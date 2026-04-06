@@ -146,3 +146,160 @@ lingce-api/
 | badge-middleware | [badge-middleware](https://github.com/freeasyman/badge-middleware) | 智能工牌中间件（厂商对接 + 事件分发） |
 | recording-worker | [recording-worker](https://github.com/yiliiang/recording-worker) | 录音分析 Worker（转写 → 清洗 → 分析） |
 | operations-api | lince-medical-ops/services/operations-api | 旧 Python 服务（本项目替代目标） |
+
+## 已实现模块
+
+### 1. 认证模块 (9个端点) ✅
+
+- `POST /api/v1/auth/login` - 运维管理员登录
+- `POST /api/v1/auth/login/institution` - 机构员工登录
+- `POST /api/v1/auth/login/employee` - 员工登录（别名）
+- `POST /api/v1/auth/login/mobile` - 移动端登录（会话隔离）
+- `GET /api/v1/auth/me` - 获取当前用户信息（需认证）
+- `POST /api/v1/auth/change-password` - 修改密码（需认证）
+- `GET /api/v1/auth/captcha` - 生成图形验证码
+- `POST /api/v1/auth/mobile/sms/send` - 发送短信验证码
+- `POST /api/v1/auth/mobile/sms/login` - 短信验证码登录
+
+**特性**:
+- JWT令牌认证，三种用户类型（admin/employee/mobile）
+- 会话版本管理（修改密码后旧令牌失效）
+- bcrypt密码加密，兼容旧SHA256密码
+- 图形验证码生成，阿里云短信集成
+
+### 2. 机构管理模块 (5个端点) ✅
+
+- `GET /api/v1/tenants` - 获取机构列表（需认证，仅管理员）
+- `GET /api/v1/tenants/{id}` - 获取机构详情
+- `POST /api/v1/tenants` - 创建机构
+- `PUT /api/v1/tenants/{id}` - 更新机构
+- `DELETE /api/v1/tenants/{id}` - 删除机构（软删除）
+
+**特性**:
+- 分页和过滤（按名称、代码、状态）
+- 有效期管理（valid_from, valid_to）
+- 软删除支持
+
+### 3. 部门管理模块 (5个端点) ✅
+
+- `GET /api/v1/departments` - 获取部门列表（需认证）
+- `GET /api/v1/departments/{id}` - 获取部门详情
+- `POST /api/v1/departments` - 创建部门（仅管理员）
+- `PUT /api/v1/departments/{id}` - 更新部门（仅管理员）
+- `DELETE /api/v1/departments/{id}` - 删除部门（软删除）
+
+**特性**:
+- 层级结构支持（parent_id）
+- 按租户过滤
+- 员工可查看本租户部门，管理员可管理所有租户
+
+### 4. 员工管理模块 (6个端点) ✅
+
+- `GET /api/v1/employees` - 获取员工列表（需认证）
+- `GET /api/v1/employees/{id}` - 获取员工详情
+- `POST /api/v1/employees` - 创建员工（仅管理员）
+- `PUT /api/v1/employees/{id}` - 更新员工（仅管理员）
+- `POST /api/v1/employees/{id}/reset-password` - 重置密码（仅管理员）
+- `DELETE /api/v1/employees/{id}` - 删除员工（软删除）
+
+**特性**:
+- 关联租户和部门
+- 密码管理（创建时bcrypt加密，管理员可重置）
+- 分页和过滤（按用户名、姓名、电话、部门）
+- 会话版本管理
+
+### 5. 问诊记录管理模块 (5个端点) ✅
+
+- `GET /api/v1/recordings` - 获取问诊记录列表（需认证）
+- `GET /api/v1/recordings/{id}` - 获取记录详情
+- `POST /api/v1/recordings` - 创建问诊记录
+- `PUT /api/v1/recordings/{id}` - 更新记录
+- `DELETE /api/v1/recordings/{id}` - 删除记录（仅管理员，软删除）
+
+**特性**:
+- 患者信息管理
+- 录音文件URL存储
+- AI处理结果存储（转录文本、医生摘要、治疗师摘要、顾问摘要）
+- 状态管理（pending, processing, completed, failed）
+- 按租户、员工、患者、状态、日期范围过滤
+- 员工只能更新自己的记录
+
+## 权限控制
+
+### 用户类型
+
+1. **admin** - 运维管理员
+   - 可访问所有租户的数据
+   - 可执行所有管理操作
+
+2. **employee** - 机构员工（Web端）
+   - 只能访问自己租户的数据
+   - 可查看同租户的部门、员工
+   - 可创建和更新自己的问诊记录
+
+3. **mobile** - 移动端用户
+   - 与employee权限相同
+   - 会话独立（Web和移动端登录互不影响）
+
+## API响应格式
+
+### 成功响应
+```json
+{
+  "data": {
+    // 响应数据
+  }
+}
+```
+
+### 分页响应
+```json
+{
+  "items": [...],
+  "total": 100,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+### 错误响应
+```json
+{
+  "code": "ERROR_CODE",
+  "message": "错误描述",
+  "details": null
+}
+```
+
+## 技术特性
+
+### 安全
+- JWT令牌认证
+- bcrypt密码加密
+- SQL注入防护（参数化查询）
+- CORS配置
+- 会话版本管理
+- 密码长度验证（最少6位）
+
+### 性能
+- 数据库连接池（最大20个连接）
+- 分页查询限制（最大100条/页）
+- 索引优化（tenant_id, employee_id等外键）
+- 软删除查询过滤
+
+### 监控
+- 结构化日志（JSON格式）
+- 请求ID追踪
+- 错误堆栈记录
+- 优雅关闭（30秒超时）
+
+## 开发进度
+
+**已完成**: 30个API端点
+- ✅ 认证模块 (9个端点)
+- ✅ 机构管理 (5个端点)
+- ✅ 部门管理 (5个端点)
+- ✅ 员工管理 (6个端点)
+- ✅ 问诊记录管理 (5个端点)
+
+**待实现**: 参考 [迁移清单](docs/MIGRATION_INVENTORY.md)
