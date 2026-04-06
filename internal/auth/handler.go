@@ -1,11 +1,17 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image/png"
 	"net/http"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/pkg/captcha"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -28,10 +34,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/auth/me", authMw(http.HandlerFunc(h.GetMe)))
 	mux.Handle("POST /api/v1/auth/change-password", authMw(http.HandlerFunc(h.ChangePassword)))
 
-	// TODO: Implement remaining endpoints
-	// mux.HandleFunc("GET /api/v1/auth/captcha", h.GetCaptcha)
-	// mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)
-	// mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)
+	// Captcha endpoint
+	mux.HandleFunc("GET /api/v1/auth/captcha", h.GetCaptcha)
+
+	// SMS endpoints
+	mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)
+	mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)
 }
 
 // LoginAdmin handles operations admin login
@@ -158,4 +166,76 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Password changed successfully"})
+}
+
+// GetCaptcha generates and returns a captcha image
+func (h *Handler) GetCaptcha(w http.ResponseWriter, r *http.Request) {
+	// Generate captcha
+	code, img, err := captcha.Generate()
+	if err != nil {
+		httputil.WriteInternalError(w, "Failed to generate captcha")
+		return
+	}
+
+	// Generate captcha ID
+	captchaID := uuid.New().String()
+
+	// Store captcha code with 5 minute expiration
+	h.service.captchaStore.Save(captchaID, code, 5*time.Minute)
+
+	// Encode image to PNG
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		httputil.WriteInternalError(w, "Failed to encode captcha image")
+		return
+	}
+
+	// Return captcha ID and base64 image
+	httputil.WriteSuccess(w, CaptchaResponse{
+		CaptchaID: captchaID,
+		ImageData: base64.StdEncoding.EncodeToString(buf.Bytes()),
+	})
+}
+
+// SendSMS handles SMS verification code sending
+func (h *Handler) SendSMS(w http.ResponseWriter, r *http.Request) {
+	var req SendSMSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if req.Phone == "" {
+		httputil.WriteBadRequest(w, "Phone number is required")
+		return
+	}
+
+	if err := h.service.SendSMSCode(r.Context(), req.Phone); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "SMS code sent successfully"})
+}
+
+// SMSLogin handles SMS code login
+func (h *Handler) SMSLogin(w http.ResponseWriter, r *http.Request) {
+	var req SMSLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if req.Phone == "" || req.Code == "" {
+		httputil.WriteBadRequest(w, "Phone and code are required")
+		return
+	}
+
+	resp, err := h.service.LoginSMS(r.Context(), req.Phone, req.Code)
+	if err != nil {
+		httputil.WriteUnauthorized(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
 }

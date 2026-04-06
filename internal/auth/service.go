@@ -2,25 +2,32 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/freeasyman/lingce-api/pkg/auth"
+	"github.com/freeasyman/lingce-api/pkg/sms"
 )
 
 type Service struct {
-	store         *Store
-	jwtSecret     string
+	store          *Store
+	captchaStore   *CaptchaStore
+	smsClient      *sms.AliyunClient
+	jwtSecret      string
 	jwtExpiryHours int
 }
 
-func NewService(store *Store, jwtSecret string, jwtExpiryHours int) *Service {
+func NewService(store *Store, smsClient *sms.AliyunClient, jwtSecret string, jwtExpiryHours int) *Service {
 	return &Service{
 		store:          store,
+		captchaStore:   NewCaptchaStore(),
+		smsClient:      smsClient,
 		jwtSecret:      jwtSecret,
 		jwtExpiryHours: jwtExpiryHours,
 	}
@@ -310,4 +317,96 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, userType aut
 	default:
 		return fmt.Errorf("unknown user type")
 	}
+}
+
+// SendSMSCode sends a SMS verification code
+func (s *Service) SendSMSCode(ctx context.Context, phone string) error {
+	// Generate 6-digit code
+	code := generateSMSCode(6)
+
+	// Send SMS
+	if err := s.smsClient.SendCode(phone, code); err != nil {
+		return fmt.Errorf("failed to send SMS: %w", err)
+	}
+
+	// Save code to database with 5 minute expiration
+	expiresAt := time.Now().Add(5 * time.Minute).Unix()
+	if err := s.store.SaveSMSCode(ctx, phone, code, expiresAt); err != nil {
+		return fmt.Errorf("failed to save SMS code: %w", err)
+	}
+
+	return nil
+}
+
+// LoginSMS authenticates a mobile employee via SMS code
+func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginResponse, error) {
+	// Verify SMS code
+	valid, err := s.store.VerifySMSCode(ctx, phone, code)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify SMS code: %w", err)
+	}
+	if !valid {
+		return nil, fmt.Errorf("invalid or expired SMS code")
+	}
+
+	// Get employee by phone
+	employee, err := s.store.GetEmployeeByPhone(ctx, phone)
+	if err != nil {
+		return nil, fmt.Errorf("employee not found")
+	}
+
+	if !employee.IsActive {
+		return nil, fmt.Errorf("account is inactive")
+	}
+
+	// Verify tenant
+	tenant, err := s.store.GetTenantByID(ctx, employee.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid tenant")
+	}
+
+	if !tenant.IsActive {
+		return nil, fmt.Errorf("tenant is inactive")
+	}
+
+	now := time.Now()
+	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+		return nil, fmt.Errorf("tenant subscription expired")
+	}
+
+	// Generate JWT token with mobile user type
+	token, expiresAt, err := auth.GenerateToken(
+		s.jwtSecret,
+		employee.ID,
+		auth.UserTypeMobile,
+		&employee.TenantID,
+		employee.SessionVersion,
+		s.jwtExpiryHours,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	return &LoginResponse{
+		Token:     token,
+		UserType:  string(auth.UserTypeMobile),
+		UserID:    employee.ID,
+		Username:  employee.Username,
+		TenantID:  &employee.TenantID,
+		ExpiresAt: expiresAt,
+		UserInfo: map[string]interface{}{
+			"full_name": employee.FullName,
+			"phone":     employee.Phone,
+		},
+	}, nil
+}
+
+// generateSMSCode generates a random numeric code
+func generateSMSCode(length int) string {
+	code := make([]byte, length)
+	for i := range code {
+		n, _ := rand.Int(rand.Reader, big.NewInt(10))
+		code[i] = byte('0' + n.Int64())
+	}
+	return string(code)
 }

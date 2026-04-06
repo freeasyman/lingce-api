@@ -15,6 +15,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/freeasyman/lingce-api/pkg/sms"
 )
 
 const version = "1.0.0"
@@ -54,7 +55,13 @@ func main() {
 
 	// Register module routes
 	authStore := auth.NewStore(pool)
-	authService := auth.NewService(authStore, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	smsClient := sms.NewAliyunClient(
+		cfg.Aliyun.AccessKeyID,
+		cfg.Aliyun.AccessKeySecret,
+		cfg.Aliyun.SMSSignName,
+		cfg.Aliyun.SMSTemplateCode,
+	)
+	authService := auth.NewService(authStore, smsClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
