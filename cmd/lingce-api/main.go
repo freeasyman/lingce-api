@@ -16,6 +16,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/organization"
+	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/sms"
@@ -86,9 +87,11 @@ func main() {
 	empHandler := employee.NewHandler(empService)
 	empHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	// TODO: Register other modules
-	// medical_recording.RegisterRoutes(mux, mrSvc, cfg.JWT.Secret)
-	// ...
+	// Register medical recording module
+	recStore := recording.NewStore(pool)
+	recService := recording.NewService(recStore)
+	recHandler := recording.NewHandler(recService)
+	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Apply middleware chain
 	handler := middleware.RequestID(
