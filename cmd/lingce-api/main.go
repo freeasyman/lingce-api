@@ -13,6 +13,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/department"
+	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/store"
@@ -79,8 +80,14 @@ func main() {
 	deptHandler := department.NewHandler(deptService)
 	deptHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Register employee module
+	empStore := employee.NewStore(pool)
+	empService := employee.NewService(empStore)
+	empHandler := employee.NewHandler(empService)
+	empHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
 	// TODO: Register other modules
-	// employee.RegisterRoutes(mux, empSvc, cfg.JWT.Secret)
+	// medical_recording.RegisterRoutes(mux, mrSvc, cfg.JWT.Secret)
 	// ...
 
 	// Apply middleware chain
