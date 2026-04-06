@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/store"
@@ -51,8 +52,13 @@ func main() {
 		})
 	})
 
-	// TODO: Register module routes here
-	// auth.RegisterRoutes(mux, authSvc, mw)
+	// Register module routes
+	authStore := auth.NewStore(pool)
+	authService := auth.NewService(authStore, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	authHandler := auth.NewHandler(authService)
+	authHandler.RegisterRoutes(mux)
+
+	// TODO: Register other modules
 	// organization.RegisterRoutes(mux, orgSvc, mw)
 	// ...
 
