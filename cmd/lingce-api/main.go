@@ -56,7 +56,7 @@ func main() {
 	authStore := auth.NewStore(pool)
 	authService := auth.NewService(authStore, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	authHandler := auth.NewHandler(authService)
-	authHandler.RegisterRoutes(mux)
+	authHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// TODO: Register other modules
 	// organization.RegisterRoutes(mux, orgSvc, mw)

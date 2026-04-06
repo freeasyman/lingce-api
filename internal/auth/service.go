@@ -200,3 +200,114 @@ func (s *Service) verifyPassword(password, hash string) bool {
 	sha256Hex := hex.EncodeToString(sha256Hash[:])
 	return sha256Hex == hash
 }
+
+// GetMe retrieves current user information
+func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserType, tenantID *int64) (*MeResponse, error) {
+	switch userType {
+	case auth.UserTypeAdmin:
+		admin, err := s.store.GetAdminByID(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get admin: %w", err)
+		}
+
+		return &MeResponse{
+			UserID:   admin.ID,
+			UserType: string(auth.UserTypeAdmin),
+			Username: admin.Username,
+			UserInfo: map[string]interface{}{
+				"real_name": admin.RealName,
+				"email":     admin.Email,
+				"phone":     admin.Phone,
+				"is_active": admin.IsActive,
+			},
+		}, nil
+
+	case auth.UserTypeEmployee, auth.UserTypeMobile:
+		if tenantID == nil {
+			return nil, fmt.Errorf("tenant_id is required for employee")
+		}
+
+		employee, err := s.store.GetEmployeeByID(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get employee: %w", err)
+		}
+
+		return &MeResponse{
+			UserID:   employee.ID,
+			UserType: string(userType),
+			Username: employee.Username,
+			TenantID: &employee.TenantID,
+			UserInfo: map[string]interface{}{
+				"full_name":     employee.FullName,
+				"phone":         employee.Phone,
+				"email":         employee.Email,
+				"department_id": employee.DepartmentID,
+				"is_active":     employee.IsActive,
+			},
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown user type")
+	}
+}
+
+// ChangePassword changes user password
+func (s *Service) ChangePassword(ctx context.Context, userID int64, userType auth.UserType, oldPassword, newPassword string) error {
+	// Validate new password
+	if len(newPassword) < 6 {
+		return fmt.Errorf("password must be at least 6 characters")
+	}
+
+	switch userType {
+	case auth.UserTypeAdmin:
+		admin, err := s.store.GetAdminByID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to get admin: %w", err)
+		}
+
+		// Verify old password
+		if !s.verifyPassword(oldPassword, admin.PasswordHash) {
+			return fmt.Errorf("invalid old password")
+		}
+
+		// Hash new password with bcrypt
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+
+		// Update password and increment session version
+		if err := s.store.UpdateAdminPassword(ctx, userID, string(hashedPassword)); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		return nil
+
+	case auth.UserTypeEmployee, auth.UserTypeMobile:
+		employee, err := s.store.GetEmployeeByID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to get employee: %w", err)
+		}
+
+		// Verify old password
+		if !s.verifyPassword(oldPassword, employee.PasswordHash) {
+			return fmt.Errorf("invalid old password")
+		}
+
+		// Hash new password with bcrypt
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+
+		// Update password and increment session version
+		if err := s.store.UpdateEmployeePassword(ctx, userID, string(hashedPassword)); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		return nil
+
+	default:
+		return fmt.Errorf("unknown user type")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -16,15 +17,19 @@ func NewHandler(service *Service) *Handler {
 }
 
 // RegisterRoutes registers auth routes
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.HandleFunc("POST /api/v1/auth/login", h.LoginAdmin)
 	mux.HandleFunc("POST /api/v1/auth/login/institution", h.LoginInstitution)
 	mux.HandleFunc("POST /api/v1/auth/login/employee", h.LoginEmployee)
 	mux.HandleFunc("POST /api/v1/auth/login/mobile", h.LoginMobile)
+
+	// Protected routes
+	authMw := middleware.Auth(jwtSecret)
+	mux.Handle("GET /api/v1/auth/me", authMw(http.HandlerFunc(h.GetMe)))
+	mux.Handle("POST /api/v1/auth/change-password", authMw(http.HandlerFunc(h.ChangePassword)))
+
 	// TODO: Implement remaining endpoints
 	// mux.HandleFunc("GET /api/v1/auth/captcha", h.GetCaptcha)
-	// mux.HandleFunc("GET /api/v1/auth/me", h.GetMe)
-	// mux.HandleFunc("POST /api/v1/auth/change-password", h.ChangePassword)
 	// mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)
 	// mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)
 }
@@ -108,4 +113,49 @@ func (h *Handler) LoginMobile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, resp)
+}
+
+// GetMe handles get current user information
+func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	resp, err := h.service.GetMe(r.Context(), claims.UserID, claims.UserType, claims.TenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
+}
+
+// ChangePassword handles password change
+func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if req.OldPassword == "" || req.NewPassword == "" {
+		httputil.WriteBadRequest(w, "Old password and new password are required")
+		return
+	}
+
+	err := h.service.ChangePassword(r.Context(), claims.UserID, claims.UserType, req.OldPassword, req.NewPassword)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Password changed successfully"})
 }

@@ -7,8 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type contextKey string
-
 const requestIDKey contextKey = "request_id"
 
 // RequestID adds a unique request ID to each request
