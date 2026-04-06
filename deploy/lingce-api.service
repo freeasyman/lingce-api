@@ -1,0 +1,26 @@
+[Unit]
+Description=Lingce API Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=lingce
+Group=lingce
+WorkingDirectory=/opt/lingce-api
+ExecStart=/opt/lingce-api/lingce-api
+EnvironmentFile=/opt/lingce-api/.env
+
+Restart=always
+RestartSec=5
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lingce-api
+
+[Install]
+WantedBy=multi-user.target
