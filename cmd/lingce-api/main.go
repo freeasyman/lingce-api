@@ -13,6 +13,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/sms"
@@ -65,8 +66,14 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Register organization module
+	orgStore := organization.NewStore(pool)
+	orgService := organization.NewService(orgStore)
+	orgHandler := organization.NewHandler(orgService)
+	orgHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
 	// TODO: Register other modules
-	// organization.RegisterRoutes(mux, orgSvc, mw)
+	// department.RegisterRoutes(mux, deptSvc, cfg.JWT.Secret)
 	// ...
 
 	// Apply middleware chain
