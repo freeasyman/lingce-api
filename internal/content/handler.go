@@ -96,6 +96,23 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/content-prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestContentTemplate)))
 	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetContentTemplateStats)))
 	mux.Handle("POST /api/v1/content-prompt-templates/initialize-defaults", authMw(http.HandlerFunc(h.InitializeDefaultTemplates)))
+
+	// Publish tasks endpoints
+	mux.Handle("GET /api/v1/content/publish-tasks/dashboard", authMw(http.HandlerFunc(h.GetPublishDashboard)))
+	mux.Handle("GET /api/v1/content/publish-tasks", authMw(http.HandlerFunc(h.ListPublishTasks)))
+	mux.Handle("GET /api/v1/content/publish-tasks/{task_id}", authMw(http.HandlerFunc(h.GetPublishTask)))
+	mux.Handle("POST /api/v1/content/publish-tasks", authMw(http.HandlerFunc(h.CreatePublishTask)))
+	mux.Handle("POST /api/v1/content/publish-tasks/batch", authMw(http.HandlerFunc(h.BatchCreatePublishTasks)))
+	mux.Handle("PUT /api/v1/content/publish-tasks/{task_id}/status", authMw(http.HandlerFunc(h.UpdatePublishTaskStatus)))
+	mux.Handle("PUT /api/v1/content/publish-tasks/{task_id}/cancel", authMw(http.HandlerFunc(h.CancelPublishTask)))
+	mux.Handle("PUT /api/v1/content/publish-tasks/{task_id}/retry", authMw(http.HandlerFunc(h.RetryPublishTask)))
+	mux.Handle("DELETE /api/v1/content/publish-tasks/{task_id}", authMw(http.HandlerFunc(h.DeletePublishTask)))
+
+	// GEO optimization endpoints
+	mux.Handle("POST /api/v1/content/geo/analyze", authMw(http.HandlerFunc(h.AnalyzeGEO)))
+	mux.Handle("POST /api/v1/content/geo/analyze-by-id/{content_id}", authMw(http.HandlerFunc(h.AnalyzeGEOByID)))
+	mux.Handle("POST /api/v1/content/geo/optimize", authMw(http.HandlerFunc(h.OptimizeGEO)))
+	mux.Handle("GET /api/v1/content/geo/prompt-injection", authMw(http.HandlerFunc(h.GetGEOPromptInjection)))
 }
 
 // Topic Handlers
