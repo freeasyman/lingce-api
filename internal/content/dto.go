@@ -65,6 +65,58 @@ type GenerateTopicsRequest struct {
 	ExtraData   JSONObject `json:"extra_data,omitempty"`
 }
 
+// HotTopicsResponse represents hot topics response
+type HotTopicsResponse struct {
+	Topics    []HotTopic `json:"topics"`
+	UpdatedAt string     `json:"updated_at"`
+}
+
+// HotTopic represents a hot topic
+type HotTopic struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Keywords    []string `json:"keywords"`
+	Trend       string   `json:"trend"` // rising, stable, declining
+	Score       float64  `json:"score"`
+}
+
+// IdeaTopicStartRequest represents "我有想法" initialization request
+type IdeaTopicStartRequest struct {
+	Description string     `json:"description"`
+	ExtraData   JSONObject `json:"extra_data,omitempty"`
+}
+
+// IdeaTopicStartResponse represents "我有想法" initialization response
+type IdeaTopicStartResponse struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+// ParseFilesRequest represents file parsing request
+type ParseFilesRequest struct {
+	SessionID string   `json:"session_id"`
+	FileURLs  []string `json:"file_urls"`
+}
+
+// ParseFilesResponse represents file parsing response
+type ParseFilesResponse struct {
+	SessionID     string   `json:"session_id"`
+	ParsedContent string   `json:"parsed_content"`
+	Keywords      []string `json:"keywords"`
+}
+
+// IdeaGenerateTopicsRequest represents idea topic generation request
+type IdeaGenerateTopicsRequest struct {
+	SessionID string `json:"session_id"`
+	Count     int    `json:"count"`
+}
+
+// SaveIdeaTopicsRequest represents save idea topics request
+type SaveIdeaTopicsRequest struct {
+	SessionID string   `json:"session_id"`
+	TopicIDs  []int64  `json:"topic_ids"`
+}
+
 // Content DTOs
 
 // ContentListRequest represents the request for listing contents
@@ -294,3 +346,89 @@ type VersionResponse struct {
 	CreatedBy   int64    `json:"created_by"`
 	CreatedAt   string   `json:"created_at"`
 }
+
+// GenerateImagesRequest represents batch image generation request
+type GenerateImagesRequest struct {
+	Prompts   []string   `json:"prompts"`
+	Style     *string    `json:"style,omitempty"`
+	ExtraData JSONObject `json:"extra_data,omitempty"`
+}
+
+// GenerateSingleImageRequest represents single image generation request
+type GenerateSingleImageRequest struct {
+	Prompt    string     `json:"prompt"`
+	Style     *string    `json:"style,omitempty"`
+	ExtraData JSONObject `json:"extra_data,omitempty"`
+}
+
+// ImageGenerationResponse represents image generation response
+type ImageGenerationResponse struct {
+	Images []GeneratedImage `json:"images"`
+}
+
+// GeneratedImage represents a generated image
+type GeneratedImage struct {
+	URL    string `json:"url"`
+	Prompt string `json:"prompt"`
+}
+
+// SaveComposedImagesRequest represents save composed images request
+type SaveComposedImagesRequest struct {
+	Images []string `json:"images"` // Image URLs
+}
+
+// ConversationInsightsStatsResponse represents conversation insights statistics
+type ConversationInsightsStatsResponse struct {
+	TotalConversations int64   `json:"total_conversations"`
+	TotalQuestions     int64   `json:"total_questions"`
+	UniqueTopics       int64   `json:"unique_topics"`
+	AvgQuestionsPerDay float64 `json:"avg_questions_per_day"`
+}
+
+// FrequentQuestion represents a frequent question
+type FrequentQuestion struct {
+	Question  string `json:"question"`
+	Count     int64  `json:"count"`
+	Category  string `json:"category"`
+	Sentiment string `json:"sentiment"` // positive, neutral, negative
+}
+
+// FrequentQuestionsResponse represents frequent questions response
+type FrequentQuestionsResponse struct {
+	Questions []FrequentQuestion `json:"questions"`
+	Total     int64              `json:"total"`
+}
+
+// MineTopicsRequest represents topic mining request
+type MineTopicsRequest struct {
+	StartDate *string `json:"start_date,omitempty"`
+	EndDate   *string `json:"end_date,omitempty"`
+	MinCount  *int    `json:"min_count,omitempty"`
+	Category  *string `json:"category,omitempty"`
+}
+
+// MinedTopic represents a mined topic
+type MinedTopic struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Keywords    []string `json:"keywords"`
+	Count       int64    `json:"count"`
+	Relevance   float64  `json:"relevance"`
+}
+
+// MineTopicsResponse represents topic mining response
+type MineTopicsResponse struct {
+	Topics []MinedTopic `json:"topics"`
+	Total  int64        `json:"total"`
+}
+
+// SaveMinedTopicsRequest represents save mined topics request
+type SaveMinedTopicsRequest struct {
+	Topics []struct {
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		Keywords    []string `json:"keywords"`
+		Category    *string  `json:"category,omitempty"`
+	} `json:"topics"`
+}
+

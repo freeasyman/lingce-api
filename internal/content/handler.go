@@ -22,21 +22,80 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Topic management endpoints (P0 priority only)
+	// Topic management endpoints
+	mux.Handle("GET /api/v1/content/hot-topics", authMw(http.HandlerFunc(h.GetHotTopics)))
+	mux.Handle("POST /api/v1/content/hot-topics/refresh", authMw(http.HandlerFunc(h.RefreshHotTopics)))
 	mux.Handle("GET /api/v1/content/topics", authMw(http.HandlerFunc(h.ListTopics)))
 	mux.Handle("GET /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.GetTopic)))
+	mux.Handle("POST /api/v1/content/topics/generate", authMw(http.HandlerFunc(h.GenerateTopics)))
 	mux.Handle("POST /api/v1/content/topics", authMw(http.HandlerFunc(h.CreateTopic)))
 	mux.Handle("PUT /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.UpdateTopic)))
+	mux.Handle("PUT /api/v1/content/topics/{topic_id}/select", authMw(http.HandlerFunc(h.SelectTopic)))
 	mux.Handle("DELETE /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.DeleteTopic)))
-	mux.Handle("POST /api/v1/content/topics/generate", authMw(http.HandlerFunc(h.GenerateTopics)))
 
-	// TODO: Implement remaining endpoints in future phases:
-	// - Content management (11 endpoints)
-	// - Publish tasks (9 endpoints)
-	// - Content seeds (11 endpoints)
-	// - Prompt templates (22 endpoints)
-	// - GEO optimization (4 endpoints)
-	// - Conversation insights (4 endpoints)
+	// "我有想法" endpoints
+	mux.Handle("POST /api/v1/content/idea-topics/start", authMw(http.HandlerFunc(h.IdeaTopicStart)))
+	mux.Handle("POST /api/v1/content/idea-topics/parse-files", authMw(http.HandlerFunc(h.ParseFiles)))
+	mux.Handle("POST /api/v1/content/idea-topics/generate", authMw(http.HandlerFunc(h.IdeaGenerateTopics)))
+	mux.Handle("POST /api/v1/content/idea-topics/save-topics", authMw(http.HandlerFunc(h.SaveIdeaTopics)))
+
+	// Content management endpoints
+	mux.Handle("GET /api/v1/content/contents", authMw(http.HandlerFunc(h.ListContents)))
+	mux.Handle("GET /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.GetContent)))
+	mux.Handle("POST /api/v1/content/contents/generate", authMw(http.HandlerFunc(h.GenerateContent)))
+	mux.Handle("POST /api/v1/content/contents", authMw(http.HandlerFunc(h.CreateContent)))
+	mux.Handle("PUT /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.UpdateContent)))
+	mux.Handle("DELETE /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.DeleteContent)))
+	mux.Handle("POST /api/v1/content/contents/{content_id}/generate-images", authMw(http.HandlerFunc(h.GenerateImages)))
+	mux.Handle("POST /api/v1/content/contents/{content_id}/generate-single-image", authMw(http.HandlerFunc(h.GenerateSingleImage)))
+	mux.Handle("POST /api/v1/content/contents/{content_id}/save-composed-images", authMw(http.HandlerFunc(h.SaveComposedImages)))
+	mux.Handle("POST /api/v1/content/contents/{content_id}/publish", authMw(http.HandlerFunc(h.PublishContent)))
+	mux.Handle("POST /api/v1/content/contents/{content_id}/unpublish", authMw(http.HandlerFunc(h.UnpublishContent)))
+
+	// Conversation insights endpoints
+	mux.Handle("GET /api/v1/content/conversation-insights/stats", authMw(http.HandlerFunc(h.GetInsightsStats)))
+	mux.Handle("GET /api/v1/content/conversation-insights/frequent-questions", authMw(http.HandlerFunc(h.GetFrequentQuestions)))
+	mux.Handle("POST /api/v1/content/conversation-insights/mine-topics", authMw(http.HandlerFunc(h.MineTopics)))
+	mux.Handle("POST /api/v1/content/conversation-insights/save-topics", authMw(http.HandlerFunc(h.SaveMinedTopics)))
+
+	// Content seeds endpoints
+	mux.Handle("GET /api/v1/content-seeds", authMw(http.HandlerFunc(h.ListSeeds)))
+	mux.Handle("GET /api/v1/content-seeds/stats", authMw(http.HandlerFunc(h.GetSeedStats)))
+	mux.Handle("GET /api/v1/content-seeds/clusters", authMw(http.HandlerFunc(h.GetClusters)))
+	mux.Handle("GET /api/v1/content-seeds/my-inspirations", authMw(http.HandlerFunc(h.GetMyInspirations)))
+	mux.Handle("POST /api/v1/content-seeds/{seed_id}/generate-draft", authMw(http.HandlerFunc(h.GenerateDraftFromSeed)))
+	mux.Handle("POST /api/v1/content-seeds/{seed_id}/dismiss", authMw(http.HandlerFunc(h.DismissSeed)))
+	mux.Handle("GET /api/v1/content-seeds/{seed_id}", authMw(http.HandlerFunc(h.GetSeed)))
+	mux.Handle("PATCH /api/v1/content-seeds/{seed_id}/status", authMw(http.HandlerFunc(h.UpdateSeedStatus)))
+	mux.Handle("GET /api/v1/content-seeds/honor-list", authMw(http.HandlerFunc(h.GetHonorList)))
+	mux.Handle("GET /api/v1/content-seeds/my-stats", authMw(http.HandlerFunc(h.GetMyStats)))
+	mux.Handle("GET /api/v1/content-seeds/my-adopted", authMw(http.HandlerFunc(h.GetMyAdopted)))
+
+	// Prompt templates endpoints
+	mux.Handle("GET /api/v1/prompt-templates", authMw(http.HandlerFunc(h.ListTemplates)))
+	mux.Handle("POST /api/v1/prompt-templates", authMw(http.HandlerFunc(h.CreateTemplate)))
+	mux.Handle("GET /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.GetTemplate)))
+	mux.Handle("PUT /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.UpdateTemplate)))
+	mux.Handle("DELETE /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.DeleteTemplate)))
+	mux.Handle("POST /api/v1/prompt-templates/preview", authMw(http.HandlerFunc(h.PreviewTemplate)))
+	mux.Handle("POST /api/v1/prompt-templates/{template_id}/clone", authMw(http.HandlerFunc(h.CloneTemplate)))
+	mux.Handle("POST /api/v1/prompt-templates/{template_id}/versions", authMw(http.HandlerFunc(h.CreateTemplateVersion)))
+	mux.Handle("GET /api/v1/prompt-templates/{template_id}/versions", authMw(http.HandlerFunc(h.ListTemplateVersions)))
+	mux.Handle("POST /api/v1/prompt-templates/{template_id}/publish", authMw(http.HandlerFunc(h.PublishTemplate)))
+	mux.Handle("POST /api/v1/prompt-templates/{template_id}/rollback/{version}", authMw(http.HandlerFunc(h.RollbackTemplate)))
+	mux.Handle("POST /api/v1/prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestTemplate)))
+	mux.Handle("GET /api/v1/prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetTemplateStats)))
+
+	// Content prompt templates endpoints
+	mux.Handle("GET /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.ListContentTemplates)))
+	mux.Handle("POST /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.CreateContentTemplate)))
+	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.GetContentTemplate)))
+	mux.Handle("PUT /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.UpdateContentTemplate)))
+	mux.Handle("DELETE /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.DeleteContentTemplate)))
+	mux.Handle("POST /api/v1/content-prompt-templates/{template_id}/clone", authMw(http.HandlerFunc(h.CloneContentTemplate)))
+	mux.Handle("POST /api/v1/content-prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestContentTemplate)))
+	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetContentTemplateStats)))
+	mux.Handle("POST /api/v1/content-prompt-templates/initialize-defaults", authMw(http.HandlerFunc(h.InitializeDefaultTemplates)))
 }
 
 // Topic Handlers

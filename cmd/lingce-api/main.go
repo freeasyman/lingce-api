@@ -25,6 +25,8 @@ import (
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/freeasyman/lingce-api/pkg/llmgateway"
+	"github.com/freeasyman/lingce-api/pkg/oss"
 	"github.com/freeasyman/lingce-api/pkg/sms"
 )
 
@@ -129,9 +131,27 @@ func main() {
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Create LLM gateway client
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+
+	// Create OSS client
+	var ossClient *oss.Client
+	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
+		var err error
+		ossClient, err = oss.NewClient(
+			cfg.Aliyun.OSSEndpoint,
+			cfg.Aliyun.AccessKeyID,
+			cfg.Aliyun.AccessKeySecret,
+			cfg.Aliyun.OSSBucket,
+		)
+		if err != nil {
+			slog.Warn("failed to create OSS client", "error", err)
+		}
+	}
+
 	// Register content module
 	contentStore := content.NewStore(pool)
-	contentService := content.NewService(contentStore)
+	contentService := content.NewService(contentStore, llmClient, ossClient)
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
