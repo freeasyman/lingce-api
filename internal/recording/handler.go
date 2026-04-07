@@ -23,12 +23,35 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Recording endpoints require authentication
+	// Recording CRUD endpoints
 	mux.Handle("GET /api/v1/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
 	mux.Handle("GET /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
 	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
 	mux.Handle("DELETE /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.DeleteRecording)))
+
+	// Recording Statistics endpoints
+	mux.Handle("GET /api/v1/recordings/stats/overview", authMw(http.HandlerFunc(h.GetStatsOverview)))
+	mux.Handle("GET /api/v1/recordings/stats/by-scene", authMw(http.HandlerFunc(h.GetStatsByScene)))
+	mux.Handle("GET /api/v1/recordings/stats/by-source", authMw(http.HandlerFunc(h.GetStatsBySource)))
+
+	// Recording Task endpoints
+	mux.Handle("GET /api/v1/recording-tasks", authMw(http.HandlerFunc(h.ListRecordingTasks)))
+	mux.Handle("GET /api/v1/recording-tasks/{id}", authMw(http.HandlerFunc(h.GetTask)))
+	mux.Handle("POST /api/v1/recording-tasks/{id}/complete", authMw(http.HandlerFunc(h.CompleteTask)))
+	mux.Handle("POST /api/v1/recording-tasks/{id}/cancel", authMw(http.HandlerFunc(h.CancelTask)))
+
+	// Recording Prompt endpoints
+	mux.Handle("GET /api/v1/recording-prompts", authMw(http.HandlerFunc(h.ListRecordingPrompts)))
+	mux.Handle("POST /api/v1/recording-prompts", authMw(http.HandlerFunc(h.CreateRecordingPrompt)))
+	mux.Handle("GET /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.GetRecordingPrompt)))
+	mux.Handle("PUT /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.UpdateRecordingPrompt)))
+	mux.Handle("DELETE /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.DeleteRecordingPrompt)))
+
+	// Best Practice endpoints
+	mux.Handle("GET /api/v1/medical-recordings/best-practices", authMw(http.HandlerFunc(h.ListBestPractices)))
+	mux.Handle("POST /api/v1/medical-recordings/{id}/best-practice", authMw(http.HandlerFunc(h.AddBestPractice)))
+	mux.Handle("DELETE /api/v1/medical-recordings/{id}/best-practice", authMw(http.HandlerFunc(h.DeleteBestPractice)))
 }
 
 // ListRecordings handles listing medical recordings
@@ -242,4 +265,466 @@ func (h *Handler) DeleteRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Recording deleted successfully"})
+}
+// Recording Statistics Handlers
+
+// GetStatsOverview handles getting overview statistics
+func (h *Handler) GetStatsOverview(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	tenantID := h.getTenantID(claims, r)
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	
+	startDate := r.URL.Query().Get("start_date")
+	endDate := r.URL.Query().Get("end_date")
+	
+	var startDatePtr, endDatePtr *string
+	if startDate != "" {
+		startDatePtr = &startDate
+	}
+	if endDate != "" {
+		endDatePtr = &endDate
+	}
+	
+	stats, err := h.service.GetStatsOverview(r.Context(), tenantID, startDatePtr, endDatePtr)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, stats)
+}
+
+// GetStatsByScene handles getting statistics by scene
+func (h *Handler) GetStatsByScene(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	tenantID := h.getTenantID(claims, r)
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	
+	stats, err := h.service.GetStatsByScene(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, stats)
+}
+
+// GetStatsBySource handles getting statistics by source
+func (h *Handler) GetStatsBySource(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	tenantID := h.getTenantID(claims, r)
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	
+	stats, err := h.service.GetStatsBySource(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, stats)
+}
+
+// Recording Task Handlers
+
+// ListRecordingTasks handles listing recording tasks
+func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	var req TaskListRequest
+	
+	// Parse filters
+	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		req.TenantID = &tenantID
+	}
+	
+	if recordingIDStr := r.URL.Query().Get("recording_id"); recordingIDStr != "" {
+		recordingID, _ := strconv.ParseInt(recordingIDStr, 10, 64)
+		req.RecordingID = &recordingID
+	}
+	
+	if assignedToStr := r.URL.Query().Get("assigned_to"); assignedToStr != "" {
+		assignedTo, _ := strconv.ParseInt(assignedToStr, 10, 64)
+		req.AssignedTo = &assignedTo
+	}
+	
+	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
+		status := TaskStatus(statusStr)
+		req.Status = &status
+	}
+	
+	if taskTypeStr := r.URL.Query().Get("task_type"); taskTypeStr != "" {
+		taskType := TaskType(taskTypeStr)
+		req.TaskType = &taskType
+	}
+	
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	req.Page = page
+	req.PageSize = pageSize
+	
+	tasks, total, err := h.service.ListRecordingTasks(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WritePaginated(w, tasks, int64(total), req.Page, req.PageSize)
+}
+
+// GetTask handles getting a recording task by ID
+func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid task ID")
+		return
+	}
+	
+	task, err := h.service.GetTask(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, task)
+}
+
+// CompleteTask handles completing a recording task
+func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid task ID")
+		return
+	}
+	
+	var req CompleteTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	
+	if err := h.service.CompleteTask(r.Context(), id, claims.UserID, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, map[string]string{"message": "Task completed successfully"})
+}
+
+// CancelTask handles cancelling a recording task
+func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid task ID")
+		return
+	}
+	
+	var req CancelTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	
+	if err := h.service.CancelTask(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, map[string]string{"message": "Task cancelled successfully"})
+}
+
+// Recording Prompt Handlers
+
+// ListRecordingPrompts handles listing recording prompts
+func (h *Handler) ListRecordingPrompts(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	var req RecordingPromptListRequest
+	
+	if code := r.URL.Query().Get("code"); code != "" {
+		req.Code = &code
+	}
+	
+	if name := r.URL.Query().Get("name"); name != "" {
+		req.Name = &name
+	}
+	
+	if isActiveStr := r.URL.Query().Get("is_active"); isActiveStr != "" {
+		isActive := isActiveStr == "true"
+		req.IsActive = &isActive
+	}
+	
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	req.Page = page
+	req.PageSize = pageSize
+	
+	prompts, total, err := h.service.ListRecordingPrompts(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WritePaginated(w, prompts, int64(total), req.Page, req.PageSize)
+}
+
+// GetRecordingPrompt handles getting a recording prompt by code
+func (h *Handler) GetRecordingPrompt(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	code := r.PathValue("code")
+	if code == "" {
+		httputil.WriteBadRequest(w, "Invalid prompt code")
+		return
+	}
+	
+	prompt, err := h.service.GetRecordingPrompt(r.Context(), code)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, prompt)
+}
+
+// CreateRecordingPrompt handles creating a new recording prompt
+func (h *Handler) CreateRecordingPrompt(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	// Only admin can create prompts
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	
+	var req CreateRecordingPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	
+	prompt, err := h.service.CreateRecordingPrompt(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, prompt)
+}
+
+// UpdateRecordingPrompt handles updating a recording prompt
+func (h *Handler) UpdateRecordingPrompt(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	// Only admin can update prompts
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	
+	code := r.PathValue("code")
+	if code == "" {
+		httputil.WriteBadRequest(w, "Invalid prompt code")
+		return
+	}
+	
+	var req UpdateRecordingPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	
+	prompt, err := h.service.UpdateRecordingPrompt(r.Context(), code, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, prompt)
+}
+
+// DeleteRecordingPrompt handles deleting a recording prompt
+func (h *Handler) DeleteRecordingPrompt(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	// Only admin can delete prompts
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	
+	code := r.PathValue("code")
+	if code == "" {
+		httputil.WriteBadRequest(w, "Invalid prompt code")
+		return
+	}
+	
+	if err := h.service.DeleteRecordingPrompt(r.Context(), code); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, map[string]string{"message": "Prompt deleted successfully"})
+}
+
+// Best Practice Handlers
+
+// ListBestPractices handles listing best practices
+func (h *Handler) ListBestPractices(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	tenantID := h.getTenantID(claims, r)
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	
+	practices, err := h.service.ListBestPractices(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, practices)
+}
+
+// AddBestPractice handles adding a recording to best practices
+func (h *Handler) AddBestPractice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	
+	tenantID := h.getTenantID(claims, r)
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	
+	var req AddBestPracticeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	
+	practice, err := h.service.AddBestPractice(r.Context(), tenantID, id, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, practice)
+}
+
+// DeleteBestPractice handles removing a recording from best practices
+func (h *Handler) DeleteBestPractice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	
+	if err := h.service.DeleteBestPractice(r.Context(), id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	
+	httputil.WriteSuccess(w, map[string]string{"message": "Best practice deleted successfully"})
+}
+
+// Helper methods
+
+// getTenantID gets the tenant ID from claims or query parameter
+func (h *Handler) getTenantID(claims *auth.Claims, r *http.Request) int64 {
+	if claims.UserType == auth.UserTypeAdmin {
+		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+		return tenantID
+	}
+	if claims.TenantID != nil {
+		return *claims.TenantID
+	}
+	return 0
 }
