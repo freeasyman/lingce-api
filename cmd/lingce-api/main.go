@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/auth"
+	"github.com/freeasyman/lingce-api/internal/badge"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/customer"
 	"github.com/freeasyman/lingce-api/internal/department"
@@ -120,6 +121,12 @@ func main() {
 	customerService := customer.NewService(customerStore)
 	customerHandler := customer.NewHandler(customerService)
 	customerHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// Register badge module
+	badgeStore := badge.NewStore(pool)
+	badgeService := badge.NewService(badgeStore)
+	badgeHandler := badge.NewHandler(badgeService)
+	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Apply middleware chain
 	handler := middleware.RequestID(
