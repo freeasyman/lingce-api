@@ -38,6 +38,33 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Institution statistics (admin only)
 	mux.Handle("GET /api/v1/institutions/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
+
+	// Department advanced endpoints
+	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))
+	mux.Handle("POST /api/v1/departments/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
+	mux.Handle("GET /api/v1/departments/{id}/performance", authMw(http.HandlerFunc(h.GetDepartmentPerformance)))
+
+	// Doctor management endpoints
+	mux.Handle("GET /api/v1/doctors/health", authMw(http.HandlerFunc(h.DoctorHealthCheck)))
+	mux.Handle("GET /api/v1/doctors", authMw(http.HandlerFunc(h.ListDoctors)))
+	mux.Handle("GET /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.GetDoctor)))
+	mux.Handle("POST /api/v1/doctors", authMw(http.HandlerFunc(h.CreateDoctor)))
+	mux.Handle("PUT /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.UpdateDoctor)))
+	mux.Handle("DELETE /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.DeleteDoctor)))
+	mux.Handle("POST /api/v1/doctors/sync-from-visits", authMw(http.HandlerFunc(h.SyncDoctorsFromVisits)))
+	mux.Handle("GET /api/v1/doctors/{id}/performance", authMw(http.HandlerFunc(h.GetDoctorPerformance)))
+	mux.Handle("GET /api/v1/doctors/performance/summary", authMw(http.HandlerFunc(h.GetDoctorPerformanceSummary)))
+	mux.Handle("GET /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.GetDoctorEmployees)))
+	mux.Handle("POST /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.UpdateDoctorEmployees)))
+
+	// Patient management endpoints
+	mux.Handle("GET /api/v1/patients", authMw(http.HandlerFunc(h.ListPatients)))
+	mux.Handle("POST /api/v1/patients/sync-from-visits", authMw(http.HandlerFunc(h.SyncPatientsFromVisits)))
+	mux.Handle("GET /api/v1/patients/{id}", authMw(http.HandlerFunc(h.GetPatient)))
+	mux.Handle("POST /api/v1/patients", authMw(http.HandlerFunc(h.CreatePatient)))
+	mux.Handle("PUT /api/v1/patients/{id}", authMw(http.HandlerFunc(h.UpdatePatient)))
+	mux.Handle("DELETE /api/v1/patients/{id}", authMw(http.HandlerFunc(h.DeletePatient)))
+	mux.Handle("GET /api/v1/patients/{id}/360", authMw(http.HandlerFunc(h.GetPatient360View)))
 }
 
 // ListTenants handles listing tenants
