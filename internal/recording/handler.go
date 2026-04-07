@@ -52,6 +52,76 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/medical-recordings/best-practices", authMw(http.HandlerFunc(h.ListBestPractices)))
 	mux.Handle("POST /api/v1/medical-recordings/{id}/best-practice", authMw(http.HandlerFunc(h.AddBestPractice)))
 	mux.Handle("DELETE /api/v1/medical-recordings/{id}/best-practice", authMw(http.HandlerFunc(h.DeleteBestPractice)))
+
+	// Advanced Recording endpoints
+	mux.Handle("GET /api/v1/recordings/stats/by-tenant", authMw(http.HandlerFunc(h.GetStatsByTenant)))
+	mux.Handle("GET /api/v1/recordings/stats/duration-distribution", authMw(http.HandlerFunc(h.GetDurationDistribution)))
+	mux.Handle("GET /api/v1/recordings/stats/daily", authMw(http.HandlerFunc(h.GetDailyStats)))
+	mux.Handle("POST /api/v1/recordings/upload", authMw(http.HandlerFunc(h.UploadRecording)))
+	mux.Handle("GET /api/v1/recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
+	mux.Handle("GET /api/v1/recordings/{id}/file-test", authMw(http.HandlerFunc(h.TestPlayback)))
+	mux.Handle("POST /api/v1/recordings/{id}/transcribe", authMw(http.HandlerFunc(h.TriggerTranscribe)))
+	mux.Handle("POST /api/v1/recordings/{id}/analyze", authMw(http.HandlerFunc(h.TriggerAnalyze)))
+	mux.Handle("POST /api/v1/recordings/{id}/clean", authMw(http.HandlerFunc(h.TriggerClean)))
+	mux.Handle("GET /api/v1/recordings/{id}/analysis", authMw(http.HandlerFunc(h.GetAnalysisResult)))
+	mux.Handle("POST /api/v1/recordings/{id}/follow-up-tasks/dispatch", authMw(http.HandlerFunc(h.DispatchFollowUpTasks)))
+	mux.Handle("POST /api/v1/recordings/{id}/analysis/feedback", authMw(http.HandlerFunc(h.SubmitAnalysisFeedback)))
+	mux.Handle("POST /api/v1/recordings/batch-transcribe", authMw(http.HandlerFunc(h.BatchTranscribe)))
+	mux.Handle("POST /api/v1/recordings/batch-delete", authMw(http.HandlerFunc(h.BatchDelete)))
+	mux.Handle("GET /api/v1/recordings/{id}/learning-recommendation", authMw(http.HandlerFunc(h.GetLearningRecommendation)))
+	mux.Handle("POST /api/v1/recordings/{id}/confirm-action", authMw(http.HandlerFunc(h.ConfirmFollowUpAction)))
+	mux.Handle("POST /api/v1/recordings/{id}/generate-opening-script", authMw(http.HandlerFunc(h.GenerateOpeningScript)))
+	mux.Handle("POST /api/v1/recordings/{id}/generate-operations-plan", authMw(http.HandlerFunc(h.GenerateOperationsPlan)))
+	mux.Handle("GET /api/v1/recordings/{id}/operations-plan-jobs/{job_id}", authMw(http.HandlerFunc(h.GetOperationsPlanJobStatus)))
+	mux.Handle("GET /api/v1/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasks)))
+
+	// Medical Recording Dashboard endpoints
+	mux.Handle("GET /api/v1/medical-recordings", authMw(http.HandlerFunc(h.ListMedicalRecordings)))
+	mux.Handle("GET /api/v1/medical-recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))
+	mux.Handle("GET /api/v1/medical-recordings/doctor-ability", authMw(http.HandlerFunc(h.GetDoctorAbilityRanking)))
+	mux.Handle("GET /api/v1/medical-recordings/doctor-ability/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilityDetail)))
+	mux.Handle("GET /api/v1/medical-recordings/analysis", authMw(http.HandlerFunc(h.GetCommunicationAnalysis)))
+	mux.Handle("GET /api/v1/medical-recordings/weekly-meeting", authMw(http.HandlerFunc(h.GetWeeklyMeetingMaterial)))
+	mux.Handle("GET /api/v1/medical-recordings/weekly-summary", authMw(http.HandlerFunc(h.GetWeeklySummary)))
+	mux.Handle("GET /api/v1/medical-recordings/team-trends", authMw(http.HandlerFunc(h.GetTeamTrends)))
+	mux.Handle("POST /api/v1/medical-recordings/{id}/mark-highlight", authMw(http.HandlerFunc(h.MarkHighlight)))
+	mux.Handle("GET /api/v1/medical-recordings/followup-generation-mode", authMw(http.HandlerFunc(h.GetFollowUpGenerationMode)))
+	mux.Handle("POST /api/v1/medical-recordings/{id}/follow-up-tasks/confirm", authMw(http.HandlerFunc(h.ConfirmFollowUpTasks)))
+	mux.Handle("POST /api/v1/medical-recordings/followup-generation-mode", authMw(http.HandlerFunc(h.UpdateFollowUpGenerationMode)))
+	mux.Handle("GET /api/v1/medical-recordings/institution-rule-configs", authMw(http.HandlerFunc(h.ListInstitutionRuleConfigs)))
+	mux.Handle("POST /api/v1/medical-recordings/institution-rule-configs", authMw(http.HandlerFunc(h.CreateInstitutionRuleConfig)))
+	mux.Handle("PUT /api/v1/medical-recordings/institution-rule-configs/{id}", authMw(http.HandlerFunc(h.UpdateInstitutionRuleConfig)))
+	mux.Handle("GET /api/v1/medical-recordings/recording-analysis/settings", authMw(http.HandlerFunc(h.GetAnalysisSettings)))
+
+	// Recording Task Advanced endpoints
+	mux.Handle("GET /api/v1/recording-tasks/stats", authMw(http.HandlerFunc(h.GetTaskStats)))
+	mux.Handle("GET /api/v1/recording-tasks/daily-briefing", authMw(http.HandlerFunc(h.GetDailyBriefing)))
+	mux.Handle("GET /api/v1/recording-tasks/my-tasks", authMw(http.HandlerFunc(h.GetMyTasks)))
+	mux.Handle("GET /api/v1/recording-tasks/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasksByRecordingID)))
+	mux.Handle("GET /api/v1/recording-tasks/employees", authMw(http.HandlerFunc(h.ListTaskEmployees)))
+	mux.Handle("POST /api/v1/recording-tasks/assign", authMw(http.HandlerFunc(h.BatchAssignTasks)))
+	mux.Handle("GET /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.ListEmployeePartnerships)))
+	mux.Handle("POST /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.CreateEmployeePartnership)))
+	mux.Handle("DELETE /api/v1/recording-tasks/employee-partnerships/{id}", authMw(http.HandlerFunc(h.DeleteEmployeePartnership)))
+
+	// Recording Dashboard endpoints
+	mux.Handle("GET /api/v1/recordings/dashboard/daily-report", authMw(http.HandlerFunc(h.GetDailyReport)))
+	mux.Handle("GET /api/v1/recordings/dashboard/diagnosis", authMw(http.HandlerFunc(h.GetOperationsDiagnosis)))
+	mux.Handle("PATCH /api/v1/recordings/dashboard/target", authMw(http.HandlerFunc(h.UpdateMonthlyTarget)))
+	mux.Handle("GET /api/v1/recordings/dashboard/funnel-detail", authMw(http.HandlerFunc(h.GetFunnelDetail)))
+
+	// Analysis Dashboard endpoints
+	mux.Handle("GET /api/v1/recordings/dashboard/employee-diagnosis", authMw(http.HandlerFunc(h.GetEmployeeDiagnosis)))
+	mux.Handle("GET /api/v1/recordings/dashboard/team-ability", authMw(http.HandlerFunc(h.GetTeamAbility)))
+	mux.Handle("GET /api/v1/recordings/dashboard/morning-meeting", authMw(http.HandlerFunc(h.GetMorningMeetingMaterial)))
+	mux.Handle("GET /api/v1/recordings/dashboard/employee-growth", authMw(http.HandlerFunc(h.GetEmployeeGrowth)))
+
+	// Recording Prompt Advanced endpoints
+	mux.Handle("POST /api/v1/recording-prompts/codes/{code}/test", authMw(http.HandlerFunc(h.TestRecordingPrompt)))
+	mux.Handle("GET /api/v1/recording-prompts/tenant-configs", authMw(http.HandlerFunc(h.ListTenantPromptConfigs)))
+	mux.Handle("POST /api/v1/recording-prompts/tenant-configs", authMw(http.HandlerFunc(h.CreateTenantPromptConfig)))
+	mux.Handle("PUT /api/v1/recording-prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
+	mux.Handle("DELETE /api/v1/recording-prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
 }
 
 // ListRecordings handles listing medical recordings
