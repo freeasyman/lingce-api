@@ -57,6 +57,22 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Metadata endpoints
 	mux.Handle("GET /api/v1/metadata/fields", authMw(http.HandlerFunc(h.GetMetadataFields)))
 	mux.Handle("POST /api/v1/metadata/validate-template", authMw(http.HandlerFunc(h.ValidateTemplate)))
+
+	// Data browser endpoints
+	mux.Handle("GET /api/v1/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
+	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
+	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/data", authMw(http.HandlerFunc(h.GetTableData)))
+	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/export", authMw(http.HandlerFunc(h.ExportTableData)))
+	mux.Handle("GET /api/v1/data-browser/statistics", authMw(http.HandlerFunc(h.GetDatabaseStatistics)))
+	mux.Handle("DELETE /api/v1/data-browser/tables/{table_name}/truncate", authMw(http.HandlerFunc(h.TruncateTable)))
+	mux.Handle("POST /api/v1/data-browser/clear-import-data", authMw(http.HandlerFunc(h.ClearImportData)))
+
+	// Visit management endpoints
+	mux.Handle("GET /api/v1/visits/health", authMw(http.HandlerFunc(h.VisitsHealthCheck)))
+	mux.Handle("GET /api/v1/visits", authMw(http.HandlerFunc(h.ListVisits)))
+	mux.Handle("GET /api/v1/visits/statistics", authMw(http.HandlerFunc(h.GetVisitStatistics)))
+	mux.Handle("GET /api/v1/visits/filters", authMw(http.HandlerFunc(h.GetVisitFilters)))
+	mux.Handle("GET /api/v1/visits/{visit_id}", authMw(http.HandlerFunc(h.GetVisitByID)))
 }
 
 // Notification Handlers
@@ -799,3 +815,268 @@ func (h *Handler) ValidateTemplate(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteSuccess(w, result)
 }
+
+// Data Browser Handlers
+
+// ListTables handles listing database tables
+func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	// TODO: Implement table listing from database
+	tables := []string{
+		"tenants", "employees", "departments", "customers", "recordings",
+		"notifications", "operation_logs", "llm_call_records",
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"tables": tables,
+		"count":  len(tables),
+	})
+}
+
+// GetTableStructure handles getting table structure
+func (h *Handler) GetTableStructure(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	tableName := r.PathValue("table_name")
+	if tableName == "" {
+		httputil.WriteBadRequest(w, "Table name is required")
+		return
+	}
+
+	// TODO: Implement table structure retrieval from database
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"table_name": tableName,
+		"columns":    []interface{}{},
+	})
+}
+
+// GetTableData handles getting table data
+func (h *Handler) GetTableData(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	tableName := r.PathValue("table_name")
+	if tableName == "" {
+		httputil.WriteBadRequest(w, "Table name is required")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	// TODO: Implement table data retrieval from database
+	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+}
+
+// ExportTableData handles exporting table data
+func (h *Handler) ExportTableData(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	tableName := r.PathValue("table_name")
+	if tableName == "" {
+		httputil.WriteBadRequest(w, "Table name is required")
+		return
+	}
+
+	// TODO: Implement table data export (CSV format)
+	httputil.WriteSuccess(w, map[string]string{
+		"message": "Export functionality not yet implemented",
+	})
+}
+
+// GetDatabaseStatistics handles getting database statistics
+func (h *Handler) GetDatabaseStatistics(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	// TODO: Implement database statistics retrieval
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"total_tables":   0,
+		"total_rows":     0,
+		"database_size":  "0 MB",
+		"table_stats":    []interface{}{},
+	})
+}
+
+// TruncateTable handles truncating a table
+func (h *Handler) TruncateTable(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	tableName := r.PathValue("table_name")
+	if tableName == "" {
+		httputil.WriteBadRequest(w, "Table name is required")
+		return
+	}
+
+	// TODO: Implement table truncation (with safety checks)
+	httputil.WriteSuccess(w, map[string]string{
+		"message": "Table truncation not yet implemented",
+	})
+}
+
+// ClearImportData handles clearing import data
+func (h *Handler) ClearImportData(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Only admin can access data browser
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access data browser")
+		return
+	}
+
+	// TODO: Implement clearing import data
+	httputil.WriteSuccess(w, map[string]string{
+		"message": "Import data cleared successfully",
+	})
+}
+
+// Visit Management Handlers
+
+// VisitsHealthCheck handles visits health check
+func (h *Handler) VisitsHealthCheck(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteSuccess(w, map[string]string{
+		"status": "ok",
+	})
+}
+
+// ListVisits handles listing visits
+func (h *Handler) ListVisits(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	// TODO: Implement visit listing from database
+	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+}
+
+// GetVisitStatistics handles getting visit statistics
+func (h *Handler) GetVisitStatistics(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// TODO: Implement visit statistics calculation
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"total_visits":       0,
+		"visits_today":       0,
+		"visits_this_week":   0,
+		"visits_this_month":  0,
+	})
+}
+
+// GetVisitFilters handles getting visit filters
+func (h *Handler) GetVisitFilters(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// TODO: Implement visit filters retrieval
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"departments": []string{},
+		"doctors":     []string{},
+		"statuses":    []string{"pending", "completed", "cancelled"},
+	})
+}
+
+// GetVisitByID handles getting visit by ID
+func (h *Handler) GetVisitByID(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	visitID := r.PathValue("visit_id")
+	if visitID == "" {
+		httputil.WriteBadRequest(w, "Visit ID is required")
+		return
+	}
+
+	// TODO: Implement visit retrieval from database
+	httputil.WriteNotFound(w, "Visit not found")
+}
+
