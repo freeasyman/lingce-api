@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean build-linux help
+.PHONY: build run test lint clean build-linux docs help
 
 APP_NAME := lingce-api
 BUILD_DIR := bin
@@ -12,6 +12,7 @@ help:
 	@echo "  lint         - Run linter"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  build-linux  - Cross-compile for Linux amd64"
+	@echo "  docs         - Start API documentation server"
 
 build:
 	@echo "Building $(APP_NAME)..."
@@ -38,3 +39,13 @@ build-linux:
 	@echo "Cross-compiling for Linux amd64..."
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_PATH)
+
+docs:
+	@echo "Starting API documentation server..."
+	@if ! command -v swagger-ui-watcher &> /dev/null; then \
+		echo "Error: swagger-ui-watcher not found"; \
+		echo "Please install: npm install -g swagger-ui-watcher"; \
+		exit 1; \
+	fi
+	@echo "Documentation will be available at http://localhost:8000"
+	@swagger-ui-watcher docs/openapi.yaml
