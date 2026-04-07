@@ -135,11 +135,76 @@ handler → service → store
 - handler 不直接调用 store
 - store 不调用 service
 
+### 已实现模块示例
+
+**auth 模块**（9 个端点）：
+```
+internal/auth/
+├── handler.go          # 9 个登录/认证端点
+├── service.go          # 密码验证、JWT 生成、会话管理
+├── store.go            # 用户查询、会话版本更新
+├── model.go            # OperationsAdmin, Employee, Tenant, SMSLoginCode
+├── dto.go              # LoginRequest, LoginResponse, MeResponse
+├── captcha_store.go    # 验证码存储（进程内存 + 自动清理）
+└── (依赖) pkg/auth/jwt.go, pkg/captcha/captcha.go, pkg/sms/aliyun.go
+```
+
+**organization 模块**（16 个端点）：
+```
+internal/organization/
+├── handler.go    # 租户 CRUD（5 个端点）
+├── service.go    # 租户业务逻辑、分页处理
+├── store.go      # 租户查询、动态条件构建
+├── model.go      # Tenant
+└── dto.go        # TenantListRequest, TenantResponse, CreateTenantRequest
+
+internal/department/
+├── handler.go    # 部门 CRUD（5 个端点）
+├── service.go    # 部门业务逻辑
+├── store.go      # 部门查询（支持层级结构）
+├── model.go      # Department
+└── dto.go        # DepartmentListRequest, DepartmentResponse
+
+internal/employee/
+├── handler.go    # 员工 CRUD + 密码重置（6 个端点）
+├── service.go    # 员工业务逻辑、密码哈希
+├── store.go      # 员工查询、会话版本管理
+├── model.go      # Employee
+└── dto.go        # EmployeeListRequest, EmployeeResponse
+```
+
+**recording 模块**（5 个端点，基础版）：
+```
+internal/recording/
+├── handler.go    # 录音 CRUD（5 个端点）
+├── service.go    # 录音业务逻辑
+├── store.go      # 录音查询（支持多条件过滤）
+├── model.go      # MedicalRecording, RecordingStatus
+└── dto.go        # RecordingListRequest, RecordingResponse
+```
+
 ### 文件大小约束
 
 - 单文件不超过 500 行（硬性约束）
 - 超过 300 行时考虑拆分（如 `handler_topics.go`、`handler_contents.go`）
 - 复杂模块可按子域拆分文件，但保持同一 package
+
+**拆分示例**（recording 模块完整版将采用）：
+```
+internal/recording/
+├── handler.go              # RegisterRoutes + 公共辅助
+├── handler_recordings.go   # 录音 CRUD 端点
+├── handler_dashboard.go    # 看板端点
+├── handler_tasks.go        # 任务端点
+├── handler_prompts.go      # 提示词端点
+├── service.go              # 公共 service 逻辑
+├── service_analysis.go     # 分析相关逻辑
+├── store.go                # 公共查询
+├── store_recordings.go     # 录音表查询
+├── store_tasks.go          # 任务表查询
+├── model.go
+└── dto.go
+```
 
 ---
 

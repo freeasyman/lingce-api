@@ -167,34 +167,23 @@ lingce-api/
 - bcrypt密码加密，兼容旧SHA256密码
 - 图形验证码生成，阿里云短信集成
 
-### 2. 机构管理模块 (5个端点) ✅
+### 2. 组织架构模块 (20个端点) ✅
 
+**机构管理 (5个端点)**:
 - `GET /api/v1/tenants` - 获取机构列表（需认证，仅管理员）
 - `GET /api/v1/tenants/{id}` - 获取机构详情
 - `POST /api/v1/tenants` - 创建机构
 - `PUT /api/v1/tenants/{id}` - 更新机构
 - `DELETE /api/v1/tenants/{id}` - 删除机构（软删除）
 
-**特性**:
-- 分页和过滤（按名称、代码、状态）
-- 有效期管理（valid_from, valid_to）
-- 软删除支持
-
-### 3. 部门管理模块 (5个端点) ✅
-
+**部门管理 (5个端点)**:
 - `GET /api/v1/departments` - 获取部门列表（需认证）
 - `GET /api/v1/departments/{id}` - 获取部门详情
 - `POST /api/v1/departments` - 创建部门（仅管理员）
 - `PUT /api/v1/departments/{id}` - 更新部门（仅管理员）
 - `DELETE /api/v1/departments/{id}` - 删除部门（软删除）
 
-**特性**:
-- 层级结构支持（parent_id）
-- 按租户过滤
-- 员工可查看本租户部门，管理员可管理所有租户
-
-### 4. 员工管理模块 (6个端点) ✅
-
+**员工管理 (6个端点)**:
 - `GET /api/v1/employees` - 获取员工列表（需认证）
 - `GET /api/v1/employees/{id}` - 获取员工详情
 - `POST /api/v1/employees` - 创建员工（仅管理员）
@@ -202,13 +191,21 @@ lingce-api/
 - `POST /api/v1/employees/{id}/reset-password` - 重置密码（仅管理员）
 - `DELETE /api/v1/employees/{id}` - 删除员工（软删除）
 
-**特性**:
-- 关联租户和部门
-- 密码管理（创建时bcrypt加密，管理员可重置）
-- 分页和过滤（按用户名、姓名、电话、部门）
-- 会话版本管理
+**组织功能 (4个端点)**:
+- `GET /api/v1/organization/medical-specialties` - 医学专科目录（树形结构）
+- `GET /api/v1/organization/employees/{id}/assistants` - 医助绑定查询
+- `PUT /api/v1/organization/employees/{id}/assistants` - 医助绑定更新
+- `GET /api/v1/institutions/statistics` - 机构统计（仅管理员）
 
-### 5. 问诊记录管理模块 (5个端点) ✅
+**特性**:
+- 分页和过滤（按名称、代码、状态）
+- 有效期管理（valid_from, valid_to）
+- 层级结构支持（部门、医学专科）
+- 医助绑定关系管理
+- 机构统计数据（租户、员工、部门、设备、录音数量）
+- 软删除支持
+
+### 3. 问诊记录管理模块 (5个端点) ✅
 
 - `GET /api/v1/recordings` - 获取问诊记录列表（需认证）
 - `GET /api/v1/recordings/{id}` - 获取记录详情
@@ -295,11 +292,22 @@ lingce-api/
 
 ## 开发进度
 
-**已完成**: 30个API端点
+**已完成**: 34个API端点 (24.1%)
 - ✅ 认证模块 (9个端点)
-- ✅ 机构管理 (5个端点)
-- ✅ 部门管理 (5个端点)
-- ✅ 员工管理 (6个端点)
+- ✅ 组织架构模块 (20个端点)
+  - 机构管理 (5个)
+  - 部门管理 (5个)
+  - 员工管理 (6个)
+  - 组织功能 (4个)
 - ✅ 问诊记录管理 (5个端点)
 
-**待实现**: 参考 [迁移清单](docs/MIGRATION_INVENTORY.md)
+**待实现**: 107个端点 (75.9%)
+- sysconfig 模块 (22个端点)
+- rbac 模块 (44个端点)
+- recording 模块剩余 (72个端点)
+- badge 模块 (46个端点)
+- content 模块 (61个端点)
+- customer 模块 (35个端点)
+- support 模块 (24个端点)
+
+详见 [开发计划](docs/DEVELOPMENT_PLAN.md) 和 [迁移清单](docs/MIGRATION_INVENTORY.md)

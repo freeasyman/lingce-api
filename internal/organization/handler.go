@@ -22,12 +22,22 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// All organization endpoints require admin authentication
+	// Tenant management (admin only)
 	mux.Handle("GET /api/v1/tenants", authMw(http.HandlerFunc(h.ListTenants)))
 	mux.Handle("GET /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
 	mux.Handle("POST /api/v1/tenants", authMw(http.HandlerFunc(h.CreateTenant)))
 	mux.Handle("PUT /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
 	mux.Handle("DELETE /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.DeleteTenant)))
+
+	// Medical specialties (authenticated users)
+	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
+
+	// Employee assistants (authenticated users)
+	mux.Handle("GET /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
+	mux.Handle("PUT /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
+
+	// Institution statistics (admin only)
+	mux.Handle("GET /api/v1/institutions/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
 }
 
 // ListTenants handles listing tenants
@@ -163,4 +173,71 @@ func (h *Handler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) isAdmin(r *http.Request) bool {
 	claims := middleware.GetUserClaims(r.Context())
 	return claims != nil && claims.UserType == auth.UserTypeAdmin
+}
+
+// ListMedicalSpecialties handles listing medical specialties
+func (h *Handler) ListMedicalSpecialties(w http.ResponseWriter, r *http.Request) {
+	specialties, err := h.service.ListMedicalSpecialties(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, specialties)
+}
+
+// GetEmployeeAssistants handles getting assistants for an employee
+func (h *Handler) GetEmployeeAssistants(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+
+	assistants, err := h.service.GetEmployeeAssistants(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, assistants)
+}
+
+// UpdateEmployeeAssistants handles updating assistant bindings for an employee
+func (h *Handler) UpdateEmployeeAssistants(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+
+	var req UpdateAssistantsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.UpdateEmployeeAssistants(r.Context(), id, req); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Assistants updated successfully"})
+}
+
+// GetInstitutionStatistics handles getting institution statistics
+func (h *Handler) GetInstitutionStatistics(w http.ResponseWriter, r *http.Request) {
+	// Check admin permission
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	stats, err := h.service.GetInstitutionStatistics(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, stats)
 }

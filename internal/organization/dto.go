@@ -39,3 +39,26 @@ type TenantListRequest struct {
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
 }
+
+// MedicalSpecialtyResponse represents a medical specialty response
+type MedicalSpecialtyResponse struct {
+	ID        int64                       `json:"id"`
+	Name      string                      `json:"name"`
+	Code      string                      `json:"code"`
+	ParentID  *int64                      `json:"parent_id,omitempty"`
+	Level     int                         `json:"level"`
+	SortOrder int                         `json:"sort_order"`
+	Children  []*MedicalSpecialtyResponse `json:"children,omitempty"`
+}
+
+// AssistantResponse represents an assistant in the binding
+type AssistantResponse struct {
+	ID       int64  `json:"id"`
+	FullName string `json:"full_name"`
+	Username string `json:"username"`
+}
+
+// UpdateAssistantsRequest represents a request to update assistant bindings
+type UpdateAssistantsRequest struct {
+	AssistantIDs []int64 `json:"assistant_ids"`
+}

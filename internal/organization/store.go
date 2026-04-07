@@ -246,3 +246,153 @@ func (s *Store) DeleteTenant(ctx context.Context, id int64) error {
 
 	return nil
 }
+
+// ListMedicalSpecialties retrieves all medical specialties
+func (s *Store) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialty, error) {
+	query := `
+		SELECT id, name, code, parent_id, level, sort_order
+		FROM medical_specialties
+		ORDER BY sort_order, id
+	`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query medical specialties: %w", err)
+	}
+	defer rows.Close()
+
+	var specialties []*MedicalSpecialty
+	for rows.Next() {
+		var ms MedicalSpecialty
+		if err := rows.Scan(
+			&ms.ID,
+			&ms.Name,
+			&ms.Code,
+			&ms.ParentID,
+			&ms.Level,
+			&ms.SortOrder,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan medical specialty: %w", err)
+		}
+		specialties = append(specialties, &ms)
+	}
+
+	return specialties, nil
+}
+
+// GetEmployeeAssistants retrieves assistants for an employee
+func (s *Store) GetEmployeeAssistants(ctx context.Context, employeeID int64) ([]*AssistantResponse, error) {
+	query := `
+		SELECT e.id, e.full_name, e.username
+		FROM employees e
+		INNER JOIN employee_assistant_assignments eaa ON e.id = eaa.assistant_id
+		WHERE eaa.employee_id = $1 AND e.deleted_at IS NULL
+		ORDER BY e.full_name
+	`
+
+	rows, err := s.pool.Query(ctx, query, employeeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query employee assistants: %w", err)
+	}
+	defer rows.Close()
+
+	var assistants []*AssistantResponse
+	for rows.Next() {
+		var a AssistantResponse
+		if err := rows.Scan(&a.ID, &a.FullName, &a.Username); err != nil {
+			return nil, fmt.Errorf("failed to scan assistant: %w", err)
+		}
+		assistants = append(assistants, &a)
+	}
+
+	return assistants, nil
+}
+
+// UpdateEmployeeAssistants updates assistant bindings for an employee
+func (s *Store) UpdateEmployeeAssistants(ctx context.Context, employeeID int64, assistantIDs []int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Delete existing assignments
+	deleteQuery := `DELETE FROM employee_assistant_assignments WHERE employee_id = $1`
+	if _, err := tx.Exec(ctx, deleteQuery, employeeID); err != nil {
+		return fmt.Errorf("failed to delete existing assignments: %w", err)
+	}
+
+	// Insert new assignments
+	if len(assistantIDs) > 0 {
+		insertQuery := `
+			INSERT INTO employee_assistant_assignments (employee_id, assistant_id, created_at)
+			VALUES ($1, $2, NOW())
+		`
+		for _, assistantID := range assistantIDs {
+			if _, err := tx.Exec(ctx, insertQuery, employeeID, assistantID); err != nil {
+				return fmt.Errorf("failed to insert assignment: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetInstitutionStatistics retrieves institution statistics
+func (s *Store) GetInstitutionStatistics(ctx context.Context) (*InstitutionStatistics, error) {
+	var stats InstitutionStatistics
+
+	// Total and active tenants
+	tenantQuery := `
+		SELECT
+			COUNT(*) as total,
+			COUNT(*) FILTER (WHERE is_active = true) as active
+		FROM tenants
+		WHERE deleted_at IS NULL
+	`
+	if err := s.pool.QueryRow(ctx, tenantQuery).Scan(&stats.TotalTenants, &stats.ActiveTenants); err != nil {
+		return nil, fmt.Errorf("failed to query tenant stats: %w", err)
+	}
+
+	// Total employees
+	employeeQuery := `SELECT COUNT(*) FROM employees WHERE deleted_at IS NULL`
+	if err := s.pool.QueryRow(ctx, employeeQuery).Scan(&stats.TotalEmployees); err != nil {
+		return nil, fmt.Errorf("failed to query employee stats: %w", err)
+	}
+
+	// Total departments
+	deptQuery := `SELECT COUNT(*) FROM departments WHERE deleted_at IS NULL`
+	if err := s.pool.QueryRow(ctx, deptQuery).Scan(&stats.TotalDepartments); err != nil {
+		return nil, fmt.Errorf("failed to query department stats: %w", err)
+	}
+
+	// Total badge devices
+	badgeQuery := `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL`
+	if err := s.pool.QueryRow(ctx, badgeQuery).Scan(&stats.TotalBadgeDevices); err != nil {
+		// Badge devices table might not exist yet, set to 0
+		stats.TotalBadgeDevices = 0
+	}
+
+	// Total recordings
+	recordingQuery := `SELECT COUNT(*) FROM medical_recordings WHERE deleted_at IS NULL`
+	if err := s.pool.QueryRow(ctx, recordingQuery).Scan(&stats.TotalRecordings); err != nil {
+		return nil, fmt.Errorf("failed to query recording stats: %w", err)
+	}
+
+	// Recordings this week
+	weekQuery := `
+		SELECT COUNT(*)
+		FROM medical_recordings
+		WHERE deleted_at IS NULL
+		AND created_at >= date_trunc('week', NOW())
+	`
+	if err := s.pool.QueryRow(ctx, weekQuery).Scan(&stats.RecordingsThisWeek); err != nil {
+		return nil, fmt.Errorf("failed to query weekly recording stats: %w", err)
+	}
+
+	return &stats, nil
+}

@@ -95,3 +95,64 @@ func toTenantResponse(t *Tenant) *TenantResponse {
 		UpdatedAt: t.UpdatedAt,
 	}
 }
+
+// ListMedicalSpecialties retrieves all medical specialties as a tree
+func (s *Service) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialtyResponse, error) {
+	specialties, err := s.store.ListMedicalSpecialties(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build tree structure
+	return buildSpecialtyTree(specialties), nil
+}
+
+// buildSpecialtyTree builds a tree structure from flat specialty list
+func buildSpecialtyTree(specialties []*MedicalSpecialty) []*MedicalSpecialtyResponse {
+	// Create a map for quick lookup
+	specialtyMap := make(map[int64]*MedicalSpecialtyResponse)
+	var roots []*MedicalSpecialtyResponse
+
+	// First pass: create all nodes
+	for _, s := range specialties {
+		node := &MedicalSpecialtyResponse{
+			ID:        s.ID,
+			Name:      s.Name,
+			Code:      s.Code,
+			ParentID:  s.ParentID,
+			Level:     s.Level,
+			SortOrder: s.SortOrder,
+			Children:  []*MedicalSpecialtyResponse{},
+		}
+		specialtyMap[s.ID] = node
+	}
+
+	// Second pass: build tree
+	for _, s := range specialties {
+		node := specialtyMap[s.ID]
+		if s.ParentID == nil {
+			roots = append(roots, node)
+		} else {
+			if parent, ok := specialtyMap[*s.ParentID]; ok {
+				parent.Children = append(parent.Children, node)
+			}
+		}
+	}
+
+	return roots
+}
+
+// GetEmployeeAssistants retrieves assistants for an employee
+func (s *Service) GetEmployeeAssistants(ctx context.Context, employeeID int64) ([]*AssistantResponse, error) {
+	return s.store.GetEmployeeAssistants(ctx, employeeID)
+}
+
+// UpdateEmployeeAssistants updates assistant bindings for an employee
+func (s *Service) UpdateEmployeeAssistants(ctx context.Context, employeeID int64, req UpdateAssistantsRequest) error {
+	return s.store.UpdateEmployeeAssistants(ctx, employeeID, req.AssistantIDs)
+}
+
+// GetInstitutionStatistics retrieves institution statistics
+func (s *Service) GetInstitutionStatistics(ctx context.Context) (*InstitutionStatistics, error) {
+	return s.store.GetInstitutionStatistics(ctx)
+}
