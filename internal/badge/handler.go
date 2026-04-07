@@ -39,6 +39,28 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/badge-control/manufacturers/{manufacturer_code}/config", authMw(http.HandlerFunc(h.UpdateManufacturerConfig)))
 	mux.Handle("GET /api/v1/badge-control/dashboard/summary", authMw(http.HandlerFunc(h.GetDashboardSummary)))
 
+	// Device Inspection endpoints
+	mux.Handle("POST /api/v1/badge-control/acceptance/validate", authMw(http.HandlerFunc(h.ValidateAcceptance)))
+	mux.Handle("POST /api/v1/badge-control/acceptance/vendor-check", authMw(http.HandlerFunc(h.VendorCheck)))
+	mux.Handle("POST /api/v1/badge-control/inspection/device/{device_id}", authMw(http.HandlerFunc(h.InspectDevice)))
+	mux.Handle("POST /api/v1/badge-control/inspection/batch", authMw(http.HandlerFunc(h.BatchInspect)))
+	mux.Handle("GET /api/v1/badge-control/inspection/devices", authMw(http.HandlerFunc(h.ListInspectionDevices)))
+	mux.Handle("GET /api/v1/badge-control/inspection/device/{device_id}/live-status", authMw(http.HandlerFunc(h.GetDeviceLiveStatus)))
+	mux.Handle("POST /api/v1/badge-control/inspection/device/{device_id}/recording-test", authMw(http.HandlerFunc(h.TestDeviceRecording)))
+	mux.Handle("POST /api/v1/badge-control/tickets/submit-by-device", authMw(http.HandlerFunc(h.SubmitTicketByDevice)))
+
+	// Vendor Pool Sync endpoints
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-devices", authMw(http.HandlerFunc(h.SyncVendorDevices)))
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-and-diff", authMw(http.HandlerFunc(h.SyncAndDiff)))
+	mux.Handle("GET /api/v1/badge-control/vendor-pool/diff", authMw(http.HandlerFunc(h.GetVendorPoolDiff)))
+	mux.Handle("GET /api/v1/badge-control/vendor-pool/sync-batches", authMw(http.HandlerFunc(h.ListSyncBatches)))
+	mux.Handle("GET /api/v1/badge-control/vendor-pool/sync-batches/{id}/items", authMw(http.HandlerFunc(h.GetSyncBatchItems)))
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-batches/{id}/rollback-drafts", authMw(http.HandlerFunc(h.RollbackDrafts)))
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/create-acceptance-drafts", authMw(http.HandlerFunc(h.CreateAcceptanceDrafts)))
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/mark-pending-assignment", authMw(http.HandlerFunc(h.MarkPendingAssignment)))
+	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/create-exception-tickets", authMw(http.HandlerFunc(h.CreateExceptionTickets)))
+	mux.Handle("GET /api/v1/badge-control/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
+
 	// Smart badge endpoints
 	mux.Handle("GET /api/v1/smart-badge/tenant/devices", authMw(http.HandlerFunc(h.GetTenantDevices)))
 	mux.Handle("GET /api/v1/smart-badge/tenant/devices/overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
@@ -49,6 +71,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/smart-badge/me", authMw(http.HandlerFunc(h.GetMyBadgeStatus)))
 	mux.Handle("POST /api/v1/smart-badge/me/recording/start", authMw(http.HandlerFunc(h.StartMyRecording)))
 	mux.Handle("POST /api/v1/smart-badge/me/recording/stop", authMw(http.HandlerFunc(h.StopMyRecording)))
+
+	// Smart Badge Advanced endpoints
+	mux.Handle("GET /api/v1/smart-badge/tenant/devices/{device_no}/history", authMw(http.HandlerFunc(h.GetDeviceHistory)))
+	mux.Handle("POST /api/v1/smart-badge/callback/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
+	mux.Handle("POST /api/v1/smart-badge/callback/audio", authMw(http.HandlerFunc(h.AudioCallback)))
+	mux.Handle("POST /api/v1/smart-badge/process/pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
 }
 
 // Device Lifecycle Handlers
