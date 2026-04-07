@@ -132,11 +132,38 @@ lingce-api/
 
 | 文档 | 内容 |
 |------|------|
+| [API 文档](docs/API_DOCUMENTATION.md) | **完整的 API 调用文档（OpenAPI 3.0）** |
 | [迁移历史背景](docs/MIGRATION_BACKGROUND.md) | 为什么要做这次迁移，旧系统的问题，目标 |
 | [开发计划](docs/DEVELOPMENT_PLAN.md) | 分阶段实施计划、时间线、里程碑 |
 | [迁移清单](docs/MIGRATION_INVENTORY.md) | 完整的 API 端点和数据表清单 |
 | [架构设计](docs/ARCHITECTURE.md) | 技术选型、模块设计、约定 |
 | [开发规范](docs/DEVELOPMENT_GUIDE.md) | 编码规范、目录约定、开发流程 |
+
+## API 文档
+
+本项目提供完整的 **OpenAPI 3.0** 规范文档，包含所有 384 个 API 端点的详细说明。
+
+### 快速查看
+
+```bash
+# 安装 Swagger UI
+npm install -g swagger-ui-watcher
+
+# 启动文档服务器
+swagger-ui-watcher docs/openapi.yaml
+
+# 在浏览器中打开 http://localhost:8000
+```
+
+### 文档内容
+
+- ✅ 完整的请求/响应格式说明
+- ✅ 认证方式和权限要求
+- ✅ 数据模型定义和示例
+- ✅ 错误码说明
+- ✅ 可交互式测试
+
+详见 [API 文档说明](docs/API_DOCUMENTATION.md)
 
 ## 相关服务
 
