@@ -1,0 +1,1936 @@
+openapi: 3.0.3
+info:
+  title: 灵策医疗运营系统 API
+  description: "灵策医疗运营系统的统一后端 API 服务，提供完整的医疗运营管理功能。\n\n## 功能模块\n- **认证模块**: 用户登录、令牌管理、密码修改\n- **组织架构**: 机构、部门、员工、医生、患者管理\n- **录音管理**: 问诊录音、转写、分析、任务管理\n- **权限管理**: RBAC权限控制、角色菜单管理\n- **系统配置**: 租户配置、订阅管理、功能控制\n- **智能工牌**: 设备生命周期、录音控制、厂商同步\n- **内容管理**: 选题、内容生成、发布、GEO优化\n- **客户管理**: 客户信息、标签、分组、跟进记录\n- **支撑模块**: 通知、日志、LLM配置、就诊管理\n\n## 认证方式\n所有需要认证的接口都需要在请求头中携带JWT令牌：\n```\nAuthorization: Bearer <token>\n```\n\n## 用户类型\n- `admin`: 运维管理员，可访问所有租户数据\n- `employee`: 机构员工（Web端），只能访问自己租户的数据\n- `mobile`: 移动端用户，与employee权限相同但会话独立\n\n## 响应格式\n\n### 成功响应\n```json\n{\n  \"data\": {\n    // 响应数据\n  }\n}\n```\n\n### 分页响应\n```json\n{\n  \"items\": [...],\n  \"total\": 100,\n  \"page\": 1,\n  \"page_size\": 20\n}\n```\n\n### 错误响应\n```json\n{\n  \"code\": \"ERROR_CODE\",\n  \"message\": \"错误描述\",\n  \"details\": null\n}\n```\n"
+  version: 1.0.0
+  contact:
+    name: 灵策医疗技术支持
+    email: support@lingce.com
+  license:
+    name: Proprietary
+servers:
+- url: http://localhost:18080
+  description: 本地开发环境
+- url: https://api.lingce.com
+  description: 生产环境
+tags:
+- name: 认证
+  description: 用户认证、登录、令牌管理
+- name: 组织架构
+  description: 机构、部门、员工管理
+- name: 医生管理
+  description: 医生信息、业绩统计、员工映射
+- name: 患者管理
+  description: 患者信息、360度视图
+- name: 录音管理
+  description: 问诊录音CRUD、统计分析
+- name: 录音任务
+  description: 录音任务管理、分配、跟踪
+- name: 录音提示词
+  description: 录音分析提示词配置
+- name: 医疗录音看板
+  description: 质控、医生能力、团队分析
+- name: 权限管理
+  description: 运营端RBAC权限控制
+- name: 机构权限
+  description: 机构端RBAC权限控制
+- name: 系统配置
+  description: 租户配置、订阅管理、功能控制
+- name: 智能工牌
+  description: 设备生命周期、录音控制
+- name: 设备检测
+  description: 设备验收、检测、厂商验证
+- name: 厂商池同步
+  description: 厂商设备池同步、差异对比
+- name: 内容管理
+  description: 选题、内容生成、发布
+- name: 发布任务
+  description: 内容发布任务管理
+- name: GEO优化
+  description: 内容SEO优化分析
+- name: 素材池
+  description: 录音衍生素材管理
+- name: 提示词模板
+  description: 通用提示词模板管理
+- name: 客户管理
+  description: 客户信息、互动、跟进
+- name: 客户标签
+  description: 客户标签管理
+- name: 客户分组
+  description: 客户动态分组
+- name: 支撑模块
+  description: 通知、日志、LLM配置
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'JWT令牌认证。通过登录接口获取token后，在请求头中携带：
+
+        ```
+
+        Authorization: Bearer <token>
+
+        ```
+
+        '
+  schemas:
+    Error:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          description: 错误码
+          example: INVALID_REQUEST
+        message:
+          type: string
+          description: 错误描述
+          example: 请求参数无效
+        details:
+          type: object
+          nullable: true
+          description: 错误详情
+    PaginatedResponse:
+      type: object
+      required:
+      - items
+      - total
+      - page
+      - page_size
+      properties:
+        items:
+          type: array
+          items: {}
+          description: 数据列表
+        total:
+          type: integer
+          format: int64
+          description: 总记录数
+          example: 100
+        page:
+          type: integer
+          description: 当前页码
+          example: 1
+        page_size:
+          type: integer
+          description: 每页记录数
+          example: 20
+    SuccessResponse:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: object
+          description: 响应数据
+    LoginRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+          description: 用户名
+          example: admin
+        password:
+          type: string
+          format: password
+          description: 密码
+          example: password123
+        captcha_id:
+          type: string
+          description: 验证码ID（可选）
+        captcha_code:
+          type: string
+          description: 验证码（可选）
+    LoginResponse:
+      type: object
+      required:
+      - token
+      - user
+      properties:
+        token:
+          type: string
+          description: JWT令牌
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: '#/components/schemas/UserInfo'
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: 用户ID
+          example: 1
+        username:
+          type: string
+          description: 用户名
+          example: admin
+        user_type:
+          type: string
+          enum:
+          - admin
+          - employee
+          - mobile
+          description: 用户类型
+          example: admin
+        tenant_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: 租户ID（admin为null）
+          example: 1
+        employee_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: 员工ID（admin为null）
+          example: 1
+    ChangePasswordRequest:
+      type: object
+      required:
+      - old_password
+      - new_password
+      properties:
+        old_password:
+          type: string
+          format: password
+          description: 旧密码
+        new_password:
+          type: string
+          format: password
+          description: 新密码（至少6位）
+          minLength: 6
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        name:
+          type: string
+          description: 机构名称
+          example: 北京协和医院
+        code:
+          type: string
+          description: 机构代码
+          example: BJ001
+        contact_person:
+          type: string
+          description: 联系人
+          example: 张三
+        contact_phone:
+          type: string
+          description: 联系电话
+          example: 13800138000
+        is_active:
+          type: boolean
+          description: 是否启用
+          example: true
+        valid_from:
+          type: string
+          format: date
+          description: 有效期开始
+          example: '2024-01-01'
+        valid_to:
+          type: string
+          format: date
+          nullable: true
+          description: 有效期结束
+          example: '2025-12-31'
+        created_at:
+          type: string
+          format: date-time
+          example: '2024-01-01T00:00:00Z'
+        updated_at:
+          type: string
+          format: date-time
+          example: '2024-01-01T00:00:00Z'
+    Department:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        tenant_id:
+          type: integer
+          format: int64
+          example: 1
+        name:
+          type: string
+          description: 部门名称
+          example: 心内科
+        code:
+          type: string
+          description: 部门代码
+          example: DEPT001
+        parent_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: 父部门ID
+          example: null
+        level:
+          type: integer
+          description: 层级
+          example: 1
+        sort_order:
+          type: integer
+          description: 排序
+          example: 1
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Employee:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        tenant_id:
+          type: integer
+          format: int64
+          example: 1
+        department_id:
+          type: integer
+          format: int64
+          nullable: true
+          example: 1
+        username:
+          type: string
+          example: zhangsan
+        name:
+          type: string
+          example: 张三
+        phone:
+          type: string
+          example: '13800138000'
+        email:
+          type: string
+          format: email
+          example: zhangsan@example.com
+        job_title:
+          type: string
+          example: 主治医师
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Recording:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        tenant_id:
+          type: integer
+          format: int64
+          example: 1
+        employee_id:
+          type: integer
+          format: int64
+          example: 1
+        patient_name:
+          type: string
+          example: 李四
+        patient_phone:
+          type: string
+          example: '13900139000'
+        recording_url:
+          type: string
+          format: uri
+          example: https://oss.example.com/recordings/123.mp3
+        duration:
+          type: integer
+          description: 时长（秒）
+          example: 300
+        status:
+          type: string
+          enum:
+          - pending
+          - processing
+          - completed
+          - failed
+          example: completed
+        transcription:
+          type: string
+          nullable: true
+          description: 转写文本
+        doctor_summary:
+          type: string
+          nullable: true
+          description: 医生摘要
+        therapist_summary:
+          type: string
+          nullable: true
+          description: 治疗师摘要
+        consultant_summary:
+          type: string
+          nullable: true
+          description: 顾问摘要
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+  responses:
+    UnauthorizedError:
+      description: 未授权 - 令牌无效或已过期
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: UNAUTHORIZED
+            message: Invalid or expired token
+            details: null
+    ForbiddenError:
+      description: 禁止访问 - 权限不足
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: FORBIDDEN
+            message: Insufficient permissions
+            details: null
+    NotFoundError:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: NOT_FOUND
+            message: Resource not found
+            details: null
+    BadRequestError:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: BAD_REQUEST
+            message: Invalid request parameters
+            details: null
+    InternalServerError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: Internal server error
+            details: null
+security:
+- BearerAuth: []
+paths:
+  /api/v1/auth/login:
+    post:
+      summary: 运维管理员登录
+      description: 使用用户名密码登录，获取JWT令牌
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  example: password123
+                captcha_id:
+                  type: string
+                captcha_code:
+                  type: string
+              required:
+              - username
+              - password
+  /api/v1/auth/login/institution:
+    post:
+      summary: 机构员工登录
+      description: 机构员工使用用户名密码登录（Web端）
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+              required:
+              - username
+              - password
+  /api/v1/auth/login/employee:
+    post:
+      summary: 员工登录（别名）
+      description: 与机构员工登录相同
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+  /api/v1/auth/login/mobile:
+    post:
+      summary: 移动端登录
+      description: 移动端用户登录，会话与Web端独立
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+  /api/v1/auth/me:
+    get:
+      summary: 获取当前用户信息
+      description: 获取当前登录用户的详细信息
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/auth/change-password:
+    post:
+      summary: 修改密码
+      description: 修改当前用户密码，修改后旧令牌失效
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 6
+              required:
+              - old_password
+              - new_password
+  /api/v1/auth/captcha:
+    get:
+      summary: 生成图形验证码
+      description: 生成图形验证码，返回验证码ID和Base64图片
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+  /api/v1/auth/mobile/sms/send:
+    post:
+      summary: 发送短信验证码
+      description: 向指定手机号发送短信验证码
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                  example: '13800138000'
+              required:
+              - phone
+  /api/v1/auth/mobile/sms/login:
+    post:
+      summary: 短信验证码登录
+      description: 使用手机号和短信验证码登录
+      tags:
+      - 认证
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                code:
+                  type: string
+              required:
+              - phone
+              - code
+  /api/v1/tenants:
+    get:
+      summary: 机构列表
+      description: '获取机构列表（分页）
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-机构
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+        description: 页码
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+        description: 每页记录数
+    post:
+      summary: 创建机构
+      description: '创建新机构
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-机构
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                code:
+                  type: string
+                contact_person:
+                  type: string
+                contact_phone:
+                  type: string
+              required:
+              - name
+              - code
+  /api/v1/tenants/{id}:
+    get:
+      summary: 机构详情
+      description: '获取指定机构的详细信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-机构
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 更新机构
+      description: '更新机构信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-机构
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    delete:
+      summary: 删除机构
+      description: '软删除机构
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-机构
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/departments:
+    get:
+      summary: 部门列表
+      description: 获取部门列表（分页）
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+        description: 页码
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+        description: 每页记录数
+    post:
+      summary: 创建部门
+      description: '创建新部门
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/departments/{id}:
+    get:
+      summary: 部门详情
+      description: 获取指定部门的详细信息
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 更新部门
+      description: '更新部门信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    delete:
+      summary: 删除部门
+      description: '软删除部门
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/departments/health:
+    get:
+      summary: 部门健康检查
+      description: 检查部门模块健康状态
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/departments/sync-from-visits:
+    post:
+      summary: 从就诊同步部门
+      description: '从就诊记录同步部门信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/departments/{id}/performance:
+    get:
+      summary: 部门业绩统计
+      description: 获取部门业绩统计数据
+      tags:
+      - 组织架构-部门
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/employees:
+    get:
+      summary: 员工列表
+      description: 获取员工列表（分页）
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+        description: 页码
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+        description: 每页记录数
+    post:
+      summary: 创建员工
+      description: '创建新员工
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/employees/{id}:
+    get:
+      summary: 员工详情
+      description: 获取指定员工的详细信息
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 更新员工
+      description: '更新员工信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    delete:
+      summary: 删除员工
+      description: '软删除员工
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/employees/{id}/reset-password:
+    post:
+      summary: 重置密码
+      description: '重置员工密码
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-员工
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/organization/medical-specialties:
+    get:
+      summary: 医学专科目录
+      description: 获取医学专科树形目录
+      tags:
+      - 组织架构-组织功能
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/organization/employees/{id}/assistants:
+    get:
+      summary: 医助绑定查询
+      description: 查询员工的医助绑定关系
+      tags:
+      - 组织架构-组织功能
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 医助绑定更新
+      description: 更新员工的医助绑定关系
+      tags:
+      - 组织架构-组织功能
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/institutions/statistics:
+    get:
+      summary: 机构统计
+      description: '获取机构统计数据（租户、员工、部门、设备、录音数量）
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-组织功能
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/doctors/health:
+    get:
+      summary: 医生健康检查
+      description: 检查医生模块健康状态
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/doctors:
+    get:
+      summary: 医生列表
+      description: 获取医生列表（分页）
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+        description: 页码
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+        description: 每页记录数
+    post:
+      summary: 创建医生
+      description: '创建新医生
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/doctors/{id}:
+    get:
+      summary: 医生详情
+      description: 获取指定医生的详细信息
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 更新医生
+      description: '更新医生信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    delete:
+      summary: 删除医生
+      description: '软删除医生
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/doctors/sync-from-visits:
+    post:
+      summary: 从就诊同步医生
+      description: '从就诊记录同步医生信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/doctors/{id}/performance:
+    get:
+      summary: 医生业绩统计
+      description: 获取医生业绩统计数据
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/doctors/performance/summary:
+    get:
+      summary: 医生业绩汇总
+      description: 获取所有医生业绩汇总
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/doctors/{id}/employees:
+    get:
+      summary: 医生映射员工
+      description: 获取医生关联的员工列表
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    post:
+      summary: 更新医生员工映射
+      description: '更新医生与员工的映射关系
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-医生
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/patients:
+    get:
+      summary: 患者列表
+      description: 获取患者列表（分页）
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          default: 1
+        description: 页码
+      - name: page_size
+        in: query
+        schema:
+          type: integer
+          default: 20
+        description: 每页记录数
+    post:
+      summary: 创建患者
+      description: 创建新患者
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/patients/sync-from-visits:
+    post:
+      summary: 从就诊同步患者
+      description: '从就诊记录同步患者信息
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/patients/{id}:
+    get:
+      summary: 患者详情
+      description: 获取指定患者的详细信息
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    put:
+      summary: 更新患者
+      description: 更新患者信息
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+    delete:
+      summary: 删除患者
+      description: '软删除患者
+
+
+        **权限要求**: 仅管理员可访问'
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数
+  /api/v1/patients/{id}/360:
+    get:
+      summary: 患者360度视图
+      description: 获取患者完整信息视图（包含就诊、录音、病历等）
+      tags:
+      - 组织架构-患者
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: id参数

@@ -48,4 +48,4 @@ docs:
 		exit 1; \
 	fi
 	@echo "Documentation will be available at http://localhost:8000"
-	@swagger-ui-watcher docs/openapi.yaml
+	@swagger-ui-watcher docs/openapi_complete.yaml

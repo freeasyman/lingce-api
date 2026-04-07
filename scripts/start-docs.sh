@@ -14,7 +14,7 @@ fi
 # 获取脚本所在目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
-OPENAPI_FILE="$PROJECT_ROOT/docs/openapi.yaml"
+OPENAPI_FILE="$PROJECT_ROOT/docs/openapi_complete.yaml"
 
 # 检查文档文件是否存在
 if [ ! -f "$OPENAPI_FILE" ]; then
@@ -30,4 +30,4 @@ echo ""
 
 # 启动文档服务
 cd "$PROJECT_ROOT"
-swagger-ui-watcher docs/openapi.yaml
+swagger-ui-watcher docs/openapi_complete.yaml
