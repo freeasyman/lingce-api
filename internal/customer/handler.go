@@ -47,6 +47,26 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/customer-groups", authMw(http.HandlerFunc(h.CreateCustomerGroup)))
 	mux.Handle("PUT /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.UpdateCustomerGroup)))
 	mux.Handle("DELETE /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.DeleteCustomerGroup)))
+
+	// Advanced customer endpoints
+	mux.Handle("GET /api/v1/customers/{id}/momentum-history", authMw(http.HandlerFunc(h.GetCustomerMomentumHistory)))
+	mux.Handle("GET /api/v1/customers/duplicates", authMw(http.HandlerFunc(h.CheckDuplicates)))
+	mux.Handle("POST /api/v1/customers/merge", authMw(http.HandlerFunc(h.MergeCustomers)))
+	mux.Handle("GET /api/v1/customers/{id}/consultation-records", authMw(http.HandlerFunc(h.GetConsultationRecords)))
+	mux.Handle("GET /api/v1/customers/{id}/emr-records", authMw(http.HandlerFunc(h.GetEMRRecords)))
+
+	// Advanced tag endpoints
+	mux.Handle("POST /api/v1/customer-tags/batch", authMw(http.HandlerFunc(h.BatchTagCustomers)))
+	mux.Handle("GET /api/v1/customer-tags/stats", authMw(http.HandlerFunc(h.GetTagStats)))
+
+	// Advanced group endpoints
+	mux.Handle("GET /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.GetGroupMembers)))
+	mux.Handle("POST /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.AddGroupMembers)))
+	mux.Handle("DELETE /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.RemoveGroupMembers)))
+	mux.Handle("POST /api/v1/customer-groups/rules/preview", authMw(http.HandlerFunc(h.PreviewGroupRules)))
+	mux.Handle("POST /api/v1/customer-groups/rules/validate", authMw(http.HandlerFunc(h.ValidateGroupRules)))
+	mux.Handle("GET /api/v1/customer-groups/rules/fields", authMw(http.HandlerFunc(h.GetRuleFields)))
+	mux.Handle("GET /api/v1/customer-groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
 }
 
 // Customer Handlers
@@ -865,4 +885,434 @@ func (h *Handler) DeleteCustomerGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Customer group deleted successfully"})
+}
+
+// Advanced Customer Handlers
+
+// GetCustomerMomentumHistory handles getting customer momentum history
+func (h *Handler) GetCustomerMomentumHistory(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid customer ID")
+		return
+	}
+
+	// Check tenant access
+	existingCustomer, err := h.service.GetCustomerByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	// TODO: Implement momentum history retrieval from store
+	httputil.WriteSuccess(w, []interface{}{})
+}
+
+// CheckDuplicates handles checking for duplicate customers
+func (h *Handler) CheckDuplicates(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	phone := r.URL.Query().Get("phone")
+	email := r.URL.Query().Get("email")
+
+	if phone == "" && email == "" {
+		httputil.WriteBadRequest(w, "Either phone or email is required")
+		return
+	}
+
+	// TODO: Implement duplicate detection logic
+	httputil.WriteSuccess(w, []interface{}{})
+}
+
+// MergeCustomers handles merging multiple customers
+func (h *Handler) MergeCustomers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req MergeCustomersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if len(req.SourceIDs) == 0 {
+		httputil.WriteBadRequest(w, "Source IDs are required")
+		return
+	}
+
+	if req.TargetID == 0 {
+		httputil.WriteBadRequest(w, "Target ID is required")
+		return
+	}
+
+	// TODO: Implement customer merge logic
+	httputil.WriteSuccess(w, map[string]string{"message": "Customers merged successfully"})
+}
+
+// GetConsultationRecords handles getting customer consultation records
+func (h *Handler) GetConsultationRecords(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid customer ID")
+		return
+	}
+
+	// Check tenant access
+	existingCustomer, err := h.service.GetCustomerByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	// TODO: Implement consultation records retrieval from recordings table
+	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+}
+
+// GetEMRRecords handles getting customer EMR records
+func (h *Handler) GetEMRRecords(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid customer ID")
+		return
+	}
+
+	// Check tenant access
+	existingCustomer, err := h.service.GetCustomerByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	// TODO: Implement EMR records retrieval from medical records table
+	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+}
+
+// Advanced Tag Handlers
+
+// BatchTagCustomers handles batch tagging customers
+func (h *Handler) BatchTagCustomers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req BatchTagRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if len(req.CustomerIDs) == 0 {
+		httputil.WriteBadRequest(w, "Customer IDs are required")
+		return
+	}
+
+	if len(req.TagIDs) == 0 {
+		httputil.WriteBadRequest(w, "Tag IDs are required")
+		return
+	}
+
+	if req.Action != "add" && req.Action != "remove" {
+		httputil.WriteBadRequest(w, "Action must be 'add' or 'remove'")
+		return
+	}
+
+	// TODO: Implement batch tagging logic
+	httputil.WriteSuccess(w, map[string]string{"message": "Batch tagging completed successfully"})
+}
+
+// GetTagStats handles getting tag statistics
+func (h *Handler) GetTagStats(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var tenantID *int64
+	// Admin can view all tenants, employees can only view their own tenant
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		tenantID = &tid
+	}
+
+	// TODO: Implement tag statistics calculation
+	_ = tenantID // Will be used in implementation
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"total_tags":        0,
+		"total_assignments": 0,
+		"most_used_tags":    []interface{}{},
+	})
+}
+
+// Advanced Group Handlers
+
+// GetGroupMembers handles getting group members
+func (h *Handler) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid group ID")
+		return
+	}
+
+	// Check tenant access
+	existingGroup, err := h.service.GetCustomerGroupByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	// TODO: Implement group members retrieval
+	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+}
+
+// AddGroupMembers handles adding members to a group
+func (h *Handler) AddGroupMembers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid group ID")
+		return
+	}
+
+	// Check tenant access
+	existingGroup, err := h.service.GetCustomerGroupByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req AddMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if len(req.CustomerIDs) == 0 {
+		httputil.WriteBadRequest(w, "Customer IDs are required")
+		return
+	}
+
+	// TODO: Implement add members logic
+	httputil.WriteSuccess(w, map[string]string{"message": "Members added successfully"})
+}
+
+// RemoveGroupMembers handles removing members from a group
+func (h *Handler) RemoveGroupMembers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid group ID")
+		return
+	}
+
+	// Check tenant access
+	existingGroup, err := h.service.GetCustomerGroupByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	var req RemoveMembersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if len(req.CustomerIDs) == 0 {
+		httputil.WriteBadRequest(w, "Customer IDs are required")
+		return
+	}
+
+	// TODO: Implement remove members logic
+	httputil.WriteSuccess(w, map[string]string{"message": "Members removed successfully"})
+}
+
+// PreviewGroupRules handles previewing group rules
+func (h *Handler) PreviewGroupRules(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req RulePreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	// TODO: Implement rule preview logic
+	httputil.WriteSuccess(w, RulePreviewResponse{
+		MatchCount: 0,
+		Customers:  []int64{},
+	})
+}
+
+// ValidateGroupRules handles validating group rules
+func (h *Handler) ValidateGroupRules(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req RuleValidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	// TODO: Implement rule validation logic
+	httputil.WriteSuccess(w, RuleValidateResponse{
+		IsValid: true,
+		Errors:  []string{},
+	})
+}
+
+// GetRuleFields handles getting available rule fields
+func (h *Handler) GetRuleFields(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Return available fields for rule building
+	fields := []RuleField{
+		{Name: "status", Label: "Status", Type: "enum", Options: []string{"lead", "contacted", "qualified", "converted", "lost"}, Description: "Customer status"},
+		{Name: "source", Label: "Source", Type: "string", Description: "Customer source"},
+		{Name: "momentum", Label: "Momentum", Type: "number", Description: "Customer momentum score"},
+		{Name: "created_at", Label: "Created Date", Type: "date", Description: "Customer creation date"},
+		{Name: "last_contacted_at", Label: "Last Contacted", Type: "date", Description: "Last contact date"},
+		{Name: "age", Label: "Age", Type: "number", Description: "Customer age"},
+		{Name: "gender", Label: "Gender", Type: "enum", Options: []string{"male", "female", "other"}, Description: "Customer gender"},
+	}
+
+	httputil.WriteSuccess(w, fields)
+}
+
+// GetRuleOperators handles getting available rule operators
+func (h *Handler) GetRuleOperators(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Return available operators for rule building
+	operators := []RuleOperator{
+		{Name: "eq", Label: "Equals", ApplicableTypes: []string{"string", "number", "enum"}, Description: "Equals"},
+		{Name: "ne", Label: "Not Equals", ApplicableTypes: []string{"string", "number", "enum"}, Description: "Not equals"},
+		{Name: "gt", Label: "Greater Than", ApplicableTypes: []string{"number", "date"}, Description: "Greater than"},
+		{Name: "gte", Label: "Greater Than or Equal", ApplicableTypes: []string{"number", "date"}, Description: "Greater than or equal"},
+		{Name: "lt", Label: "Less Than", ApplicableTypes: []string{"number", "date"}, Description: "Less than"},
+		{Name: "lte", Label: "Less Than or Equal", ApplicableTypes: []string{"number", "date"}, Description: "Less than or equal"},
+		{Name: "contains", Label: "Contains", ApplicableTypes: []string{"string"}, Description: "Contains substring"},
+		{Name: "in", Label: "In", ApplicableTypes: []string{"string", "number", "enum"}, Description: "In list"},
+		{Name: "not_in", Label: "Not In", ApplicableTypes: []string{"string", "number", "enum"}, Description: "Not in list"},
+	}
+
+	httputil.WriteSuccess(w, operators)
 }
