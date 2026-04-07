@@ -13,6 +13,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
 	"github.com/freeasyman/lingce-api/internal/config"
+	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
@@ -127,6 +128,12 @@ func main() {
 	badgeService := badge.NewService(badgeStore)
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// Register content module
+	contentStore := content.NewStore(pool)
+	contentService := content.NewService(contentStore)
+	contentHandler := content.NewHandler(contentService)
+	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Apply middleware chain
 	handler := middleware.RequestID(
