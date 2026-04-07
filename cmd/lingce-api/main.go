@@ -19,6 +19,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/store"
+	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/sms"
@@ -106,6 +107,12 @@ func main() {
 	rbacService := rbac.NewService(rbacStore)
 	rbacHandler := rbac.NewHandler(rbacService)
 	rbacHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// Register support module
+	supportStore := support.NewStore(pool)
+	supportService := support.NewService(supportStore)
+	supportHandler := support.NewHandler(supportService)
+	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Apply middleware chain
 	handler := middleware.RequestID(
