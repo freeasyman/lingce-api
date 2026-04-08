@@ -19,10 +19,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // GetAdminByUsername retrieves an operations admin by username
 func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, username, password_hash, real_name, email, phone,
-		       session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, name AS username, password_hash, name AS real_name, email, phone,
+		       session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins
-		WHERE username = $1 AND deleted_at IS NULL
+		WHERE name = $1 OR phone = $1
 	`
 
 	var admin OperationsAdmin
@@ -53,10 +53,10 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 // GetAdminByID retrieves an operations admin by ID
 func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, username, password_hash, real_name, email, phone,
-		       session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, name AS username, password_hash, name AS real_name, email, phone,
+		       session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins
-		WHERE id = $1 AND deleted_at IS NULL
+		WHERE id = $1
 	`
 
 	var admin OperationsAdmin
@@ -87,10 +87,10 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 // GetEmployeeByUsername retrieves an employee by username and tenant
 func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tenantID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, username, password_hash, full_name, phone, email,
-		       department_id, session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
+		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM employees
-		WHERE username = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		WHERE (name = $1 OR phone = $1) AND tenant_id = $2
 	`
 
 	var emp Employee
@@ -123,10 +123,10 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 // GetEmployeeByPhone retrieves an employee by phone
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, username, password_hash, full_name, phone, email,
-		       department_id, session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
+		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM employees
-		WHERE phone = $1 AND deleted_at IS NULL
+		WHERE phone = $1
 		LIMIT 1
 	`
 
@@ -160,10 +160,10 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 // GetEmployeeByID retrieves an employee by ID
 func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, username, password_hash, full_name, phone, email,
-		       department_id, session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
+		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM employees
-		WHERE id = $1 AND deleted_at IS NULL
+		WHERE id = $1
 	`
 
 	var emp Employee
@@ -196,10 +196,10 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 // GetTenantByID retrieves a tenant by ID
 func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, error) {
 	query := `
-		SELECT id, name, code, is_active, valid_from, valid_to,
-		       created_at, updated_at, deleted_at
+		SELECT id, name, code, (is_active <> 0) AS is_active, service_started_on AS valid_from, service_expired_on AS valid_to,
+		       created_at, updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
-		WHERE id = $1 AND deleted_at IS NULL
+		WHERE id = $1
 	`
 
 	var tenant Tenant

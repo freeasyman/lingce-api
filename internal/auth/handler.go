@@ -50,12 +50,17 @@ func (h *Handler) LoginAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.Password == "" {
+	loginID := req.Username
+	if loginID == "" {
+		loginID = req.Phone
+	}
+
+	if loginID == "" || req.Password == "" {
 		httputil.WriteBadRequest(w, "Username and password are required")
 		return
 	}
 
-	resp, err := h.service.LoginAdmin(r.Context(), req.Username, req.Password)
+	resp, err := h.service.LoginAdmin(r.Context(), loginID, req.Password)
 	if err != nil {
 		httputil.WriteUnauthorized(w, err.Error())
 		return
@@ -68,6 +73,7 @@ func (h *Handler) LoginAdmin(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
+		Phone    string `json:"phone"`
 		Password string `json:"password"`
 		TenantID int64  `json:"tenant_id"`
 	}
@@ -77,12 +83,17 @@ func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.Password == "" || req.TenantID == 0 {
+	loginID := req.Username
+	if loginID == "" {
+		loginID = req.Phone
+	}
+
+	if loginID == "" || req.Password == "" || req.TenantID == 0 {
 		httputil.WriteBadRequest(w, "Username, password and tenant_id are required")
 		return
 	}
 
-	resp, err := h.service.LoginEmployee(r.Context(), req.Username, req.Password, req.TenantID)
+	resp, err := h.service.LoginEmployee(r.Context(), loginID, req.Password, req.TenantID)
 	if err != nil {
 		httputil.WriteUnauthorized(w, err.Error())
 		return
@@ -100,6 +111,7 @@ func (h *Handler) LoginEmployee(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) LoginMobile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
+		Phone    string `json:"phone"`
 		Password string `json:"password"`
 		TenantID int64  `json:"tenant_id"`
 	}
@@ -109,12 +121,17 @@ func (h *Handler) LoginMobile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Username == "" || req.Password == "" || req.TenantID == 0 {
+	loginID := req.Username
+	if loginID == "" {
+		loginID = req.Phone
+	}
+
+	if loginID == "" || req.Password == "" || req.TenantID == 0 {
 		httputil.WriteBadRequest(w, "Username, password and tenant_id are required")
 		return
 	}
 
-	resp, err := h.service.LoginMobile(r.Context(), req.Username, req.Password, req.TenantID)
+	resp, err := h.service.LoginMobile(r.Context(), loginID, req.Password, req.TenantID)
 	if err != nil {
 		httputil.WriteUnauthorized(w, err.Error())
 		return

@@ -3,6 +3,7 @@ package auth
 // LoginRequest represents a login request
 type LoginRequest struct {
 	Username string `json:"username"`
+	Phone    string `json:"phone,omitempty"`
 	Password string `json:"password"`
 	Captcha  string `json:"captcha,omitempty"`
 }
