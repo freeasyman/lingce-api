@@ -4,8 +4,8 @@
 从代码中提取所有端点并生成易读的 Markdown 文档
 """
 
-import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -40,11 +40,24 @@ def extract_routes_from_file(file_path: str) -> List[Tuple[str, str, str]]:
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # 匹配路由定义
-    pattern = r'mux\.Handle\("(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)",\s+authMw\(http\.HandlerFunc\(h\.(\w+)\)\)\)'
-    matches = re.findall(pattern, content)
+    # 匹配受保护路由
+    protected_pattern = (
+        r'mux\.Handle\(\s*"(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)"\s*,\s*'
+        r'authMw\(http\.HandlerFunc\(h\.(\w+)\)\)\s*\)'
+    )
+    matches = re.findall(protected_pattern, content)
 
     for method, path, handler_name in matches:
+        routes.append((method, path, handler_name))
+
+    # 匹配公开路由
+    public_pattern = (
+        r'mux\.HandleFunc\(\s*"(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)"\s*,\s*'
+        r'h\.(\w+)\s*\)'
+    )
+    public_matches = re.findall(public_pattern, content)
+
+    for method, path, handler_name in public_matches:
         routes.append((method, path, handler_name))
 
     return routes
@@ -112,7 +125,7 @@ def generate_markdown_docs(project_root: str):
     md_content.append(f"**版本**: 1.0.0  \n")
     md_content.append(f"**端点总数**: {total_endpoints}  \n")
     md_content.append(f"**模块数量**: {len(all_routes)}  \n")
-    md_content.append(f"**生成时间**: {Path(__file__).stat().st_mtime}\n")
+    md_content.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     md_content.append("\n---\n")
 
     # 目录

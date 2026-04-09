@@ -9,6 +9,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/jackc/pgx/v5"
 )
 
 // Medical Recording Dashboard Handlers
@@ -268,13 +269,17 @@ func (h *Handler) GetFollowUpGenerationMode(w http.ResponseWriter, r *http.Reque
 			"min_score": 60,
 		},
 	}
-	_ = h.service.store.pool.QueryRow(r.Context(), `
+	err = h.service.store.pool.QueryRow(r.Context(), `
 		SELECT COALESCE(NULLIF(doctor_call2_mode, ''), 'auto')
 		FROM recording_institution_rule_configs
 		WHERE tenant_id = $1 AND is_active = true
 		ORDER BY updated_at DESC
 		LIMIT 1
 	`, tenantID).Scan(&resp.Mode)
+	if err != nil && err != pgx.ErrNoRows {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, resp)
 }
 
@@ -301,10 +306,33 @@ func (h *Handler) ConfirmFollowUpTasks(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "task_ids is required")
 		return
 	}
-	for _, taskID := range req.TaskIDs {
-		_ = h.service.store.CompleteTask(r.Context(), taskID, claims.UserID)
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
-	_ = id
+	rec, err := h.service.store.GetRecordingByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if rec.TenantID != tenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	var failedTaskIDs []int64
+	for _, taskID := range req.TaskIDs {
+		if err := h.service.store.CompleteTask(r.Context(), taskID, claims.UserID); err != nil {
+			failedTaskIDs = append(failedTaskIDs, taskID)
+		}
+	}
+	if len(failedTaskIDs) > 0 {
+		httputil.WriteSuccess(w, map[string]interface{}{
+			"message":         "Follow-up tasks partially confirmed",
+			"failed_task_ids": failedTaskIDs,
+		})
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Follow-up tasks confirmed"})
 }
 

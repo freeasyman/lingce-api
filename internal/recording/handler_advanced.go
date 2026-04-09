@@ -447,9 +447,12 @@ func (h *Handler) SubmitAnalysisFeedback(w http.ResponseWriter, r *http.Request)
 		msg = msg + ": " + comment
 	}
 	processingError := msg
-	_, _ = h.service.store.UpdateRecording(r.Context(), id, UpdateRecordingRequest{
+	if _, err := h.service.store.UpdateRecording(r.Context(), id, UpdateRecordingRequest{
 		ProcessingError: &processingError,
-	})
+	}); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Feedback submitted"})
 }
 
@@ -579,12 +582,19 @@ func (h *Handler) ConfirmFollowUpAction(w http.ResponseWriter, r *http.Request) 
 	if req.Notes != nil {
 		note = note + ": " + *req.Notes
 	}
-	_, _ = h.service.store.pool.Exec(r.Context(), `
+	result, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE recording_tasks
-		SET status = 'completed', completed_at = NOW(), feedback = CONCAT(COALESCE(feedback, ''), CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END, 'completed_by=', $1::text), updated_at = NOW()
-		WHERE recording_id = $2 AND source_type = 'follow_up' AND status IN ('pending', 'assigned')
-	`, claims.UserID, id)
-	_ = note
+		SET status = 'completed', completed_at = NOW(), feedback = CONCAT(COALESCE(feedback, ''), CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END, 'completed_by=', $1::text, E'\n', 'action_note=', $2), updated_at = NOW()
+		WHERE recording_id = $3 AND source_type = 'follow_up' AND status IN ('pending', 'assigned')
+	`, claims.UserID, note, id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if result.RowsAffected() == 0 {
+		httputil.WriteNotFound(w, "No pending follow-up tasks found for this recording")
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Follow-up action confirmed"})
 }
 

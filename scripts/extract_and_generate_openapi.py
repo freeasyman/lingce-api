@@ -4,7 +4,6 @@
 扫描所有 handler.go 文件，自动提取路由定义
 """
 
-import os
 import re
 import yaml
 from pathlib import Path
@@ -17,11 +16,20 @@ def extract_routes_from_file(file_path: str) -> List[Tuple[str, str, str]]:
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    # 匹配路由定义: mux.Handle("METHOD /path", ...)
-    pattern = r'mux\.Handle\("(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)",\s+authMw\(http\.HandlerFunc\(h\.(\w+)\)\)\)'
-    matches = re.findall(pattern, content)
+    # 匹配受保护路由: mux.Handle("METHOD /path", authMw(http.HandlerFunc(h.Handler)))
+    protected_pattern = (
+        r'mux\.Handle\(\s*"(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)"\s*,\s*'
+        r'authMw\(http\.HandlerFunc\(h\.(\w+)\)\)\s*\)'
+    )
+    for method, path, handler_name in re.findall(protected_pattern, content):
+        routes.append((method, path, handler_name))
 
-    for method, path, handler_name in matches:
+    # 匹配公开路由: mux.HandleFunc("METHOD /path", h.Handler)
+    public_pattern = (
+        r'mux\.HandleFunc\(\s*"(GET|POST|PUT|DELETE|PATCH)\s+([^"]+)"\s*,\s*'
+        r'h\.(\w+)\s*\)'
+    )
+    for method, path, handler_name in re.findall(public_pattern, content):
         routes.append((method, path, handler_name))
 
     return routes
