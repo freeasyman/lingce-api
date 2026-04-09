@@ -1,13 +1,13 @@
 # 灵策医疗运营系统 API 端点文档
 **版本**: 1.0.0  
-**端点总数**: 369  
+**端点总数**: 376  
 **模块数量**: 11  
-**生成时间**: 1775559899.1936533
+**生成时间**: 2026-04-09 23:40:41
 
 ---
 
 ## 目录
-- [auth](#auth) (2 个端点)
+- [auth](#auth) (9 个端点)
 - [badge](#badge) (46 个端点)
 - [content](#content) (74 个端点)
 - [customer](#customer) (34 个端点)
@@ -39,8 +39,26 @@ Authorization: Bearer <your-token>
 
 ## auth
 
-**端点数量**: 2
+**端点数量**: 9
 
+### `GET /api/v1/auth/captcha`
+
+**描述**: 生成图形验证码
+
+**Handler**: `GetCaptcha`
+
+**响应示例**:
+```json
+{
+  "data": {
+    "id": 1,
+    "name": "示例名称",
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+---
 ### `POST /api/v1/auth/change-password`
 
 **描述**: 修改当前用户密码
@@ -65,6 +83,122 @@ Authorization: Bearer <your-token>
 ```
 
 ---
+### `POST /api/v1/auth/login`
+
+**描述**: 用户登录，返回JWT令牌
+
+**Handler**: `LoginAdmin`
+
+**请求体示例**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "user_type": "admin"
+    }
+  }
+}
+```
+
+---
+### `POST /api/v1/auth/login/employee`
+
+**描述**: 用户登录，返回JWT令牌
+
+**Handler**: `LoginEmployee`
+
+**请求体示例**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "user_type": "admin"
+    }
+  }
+}
+```
+
+---
+### `POST /api/v1/auth/login/institution`
+
+**描述**: 用户登录，返回JWT令牌
+
+**Handler**: `LoginInstitution`
+
+**请求体示例**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "user_type": "admin"
+    }
+  }
+}
+```
+
+---
+### `POST /api/v1/auth/login/mobile`
+
+**描述**: 用户登录，返回JWT令牌
+
+**Handler**: `LoginMobile`
+
+**请求体示例**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "user_type": "admin"
+    }
+  }
+}
+```
+
+---
 ### `GET /api/v1/auth/me`
 
 **描述**: 获取当前登录用户信息
@@ -78,6 +212,58 @@ Authorization: Bearer <your-token>
     "id": 1,
     "name": "示例名称",
     "created_at": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+---
+### `POST /api/v1/auth/mobile/sms/login`
+
+**描述**: 用户登录，返回JWT令牌
+
+**Handler**: `SMSLogin`
+
+**请求体示例**:
+```json
+{
+  "username": "admin",
+  "password": "password123"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": 1,
+      "username": "admin",
+      "user_type": "admin"
+    }
+  }
+}
+```
+
+---
+### `POST /api/v1/auth/mobile/sms/send`
+
+**描述**: 发送短信验证码
+
+**Handler**: `SendSMS`
+
+**请求体示例**:
+```json
+{
+  "data": "请求数据"
+}
+```
+
+**响应示例**:
+```json
+{
+  "data": {
+    "message": "操作成功"
   }
 }
 ```

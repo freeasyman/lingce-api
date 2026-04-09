@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-04-09T15:41:17.140293+00:00",
+  "total_routes": 376,
+  "total_shell": 0,
+  "total_implemented": 376,
+  "modules": {
+    "auth": {
+      "total": 9,
+      "shell": 0,
+      "implemented": 9
+    },
+    "badge": {
+      "total": 46,
+      "shell": 0,
+      "implemented": 46
+    },
+    "content": {
+      "total": 74,
+      "shell": 0,
+      "implemented": 74
+    },
+    "customer": {
+      "total": 34,
+      "shell": 0,
+      "implemented": 34
+    },
+    "department": {
+      "total": 5,
+      "shell": 0,
+      "implemented": 5
+    },
+    "employee": {
+      "total": 6,
+      "shell": 0,
+      "implemented": 6
+    },
+    "organization": {
+      "total": 30,
+      "shell": 0,
+      "implemented": 30
+    },
+    "rbac": {
+      "total": 39,
+      "shell": 0,
+      "implemented": 39
+    },
+    "recording": {
+      "total": 78,
+      "shell": 0,
+      "implemented": 78
+    },
+    "support": {
+      "total": 36,
+      "shell": 0,
+      "implemented": 36
+    },
+    "sysconfig": {
+      "total": 19,
+      "shell": 0,
+      "implemented": 19
+    }
+  },
+  "shell_routes": []
+}
