@@ -156,3 +156,81 @@ func (s *Service) UpdateEmployeeAssistants(ctx context.Context, employeeID int64
 func (s *Service) GetInstitutionStatistics(ctx context.Context) (*InstitutionStatistics, error) {
 	return s.store.GetInstitutionStatistics(ctx)
 }
+
+// Doctor services
+
+func (s *Service) ListDoctors(ctx context.Context, tenantID *int64, name *string, departmentID *int64, isActive *bool, page, pageSize int) ([]*Doctor, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	return s.store.ListDoctors(ctx, tenantID, name, departmentID, isActive, page, pageSize)
+}
+
+func (s *Service) GetDoctorByID(ctx context.Context, id int64) (*Doctor, error) {
+	return s.store.GetDoctorByID(ctx, id)
+}
+
+func (s *Service) CreateDoctor(ctx context.Context, tenantID int64, fullName, phone, email string, departmentID *int64) (*Doctor, error) {
+	if fullName == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	return s.store.CreateDoctor(ctx, tenantID, fullName, phone, email, departmentID)
+}
+
+func (s *Service) UpdateDoctor(ctx context.Context, id int64, fullName, phone, email *string, departmentID *int64, isActive *bool) (*Doctor, error) {
+	return s.store.UpdateDoctor(ctx, id, fullName, phone, email, departmentID, isActive)
+}
+
+func (s *Service) DeleteDoctor(ctx context.Context, id int64) error {
+	return s.store.DeleteDoctor(ctx, id)
+}
+
+// Patient services
+
+func (s *Service) ListPatients(ctx context.Context, tenantID *int64, name *string, phone *string, status *string, page, pageSize int) ([]*Patient, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	return s.store.ListPatients(ctx, tenantID, name, phone, status, page, pageSize)
+}
+
+func (s *Service) GetPatientByID(ctx context.Context, id int64) (*Patient, error) {
+	return s.store.GetPatientByID(ctx, id)
+}
+
+func (s *Service) CreatePatient(ctx context.Context, tenantID int64, name string, phone, email, gender *string, age *int, createdBy int64) (*Patient, error) {
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	return s.store.CreatePatient(ctx, tenantID, name, phone, email, gender, age, createdBy)
+}
+
+func (s *Service) UpdatePatient(ctx context.Context, id int64, name, phone, email, gender, status *string, age *int) (*Patient, error) {
+	return s.store.UpdatePatient(ctx, id, name, phone, email, gender, status, age)
+}
+
+func (s *Service) DeletePatient(ctx context.Context, id int64) error {
+	return s.store.DeletePatient(ctx, id)
+}
+
+// Department advanced services
+
+func (s *Service) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) (map[string]int64, error) {
+	return s.store.SyncDepartmentsFromVisits(ctx, tenantID)
+}
+
+func (s *Service) GetDepartmentPerformance(ctx context.Context, departmentID int64, period string) (map[string]interface{}, error) {
+	return s.store.GetDepartmentPerformance(ctx, departmentID, period)
+}

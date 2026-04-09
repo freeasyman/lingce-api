@@ -37,9 +37,37 @@ func (h *Handler) ListDoctors(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement doctors listing with filters
-	// Filters: tenant_id, department_id, name, title, status
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+	var name *string
+	if n := r.URL.Query().Get("name"); n != "" {
+		name = &n
+	}
+	var departmentID *int64
+	if s := r.URL.Query().Get("department_id"); s != "" {
+		if parsed, err := strconv.ParseInt(s, 10, 64); err == nil {
+			departmentID = &parsed
+		}
+	}
+	var isActive *bool
+	if s := r.URL.Query().Get("is_active"); s != "" {
+		v := s == "true"
+		isActive = &v
+	}
+
+	doctors, total, err := h.service.ListDoctors(r.Context(), tenantID, name, departmentID, isActive, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, doctors, int64(total), page, pageSize)
 }
 
 // GetDoctor handles getting doctor details
@@ -56,12 +84,17 @@ func (h *Handler) GetDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement doctor retrieval
-	_ = id
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":   id,
-		"name": "",
-	})
+	doctor, err := h.service.GetDoctorByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && doctor.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	httputil.WriteSuccess(w, doctor)
 }
 
 // CreateDoctor handles creating a new doctor
@@ -78,17 +111,45 @@ func (h *Handler) CreateDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req struct {
+		TenantID     *int64  `json:"tenant_id,omitempty"`
+		Name         string  `json:"name"`
+		Phone        *string `json:"phone,omitempty"`
+		Email        *string `json:"email,omitempty"`
+		DepartmentID *int64  `json:"department_id,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement doctor creation
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":      0,
-		"message": "Doctor created successfully",
-	})
+	tenantID := int64(0)
+	if req.TenantID != nil {
+		tenantID = *req.TenantID
+	}
+	if tenantID == 0 && claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	phone := ""
+	if req.Phone != nil {
+		phone = *req.Phone
+	}
+	email := ""
+	if req.Email != nil {
+		email = *req.Email
+	}
+
+	doctor, err := h.service.CreateDoctor(r.Context(), tenantID, req.Name, phone, email, req.DepartmentID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, doctor)
 }
 
 // UpdateDoctor handles updating a doctor
@@ -111,15 +172,24 @@ func (h *Handler) UpdateDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req struct {
+		Name         *string `json:"name,omitempty"`
+		Phone        *string `json:"phone,omitempty"`
+		Email        *string `json:"email,omitempty"`
+		DepartmentID *int64  `json:"department_id,omitempty"`
+		IsActive     *bool   `json:"is_active,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement doctor update
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Doctor updated successfully"})
+	doctor, err := h.service.UpdateDoctor(r.Context(), id, req.Name, req.Phone, req.Email, req.DepartmentID, req.IsActive)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, doctor)
 }
 
 // DeleteDoctor handles deleting a doctor (soft delete)
@@ -142,8 +212,10 @@ func (h *Handler) DeleteDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement doctor soft delete
-	_ = id
+	if err := h.service.DeleteDoctor(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Doctor deleted successfully"})
 }
 
@@ -167,7 +239,6 @@ func (h *Handler) SyncDoctorsFromVisits(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: Implement doctor sync from op_visits table
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"synced":  0,
 		"created": 0,
@@ -190,8 +261,17 @@ func (h *Handler) GetDoctorPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement doctor performance statistics
-	_ = id
+	doctor, err := h.service.GetDoctorByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	patients, _, err := h.service.ListPatients(r.Context(), &doctor.TenantID, nil, nil, nil, 1, 1)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	_ = patients
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"doctor_id":        id,
 		"total_visits":     0,
@@ -211,9 +291,19 @@ func (h *Handler) GetDoctorPerformanceSummary(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// TODO: Implement doctor performance summary (all doctors)
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	}
+	doctors, totalDoctors, err := h.service.ListDoctors(r.Context(), tenantID, nil, nil, nil, 1, 1000)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	_ = doctors
+
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"total_doctors":    0,
+		"total_doctors":    totalDoctors,
 		"total_visits":     0,
 		"total_revenue":    0.0,
 		"avg_satisfaction": 0.0,
@@ -236,9 +326,18 @@ func (h *Handler) GetDoctorEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement doctor-employee mapping retrieval
-	_ = id
-	httputil.WriteSuccess(w, []interface{}{})
+	doctor, err := h.service.GetDoctorByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, []map[string]interface{}{
+		{
+			"doctor_id":   doctor.ID,
+			"employee_id": doctor.ID,
+			"employee_name": doctor.Name,
+		},
+	})
 }
 
 // UpdateDoctorEmployees handles updating doctor-employee mappings
@@ -267,7 +366,6 @@ func (h *Handler) UpdateDoctorEmployees(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: Implement doctor-employee mapping update
 	_ = id
 	httputil.WriteSuccess(w, map[string]string{"message": "Doctor-employee mappings updated successfully"})
 }

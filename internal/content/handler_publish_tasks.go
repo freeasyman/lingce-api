@@ -20,15 +20,22 @@ func (h *Handler) GetPublishDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement publish dashboard
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"total_tasks":     0,
-		"pending_tasks":   0,
-		"running_tasks":   0,
-		"completed_tasks": 0,
-		"failed_tasks":    0,
-		"recent_tasks":    []interface{}{},
-	})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+
+	resp, err := h.service.GetPublishDashboard(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
 }
 
 // ListPublishTasks handles listing publish tasks
@@ -39,18 +46,47 @@ func (h *Handler) ListPublishTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
+	var req PublishTaskListRequest
+	if claims.UserType != auth.UserTypeAdmin {
+		req.TenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			req.TenantID = &parsed
+		}
 	}
 
-	// TODO: Implement publish tasks listing with filters
-	// Filters: status, content_id, platform, created_by
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	if contentIDStr := r.URL.Query().Get("content_id"); contentIDStr != "" {
+		if parsed, err := strconv.ParseInt(contentIDStr, 10, 64); err == nil {
+			req.ContentID = &parsed
+		}
+	}
+	if platform := r.URL.Query().Get("platform"); platform != "" {
+		req.Platform = &platform
+	}
+	if status := r.URL.Query().Get("status"); status != "" {
+		req.Status = &status
+	}
+	if createdByStr := r.URL.Query().Get("created_by"); createdByStr != "" {
+		if parsed, err := strconv.ParseInt(createdByStr, 10, 64); err == nil {
+			req.CreatedBy = &parsed
+		}
+	}
+	if startDate := r.URL.Query().Get("start_date"); startDate != "" {
+		req.StartDate = &startDate
+	}
+	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
+		req.EndDate = &endDate
+	}
+	req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
+
+	tasks, total, err := h.service.ListPublishTasks(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, tasks, int64(total), req.Page, req.PageSize)
 }
 
 // GetPublishTask handles getting publish task details
@@ -67,12 +103,17 @@ func (h *Handler) GetPublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement publish task retrieval
-	_ = taskID
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":     taskID,
-		"status": "pending",
-	})
+	task, err := h.service.GetPublishTaskByID(r.Context(), taskID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && task.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	httputil.WriteSuccess(w, task)
 }
 
 // CreatePublishTask handles creating a publish task
@@ -83,17 +124,24 @@ func (h *Handler) CreatePublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req CreatePublishTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement publish task creation
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":      0,
-		"message": "Publish task created successfully",
-	})
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+
+	task, err := h.service.CreatePublishTask(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, task)
 }
 
 // BatchCreatePublishTasks handles batch creating publish tasks
@@ -104,15 +152,26 @@ func (h *Handler) BatchCreatePublishTasks(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req map[string]interface{}
+	var req BatchCreatePublishTasksRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement batch publish task creation
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+
+	tasks, err := h.service.BatchCreatePublishTasks(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"created": 0,
+		"created": len(tasks),
+		"tasks":   tasks,
 		"message": "Publish tasks created successfully",
 	})
 }
@@ -131,15 +190,28 @@ func (h *Handler) UpdatePublishTaskStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req map[string]interface{}
+	var req UpdateTaskStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement publish task status update
-	_ = taskID
-	httputil.WriteSuccess(w, map[string]string{"message": "Task status updated successfully"})
+	existing, err := h.service.GetPublishTaskByID(r.Context(), taskID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	task, err := h.service.UpdatePublishTaskStatus(r.Context(), taskID, req.Status)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, task)
 }
 
 // CancelPublishTask handles canceling a publish task
@@ -156,9 +228,22 @@ func (h *Handler) CancelPublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement publish task cancellation
-	_ = taskID
-	httputil.WriteSuccess(w, map[string]string{"message": "Task cancelled successfully"})
+	existing, err := h.service.GetPublishTaskByID(r.Context(), taskID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	task, err := h.service.UpdatePublishTaskStatus(r.Context(), taskID, "cancelled")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, task)
 }
 
 // RetryPublishTask handles retrying a failed publish task
@@ -175,9 +260,22 @@ func (h *Handler) RetryPublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement publish task retry
-	_ = taskID
-	httputil.WriteSuccess(w, map[string]string{"message": "Task retry initiated successfully"})
+	existing, err := h.service.GetPublishTaskByID(r.Context(), taskID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	task, err := h.service.UpdatePublishTaskStatus(r.Context(), taskID, "pending")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, task)
 }
 
 // DeletePublishTask handles deleting a publish task
@@ -200,7 +298,9 @@ func (h *Handler) DeletePublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement publish task deletion
-	_ = taskID
+	if err := h.service.DeletePublishTask(r.Context(), taskID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Task deleted successfully"})
 }

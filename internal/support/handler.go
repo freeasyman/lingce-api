@@ -832,10 +832,10 @@ func (h *Handler) ListTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement table listing from database
-	tables := []string{
-		"tenants", "employees", "departments", "customers", "recordings",
-		"notifications", "operation_logs", "llm_call_records",
+	tables, err := h.service.ListTables(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
 	}
 
 	httputil.WriteSuccess(w, map[string]interface{}{
@@ -864,10 +864,14 @@ func (h *Handler) GetTableStructure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement table structure retrieval from database
+	columns, err := h.service.GetTableStructure(r.Context(), tableName)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"table_name": tableName,
-		"columns":    []interface{}{},
+		"columns":    columns,
 	})
 }
 
@@ -900,8 +904,12 @@ func (h *Handler) GetTableData(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement table data retrieval from database
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	data, total, err := h.service.GetTableData(r.Context(), tableName, page, pageSize)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, data, total, page, pageSize)
 }
 
 // ExportTableData handles exporting table data
@@ -924,9 +932,17 @@ func (h *Handler) ExportTableData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement table data export (CSV format)
-	httputil.WriteSuccess(w, map[string]string{
-		"message": "Export functionality not yet implemented",
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	csvData, total, err := h.service.ExportTableDataCSV(r.Context(), tableName, limit)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"table_name":   tableName,
+		"total_rows":   total,
+		"csv_preview":  csvData,
+		"message":      "CSV export generated",
 	})
 }
 
@@ -944,13 +960,12 @@ func (h *Handler) GetDatabaseStatistics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: Implement database statistics retrieval
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"total_tables":   0,
-		"total_rows":     0,
-		"database_size":  "0 MB",
-		"table_stats":    []interface{}{},
-	})
+	stats, err := h.service.GetDatabaseStatistics(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, stats)
 }
 
 // TruncateTable handles truncating a table
@@ -973,9 +988,12 @@ func (h *Handler) TruncateTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement table truncation (with safety checks)
+	if err := h.service.TruncateTable(r.Context(), tableName); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{
-		"message": "Table truncation not yet implemented",
+		"message": "Table truncated successfully",
 	})
 }
 
@@ -993,9 +1011,13 @@ func (h *Handler) ClearImportData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement clearing import data
+	count, err := h.service.ClearImportData(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{
-		"message": "Import data cleared successfully",
+		"message": "Import data cleared successfully: " + strconv.Itoa(count) + " tables",
 	})
 }
 
@@ -1025,8 +1047,20 @@ func (h *Handler) ListVisits(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement visit listing from database
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+	items, total, err := h.service.ListVisits(r.Context(), tenantID, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, total, page, pageSize)
 }
 
 // GetVisitStatistics handles getting visit statistics
@@ -1037,13 +1071,20 @@ func (h *Handler) GetVisitStatistics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement visit statistics calculation
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"total_visits":       0,
-		"visits_today":       0,
-		"visits_this_week":   0,
-		"visits_this_month":  0,
-	})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+	stats, err := h.service.GetVisitStatistics(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, stats)
 }
 
 // GetVisitFilters handles getting visit filters
@@ -1054,12 +1095,20 @@ func (h *Handler) GetVisitFilters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement visit filters retrieval
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"departments": []string{},
-		"doctors":     []string{},
-		"statuses":    []string{"pending", "completed", "cancelled"},
-	})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+	filters, err := h.service.GetVisitFilters(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, filters)
 }
 
 // GetVisitByID handles getting visit by ID
@@ -1070,13 +1119,27 @@ func (h *Handler) GetVisitByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	visitID := r.PathValue("visit_id")
-	if visitID == "" {
+	visitIDStr := r.PathValue("visit_id")
+	if visitIDStr == "" {
 		httputil.WriteBadRequest(w, "Visit ID is required")
 		return
 	}
+	visitID, err := strconv.ParseInt(visitIDStr, 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid visit ID")
+		return
+	}
 
-	// TODO: Implement visit retrieval from database
-	httputil.WriteNotFound(w, "Visit not found")
+	visit, err := h.service.GetVisitByID(r.Context(), visitID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil {
+		if tenantID, ok := visit["tenant_id"].(int64); ok && tenantID != *claims.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+	}
+	httputil.WriteSuccess(w, visit)
 }
-

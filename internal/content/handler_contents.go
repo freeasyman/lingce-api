@@ -40,14 +40,29 @@ func (h *Handler) ListContents(w http.ResponseWriter, r *http.Request) {
 	if category := r.URL.Query().Get("category"); category != "" {
 		req.Category = &category
 	}
+	if createdByStr := r.URL.Query().Get("created_by"); createdByStr != "" {
+		createdBy, _ := strconv.ParseInt(createdByStr, 10, 64)
+		req.CreatedBy = &createdBy
+	}
+	if startDate := r.URL.Query().Get("start_date"); startDate != "" {
+		req.StartDate = &startDate
+	}
+	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
+		req.EndDate = &endDate
+	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
 
-	// TODO: Implement content listing from store
-	httputil.WritePaginated(w, []ContentResponse{}, 0, req.Page, req.PageSize)
+	contents, total, err := h.service.ListContents(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, contents, int64(total), req.Page, req.PageSize)
 }
 
 // GetContent handles getting content by ID
@@ -64,9 +79,18 @@ func (h *Handler) GetContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content retrieval from store
-	_ = id
-	httputil.WriteNotFound(w, "Content not found")
+	content, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && content.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	httputil.WriteSuccess(w, content)
 }
 
 // GenerateContent handles AI content generation
@@ -83,8 +107,29 @@ func (h *Handler) GenerateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement AI content generation via LLM
-	httputil.WriteSuccess(w, map[string]string{"message": "Content generation not yet implemented"})
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	if claims.UserType == auth.UserTypeAdmin && tenantID == 0 {
+		if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+			if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+				tenantID = parsed
+			}
+		}
+	}
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+
+	content, err := h.service.GenerateContent(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, content)
 }
 
 // CreateContent handles creating content
@@ -101,8 +146,29 @@ func (h *Handler) CreateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content creation in store
-	httputil.WriteSuccess(w, map[string]string{"message": "Content created successfully"})
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	if claims.UserType == auth.UserTypeAdmin && tenantID == 0 {
+		if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+			if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+				tenantID = parsed
+			}
+		}
+	}
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+
+	content, err := h.service.CreateContent(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, content)
 }
 
 // UpdateContent handles updating content
@@ -125,9 +191,23 @@ func (h *Handler) UpdateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content update in store
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Content updated successfully"})
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.UpdateContent(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, content)
 }
 
 // DeleteContent handles deleting content
@@ -144,8 +224,21 @@ func (h *Handler) DeleteContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content deletion in store
-	_ = id
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	if err := h.service.DeleteContent(r.Context(), id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
 	httputil.WriteSuccess(w, map[string]string{"message": "Content deleted successfully"})
 }
 
@@ -169,10 +262,20 @@ func (h *Handler) GenerateImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement image generation via LLM and upload to OSS
-	_ = id
-	response := &ImageGenerationResponse{
-		Images: []GeneratedImage{},
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	response, err := h.service.GenerateImages(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	httputil.WriteSuccess(w, response)
 }
@@ -197,10 +300,20 @@ func (h *Handler) GenerateSingleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement single image generation via LLM and upload to OSS
-	_ = id
-	response := &ImageGenerationResponse{
-		Images: []GeneratedImage{},
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	response, err := h.service.GenerateSingleImage(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	httputil.WriteSuccess(w, response)
 }
@@ -225,9 +338,22 @@ func (h *Handler) SaveComposedImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement saving composed images to content
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Images saved successfully"})
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.SaveComposedImages(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
 }
 
 // PublishContent handles publishing content
@@ -244,9 +370,22 @@ func (h *Handler) PublishContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content publishing
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Content published successfully"})
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.PublishContent(r.Context(), id)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
 }
 
 // UnpublishContent handles unpublishing content
@@ -263,7 +402,20 @@ func (h *Handler) UnpublishContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement content unpublishing
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Content unpublished successfully"})
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.UnpublishContent(r.Context(), id)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
 }

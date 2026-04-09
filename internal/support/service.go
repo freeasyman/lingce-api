@@ -3,6 +3,9 @@ package support
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 )
 
 type Service struct {
@@ -312,21 +315,154 @@ func (s *Service) GetLLMCostSummary(ctx context.Context, startDate, endDate *str
 
 // GetMetadataFields retrieves metadata fields
 func (s *Service) GetMetadataFields(ctx context.Context) (*MetadataFieldsResponse, error) {
-	// TODO: Implement metadata field retrieval from database schema
-	// This would typically query information_schema or use reflection
+	tables, err := s.store.ListTables(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fields := make([]MetadataField, 0, 256)
+	for _, table := range tables {
+		structure, err := s.store.GetTableStructure(ctx, table)
+		if err != nil {
+			return nil, err
+		}
+		for _, col := range structure {
+			columnName, _ := col["column_name"].(string)
+			dataType, _ := col["data_type"].(string)
+			isNullable, _ := col["is_nullable"].(bool)
+			var defaultValue *string
+			switch v := col["column_default"].(type) {
+			case *string:
+				defaultValue = v
+			case string:
+				if strings.TrimSpace(v) != "" {
+					value := v
+					defaultValue = &value
+				}
+			}
+
+			fields = append(fields, MetadataField{
+				FieldName:    table + "." + columnName,
+				FieldType:    normalizeMetadataFieldType(dataType),
+				Description:  fmt.Sprintf("Field %s from table %s", columnName, table),
+				TableName:    table,
+				IsRequired:   !isNullable,
+				DefaultValue: defaultValue,
+			})
+		}
+	}
+
+	sort.Slice(fields, func(i, j int) bool {
+		if fields[i].TableName == fields[j].TableName {
+			return fields[i].FieldName < fields[j].FieldName
+		}
+		return fields[i].TableName < fields[j].TableName
+	})
+
 	return &MetadataFieldsResponse{
-		Fields: []MetadataField{},
+		Fields: fields,
 	}, nil
 }
 
 // ValidateTemplate validates a template
 func (s *Service) ValidateTemplate(ctx context.Context, req ValidateTemplateRequest) (*ValidateTemplateResponse, error) {
-	// TODO: Implement template validation logic
-	// This would parse the template and check for valid field references
+	template := strings.TrimSpace(req.Template)
+	if template == "" {
+		return &ValidateTemplateResponse{
+			IsValid: false,
+			Errors:  []string{"template is required"},
+		}, nil
+	}
+
+	fieldsResp, err := s.GetMetadataFields(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	validFields := make(map[string]struct{}, len(fieldsResp.Fields))
+	for _, f := range fieldsResp.Fields {
+		validFields[f.FieldName] = struct{}{}
+	}
+
+	re := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}`)
+	matches := re.FindAllStringSubmatch(template, -1)
+	usedSet := map[string]struct{}{}
+	missingSet := map[string]struct{}{}
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		field := strings.TrimSpace(match[1])
+		if field == "" {
+			continue
+		}
+		usedSet[field] = struct{}{}
+		if _, ok := validFields[field]; !ok {
+			missingSet[field] = struct{}{}
+		}
+	}
+
+	usedFields := setToSortedSlice(usedSet)
+	missingFields := setToSortedSlice(missingSet)
+	errors := []string{}
+	if len(missingFields) > 0 {
+		errors = append(errors, fmt.Sprintf("unknown fields: %s", strings.Join(missingFields, ", ")))
+	}
+
 	return &ValidateTemplateResponse{
-		IsValid: true,
-		Errors:  []string{},
+		IsValid:       len(errors) == 0,
+		Errors:        errors,
+		UsedFields:    usedFields,
+		MissingFields: missingFields,
 	}, nil
+}
+
+// Data browser services
+
+func (s *Service) ListTables(ctx context.Context) ([]string, error) {
+	return s.store.ListTables(ctx)
+}
+
+func (s *Service) GetTableStructure(ctx context.Context, tableName string) ([]map[string]interface{}, error) {
+	return s.store.GetTableStructure(ctx, tableName)
+}
+
+func (s *Service) GetTableData(ctx context.Context, tableName string, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	return s.store.GetTableData(ctx, tableName, page, pageSize)
+}
+
+func (s *Service) ExportTableDataCSV(ctx context.Context, tableName string, limit int) (string, int64, error) {
+	return s.store.ExportTableDataCSV(ctx, tableName, limit)
+}
+
+func (s *Service) GetDatabaseStatistics(ctx context.Context) (map[string]interface{}, error) {
+	return s.store.GetDatabaseStatistics(ctx)
+}
+
+func (s *Service) TruncateTable(ctx context.Context, tableName string) error {
+	return s.store.TruncateTable(ctx, tableName)
+}
+
+func (s *Service) ClearImportData(ctx context.Context) (int, error) {
+	return s.store.ClearImportData(ctx)
+}
+
+// Visit services
+
+func (s *Service) ListVisits(ctx context.Context, tenantID *int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	return s.store.ListVisits(ctx, tenantID, page, pageSize)
+}
+
+func (s *Service) GetVisitStatistics(ctx context.Context, tenantID *int64) (map[string]int64, error) {
+	return s.store.GetVisitStatistics(ctx, tenantID)
+}
+
+func (s *Service) GetVisitFilters(ctx context.Context, tenantID *int64) (map[string]interface{}, error) {
+	return s.store.GetVisitFilters(ctx, tenantID)
+}
+
+func (s *Service) GetVisitByID(ctx context.Context, id int64) (map[string]interface{}, error) {
+	return s.store.GetVisitByID(ctx, id)
 }
 
 // Helper functions
@@ -409,4 +545,33 @@ func toLLMCallRecordResponse(r *LLMCallRecord) *LLMCallRecordResponse {
 		RelatedType:      r.RelatedType,
 		CreatedAt:        r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+}
+
+func normalizeMetadataFieldType(dataType string) string {
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "smallint", "integer", "bigint", "numeric", "decimal", "real", "double precision":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "date", "timestamp without time zone", "timestamp with time zone", "time without time zone", "time with time zone":
+		return "date"
+	case "json", "jsonb":
+		return "object"
+	case "array":
+		return "array"
+	default:
+		return "string"
+	}
+}
+
+func setToSortedSlice(input map[string]struct{}) []string {
+	if len(input) == 0 {
+		return []string{}
+	}
+	result := make([]string, 0, len(input))
+	for item := range input {
+		result = append(result, item)
+	}
+	sort.Strings(result)
+	return result
 }

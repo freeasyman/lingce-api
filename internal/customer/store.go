@@ -2,6 +2,8 @@ package customer
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -1016,4 +1018,902 @@ func (s *Store) DeleteCustomerGroup(ctx context.Context, id int64) error {
 	}
 
 	return nil
+}
+
+// Advanced Customer Methods
+
+func (s *Store) GetCustomerMomentumHistory(ctx context.Context, customerID int64, days int) ([]MomentumHistory, error) {
+	if days <= 0 {
+		days = 30
+	}
+
+	query := `
+		SELECT
+			to_char(d.day, 'YYYY-MM-DD') AS date,
+			LEAST(100, GREATEST(0, COALESCE(c.momentum, 0) + COALESCE(i.interactions, 0) * 3 - COALESCE(f.pending_followups, 0) * 2)) AS momentum
+		FROM generate_series(CURRENT_DATE - ($2::int - 1), CURRENT_DATE, interval '1 day') d(day)
+		JOIN customers c ON c.id = $1 AND c.deleted_at IS NULL
+		LEFT JOIN (
+			SELECT DATE(interacted_at) AS day, COUNT(*)::int AS interactions
+			FROM customer_interactions
+			WHERE customer_id = $1
+			GROUP BY DATE(interacted_at)
+		) i ON i.day = d.day::date
+		LEFT JOIN (
+			SELECT DATE(created_at) AS day, COUNT(*)::int AS pending_followups
+			FROM customer_follow_ups
+			WHERE customer_id = $1 AND status = 'planned'
+			GROUP BY DATE(created_at)
+		) f ON f.day = d.day::date
+		ORDER BY d.day ASC
+	`
+
+	rows, err := s.pool.Query(ctx, query, customerID, days)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query momentum history: %w", err)
+	}
+	defer rows.Close()
+
+	var history []MomentumHistory
+	for rows.Next() {
+		var item MomentumHistory
+		if err := rows.Scan(&item.Date, &item.Momentum); err != nil {
+			return nil, fmt.Errorf("failed to scan momentum history: %w", err)
+		}
+		history = append(history, item)
+	}
+
+	return history, nil
+}
+
+func (s *Store) FindDuplicateCustomers(ctx context.Context, tenantID *int64, phone, email *string) ([]*Customer, error) {
+	if phone == nil && email == nil {
+		return []*Customer{}, nil
+	}
+
+	conditions := []string{"deleted_at IS NULL"}
+	args := []interface{}{}
+	argIndex := 1
+
+	if tenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *tenantID)
+		argIndex++
+	}
+
+	var duplicateParts []string
+	if phone != nil && *phone != "" {
+		duplicateParts = append(duplicateParts, fmt.Sprintf("phone = $%d", argIndex))
+		args = append(args, *phone)
+		argIndex++
+	}
+	if email != nil && *email != "" {
+		duplicateParts = append(duplicateParts, fmt.Sprintf("LOWER(email) = LOWER($%d)", argIndex))
+		args = append(args, *email)
+		argIndex++
+	}
+	if len(duplicateParts) > 0 {
+		conditions = append(conditions, "("+strings.Join(duplicateParts, " OR ")+")")
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, name, phone, email, gender, age, source, status, momentum,
+		       assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
+		       notes, extra_data, created_by, created_at, updated_at
+		FROM customers
+		WHERE %s
+		ORDER BY updated_at DESC
+		LIMIT 100
+	`, strings.Join(conditions, " AND "))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query duplicate customers: %w", err)
+	}
+	defer rows.Close()
+
+	var customers []*Customer
+	for rows.Next() {
+		var c Customer
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
+			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
+			&c.LastContactedAt, &c.NextFollowUpAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan duplicate customer: %w", err)
+		}
+		customers = append(customers, &c)
+	}
+	return customers, nil
+}
+
+func (s *Store) MergeCustomers(ctx context.Context, targetID int64, sourceIDs []int64, operatorID int64) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var targetTenantID int64
+	if err := tx.QueryRow(ctx, "SELECT tenant_id FROM customers WHERE id = $1 AND deleted_at IS NULL", targetID).Scan(&targetTenantID); err != nil {
+		if err == pgx.ErrNoRows {
+			return 0, fmt.Errorf("target customer not found")
+		}
+		return 0, fmt.Errorf("failed to query target customer: %w", err)
+	}
+
+	var validSourceIDs []int64
+	for _, sourceID := range sourceIDs {
+		if sourceID == targetID {
+			continue
+		}
+		var sourceTenantID int64
+		if err := tx.QueryRow(ctx, "SELECT tenant_id FROM customers WHERE id = $1 AND deleted_at IS NULL", sourceID).Scan(&sourceTenantID); err != nil {
+			if err == pgx.ErrNoRows {
+				continue
+			}
+			return 0, fmt.Errorf("failed to query source customer %d: %w", sourceID, err)
+		}
+		if sourceTenantID != targetTenantID {
+			return 0, fmt.Errorf("source customer %d is not in the same tenant as target", sourceID)
+		}
+		validSourceIDs = append(validSourceIDs, sourceID)
+	}
+
+	if len(validSourceIDs) == 0 {
+		return 0, fmt.Errorf("no valid source customers to merge")
+	}
+
+	mergeTables := []string{
+		"customer_identities",
+		"customer_interactions",
+		"customer_follow_ups",
+		"customer_memberships",
+		"recordings",
+	}
+	for _, table := range mergeTables {
+		exists, err := s.tableExistsTx(ctx, tx, table)
+		if err != nil {
+			return 0, err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET customer_id = $1 WHERE customer_id = ANY($2)", table), targetID, validSourceIDs); err != nil {
+			return 0, fmt.Errorf("failed to migrate %s during merge: %w", table, err)
+		}
+	}
+
+	deleteNote := fmt.Sprintf("merged into customer #%d by user #%d", targetID, operatorID)
+	result, execErr := tx.Exec(ctx, `
+		UPDATE customers
+		SET deleted_at = NOW(),
+		    updated_at = NOW(),
+		    notes = CASE
+		        WHEN notes IS NULL OR notes = '' THEN $2
+		        ELSE notes || E'\n' || $2
+		    END
+		WHERE id = ANY($1) AND deleted_at IS NULL
+	`, validSourceIDs, deleteNote)
+	if execErr != nil {
+		return 0, fmt.Errorf("failed to soft delete merged source customers: %w", execErr)
+	}
+	mergedCount := result.RowsAffected()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE customers
+		SET updated_at = NOW(),
+		    notes = CASE
+		        WHEN notes IS NULL OR notes = '' THEN $2
+		        ELSE notes || E'\n' || $2
+		    END
+		WHERE id = $1
+	`, targetID, fmt.Sprintf("merged customers: %v", validSourceIDs)); err != nil {
+		return 0, fmt.Errorf("failed to update target merge note: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit merge transaction: %w", err)
+	}
+
+	return mergedCount, nil
+}
+
+func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, page, pageSize int) ([]map[string]interface{}, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM recordings WHERE customer_id = $1", customerID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count consultation records: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			r.id,
+			r.employee_id,
+			COALESCE(e.full_name, '') AS employee_name,
+			r.file_url,
+			r.duration,
+			r.analysis_status,
+			r.transcription_status,
+			r.recorded_at,
+			r.created_at
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.customer_id = $1
+		ORDER BY r.created_at DESC
+		LIMIT $2 OFFSET $3
+	`, customerID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query consultation records: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]map[string]interface{}, 0, pageSize)
+	for rows.Next() {
+		var id, employeeID int64
+		var employeeName string
+		var fileURL *string
+		var duration *int
+		var analysisStatus, transcriptionStatus *string
+		var recordedAt, createdAt interface{}
+		if err := rows.Scan(&id, &employeeID, &employeeName, &fileURL, &duration, &analysisStatus, &transcriptionStatus, &recordedAt, &createdAt); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan consultation record: %w", err)
+		}
+		status := "processing"
+		if analysisStatus != nil && *analysisStatus == "completed" {
+			status = "completed"
+		} else if (analysisStatus != nil && *analysisStatus == "failed") || (transcriptionStatus != nil && *transcriptionStatus == "failed") {
+			status = "failed"
+		} else if (analysisStatus != nil && *analysisStatus == "pending") || (transcriptionStatus != nil && *transcriptionStatus == "pending") {
+			status = "pending"
+		}
+		records = append(records, map[string]interface{}{
+			"id":                   id,
+			"employee_id":          employeeID,
+			"employee_name":        employeeName,
+			"recording_url":        fileURL,
+			"recording_duration":   duration,
+			"analysis_status":      analysisStatus,
+			"transcription_status": transcriptionStatus,
+			"status":               status,
+			"recorded_at":          fmt.Sprintf("%v", recordedAt),
+			"created_at":           fmt.Sprintf("%v", createdAt),
+		})
+	}
+
+	return records, total, nil
+}
+
+func (s *Store) ListEMRRecords(ctx context.Context, customerID int64, page, pageSize int) ([]map[string]interface{}, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	exists, err := s.tableExists(ctx, "medical_records")
+	if err != nil {
+		return nil, 0, err
+	}
+	if !exists {
+		return []map[string]interface{}{}, 0, nil
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM medical_records WHERE customer_id = $1", customerID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count EMR records: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_jsonb(mr)
+		FROM medical_records mr
+		WHERE mr.customer_id = $1
+		ORDER BY mr.id DESC
+		LIMIT $2 OFFSET $3
+	`, customerID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query EMR records: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]map[string]interface{}, 0, pageSize)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan EMR record: %w", err)
+		}
+		var item map[string]interface{}
+		if err := json.Unmarshal(payload, &item); err != nil {
+			return nil, 0, fmt.Errorf("failed to decode EMR record json: %w", err)
+		}
+		records = append(records, item)
+	}
+
+	return records, total, nil
+}
+
+func (s *Store) BatchTagCustomers(ctx context.Context, tenantID *int64, req BatchTagRequest) (int64, error) {
+	exists, err := s.tableExists(ctx, "customer_tag_assignments")
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin batch tag transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var affected int64
+	for _, customerID := range req.CustomerIDs {
+		if !s.customerAccessibleInTenantTx(ctx, tx, customerID, tenantID) {
+			continue
+		}
+		for _, tagID := range req.TagIDs {
+			if !s.tagAccessibleInTenantTx(ctx, tx, tagID, tenantID) {
+				continue
+			}
+			switch req.Action {
+			case "add":
+				var exists int
+				if err := tx.QueryRow(ctx, `
+					SELECT 1
+					FROM customer_tag_assignments
+					WHERE customer_id = $1 AND tag_id = $2
+					LIMIT 1
+				`, customerID, tagID).Scan(&exists); err == nil {
+					continue
+				} else if err != pgx.ErrNoRows {
+					return 0, fmt.Errorf("failed to check existing tag assignment: %w", err)
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO customer_tag_assignments (customer_id, tag_id, created_at, updated_at)
+					VALUES ($1, $2, NOW(), NOW())
+				`, customerID, tagID); err != nil {
+					return 0, fmt.Errorf("failed to add tag assignment: %w", err)
+				}
+				affected++
+			case "remove":
+				result, err := tx.Exec(ctx, `
+					DELETE FROM customer_tag_assignments
+					WHERE customer_id = $1 AND tag_id = $2
+				`, customerID, tagID)
+				if err != nil {
+					return 0, fmt.Errorf("failed to remove tag assignment: %w", err)
+				}
+				affected += result.RowsAffected()
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit batch tag transaction: %w", err)
+	}
+	return affected, nil
+}
+
+func (s *Store) GetTagStats(ctx context.Context, tenantID *int64) (map[string]interface{}, error) {
+	stats := map[string]interface{}{
+		"total_tags":        0,
+		"total_assignments": 0,
+		"most_used_tags":    []map[string]interface{}{},
+	}
+
+	conditions := []string{"deleted_at IS NULL"}
+	args := []interface{}{}
+	argIndex := 1
+	if tenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *tenantID)
+		argIndex++
+	}
+	tagWhere := strings.Join(conditions, " AND ")
+
+	var totalTags int
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM customer_tags WHERE %s", tagWhere), args...).Scan(&totalTags); err != nil {
+		return nil, fmt.Errorf("failed to count tags: %w", err)
+	}
+	stats["total_tags"] = totalTags
+
+	exists, err := s.tableExists(ctx, "customer_tag_assignments")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return stats, nil
+	}
+
+	totalAssignmentsSQL := `
+		SELECT COUNT(*)
+		FROM customer_tag_assignments cta
+		JOIN customer_tags ct ON ct.id = cta.tag_id AND ct.deleted_at IS NULL
+	`
+	if tenantID != nil {
+		totalAssignmentsSQL += " WHERE ct.tenant_id = $1"
+	}
+	var totalAssignments int
+	if err := s.pool.QueryRow(ctx, totalAssignmentsSQL, args...).Scan(&totalAssignments); err != nil {
+		return nil, fmt.Errorf("failed to count tag assignments: %w", err)
+	}
+	stats["total_assignments"] = totalAssignments
+
+	mostUsedSQL := `
+		SELECT ct.id, ct.name, ct.color, COUNT(cta.customer_id) AS usage_count
+		FROM customer_tags ct
+		LEFT JOIN customer_tag_assignments cta ON cta.tag_id = ct.id
+		WHERE ct.deleted_at IS NULL
+	`
+	mostUsedArgs := []interface{}{}
+	if tenantID != nil {
+		mostUsedSQL += " AND ct.tenant_id = $1"
+		mostUsedArgs = append(mostUsedArgs, *tenantID)
+	}
+	mostUsedSQL += `
+		GROUP BY ct.id, ct.name, ct.color
+		ORDER BY usage_count DESC, ct.id DESC
+		LIMIT 10
+	`
+	rows, err := s.pool.Query(ctx, mostUsedSQL, mostUsedArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query most used tags: %w", err)
+	}
+	defer rows.Close()
+
+	mostUsed := []map[string]interface{}{}
+	for rows.Next() {
+		var id int64
+		var name string
+		var color *string
+		var usageCount int64
+		if err := rows.Scan(&id, &name, &color, &usageCount); err != nil {
+			return nil, fmt.Errorf("failed to scan most used tag: %w", err)
+		}
+		mostUsed = append(mostUsed, map[string]interface{}{
+			"id":          id,
+			"name":        name,
+			"color":       color,
+			"usage_count": usageCount,
+		})
+	}
+	stats["most_used_tags"] = mostUsed
+
+	return stats, nil
+}
+
+func (s *Store) ListGroupMembers(ctx context.Context, groupID int64, page, pageSize int) ([]*Customer, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	exists, err := s.tableExists(ctx, "customer_group_members")
+	if err != nil {
+		return nil, 0, err
+	}
+	if !exists {
+		return []*Customer{}, 0, nil
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM customer_group_members gm
+		JOIN customers c ON c.id = gm.customer_id
+		WHERE gm.group_id = $1 AND c.deleted_at IS NULL
+	`, groupID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count group members: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, c.tenant_id, c.name, c.phone, c.email, c.gender, c.age, c.source, c.status, c.momentum,
+		       c.assigned_to, c.assigned_at, c.converted_at, c.last_contacted_at, c.next_follow_up_at,
+		       c.notes, c.extra_data, c.created_by, c.created_at, c.updated_at
+		FROM customer_group_members gm
+		JOIN customers c ON c.id = gm.customer_id
+		WHERE gm.group_id = $1 AND c.deleted_at IS NULL
+		ORDER BY c.updated_at DESC
+		LIMIT $2 OFFSET $3
+	`, groupID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query group members: %w", err)
+	}
+	defer rows.Close()
+
+	var members []*Customer
+	for rows.Next() {
+		var c Customer
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
+			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
+			&c.LastContactedAt, &c.NextFollowUpAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan group member: %w", err)
+		}
+		members = append(members, &c)
+	}
+
+	return members, total, nil
+}
+
+func (s *Store) AddGroupMembers(ctx context.Context, groupID int64, customerIDs []int64) (int64, error) {
+	exists, err := s.tableExists(ctx, "customer_group_members")
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin group member transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var added int64
+	for _, customerID := range customerIDs {
+		var existsRow int
+		if err := tx.QueryRow(ctx, `
+			SELECT 1
+			FROM customer_group_members
+			WHERE group_id = $1 AND customer_id = $2
+			LIMIT 1
+		`, groupID, customerID).Scan(&existsRow); err == nil {
+			continue
+		} else if err != pgx.ErrNoRows {
+			return 0, fmt.Errorf("failed to check existing group member: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO customer_group_members (group_id, customer_id, created_at, updated_at)
+			VALUES ($1, $2, NOW(), NOW())
+		`, groupID, customerID); err != nil {
+			return 0, fmt.Errorf("failed to add group member: %w", err)
+		}
+		added++
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE customer_groups
+		SET member_count = (
+			SELECT COUNT(*)
+			FROM customer_group_members
+			WHERE group_id = $1
+		),
+		updated_at = NOW()
+		WHERE id = $1
+	`, groupID); err != nil {
+		return 0, fmt.Errorf("failed to refresh group member count: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit group member transaction: %w", err)
+	}
+	return added, nil
+}
+
+func (s *Store) RemoveGroupMembers(ctx context.Context, groupID int64, customerIDs []int64) (int64, error) {
+	exists, err := s.tableExists(ctx, "customer_group_members")
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin remove group member transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	result, err := tx.Exec(ctx, `
+		DELETE FROM customer_group_members
+		WHERE group_id = $1 AND customer_id = ANY($2)
+	`, groupID, customerIDs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to remove group members: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE customer_groups
+		SET member_count = (
+			SELECT COUNT(*)
+			FROM customer_group_members
+			WHERE group_id = $1
+		),
+		updated_at = NOW()
+		WHERE id = $1
+	`, groupID); err != nil {
+		return 0, fmt.Errorf("failed to refresh group member count: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit remove group member transaction: %w", err)
+	}
+	return result.RowsAffected(), nil
+}
+
+func (s *Store) PreviewGroupRules(ctx context.Context, tenantID *int64, rules JSONObject) (*RulePreviewResponse, error) {
+	logic, conditions, errs := parseRuleConditions(rules)
+	if len(errs) > 0 {
+		return nil, errors.New(strings.Join(errs, "; "))
+	}
+
+	whereParts := []string{"deleted_at IS NULL"}
+	args := []interface{}{}
+	argIndex := 1
+	if tenantID != nil {
+		whereParts = append(whereParts, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *tenantID)
+		argIndex++
+	}
+
+	sqlConditions, sqlArgs, nextArg, err := buildRuleSQL(conditions, logic, argIndex)
+	if err != nil {
+		return nil, err
+	}
+	whereParts = append(whereParts, sqlConditions...)
+	args = append(args, sqlArgs...)
+	argIndex = nextArg
+	whereClause := strings.Join(whereParts, " AND ")
+
+	var matchCount int
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM customers WHERE %s", whereClause), args...).Scan(&matchCount); err != nil {
+		return nil, fmt.Errorf("failed to count preview matches: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id
+		FROM customers
+		WHERE %s
+		ORDER BY updated_at DESC
+		LIMIT 100
+	`, whereClause)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query preview matches: %w", err)
+	}
+	defer rows.Close()
+
+	customers := make([]int64, 0, 100)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan preview match customer id: %w", err)
+		}
+		customers = append(customers, id)
+	}
+
+	return &RulePreviewResponse{
+		MatchCount: matchCount,
+		Customers:  customers,
+	}, nil
+}
+
+// Helper functions for advanced operations
+
+func (s *Store) tableExists(ctx context.Context, tableName string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+tableName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check table existence for %s: %w", tableName, err)
+	}
+	return exists, nil
+}
+
+func (s *Store) tableExistsTx(ctx context.Context, tx pgx.Tx, tableName string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+tableName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to check table existence for %s: %w", tableName, err)
+	}
+	return exists, nil
+}
+
+func (s *Store) customerAccessibleInTenantTx(ctx context.Context, tx pgx.Tx, customerID int64, tenantID *int64) bool {
+	query := "SELECT 1 FROM customers WHERE id = $1 AND deleted_at IS NULL"
+	args := []interface{}{customerID}
+	if tenantID != nil {
+		query += " AND tenant_id = $2"
+		args = append(args, *tenantID)
+	}
+	var ok int
+	return tx.QueryRow(ctx, query, args...).Scan(&ok) == nil
+}
+
+func (s *Store) tagAccessibleInTenantTx(ctx context.Context, tx pgx.Tx, tagID int64, tenantID *int64) bool {
+	query := "SELECT 1 FROM customer_tags WHERE id = $1 AND deleted_at IS NULL"
+	args := []interface{}{tagID}
+	if tenantID != nil {
+		query += " AND tenant_id = $2"
+		args = append(args, *tenantID)
+	}
+	var ok int
+	return tx.QueryRow(ctx, query, args...).Scan(&ok) == nil
+}
+
+type parsedRuleCondition struct {
+	Field    string
+	Operator string
+	Value    interface{}
+}
+
+var ruleFieldToColumn = map[string]string{
+	"status":            "status",
+	"source":            "source",
+	"momentum":          "momentum",
+	"created_at":        "created_at",
+	"last_contacted_at": "last_contacted_at",
+	"age":               "age",
+	"gender":            "gender",
+}
+
+var allowedRuleOperators = map[string]struct{}{
+	"eq":       {},
+	"ne":       {},
+	"gt":       {},
+	"gte":      {},
+	"lt":       {},
+	"lte":      {},
+	"contains": {},
+	"in":       {},
+	"not_in":   {},
+}
+
+func parseRuleConditions(rules JSONObject) (string, []parsedRuleCondition, []string) {
+	logic := "and"
+	if rawLogic, ok := rules["logic"]; ok {
+		logicStr, ok := rawLogic.(string)
+		if !ok {
+			return "", nil, []string{"logic must be string"}
+		}
+		logicStr = strings.ToLower(strings.TrimSpace(logicStr))
+		if logicStr != "and" && logicStr != "or" {
+			return "", nil, []string{"logic must be 'and' or 'or'"}
+		}
+		logic = logicStr
+	}
+
+	rawConditions, ok := rules["conditions"]
+	if !ok {
+		return logic, nil, []string{"conditions is required"}
+	}
+	conditionList, ok := rawConditions.([]interface{})
+	if !ok {
+		return logic, nil, []string{"conditions must be an array"}
+	}
+	if len(conditionList) == 0 {
+		return logic, nil, []string{"conditions cannot be empty"}
+	}
+
+	conditions := make([]parsedRuleCondition, 0, len(conditionList))
+	errors := []string{}
+	for idx, raw := range conditionList {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			errors = append(errors, fmt.Sprintf("conditions[%d] must be object", idx))
+			continue
+		}
+		field, ok := item["field"].(string)
+		if !ok || strings.TrimSpace(field) == "" {
+			errors = append(errors, fmt.Sprintf("conditions[%d].field is required", idx))
+			continue
+		}
+		if _, exists := ruleFieldToColumn[field]; !exists {
+			errors = append(errors, fmt.Sprintf("conditions[%d].field '%s' is not supported", idx, field))
+			continue
+		}
+
+		operator, ok := item["operator"].(string)
+		if !ok || strings.TrimSpace(operator) == "" {
+			errors = append(errors, fmt.Sprintf("conditions[%d].operator is required", idx))
+			continue
+		}
+		if _, exists := allowedRuleOperators[operator]; !exists {
+			errors = append(errors, fmt.Sprintf("conditions[%d].operator '%s' is not supported", idx, operator))
+			continue
+		}
+
+		value, hasValue := item["value"]
+		if !hasValue {
+			errors = append(errors, fmt.Sprintf("conditions[%d].value is required", idx))
+			continue
+		}
+		if (operator == "in" || operator == "not_in") && !isInterfaceSlice(value) {
+			errors = append(errors, fmt.Sprintf("conditions[%d].value must be array for %s", idx, operator))
+			continue
+		}
+
+		conditions = append(conditions, parsedRuleCondition{
+			Field:    field,
+			Operator: operator,
+			Value:    value,
+		})
+	}
+
+	return logic, conditions, errors
+}
+
+func buildRuleSQL(conditions []parsedRuleCondition, logic string, startArgIndex int) ([]string, []interface{}, int, error) {
+	parts := make([]string, 0, len(conditions))
+	args := []interface{}{}
+	argIndex := startArgIndex
+
+	for _, cond := range conditions {
+		column := ruleFieldToColumn[cond.Field]
+		switch cond.Operator {
+		case "eq":
+			parts = append(parts, fmt.Sprintf("%s = $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "ne":
+			parts = append(parts, fmt.Sprintf("%s <> $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "gt":
+			parts = append(parts, fmt.Sprintf("%s > $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "gte":
+			parts = append(parts, fmt.Sprintf("%s >= $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "lt":
+			parts = append(parts, fmt.Sprintf("%s < $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "lte":
+			parts = append(parts, fmt.Sprintf("%s <= $%d", column, argIndex))
+			args = append(args, cond.Value)
+			argIndex++
+		case "contains":
+			parts = append(parts, fmt.Sprintf("CAST(%s AS TEXT) ILIKE $%d", column, argIndex))
+			args = append(args, "%"+fmt.Sprintf("%v", cond.Value)+"%")
+			argIndex++
+		case "in", "not_in":
+			values := cond.Value.([]interface{})
+			if len(values) == 0 {
+				return nil, nil, argIndex, fmt.Errorf("in/not_in value array cannot be empty")
+			}
+			inPlaceholders := make([]string, 0, len(values))
+			for _, v := range values {
+				inPlaceholders = append(inPlaceholders, fmt.Sprintf("$%d", argIndex))
+				args = append(args, v)
+				argIndex++
+			}
+			op := "IN"
+			if cond.Operator == "not_in" {
+				op = "NOT IN"
+			}
+			parts = append(parts, fmt.Sprintf("%s %s (%s)", column, op, strings.Join(inPlaceholders, ", ")))
+		default:
+			return nil, nil, argIndex, fmt.Errorf("unsupported operator: %s", cond.Operator)
+		}
+	}
+
+	connector := " AND "
+	if logic == "or" {
+		connector = " OR "
+	}
+	if len(parts) > 0 {
+		return []string{"(" + strings.Join(parts, connector) + ")"}, args, argIndex, nil
+	}
+	return []string{}, args, argIndex, nil
+}
+
+func isInterfaceSlice(value interface{}) bool {
+	_, ok := value.([]interface{})
+	return ok
 }

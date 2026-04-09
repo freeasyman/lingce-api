@@ -43,3 +43,32 @@ type InstitutionStatistics struct {
 	TotalRecordings    int `json:"total_recordings"`
 	RecordingsThisWeek int `json:"recordings_this_week"`
 }
+
+// Doctor represents doctor-facing projection over employees.
+type Doctor struct {
+	ID           int64      `json:"id"`
+	TenantID     int64      `json:"tenant_id"`
+	DepartmentID *int64     `json:"department_id,omitempty"`
+	Name         string     `json:"name"`
+	Phone        string     `json:"phone"`
+	Email        string     `json:"email"`
+	IsActive     bool       `json:"is_active"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// Patient represents patient-facing projection over customers.
+type Patient struct {
+	ID         int64      `json:"id"`
+	TenantID   int64      `json:"tenant_id"`
+	Name       string     `json:"name"`
+	Phone      *string    `json:"phone,omitempty"`
+	Email      *string    `json:"email,omitempty"`
+	Gender     *string    `json:"gender,omitempty"`
+	Age        *int       `json:"age,omitempty"`
+	Status     string     `json:"status"`
+	Momentum   int        `json:"momentum"`
+	AssignedTo *int64     `json:"assigned_to,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}

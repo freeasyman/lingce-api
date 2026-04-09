@@ -334,26 +334,102 @@ func (s *Service) DeleteCustomerGroup(ctx context.Context, id int64) error {
 	return s.store.DeleteCustomerGroup(ctx, id)
 }
 
+// Advanced Customer Services
+
+func (s *Service) GetCustomerMomentumHistory(ctx context.Context, customerID int64) ([]MomentumHistory, error) {
+	return s.store.GetCustomerMomentumHistory(ctx, customerID, 30)
+}
+
+func (s *Service) FindDuplicateCustomers(ctx context.Context, tenantID *int64, phone, email *string) ([]*CustomerResponse, error) {
+	customers, err := s.store.FindDuplicateCustomers(ctx, tenantID, phone, email)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]*CustomerResponse, len(customers))
+	for i, c := range customers {
+		responses[i] = toCustomerResponse(c)
+	}
+	return responses, nil
+}
+
+func (s *Service) MergeCustomers(ctx context.Context, targetID int64, sourceIDs []int64, operatorID int64) (int64, error) {
+	return s.store.MergeCustomers(ctx, targetID, sourceIDs, operatorID)
+}
+
+func (s *Service) ListConsultationRecords(ctx context.Context, customerID int64, page, pageSize int) ([]map[string]interface{}, int, error) {
+	return s.store.ListConsultationRecords(ctx, customerID, page, pageSize)
+}
+
+func (s *Service) ListEMRRecords(ctx context.Context, customerID int64, page, pageSize int) ([]map[string]interface{}, int, error) {
+	return s.store.ListEMRRecords(ctx, customerID, page, pageSize)
+}
+
+func (s *Service) BatchTagCustomers(ctx context.Context, tenantID *int64, req BatchTagRequest) (int64, error) {
+	return s.store.BatchTagCustomers(ctx, tenantID, req)
+}
+
+func (s *Service) GetTagStats(ctx context.Context, tenantID *int64) (map[string]interface{}, error) {
+	return s.store.GetTagStats(ctx, tenantID)
+}
+
+func (s *Service) ListGroupMembers(ctx context.Context, groupID int64, page, pageSize int) ([]*CustomerResponse, int, error) {
+	members, total, err := s.store.ListGroupMembers(ctx, groupID, page, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	responses := make([]*CustomerResponse, len(members))
+	for i, m := range members {
+		responses[i] = toCustomerResponse(m)
+	}
+	return responses, total, nil
+}
+
+func (s *Service) AddGroupMembers(ctx context.Context, groupID int64, customerIDs []int64) (int64, error) {
+	return s.store.AddGroupMembers(ctx, groupID, customerIDs)
+}
+
+func (s *Service) RemoveGroupMembers(ctx context.Context, groupID int64, customerIDs []int64) (int64, error) {
+	return s.store.RemoveGroupMembers(ctx, groupID, customerIDs)
+}
+
+func (s *Service) PreviewGroupRules(ctx context.Context, tenantID *int64, req RulePreviewRequest) (*RulePreviewResponse, error) {
+	return s.store.PreviewGroupRules(ctx, tenantID, req.Rules)
+}
+
+func (s *Service) ValidateGroupRules(req RuleValidateRequest) *RuleValidateResponse {
+	_, _, errs := parseRuleConditions(req.Rules)
+	if len(errs) > 0 {
+		return &RuleValidateResponse{
+			IsValid: false,
+			Errors:  errs,
+		}
+	}
+	return &RuleValidateResponse{
+		IsValid: true,
+		Errors:  []string{},
+	}
+}
+
 // Helper functions
 
 // toCustomerResponse converts a Customer to CustomerResponse
 func toCustomerResponse(c *Customer) *CustomerResponse {
 	resp := &CustomerResponse{
-		ID:              c.ID,
-		TenantID:        c.TenantID,
-		Name:            c.Name,
-		Phone:           c.Phone,
-		Email:           c.Email,
-		Gender:          c.Gender,
-		Age:             c.Age,
-		Source:          c.Source,
-		Status:          c.Status,
-		Momentum:        c.Momentum,
-		AssignedTo:      c.AssignedTo,
-		Notes:           c.Notes,
-		ExtraData:       c.ExtraData,
-		CreatedAt:       c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:       c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:         c.ID,
+		TenantID:   c.TenantID,
+		Name:       c.Name,
+		Phone:      c.Phone,
+		Email:      c.Email,
+		Gender:     c.Gender,
+		Age:        c.Age,
+		Source:     c.Source,
+		Status:     c.Status,
+		Momentum:   c.Momentum,
+		AssignedTo: c.AssignedTo,
+		Notes:      c.Notes,
+		ExtraData:  c.ExtraData,
+		CreatedAt:  c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:  c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if c.AssignedAt != nil {

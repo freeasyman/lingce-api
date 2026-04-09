@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -33,8 +34,12 @@ func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	req.Page = page
 	req.PageSize = pageSize
 
-	// TODO: Implement template listing from store
-	httputil.WritePaginated(w, []TemplateResponse{}, 0, req.Page, req.PageSize)
+	templates, total, err := h.service.ListPromptTemplates(r.Context(), req, false)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, templates, int64(total), req.Page, req.PageSize)
 }
 
 // CreateTemplate handles creating a prompt template
@@ -51,8 +56,19 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template creation in store
-	httputil.WriteSuccess(w, map[string]string{"message": "Template created successfully"})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		tenantID = &tid
+	}
+	template, err := h.service.CreatePromptTemplate(r.Context(), tenantID, claims.UserID, req, false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, template)
 }
 
 // GetTemplate handles getting template by ID
@@ -69,9 +85,12 @@ func (h *Handler) GetTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template retrieval from store
-	_ = id
-	httputil.WriteNotFound(w, "Template not found")
+	template, err := h.service.GetPromptTemplateByID(r.Context(), id, false)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, template)
 }
 
 // UpdateTemplate handles updating a template
@@ -94,9 +113,12 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template update in store
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Template updated successfully"})
+	template, err := h.service.UpdatePromptTemplate(r.Context(), id, req, false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, template)
 }
 
 // DeleteTemplate handles deleting a template
@@ -113,8 +135,10 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template deletion in store
-	_ = id
+	if err := h.service.DeletePromptTemplate(r.Context(), id, false); err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Template deleted successfully"})
 }
 
@@ -126,8 +150,21 @@ func (h *Handler) PreviewTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template preview rendering
-	httputil.WriteSuccess(w, map[string]string{"preview": ""})
+	var req map[string]interface{}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	templateText, _ := req["template"].(string)
+	variables := map[string]string{}
+	if rawVars, ok := req["variables"].(map[string]interface{}); ok {
+		for k, v := range rawVars {
+			variables[k] = strings.TrimSpace(toString(v))
+		}
+	}
+	preview := templateText
+	for k, v := range variables {
+		preview = strings.ReplaceAll(preview, "{{"+k+"}}", v)
+		preview = strings.ReplaceAll(preview, "{{ "+k+" }}", v)
+	}
+	httputil.WriteSuccess(w, map[string]string{"preview": preview})
 }
 
 // CloneTemplate handles cloning a template
@@ -144,9 +181,12 @@ func (h *Handler) CloneTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template cloning
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Template cloned successfully"})
+	cloned, err := h.service.ClonePromptTemplate(r.Context(), id, claims.UserID, false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, cloned)
 }
 
 // CreateTemplateVersion handles creating a template version
@@ -169,9 +209,12 @@ func (h *Handler) CreateTemplateVersion(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: Implement template version creation
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Version created successfully"})
+	version, err := h.service.CreatePromptTemplateVersion(r.Context(), id, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, version)
 }
 
 // ListTemplateVersions handles listing template versions
@@ -188,9 +231,12 @@ func (h *Handler) ListTemplateVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template versions listing
-	_ = id
-	httputil.WriteSuccess(w, []VersionResponse{})
+	versions, err := h.service.ListPromptTemplateVersions(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, versions)
 }
 
 // PublishTemplate handles publishing a template version
@@ -207,8 +253,10 @@ func (h *Handler) PublishTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template version publishing
-	_ = id
+	if err := h.service.PublishPromptTemplate(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Template published successfully"})
 }
 
@@ -232,8 +280,10 @@ func (h *Handler) RollbackTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template version rollback
-	_, _ = id, version
+	if err := h.service.RollbackPromptTemplate(r.Context(), id, version); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Template rolled back successfully"})
 }
 
@@ -251,9 +301,12 @@ func (h *Handler) TestTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template testing via LLM
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"result": ""})
+	result, err := h.service.TestPromptTemplate(r.Context(), id, false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"result": result})
 }
 
 // GetTemplateStats handles getting template usage statistics
@@ -270,7 +323,19 @@ func (h *Handler) GetTemplateStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement template statistics retrieval
-	_ = id
-	httputil.WriteSuccess(w, map[string]interface{}{})
+	stats, err := h.service.PromptTemplateStats(r.Context(), id, false)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, stats)
+}
+
+func toString(v interface{}) string {
+	switch tv := v.(type) {
+	case string:
+		return tv
+	default:
+		return ""
+	}
 }

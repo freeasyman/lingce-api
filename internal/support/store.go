@@ -1,8 +1,11 @@
 package support
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -964,4 +967,463 @@ func (s *Store) GetLLMCostSummary(ctx context.Context, startDate, endDate *strin
 	}
 
 	return &response, nil
+}
+
+func validateTableName(tableName string) error {
+	if tableName == "" {
+		return fmt.Errorf("table name is required")
+	}
+	matched, _ := regexp.MatchString(`^[a-zA-Z_][a-zA-Z0-9_]*$`, tableName)
+	if !matched {
+		return fmt.Errorf("invalid table name")
+	}
+	return nil
+}
+
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// Data browser methods
+
+func (s *Store) ListTables(ctx context.Context) ([]string, error) {
+	query := `
+		SELECT table_name
+		FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+		ORDER BY table_name
+	`
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tables = append(tables, t)
+	}
+	return tables, nil
+}
+
+func (s *Store) GetTableStructure(ctx context.Context, tableName string) ([]map[string]interface{}, error) {
+	if err := validateTableName(tableName); err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT column_name, data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1
+		ORDER BY ordinal_position
+	`
+	rows, err := s.pool.Query(ctx, query, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table structure: %w", err)
+	}
+	defer rows.Close()
+
+	result := []map[string]interface{}{}
+	for rows.Next() {
+		var colName, dataType, isNullable string
+		var colDefault *string
+		if err := rows.Scan(&colName, &dataType, &isNullable, &colDefault); err != nil {
+			return nil, fmt.Errorf("failed to scan column info: %w", err)
+		}
+		result = append(result, map[string]interface{}{
+			"column_name":    colName,
+			"data_type":      dataType,
+			"is_nullable":    isNullable == "YES",
+			"column_default": colDefault,
+		})
+	}
+	return result, nil
+}
+
+func (s *Store) GetTableData(ctx context.Context, tableName string, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	if err := validateTableName(tableName); err != nil {
+		return nil, 0, err
+	}
+
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	quoted := quoteIdent(tableName)
+	var total int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", quoted)).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count table rows: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT $1 OFFSET $2", quoted)
+	rows, err := s.pool.Query(ctx, query, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query table data: %w", err)
+	}
+	defer rows.Close()
+
+	fieldDescs := rows.FieldDescriptions()
+	cols := make([]string, len(fieldDescs))
+	for i, f := range fieldDescs {
+		cols[i] = string(f.Name)
+	}
+
+	result := []map[string]interface{}{}
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to read row values: %w", err)
+		}
+		item := make(map[string]interface{}, len(cols))
+		for i := range cols {
+			v := values[i]
+			switch tv := v.(type) {
+			case []byte:
+				item[cols[i]] = string(tv)
+			default:
+				item[cols[i]] = tv
+			}
+		}
+		result = append(result, item)
+	}
+
+	return result, total, nil
+}
+
+func (s *Store) ExportTableDataCSV(ctx context.Context, tableName string, limit int) (string, int64, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	data, total, err := s.GetTableData(ctx, tableName, 1, limit)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(data) == 0 {
+		return "", total, nil
+	}
+
+	// Stabilize column order by first row keys.
+	columns := make([]string, 0, len(data[0]))
+	for k := range data[0] {
+		columns = append(columns, k)
+	}
+	// deterministic order
+	for i := 0; i < len(columns); i++ {
+		for j := i + 1; j < len(columns); j++ {
+			if columns[j] < columns[i] {
+				columns[i], columns[j] = columns[j], columns[i]
+			}
+		}
+	}
+
+	buf := &bytes.Buffer{}
+	w := csv.NewWriter(buf)
+	if err := w.Write(columns); err != nil {
+		return "", 0, fmt.Errorf("failed to write csv header: %w", err)
+	}
+	for _, row := range data {
+		record := make([]string, len(columns))
+		for i, c := range columns {
+			if row[c] == nil {
+				record[i] = ""
+			} else {
+				record[i] = fmt.Sprintf("%v", row[c])
+			}
+		}
+		if err := w.Write(record); err != nil {
+			return "", 0, fmt.Errorf("failed to write csv row: %w", err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return "", 0, fmt.Errorf("failed to flush csv writer: %w", err)
+	}
+	return buf.String(), total, nil
+}
+
+func (s *Store) GetDatabaseStatistics(ctx context.Context) (map[string]interface{}, error) {
+	var totalTables int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+	`).Scan(&totalTables); err != nil {
+		return nil, fmt.Errorf("failed to count tables: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT relname, COALESCE(n_live_tup, 0)::bigint
+		FROM pg_stat_user_tables
+		ORDER BY relname
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table stats: %w", err)
+	}
+	defer rows.Close()
+
+	var totalRows int64
+	tableStats := []map[string]interface{}{}
+	for rows.Next() {
+		var tableName string
+		var rowCount int64
+		if err := rows.Scan(&tableName, &rowCount); err != nil {
+			return nil, fmt.Errorf("failed to scan table stats: %w", err)
+		}
+		totalRows += rowCount
+		tableStats = append(tableStats, map[string]interface{}{
+			"table_name": tableName,
+			"row_count":  rowCount,
+		})
+	}
+
+	return map[string]interface{}{
+		"total_tables": totalTables,
+		"total_rows":   totalRows,
+		"table_stats":  tableStats,
+	}, nil
+}
+
+func (s *Store) TruncateTable(ctx context.Context, tableName string) error {
+	if err := validateTableName(tableName); err != nil {
+		return err
+	}
+	// Safety check: only import/staging/temp tables can be truncated.
+	allowed := strings.HasPrefix(tableName, "import_") || strings.HasSuffix(tableName, "_staging") || strings.HasPrefix(tableName, "tmp_")
+	if !allowed {
+		return fmt.Errorf("table %s is protected; only import_/tmp_/*_staging tables are allowed", tableName)
+	}
+	_, err := s.pool.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(tableName)))
+	if err != nil {
+		return fmt.Errorf("failed to truncate table: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ClearImportData(ctx context.Context) (int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT table_name
+		FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name LIKE 'import_%'
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list import tables: %w", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return count, fmt.Errorf("failed to scan import table: %w", err)
+		}
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(t))); err != nil {
+			return count, fmt.Errorf("failed to truncate %s: %w", t, err)
+		}
+		count++
+	}
+	return count, nil
+}
+
+// Visit methods (backed by recordings as visit source)
+
+func (s *Store) ListVisits(ctx context.Context, tenantID *int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+
+	conditions := []string{"1=1"}
+	args := []interface{}{}
+	argIndex := 1
+	if tenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("r.tenant_id = $%d", argIndex))
+		args = append(args, *tenantID)
+		argIndex++
+	}
+	whereClause := strings.Join(conditions, " AND ")
+
+	var total int64
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM recordings r WHERE %s", whereClause)
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count visits: %w", err)
+	}
+
+	offset := (page - 1) * pageSize
+	query := fmt.Sprintf(`
+		SELECT r.id, r.tenant_id, r.employee_id, COALESCE(e.full_name, ''), r.customer_id, COALESCE(c.name, ''),
+		       r.scene, r.recorded_at, r.created_at
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN customers c ON c.id = r.customer_id
+		WHERE %s
+		ORDER BY r.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+	args = append(args, pageSize, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list visits: %w", err)
+	}
+	defer rows.Close()
+
+	result := []map[string]interface{}{}
+	for rows.Next() {
+		var id, tenant, employeeID int64
+		var employeeName string
+		var customerID *int64
+		var customerName string
+		var scene *string
+		var recordedAt, createdAt interface{}
+		if err := rows.Scan(&id, &tenant, &employeeID, &employeeName, &customerID, &customerName, &scene, &recordedAt, &createdAt); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan visit: %w", err)
+		}
+		result = append(result, map[string]interface{}{
+			"id":            id,
+			"tenant_id":     tenant,
+			"employee_id":   employeeID,
+			"employee_name": employeeName,
+			"customer_id":   customerID,
+			"customer_name": customerName,
+			"scene":         scene,
+			"recorded_at":   fmt.Sprintf("%v", recordedAt),
+			"created_at":    fmt.Sprintf("%v", createdAt),
+		})
+	}
+	return result, total, nil
+}
+
+func (s *Store) GetVisitByID(ctx context.Context, id int64) (map[string]interface{}, error) {
+	query := `
+		SELECT r.id, r.tenant_id, r.employee_id, COALESCE(e.full_name, ''), r.customer_id, COALESCE(c.name, ''),
+		       r.scene, r.notes, r.status, r.recorded_at, r.created_at
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN customers c ON c.id = r.customer_id
+		WHERE r.id = $1
+	`
+	var visitID, tenantID, employeeID int64
+	var employeeName string
+	var customerID *int64
+	var customerName string
+	var scene, notes, status *string
+	var recordedAt, createdAt interface{}
+	if err := s.pool.QueryRow(ctx, query, id).Scan(
+		&visitID, &tenantID, &employeeID, &employeeName, &customerID, &customerName,
+		&scene, &notes, &status, &recordedAt, &createdAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("visit not found")
+		}
+		return nil, fmt.Errorf("failed to query visit: %w", err)
+	}
+	return map[string]interface{}{
+		"id":            visitID,
+		"tenant_id":     tenantID,
+		"employee_id":   employeeID,
+		"employee_name": employeeName,
+		"customer_id":   customerID,
+		"customer_name": customerName,
+		"scene":         scene,
+		"notes":         notes,
+		"status":        status,
+		"recorded_at":   fmt.Sprintf("%v", recordedAt),
+		"created_at":    fmt.Sprintf("%v", createdAt),
+	}, nil
+}
+
+func (s *Store) GetVisitStatistics(ctx context.Context, tenantID *int64) (map[string]int64, error) {
+	conditions := []string{"1=1"}
+	args := []interface{}{}
+	argIndex := 1
+	if tenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *tenantID)
+		argIndex++
+	}
+	whereClause := strings.Join(conditions, " AND ")
+
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*)::bigint,
+			COUNT(*) FILTER (WHERE created_at >= NOW()::date)::bigint,
+			COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW()))::bigint,
+			COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))::bigint
+		FROM recordings
+		WHERE %s
+	`, whereClause)
+	var total, today, week, month int64
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(&total, &today, &week, &month); err != nil {
+		return nil, fmt.Errorf("failed to get visit stats: %w", err)
+	}
+	return map[string]int64{
+		"total_visits":      total,
+		"visits_today":      today,
+		"visits_this_week":  week,
+		"visits_this_month": month,
+	}, nil
+}
+
+func (s *Store) GetVisitFilters(ctx context.Context, tenantID *int64) (map[string]interface{}, error) {
+	args := []interface{}{}
+	whereTenant := ""
+	if tenantID != nil {
+		whereTenant = "AND tenant_id = $1"
+		args = append(args, *tenantID)
+	}
+
+	departments := []string{}
+	rows1, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT DISTINCT COALESCE(d.name, '')
+		FROM employees e
+		LEFT JOIN departments d ON d.id = e.department_id
+		WHERE e.deleted_at IS NULL %s
+		ORDER BY 1
+	`, whereTenant), args...)
+	if err == nil {
+		defer rows1.Close()
+		for rows1.Next() {
+			var n string
+			if err := rows1.Scan(&n); err == nil && n != "" {
+				departments = append(departments, n)
+			}
+		}
+	}
+
+	doctors := []string{}
+	rows2, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT DISTINCT full_name
+		FROM employees
+		WHERE deleted_at IS NULL %s
+		ORDER BY full_name
+	`, whereTenant), args...)
+	if err == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var n string
+			if err := rows2.Scan(&n); err == nil && n != "" {
+				doctors = append(doctors, n)
+			}
+		}
+	}
+
+	statuses := []string{"uploaded", "pending", "completed", "failed"}
+	return map[string]interface{}{
+		"departments": departments,
+		"doctors":     doctors,
+		"statuses":    statuses,
+	}, nil
 }

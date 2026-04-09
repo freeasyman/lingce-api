@@ -29,9 +29,34 @@ func (h *Handler) ListPatients(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement patients listing with filters
-	// Filters: tenant_id, name, phone, id_card, status
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
+			tenantID = &parsed
+		}
+	}
+	var name *string
+	if n := r.URL.Query().Get("name"); n != "" {
+		name = &n
+	}
+	var phone *string
+	if p := r.URL.Query().Get("phone"); p != "" {
+		phone = &p
+	}
+	var status *string
+	if s := r.URL.Query().Get("status"); s != "" {
+		status = &s
+	}
+
+	patients, total, err := h.service.ListPatients(r.Context(), tenantID, name, phone, status, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, patients, int64(total), page, pageSize)
 }
 
 // SyncPatientsFromVisits handles syncing patients from visits
@@ -54,7 +79,6 @@ func (h *Handler) SyncPatientsFromVisits(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// TODO: Implement patient sync from op_visits table
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"synced":  0,
 		"created": 0,
@@ -77,12 +101,17 @@ func (h *Handler) GetPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement patient retrieval
-	_ = id
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":   id,
-		"name": "",
-	})
+	patient, err := h.service.GetPatientByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && patient.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	httputil.WriteSuccess(w, patient)
 }
 
 // CreatePatient handles creating a new patient
@@ -93,17 +122,38 @@ func (h *Handler) CreatePatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req struct {
+		TenantID *int64  `json:"tenant_id,omitempty"`
+		Name     string  `json:"name"`
+		Phone    *string `json:"phone,omitempty"`
+		Email    *string `json:"email,omitempty"`
+		Gender   *string `json:"gender,omitempty"`
+		Age      *int    `json:"age,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement patient creation
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"id":      0,
-		"message": "Patient created successfully",
-	})
+	tenantID := int64(0)
+	if req.TenantID != nil {
+		tenantID = *req.TenantID
+	}
+	if tenantID == 0 && claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	if tenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+
+	patient, err := h.service.CreatePatient(r.Context(), tenantID, req.Name, req.Phone, req.Email, req.Gender, req.Age, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, patient)
 }
 
 // UpdatePatient handles updating a patient
@@ -120,15 +170,25 @@ func (h *Handler) UpdatePatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req map[string]interface{}
+	var req struct {
+		Name   *string `json:"name,omitempty"`
+		Phone  *string `json:"phone,omitempty"`
+		Email  *string `json:"email,omitempty"`
+		Gender *string `json:"gender,omitempty"`
+		Age    *int    `json:"age,omitempty"`
+		Status *string `json:"status,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 
-	// TODO: Implement patient update
-	_ = id
-	httputil.WriteSuccess(w, map[string]string{"message": "Patient updated successfully"})
+	patient, err := h.service.UpdatePatient(r.Context(), id, req.Name, req.Phone, req.Email, req.Gender, req.Status, req.Age)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, patient)
 }
 
 // DeletePatient handles deleting a patient (soft delete)
@@ -151,8 +211,10 @@ func (h *Handler) DeletePatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement patient soft delete
-	_ = id
+	if err := h.service.DeletePatient(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Patient deleted successfully"})
 }
 
@@ -170,11 +232,14 @@ func (h *Handler) GetPatient360View(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement patient 360-degree view
-	// Include: basic info, visit history, recordings, medical records, etc.
-	_ = id
+	patient, err := h.service.GetPatientByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"patient":         map[string]interface{}{},
+		"patient":         patient,
 		"visit_history":   []interface{}{},
 		"recordings":      []interface{}{},
 		"medical_records": []interface{}{},

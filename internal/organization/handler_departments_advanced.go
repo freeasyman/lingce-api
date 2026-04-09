@@ -40,11 +40,28 @@ func (h *Handler) SyncDepartmentsFromVisits(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// TODO: Implement department sync from op_visits table
+	var tenantID *int64
+	if rawTenantID, ok := req["tenant_id"]; ok {
+		switch v := rawTenantID.(type) {
+		case float64:
+			tid := int64(v)
+			tenantID = &tid
+		case int64:
+			tid := v
+			tenantID = &tid
+		}
+	}
+
+	result, err := h.service.SyncDepartmentsFromVisits(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"synced":  0,
-		"created": 0,
-		"updated": 0,
+		"synced":  result["synced"],
+		"created": result["created"],
+		"updated": result["updated"],
 		"message": "Departments synced successfully",
 	})
 }
@@ -63,15 +80,20 @@ func (h *Handler) GetDepartmentPerformance(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Implement department performance statistics
-	_ = id
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"department_id":    id,
-		"total_visits":     0,
-		"total_revenue":    0.0,
-		"avg_visit_value":  0.0,
-		"patient_count":    0,
-		"doctor_count":     0,
-		"period":           "month",
-	})
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "month"
+	}
+
+	stats, err := h.service.GetDepartmentPerformance(r.Context(), id, period)
+	if err != nil {
+		if err.Error() == "department not found" {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, stats)
 }

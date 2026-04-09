@@ -229,9 +229,24 @@ type CreatePublishTaskRequest struct {
 	ExtraData   JSONObject `json:"extra_data,omitempty"`
 }
 
+// BatchCreatePublishTasksRequest represents batch create publish tasks request
+type BatchCreatePublishTasksRequest struct {
+	Tasks []CreatePublishTaskRequest `json:"tasks"`
+}
+
 // UpdateTaskStatusRequest represents update task status request
 type UpdateTaskStatusRequest struct {
 	Status string `json:"status"`
+}
+
+// PublishDashboardResponse represents publish dashboard statistics
+type PublishDashboardResponse struct {
+	TotalTasks     int64                  `json:"total_tasks"`
+	PendingTasks   int64                  `json:"pending_tasks"`
+	RunningTasks   int64                  `json:"running_tasks"`
+	CompletedTasks int64                  `json:"completed_tasks"`
+	FailedTasks    int64                  `json:"failed_tasks"`
+	RecentTasks    []*PublishTaskResponse `json:"recent_tasks"`
 }
 
 // Content Seed DTOs
@@ -431,4 +446,3 @@ type SaveMinedTopicsRequest struct {
 		Category    *string  `json:"category,omitempty"`
 	} `json:"topics"`
 }
-

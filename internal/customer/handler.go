@@ -915,8 +915,13 @@ func (h *Handler) GetCustomerMomentumHistory(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// TODO: Implement momentum history retrieval from store
-	httputil.WriteSuccess(w, []interface{}{})
+	history, err := h.service.GetCustomerMomentumHistory(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, history)
 }
 
 // CheckDuplicates handles checking for duplicate customers
@@ -935,8 +940,29 @@ func (h *Handler) CheckDuplicates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement duplicate detection logic
-	httputil.WriteSuccess(w, []interface{}{})
+	var phonePtr, emailPtr *string
+	if phone != "" {
+		phonePtr = &phone
+	}
+	if email != "" {
+		emailPtr = &email
+	}
+
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		tenantID = &tid
+	}
+
+	duplicates, err := h.service.FindDuplicateCustomers(r.Context(), tenantID, phonePtr, emailPtr)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, duplicates)
 }
 
 // MergeCustomers handles merging multiple customers
@@ -963,8 +989,26 @@ func (h *Handler) MergeCustomers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement customer merge logic
-	httputil.WriteSuccess(w, map[string]string{"message": "Customers merged successfully"})
+	targetCustomer, err := h.service.GetCustomerByID(r.Context(), req.TargetID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && targetCustomer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	merged, err := h.service.MergeCustomers(r.Context(), req.TargetID, req.SourceIDs, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"merged_count": merged,
+		"message":      "Customers merged successfully",
+	})
 }
 
 // GetConsultationRecords handles getting customer consultation records
@@ -1002,8 +1046,13 @@ func (h *Handler) GetConsultationRecords(w http.ResponseWriter, r *http.Request)
 		pageSize = 20
 	}
 
-	// TODO: Implement consultation records retrieval from recordings table
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	records, total, err := h.service.ListConsultationRecords(r.Context(), id, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, records, int64(total), page, pageSize)
 }
 
 // GetEMRRecords handles getting customer EMR records
@@ -1041,8 +1090,13 @@ func (h *Handler) GetEMRRecords(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement EMR records retrieval from medical records table
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	records, total, err := h.service.ListEMRRecords(r.Context(), id, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, records, int64(total), page, pageSize)
 }
 
 // Advanced Tag Handlers
@@ -1076,8 +1130,24 @@ func (h *Handler) BatchTagCustomers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement batch tagging logic
-	httputil.WriteSuccess(w, map[string]string{"message": "Batch tagging completed successfully"})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		tenantID = &tid
+	}
+
+	affected, err := h.service.BatchTagCustomers(r.Context(), tenantID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"affected": affected,
+		"message":  "Batch tagging completed successfully",
+	})
 }
 
 // GetTagStats handles getting tag statistics
@@ -1097,13 +1167,13 @@ func (h *Handler) GetTagStats(w http.ResponseWriter, r *http.Request) {
 		tenantID = &tid
 	}
 
-	// TODO: Implement tag statistics calculation
-	_ = tenantID // Will be used in implementation
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"total_tags":        0,
-		"total_assignments": 0,
-		"most_used_tags":    []interface{}{},
-	})
+	stats, err := h.service.GetTagStats(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, stats)
 }
 
 // Advanced Group Handlers
@@ -1143,8 +1213,13 @@ func (h *Handler) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	// TODO: Implement group members retrieval
-	httputil.WritePaginated(w, []interface{}{}, 0, page, pageSize)
+	members, total, err := h.service.ListGroupMembers(r.Context(), id, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WritePaginated(w, members, int64(total), page, pageSize)
 }
 
 // AddGroupMembers handles adding members to a group
@@ -1184,8 +1259,16 @@ func (h *Handler) AddGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement add members logic
-	httputil.WriteSuccess(w, map[string]string{"message": "Members added successfully"})
+	added, err := h.service.AddGroupMembers(r.Context(), id, req.CustomerIDs)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"added":   added,
+		"message": "Members added successfully",
+	})
 }
 
 // RemoveGroupMembers handles removing members from a group
@@ -1225,8 +1308,16 @@ func (h *Handler) RemoveGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement remove members logic
-	httputil.WriteSuccess(w, map[string]string{"message": "Members removed successfully"})
+	removed, err := h.service.RemoveGroupMembers(r.Context(), id, req.CustomerIDs)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"removed": removed,
+		"message": "Members removed successfully",
+	})
 }
 
 // PreviewGroupRules handles previewing group rules
@@ -1243,11 +1334,21 @@ func (h *Handler) PreviewGroupRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement rule preview logic
-	httputil.WriteSuccess(w, RulePreviewResponse{
-		MatchCount: 0,
-		Customers:  []int64{},
-	})
+	var tenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID = claims.TenantID
+	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		tenantID = &tid
+	}
+
+	resp, err := h.service.PreviewGroupRules(r.Context(), tenantID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
 }
 
 // ValidateGroupRules handles validating group rules
@@ -1264,11 +1365,8 @@ func (h *Handler) ValidateGroupRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement rule validation logic
-	httputil.WriteSuccess(w, RuleValidateResponse{
-		IsValid: true,
-		Errors:  []string{},
-	})
+	resp := h.service.ValidateGroupRules(req)
+	httputil.WriteSuccess(w, resp)
 }
 
 // GetRuleFields handles getting available rule fields

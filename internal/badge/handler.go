@@ -2,6 +2,7 @@ package badge
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -566,14 +567,43 @@ func (h *Handler) GetTenantDeviceOverview(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Implement tenant device overview logic
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	req := DeviceListRequest{
+		TenantID: &tenantID,
+		Page:     1,
+		PageSize: 1000,
+	}
+	devices, _, err := h.service.ListDevices(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	var inUse, idle, maintenance, online int64
+	for _, d := range devices {
+		switch d.Status {
+		case "in_use":
+			inUse++
+		case "maintenance":
+			maintenance++
+		default:
+			idle++
+		}
+		if d.Status != "reclaimed" && d.Status != "retired" {
+			online++
+		}
+	}
+
 	overview := &TenantDeviceOverviewResponse{
-		TotalDevices:   0,
-		InUse:          0,
-		Idle:           0,
-		Maintenance:    0,
-		OnlineDevices:  0,
-		OfflineDevices: 0,
+		TotalDevices:   int64(len(devices)),
+		InUse:          inUse,
+		Idle:           idle,
+		Maintenance:    maintenance,
+		OnlineDevices:  online,
+		OfflineDevices: int64(len(devices)) - online,
 	}
 
 	httputil.WriteSuccess(w, overview)
@@ -724,16 +754,20 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement get my badge status logic
-	// For now, return empty status
+	device, err := h.getMyAssignedDevice(r, claims.UserID)
+	if err != nil {
+		httputil.WriteSuccess(w, &MyBadgeStatusResponse{IsOnline: false})
+		return
+	}
+
 	status := &MyBadgeStatusResponse{
-		DeviceNo:        nil,
-		DeviceID:        nil,
-		Status:          nil,
-		IsOnline:        false,
-		BatteryLevel:    nil,
-		FirmwareVersion: nil,
-		LastOnlineAt:    nil,
+		DeviceNo:        &device.DeviceNo,
+		DeviceID:        &device.ID,
+		Status:          &device.Status,
+		IsOnline:        device.Status != "reclaimed" && device.Status != "retired",
+		BatteryLevel:    device.BatteryLevel,
+		FirmwareVersion: device.FirmwareVersion,
+		LastOnlineAt:    device.LastOnlineAt,
 	}
 
 	httputil.WriteSuccess(w, status)
@@ -747,9 +781,21 @@ func (h *Handler) StartMyRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Get device_no from employee's assigned device
-	// For now, return error
-	httputil.WriteBadRequest(w, "No device assigned to this employee")
+	device, err := h.getMyAssignedDevice(r, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, "No device assigned to this employee")
+		return
+	}
+	if err := h.service.StartRecording(r.Context(), device.DeviceNo, &claims.UserID, JSONObject{
+		"source": "employee_self",
+	}); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"message":   "Recording started successfully",
+		"device_no": device.DeviceNo,
+	})
 }
 
 // StopMyRecording handles stopping my recording
@@ -760,9 +806,21 @@ func (h *Handler) StopMyRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Get device_no from employee's assigned device
-	// For now, return error
-	httputil.WriteBadRequest(w, "No device assigned to this employee")
+	device, err := h.getMyAssignedDevice(r, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, "No device assigned to this employee")
+		return
+	}
+	if err := h.service.StopRecording(r.Context(), device.DeviceNo, &claims.UserID, JSONObject{
+		"source": "employee_self",
+	}); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"message":   "Recording stopped successfully",
+		"device_no": device.DeviceNo,
+	})
 }
 
 // Helper functions
@@ -771,3 +829,23 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+func (h *Handler) getMyAssignedDevice(r *http.Request, employeeID int64) (*DeviceResponse, error) {
+	claims := middleware.GetUserClaims(r.Context())
+	var tenantID *int64
+	if claims != nil {
+		tenantID = claims.TenantID
+	}
+	devices, _, err := h.service.ListDevices(r.Context(), DeviceListRequest{
+		TenantID:   tenantID,
+		EmployeeID: &employeeID,
+		Page:       1,
+		PageSize:   1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no assigned device")
+	}
+	return devices[0], nil
+}
