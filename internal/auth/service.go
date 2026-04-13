@@ -63,11 +63,20 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 	}
 
 	return &LoginResponse{
-		Token:     token,
-		UserType:  string(auth.UserTypeAdmin),
-		UserID:    admin.ID,
-		Username:  admin.Username,
-		ExpiresAt: expiresAt,
+		Token:       token,
+		AccessToken: token,
+		TokenType:   "bearer",
+		UserType:    string(auth.UserTypeAdmin),
+		UserID:      admin.ID,
+		Username:    admin.Username,
+		ExpiresAt:   expiresAt,
+		User: &LoginUser{
+			ID:       admin.ID,
+			Name:     admin.Username,
+			Phone:    admin.Phone,
+			Role:     string(auth.UserTypeAdmin),
+			TenantID: nil,
+		},
 		UserInfo: map[string]interface{}{
 			"real_name": admin.RealName,
 			"email":     admin.Email,
@@ -97,6 +106,11 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	// Get employee
 	employee, err := s.store.GetEmployeeByUsername(ctx, username, tenantID)
 	if err != nil {
+		// Distinguish tenant mismatch from credential errors for better troubleshooting.
+		anyTenantEmployee, anyErr := s.store.GetEmployeeByLoginAnyTenant(ctx, username)
+		if anyErr == nil && anyTenantEmployee != nil && anyTenantEmployee.TenantID != tenantID {
+			return nil, fmt.Errorf("tenant mismatch")
+		}
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
@@ -123,12 +137,22 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	}
 
 	return &LoginResponse{
-		Token:     token,
-		UserType:  string(auth.UserTypeEmployee),
-		UserID:    employee.ID,
-		Username:  employee.Username,
-		TenantID:  &employee.TenantID,
-		ExpiresAt: expiresAt,
+		Token:       token,
+		AccessToken: token,
+		TokenType:   "bearer",
+		UserType:    string(auth.UserTypeEmployee),
+		UserID:      employee.ID,
+		Username:    employee.Username,
+		TenantID:    &employee.TenantID,
+		ExpiresAt:   expiresAt,
+		User: &LoginUser{
+			ID:         employee.ID,
+			Name:       employee.Username,
+			Phone:      employee.Phone,
+			Role:       string(auth.UserTypeEmployee),
+			TenantID:   &employee.TenantID,
+			TenantName: &tenant.Name,
+		},
 		UserInfo: map[string]interface{}{
 			"full_name":     employee.FullName,
 			"phone":         employee.Phone,
@@ -182,12 +206,22 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 	}
 
 	return &LoginResponse{
-		Token:     token,
-		UserType:  string(auth.UserTypeMobile),
-		UserID:    employee.ID,
-		Username:  employee.Username,
-		TenantID:  &employee.TenantID,
-		ExpiresAt: expiresAt,
+		Token:       token,
+		AccessToken: token,
+		TokenType:   "bearer",
+		UserType:    string(auth.UserTypeMobile),
+		UserID:      employee.ID,
+		Username:    employee.Username,
+		TenantID:    &employee.TenantID,
+		ExpiresAt:   expiresAt,
+		User: &LoginUser{
+			ID:         employee.ID,
+			Name:       employee.Username,
+			Phone:      employee.Phone,
+			Role:       string(auth.UserTypeMobile),
+			TenantID:   &employee.TenantID,
+			TenantName: &tenant.Name,
+		},
 		UserInfo: map[string]interface{}{
 			"full_name": employee.FullName,
 			"phone":     employee.Phone,
@@ -388,12 +422,22 @@ func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginRespo
 	}
 
 	return &LoginResponse{
-		Token:     token,
-		UserType:  string(auth.UserTypeMobile),
-		UserID:    employee.ID,
-		Username:  employee.Username,
-		TenantID:  &employee.TenantID,
-		ExpiresAt: expiresAt,
+		Token:       token,
+		AccessToken: token,
+		TokenType:   "bearer",
+		UserType:    string(auth.UserTypeMobile),
+		UserID:      employee.ID,
+		Username:    employee.Username,
+		TenantID:    &employee.TenantID,
+		ExpiresAt:   expiresAt,
+		User: &LoginUser{
+			ID:         employee.ID,
+			Name:       employee.Username,
+			Phone:      employee.Phone,
+			Role:       string(auth.UserTypeMobile),
+			TenantID:   &employee.TenantID,
+			TenantName: &tenant.Name,
+		},
 		UserInfo: map[string]interface{}{
 			"full_name": employee.FullName,
 			"phone":     employee.Phone,

@@ -19,8 +19,11 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // GetAdminByUsername retrieves an operations admin by username
 func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, name AS username, password_hash, name AS real_name, email, phone,
-		       session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, name AS username, password_hash, name AS real_name,
+		       COALESCE(email, '') AS email, COALESCE(phone, '') AS phone,
+		       COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins
 		WHERE name = $1 OR phone = $1
 	`
@@ -53,8 +56,11 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 // GetAdminByID retrieves an operations admin by ID
 func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, name AS username, password_hash, name AS real_name, email, phone,
-		       session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, name AS username, password_hash, name AS real_name,
+		       COALESCE(email, '') AS email, COALESCE(phone, '') AS phone,
+		       COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins
 		WHERE id = $1
 	`
@@ -87,10 +93,14 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 // GetEmployeeByUsername retrieves an employee by username and tenant
 func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tenantID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
-		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
+		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
+		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
+		       department_id, COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
 		FROM employees
-		WHERE (name = $1 OR phone = $1) AND tenant_id = $2
+		WHERE (name = $1 OR phone = $1 OR username = $1) AND tenant_id = $2 AND deleted_at IS NULL
 	`
 
 	var emp Employee
@@ -120,13 +130,57 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 	return &emp, nil
 }
 
+// GetEmployeeByLoginAnyTenant retrieves an employee by login id without tenant restriction.
+func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string) (*Employee, error) {
+	query := `
+		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
+		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
+		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
+		       department_id, COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
+		FROM employees
+		WHERE (name = $1 OR phone = $1 OR username = $1) AND deleted_at IS NULL
+		ORDER BY id ASC
+		LIMIT 1
+	`
+
+	var emp Employee
+	err := s.pool.QueryRow(ctx, query, loginID).Scan(
+		&emp.ID,
+		&emp.TenantID,
+		&emp.Username,
+		&emp.PasswordHash,
+		&emp.FullName,
+		&emp.Phone,
+		&emp.Email,
+		&emp.DepartmentID,
+		&emp.SessionVersion,
+		&emp.IsActive,
+		&emp.CreatedAt,
+		&emp.UpdatedAt,
+		&emp.DeletedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("employee not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query employee by login: %w", err)
+	}
+	return &emp, nil
+}
+
 // GetEmployeeByPhone retrieves an employee by phone
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
-		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
+		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
+		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
+		       department_id, COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
 		FROM employees
-		WHERE phone = $1
+		WHERE phone = $1 AND deleted_at IS NULL
 		LIMIT 1
 	`
 
@@ -160,10 +214,14 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 // GetEmployeeByID retrieves an employee by ID
 func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, name AS username, password_hash, name AS full_name, phone, NULL::text AS email,
-		       department_id, session_version, (is_active <> 0) AS is_active, created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
+		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
+		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
+		       department_id, COALESCE(session_version, 1) AS session_version,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
 		FROM employees
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	var emp Employee
@@ -196,8 +254,10 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 // GetTenantByID retrieves a tenant by ID
 func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, error) {
 	query := `
-		SELECT id, name, code, (is_active <> 0) AS is_active, service_started_on AS valid_from, service_expired_on AS valid_to,
-		       created_at, updated_at, NULL::timestamp AS deleted_at
+		SELECT id, name, COALESCE(code, '') AS code,
+		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       service_started_on AS valid_from, service_expired_on AS valid_to,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
 		WHERE id = $1
 	`

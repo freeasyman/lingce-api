@@ -10,13 +10,26 @@ type LoginRequest struct {
 
 // LoginResponse represents a login response
 type LoginResponse struct {
-	Token     string      `json:"token"`
-	UserType  string      `json:"user_type"`
-	UserID    int64       `json:"user_id"`
-	Username  string      `json:"username"`
-	TenantID  *int64      `json:"tenant_id,omitempty"`
-	ExpiresAt int64       `json:"expires_at"`
-	UserInfo  interface{} `json:"user_info,omitempty"`
+	Token       string      `json:"token"`
+	AccessToken string      `json:"access_token,omitempty"` // backward compatibility
+	TokenType   string      `json:"token_type,omitempty"`   // backward compatibility
+	UserType    string      `json:"user_type"`
+	UserID      int64       `json:"user_id"`
+	Username    string      `json:"username"`
+	TenantID    *int64      `json:"tenant_id,omitempty"`
+	ExpiresAt   int64       `json:"expires_at"`
+	User        *LoginUser  `json:"user,omitempty"` // backward compatibility
+	UserInfo    interface{} `json:"user_info,omitempty"`
+}
+
+// LoginUser represents a backward-compatible nested user payload.
+type LoginUser struct {
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	Phone      string  `json:"phone,omitempty"`
+	Role       string  `json:"role"`
+	TenantID   *int64  `json:"tenant_id"`
+	TenantName *string `json:"tenant_name,omitempty"`
 }
 
 // MeResponse represents current user info
@@ -47,6 +60,7 @@ type SMSLoginRequest struct {
 
 // CaptchaResponse represents a captcha response
 type CaptchaResponse struct {
-	CaptchaID string `json:"captcha_id"`
-	ImageData string `json:"image_data"` // base64 encoded
+	CaptchaID    string `json:"captcha_id"`
+	ImageData    string `json:"image_data"`              // base64 encoded (new field)
+	CaptchaImage string `json:"captcha_image,omitempty"` // backward compatibility
 }

@@ -208,9 +208,11 @@ func (h *Handler) GetCaptcha(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return captcha ID and base64 image
+	imageBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
 	httputil.WriteSuccess(w, CaptchaResponse{
-		CaptchaID: captchaID,
-		ImageData: base64.StdEncoding.EncodeToString(buf.Bytes()),
+		CaptchaID:    captchaID,
+		ImageData:    imageBase64,
+		CaptchaImage: "data:image/png;base64," + imageBase64,
 	})
 }
 
