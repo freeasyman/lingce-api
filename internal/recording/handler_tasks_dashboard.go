@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -23,9 +24,17 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	scope, err := getTaskTenantScope(claims, r, h)
 	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, &RecordingTaskStatsResponse{})
 		return
 	}
 
@@ -34,7 +43,11 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 		assignedTo = &claims.UserID
 	}
 
-	stats, err := h.service.GetTaskStats(r.Context(), tenantID, assignedTo)
+	tenantID := int64(0)
+	if scope.TenantID != nil {
+		tenantID = *scope.TenantID
+	}
+	stats, err := h.service.GetTaskStats(r.Context(), tenantID, scope.TenantIDs, assignedTo)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -135,17 +148,29 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 		return
 	}
 
-	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	scope, err := getTaskTenantScope(claims, r, h)
 	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, []*TaskResponse{})
 		return
 	}
 
 	req := TaskListRequest{
-		TenantID:    &tenantID,
 		RecordingID: &id,
 		Page:        1,
 		PageSize:    100,
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 	tasks, _, err := h.service.ListRecordingTasks(r.Context(), req)
 	if err != nil {
@@ -158,22 +183,30 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 
 func getTaskTenantIDFromClaimsOrQuery(claims *auth.Claims, r *http.Request) (int64, error) {
 	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, err := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		if err != nil || tenantID <= 0 {
-			return 0, errTenantIDRequiredForAdmin
+		if tenantIDStr := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantIDStr != "" {
+			tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
+			if err != nil || tenantID <= 0 {
+				return 0, fmt.Errorf("invalid tenant_id")
+			}
+			return tenantID, nil
 		}
-		return tenantID, nil
+		if claims.TenantID != nil && *claims.TenantID > 0 {
+			return *claims.TenantID, nil
+		}
+		return 0, fmt.Errorf("tenant_id is required")
 	}
-
 	if claims.TenantID == nil || *claims.TenantID <= 0 {
 		return 0, errTenantAccessDenied
 	}
 	return *claims.TenantID, nil
 }
 
+func getTaskTenantScope(claims *auth.Claims, r *http.Request, h *Handler) (*tenancy.Scope, error) {
+	return tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+}
+
 var (
-	errTenantIDRequiredForAdmin = &tenantError{msg: "tenant_id is required for admin"}
-	errTenantAccessDenied       = &tenantError{msg: "No tenant access"}
+	errTenantAccessDenied = &tenantError{msg: "No tenant access"}
 )
 
 type tenantError struct {
@@ -192,9 +225,17 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	scope, err := getTaskTenantScope(claims, r, h)
 	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, []map[string]interface{}{})
 		return
 	}
 
@@ -202,9 +243,9 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 		SELECT DISTINCT e.id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
 		FROM employees e
 		INNER JOIN recording_tasks t ON t.assigned_to = e.id
-		WHERE e.tenant_id = $1
+		WHERE e.tenant_id = ANY($1)
 		ORDER BY e.id DESC
-	`, tenantID)
+	`, scope.TenantIDs)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

@@ -29,7 +29,11 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++
@@ -662,7 +666,11 @@ func (s *Store) ListCustomerTags(ctx context.Context, req TagListRequest) ([]*Cu
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++
@@ -843,7 +851,11 @@ func (s *Store) ListCustomerGroups(ctx context.Context, req GroupListRequest) ([
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++

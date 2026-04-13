@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -32,13 +31,23 @@ func (h *Handler) ListSeeds(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SeedListRequest
-
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []SeedResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -46,7 +55,7 @@ func (h *Handler) ListSeeds(w http.ResponseWriter, r *http.Request) {
 	req.Page = page
 	req.PageSize = pageSize
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), req.TenantID)
+	seeds, err := h.buildSeedsFromTopics(r.Context(), req.TenantID, req.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -78,7 +87,20 @@ func (h *Handler) GetSeedStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, &SeedStatsResponse{})
+		return
+	}
+	seeds, err := h.buildSeedsFromTopics(r.Context(), scope.TenantID, scope.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -110,7 +132,20 @@ func (h *Handler) GetClusters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, []map[string]interface{}{})
+		return
+	}
+	seeds, err := h.buildSeedsFromTopics(r.Context(), scope.TenantID, scope.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -356,11 +391,12 @@ func (h *Handler) GetMyAdopted(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, out)
 }
 
-func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64) ([]SeedResponse, error) {
+func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
 	topics, _, err := h.service.ListTopics(ctx, TopicListRequest{
-		TenantID: tenantID,
-		Page:     1,
-		PageSize: 500,
+		TenantID:  tenantID,
+		TenantIDs: tenantIDs,
+		Page:      1,
+		PageSize:  500,
 	})
 	if err != nil {
 		return nil, err
@@ -402,8 +438,8 @@ func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64) ([]
 	return result, nil
 }
 
-func (h *Handler) getSeedByID(ctx context.Context, tenantID *int64, id int64) (*SeedResponse, error) {
-	seeds, err := h.buildSeedsFromTopics(ctx, tenantID)
+func (h *Handler) getSeedByID(ctx context.Context, tenantID *int64, id int64, tenantIDs ...int64) (*SeedResponse, error) {
+	seeds, err := h.buildSeedsFromTopics(ctx, tenantID, tenantIDs...)
 	if err != nil {
 		return nil, err
 	}

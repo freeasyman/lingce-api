@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -25,8 +26,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Recording CRUD endpoints
 	mux.Handle("GET /api/v1/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
+	mux.Handle("GET /api/v1/recordings/", authMw(http.HandlerFunc(h.ListRecordings)))
 	mux.Handle("GET /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
 	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
+	mux.Handle("POST /api/v1/recordings/", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
 	mux.Handle("DELETE /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.DeleteRecording)))
 
@@ -37,6 +40,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Recording Task endpoints
 	mux.Handle("GET /api/v1/recording-tasks", authMw(http.HandlerFunc(h.ListRecordingTasks)))
+	mux.Handle("GET /api/v1/recording-tasks/", authMw(http.HandlerFunc(h.ListRecordingTasks)))
 	mux.Handle("GET /api/v1/recording-tasks/{id}", authMw(http.HandlerFunc(h.GetTask)))
 	mux.Handle("POST /api/v1/recording-tasks/{id}/complete", authMw(http.HandlerFunc(h.CompleteTask)))
 	mux.Handle("POST /api/v1/recording-tasks/{id}/cancel", authMw(http.HandlerFunc(h.CancelTask)))
@@ -77,9 +81,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Medical Recording Dashboard endpoints
 	mux.Handle("GET /api/v1/medical-recordings", authMw(http.HandlerFunc(h.ListMedicalRecordings)))
+	mux.Handle("GET /api/v1/medical-recordings/", authMw(http.HandlerFunc(h.ListMedicalRecordings)))
+	mux.Handle("GET /api/v1/medical-recordings/{id}", authMw(http.HandlerFunc(h.GetMedicalRecording)))
+	mux.Handle("GET /api/v1/medical-recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
+	mux.Handle("GET /api/v1/medical-recordings/{id}/route", authMw(http.HandlerFunc(h.GetMedicalRecordingRoute)))
+	mux.Handle("GET /api/v1/medical-recordings/{id}/segue", authMw(http.HandlerFunc(h.GetMedicalRecordingSegue)))
 	mux.Handle("GET /api/v1/medical-recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))
 	mux.Handle("GET /api/v1/medical-recordings/doctor-ability", authMw(http.HandlerFunc(h.GetDoctorAbilityRanking)))
-	mux.Handle("GET /api/v1/medical-recordings/doctor-ability/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilityDetail)))
 	mux.Handle("GET /api/v1/medical-recordings/analysis", authMw(http.HandlerFunc(h.GetCommunicationAnalysis)))
 	mux.Handle("GET /api/v1/medical-recordings/weekly-meeting", authMw(http.HandlerFunc(h.GetWeeklyMeetingMaterial)))
 	mux.Handle("GET /api/v1/medical-recordings/weekly-summary", authMw(http.HandlerFunc(h.GetWeeklySummary)))
@@ -95,10 +103,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Recording Task Advanced endpoints
 	mux.Handle("GET /api/v1/recording-tasks/stats", authMw(http.HandlerFunc(h.GetTaskStats)))
+	mux.Handle("GET /api/v1/recording-tasks/stats/", authMw(http.HandlerFunc(h.GetTaskStats)))
 	mux.Handle("GET /api/v1/recording-tasks/daily-briefing", authMw(http.HandlerFunc(h.GetDailyBriefing)))
 	mux.Handle("GET /api/v1/recording-tasks/my-tasks", authMw(http.HandlerFunc(h.GetMyTasks)))
 	mux.Handle("GET /api/v1/recording-tasks/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasksByRecordingID)))
 	mux.Handle("GET /api/v1/recording-tasks/employees", authMw(http.HandlerFunc(h.ListTaskEmployees)))
+	mux.Handle("GET /api/v1/recording-tasks/employees/", authMw(http.HandlerFunc(h.ListTaskEmployees)))
 	mux.Handle("POST /api/v1/recording-tasks/assign", authMw(http.HandlerFunc(h.BatchAssignTasks)))
 	mux.Handle("GET /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.ListEmployeePartnerships)))
 	mux.Handle("POST /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.CreateEmployeePartnership)))
@@ -135,20 +145,31 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	var req RecordingListRequest
 
-	// Admin can query any tenant, employees can only query their own tenant
-	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		if tenantID == 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required for admin")
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
-		req.TenantID = tenantID
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+		if page <= 0 {
+			page = 1
+		}
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		httputil.WritePaginated(w, []*RecordingResponse{}, 0, page, pageSize)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = *scope.TenantID
 	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	// Parse optional filters
@@ -336,6 +357,7 @@ func (h *Handler) DeleteRecording(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Recording deleted successfully"})
 }
+
 // Recording Statistics Handlers
 
 // GetStatsOverview handles getting overview statistics
@@ -345,16 +367,16 @@ func (h *Handler) GetStatsOverview(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	tenantID := h.getTenantID(claims, r)
 	if tenantID == 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	
+
 	startDate := r.URL.Query().Get("start_date")
 	endDate := r.URL.Query().Get("end_date")
-	
+
 	var startDatePtr, endDatePtr *string
 	if startDate != "" {
 		startDatePtr = &startDate
@@ -362,13 +384,13 @@ func (h *Handler) GetStatsOverview(w http.ResponseWriter, r *http.Request) {
 	if endDate != "" {
 		endDatePtr = &endDate
 	}
-	
+
 	stats, err := h.service.GetStatsOverview(r.Context(), tenantID, startDatePtr, endDatePtr)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, stats)
 }
 
@@ -379,19 +401,19 @@ func (h *Handler) GetStatsByScene(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	tenantID := h.getTenantID(claims, r)
 	if tenantID == 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	
+
 	stats, err := h.service.GetStatsByScene(r.Context(), tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, stats)
 }
 
@@ -402,19 +424,19 @@ func (h *Handler) GetStatsBySource(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	tenantID := h.getTenantID(claims, r)
 	if tenantID == 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	
+
 	stats, err := h.service.GetStatsBySource(r.Context(), tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, stats)
 }
 
@@ -427,46 +449,68 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	var req TaskListRequest
-	
-	// Parse filters
-	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
-	
+	if len(scope.TenantIDs) == 0 {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+		if page <= 0 {
+			page = 1
+		}
+		if pageSize <= 0 {
+			pageSize = 20
+		}
+		httputil.WritePaginated(w, []*TaskResponse{}, 0, page, pageSize)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
+	}
+
+	// Parse filters
 	if recordingIDStr := r.URL.Query().Get("recording_id"); recordingIDStr != "" {
 		recordingID, _ := strconv.ParseInt(recordingIDStr, 10, 64)
 		req.RecordingID = &recordingID
 	}
-	
+
 	if assignedToStr := r.URL.Query().Get("assigned_to"); assignedToStr != "" {
 		assignedTo, _ := strconv.ParseInt(assignedToStr, 10, 64)
 		req.AssignedTo = &assignedTo
 	}
-	
+
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		status := TaskStatus(statusStr)
 		req.Status = &status
 	}
-	
+
 	if taskTypeStr := r.URL.Query().Get("task_type"); taskTypeStr != "" {
 		taskType := TaskType(taskTypeStr)
 		req.TaskType = &taskType
 	}
-	
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
-	
+
 	tasks, total, err := h.service.ListRecordingTasks(r.Context(), req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WritePaginated(w, tasks, int64(total), req.Page, req.PageSize)
 }
 
@@ -477,19 +521,19 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid task ID")
 		return
 	}
-	
+
 	task, err := h.service.GetTask(r.Context(), id)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, task)
 }
 
@@ -500,24 +544,24 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid task ID")
 		return
 	}
-	
+
 	var req CompleteTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	
+
 	if err := h.service.CompleteTask(r.Context(), id, claims.UserID, req); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, map[string]string{"message": "Task completed successfully"})
 }
 
@@ -528,24 +572,24 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid task ID")
 		return
 	}
-	
+
 	var req CancelTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	
+
 	if err := h.service.CancelTask(r.Context(), id, req); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, map[string]string{"message": "Task cancelled successfully"})
 }
 
@@ -558,33 +602,33 @@ func (h *Handler) ListRecordingPrompts(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	var req RecordingPromptListRequest
-	
+
 	if code := r.URL.Query().Get("code"); code != "" {
 		req.Code = &code
 	}
-	
+
 	if name := r.URL.Query().Get("name"); name != "" {
 		req.Name = &name
 	}
-	
+
 	if isActiveStr := r.URL.Query().Get("is_active"); isActiveStr != "" {
 		isActive := isActiveStr == "true"
 		req.IsActive = &isActive
 	}
-	
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
-	
+
 	prompts, total, err := h.service.ListRecordingPrompts(r.Context(), req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WritePaginated(w, prompts, int64(total), req.Page, req.PageSize)
 }
 
@@ -595,19 +639,19 @@ func (h *Handler) GetRecordingPrompt(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	code := r.PathValue("code")
 	if code == "" {
 		httputil.WriteBadRequest(w, "Invalid prompt code")
 		return
 	}
-	
+
 	prompt, err := h.service.GetRecordingPrompt(r.Context(), code)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, prompt)
 }
 
@@ -618,25 +662,25 @@ func (h *Handler) CreateRecordingPrompt(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	// Only admin can create prompts
 	if claims.UserType != auth.UserTypeAdmin {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	
+
 	var req CreateRecordingPromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	
+
 	prompt, err := h.service.CreateRecordingPrompt(r.Context(), req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, prompt)
 }
 
@@ -647,31 +691,31 @@ func (h *Handler) UpdateRecordingPrompt(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	// Only admin can update prompts
 	if claims.UserType != auth.UserTypeAdmin {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	
+
 	code := r.PathValue("code")
 	if code == "" {
 		httputil.WriteBadRequest(w, "Invalid prompt code")
 		return
 	}
-	
+
 	var req UpdateRecordingPromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	
+
 	prompt, err := h.service.UpdateRecordingPrompt(r.Context(), code, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, prompt)
 }
 
@@ -682,24 +726,24 @@ func (h *Handler) DeleteRecordingPrompt(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	// Only admin can delete prompts
 	if claims.UserType != auth.UserTypeAdmin {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	
+
 	code := r.PathValue("code")
 	if code == "" {
 		httputil.WriteBadRequest(w, "Invalid prompt code")
 		return
 	}
-	
+
 	if err := h.service.DeleteRecordingPrompt(r.Context(), code); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, map[string]string{"message": "Prompt deleted successfully"})
 }
 
@@ -712,19 +756,19 @@ func (h *Handler) ListBestPractices(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	tenantID := h.getTenantID(claims, r)
 	if tenantID == 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	
+
 	practices, err := h.service.ListBestPractices(r.Context(), tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, practices)
 }
 
@@ -735,31 +779,31 @@ func (h *Handler) AddBestPractice(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
 		return
 	}
-	
+
 	tenantID := h.getTenantID(claims, r)
 	if tenantID == 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	
+
 	var req AddBestPracticeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	
+
 	practice, err := h.service.AddBestPractice(r.Context(), tenantID, id, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, practice)
 }
 
@@ -770,18 +814,18 @@ func (h *Handler) DeleteBestPractice(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
 		return
 	}
-	
+
 	if err := h.service.DeleteBestPractice(r.Context(), id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	
+
 	httputil.WriteSuccess(w, map[string]string{"message": "Best practice deleted successfully"})
 }
 

@@ -5,6 +5,7 @@ package badge
 // DeviceListRequest represents the request for listing devices
 type DeviceListRequest struct {
 	TenantID         *int64  `json:"tenant_id,omitempty"`
+	TenantIDs        []int64 `json:"tenant_ids,omitempty"`
 	EmployeeID       *int64  `json:"employee_id,omitempty"`
 	Status           *string `json:"status,omitempty"`
 	ManufacturerCode *string `json:"manufacturer_code,omitempty"`
@@ -94,33 +95,33 @@ type TicketListRequest struct {
 
 // TicketResponse represents ticket response
 type TicketResponse struct {
-	ID             int64      `json:"id"`
-	TicketNo       string     `json:"ticket_no"`
-	Type           string     `json:"type"`
-	Status         string     `json:"status"`
-	DeviceID       *int64     `json:"device_id,omitempty"`
-	DeviceNo       *string    `json:"device_no,omitempty"`
-	TenantID       *int64     `json:"tenant_id,omitempty"`
-	TenantName     *string    `json:"tenant_name,omitempty"`
-	EmployeeID     *int64     `json:"employee_id,omitempty"`
-	EmployeeName   *string    `json:"employee_name,omitempty"`
-	SubmitterID    int64      `json:"submitter_id"`
-	SubmitterName  string     `json:"submitter_name"`
-	ReviewerID     *int64     `json:"reviewer_id,omitempty"`
-	ReviewerName   *string    `json:"reviewer_name,omitempty"`
-	ExecutorID     *int64     `json:"executor_id,omitempty"`
-	ExecutorName   *string    `json:"executor_name,omitempty"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description"`
-	ReviewNotes    *string    `json:"review_notes,omitempty"`
-	ExecuteNotes   *string    `json:"execute_notes,omitempty"`
-	SubmittedAt    string     `json:"submitted_at"`
-	ReviewedAt     *string    `json:"reviewed_at,omitempty"`
-	ExecutedAt     *string    `json:"executed_at,omitempty"`
-	CompletedAt    *string    `json:"completed_at,omitempty"`
-	ExtraData      JSONObject `json:"extra_data,omitempty"`
-	CreatedAt      string     `json:"created_at"`
-	UpdatedAt      string     `json:"updated_at"`
+	ID            int64      `json:"id"`
+	TicketNo      string     `json:"ticket_no"`
+	Type          string     `json:"type"`
+	Status        string     `json:"status"`
+	DeviceID      *int64     `json:"device_id,omitempty"`
+	DeviceNo      *string    `json:"device_no,omitempty"`
+	TenantID      *int64     `json:"tenant_id,omitempty"`
+	TenantName    *string    `json:"tenant_name,omitempty"`
+	EmployeeID    *int64     `json:"employee_id,omitempty"`
+	EmployeeName  *string    `json:"employee_name,omitempty"`
+	SubmitterID   int64      `json:"submitter_id"`
+	SubmitterName string     `json:"submitter_name"`
+	ReviewerID    *int64     `json:"reviewer_id,omitempty"`
+	ReviewerName  *string    `json:"reviewer_name,omitempty"`
+	ExecutorID    *int64     `json:"executor_id,omitempty"`
+	ExecutorName  *string    `json:"executor_name,omitempty"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	ReviewNotes   *string    `json:"review_notes,omitempty"`
+	ExecuteNotes  *string    `json:"execute_notes,omitempty"`
+	SubmittedAt   string     `json:"submitted_at"`
+	ReviewedAt    *string    `json:"reviewed_at,omitempty"`
+	ExecutedAt    *string    `json:"executed_at,omitempty"`
+	CompletedAt   *string    `json:"completed_at,omitempty"`
+	ExtraData     JSONObject `json:"extra_data,omitempty"`
+	CreatedAt     string     `json:"created_at"`
+	UpdatedAt     string     `json:"updated_at"`
 }
 
 // TicketReviewRequest represents ticket review request
@@ -136,15 +137,15 @@ type TicketExecuteRequest struct {
 
 // DashboardSummaryResponse represents dashboard summary
 type DashboardSummaryResponse struct {
-	TotalDevices       int64                  `json:"total_devices"`
-	PendingAcceptance  int64                  `json:"pending_acceptance"`
-	PendingAssignment  int64                  `json:"pending_assignment"`
-	InUse              int64                  `json:"in_use"`
-	Maintenance        int64                  `json:"maintenance"`
-	Retired            int64                  `json:"retired"`
-	StatusDistribution []StatusCount          `json:"status_distribution"`
-	ManufacturerStats  []ManufacturerCount    `json:"manufacturer_stats"`
-	TenantStats        []TenantDeviceCount    `json:"tenant_stats"`
+	TotalDevices       int64               `json:"total_devices"`
+	PendingAcceptance  int64               `json:"pending_acceptance"`
+	PendingAssignment  int64               `json:"pending_assignment"`
+	InUse              int64               `json:"in_use"`
+	Maintenance        int64               `json:"maintenance"`
+	Retired            int64               `json:"retired"`
+	StatusDistribution []StatusCount       `json:"status_distribution"`
+	ManufacturerStats  []ManufacturerCount `json:"manufacturer_stats"`
+	TenantStats        []TenantDeviceCount `json:"tenant_stats"`
 }
 
 // StatusCount represents status count

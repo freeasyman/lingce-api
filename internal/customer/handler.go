@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -24,9 +26,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Customer endpoints
 	mux.Handle("GET /api/v1/customers", authMw(http.HandlerFunc(h.ListCustomers)))
+	mux.Handle("GET /api/v1/customers/", authMw(http.HandlerFunc(h.ListCustomers)))
 	mux.Handle("GET /api/v1/customers/stats/overview", authMw(http.HandlerFunc(h.GetCustomerStats)))
 	mux.Handle("GET /api/v1/customers/{id}", authMw(http.HandlerFunc(h.GetCustomerByID)))
 	mux.Handle("POST /api/v1/customers", authMw(http.HandlerFunc(h.CreateCustomer)))
+	mux.Handle("POST /api/v1/customers/", authMw(http.HandlerFunc(h.CreateCustomer)))
 	mux.Handle("PUT /api/v1/customers/{id}", authMw(http.HandlerFunc(h.UpdateCustomer)))
 	mux.Handle("PUT /api/v1/customers/{id}/converted", authMw(http.HandlerFunc(h.MarkCustomerConverted)))
 	mux.Handle("POST /api/v1/customers/{id}/identities", authMw(http.HandlerFunc(h.AddCustomerIdentity)))
@@ -38,12 +42,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Tag endpoints
 	mux.Handle("GET /api/v1/customer-tags", authMw(http.HandlerFunc(h.ListCustomerTags)))
+	mux.Handle("GET /api/v1/customer-tags/", authMw(http.HandlerFunc(h.ListCustomerTags)))
 	mux.Handle("POST /api/v1/customer-tags", authMw(http.HandlerFunc(h.CreateCustomerTag)))
 	mux.Handle("PUT /api/v1/customer-tags/{id}", authMw(http.HandlerFunc(h.UpdateCustomerTag)))
 	mux.Handle("DELETE /api/v1/customer-tags/{id}", authMw(http.HandlerFunc(h.DeleteCustomerTag)))
 
 	// Group endpoints
 	mux.Handle("GET /api/v1/customer-groups", authMw(http.HandlerFunc(h.ListCustomerGroups)))
+	mux.Handle("GET /api/v1/customer-groups/", authMw(http.HandlerFunc(h.ListCustomerGroups)))
 	mux.Handle("POST /api/v1/customer-groups", authMw(http.HandlerFunc(h.CreateCustomerGroup)))
 	mux.Handle("PUT /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.UpdateCustomerGroup)))
 	mux.Handle("DELETE /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.DeleteCustomerGroup)))
@@ -81,12 +87,23 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 
 	var req CustomerListRequest
 
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []*CustomerResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	if name := r.URL.Query().Get("name"); name != "" {
@@ -592,6 +609,10 @@ func (h *Handler) GetCustomerMembership(w http.ResponseWriter, r *http.Request) 
 
 	membership, err := h.service.GetCustomerMembership(r.Context(), id)
 	if err != nil {
+		if strings.Contains(err.Error(), "membership not found") {
+			httputil.WriteSuccess(w, map[string]interface{}{})
+			return
+		}
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
@@ -611,12 +632,23 @@ func (h *Handler) ListCustomerTags(w http.ResponseWriter, r *http.Request) {
 
 	var req TagListRequest
 
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []*TagResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	if name := r.URL.Query().Get("name"); name != "" {
@@ -753,12 +785,23 @@ func (h *Handler) ListCustomerGroups(w http.ResponseWriter, r *http.Request) {
 
 	var req GroupListRequest
 
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []*GroupResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	if name := r.URL.Query().Get("name"); name != "" {

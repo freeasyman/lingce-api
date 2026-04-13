@@ -18,46 +18,47 @@ type CreateRecordingRequest struct {
 
 // UpdateRecordingRequest represents a request to update a medical recording
 type UpdateRecordingRequest struct {
-	PatientName       *string         `json:"patient_name,omitempty"`
-	PatientAge        *int            `json:"patient_age,omitempty"`
-	PatientGender     *string         `json:"patient_gender,omitempty"`
-	PatientPhone      *string         `json:"patient_phone,omitempty"`
-	TranscriptText    *string         `json:"transcript_text,omitempty"`
-	DoctorSummary     *string         `json:"doctor_summary,omitempty"`
-	TherapistSummary  *string         `json:"therapist_summary,omitempty"`
-	ConsultantSummary *string         `json:"consultant_summary,omitempty"`
+	PatientName       *string          `json:"patient_name,omitempty"`
+	PatientAge        *int             `json:"patient_age,omitempty"`
+	PatientGender     *string          `json:"patient_gender,omitempty"`
+	PatientPhone      *string          `json:"patient_phone,omitempty"`
+	TranscriptText    *string          `json:"transcript_text,omitempty"`
+	DoctorSummary     *string          `json:"doctor_summary,omitempty"`
+	TherapistSummary  *string          `json:"therapist_summary,omitempty"`
+	ConsultantSummary *string          `json:"consultant_summary,omitempty"`
 	Status            *RecordingStatus `json:"status,omitempty"`
-	ProcessingError   *string         `json:"processing_error,omitempty"`
-	ProcessedAt       *time.Time      `json:"processed_at,omitempty"`
+	ProcessingError   *string          `json:"processing_error,omitempty"`
+	ProcessedAt       *time.Time       `json:"processed_at,omitempty"`
 }
 
 // RecordingResponse represents a medical recording response
 type RecordingResponse struct {
-	ID                 int64      `json:"id"`
-	TenantID           int64      `json:"tenant_id"`
-	EmployeeID         int64      `json:"employee_id"`
-	PatientName        string     `json:"patient_name"`
-	PatientAge         *int       `json:"patient_age,omitempty"`
-	PatientGender      *string    `json:"patient_gender,omitempty"`
-	PatientPhone       *string    `json:"patient_phone,omitempty"`
-	RecordingURL       string     `json:"recording_url"`
-	RecordingDuration  *int       `json:"recording_duration,omitempty"`
-	TranscriptText     *string    `json:"transcript_text,omitempty"`
-	DoctorSummary      *string    `json:"doctor_summary,omitempty"`
-	TherapistSummary   *string    `json:"therapist_summary,omitempty"`
-	ConsultantSummary  *string    `json:"consultant_summary,omitempty"`
-	Status             string     `json:"status"`
-	ProcessingError    *string    `json:"processing_error,omitempty"`
-	RecordingStartedAt *string    `json:"recording_started_at,omitempty"`
-	RecordingEndedAt   *string    `json:"recording_ended_at,omitempty"`
-	ProcessedAt        *string    `json:"processed_at,omitempty"`
-	CreatedAt          string     `json:"created_at"`
-	UpdatedAt          string     `json:"updated_at"`
+	ID                 int64   `json:"id"`
+	TenantID           int64   `json:"tenant_id"`
+	EmployeeID         int64   `json:"employee_id"`
+	PatientName        string  `json:"patient_name"`
+	PatientAge         *int    `json:"patient_age,omitempty"`
+	PatientGender      *string `json:"patient_gender,omitempty"`
+	PatientPhone       *string `json:"patient_phone,omitempty"`
+	RecordingURL       string  `json:"recording_url"`
+	RecordingDuration  *int    `json:"recording_duration,omitempty"`
+	TranscriptText     *string `json:"transcript_text,omitempty"`
+	DoctorSummary      *string `json:"doctor_summary,omitempty"`
+	TherapistSummary   *string `json:"therapist_summary,omitempty"`
+	ConsultantSummary  *string `json:"consultant_summary,omitempty"`
+	Status             string  `json:"status"`
+	ProcessingError    *string `json:"processing_error,omitempty"`
+	RecordingStartedAt *string `json:"recording_started_at,omitempty"`
+	RecordingEndedAt   *string `json:"recording_ended_at,omitempty"`
+	ProcessedAt        *string `json:"processed_at,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // RecordingListRequest represents a request to list medical recordings
 type RecordingListRequest struct {
 	TenantID    int64            `json:"tenant_id"`
+	TenantIDs   []int64          `json:"tenant_ids,omitempty"`
 	EmployeeID  *int64           `json:"employee_id,omitempty"`
 	PatientName *string          `json:"patient_name,omitempty"`
 	Status      *RecordingStatus `json:"status,omitempty"`
@@ -237,11 +238,11 @@ type CommunicationAnalysisResponse struct {
 
 // WeeklyMeetingMaterialResponse represents weekly meeting material
 type WeeklyMeetingMaterialResponse struct {
-	WeekStart        string              `json:"week_start"`
-	WeekEnd          string              `json:"week_end"`
-	Highlights       []string            `json:"highlights"`
-	BestPractices    []BestPracticeItem  `json:"best_practices"`
-	ImprovementAreas []string            `json:"improvement_areas"`
+	WeekStart        string             `json:"week_start"`
+	WeekEnd          string             `json:"week_end"`
+	Highlights       []string           `json:"highlights"`
+	BestPractices    []BestPracticeItem `json:"best_practices"`
+	ImprovementAreas []string           `json:"improvement_areas"`
 }
 
 // BestPracticeItem represents a best practice item
@@ -254,18 +255,18 @@ type BestPracticeItem struct {
 
 // WeeklySummaryResponse represents weekly summary
 type WeeklySummaryResponse struct {
-	WeekStart       string                           `json:"week_start"`
-	WeekEnd         string                           `json:"week_end"`
-	TotalRecordings int64                            `json:"total_recordings"`
-	AvgScore        float64                          `json:"avg_score"`
-	TopPerformers   []DoctorAbilityRankingResponse   `json:"top_performers"`
-	KeyInsights     []string                         `json:"key_insights"`
+	WeekStart       string                         `json:"week_start"`
+	WeekEnd         string                         `json:"week_end"`
+	TotalRecordings int64                          `json:"total_recordings"`
+	AvgScore        float64                        `json:"avg_score"`
+	TopPerformers   []DoctorAbilityRankingResponse `json:"top_performers"`
+	KeyInsights     []string                       `json:"key_insights"`
 }
 
 // TeamTrendsResponse represents team trends
 type TeamTrendsResponse struct {
-	Period string            `json:"period"` // "daily", "weekly", "monthly"
-	Data   []TrendDataPoint  `json:"data"`
+	Period string           `json:"period"` // "daily", "weekly", "monthly"
+	Data   []TrendDataPoint `json:"data"`
 }
 
 // TrendDataPoint represents a data point in trend
@@ -334,27 +335,28 @@ type RecordingAnalysisSettingsResponse struct {
 
 // RecordingTaskStatsResponse represents task statistics
 type RecordingTaskStatsResponse struct {
-	TotalTasks      int64 `json:"total_tasks"`
-	PendingTasks    int64 `json:"pending_tasks"`
-	AssignedTasks   int64 `json:"assigned_tasks"`
-	CompletedTasks  int64 `json:"completed_tasks"`
-	CancelledTasks  int64 `json:"cancelled_tasks"`
-	OverdueTasks    int64 `json:"overdue_tasks"`
+	TotalTasks     int64 `json:"total_tasks"`
+	PendingTasks   int64 `json:"pending_tasks"`
+	AssignedTasks  int64 `json:"assigned_tasks"`
+	CompletedTasks int64 `json:"completed_tasks"`
+	CancelledTasks int64 `json:"cancelled_tasks"`
+	OverdueTasks   int64 `json:"overdue_tasks"`
 }
 
 // DailyBriefingResponse represents daily briefing
 type DailyBriefingResponse struct {
-	Date            string `json:"date"`
-	TodayTasks      int64  `json:"today_tasks"`
-	CompletedTasks  int64  `json:"completed_tasks"`
-	PendingTasks    int64  `json:"pending_tasks"`
-	HighPriorityTasks int64 `json:"high_priority_tasks"`
-	Summary         string `json:"summary"`
+	Date              string `json:"date"`
+	TodayTasks        int64  `json:"today_tasks"`
+	CompletedTasks    int64  `json:"completed_tasks"`
+	PendingTasks      int64  `json:"pending_tasks"`
+	HighPriorityTasks int64  `json:"high_priority_tasks"`
+	Summary           string `json:"summary"`
 }
 
 // TaskListRequest represents the request for listing tasks
 type TaskListRequest struct {
 	TenantID    *int64      `json:"tenant_id,omitempty"`
+	TenantIDs   []int64     `json:"tenant_ids,omitempty"`
 	RecordingID *int64      `json:"recording_id,omitempty"`
 	AssignedTo  *int64      `json:"assigned_to,omitempty"`
 	Status      *TaskStatus `json:"status,omitempty"`
@@ -403,11 +405,11 @@ type CancelTaskRequest struct {
 
 // EmployeePartnershipListRequest represents the request for listing partnerships
 type EmployeePartnershipListRequest struct {
-	EmployeeID *int64  `json:"employee_id,omitempty"`
-	PartnerID  *int64  `json:"partner_id,omitempty"`
+	EmployeeID   *int64  `json:"employee_id,omitempty"`
+	PartnerID    *int64  `json:"partner_id,omitempty"`
 	Relationship *string `json:"relationship,omitempty"`
-	Page       int     `json:"page"`
-	PageSize   int     `json:"page_size"`
+	Page         int     `json:"page"`
+	PageSize     int     `json:"page_size"`
 }
 
 // CreateEmployeePartnershipRequest represents the request for creating partnership
@@ -421,20 +423,20 @@ type CreateEmployeePartnershipRequest struct {
 
 // DailyReportResponse represents daily report
 type DailyReportResponse struct {
-	Date                string  `json:"date"`
-	TotalRecordings     int64   `json:"total_recordings"`
-	TotalDuration       int64   `json:"total_duration"`
-	AvgScore            float64 `json:"avg_score"`
-	TopPerformers       []DoctorAbilityRankingResponse `json:"top_performers"`
-	KeyMetrics          JSONObject `json:"key_metrics"`
+	Date            string                         `json:"date"`
+	TotalRecordings int64                          `json:"total_recordings"`
+	TotalDuration   int64                          `json:"total_duration"`
+	AvgScore        float64                        `json:"avg_score"`
+	TopPerformers   []DoctorAbilityRankingResponse `json:"top_performers"`
+	KeyMetrics      JSONObject                     `json:"key_metrics"`
 }
 
 // DiagnosisResponse represents diagnosis
 type DiagnosisResponse struct {
-	OverallHealth string     `json:"overall_health"` // "excellent", "good", "fair", "poor"
-	Issues        []IssueCount `json:"issues"`
-	Recommendations []string `json:"recommendations"`
-	Trends        []TrendDataPoint `json:"trends"`
+	OverallHealth   string           `json:"overall_health"` // "excellent", "good", "fair", "poor"
+	Issues          []IssueCount     `json:"issues"`
+	Recommendations []string         `json:"recommendations"`
+	Trends          []TrendDataPoint `json:"trends"`
 }
 
 // UpdateTargetRequest represents the request for updating target

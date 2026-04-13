@@ -20,12 +20,23 @@ func (h *Handler) ListContentTemplates(w http.ResponseWriter, r *http.Request) {
 
 	var req TemplateListRequest
 
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []TemplateResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))

@@ -26,9 +26,15 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 
 	conditions = append(conditions, "1=1")
 
-	conditions = append(conditions, fmt.Sprintf("r.tenant_id = $%d", argIndex))
-	args = append(args, req.TenantID)
-	argIndex++
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("r.tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID > 0 {
+		conditions = append(conditions, fmt.Sprintf("r.tenant_id = $%d", argIndex))
+		args = append(args, req.TenantID)
+		argIndex++
+	}
 
 	if req.EmployeeID != nil {
 		conditions = append(conditions, fmt.Sprintf("r.employee_id = $%d", argIndex))
@@ -104,9 +110,9 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			NULL::text AS processing_error,
 			r.recorded_at AS recording_started_at,
 			NULL::timestamp AS recording_ended_at,
-			CASE WHEN r.analysis_status = 'completed' THEN r.updated_at ELSE NULL::timestamp END AS processed_at,
+			CASE WHEN r.analysis_status = 'completed' THEN COALESCE(r.updated_at, r.created_at, NOW()) ELSE NULL::timestamp END AS processed_at,
 			r.created_at,
-			r.updated_at,
+			COALESCE(r.updated_at, r.created_at, NOW()) AS updated_at,
 			NULL::timestamp AS deleted_at
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
@@ -183,9 +189,9 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			NULL::text AS processing_error,
 			r.recorded_at AS recording_started_at,
 			NULL::timestamp AS recording_ended_at,
-			CASE WHEN r.analysis_status = 'completed' THEN r.updated_at ELSE NULL::timestamp END AS processed_at,
+			CASE WHEN r.analysis_status = 'completed' THEN COALESCE(r.updated_at, r.created_at, NOW()) ELSE NULL::timestamp END AS processed_at,
 			r.created_at,
-			r.updated_at,
+			COALESCE(r.updated_at, r.created_at, NOW()) AS updated_at,
 			NULL::timestamp AS deleted_at
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
@@ -441,7 +447,11 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	conditions = append(conditions, "1=1")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++
@@ -582,14 +592,20 @@ func (s *Store) CancelTask(ctx context.Context, id int64, reason string) error {
 }
 
 // GetTaskStats retrieves task statistics for a tenant
-func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, assignedTo *int64) (*RecordingTaskStatsResponse, error) {
+func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo *int64) (*RecordingTaskStatsResponse, error) {
 	var conditions []string
 	var args []interface{}
 	argIndex := 1
 
-	conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
-	args = append(args, tenantID)
-	argIndex++
+	if len(tenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, tenantIDs)
+		argIndex++
+	} else {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, tenantID)
+		argIndex++
+	}
 
 	if assignedTo != nil {
 		conditions = append(conditions, fmt.Sprintf("assigned_to = $%d", argIndex))

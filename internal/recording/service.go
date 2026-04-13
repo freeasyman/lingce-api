@@ -213,8 +213,8 @@ func (s *Service) CancelTask(ctx context.Context, id int64, req CancelTaskReques
 }
 
 // GetTaskStats retrieves task statistics
-func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, assignedTo *int64) (*RecordingTaskStatsResponse, error) {
-	return s.store.GetTaskStats(ctx, tenantID, assignedTo)
+func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo *int64) (*RecordingTaskStatsResponse, error) {
+	return s.store.GetTaskStats(ctx, tenantID, tenantIDs, assignedTo)
 }
 
 // GetDailyBriefing retrieves a daily briefing

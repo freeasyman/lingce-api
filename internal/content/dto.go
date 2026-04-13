@@ -4,15 +4,16 @@ package content
 
 // TopicListRequest represents the request for listing topics
 type TopicListRequest struct {
-	TenantID   *int64  `json:"tenant_id,omitempty"`
-	Status     *string `json:"status,omitempty"`
-	Category   *string `json:"category,omitempty"`
-	Source     *string `json:"source,omitempty"`
-	CreatedBy  *int64  `json:"created_by,omitempty"`
-	StartDate  *string `json:"start_date,omitempty"`
-	EndDate    *string `json:"end_date,omitempty"`
-	Page       int     `json:"page"`
-	PageSize   int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	Status    *string `json:"status,omitempty"`
+	Category  *string `json:"category,omitempty"`
+	Source    *string `json:"source,omitempty"`
+	CreatedBy *int64  `json:"created_by,omitempty"`
+	StartDate *string `json:"start_date,omitempty"`
+	EndDate   *string `json:"end_date,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // TopicResponse represents topic response
@@ -59,10 +60,10 @@ type UpdateTopicRequest struct {
 
 // GenerateTopicsRequest represents AI topic generation request
 type GenerateTopicsRequest struct {
-	Context     string     `json:"context"`
-	Count       int        `json:"count"`
-	Category    *string    `json:"category,omitempty"`
-	ExtraData   JSONObject `json:"extra_data,omitempty"`
+	Context   string     `json:"context"`
+	Count     int        `json:"count"`
+	Category  *string    `json:"category,omitempty"`
+	ExtraData JSONObject `json:"extra_data,omitempty"`
 }
 
 // HotTopicsResponse represents hot topics response
@@ -113,23 +114,24 @@ type IdeaGenerateTopicsRequest struct {
 
 // SaveIdeaTopicsRequest represents save idea topics request
 type SaveIdeaTopicsRequest struct {
-	SessionID string   `json:"session_id"`
-	TopicIDs  []int64  `json:"topic_ids"`
+	SessionID string  `json:"session_id"`
+	TopicIDs  []int64 `json:"topic_ids"`
 }
 
 // Content DTOs
 
 // ContentListRequest represents the request for listing contents
 type ContentListRequest struct {
-	TenantID   *int64  `json:"tenant_id,omitempty"`
-	TopicID    *int64  `json:"topic_id,omitempty"`
-	Status     *string `json:"status,omitempty"`
-	Category   *string `json:"category,omitempty"`
-	CreatedBy  *int64  `json:"created_by,omitempty"`
-	StartDate  *string `json:"start_date,omitempty"`
-	EndDate    *string `json:"end_date,omitempty"`
-	Page       int     `json:"page"`
-	PageSize   int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	TopicID   *int64  `json:"topic_id,omitempty"`
+	Status    *string `json:"status,omitempty"`
+	Category  *string `json:"category,omitempty"`
+	CreatedBy *int64  `json:"created_by,omitempty"`
+	StartDate *string `json:"start_date,omitempty"`
+	EndDate   *string `json:"end_date,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // ContentResponse represents content response
@@ -193,32 +195,32 @@ type GenerateContentRequest struct {
 
 // PublishTaskListRequest represents the request for listing publish tasks
 type PublishTaskListRequest struct {
-	TenantID   *int64  `json:"tenant_id,omitempty"`
-	ContentID  *int64  `json:"content_id,omitempty"`
-	Platform   *string `json:"platform,omitempty"`
-	Status     *string `json:"status,omitempty"`
-	CreatedBy  *int64  `json:"created_by,omitempty"`
-	StartDate  *string `json:"start_date,omitempty"`
-	EndDate    *string `json:"end_date,omitempty"`
-	Page       int     `json:"page"`
-	PageSize   int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	ContentID *int64  `json:"content_id,omitempty"`
+	Platform  *string `json:"platform,omitempty"`
+	Status    *string `json:"status,omitempty"`
+	CreatedBy *int64  `json:"created_by,omitempty"`
+	StartDate *string `json:"start_date,omitempty"`
+	EndDate   *string `json:"end_date,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // PublishTaskResponse represents publish task response
 type PublishTaskResponse struct {
-	ID          int64      `json:"id"`
-	TenantID    int64      `json:"tenant_id"`
-	ContentID   int64      `json:"content_id"`
-	ContentTitle string    `json:"content_title"`
-	Platform    string     `json:"platform"`
-	Status      string     `json:"status"`
-	ScheduledAt *string    `json:"scheduled_at,omitempty"`
-	PublishedAt *string    `json:"published_at,omitempty"`
-	ErrorMsg    *string    `json:"error_msg,omitempty"`
-	ExtraData   JSONObject `json:"extra_data,omitempty"`
-	CreatedBy   int64      `json:"created_by"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	ID           int64      `json:"id"`
+	TenantID     int64      `json:"tenant_id"`
+	ContentID    int64      `json:"content_id"`
+	ContentTitle string     `json:"content_title"`
+	Platform     string     `json:"platform"`
+	Status       string     `json:"status"`
+	ScheduledAt  *string    `json:"scheduled_at,omitempty"`
+	PublishedAt  *string    `json:"published_at,omitempty"`
+	ErrorMsg     *string    `json:"error_msg,omitempty"`
+	ExtraData    JSONObject `json:"extra_data,omitempty"`
+	CreatedBy    int64      `json:"created_by"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
 }
 
 // CreatePublishTaskRequest represents create publish task request
@@ -254,6 +256,7 @@ type PublishDashboardResponse struct {
 // SeedListRequest represents the request for listing seeds
 type SeedListRequest struct {
 	TenantID    *int64  `json:"tenant_id,omitempty"`
+	TenantIDs   []int64 `json:"tenant_ids,omitempty"`
 	Status      *string `json:"status,omitempty"`
 	Category    *string `json:"category,omitempty"`
 	ClusterID   *int64  `json:"cluster_id,omitempty"`
@@ -293,11 +296,12 @@ type SeedStatsResponse struct {
 
 // TemplateListRequest represents the request for listing templates
 type TemplateListRequest struct {
-	TenantID *int64  `json:"tenant_id,omitempty"`
-	Category *string `json:"category,omitempty"`
-	IsActive *bool   `json:"is_active,omitempty"`
-	Page     int     `json:"page"`
-	PageSize int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	Category  *string `json:"category,omitempty"`
+	IsActive  *bool   `json:"is_active,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // TemplateResponse represents template response

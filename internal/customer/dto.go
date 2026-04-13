@@ -4,33 +4,34 @@ package customer
 
 // CustomerListRequest represents the request for listing customers
 type CustomerListRequest struct {
-	TenantID        *int64  `json:"tenant_id,omitempty"`
-	Name            *string `json:"name,omitempty"`
-	Phone           *string `json:"phone,omitempty"`
-	Status          *string `json:"status,omitempty"`
-	Source          *string `json:"source,omitempty"`
-	AssignedTo      *int64  `json:"assigned_to,omitempty"`
-	MinMomentum     *int    `json:"min_momentum,omitempty"`
-	MaxMomentum     *int    `json:"max_momentum,omitempty"`
-	Tags            []string `json:"tags,omitempty"`
-	StartDate       *string `json:"start_date,omitempty"`
-	EndDate         *string `json:"end_date,omitempty"`
-	Page            int     `json:"page"`
-	PageSize        int     `json:"page_size"`
+	TenantID    *int64   `json:"tenant_id,omitempty"`
+	TenantIDs   []int64  `json:"tenant_ids,omitempty"`
+	Name        *string  `json:"name,omitempty"`
+	Phone       *string  `json:"phone,omitempty"`
+	Status      *string  `json:"status,omitempty"`
+	Source      *string  `json:"source,omitempty"`
+	AssignedTo  *int64   `json:"assigned_to,omitempty"`
+	MinMomentum *int     `json:"min_momentum,omitempty"`
+	MaxMomentum *int     `json:"max_momentum,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	StartDate   *string  `json:"start_date,omitempty"`
+	EndDate     *string  `json:"end_date,omitempty"`
+	Page        int      `json:"page"`
+	PageSize    int      `json:"page_size"`
 }
 
 // CustomerStatsResponse represents customer statistics
 type CustomerStatsResponse struct {
-	TotalCustomers     int64              `json:"total_customers"`
-	LeadCount          int64              `json:"lead_count"`
-	ContactedCount     int64              `json:"contacted_count"`
-	QualifiedCount     int64              `json:"qualified_count"`
-	ConvertedCount     int64              `json:"converted_count"`
-	LostCount          int64              `json:"lost_count"`
-	ConversionRate     float64            `json:"conversion_rate"`
-	AvgMomentum        float64            `json:"avg_momentum"`
-	SourceDistribution []SourceCount      `json:"source_distribution"`
-	StatusDistribution []StatusCount      `json:"status_distribution"`
+	TotalCustomers     int64         `json:"total_customers"`
+	LeadCount          int64         `json:"lead_count"`
+	ContactedCount     int64         `json:"contacted_count"`
+	QualifiedCount     int64         `json:"qualified_count"`
+	ConvertedCount     int64         `json:"converted_count"`
+	LostCount          int64         `json:"lost_count"`
+	ConversionRate     float64       `json:"conversion_rate"`
+	AvgMomentum        float64       `json:"avg_momentum"`
+	SourceDistribution []SourceCount `json:"source_distribution"`
+	StatusDistribution []StatusCount `json:"status_distribution"`
 }
 
 type SourceCount struct {
@@ -45,27 +46,27 @@ type StatusCount struct {
 
 // CustomerResponse represents customer response
 type CustomerResponse struct {
-	ID                int64      `json:"id"`
-	TenantID          int64      `json:"tenant_id"`
-	Name              string     `json:"name"`
-	Phone             *string    `json:"phone,omitempty"`
-	Email             *string    `json:"email,omitempty"`
-	Gender            *string    `json:"gender,omitempty"`
-	Age               *int       `json:"age,omitempty"`
-	Source            *string    `json:"source,omitempty"`
-	Status            string     `json:"status"`
-	Momentum          int        `json:"momentum"`
-	AssignedTo        *int64     `json:"assigned_to,omitempty"`
-	AssignedToName    *string    `json:"assigned_to_name,omitempty"`
-	AssignedAt        *string    `json:"assigned_at,omitempty"`
-	ConvertedAt       *string    `json:"converted_at,omitempty"`
-	LastContactedAt   *string    `json:"last_contacted_at,omitempty"`
-	NextFollowUpAt    *string    `json:"next_follow_up_at,omitempty"`
-	Tags              []string   `json:"tags,omitempty"`
-	Notes             *string    `json:"notes,omitempty"`
-	ExtraData         JSONObject `json:"extra_data,omitempty"`
-	CreatedAt         string     `json:"created_at"`
-	UpdatedAt         string     `json:"updated_at"`
+	ID              int64      `json:"id"`
+	TenantID        int64      `json:"tenant_id"`
+	Name            string     `json:"name"`
+	Phone           *string    `json:"phone,omitempty"`
+	Email           *string    `json:"email,omitempty"`
+	Gender          *string    `json:"gender,omitempty"`
+	Age             *int       `json:"age,omitempty"`
+	Source          *string    `json:"source,omitempty"`
+	Status          string     `json:"status"`
+	Momentum        int        `json:"momentum"`
+	AssignedTo      *int64     `json:"assigned_to,omitempty"`
+	AssignedToName  *string    `json:"assigned_to_name,omitempty"`
+	AssignedAt      *string    `json:"assigned_at,omitempty"`
+	ConvertedAt     *string    `json:"converted_at,omitempty"`
+	LastContactedAt *string    `json:"last_contacted_at,omitempty"`
+	NextFollowUpAt  *string    `json:"next_follow_up_at,omitempty"`
+	Tags            []string   `json:"tags,omitempty"`
+	Notes           *string    `json:"notes,omitempty"`
+	ExtraData       JSONObject `json:"extra_data,omitempty"`
+	CreatedAt       string     `json:"created_at"`
+	UpdatedAt       string     `json:"updated_at"`
 }
 
 // CreateCustomerRequest represents the request for creating a customer
@@ -195,22 +196,23 @@ type MergeCustomersRequest struct {
 
 // TagListRequest represents the request for listing tags
 type TagListRequest struct {
-	TenantID *int64  `json:"tenant_id,omitempty"`
-	Name     *string `json:"name,omitempty"`
-	Page     int     `json:"page"`
-	PageSize int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // TagResponse represents tag response
 type TagResponse struct {
-	ID          int64   `json:"id"`
-	TenantID    int64   `json:"tenant_id"`
-	Name        string  `json:"name"`
-	Color       *string `json:"color,omitempty"`
-	Description *string `json:"description,omitempty"`
-	CustomerCount int   `json:"customer_count"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID            int64   `json:"id"`
+	TenantID      int64   `json:"tenant_id"`
+	Name          string  `json:"name"`
+	Color         *string `json:"color,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	CustomerCount int     `json:"customer_count"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
 }
 
 // CreateTagRequest represents the request for creating a tag
@@ -238,11 +240,12 @@ type BatchTagRequest struct {
 
 // GroupListRequest represents the request for listing groups
 type GroupListRequest struct {
-	TenantID *int64  `json:"tenant_id,omitempty"`
-	Name     *string `json:"name,omitempty"`
-	Type     *string `json:"type,omitempty"`
-	Page     int     `json:"page"`
-	PageSize int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	Type      *string `json:"type,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // GroupResponse represents group response
@@ -316,8 +319,8 @@ type RuleField struct {
 
 // RuleOperator represents a rule operator
 type RuleOperator struct {
-	Name        string   `json:"name"`
-	Label       string   `json:"label"`
+	Name            string   `json:"name"`
+	Label           string   `json:"label"`
 	ApplicableTypes []string `json:"applicable_types"`
-	Description string   `json:"description"`
+	Description     string   `json:"description"`
 }

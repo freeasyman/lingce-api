@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -92,11 +93,11 @@ func (h *Handler) SyncAndDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"batch_id":     time.Now().Unix(),
-		"new_devices":  newDevices,
-		"updated":      updated,
-		"unchanged":    unchanged,
-		"missing":      missing,
+		"batch_id":    time.Now().Unix(),
+		"new_devices": newDevices,
+		"updated":     updated,
+		"unchanged":   unchanged,
+		"missing":     missing,
 	})
 }
 
@@ -358,41 +359,45 @@ func (h *Handler) ListTenantEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantIDStr := r.URL.Query().Get("tenant_id")
-	if tenantIDStr == "" {
-		httputil.WriteBadRequest(w, "Tenant ID is required")
-		return
-	}
-
-	tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteSuccess(w, []map[string]interface{}{})
 		return
 	}
 
-	devices, _, err := h.service.ListDevices(r.Context(), DeviceListRequest{
-		TenantID: &tenantID,
-		Page:     1,
-		PageSize: 200,
-	})
+	rows, err := h.service.store.pool.Query(r.Context(), `
+		SELECT DISTINCT e.id, e.tenant_id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
+		FROM employees e
+		WHERE e.tenant_id = ANY($1)
+		ORDER BY e.id DESC
+	`, scope.TenantIDs)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
+	defer rows.Close()
 
 	employees := make([]map[string]interface{}, 0)
-	seen := make(map[int64]struct{})
-	for _, d := range devices {
-		if d.EmployeeID == nil {
-			continue
+	for rows.Next() {
+		var employeeID int64
+		var tenantID int64
+		var name string
+		if err := rows.Scan(&employeeID, &tenantID, &name); err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
 		}
-		if _, ok := seen[*d.EmployeeID]; ok {
-			continue
-		}
-		seen[*d.EmployeeID] = struct{}{}
 		employees = append(employees, map[string]interface{}{
-			"employee_id": *d.EmployeeID,
-			"device_no":   d.DeviceNo,
+			"employee_id": employeeID,
+			"tenant_id":   tenantID,
+			"name":        name,
 		})
 	}
 

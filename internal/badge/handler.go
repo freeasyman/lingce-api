@@ -61,6 +61,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/mark-pending-assignment", authMw(http.HandlerFunc(h.MarkPendingAssignment)))
 	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/create-exception-tickets", authMw(http.HandlerFunc(h.CreateExceptionTickets)))
 	mux.Handle("GET /api/v1/badge-control/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
+	mux.Handle("GET /api/v1/badge-control/tenant-employees/", authMw(http.HandlerFunc(h.ListTenantEmployees)))
 
 	// Smart badge endpoints
 	mux.Handle("GET /api/v1/smart-badge/tenant/devices", authMw(http.HandlerFunc(h.GetTenantDevices)))

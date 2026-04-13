@@ -36,7 +36,11 @@ func (s *Service) ListPromptTemplates(ctx context.Context, req TemplateListReque
 	items := make([]TemplateResponse, 0, len(source))
 	for _, entry := range source {
 		t := entry.Template
-		if req.TenantID != nil {
+		if len(req.TenantIDs) > 0 {
+			if t.TenantID == nil || !tenantIDInList(*t.TenantID, req.TenantIDs) {
+				continue
+			}
+		} else if req.TenantID != nil {
 			if t.TenantID == nil || *t.TenantID != *req.TenantID {
 				continue
 			}
@@ -66,6 +70,15 @@ func (s *Service) ListPromptTemplates(ctx context.Context, req TemplateListReque
 		end = total
 	}
 	return items[start:end], total, nil
+}
+
+func tenantIDInList(tenantID int64, tenantIDs []int64) bool {
+	for _, id := range tenantIDs {
+		if id == tenantID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) CreatePromptTemplate(ctx context.Context, tenantID *int64, createdBy int64, req CreateTemplateRequest, contentOnly bool) (*TemplateResponse, error) {

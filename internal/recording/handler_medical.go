@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/pkg/auth"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
 )
@@ -35,19 +35,23 @@ func (h *Handler) ListMedicalRecordings(w http.ResponseWriter, r *http.Request) 
 	req.Page = page
 	req.PageSize = pageSize
 
-	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, err := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		if err != nil || tenantID <= 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required for admin")
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
-		req.TenantID = tenantID
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []*RecordingResponse{}, 0, page, pageSize)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = *scope.TenantID
 	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	recordings, total, err := h.service.ListRecordings(r.Context(), req)

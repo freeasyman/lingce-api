@@ -28,7 +28,11 @@ func (s *Store) ListTopics(ctx context.Context, req TopicListRequest) ([]*Conten
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++
@@ -279,7 +283,11 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
-	if req.TenantID != nil {
+	if len(req.TenantIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		args = append(args, req.TenantIDs)
+		argIndex++
+	} else if req.TenantID != nil {
 		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++

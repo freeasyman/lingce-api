@@ -26,6 +26,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/content/hot-topics", authMw(http.HandlerFunc(h.GetHotTopics)))
 	mux.Handle("POST /api/v1/content/hot-topics/refresh", authMw(http.HandlerFunc(h.RefreshHotTopics)))
 	mux.Handle("GET /api/v1/content/topics", authMw(http.HandlerFunc(h.ListTopics)))
+	mux.Handle("GET /api/v1/content/topics/", authMw(http.HandlerFunc(h.ListTopics)))
 	mux.Handle("GET /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.GetTopic)))
 	mux.Handle("POST /api/v1/content/topics/generate", authMw(http.HandlerFunc(h.GenerateTopics)))
 	mux.Handle("POST /api/v1/content/topics", authMw(http.HandlerFunc(h.CreateTopic)))
@@ -41,6 +42,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Content management endpoints
 	mux.Handle("GET /api/v1/content/contents", authMw(http.HandlerFunc(h.ListContents)))
+	mux.Handle("GET /api/v1/content/contents/", authMw(http.HandlerFunc(h.ListContents)))
 	mux.Handle("GET /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.GetContent)))
 	mux.Handle("POST /api/v1/content/contents/generate", authMw(http.HandlerFunc(h.GenerateContent)))
 	mux.Handle("POST /api/v1/content/contents", authMw(http.HandlerFunc(h.CreateContent)))
@@ -60,8 +62,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Content seeds endpoints
 	mux.Handle("GET /api/v1/content-seeds", authMw(http.HandlerFunc(h.ListSeeds)))
+	mux.Handle("GET /api/v1/content-seeds/", authMw(http.HandlerFunc(h.ListSeeds)))
 	mux.Handle("GET /api/v1/content-seeds/stats", authMw(http.HandlerFunc(h.GetSeedStats)))
+	mux.Handle("GET /api/v1/content-seeds/stats/", authMw(http.HandlerFunc(h.GetSeedStats)))
 	mux.Handle("GET /api/v1/content-seeds/clusters", authMw(http.HandlerFunc(h.GetClusters)))
+	mux.Handle("GET /api/v1/content-seeds/clusters/", authMw(http.HandlerFunc(h.GetClusters)))
 	mux.Handle("GET /api/v1/content-seeds/my-inspirations", authMw(http.HandlerFunc(h.GetMyInspirations)))
 	mux.Handle("POST /api/v1/content-seeds/{seed_id}/generate-draft", authMw(http.HandlerFunc(h.GenerateDraftFromSeed)))
 	mux.Handle("POST /api/v1/content-seeds/{seed_id}/dismiss", authMw(http.HandlerFunc(h.DismissSeed)))
@@ -88,6 +93,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Content prompt templates endpoints
 	mux.Handle("GET /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.ListContentTemplates)))
+	mux.Handle("GET /api/v1/content-prompt-templates/", authMw(http.HandlerFunc(h.ListContentTemplates)))
 	mux.Handle("POST /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.CreateContentTemplate)))
 	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.GetContentTemplate)))
 	mux.Handle("PUT /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.UpdateContentTemplate)))
@@ -127,12 +133,23 @@ func (h *Handler) ListTopics(w http.ResponseWriter, r *http.Request) {
 
 	var req TopicListRequest
 
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WritePaginated(w, []*TopicResponse{}, 0, 1, 20)
+		return
+	}
+	if scope.TenantID != nil {
+		req.TenantID = scope.TenantID
+	} else {
+		req.TenantIDs = scope.TenantIDs
 	}
 
 	if status := r.URL.Query().Get("status"); status != "" {
