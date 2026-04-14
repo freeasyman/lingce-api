@@ -69,7 +69,7 @@ check_not_missing "recordings batch-delete action" POST "/api/v1/recordings/acti
 check_not_missing "badge-devices batch-health-check action" POST "/api/v1/badge-devices/actions/batch-health-check" "{\"device_ids\":[]}"
 check_not_missing "customers merge action" POST "/api/v1/customers/actions/merge" "{\"source_ids\":[]}"
 check_not_missing "tenants renew action" POST "/api/v1/tenants/${TENANT_ID}/subscription/actions/renew" "{\"duration_days\":30}"
-check_not_missing "recordings prompt test action" POST "/api/v1/recordings/prompts/codes/default/actions/test" "{}"
+check_not_missing "recordings batch-transcribe action" POST "/api/v1/recordings/actions/batch-transcribe" "{\"recording_ids\":[]}"
 
 echo "== Summary =="
 if [[ "${fail_count}" -gt 0 ]]; then
