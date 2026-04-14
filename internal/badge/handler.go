@@ -454,6 +454,35 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 	httputil.WritePaginated(w, tickets, int64(total), req.Page, req.PageSize)
 }
 
+// GetTicket handles getting ticket detail by ID
+func (h *Handler) GetTicket(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid ticket ID")
+		return
+	}
+
+	ticket, err := h.service.GetTicketByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	// Admin can read all tickets; non-admin is limited to own submitted tickets in detail API.
+	if claims.UserType != auth.UserTypeAdmin && ticket.SubmitterID != claims.UserID {
+		httputil.WriteForbidden(w, "No permission to access this ticket")
+		return
+	}
+
+	httputil.WriteSuccess(w, ticket)
+}
+
 // ReviewTicket handles reviewing a ticket
 func (h *Handler) ReviewTicket(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
