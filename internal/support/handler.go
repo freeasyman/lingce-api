@@ -80,7 +80,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/visits", authMw(http.HandlerFunc(h.ListVisits)))
 	mux.Handle("GET /api/v1/visits/statistics", authMw(http.HandlerFunc(h.GetVisitStatistics)))
 	mux.Handle("GET /api/v1/visits/filters", authMw(http.HandlerFunc(h.GetVisitFilters)))
-	mux.Handle("GET /api/v1/visits/{visit_id}", authMw(http.HandlerFunc(h.GetVisitByID)))
+	mux.Handle("GET /api/v1/visits/{id}", authMw(http.HandlerFunc(h.GetVisitByID)))
 }
 
 // Notification Handlers
@@ -1172,7 +1172,7 @@ func (h *Handler) GetVisitByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	visitIDStr := r.PathValue("visit_id")
+	visitIDStr := r.PathValue("id")
 	if visitIDStr == "" {
 		httputil.WriteBadRequest(w, "Visit ID is required")
 		return
