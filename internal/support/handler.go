@@ -42,7 +42,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.UpdateLLMModelConfig)))
 	mux.Handle("DELETE /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.DeleteLLMModelConfig)))
 	mux.Handle("POST /api/v1/llm/models/{id}/actions/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
-	mux.Handle("POST /api/v1/llm/models/{id}/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
 
 	// LLM call record endpoints
 	mux.Handle("GET /api/v1/llm/records", authMw(http.HandlerFunc(h.ListLLMCallRecords)))
@@ -52,8 +51,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// LLM cost endpoints
 	mux.Handle("GET /api/v1/llm/costs/by-tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
 	mux.Handle("GET /api/v1/llm/costs/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
-	mux.Handle("GET /api/v1/llm/cost/tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
-	mux.Handle("GET /api/v1/llm/cost/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
 
 	// Metadata endpoints
 	mux.Handle("GET /api/v1/metadata/fields", authMw(http.HandlerFunc(h.GetMetadataFields)))
