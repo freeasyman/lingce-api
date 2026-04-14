@@ -25,17 +25,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Notification endpoints
 	mux.Handle("POST /api/v1/notifications/device-tokens", authMw(http.HandlerFunc(h.RegisterDeviceToken)))
 	mux.Handle("DELETE /api/v1/notifications/device-tokens/{id}", authMw(http.HandlerFunc(h.DeleteDeviceTokenByID)))
-	mux.Handle("POST /api/v1/notifications/device-tokens/register", authMw(http.HandlerFunc(h.RegisterDeviceToken)))
-	mux.Handle("POST /api/v1/notifications/device-tokens/unregister", authMw(http.HandlerFunc(h.UnregisterDeviceToken)))
-	mux.Handle("GET /api/v1/notifications/device-tokens/me", authMw(http.HandlerFunc(h.GetMyDeviceTokens)))
-	mux.Handle("POST /api/v1/notifications/push-to-app", authMw(http.HandlerFunc(h.PushNotification)))
 	mux.Handle("GET /api/v1/notifications", authMw(http.HandlerFunc(h.ListNotifications)))
 	mux.Handle("GET /api/v1/notifications/{id}", authMw(http.HandlerFunc(h.GetNotificationByID)))
-	mux.Handle("GET /api/v1/notifications/unread-count", authMw(http.HandlerFunc(h.GetUnreadCount)))
 	mux.Handle("POST /api/v1/notifications/{id}/actions/read", authMw(http.HandlerFunc(h.MarkNotificationAsRead)))
 	mux.Handle("POST /api/v1/notifications/actions/read-all", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
-	mux.Handle("PUT /api/v1/notifications/{id}/read", authMw(http.HandlerFunc(h.MarkNotificationAsRead)))
-	mux.Handle("PUT /api/v1/notifications/mark-all-read", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
 
 	// Operation log endpoints
 	mux.Handle("GET /api/v1/operation-logs", authMw(http.HandlerFunc(h.ListOperationLogs)))
