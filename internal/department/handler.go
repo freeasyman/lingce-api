@@ -28,6 +28,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/departments", authMw(http.HandlerFunc(h.CreateDepartment)))
 	mux.Handle("PUT /api/v1/departments/{id}", authMw(http.HandlerFunc(h.UpdateDepartment)))
 	mux.Handle("DELETE /api/v1/departments/{id}", authMw(http.HandlerFunc(h.DeleteDepartment)))
+	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))
+	mux.Handle("POST /api/v1/departments/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
+	mux.Handle("GET /api/v1/departments/{id}/performance", authMw(http.HandlerFunc(h.GetDepartmentPerformance)))
 }
 
 // ListDepartments handles listing departments
@@ -205,4 +208,85 @@ func (h *Handler) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Department deleted successfully"})
+}
+
+func (h *Handler) DepartmentHealthCheck(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteSuccess(w, map[string]string{
+		"status": "ok",
+		"module": "departments",
+	})
+}
+
+func (h *Handler) SyncDepartmentsFromVisits(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	var tenantID *int64
+	if rawTenantID, ok := req["tenant_id"]; ok {
+		switch v := rawTenantID.(type) {
+		case float64:
+			tid := int64(v)
+			tenantID = &tid
+		case int64:
+			tid := v
+			tenantID = &tid
+		}
+	}
+
+	result, err := h.service.SyncDepartmentsFromVisits(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"synced":  result["synced"],
+		"created": result["created"],
+		"updated": result["updated"],
+		"message": "Departments synced successfully",
+	})
+}
+
+func (h *Handler) GetDepartmentPerformance(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "month"
+	}
+
+	stats, err := h.service.GetDepartmentPerformance(r.Context(), id, period)
+	if err != nil {
+		if err.Error() == "department not found" {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, stats)
 }

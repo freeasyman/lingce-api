@@ -85,6 +85,14 @@ func (s *Service) DeleteDepartment(ctx context.Context, id int64) error {
 	return s.store.DeleteDepartment(ctx, id)
 }
 
+func (s *Service) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) (map[string]int64, error) {
+	return s.store.SyncDepartmentsFromVisits(ctx, tenantID)
+}
+
+func (s *Service) GetDepartmentPerformance(ctx context.Context, departmentID int64, period string) (map[string]interface{}, error) {
+	return s.store.GetDepartmentPerformance(ctx, departmentID, period)
+}
+
 // toDepartmentResponse converts a Department to DepartmentResponse
 func toDepartmentResponse(d *Department) *DepartmentResponse {
 	return &DepartmentResponse{
