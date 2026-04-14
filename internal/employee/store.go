@@ -48,6 +48,21 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		argIndex++
 	}
 
+	if req.Role != "" {
+		conditions = append(conditions, fmt.Sprintf(`
+			EXISTS (
+				SELECT 1
+				FROM institution_employee_roles er
+				JOIN institution_roles r ON r.id = er.role_id
+				WHERE er.employee_id = employees.id
+				  AND r.deleted_at IS NULL
+				  AND r.code = $%d
+			)
+		`, argIndex))
+		args = append(args, req.Role)
+		argIndex++
+	}
+
 	if req.DepartmentID != nil {
 		if *req.DepartmentID == 0 {
 			conditions = append(conditions, "department_id IS NULL")

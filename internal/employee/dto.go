@@ -43,6 +43,7 @@ type EmployeeResponse struct {
 // EmployeeListRequest represents a request to list employees
 type EmployeeListRequest struct {
 	TenantID     int64  `json:"tenant_id"`
+	Role         string `json:"role,omitempty"`
 	Username     string `json:"username,omitempty"`
 	FullName     string `json:"full_name,omitempty"`
 	Phone        string `json:"phone,omitempty"`

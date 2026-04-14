@@ -24,11 +24,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Employee endpoints require authentication
 	mux.Handle("GET /api/v1/employees", authMw(http.HandlerFunc(h.ListEmployees)))
-	mux.Handle("GET /api/v1/organization/employees", authMw(http.HandlerFunc(h.ListEmployees)))
-	mux.Handle("GET /api/v1/organization/employees/", authMw(http.HandlerFunc(h.ListEmployees)))
 	mux.Handle("GET /api/v1/employees/{id}", authMw(http.HandlerFunc(h.GetEmployee)))
 	mux.Handle("POST /api/v1/employees", authMw(http.HandlerFunc(h.CreateEmployee)))
 	mux.Handle("PUT /api/v1/employees/{id}", authMw(http.HandlerFunc(h.UpdateEmployee)))
+	mux.Handle("POST /api/v1/employees/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetPassword)))
 	mux.Handle("POST /api/v1/employees/{id}/reset-password", authMw(http.HandlerFunc(h.ResetPassword)))
 	mux.Handle("DELETE /api/v1/employees/{id}", authMw(http.HandlerFunc(h.DeleteEmployee)))
 }
@@ -67,6 +66,7 @@ func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 	req.Username = r.URL.Query().Get("username")
 	req.FullName = r.URL.Query().Get("full_name")
 	req.Phone = r.URL.Query().Get("phone")
+	req.Role = r.URL.Query().Get("role")
 
 	if deptIDStr := r.URL.Query().Get("department_id"); deptIDStr != "" {
 		deptID, _ := strconv.ParseInt(deptIDStr, 10, 64)
