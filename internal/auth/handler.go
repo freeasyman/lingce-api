@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/captcha"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
@@ -22,24 +24,77 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-// RegisterRoutes registers auth routes
-func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	mux.HandleFunc("POST /api/v1/auth/login", h.LoginAdmin)
-	mux.HandleFunc("POST /api/v1/auth/login/institution", h.LoginInstitution)
-	mux.HandleFunc("POST /api/v1/auth/login/employee", h.LoginEmployee)
-	mux.HandleFunc("POST /api/v1/auth/login/mobile", h.LoginMobile)
+// RegisterRoutes registers auth routes using declarative router framework
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgxpool.Pool) {
+	routes := []router.Route{
+		// Public login endpoints
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/login",
+			Handler: h.LoginAdmin,
+			Auth:    false,
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/login/institution",
+			Handler: h.LoginInstitution,
+			Auth:    false,
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/login/mobile",
+			Handler: h.LoginMobile,
+			Auth:    false,
+		},
+		// Protected endpoints
+		{
+			Method:           "GET",
+			Path:             "/api/v1/auth/me",
+			Handler:          h.GetMe,
+			Auth:             true,
+			AllowedUserTypes: []string{"admin", "employee", "mobile"},
+		},
+		{
+			Method:           "POST",
+			Path:             "/api/v1/auth/change-password",
+			Handler:          h.ChangePassword,
+			Auth:             true,
+			AllowedUserTypes: []string{"admin", "employee", "mobile"},
+		},
+		// Captcha endpoint
+		{
+			Method:  "GET",
+			Path:    "/api/v1/auth/captcha",
+			Handler: h.GetCaptcha,
+			Auth:    false,
+		},
+		// SMS endpoints (updated paths)
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/sms/send",
+			Handler: h.SendSMS,
+			Auth:    false,
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/sms/login",
+			Handler: h.SMSLogin,
+			Auth:    false,
+		},
+	}
 
-	// Protected routes
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/auth/me", authMw(http.HandlerFunc(h.GetMe)))
-	mux.Handle("POST /api/v1/auth/change-password", authMw(http.HandlerFunc(h.ChangePassword)))
+	deps := router.RouteDeps{
+		JWTSecret:   jwtSecret,
+		PermChecker: nil, // Auth endpoints don't need permission checking
+		Pool:        pool,
+	}
 
-	// Captcha endpoint
-	mux.HandleFunc("GET /api/v1/auth/captcha", h.GetCaptcha)
+	router.Register(mux, routes, deps)
 
-	// SMS endpoints
-	mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)
-	mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)
+	// Legacy route proxies (Phase 2: keep for backward compatibility)
+	mux.HandleFunc("POST /api/v1/auth/login/employee", h.LoginInstitution)       // Alias for institution login
+	mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)               // Old SMS path
+	mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)             // Old SMS path
 }
 
 // LoginAdmin handles operations admin login
@@ -100,11 +155,6 @@ func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, resp)
-}
-
-// LoginEmployee handles employee login (alias for institution login)
-func (h *Handler) LoginEmployee(w http.ResponseWriter, r *http.Request) {
-	h.LoginInstitution(w, r)
 }
 
 // LoginMobile handles mobile employee login with session isolation

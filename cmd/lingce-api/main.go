@@ -54,6 +54,11 @@ func main() {
 	}
 	defer pool.Close()
 
+	if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
+		slog.Error("failed to apply compatibility migrations", "error", err)
+		os.Exit(1)
+	}
+
 	// Setup HTTP router
 	mux := http.NewServeMux()
 
@@ -75,7 +80,7 @@ func main() {
 	)
 	authService := auth.NewService(authStore, smsClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	authHandler := auth.NewHandler(authService)
-	authHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
 	// Register organization module
 	orgStore := organization.NewStore(pool)
@@ -127,7 +132,11 @@ func main() {
 
 	// Register badge module
 	badgeStore := badge.NewStore(pool)
-	badgeService := badge.NewService(badgeStore)
+	badgeService := badge.NewServiceWithMiddleware(
+		badgeStore,
+		cfg.External.BadgeMiddlewareURL,
+		cfg.External.BadgeMiddlewareToken,
+	)
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
