@@ -84,13 +84,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/badge-devices/tenant-overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
 
-	// Resource-oriented badge-ticket endpoints
-	mux.Handle("POST /api/v1/badge-tickets", authMw(http.HandlerFunc(h.SubmitTicket)))
-	mux.Handle("POST /api/v1/badge-tickets/by-device", authMw(http.HandlerFunc(h.SubmitTicketByDevice)))
-	mux.Handle("GET /api/v1/badge-tickets/my", authMw(http.HandlerFunc(h.GetMyTickets)))
-	mux.Handle("GET /api/v1/badge-tickets", authMw(http.HandlerFunc(h.ListTickets)))
-	mux.Handle("POST /api/v1/badge-tickets/{ticket_id}/actions/review", authMw(http.HandlerFunc(h.ReviewTicket)))
-	mux.Handle("POST /api/v1/badge-tickets/{ticket_id}/actions/execute", authMw(http.HandlerFunc(h.ExecuteTicket)))
+	h.registerTicketRoutes(mux, authMw)
 }
 
 // Device Lifecycle Handlers
