@@ -48,10 +48,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Operations admin routes
 	mux.Handle("GET /api/v1/roles/admins", authMw(http.HandlerFunc(h.ListOperationsAdmins)))
 	mux.Handle("POST /api/v1/roles/admins", authMw(http.HandlerFunc(h.CreateOperationsAdmin)))
-	mux.Handle("GET /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
-	mux.Handle("PUT /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
-	mux.Handle("DELETE /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
-	mux.Handle("POST /api/v1/roles/admins/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
+	mux.Handle("GET /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
+	mux.Handle("PUT /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
+	mux.Handle("DELETE /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
+	mux.Handle("POST /api/v1/roles/admins/id/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
 
 	// Institution RBAC - Employee roles
 	mux.Handle("GET /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
