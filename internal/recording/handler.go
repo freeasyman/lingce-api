@@ -80,7 +80,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Medical Recording Dashboard endpoints
 	mux.Handle("GET /api/v1/recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))
 	mux.Handle("GET /api/v1/recordings/doctor-ability", authMw(http.HandlerFunc(h.GetDoctorAbilityRanking)))
-	mux.Handle("GET /api/v1/recordings/doctor-ability/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilityDetail)))
+	mux.Handle("GET /api/v1/recordings/doctor-ability/employees/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilityDetail)))
 	mux.Handle("GET /api/v1/recordings/communication-analysis", authMw(http.HandlerFunc(h.GetCommunicationAnalysis)))
 	mux.Handle("GET /api/v1/recordings/weekly-meeting", authMw(http.HandlerFunc(h.GetWeeklyMeetingMaterial)))
 	mux.Handle("GET /api/v1/recordings/weekly-summary", authMw(http.HandlerFunc(h.GetWeeklySummary)))
