@@ -131,6 +131,53 @@ func (h *Handler) GetDoctorAbilityDetail(w http.ResponseWriter, r *http.Request)
 	httputil.WriteSuccess(w, resp)
 }
 
+// GetMedicalRecordingRoute handles /recordings/{id}/route endpoint.
+func (h *Handler) GetMedicalRecordingRoute(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	recording, err := h.service.GetRecording(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	resp := map[string]any{
+		"route": recording.Status,
+		"analysis_summary": map[string]any{
+			"scene":  recording.Status,
+			"status": recording.Status,
+		},
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+// GetMedicalRecordingSegue handles /recordings/{id}/segue endpoint.
+func (h *Handler) GetMedicalRecordingSegue(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	_, err = h.service.GetRecording(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	resp := map[string]any{
+		"segue_scores": map[string]any{},
+		"analysis_summary": map[string]any{
+			"recording_id": id,
+		},
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 // GetCommunicationAnalysis handles getting communication analysis
 func (h *Handler) GetCommunicationAnalysis(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
