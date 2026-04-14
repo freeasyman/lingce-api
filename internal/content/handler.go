@@ -25,14 +25,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Topic management endpoints
 	mux.Handle("GET /api/v1/content/hot-topics", authMw(http.HandlerFunc(h.GetHotTopics)))
 	mux.Handle("POST /api/v1/content/hot-topics/refresh", authMw(http.HandlerFunc(h.RefreshHotTopics)))
-	mux.Handle("GET /api/v1/content/topics", authMw(http.HandlerFunc(h.ListTopics)))
-	mux.Handle("GET /api/v1/content/topics/", authMw(http.HandlerFunc(h.ListTopics)))
-	mux.Handle("GET /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.GetTopic)))
-	mux.Handle("POST /api/v1/content/topics/generate", authMw(http.HandlerFunc(h.GenerateTopics)))
-	mux.Handle("POST /api/v1/content/topics", authMw(http.HandlerFunc(h.CreateTopic)))
-	mux.Handle("PUT /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.UpdateTopic)))
-	mux.Handle("PUT /api/v1/content/topics/{topic_id}/select", authMw(http.HandlerFunc(h.SelectTopic)))
-	mux.Handle("DELETE /api/v1/content/topics/{topic_id}", authMw(http.HandlerFunc(h.DeleteTopic)))
+	h.registerTopicRoutes(mux, authMw)
 
 	// "我有想法" endpoints
 	mux.Handle("POST /api/v1/content/idea-topics/start", authMw(http.HandlerFunc(h.IdeaTopicStart)))
@@ -53,12 +46,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/content/contents/{content_id}/save-composed-images", authMw(http.HandlerFunc(h.SaveComposedImages)))
 	mux.Handle("POST /api/v1/content/contents/{content_id}/publish", authMw(http.HandlerFunc(h.PublishContent)))
 	mux.Handle("POST /api/v1/content/contents/{content_id}/unpublish", authMw(http.HandlerFunc(h.UnpublishContent)))
-
-	// Conversation insights endpoints
-	mux.Handle("GET /api/v1/content/conversation-insights/stats", authMw(http.HandlerFunc(h.GetInsightsStats)))
-	mux.Handle("GET /api/v1/content/conversation-insights/frequent-questions", authMw(http.HandlerFunc(h.GetFrequentQuestions)))
-	mux.Handle("POST /api/v1/content/conversation-insights/mine-topics", authMw(http.HandlerFunc(h.MineTopics)))
-	mux.Handle("POST /api/v1/content/conversation-insights/save-topics", authMw(http.HandlerFunc(h.SaveMinedTopics)))
 
 	// Content seeds endpoints
 	mux.Handle("GET /api/v1/content-seeds", authMw(http.HandlerFunc(h.ListSeeds)))
@@ -199,7 +186,7 @@ func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("topic_id"), 10, 64)
+	id, err := parseTopicID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid topic ID")
 		return
@@ -257,7 +244,7 @@ func (h *Handler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("topic_id"), 10, 64)
+	id, err := parseTopicID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid topic ID")
 		return
@@ -298,7 +285,7 @@ func (h *Handler) DeleteTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("topic_id"), 10, 64)
+	id, err := parseTopicID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid topic ID")
 		return
@@ -322,6 +309,14 @@ func (h *Handler) DeleteTopic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Topic deleted successfully"})
+}
+
+func parseTopicID(r *http.Request) (int64, error) {
+	idStr := r.PathValue("topic_id")
+	if idStr == "" {
+		idStr = r.PathValue("id")
+	}
+	return strconv.ParseInt(idStr, 10, 64)
 }
 
 // GenerateTopics handles AI topic generation

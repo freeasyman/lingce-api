@@ -3,7 +3,6 @@ package content
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -59,7 +58,7 @@ func (h *Handler) SelectTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("topic_id"), 10, 64)
+	id, err := parseTopicID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid topic ID")
 		return
