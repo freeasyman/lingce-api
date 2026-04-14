@@ -89,7 +89,7 @@ func (h *Handler) GetContentTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -111,7 +111,7 @@ func (h *Handler) UpdateContentTemplate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -139,7 +139,7 @@ func (h *Handler) DeleteContentTemplate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -160,7 +160,7 @@ func (h *Handler) CloneContentTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -182,7 +182,7 @@ func (h *Handler) TestContentTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -204,7 +204,7 @@ func (h *Handler) GetContentTemplateStats(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("template_id"), 10, 64)
+	id, err := parseContentTemplateID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid template ID")
 		return
@@ -216,6 +216,14 @@ func (h *Handler) GetContentTemplateStats(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httputil.WriteSuccess(w, stats)
+}
+
+func parseContentTemplateID(r *http.Request) (int64, error) {
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		idStr = r.PathValue("template_id")
+	}
+	return strconv.ParseInt(idStr, 10, 64)
 }
 
 // InitializeDefaultTemplates handles initializing default content templates

@@ -68,16 +68,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetTemplateStats)))
 
 	// Content prompt templates endpoints
-	mux.Handle("GET /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.ListContentTemplates)))
-	mux.Handle("GET /api/v1/content-prompt-templates/", authMw(http.HandlerFunc(h.ListContentTemplates)))
-	mux.Handle("POST /api/v1/content-prompt-templates", authMw(http.HandlerFunc(h.CreateContentTemplate)))
-	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.GetContentTemplate)))
-	mux.Handle("PUT /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.UpdateContentTemplate)))
-	mux.Handle("DELETE /api/v1/content-prompt-templates/{template_id}", authMw(http.HandlerFunc(h.DeleteContentTemplate)))
-	mux.Handle("POST /api/v1/content-prompt-templates/{template_id}/clone", authMw(http.HandlerFunc(h.CloneContentTemplate)))
-	mux.Handle("POST /api/v1/content-prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestContentTemplate)))
-	mux.Handle("GET /api/v1/content-prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetContentTemplateStats)))
-	mux.Handle("POST /api/v1/content-prompt-templates/initialize-defaults", authMw(http.HandlerFunc(h.InitializeDefaultTemplates)))
+	h.registerContentPromptRoutes(mux, authMw)
 
 	// Publish tasks endpoints
 	mux.Handle("GET /api/v1/content/publish-tasks/dashboard", authMw(http.HandlerFunc(h.GetPublishDashboard)))
