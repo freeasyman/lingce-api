@@ -43,13 +43,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/complete", authMw(http.HandlerFunc(h.CompleteTask)))
 	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/cancel", authMw(http.HandlerFunc(h.CancelTask)))
 
-	// Recording Prompt endpoints
-	mux.Handle("GET /api/v1/recording-prompts", authMw(http.HandlerFunc(h.ListRecordingPrompts)))
-	mux.Handle("POST /api/v1/recording-prompts", authMw(http.HandlerFunc(h.CreateRecordingPrompt)))
-	mux.Handle("GET /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.GetRecordingPrompt)))
-	mux.Handle("PUT /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.UpdateRecordingPrompt)))
-	mux.Handle("DELETE /api/v1/recording-prompts/codes/{code}", authMw(http.HandlerFunc(h.DeleteRecordingPrompt)))
-
 	// Advanced Recording endpoints
 	mux.Handle("GET /api/v1/recordings/stats/by-tenant", authMw(http.HandlerFunc(h.GetStatsByTenant)))
 	mux.Handle("GET /api/v1/recordings/stats/duration-distribution", authMw(http.HandlerFunc(h.GetDurationDistribution)))
@@ -120,12 +113,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.GetRecordingPrompt)))
 	mux.Handle("PUT /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.UpdateRecordingPrompt)))
 	mux.Handle("DELETE /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.DeleteRecordingPrompt)))
-
-	mux.Handle("POST /api/v1/recording-prompts/codes/{code}/test", authMw(http.HandlerFunc(h.TestRecordingPrompt)))
-	mux.Handle("GET /api/v1/recording-prompts/tenant-configs", authMw(http.HandlerFunc(h.ListTenantPromptConfigs)))
-	mux.Handle("POST /api/v1/recording-prompts/tenant-configs", authMw(http.HandlerFunc(h.CreateTenantPromptConfig)))
-	mux.Handle("PUT /api/v1/recording-prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
-	mux.Handle("DELETE /api/v1/recording-prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
+	mux.Handle("POST /api/v1/recordings/prompts/codes/{code}/actions/test", authMw(http.HandlerFunc(h.TestRecordingPrompt)))
+	mux.Handle("GET /api/v1/recordings/prompts/tenant-configs", authMw(http.HandlerFunc(h.ListTenantPromptConfigs)))
+	mux.Handle("POST /api/v1/recordings/prompts/tenant-configs", authMw(http.HandlerFunc(h.CreateTenantPromptConfig)))
+	mux.Handle("PUT /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
+	mux.Handle("DELETE /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
 }
 
 // ListRecordings handles listing medical recordings

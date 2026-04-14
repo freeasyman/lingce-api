@@ -39,20 +39,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Content seeds endpoints
 	h.registerContentSeedRoutes(mux, authMw)
 
-	// Prompt templates endpoints
-	mux.Handle("GET /api/v1/prompt-templates", authMw(http.HandlerFunc(h.ListTemplates)))
-	mux.Handle("POST /api/v1/prompt-templates", authMw(http.HandlerFunc(h.CreateTemplate)))
-	mux.Handle("GET /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.GetTemplate)))
-	mux.Handle("PUT /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.UpdateTemplate)))
-	mux.Handle("DELETE /api/v1/prompt-templates/{template_id}", authMw(http.HandlerFunc(h.DeleteTemplate)))
-	mux.Handle("POST /api/v1/prompt-templates/preview", authMw(http.HandlerFunc(h.PreviewTemplate)))
-	mux.Handle("POST /api/v1/prompt-templates/{template_id}/clone", authMw(http.HandlerFunc(h.CloneTemplate)))
-	mux.Handle("POST /api/v1/prompt-templates/{template_id}/versions", authMw(http.HandlerFunc(h.CreateTemplateVersion)))
-	mux.Handle("GET /api/v1/prompt-templates/{template_id}/versions", authMw(http.HandlerFunc(h.ListTemplateVersions)))
-	mux.Handle("POST /api/v1/prompt-templates/{template_id}/publish", authMw(http.HandlerFunc(h.PublishTemplate)))
-	mux.Handle("POST /api/v1/prompt-templates/{template_id}/rollback/{version}", authMw(http.HandlerFunc(h.RollbackTemplate)))
-	mux.Handle("POST /api/v1/prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestTemplate)))
-	mux.Handle("GET /api/v1/prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetTemplateStats)))
 	h.registerLLMPromptRoutes(mux, authMw)
 
 	// Content prompt templates endpoints

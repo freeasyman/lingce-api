@@ -22,9 +22,6 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Medical specialties (authenticated users)
-	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
-
 	// Employee sub-resources (authenticated users)
 	mux.Handle("GET /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
 	mux.Handle("PUT /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
