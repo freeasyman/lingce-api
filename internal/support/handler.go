@@ -38,6 +38,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/notifications/mark-all-read", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
 
 	// Operation log endpoints
+	mux.Handle("GET /api/v1/operation-logs", authMw(http.HandlerFunc(h.ListOperationLogs)))
+	mux.Handle("GET /api/v1/operation-logs/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
+	mux.Handle("GET /api/v1/operation-logs/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
 	mux.Handle("GET /api/v1/logs/operations", authMw(http.HandlerFunc(h.ListOperationLogs)))
 	mux.Handle("GET /api/v1/logs/operations/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
 	mux.Handle("GET /api/v1/logs/operations/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
