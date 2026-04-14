@@ -41,9 +41,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/operation-logs", authMw(http.HandlerFunc(h.ListOperationLogs)))
 	mux.Handle("GET /api/v1/operation-logs/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
 	mux.Handle("GET /api/v1/operation-logs/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
-	mux.Handle("GET /api/v1/logs/operations", authMw(http.HandlerFunc(h.ListOperationLogs)))
-	mux.Handle("GET /api/v1/logs/operations/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
-	mux.Handle("GET /api/v1/logs/operations/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
 
 	// LLM model config endpoints
 	mux.Handle("GET /api/v1/llm/models", authMw(http.HandlerFunc(h.ListLLMModelConfigs)))
@@ -77,13 +74,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/operation-logs/data-browser/statistics", authMw(http.HandlerFunc(h.GetDatabaseStatistics)))
 	mux.Handle("DELETE /api/v1/operation-logs/data-browser/tables/{table_name}/truncate", authMw(http.HandlerFunc(h.TruncateTable)))
 	mux.Handle("POST /api/v1/operation-logs/data-browser/clear-import-data", authMw(http.HandlerFunc(h.ClearImportData)))
-	mux.Handle("GET /api/v1/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
-	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
-	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/data", authMw(http.HandlerFunc(h.GetTableData)))
-	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/export", authMw(http.HandlerFunc(h.ExportTableData)))
-	mux.Handle("GET /api/v1/data-browser/statistics", authMw(http.HandlerFunc(h.GetDatabaseStatistics)))
-	mux.Handle("DELETE /api/v1/data-browser/tables/{table_name}/truncate", authMw(http.HandlerFunc(h.TruncateTable)))
-	mux.Handle("POST /api/v1/data-browser/clear-import-data", authMw(http.HandlerFunc(h.ClearImportData)))
 
 	// Visit management endpoints
 	mux.Handle("GET /api/v1/visits/health", authMw(http.HandlerFunc(h.VisitsHealthCheck)))

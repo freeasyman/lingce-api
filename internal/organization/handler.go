@@ -34,7 +34,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Department advanced endpoints
 	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))
-	mux.Handle("POST /api/v1/departments/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
+	mux.Handle("POST /api/v1/departments/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
 	mux.Handle("GET /api/v1/departments/{id}/performance", authMw(http.HandlerFunc(h.GetDepartmentPerformance)))
 
 }
