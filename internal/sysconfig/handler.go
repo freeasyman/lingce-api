@@ -22,11 +22,6 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Tenant management (admin only)
-	mux.Handle("GET /api/v1/sysconfig/tenants", authMw(http.HandlerFunc(h.ListTenants)))
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
-	mux.Handle("PUT /api/v1/sysconfig/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
-
 	// Subscription plan management (admin only)
 	mux.Handle("GET /api/v1/sysconfig/subscription-plans", authMw(http.HandlerFunc(h.ListSubscriptionPlans)))
 	mux.Handle("POST /api/v1/sysconfig/subscription-plans", authMw(http.HandlerFunc(h.CreateSubscriptionPlan)))
@@ -52,7 +47,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/effective-features", authMw(http.HandlerFunc(h.GetEffectiveFeaturePolicy)))
 	mux.Handle("GET /api/v1/sysconfig/feature-options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
 
-	// Compatibility aliases for legacy /config/* and /subscriptions/* paths
+	// Legacy compatibility routes - TODO: Remove after frontend migration
 	mux.Handle("GET /api/v1/config/tenants", authMw(http.HandlerFunc(h.ListTenants)))
 	mux.Handle("GET /api/v1/config/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
 	mux.Handle("PUT /api/v1/config/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
