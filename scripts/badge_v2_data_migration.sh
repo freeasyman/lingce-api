@@ -22,7 +22,7 @@ echo ""
 # 1. 检查现有设备数量
 echo "[1] 检查现有设备数量..."
 device_count=$(curl -sS -H "Authorization: Bearer $TOKEN" \
-  "${BASE_URL}/api/v2/badges/devices?page=1&page_size=1" | \
+  "${BASE_URL}/api/v1/badge-devices?page=1&page_size=1" | \
   jq -r '.total // 0')
 
 echo "   现有设备数量: $device_count"
@@ -39,7 +39,7 @@ if [ "$device_count" -eq 0 ]; then
   echo ""
   echo "或者使用 API 导入："
   echo "curl -H \"Authorization: Bearer \$TOKEN\" \\"
-  echo "  -X POST \"${BASE_URL}/api/v2/badges/devices/import\" \\"
+  echo "  -X POST \"${BASE_URL}/api/v1/badge-devices/actions/import\" \\"
   echo "  -H \"Content-Type: application/json\" \\"
   echo "  -d '{"
   echo "    \"manufacturer_code\": \"xiaomi\","
@@ -55,7 +55,7 @@ fi
 # 2. 检查设备状态分布
 echo "[2] 检查设备状态分布..."
 curl -sS -H "Authorization: Bearer $TOKEN" \
-  "${BASE_URL}/api/v2/badges/devices?page=1&page_size=100" | \
+  "${BASE_URL}/api/v1/badge-devices?page=1&page_size=100" | \
   jq -r '.items[] | .status' | sort | uniq -c
 
 echo ""
@@ -74,7 +74,7 @@ echo ""
 # 4. 获取厂家列表
 echo "[4] 检查厂家配置..."
 manufacturers=$(curl -sS -H "Authorization: Bearer $TOKEN" \
-  "${BASE_URL}/api/v2/badges/manufacturers" | jq -r '.items[]? | "\(.code) - \(.name)"')
+  "${BASE_URL}/api/v1/badge-devices/manufacturers" | jq -r '.items[]? | "\(.code) - \(.name)"')
 
 if [ -z "$manufacturers" ]; then
   echo "   ⚠️  未配置厂家信息"

@@ -42,13 +42,6 @@ ALL_ENDPOINTS = {
         },
         {
             "method": "POST",
-            "path": "/api/v1/auth/login/employee",
-            "summary": "员工登录（别名）",
-            "description": "与机构员工登录相同",
-            "auth": False
-        },
-        {
-            "method": "POST",
             "path": "/api/v1/auth/login/mobile",
             "summary": "移动端登录",
             "description": "移动端用户登录，会话与Web端独立",
@@ -81,7 +74,7 @@ ALL_ENDPOINTS = {
         },
         {
             "method": "POST",
-            "path": "/api/v1/auth/mobile/sms/send",
+            "path": "/api/v1/auth/sms/send",
             "summary": "发送短信验证码",
             "description": "向指定手机号发送短信验证码",
             "auth": False,
@@ -91,7 +84,7 @@ ALL_ENDPOINTS = {
         },
         {
             "method": "POST",
-            "path": "/api/v1/auth/mobile/sms/login",
+            "path": "/api/v1/auth/sms/login",
             "summary": "短信验证码登录",
             "description": "使用手机号和短信验证码登录",
             "auth": False,

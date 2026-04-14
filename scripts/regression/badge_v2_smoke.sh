@@ -14,7 +14,7 @@ auth_header=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/j
 
 echo "[1] import devices"
 import_resp="$(curl -sS "${auth_header[@]}" \
-  -X POST "${BASE_URL}/api/v2/badges/devices/import" \
+  -X POST "${BASE_URL}/api/v1/badge-devices/actions/import" \
   -d '{
     "manufacturer_code":"xiaomi",
     "manufacturer_name":"小米",
@@ -26,7 +26,7 @@ import_resp="$(curl -sS "${auth_header[@]}" \
 echo "${import_resp}" | head -c 300; echo
 
 echo "[2] list devices"
-list_resp="$(curl -sS "${auth_header[@]}" "${BASE_URL}/api/v2/badges/devices?page=1&page_size=20&device_no=SMOKE-XM")"
+list_resp="$(curl -sS "${auth_header[@]}" "${BASE_URL}/api/v1/badge-devices?page=1&page_size=20&device_no=SMOKE-XM")"
 echo "${list_resp}" | head -c 300; echo
 
 device_ids="$(echo "${list_resp}" | jq -r '.items[].id' | tr '\n' ',' | sed 's/,$//')"
@@ -37,13 +37,13 @@ fi
 
 echo "[3] batch accept"
 accept_resp="$(curl -sS "${auth_header[@]}" \
-  -X POST "${BASE_URL}/api/v2/badges/devices/batch-accept" \
+  -X POST "${BASE_URL}/api/v1/badge-devices/actions/batch-accept" \
   -d "{\"device_ids\":[${device_ids}],\"skip_health_check\":true}")"
 echo "${accept_resp}" | head -c 300; echo
 
 echo "[4] batch assign"
 assign_resp="$(curl -sS "${auth_header[@]}" \
-  -X POST "${BASE_URL}/api/v2/badges/devices/batch-assign" \
+  -X POST "${BASE_URL}/api/v1/badge-devices/actions/batch-assign" \
   -d "{
     \"device_ids\":[${device_ids}],
     \"tenant_id\":1,
@@ -54,17 +54,16 @@ assign_resp="$(curl -sS "${auth_header[@]}" \
 echo "${assign_resp}" | head -c 300; echo
 
 echo "[5] dashboard"
-dashboard_resp="$(curl -sS "${auth_header[@]}" "${BASE_URL}/api/v2/badges/dashboard")"
+dashboard_resp="$(curl -sS "${auth_header[@]}" "${BASE_URL}/api/v1/badge-devices/dashboard")"
 echo "${dashboard_resp}" | head -c 300; echo
 
 echo "[6] batch reclaim"
 reclaim_resp="$(curl -sS "${auth_header[@]}" \
-  -X POST "${BASE_URL}/api/v2/badges/devices/batch-reclaim" \
+  -X POST "${BASE_URL}/api/v1/badge-devices/actions/batch-reclaim" \
   -d "{\"device_ids\":[${device_ids}],\"reason\":\"smoke test\"}")"
 echo "${reclaim_resp}" | head -c 300; echo
 
 echo "[7] export csv"
-curl -sS "${auth_header[@]}" "${BASE_URL}/api/v2/badges/devices/export?status=returned" | head -c 200; echo
+curl -sS "${auth_header[@]}" "${BASE_URL}/api/v1/badge-devices/export?status=returned" | head -c 200; echo
 
 echo "badge_v2_smoke done"
-

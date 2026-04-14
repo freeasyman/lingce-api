@@ -15,13 +15,12 @@ ENDPOINTS = {
     "认证": [
         ("POST", "/api/v1/auth/login", "运维管理员登录", "使用用户名密码登录，获取JWT令牌", False),
         ("POST", "/api/v1/auth/login/institution", "机构员工登录", "机构员工使用用户名密码登录（Web端）", False),
-        ("POST", "/api/v1/auth/login/employee", "员工登录（别名）", "与机构员工登录相同", False),
         ("POST", "/api/v1/auth/login/mobile", "移动端登录", "移动端用户登录，会话与Web端独立", False),
         ("GET", "/api/v1/auth/me", "获取当前用户信息", "获取当前登录用户的详细信息", True),
         ("POST", "/api/v1/auth/change-password", "修改密码", "修改当前用户密码，修改后旧令牌失效", True),
         ("GET", "/api/v1/auth/captcha", "生成图形验证码", "生成图形验证码，返回验证码ID和Base64图片", False),
-        ("POST", "/api/v1/auth/mobile/sms/send", "发送短信验证码", "向指定手机号发送短信验证码", False),
-        ("POST", "/api/v1/auth/mobile/sms/login", "短信验证码登录", "使用手机号和短信验证码登录", False),
+        ("POST", "/api/v1/auth/sms/send", "发送短信验证码", "向指定手机号发送短信验证码", False),
+        ("POST", "/api/v1/auth/sms/login", "短信验证码登录", "使用手机号和短信验证码登录", False),
     ],
     "组织架构-机构": [
         ("GET", "/api/v1/tenants", "机构列表", "获取机构列表（分页）", True, "admin"),
