@@ -73,35 +73,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/customers/groups/rules/fields", authMw(http.HandlerFunc(h.GetRuleFields)))
 	mux.Handle("GET /api/v1/customers/groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
 
-	// Legacy aliases
-	mux.Handle("POST /api/v1/customers/merge", withCustomerDeprecation(authMw(http.HandlerFunc(h.MergeCustomers))))
-	mux.Handle("GET /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.ListCustomerTags))))
-	mux.Handle("POST /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.CreateCustomerTag))))
-	mux.Handle("PUT /api/v1/customer-tags/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.UpdateCustomerTag))))
-	mux.Handle("DELETE /api/v1/customer-tags/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.DeleteCustomerTag))))
-	mux.Handle("POST /api/v1/customer-tags/batch", withCustomerDeprecation(authMw(http.HandlerFunc(h.BatchTagCustomers))))
-	mux.Handle("GET /api/v1/customer-tags/stats", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetTagStats))))
-	mux.Handle("GET /api/v1/customer-groups", withCustomerDeprecation(authMw(http.HandlerFunc(h.ListCustomerGroups))))
-	mux.Handle("POST /api/v1/customer-groups", withCustomerDeprecation(authMw(http.HandlerFunc(h.CreateCustomerGroup))))
-	mux.Handle("PUT /api/v1/customer-groups/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.UpdateCustomerGroup))))
-	mux.Handle("DELETE /api/v1/customer-groups/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.DeleteCustomerGroup))))
-	mux.Handle("GET /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetGroupMembers))))
-	mux.Handle("POST /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.AddGroupMembers))))
-	mux.Handle("DELETE /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.RemoveGroupMembers))))
-	mux.Handle("POST /api/v1/customer-groups/rules/preview", withCustomerDeprecation(authMw(http.HandlerFunc(h.PreviewGroupRules))))
-	mux.Handle("POST /api/v1/customer-groups/rules/validate", withCustomerDeprecation(authMw(http.HandlerFunc(h.ValidateGroupRules))))
-	mux.Handle("GET /api/v1/customer-groups/rules/fields", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetRuleFields))))
-	mux.Handle("GET /api/v1/customer-groups/rules/operators", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetRuleOperators))))
-	mux.Handle("GET /api/v1/patients/{id}/360", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetCustomer360View))))
-}
-
-func withCustomerDeprecation(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Deprecation", "true")
-		w.Header().Set("Sunset", "Tue, 30 Jun 2026 23:59:59 GMT")
-		w.Header().Set("Link", `</api/v1/customers>; rel="successor-version"`)
-		next.ServeHTTP(w, r)
-	})
 }
 
 // Customer Handlers

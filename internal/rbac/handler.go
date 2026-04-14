@@ -53,10 +53,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("DELETE /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
 	mux.Handle("POST /api/v1/roles/admins/id/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
 
-	// Institution RBAC - Employee roles
-	mux.Handle("GET /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
-	mux.Handle("PUT /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.SetEmployeeRole)))
-	mux.Handle("DELETE /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.RemoveEmployeeRole)))
 }
 
 func (h *Handler) roleScope(r *http.Request) string {
