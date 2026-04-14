@@ -389,6 +389,13 @@ type AbilityRankingItem struct {
 	CompletedCount int64
 }
 
+// TenantEmployeeLite represents lightweight employee info for cross-module reads.
+type TenantEmployeeLite struct {
+	EmployeeID int64
+	TenantID   int64
+	Name       string
+}
+
 // GetAbilityRanking retrieves employee ability ranking based on recording statistics
 func (s *Store) GetAbilityRanking(ctx context.Context, tenantID int64, limit int) ([]AbilityRankingItem, error) {
 	if limit <= 0 {
@@ -445,4 +452,35 @@ func (s *Store) GetEmployeeNameByID(ctx context.Context, employeeID, tenantID in
 	}
 
 	return name, nil
+}
+
+// ListTenantEmployeesByTenantIDs retrieves employee list for provided tenant IDs.
+func (s *Store) ListTenantEmployeesByTenantIDs(ctx context.Context, tenantIDs []int64) ([]TenantEmployeeLite, error) {
+	if len(tenantIDs) == 0 {
+		return []TenantEmployeeLite{}, nil
+	}
+
+	query := `
+		SELECT DISTINCT e.id, e.tenant_id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
+		FROM employees e
+		WHERE e.tenant_id = ANY($1) AND e.deleted_at IS NULL
+		ORDER BY e.id DESC
+	`
+
+	rows, err := s.pool.Query(ctx, query, tenantIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tenant employees: %w", err)
+	}
+	defer rows.Close()
+
+	employees := make([]TenantEmployeeLite, 0)
+	for rows.Next() {
+		var item TenantEmployeeLite
+		if err := rows.Scan(&item.EmployeeID, &item.TenantID, &item.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan tenant employee: %w", err)
+		}
+		employees = append(employees, item)
+	}
+
+	return employees, nil
 }

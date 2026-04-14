@@ -4,25 +4,54 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/employee"
 )
 
 type Service struct {
 	store            *Store
+	employeeStore    *employee.Store
 	middlewareClient *MiddlewareClient
 }
 
-func NewService(store *Store) *Service {
+func NewService(store *Store, employeeStore *employee.Store) *Service {
 	return &Service{
 		store:            store,
+		employeeStore:    employeeStore,
 		middlewareClient: NewMiddlewareClient("", ""),
 	}
 }
 
-func NewServiceWithMiddleware(store *Store, middlewareURL, middlewareToken string) *Service {
+func NewServiceWithMiddleware(store *Store, employeeStore *employee.Store, middlewareURL, middlewareToken string) *Service {
 	return &Service{
 		store:            store,
+		employeeStore:    employeeStore,
 		middlewareClient: NewMiddlewareClient(middlewareURL, middlewareToken),
 	}
+}
+
+func (s *Service) ListTenantEmployees(ctx context.Context, tenantIDs []int64) ([]map[string]interface{}, error) {
+	if len(tenantIDs) == 0 {
+		return []map[string]interface{}{}, nil
+	}
+	if s.employeeStore == nil {
+		return nil, fmt.Errorf("employee store is not configured")
+	}
+
+	employees, err := s.employeeStore.ListTenantEmployeesByTenantIDs(ctx, tenantIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := make([]map[string]interface{}, 0, len(employees))
+	for _, emp := range employees {
+		resp = append(resp, map[string]interface{}{
+			"employee_id": emp.EmployeeID,
+			"tenant_id":   emp.TenantID,
+			"name":        emp.Name,
+		})
+	}
+	return resp, nil
 }
 
 // Device Services

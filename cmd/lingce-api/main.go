@@ -142,6 +142,7 @@ func main() {
 	badgeStore := badge.NewStore(pool)
 	badgeService := badge.NewServiceWithMiddleware(
 		badgeStore,
+		empStore,
 		cfg.External.BadgeMiddlewareURL,
 		cfg.External.BadgeMiddlewareToken,
 	)

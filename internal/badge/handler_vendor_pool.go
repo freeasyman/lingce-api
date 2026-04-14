@@ -373,33 +373,10 @@ func (h *Handler) ListTenantEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.service.store.pool.Query(r.Context(), `
-		SELECT DISTINCT e.id, e.tenant_id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
-		FROM employees e
-		WHERE e.tenant_id = ANY($1)
-		ORDER BY e.id DESC
-	`, scope.TenantIDs)
+	employees, err := h.service.ListTenantEmployees(r.Context(), scope.TenantIDs)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	defer rows.Close()
-
-	employees := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var employeeID int64
-		var tenantID int64
-		var name string
-		if err := rows.Scan(&employeeID, &tenantID, &name); err != nil {
-			httputil.WriteInternalError(w, err.Error())
-			return
-		}
-		employees = append(employees, map[string]interface{}{
-			"employee_id": employeeID,
-			"tenant_id":   tenantID,
-			"name":        name,
-		})
-	}
-
 	httputil.WriteSuccess(w, employees)
 }
