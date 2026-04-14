@@ -59,9 +59,11 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 	}
 
 	if req.IsActive != nil {
-		conditions = append(conditions, fmt.Sprintf("is_active = $%d", argIndex))
-		args = append(args, *req.IsActive)
-		argIndex++
+		if *req.IsActive {
+			conditions = append(conditions, "is_active::text IN ('1','t','true','TRUE')")
+		} else {
+			conditions = append(conditions, "is_active::text NOT IN ('1','t','true','TRUE')")
+		}
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
@@ -76,8 +78,18 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 	// Query employees
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, username, password_hash, full_name, phone, email,
-		       department_id, session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
+		       CASE
+		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
+		           ELSE full_name
+		       END AS full_name,
+		       COALESCE(phone, ''), COALESCE(email, ''),
+		       department_id, COALESCE(session_version, 0),
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at, deleted_at
 		FROM employees
 		WHERE %s
 		ORDER BY created_at DESC
@@ -121,8 +133,18 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 // GetEmployeeByID retrieves an employee by ID
 func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, username, password_hash, full_name, phone, email,
-		       department_id, session_version, is_active, created_at, updated_at, deleted_at
+		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
+		       CASE
+		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
+		           ELSE full_name
+		       END AS full_name,
+		       COALESCE(phone, ''), COALESCE(email, ''),
+		       department_id, COALESCE(session_version, 0),
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at, deleted_at
 		FROM employees
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -301,4 +323,126 @@ func (s *Store) DeleteEmployee(ctx context.Context, id int64) error {
 	}
 
 	return nil
+}
+
+// GetByIDs retrieves multiple employees by IDs
+func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) {
+	if len(ids) == 0 {
+		return []*Employee{}, nil
+	}
+
+	query := `
+		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
+		       CASE
+		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
+		           ELSE full_name
+		       END AS full_name,
+		       COALESCE(phone, ''), COALESCE(email, ''),
+		       department_id, COALESCE(session_version, 0),
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at, deleted_at
+		FROM employees
+		WHERE id = ANY($1) AND deleted_at IS NULL
+		ORDER BY id
+	`
+
+	rows, err := s.pool.Query(ctx, query, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query employees by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var employees []*Employee
+	for rows.Next() {
+		var e Employee
+		if err := rows.Scan(
+			&e.ID,
+			&e.TenantID,
+			&e.Username,
+			&e.PasswordHash,
+			&e.FullName,
+			&e.Phone,
+			&e.Email,
+			&e.DepartmentID,
+			&e.SessionVersion,
+			&e.IsActive,
+			&e.CreatedAt,
+			&e.UpdatedAt,
+			&e.DeletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan employee: %w", err)
+		}
+		employees = append(employees, &e)
+	}
+
+	return employees, nil
+}
+
+// AbilityRankingItem represents an employee's ability ranking
+type AbilityRankingItem struct {
+	EmployeeID     int64
+	EmployeeName   string
+	RecordingCount int64
+	CompletedCount int64
+}
+
+// GetAbilityRanking retrieves employee ability ranking based on recording statistics
+func (s *Store) GetAbilityRanking(ctx context.Context, tenantID int64, limit int) ([]AbilityRankingItem, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := `
+		SELECT
+			e.id,
+			COALESCE(NULLIF(e.name, ''), '未知员工') AS employee_name,
+			COUNT(mr.id) AS recording_count,
+			COUNT(CASE WHEN mr.analysis_status = 'completed' THEN 1 END) AS completed_count
+		FROM employees e
+		LEFT JOIN recordings mr ON mr.employee_id = e.id AND mr.tenant_id = $1
+		WHERE e.tenant_id = $1 AND e.deleted_at IS NULL
+		GROUP BY e.id, employee_name
+		HAVING COUNT(mr.id) > 0
+		ORDER BY recording_count DESC, completed_count DESC
+		LIMIT $2
+	`
+
+	rows, err := s.pool.Query(ctx, query, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ability ranking: %w", err)
+	}
+	defer rows.Close()
+
+	var ranking []AbilityRankingItem
+	for rows.Next() {
+		var item AbilityRankingItem
+		if err := rows.Scan(&item.EmployeeID, &item.EmployeeName, &item.RecordingCount, &item.CompletedCount); err != nil {
+			return nil, fmt.Errorf("failed to scan ranking item: %w", err)
+		}
+		ranking = append(ranking, item)
+	}
+
+	return ranking, nil
+}
+
+// GetEmployeeNameByID retrieves employee name by ID
+func (s *Store) GetEmployeeNameByID(ctx context.Context, employeeID, tenantID int64) (string, error) {
+	query := `
+		SELECT COALESCE(NULLIF(name, ''), '未知员工')
+		FROM employees
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`
+
+	var name string
+	if err := s.pool.QueryRow(ctx, query, employeeID, tenantID).Scan(&name); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", fmt.Errorf("employee not found")
+		}
+		return "", fmt.Errorf("failed to query employee name: %w", err)
+	}
+
+	return name, nil
 }

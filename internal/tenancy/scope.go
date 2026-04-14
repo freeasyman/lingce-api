@@ -115,3 +115,19 @@ func containsTenantID(tenantIDs []int64, target int64) bool {
 	}
 	return false
 }
+
+// Context key for tenant scope
+type contextKey string
+
+const scopeContextKey contextKey = "tenant_scope"
+
+// WithScope adds a scope to the context
+func WithScope(ctx context.Context, scope *Scope) context.Context {
+	return context.WithValue(ctx, scopeContextKey, scope)
+}
+
+// GetScope retrieves the scope from the context
+func GetScope(ctx context.Context) *Scope {
+	scope, _ := ctx.Value(scopeContextKey).(*Scope)
+	return scope
+}
