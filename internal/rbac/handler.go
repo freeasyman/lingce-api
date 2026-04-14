@@ -23,17 +23,18 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Operations RBAC - Role management (admin only)
-	mux.Handle("GET /api/v1/rbac/roles", authMw(http.HandlerFunc(h.ListOperationsRoles)))
-	mux.Handle("POST /api/v1/rbac/roles", authMw(http.HandlerFunc(h.CreateOperationsRole)))
-	mux.Handle("GET /api/v1/rbac/roles/{id}", authMw(http.HandlerFunc(h.GetOperationsRole)))
-	mux.Handle("PUT /api/v1/rbac/roles/{id}", authMw(http.HandlerFunc(h.UpdateOperationsRole)))
-	mux.Handle("DELETE /api/v1/rbac/roles/{id}", authMw(http.HandlerFunc(h.DeleteOperationsRole)))
-
-	// Operations RBAC - Role permissions (admin only)
-	mux.Handle("POST /api/v1/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.AssignPermissionsToRole)))
-	mux.Handle("DELETE /api/v1/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.RemovePermissionsFromRole)))
-	mux.Handle("GET /api/v1/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.GetRolePermissions)))
+	// Role resource routes
+	mux.Handle("GET /api/v1/roles", authMw(http.HandlerFunc(h.ListRoles)))
+	mux.Handle("POST /api/v1/roles", authMw(http.HandlerFunc(h.CreateRole)))
+	mux.Handle("GET /api/v1/roles/{id}", authMw(http.HandlerFunc(h.GetRole)))
+	mux.Handle("PUT /api/v1/roles/{id}", authMw(http.HandlerFunc(h.UpdateRole)))
+	mux.Handle("DELETE /api/v1/roles/{id}", authMw(http.HandlerFunc(h.DeleteRole)))
+	mux.Handle("GET /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.GetRolePermissionsByScope)))
+	mux.Handle("POST /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.AssignPermissionsToRoleByScope)))
+	mux.Handle("DELETE /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.RemovePermissionsFromRoleByScope)))
+	mux.Handle("GET /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.GetRoleMenusByScope)))
+	mux.Handle("PUT /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
+	mux.Handle("POST /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
 
 	// Operations RBAC - Menu management (admin only)
 	mux.Handle("GET /api/v1/rbac/menus", authMw(http.HandlerFunc(h.ListOperationsMenus)))
@@ -45,25 +46,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/rbac/menus/sort", authMw(http.HandlerFunc(h.UpdateMenuSort)))
 	mux.Handle("GET /api/v1/rbac/menus/tree", authMw(http.HandlerFunc(h.GetOperationsMenuTree)))
 
-	// Operations RBAC - Admin management (admin only)
-	mux.Handle("GET /api/v1/rbac/admins", authMw(http.HandlerFunc(h.ListOperationsAdmins)))
-	mux.Handle("POST /api/v1/rbac/admins", authMw(http.HandlerFunc(h.CreateOperationsAdmin)))
-	mux.Handle("GET /api/v1/rbac/admins/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
-	mux.Handle("PUT /api/v1/rbac/admins/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
-	mux.Handle("DELETE /api/v1/rbac/admins/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
-	mux.Handle("PUT /api/v1/rbac/admins/{id}/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
-
-	// Operations RBAC - Role menus (admin only)
-	mux.Handle("GET /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.GetRoleMenus)))
-	mux.Handle("PUT /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRole)))
-	mux.Handle("POST /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRole)))
-
-	// Institution RBAC - Role management
-	mux.Handle("GET /api/v1/institution/rbac/roles", authMw(http.HandlerFunc(h.ListInstitutionRoles)))
-	mux.Handle("POST /api/v1/institution/rbac/roles", authMw(http.HandlerFunc(h.CreateInstitutionRole)))
-	mux.Handle("GET /api/v1/institution/rbac/roles/{id}", authMw(http.HandlerFunc(h.GetInstitutionRole)))
-	mux.Handle("PUT /api/v1/institution/rbac/roles/{id}", authMw(http.HandlerFunc(h.UpdateInstitutionRole)))
-	mux.Handle("DELETE /api/v1/institution/rbac/roles/{id}", authMw(http.HandlerFunc(h.DeleteInstitutionRole)))
+	// Operations admin routes
+	mux.Handle("GET /api/v1/roles/admins", authMw(http.HandlerFunc(h.ListOperationsAdmins)))
+	mux.Handle("POST /api/v1/roles/admins", authMw(http.HandlerFunc(h.CreateOperationsAdmin)))
+	mux.Handle("GET /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
+	mux.Handle("PUT /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
+	mux.Handle("DELETE /api/v1/roles/admins/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
+	mux.Handle("POST /api/v1/roles/admins/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
 
 	// Institution RBAC - Menu management
 	mux.Handle("GET /api/v1/institution/rbac/menus", authMw(http.HandlerFunc(h.ListInstitutionMenus)))
@@ -72,15 +61,98 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/institution/rbac/menus/{id}", authMw(http.HandlerFunc(h.UpdateInstitutionMenu)))
 	mux.Handle("DELETE /api/v1/institution/rbac/menus/{id}", authMw(http.HandlerFunc(h.DeleteInstitutionMenu)))
 
-	// Institution RBAC - Role permissions
-	mux.Handle("POST /api/v1/institution/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.AssignPermissionsToInstitutionRole)))
-	mux.Handle("DELETE /api/v1/institution/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.RemovePermissionsFromInstitutionRole)))
-	mux.Handle("GET /api/v1/institution/rbac/roles/{id}/permissions", authMw(http.HandlerFunc(h.GetInstitutionRolePermissions)))
-
 	// Institution RBAC - Employee roles
 	mux.Handle("GET /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
 	mux.Handle("PUT /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.SetEmployeeRole)))
 	mux.Handle("DELETE /api/v1/institution/rbac/employees/{id}/role", authMw(http.HandlerFunc(h.RemoveEmployeeRole)))
+}
+
+func (h *Handler) roleScope(r *http.Request) string {
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		return "ops"
+	}
+	return scope
+}
+
+func (h *Handler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.ListInstitutionRoles(w, r)
+		return
+	}
+	h.ListOperationsRoles(w, r)
+}
+
+func (h *Handler) CreateRole(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.CreateInstitutionRole(w, r)
+		return
+	}
+	h.CreateOperationsRole(w, r)
+}
+
+func (h *Handler) GetRole(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.GetInstitutionRole(w, r)
+		return
+	}
+	h.GetOperationsRole(w, r)
+}
+
+func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.UpdateInstitutionRole(w, r)
+		return
+	}
+	h.UpdateOperationsRole(w, r)
+}
+
+func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.DeleteInstitutionRole(w, r)
+		return
+	}
+	h.DeleteOperationsRole(w, r)
+}
+
+func (h *Handler) GetRolePermissionsByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.GetInstitutionRolePermissions(w, r)
+		return
+	}
+	h.GetRolePermissions(w, r)
+}
+
+func (h *Handler) AssignPermissionsToRoleByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.AssignPermissionsToInstitutionRole(w, r)
+		return
+	}
+	h.AssignPermissionsToRole(w, r)
+}
+
+func (h *Handler) RemovePermissionsFromRoleByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.RemovePermissionsFromInstitutionRole(w, r)
+		return
+	}
+	h.RemovePermissionsFromRole(w, r)
+}
+
+func (h *Handler) GetRoleMenusByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		httputil.WriteBadRequest(w, "institution scope menus are not supported")
+		return
+	}
+	h.GetRoleMenus(w, r)
+}
+
+func (h *Handler) AssignMenusToRoleByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		httputil.WriteBadRequest(w, "institution scope menus are not supported")
+		return
+	}
+	h.AssignMenusToRole(w, r)
 }
 
 // isAdmin checks if the current user is an admin
