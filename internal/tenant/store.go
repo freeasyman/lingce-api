@@ -271,6 +271,70 @@ func (s *Store) DeleteTenant(ctx context.Context, id int64) error {
 	return nil
 }
 
+// ListMedicalSpecialties retrieves all medical specialties.
+func (s *Store) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialty, error) {
+	query := `
+		SELECT id, name, code, parent_id, level, sort_order
+		FROM medical_specialties
+		ORDER BY sort_order, id
+	`
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query medical specialties: %w", err)
+	}
+	defer rows.Close()
+
+	specialties := make([]*MedicalSpecialty, 0)
+	for rows.Next() {
+		var ms MedicalSpecialty
+		if err := rows.Scan(&ms.ID, &ms.Name, &ms.Code, &ms.ParentID, &ms.Level, &ms.SortOrder); err != nil {
+			return nil, fmt.Errorf("failed to scan medical specialty: %w", err)
+		}
+		specialties = append(specialties, &ms)
+	}
+	return specialties, nil
+}
+
+func (s *Store) GetInstitutionStatistics(ctx context.Context, tenantID int64) (*InstitutionStatistics, error) {
+	stats := &InstitutionStatistics{TenantID: tenantID}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM employees WHERE tenant_id = $1 AND deleted_at IS NULL`, tenantID).
+		Scan(&stats.TotalEmployees); err != nil {
+		return nil, fmt.Errorf("failed to query employee stats: %w", err)
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM departments WHERE tenant_id = $1 AND deleted_at IS NULL`, tenantID).
+		Scan(&stats.TotalDepartments); err != nil {
+		return nil, fmt.Errorf("failed to query department stats: %w", err)
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM badge_devices WHERE tenant_id = $1 AND deleted_at IS NULL`, tenantID).
+		Scan(&stats.TotalBadgeDevices); err != nil {
+		stats.TotalBadgeDevices = 0
+	}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM medical_recordings WHERE tenant_id = $1 AND deleted_at IS NULL`, tenantID).
+		Scan(&stats.TotalRecordings); err != nil {
+		return nil, fmt.Errorf("failed to query recording stats: %w", err)
+	}
+
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM medical_recordings
+		WHERE tenant_id = $1 AND deleted_at IS NULL
+		  AND created_at >= date_trunc('week', NOW())
+	`, tenantID).Scan(&stats.RecordingsThisWeek); err != nil {
+		return nil, fmt.Errorf("failed to query weekly recording stats: %w", err)
+	}
+
+	return stats, nil
+}
+
 // GetTenantStatistics retrieves tenant statistics
 func (s *Store) GetTenantStatistics(ctx context.Context) (map[string]interface{}, error) {
 	query := `

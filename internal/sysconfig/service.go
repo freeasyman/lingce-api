@@ -5,135 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/freeasyman/lingce-api/internal/tenant"
 )
 
 type Service struct {
-	store       *Store
-	tenantStore *tenant.Store
+	store *Store
 }
 
-func NewService(store *Store, tenantStore *tenant.Store) *Service {
-	return &Service{
-		store:       store,
-		tenantStore: tenantStore,
-	}
-}
-
-// Tenant operations
-
-// ListTenants retrieves a paginated list of tenants
-func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*TenantResponse, int, error) {
-	// Set default pagination
-	if req.Page <= 0 {
-		req.Page = 1
-	}
-	if req.PageSize <= 0 {
-		req.PageSize = 20
-	}
-	if req.PageSize > 100 {
-		req.PageSize = 100
-	}
-
-	// Convert to tenant module request
-	tenantReq := tenant.TenantListRequest{
-		Name:     req.Name,
-		Code:     req.Code,
-		IsActive: req.IsActive,
-		Page:     req.Page,
-		PageSize: req.PageSize,
-	}
-
-	tenants, total, err := s.tenantStore.ListTenants(ctx, tenantReq)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	responses := make([]*TenantResponse, len(tenants))
-	for i, t := range tenants {
-		responses[i] = &TenantResponse{
-			ID:        t.ID,
-			Name:      t.Name,
-			Code:      t.Code,
-			IsActive:  t.IsActive,
-			ValidFrom: t.ValidFrom,
-			ValidTo:   t.ValidTo,
-			CreatedAt: t.CreatedAt,
-			UpdatedAt: t.UpdatedAt,
-		}
-	}
-
-	return responses, total, nil
-}
-
-// GetTenant retrieves a tenant by ID
-func (s *Service) GetTenant(ctx context.Context, id int64) (*TenantResponse, error) {
-	t, err := s.tenantStore.GetTenantByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return &TenantResponse{
-		ID:        t.ID,
-		Name:      t.Name,
-		Code:      t.Code,
-		IsActive:  t.IsActive,
-		ValidFrom: t.ValidFrom,
-		ValidTo:   t.ValidTo,
-		CreatedAt: t.CreatedAt,
-		UpdatedAt: t.UpdatedAt,
-	}, nil
-}
-
-// UpdateTenant updates a tenant
-func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*TenantResponse, error) {
-	// Get old tenant for validity change logging
-	oldTenant, err := s.tenantStore.GetTenantByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert to tenant module request
-	tenantReq := tenant.UpdateTenantRequest{
-		Name:      req.Name,
-		Code:      req.Code,
-		IsActive:  req.IsActive,
-		ValidFrom: req.ValidFrom,
-		ValidTo:   req.ValidTo,
-	}
-
-	t, err := s.tenantStore.UpdateTenant(ctx, id, tenantReq)
-	if err != nil {
-		return nil, err
-	}
-
-	// Log validity change if applicable
-	validityChanged := false
-	if req.ValidFrom != nil && (oldTenant.ValidFrom == nil || !oldTenant.ValidFrom.Equal(*req.ValidFrom)) {
-		validityChanged = true
-	}
-	if req.ValidTo != nil && (oldTenant.ValidTo == nil || !oldTenant.ValidTo.Equal(*req.ValidTo)) {
-		validityChanged = true
-	}
-
-	if validityChanged {
-		if err := s.store.LogValidityChange(ctx, id, oldTenant.ValidFrom, t.ValidFrom, oldTenant.ValidTo, t.ValidTo); err != nil {
-			// Log error but don't fail the update
-			fmt.Printf("failed to log validity change: %v\n", err)
-		}
-	}
-
-	return &TenantResponse{
-		ID:        t.ID,
-		Name:      t.Name,
-		Code:      t.Code,
-		IsActive:  t.IsActive,
-		ValidFrom: t.ValidFrom,
-		ValidTo:   t.ValidTo,
-		CreatedAt: t.CreatedAt,
-		UpdatedAt: t.UpdatedAt,
-	}, nil
+func NewService(store *Store) *Service {
+	return &Service{store: store}
 }
 
 // Subscription Plan operations

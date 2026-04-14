@@ -24,15 +24,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Medical specialties (authenticated users)
 	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
-	mux.Handle("GET /api/v1/organization/profile", authMw(http.HandlerFunc(h.GetOrganizationProfile)))
-	mux.Handle("PUT /api/v1/organization/profile", authMw(http.HandlerFunc(h.UpdateOrganizationProfile)))
 
 	// Employee assistants (authenticated users)
 	mux.Handle("GET /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
 	mux.Handle("PUT /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
-
-	// Institution statistics (admin only)
-	mux.Handle("GET /api/v1/institutions/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
 
 	// Department advanced endpoints
 	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))

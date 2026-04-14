@@ -27,142 +27,19 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/sysconfig/subscription-plans", authMw(http.HandlerFunc(h.CreateSubscriptionPlan)))
 	mux.Handle("PUT /api/v1/sysconfig/subscription-plans/{id}", authMw(http.HandlerFunc(h.UpdateSubscriptionPlan)))
 
-	// Subscription management (admin only)
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/subscription", authMw(http.HandlerFunc(h.GetTenantSubscription)))
-	mux.Handle("POST /api/v1/sysconfig/tenants/{id}/subscription/action", authMw(http.HandlerFunc(h.PerformSubscriptionAction)))
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/subscription/events", authMw(http.HandlerFunc(h.GetSubscriptionEvents)))
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/validity-logs", authMw(http.HandlerFunc(h.GetValidityChangeLogs)))
-
 	// Feature group management (admin only)
 	mux.Handle("GET /api/v1/sysconfig/feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
 	mux.Handle("GET /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.GetFeatureGroup)))
 	mux.Handle("POST /api/v1/sysconfig/feature-groups", authMw(http.HandlerFunc(h.CreateFeatureGroup)))
 	mux.Handle("PUT /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.UpdateFeatureGroup)))
 	mux.Handle("DELETE /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.DeleteFeatureGroup)))
-
-	// Feature control (admin only)
-	mux.Handle("POST /api/v1/sysconfig/tenants/{id}/feature-group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
-	mux.Handle("PUT /api/v1/sysconfig/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.GetFeatureOverrides)))
-	mux.Handle("GET /api/v1/sysconfig/tenants/{id}/effective-features", authMw(http.HandlerFunc(h.GetEffectiveFeaturePolicy)))
 	mux.Handle("GET /api/v1/sysconfig/feature-options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
-
-	// Legacy compatibility routes - TODO: Remove after frontend migration
-	mux.Handle("GET /api/v1/config/tenants", authMw(http.HandlerFunc(h.ListTenants)))
-	mux.Handle("GET /api/v1/config/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
-	mux.Handle("PUT /api/v1/config/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
-	mux.Handle("GET /api/v1/config/subscriptions", authMw(http.HandlerFunc(h.ListTenants)))
-	mux.Handle("GET /api/v1/config/subscription/plans", authMw(http.HandlerFunc(h.ListSubscriptionPlans)))
-	mux.Handle("GET /api/v1/config/tenants/{id}/subscription", authMw(http.HandlerFunc(h.GetTenantSubscription)))
-	mux.Handle("POST /api/v1/config/tenants/{id}/subscription/actions", authMw(http.HandlerFunc(h.PerformSubscriptionAction)))
-	mux.Handle("GET /api/v1/config/tenants/{id}/subscription/logs", authMw(http.HandlerFunc(h.GetSubscriptionEvents)))
-	mux.Handle("GET /api/v1/subscriptions/{id}/logs", authMw(http.HandlerFunc(h.GetSubscriptionEvents)))
-	mux.Handle("GET /api/v1/config/tenants/{id}/validity-logs", authMw(http.HandlerFunc(h.GetValidityChangeLogs)))
-	mux.Handle("GET /api/v1/config/tenant-feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
-	mux.Handle("GET /api/v1/config/feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
-	mux.Handle("POST /api/v1/config/tenant-feature-groups", authMw(http.HandlerFunc(h.CreateFeatureGroup)))
-	mux.Handle("PUT /api/v1/config/tenant-feature-groups/{id}", authMw(http.HandlerFunc(h.UpdateFeatureGroup)))
-	mux.Handle("DELETE /api/v1/config/tenant-feature-groups/{id}", authMw(http.HandlerFunc(h.DeleteFeatureGroup)))
-	mux.Handle("PUT /api/v1/config/tenants/{id}/feature-group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
-	mux.Handle("GET /api/v1/config/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.GetFeatureOverrides)))
-	mux.Handle("PUT /api/v1/config/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
-	mux.Handle("GET /api/v1/config/tenants/{id}/effective-feature-policy", authMw(http.HandlerFunc(h.GetEffectiveFeaturePolicy)))
-	mux.Handle("GET /api/v1/config/tenant-feature-options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
 }
 
 // isAdmin checks if the current user is an admin
 func (h *Handler) isAdmin(r *http.Request) bool {
 	claims := middleware.GetUserClaims(r.Context())
 	return claims != nil && claims.UserType == auth.UserTypeAdmin
-}
-
-// Tenant handlers
-
-// ListTenants handles listing tenants
-func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
-	if !h.isAdmin(r) {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
-	var req TenantListRequest
-	req.Name = r.URL.Query().Get("name")
-	req.Code = r.URL.Query().Get("code")
-
-	if isActiveStr := r.URL.Query().Get("is_active"); isActiveStr != "" {
-		isActive := isActiveStr == "true"
-		req.IsActive = &isActive
-	}
-
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	req.Page = page
-	req.PageSize = pageSize
-
-	tenants, total, err := h.service.ListTenants(r.Context(), req)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-
-	httputil.WritePaginated(w, tenants, int64(total), req.Page, req.PageSize)
-}
-
-// GetTenant handles getting a tenant by ID
-func (h *Handler) GetTenant(w http.ResponseWriter, r *http.Request) {
-	if !h.isAdmin(r) {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid tenant ID")
-		return
-	}
-
-	tenant, err := h.service.GetTenant(r.Context(), id)
-	if err != nil {
-		// Compatibility fallback: when legacy caller uses a stale tenant id,
-		// return the first available tenant instead of hard 404.
-		tenants, _, listErr := h.service.ListTenants(r.Context(), TenantListRequest{Page: 1, PageSize: 1})
-		if listErr != nil || len(tenants) == 0 {
-			httputil.WriteNotFound(w, err.Error())
-			return
-		}
-		httputil.WriteSuccess(w, tenants[0])
-		return
-	}
-
-	httputil.WriteSuccess(w, tenant)
-}
-
-// UpdateTenant handles updating a tenant
-func (h *Handler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
-	if !h.isAdmin(r) {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid tenant ID")
-		return
-	}
-
-	var req UpdateTenantRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-
-	tenant, err := h.service.UpdateTenant(r.Context(), id, req)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-
-	httputil.WriteSuccess(w, tenant)
 }
 
 // Subscription Plan handlers

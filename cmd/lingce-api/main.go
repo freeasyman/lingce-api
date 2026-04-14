@@ -83,9 +83,12 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
-	// Register tenant module (new)
+	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)
-	tenantService := tenant.NewService(tenantStore)
+	sysconfigStore := sysconfig.NewStore(pool)
+	sysconfigService := sysconfig.NewService(sysconfigStore)
+
+	tenantService := tenant.NewService(tenantStore, sysconfigService)
 	tenantHandler := tenant.NewHandler(tenantService)
 	tenantHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -114,8 +117,6 @@ func main() {
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register sysconfig module
-	sysconfigStore := sysconfig.NewStore(pool, tenantStore)
-	sysconfigService := sysconfig.NewService(sysconfigStore, tenantStore)
 	sysconfigHandler := sysconfig.NewHandler(sysconfigService)
 	sysconfigHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 

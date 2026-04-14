@@ -31,21 +31,20 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Tenant subscription actions (admin only)
 	mux.Handle("GET /api/v1/tenants/{id}/subscription", authMw(http.HandlerFunc(h.GetTenantSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/renew", authMw(http.HandlerFunc(h.RenewSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/upgrade", authMw(http.HandlerFunc(h.UpgradeSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/pause", authMw(http.HandlerFunc(h.PauseSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/cancel", authMw(http.HandlerFunc(h.CancelSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/activate", authMw(http.HandlerFunc(h.ActivateSubscription)))
+	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/{action}", authMw(http.HandlerFunc(h.PerformSubscriptionAction)))
 	mux.Handle("GET /api/v1/tenants/{id}/subscription/events", authMw(http.HandlerFunc(h.GetSubscriptionEvents)))
 
 	// Tenant features (admin only)
 	mux.Handle("GET /api/v1/tenants/{id}/features", authMw(http.HandlerFunc(h.GetTenantFeatures)))
-	mux.Handle("PUT /api/v1/tenants/{id}/features/group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
-	mux.Handle("PUT /api/v1/tenants/{id}/features/overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
+	mux.Handle("POST /api/v1/tenants/{id}/feature-group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
+	mux.Handle("GET /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.GetFeatureOverrides)))
+	mux.Handle("PUT /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
 
 	// Tenant profile (tenant-scoped)
 	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
 	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
+	mux.Handle("GET /api/v1/tenants/{id}/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
+	mux.Handle("GET /api/v1/tenants/{id}/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
 
 	// Tenant validity logs (admin only)
 	mux.Handle("GET /api/v1/tenants/{id}/validity-logs", authMw(http.HandlerFunc(h.GetValidityChangeLogs)))
@@ -184,57 +183,251 @@ func (h *Handler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]string{"message": "Tenant deleted successfully"})
 }
 
-// Subscription action handlers - placeholders for now
 func (h *Handler) GetTenantSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	subscription, err := h.service.GetTenantSubscription(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, subscription)
 }
 
-func (h *Handler) RenewSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
-}
-
-func (h *Handler) UpgradeSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
-}
-
-func (h *Handler) PauseSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
-}
-
-func (h *Handler) CancelSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
-}
-
-func (h *Handler) ActivateSubscription(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+func (h *Handler) PerformSubscriptionAction(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	action := r.PathValue("action")
+	if action == "" {
+		httputil.WriteBadRequest(w, "Invalid action")
+		return
+	}
+	var req SubscriptionActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.PerformSubscriptionAction(r.Context(), id, action, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Subscription action performed successfully"})
 }
 
 func (h *Handler) GetSubscriptionEvents(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	events, err := h.service.GetSubscriptionEvents(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, events)
 }
 
-// Feature handlers - placeholders for now
 func (h *Handler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	policy, err := h.service.GetTenantFeatures(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, policy)
 }
 
 func (h *Handler) AssignFeatureGroup(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	var req AssignFeatureGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.AssignFeatureGroup(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Feature group assigned successfully"})
+}
+
+func (h *Handler) GetFeatureOverrides(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	overrides, err := h.service.GetFeatureOverrides(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, overrides)
 }
 
 func (h *Handler) SetFeatureOverrides(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	var req FeatureOverrideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.SetFeatureOverrides(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Feature overrides set successfully"})
 }
 
-// Profile handlers - placeholders for now
 func (h *Handler) GetTenantProfile(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+	profile, err := h.service.GetTenantProfile(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, profile)
 }
 
 func (h *Handler) UpdateTenantProfile(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+	var req UpdateTenantProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	profile, err := h.service.UpdateTenantProfile(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, profile)
+}
+
+func (h *Handler) GetInstitutionStatistics(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+	stats, err := h.service.GetInstitutionStatistics(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, stats)
+}
+
+func (h *Handler) ListMedicalSpecialties(w http.ResponseWriter, r *http.Request) {
+	_, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	specialties, err := h.service.ListMedicalSpecialties(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, specialties)
 }
 
 func (h *Handler) GetValidityChangeLogs(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteInternalError(w, "Not implemented yet")
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	logs, err := h.service.GetValidityChangeLogs(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, logs)
 }

@@ -38,16 +38,16 @@
 
 | 旧 API | 新 API | 方法 | 说明 |
 |--------|--------|------|------|
-| `GET /api/v1/config/tenants/{id}/subscription` | `GET /api/v1/sysconfig/tenants/{id}/subscription` | GET | 获取租户订阅信息 |
-| `POST /api/v1/config/tenants/{id}/subscription/actions` | `POST /api/v1/sysconfig/tenants/{id}/subscription/action` | POST | 执行订阅操作 |
-| `GET /api/v1/config/tenants/{id}/subscription/logs` | `GET /api/v1/sysconfig/tenants/{id}/subscription/events` | GET | 获取订阅事件日志 |
-| `GET /api/v1/subscriptions/{id}/logs` | `GET /api/v1/sysconfig/tenants/{id}/subscription/events` | GET | 获取订阅事件日志（别名） |
+| `GET /api/v1/config/tenants/{id}/subscription` | `GET /api/v1/tenants/{id}/subscription` | GET | 获取租户订阅信息 |
+| `POST /api/v1/config/tenants/{id}/subscription/actions` | `POST /api/v1/tenants/{id}/subscription/actions/{action}` | POST | 执行订阅操作 |
+| `GET /api/v1/config/tenants/{id}/subscription/logs` | `GET /api/v1/tenants/{id}/subscription/events` | GET | 获取订阅事件日志 |
+| `GET /api/v1/subscriptions/{id}/logs` | `GET /api/v1/tenants/{id}/subscription/events` | GET | 获取订阅事件日志（别名） |
 
 ### 4. 租户有效期日志
 
 | 旧 API | 新 API | 方法 | 说明 |
 |--------|--------|------|------|
-| `GET /api/v1/config/tenants/{id}/validity-logs` | `GET /api/v1/sysconfig/tenants/{id}/validity-logs` | GET | 获取有效期变更日志 |
+| `GET /api/v1/config/tenants/{id}/validity-logs` | `GET /api/v1/tenants/{id}/validity-logs` | GET | 获取有效期变更日志 |
 
 ### 5. 功能组管理
 
@@ -63,10 +63,10 @@
 
 | 旧 API | 新 API | 方法 | 说明 |
 |--------|--------|------|------|
-| `PUT /api/v1/config/tenants/{id}/feature-group` | `POST /api/v1/sysconfig/tenants/{id}/feature-group` | POST | 分配功能组 |
-| `GET /api/v1/config/tenants/{id}/feature-overrides` | `GET /api/v1/sysconfig/tenants/{id}/feature-overrides` | GET | 获取功能覆盖 |
-| `PUT /api/v1/config/tenants/{id}/feature-overrides` | `PUT /api/v1/sysconfig/tenants/{id}/feature-overrides` | PUT | 设置功能覆盖 |
-| `GET /api/v1/config/tenants/{id}/effective-feature-policy` | `GET /api/v1/sysconfig/tenants/{id}/effective-features` | GET | 获取有效功能策略 |
+| `PUT /api/v1/config/tenants/{id}/feature-group` | `POST /api/v1/tenants/{id}/feature-group` | POST | 分配功能组 |
+| `GET /api/v1/config/tenants/{id}/feature-overrides` | `GET /api/v1/tenants/{id}/feature-overrides` | GET | 获取功能覆盖 |
+| `PUT /api/v1/config/tenants/{id}/feature-overrides` | `PUT /api/v1/tenants/{id}/feature-overrides` | PUT | 设置功能覆盖 |
+| `GET /api/v1/config/tenants/{id}/effective-feature-policy` | `GET /api/v1/tenants/{id}/features` | GET | 获取有效功能策略 |
 
 ### 7. 功能选项
 
@@ -111,17 +111,17 @@ const response = await fetch('/api/v1/tenants?page=1&page_size=100');
 /api/v1/config/subscription/plans → /api/v1/sysconfig/subscription-plans
 
 # 租户订阅
-/api/v1/config/tenants/{id}/subscription → /api/v1/sysconfig/tenants/{id}/subscription
-/api/v1/subscriptions/{id}/logs → /api/v1/sysconfig/tenants/{id}/subscription/events
+/api/v1/config/tenants/{id}/subscription → /api/v1/tenants/{id}/subscription
+/api/v1/subscriptions/{id}/logs → /api/v1/tenants/{id}/subscription/events
 
 # 功能组
 /api/v1/config/tenant-feature-groups → /api/v1/sysconfig/feature-groups
 /api/v1/config/feature-groups → /api/v1/sysconfig/feature-groups
 
 # 功能控制
-/api/v1/config/tenants/{id}/feature-group → /api/v1/sysconfig/tenants/{id}/feature-group
-/api/v1/config/tenants/{id}/feature-overrides → /api/v1/sysconfig/tenants/{id}/feature-overrides
-/api/v1/config/tenants/{id}/effective-feature-policy → /api/v1/sysconfig/tenants/{id}/effective-features
+/api/v1/config/tenants/{id}/feature-group → /api/v1/tenants/{id}/feature-group
+/api/v1/config/tenants/{id}/feature-overrides → /api/v1/tenants/{id}/feature-overrides
+/api/v1/config/tenants/{id}/effective-feature-policy → /api/v1/tenants/{id}/features
 /api/v1/config/tenant-feature-options → /api/v1/sysconfig/feature-options
 ```
 
@@ -134,10 +134,10 @@ const response = await fetch('/api/v1/tenants?page=1&page_size=100');
 POST /api/v1/config/tenants/{id}/subscription/actions
 
 // 新代码
-POST /api/v1/sysconfig/tenants/{id}/subscription/action
+POST /api/v1/tenants/{id}/subscription/actions/{action}
 ```
 
-注意：`actions` 变成了 `action`（单数）
+注意：`action` 从 body 字段改为 path 参数。
 
 #### 2.2 功能组分配方法变化
 
@@ -146,7 +146,7 @@ POST /api/v1/sysconfig/tenants/{id}/subscription/action
 PUT /api/v1/config/tenants/{id}/feature-group
 
 // 新代码
-POST /api/v1/sysconfig/tenants/{id}/feature-group
+POST /api/v1/tenants/{id}/feature-group
 ```
 
 注意：HTTP 方法从 `PUT` 变成了 `POST`

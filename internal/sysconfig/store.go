@@ -8,21 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freeasyman/lingce-api/internal/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store struct {
-	pool        *pgxpool.Pool
-	tenantStore *tenant.Store
+	pool *pgxpool.Pool
 }
 
-func NewStore(pool *pgxpool.Pool, tenantStore *tenant.Store) *Store {
-	return &Store{
-		pool:        pool,
-		tenantStore: tenantStore,
-	}
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
 }
 
 // Subscription Plan operations
