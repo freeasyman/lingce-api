@@ -23,66 +23,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	h.registerV2Routes(mux, jwtSecret)
-
-	// Device lifecycle management endpoints
-	mux.Handle("POST /api/v1/badge-control/acceptance/import", authMw(http.HandlerFunc(h.AcceptanceImport)))
-	mux.Handle("POST /api/v1/badge-control/assign/tenant", authMw(http.HandlerFunc(h.AssignToTenant)))
-	mux.Handle("POST /api/v1/badge-control/assign/employee", authMw(http.HandlerFunc(h.AssignToEmployee)))
-	mux.Handle("POST /api/v1/badge-control/reclaim/employee", authMw(http.HandlerFunc(h.ReclaimFromEmployee)))
-	mux.Handle("POST /api/v1/badge-control/reclaim/tenant", authMw(http.HandlerFunc(h.ReclaimFromTenant)))
-	mux.Handle("POST /api/v1/badge-control/tickets/submit", authMw(http.HandlerFunc(h.SubmitTicket)))
-	mux.Handle("GET /api/v1/badge-control/tickets/my", authMw(http.HandlerFunc(h.GetMyTickets)))
-	mux.Handle("GET /api/v1/badge-control/tickets", authMw(http.HandlerFunc(h.ListTickets)))
-	mux.Handle("POST /api/v1/badge-control/tickets/{ticket_id}/review", authMw(http.HandlerFunc(h.ReviewTicket)))
-	mux.Handle("POST /api/v1/badge-control/tickets/{ticket_id}/execute", authMw(http.HandlerFunc(h.ExecuteTicket)))
-	mux.Handle("GET /api/v1/badge-control/devices", authMw(http.HandlerFunc(h.ListDevices)))
-	mux.Handle("GET /api/v1/badge-control/devices/{device_id}/lifecycle", authMw(http.HandlerFunc(h.GetDeviceLifecycle)))
-	mux.Handle("GET /api/v1/badge-control/manufacturers", authMw(http.HandlerFunc(h.ListManufacturers)))
-	mux.Handle("PUT /api/v1/badge-control/manufacturers/{manufacturer_code}/config", authMw(http.HandlerFunc(h.UpdateManufacturerConfig)))
-	mux.Handle("GET /api/v1/badge-control/dashboard/summary", authMw(http.HandlerFunc(h.GetDashboardSummary)))
-
-	// Device Inspection endpoints
-	mux.Handle("POST /api/v1/badge-control/acceptance/validate", authMw(http.HandlerFunc(h.ValidateAcceptance)))
-	mux.Handle("POST /api/v1/badge-control/acceptance/vendor-check", authMw(http.HandlerFunc(h.VendorCheck)))
-	mux.Handle("POST /api/v1/badge-control/inspection/device/{device_id}", authMw(http.HandlerFunc(h.InspectDevice)))
-	mux.Handle("POST /api/v1/badge-control/inspection/batch", authMw(http.HandlerFunc(h.BatchInspect)))
-	mux.Handle("GET /api/v1/badge-control/inspection/devices", authMw(http.HandlerFunc(h.ListInspectionDevices)))
-	mux.Handle("GET /api/v1/badge-control/inspection/device/{device_id}/live-status", authMw(http.HandlerFunc(h.GetDeviceLiveStatus)))
-	mux.Handle("POST /api/v1/badge-control/inspection/device/{device_id}/recording-test", authMw(http.HandlerFunc(h.TestDeviceRecording)))
-	mux.Handle("POST /api/v1/badge-control/tickets/submit-by-device", authMw(http.HandlerFunc(h.SubmitTicketByDevice)))
-
-	// Vendor Pool Sync endpoints
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-devices", authMw(http.HandlerFunc(h.SyncVendorDevices)))
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-and-diff", authMw(http.HandlerFunc(h.SyncAndDiff)))
-	mux.Handle("GET /api/v1/badge-control/vendor-pool/diff", authMw(http.HandlerFunc(h.GetVendorPoolDiff)))
-	mux.Handle("GET /api/v1/badge-control/vendor-pool/sync-batches", authMw(http.HandlerFunc(h.ListSyncBatches)))
-	mux.Handle("GET /api/v1/badge-control/vendor-pool/sync-batches/{id}/items", authMw(http.HandlerFunc(h.GetSyncBatchItems)))
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/sync-batches/{id}/rollback-drafts", authMw(http.HandlerFunc(h.RollbackDrafts)))
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/create-acceptance-drafts", authMw(http.HandlerFunc(h.CreateAcceptanceDrafts)))
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/mark-pending-assignment", authMw(http.HandlerFunc(h.MarkPendingAssignment)))
-	mux.Handle("POST /api/v1/badge-control/vendor-pool/actions/create-exception-tickets", authMw(http.HandlerFunc(h.CreateExceptionTickets)))
-	mux.Handle("GET /api/v1/badge-control/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
-	mux.Handle("GET /api/v1/badge-control/tenant-employees/", authMw(http.HandlerFunc(h.ListTenantEmployees)))
-
-	// Smart badge endpoints
-	mux.Handle("GET /api/v1/smart-badge/tenant/devices", authMw(http.HandlerFunc(h.GetTenantDevices)))
-	mux.Handle("GET /api/v1/smart-badge/tenant/devices/overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
-	mux.Handle("GET /api/v1/smart-badge/tenant/recording-control/devices", authMw(http.HandlerFunc(h.GetRecordingControlDevices)))
-	mux.Handle("POST /api/v1/smart-badge/tenant/devices/{device_no}/recording/start", authMw(http.HandlerFunc(h.StartRecording)))
-	mux.Handle("POST /api/v1/smart-badge/tenant/devices/{device_no}/recording/stop", authMw(http.HandlerFunc(h.StopRecording)))
-	mux.Handle("GET /api/v1/smart-badge/tenant/recording-control/logs", authMw(http.HandlerFunc(h.GetRecordingControlLogs)))
-	mux.Handle("GET /api/v1/smart-badge/me", authMw(http.HandlerFunc(h.GetMyBadgeStatus)))
-	mux.Handle("POST /api/v1/smart-badge/me/recording/start", authMw(http.HandlerFunc(h.StartMyRecording)))
-	mux.Handle("POST /api/v1/smart-badge/me/recording/stop", authMw(http.HandlerFunc(h.StopMyRecording)))
-
-	// Smart Badge Advanced endpoints
-	mux.Handle("GET /api/v1/smart-badge/tenant/devices/{device_no}/history", authMw(http.HandlerFunc(h.GetDeviceHistory)))
-	mux.Handle("POST /api/v1/smart-badge/callback/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
-	mux.Handle("POST /api/v1/smart-badge/callback/audio", authMw(http.HandlerFunc(h.AudioCallback)))
-	mux.Handle("POST /api/v1/smart-badge/process/pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
-
-	// Resource-oriented badge-device endpoints (phase 2 alias layer)
+	// Resource-oriented badge-device endpoints
 	mux.Handle("GET /api/v1/badge-devices", authMw(http.HandlerFunc(h.V2ListDevices)))
 	mux.Handle("GET /api/v1/badge-devices/{id}", authMw(http.HandlerFunc(h.V2GetDevice)))
 	mux.Handle("PATCH /api/v1/badge-devices/{id}", authMw(http.HandlerFunc(h.V2UpdateDevice)))
@@ -91,6 +32,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/badge-devices/actions/batch-accept", authMw(http.HandlerFunc(h.V2BatchAccept)))
 	mux.Handle("POST /api/v1/badge-devices/actions/batch-assign", authMw(http.HandlerFunc(h.V2BatchAssign)))
 	mux.Handle("POST /api/v1/badge-devices/actions/batch-reclaim", authMw(http.HandlerFunc(h.V2BatchReclaim)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/assign-tenant", authMw(http.HandlerFunc(h.AssignDeviceToTenantAction)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/assign-employee", authMw(http.HandlerFunc(h.AssignDeviceToEmployeeAction)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/reclaim-employee", authMw(http.HandlerFunc(h.ReclaimDeviceFromEmployeeAction)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/reclaim-tenant", authMw(http.HandlerFunc(h.ReclaimDeviceFromTenantAction)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/transfer", authMw(http.HandlerFunc(h.V2TransferDevice)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/health-check", authMw(http.HandlerFunc(h.V2HealthCheck)))
 	mux.Handle("POST /api/v1/badge-devices/actions/batch-health-check", authMw(http.HandlerFunc(h.V2BatchHealthCheck)))
@@ -138,6 +83,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/badge-devices/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
+
+	// Resource-oriented badge-ticket endpoints
+	mux.Handle("POST /api/v1/badge-tickets", authMw(http.HandlerFunc(h.SubmitTicket)))
+	mux.Handle("POST /api/v1/badge-tickets/by-device", authMw(http.HandlerFunc(h.SubmitTicketByDevice)))
+	mux.Handle("GET /api/v1/badge-tickets/my", authMw(http.HandlerFunc(h.GetMyTickets)))
+	mux.Handle("GET /api/v1/badge-tickets", authMw(http.HandlerFunc(h.ListTickets)))
+	mux.Handle("POST /api/v1/badge-tickets/{ticket_id}/actions/review", authMw(http.HandlerFunc(h.ReviewTicket)))
+	mux.Handle("POST /api/v1/badge-tickets/{ticket_id}/actions/execute", authMw(http.HandlerFunc(h.ExecuteTicket)))
 }
 
 // Device Lifecycle Handlers
@@ -268,6 +221,148 @@ func (h *Handler) ReclaimFromTenant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Devices reclaimed from tenant successfully"})
+}
+
+// AssignDeviceToTenantAction handles assigning one device to tenant via resource action route.
+func (h *Handler) AssignDeviceToTenantAction(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can assign devices to tenant")
+		return
+	}
+
+	deviceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid device ID")
+		return
+	}
+
+	var req struct {
+		TenantID int64 `json:"tenant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+
+	if err := h.service.AssignToTenant(r.Context(), []int64{deviceID}, req.TenantID, claims.UserID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Device assigned to tenant successfully"})
+}
+
+// AssignDeviceToEmployeeAction handles assigning one device to employee via resource action route.
+func (h *Handler) AssignDeviceToEmployeeAction(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	deviceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid device ID")
+		return
+	}
+
+	var req struct {
+		EmployeeID int64 `json:"employee_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.EmployeeID <= 0 {
+		httputil.WriteBadRequest(w, "employee_id is required")
+		return
+	}
+
+	if err := h.service.AssignToEmployee(r.Context(), []int64{deviceID}, req.EmployeeID, claims.UserID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Device assigned to employee successfully"})
+}
+
+// ReclaimDeviceFromEmployeeAction handles reclaiming one device from employee via resource action route.
+func (h *Handler) ReclaimDeviceFromEmployeeAction(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	deviceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid device ID")
+		return
+	}
+
+	var req struct {
+		Notes  *string `json:"notes,omitempty"`
+		Remark *string `json:"remark,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.Remark
+	}
+
+	if err := h.service.ReclaimFromEmployee(r.Context(), []int64{deviceID}, claims.UserID, notes); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Device reclaimed from employee successfully"})
+}
+
+// ReclaimDeviceFromTenantAction handles reclaiming one device from tenant via resource action route.
+func (h *Handler) ReclaimDeviceFromTenantAction(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can reclaim devices from tenant")
+		return
+	}
+
+	deviceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid device ID")
+		return
+	}
+
+	var req struct {
+		Notes  *string `json:"notes,omitempty"`
+		Remark *string `json:"remark,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.Remark
+	}
+
+	if err := h.service.ReclaimFromTenant(r.Context(), []int64{deviceID}, claims.UserID, notes); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Device reclaimed from tenant successfully"})
 }
 
 // Ticket Handlers
