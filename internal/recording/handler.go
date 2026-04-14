@@ -40,6 +40,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Recording Task endpoints
 	mux.Handle("GET /api/v1/recording-tasks", authMw(http.HandlerFunc(h.ListRecordingTasks)))
 	mux.Handle("GET /api/v1/recording-tasks/{id}", authMw(http.HandlerFunc(h.GetTask)))
+	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/complete", authMw(http.HandlerFunc(h.CompleteTask)))
+	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/cancel", authMw(http.HandlerFunc(h.CancelTask)))
 	mux.Handle("POST /api/v1/recording-tasks/{id}/complete", authMw(http.HandlerFunc(h.CompleteTask)))
 	mux.Handle("POST /api/v1/recording-tasks/{id}/cancel", authMw(http.HandlerFunc(h.CancelTask)))
 
