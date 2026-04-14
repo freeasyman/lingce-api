@@ -3,6 +3,7 @@ package content
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -79,7 +80,7 @@ func (h *Handler) AnalyzeGEOByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentID, err := parseContentID(r)
+	contentID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
