@@ -10,24 +10,7 @@ import (
 )
 
 func (h *Handler) registerV2Routes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v2/badges/devices", authMw(http.HandlerFunc(h.V2ListDevices)))
-	mux.Handle("GET /api/v2/badges/devices/{id}", authMw(http.HandlerFunc(h.V2GetDevice)))
-	mux.Handle("POST /api/v2/badges/devices/import", authMw(http.HandlerFunc(h.V2ImportDevices)))
-	mux.Handle("POST /api/v2/badges/devices/batch-accept", authMw(http.HandlerFunc(h.V2BatchAccept)))
-	mux.Handle("POST /api/v2/badges/devices/batch-assign", authMw(http.HandlerFunc(h.V2BatchAssign)))
-	mux.Handle("POST /api/v2/badges/devices/batch-reclaim", authMw(http.HandlerFunc(h.V2BatchReclaim)))
-	mux.Handle("POST /api/v2/badges/devices/{id}/transfer", authMw(http.HandlerFunc(h.V2TransferDevice)))
-	mux.Handle("POST /api/v2/badges/devices/{id}/health-check", authMw(http.HandlerFunc(h.V2HealthCheck)))
-	mux.Handle("POST /api/v2/badges/devices/batch-health-check", authMw(http.HandlerFunc(h.V2BatchHealthCheck)))
-	mux.Handle("PATCH /api/v2/badges/devices/{id}", authMw(http.HandlerFunc(h.V2UpdateDevice)))
-
-	mux.Handle("GET /api/v2/badges/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))
-	mux.Handle("GET /api/v2/badges/devices/{id}/logs", authMw(http.HandlerFunc(h.V2DeviceLogs)))
-	mux.Handle("GET /api/v2/badges/devices/export", authMw(http.HandlerFunc(h.V2ExportDevices)))
-
-	mux.Handle("GET /api/v2/badges/manufacturers", authMw(http.HandlerFunc(h.V2Manufacturers)))
-	mux.Handle("POST /api/v2/badges/sync/manufacturer/{code}", authMw(http.HandlerFunc(h.V2SyncManufacturer)))
+	// Legacy /api/v2/badges routes were removed after badge-device unification.
 }
 
 func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
