@@ -74,7 +74,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/customers/groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
 
 	// Legacy aliases
-	mux.Handle("PUT /api/v1/customers/{id}/converted", withCustomerDeprecation(authMw(http.HandlerFunc(h.MarkCustomerConverted))))
 	mux.Handle("POST /api/v1/customers/merge", withCustomerDeprecation(authMw(http.HandlerFunc(h.MergeCustomers))))
 	mux.Handle("GET /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.ListCustomerTags))))
 	mux.Handle("POST /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.CreateCustomerTag))))
