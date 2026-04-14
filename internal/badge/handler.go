@@ -81,6 +81,62 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/smart-badge/callback/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
 	mux.Handle("POST /api/v1/smart-badge/callback/audio", authMw(http.HandlerFunc(h.AudioCallback)))
 	mux.Handle("POST /api/v1/smart-badge/process/pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
+
+	// Resource-oriented badge-device endpoints (phase 2 alias layer)
+	mux.Handle("GET /api/v1/badge-devices", authMw(http.HandlerFunc(h.V2ListDevices)))
+	mux.Handle("GET /api/v1/badge-devices/{id}", authMw(http.HandlerFunc(h.V2GetDevice)))
+	mux.Handle("PATCH /api/v1/badge-devices/{id}", authMw(http.HandlerFunc(h.V2UpdateDevice)))
+
+	mux.Handle("POST /api/v1/badge-devices/actions/import", authMw(http.HandlerFunc(h.V2ImportDevices)))
+	mux.Handle("POST /api/v1/badge-devices/actions/batch-accept", authMw(http.HandlerFunc(h.V2BatchAccept)))
+	mux.Handle("POST /api/v1/badge-devices/actions/batch-assign", authMw(http.HandlerFunc(h.V2BatchAssign)))
+	mux.Handle("POST /api/v1/badge-devices/actions/batch-reclaim", authMw(http.HandlerFunc(h.V2BatchReclaim)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/transfer", authMw(http.HandlerFunc(h.V2TransferDevice)))
+	mux.Handle("POST /api/v1/badge-devices/{id}/actions/health-check", authMw(http.HandlerFunc(h.V2HealthCheck)))
+	mux.Handle("POST /api/v1/badge-devices/actions/batch-health-check", authMw(http.HandlerFunc(h.V2BatchHealthCheck)))
+	mux.Handle("POST /api/v1/badge-devices/actions/validate-acceptance", authMw(http.HandlerFunc(h.ValidateAcceptance)))
+	mux.Handle("POST /api/v1/badge-devices/actions/vendor-check", authMw(http.HandlerFunc(h.VendorCheck)))
+
+	mux.Handle("POST /api/v1/badge-devices/{device_id}/actions/inspect", authMw(http.HandlerFunc(h.InspectDevice)))
+	mux.Handle("POST /api/v1/badge-devices/actions/batch-inspect", authMw(http.HandlerFunc(h.BatchInspect)))
+	mux.Handle("GET /api/v1/badge-devices/inspection", authMw(http.HandlerFunc(h.ListInspectionDevices)))
+	mux.Handle("GET /api/v1/badge-devices/{device_id}/live-status", authMw(http.HandlerFunc(h.GetDeviceLiveStatus)))
+	mux.Handle("POST /api/v1/badge-devices/{device_id}/actions/recording-test", authMw(http.HandlerFunc(h.TestDeviceRecording)))
+
+	mux.Handle("GET /api/v1/badge-devices/recording-control", authMw(http.HandlerFunc(h.GetRecordingControlDevices)))
+	mux.Handle("POST /api/v1/badge-devices/{device_no}/actions/start-recording", authMw(http.HandlerFunc(h.StartRecording)))
+	mux.Handle("POST /api/v1/badge-devices/{device_no}/actions/stop-recording", authMw(http.HandlerFunc(h.StopRecording)))
+	mux.Handle("GET /api/v1/badge-devices/recording-control/logs", authMw(http.HandlerFunc(h.GetRecordingControlLogs)))
+	mux.Handle("GET /api/v1/badge-devices/{device_no}/history", authMw(http.HandlerFunc(h.GetDeviceHistory)))
+
+	mux.Handle("GET /api/v1/badge-devices/me", authMw(http.HandlerFunc(h.GetMyBadgeStatus)))
+	mux.Handle("POST /api/v1/badge-devices/me/actions/start-recording", authMw(http.HandlerFunc(h.StartMyRecording)))
+	mux.Handle("POST /api/v1/badge-devices/me/actions/stop-recording", authMw(http.HandlerFunc(h.StopMyRecording)))
+
+	mux.Handle("GET /api/v1/badge-devices/{id}/logs", authMw(http.HandlerFunc(h.V2DeviceLogs)))
+	mux.Handle("GET /api/v1/badge-devices/{device_id}/lifecycle", authMw(http.HandlerFunc(h.GetDeviceLifecycle)))
+
+	mux.Handle("GET /api/v1/badge-devices/manufacturers", authMw(http.HandlerFunc(h.V2Manufacturers)))
+	mux.Handle("PUT /api/v1/badge-devices/manufacturers/{manufacturer_code}/config", authMw(http.HandlerFunc(h.UpdateManufacturerConfig)))
+	mux.Handle("POST /api/v1/badge-devices/manufacturers/{code}/actions/sync", authMw(http.HandlerFunc(h.V2SyncManufacturer)))
+
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/actions/sync", authMw(http.HandlerFunc(h.SyncVendorDevices)))
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/actions/sync-and-diff", authMw(http.HandlerFunc(h.SyncAndDiff)))
+	mux.Handle("GET /api/v1/badge-devices/vendor-pool/diff", authMw(http.HandlerFunc(h.GetVendorPoolDiff)))
+	mux.Handle("GET /api/v1/badge-devices/vendor-pool/sync-batches", authMw(http.HandlerFunc(h.ListSyncBatches)))
+	mux.Handle("GET /api/v1/badge-devices/vendor-pool/sync-batches/{id}/items", authMw(http.HandlerFunc(h.GetSyncBatchItems)))
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/sync-batches/{id}/actions/rollback", authMw(http.HandlerFunc(h.RollbackDrafts)))
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/actions/create-acceptance-drafts", authMw(http.HandlerFunc(h.CreateAcceptanceDrafts)))
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/actions/mark-pending-assignment", authMw(http.HandlerFunc(h.MarkPendingAssignment)))
+	mux.Handle("POST /api/v1/badge-devices/vendor-pool/actions/create-exception-tickets", authMw(http.HandlerFunc(h.CreateExceptionTickets)))
+
+	mux.Handle("POST /api/v1/badge-devices/callbacks/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
+	mux.Handle("POST /api/v1/badge-devices/callbacks/audio", authMw(http.HandlerFunc(h.AudioCallback)))
+	mux.Handle("POST /api/v1/badge-devices/actions/process-pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
+
+	mux.Handle("GET /api/v1/badge-devices/export", authMw(http.HandlerFunc(h.V2ExportDevices)))
+	mux.Handle("GET /api/v1/badge-devices/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))
+	mux.Handle("GET /api/v1/badge-devices/tenant-overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
 }
 
 // Device Lifecycle Handlers
