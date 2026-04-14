@@ -9,10 +9,6 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-func (h *Handler) registerV2Routes(mux *http.ServeMux, jwtSecret string) {
-	// Legacy /api/v2/badges routes were removed after badge-device unification.
-}
-
 func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
 	req := V2DeviceListRequest{}
 	if v := r.URL.Query().Get("status"); v != "" {
