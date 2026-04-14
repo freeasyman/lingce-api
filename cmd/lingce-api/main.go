@@ -112,7 +112,7 @@ func main() {
 
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
-	recService := recording.NewService(recStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken)
+	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken)
 	recHandler := recording.NewHandler(recService)
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 

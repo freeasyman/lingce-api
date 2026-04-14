@@ -11,13 +11,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/freeasyman/lingce-api/internal/employee"
 )
 
 type Service struct {
-	store       *Store
-	workerURL   string
-	workerToken string
-	httpClient  *http.Client
+	store         *Store
+	employeeStore *employee.Store
+	workerURL     string
+	workerToken   string
+	httpClient    *http.Client
 }
 
 type workerUnavailableError struct {
@@ -44,11 +47,12 @@ func IsWorkerUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
-func NewService(store *Store, workerURL, workerToken string) *Service {
+func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken string) *Service {
 	return &Service{
-		store:       store,
-		workerURL:   strings.TrimRight(workerURL, "/"),
-		workerToken: workerToken,
+		store:         store,
+		employeeStore: employeeStore,
+		workerURL:     strings.TrimRight(workerURL, "/"),
+		workerToken:   workerToken,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -483,55 +487,32 @@ func (s *Service) GetQualityControlDashboard(ctx context.Context, tenantID int64
 
 // GetDoctorAbilityRanking retrieves doctor ability ranking
 func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64) ([]DoctorAbilityRankingResponse, error) {
-	rows, err := s.store.pool.Query(ctx, `
-		SELECT
-			e.id,
-			COALESCE(NULLIF(e.name, ''), '未知员工') AS employee_name,
-			COUNT(mr.id) AS recording_count,
-			COUNT(CASE WHEN mr.analysis_status = 'completed' THEN 1 END) AS completed_count
-		FROM employees e
-		LEFT JOIN recordings mr ON mr.employee_id = e.id AND mr.tenant_id = $1
-		WHERE e.tenant_id = $1
-		GROUP BY e.id, employee_name
-		HAVING COUNT(mr.id) > 0
-		ORDER BY recording_count DESC, completed_count DESC
-		LIMIT 20
-	`, tenantID)
+	rankingItems, err := s.employeeStore.GetAbilityRanking(ctx, tenantID, 20)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query doctor ranking: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
 
-	var ranking []DoctorAbilityRankingResponse
-	for rows.Next() {
-		var (
-			item           DoctorAbilityRankingResponse
-			completedCount int64
-		)
-		if err := rows.Scan(&item.EmployeeID, &item.EmployeeName, &item.RecordingCount, &completedCount); err != nil {
-			return nil, fmt.Errorf("failed to scan doctor ranking: %w", err)
+	ranking := make([]DoctorAbilityRankingResponse, 0, len(rankingItems))
+	for i, item := range rankingItems {
+		resp := DoctorAbilityRankingResponse{
+			Rank:           i + 1,
+			EmployeeID:     item.EmployeeID,
+			EmployeeName:   item.EmployeeName,
+			RecordingCount: item.RecordingCount,
 		}
 		if item.RecordingCount > 0 {
-			item.AvgScore = float64(completedCount) / float64(item.RecordingCount) * 100
+			resp.AvgScore = float64(item.CompletedCount) / float64(item.RecordingCount) * 100
 		}
-		ranking = append(ranking, item)
-	}
-
-	for i := range ranking {
-		ranking[i].Rank = i + 1
+		ranking = append(ranking, resp)
 	}
 	return ranking, nil
 }
 
 // GetDoctorAbilityDetail retrieves detailed doctor ability
 func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employeeID int64) (*DoctorAbilityDetailResponse, error) {
-	var name string
-	if err := s.store.pool.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(name, ''), '未知员工')
-		FROM employees
-		WHERE id = $1 AND tenant_id = $2
-	`, employeeID, tenantID).Scan(&name); err != nil {
-		return nil, fmt.Errorf("employee not found")
+	name, err := s.employeeStore.GetEmployeeNameByID(ctx, employeeID, tenantID)
+	if err != nil {
+		return nil, err
 	}
 
 	var total, completed int64
