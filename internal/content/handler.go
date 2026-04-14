@@ -33,19 +33,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/content/idea-topics/generate", authMw(http.HandlerFunc(h.IdeaGenerateTopics)))
 	mux.Handle("POST /api/v1/content/idea-topics/save-topics", authMw(http.HandlerFunc(h.SaveIdeaTopics)))
 
-	// Content management endpoints
-	mux.Handle("GET /api/v1/content/contents", authMw(http.HandlerFunc(h.ListContents)))
-	mux.Handle("GET /api/v1/content/contents/", authMw(http.HandlerFunc(h.ListContents)))
-	mux.Handle("GET /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.GetContent)))
-	mux.Handle("POST /api/v1/content/contents/generate", authMw(http.HandlerFunc(h.GenerateContent)))
-	mux.Handle("POST /api/v1/content/contents", authMw(http.HandlerFunc(h.CreateContent)))
-	mux.Handle("PUT /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.UpdateContent)))
-	mux.Handle("DELETE /api/v1/content/contents/{content_id}", authMw(http.HandlerFunc(h.DeleteContent)))
-	mux.Handle("POST /api/v1/content/contents/{content_id}/generate-images", authMw(http.HandlerFunc(h.GenerateImages)))
-	mux.Handle("POST /api/v1/content/contents/{content_id}/generate-single-image", authMw(http.HandlerFunc(h.GenerateSingleImage)))
-	mux.Handle("POST /api/v1/content/contents/{content_id}/save-composed-images", authMw(http.HandlerFunc(h.SaveComposedImages)))
-	mux.Handle("POST /api/v1/content/contents/{content_id}/publish", authMw(http.HandlerFunc(h.PublishContent)))
-	mux.Handle("POST /api/v1/content/contents/{content_id}/unpublish", authMw(http.HandlerFunc(h.UnpublishContent)))
+	// Content item management endpoints
+	h.registerContentItemRoutes(mux, authMw)
 
 	// Content seeds endpoints
 	mux.Handle("GET /api/v1/content-seeds", authMw(http.HandlerFunc(h.ListSeeds)))
@@ -101,11 +90,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/content/publish-tasks/{task_id}/retry", authMw(http.HandlerFunc(h.RetryPublishTask)))
 	mux.Handle("DELETE /api/v1/content/publish-tasks/{task_id}", authMw(http.HandlerFunc(h.DeletePublishTask)))
 
-	// GEO optimization endpoints
-	mux.Handle("POST /api/v1/content/geo/analyze", authMw(http.HandlerFunc(h.AnalyzeGEO)))
-	mux.Handle("POST /api/v1/content/geo/analyze-by-id/{content_id}", authMw(http.HandlerFunc(h.AnalyzeGEOByID)))
-	mux.Handle("POST /api/v1/content/geo/optimize", authMw(http.HandlerFunc(h.OptimizeGEO)))
-	mux.Handle("GET /api/v1/content/geo/prompt-injection", authMw(http.HandlerFunc(h.GetGEOPromptInjection)))
 }
 
 // Topic Handlers

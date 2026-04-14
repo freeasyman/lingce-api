@@ -84,7 +84,7 @@ func (h *Handler) GetContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -190,7 +190,7 @@ func (h *Handler) UpdateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -229,7 +229,7 @@ func (h *Handler) DeleteContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -261,7 +261,7 @@ func (h *Handler) GenerateImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -299,7 +299,7 @@ func (h *Handler) GenerateSingleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -337,7 +337,7 @@ func (h *Handler) SaveComposedImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -375,7 +375,7 @@ func (h *Handler) PublishContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -407,7 +407,7 @@ func (h *Handler) UnpublishContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	id, err := parseContentID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid content ID")
 		return
@@ -429,4 +429,12 @@ func (h *Handler) UnpublishContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, content)
+}
+
+func parseContentID(r *http.Request) (int64, error) {
+	idStr := r.PathValue("content_id")
+	if idStr == "" {
+		idStr = r.PathValue("id")
+	}
+	return strconv.ParseInt(idStr, 10, 64)
 }
