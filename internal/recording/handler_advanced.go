@@ -247,9 +247,8 @@ func (h *Handler) TestPlayback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ReanalyzeMedicalRecording provides POST compatibility for legacy
-// /medical-recordings/{id}/reanalyze calls.
-func (h *Handler) ReanalyzeMedicalRecording(w http.ResponseWriter, r *http.Request) {
+// ReanalyzeRecording triggers re-analysis for a recording resource.
+func (h *Handler) ReanalyzeRecording(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")

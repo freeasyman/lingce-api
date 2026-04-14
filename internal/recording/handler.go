@@ -65,7 +65,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings/{id}/actions/generate-opening", authMw(http.HandlerFunc(h.GenerateOpeningScript)))
 	mux.Handle("POST /api/v1/recordings/{id}/actions/generate-ops-plan", authMw(http.HandlerFunc(h.GenerateOperationsPlan)))
 	mux.Handle("POST /api/v1/recordings/{id}/actions/mark-highlight", authMw(http.HandlerFunc(h.MarkHighlight)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/reanalyze", authMw(http.HandlerFunc(h.ReanalyzeMedicalRecording)))
+	mux.Handle("POST /api/v1/recordings/{id}/actions/reanalyze", authMw(http.HandlerFunc(h.ReanalyzeRecording)))
 	mux.Handle("POST /api/v1/recordings/{id}/actions/confirm-follow-ups", authMw(http.HandlerFunc(h.ConfirmFollowUpTasks)))
 	mux.Handle("POST /api/v1/recordings/actions/batch-transcribe", authMw(http.HandlerFunc(h.BatchTranscribe)))
 	mux.Handle("POST /api/v1/recordings/actions/batch-delete", authMw(http.HandlerFunc(h.BatchDelete)))
