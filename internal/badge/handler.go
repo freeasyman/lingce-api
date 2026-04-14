@@ -137,6 +137,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/badge-devices/export", authMw(http.HandlerFunc(h.V2ExportDevices)))
 	mux.Handle("GET /api/v1/badge-devices/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
+	mux.Handle("GET /api/v1/badge-devices/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
 }
 
 // Device Lifecycle Handlers
