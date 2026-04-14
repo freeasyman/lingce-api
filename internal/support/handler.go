@@ -52,10 +52,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/llm/costs/by-tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
 	mux.Handle("GET /api/v1/llm/costs/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
 
-	// Metadata endpoints
-	mux.Handle("GET /api/v1/metadata/fields", authMw(http.HandlerFunc(h.GetMetadataFields)))
-	mux.Handle("POST /api/v1/metadata/validate-template", authMw(http.HandlerFunc(h.ValidateTemplate)))
-
 	// Data browser endpoints
 	mux.Handle("GET /api/v1/operation-logs/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
 	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
