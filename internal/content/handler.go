@@ -53,6 +53,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/prompt-templates/{template_id}/rollback/{version}", authMw(http.HandlerFunc(h.RollbackTemplate)))
 	mux.Handle("POST /api/v1/prompt-templates/{template_id}/test", authMw(http.HandlerFunc(h.TestTemplate)))
 	mux.Handle("GET /api/v1/prompt-templates/{template_id}/stats", authMw(http.HandlerFunc(h.GetTemplateStats)))
+	h.registerLLMPromptRoutes(mux, authMw)
 
 	// Content prompt templates endpoints
 	h.registerContentPromptRoutes(mux, authMw)
