@@ -25,27 +25,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Medical specialties (authenticated users)
 	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
 
-	// Employee assistants (authenticated users)
-	mux.Handle("GET /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
-	mux.Handle("PUT /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
+	// Employee sub-resources (authenticated users)
+	mux.Handle("GET /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
+	mux.Handle("PUT /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
+	mux.Handle("POST /api/v1/employees/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncDoctorsFromVisits)))
+	mux.Handle("GET /api/v1/employees/{id}/performance", authMw(http.HandlerFunc(h.GetDoctorPerformance)))
+	mux.Handle("GET /api/v1/employees/performance/summary", authMw(http.HandlerFunc(h.GetDoctorPerformanceSummary)))
 
 	// Department advanced endpoints
 	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))
 	mux.Handle("POST /api/v1/departments/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
 	mux.Handle("GET /api/v1/departments/{id}/performance", authMw(http.HandlerFunc(h.GetDepartmentPerformance)))
-
-	// Doctor management endpoints
-	mux.Handle("GET /api/v1/doctors/health", authMw(http.HandlerFunc(h.DoctorHealthCheck)))
-	mux.Handle("GET /api/v1/doctors", authMw(http.HandlerFunc(h.ListDoctors)))
-	mux.Handle("GET /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.GetDoctor)))
-	mux.Handle("POST /api/v1/doctors", authMw(http.HandlerFunc(h.CreateDoctor)))
-	mux.Handle("PUT /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.UpdateDoctor)))
-	mux.Handle("DELETE /api/v1/doctors/{id}", authMw(http.HandlerFunc(h.DeleteDoctor)))
-	mux.Handle("POST /api/v1/doctors/sync-from-visits", authMw(http.HandlerFunc(h.SyncDoctorsFromVisits)))
-	mux.Handle("GET /api/v1/doctors/{id}/performance", authMw(http.HandlerFunc(h.GetDoctorPerformance)))
-	mux.Handle("GET /api/v1/doctors/performance/summary", authMw(http.HandlerFunc(h.GetDoctorPerformanceSummary)))
-	mux.Handle("GET /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.GetDoctorEmployees)))
-	mux.Handle("POST /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.UpdateDoctorEmployees)))
 
 }
 
