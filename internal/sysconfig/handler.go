@@ -26,9 +26,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/subscription-plans", authMw(http.HandlerFunc(h.ListSubscriptionPlans)))
 	mux.Handle("POST /api/v1/subscription-plans", authMw(http.HandlerFunc(h.CreateSubscriptionPlan)))
 	mux.Handle("PUT /api/v1/subscription-plans/{id}", authMw(http.HandlerFunc(h.UpdateSubscriptionPlan)))
-	mux.Handle("GET /api/v1/sysconfig/subscription-plans", authMw(http.HandlerFunc(h.ListSubscriptionPlans)))
-	mux.Handle("POST /api/v1/sysconfig/subscription-plans", authMw(http.HandlerFunc(h.CreateSubscriptionPlan)))
-	mux.Handle("PUT /api/v1/sysconfig/subscription-plans/{id}", authMw(http.HandlerFunc(h.UpdateSubscriptionPlan)))
 
 	// Feature group management (admin only)
 	mux.Handle("GET /api/v1/feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
@@ -37,12 +34,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/feature-groups/{id}", authMw(http.HandlerFunc(h.UpdateFeatureGroup)))
 	mux.Handle("DELETE /api/v1/feature-groups/{id}", authMw(http.HandlerFunc(h.DeleteFeatureGroup)))
 	mux.Handle("GET /api/v1/feature-groups/options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
-	mux.Handle("GET /api/v1/sysconfig/feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
-	mux.Handle("GET /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.GetFeatureGroup)))
-	mux.Handle("POST /api/v1/sysconfig/feature-groups", authMw(http.HandlerFunc(h.CreateFeatureGroup)))
-	mux.Handle("PUT /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.UpdateFeatureGroup)))
-	mux.Handle("DELETE /api/v1/sysconfig/feature-groups/{id}", authMw(http.HandlerFunc(h.DeleteFeatureGroup)))
-	mux.Handle("GET /api/v1/sysconfig/feature-options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
 }
 
 // isAdmin checks if the current user is an admin
