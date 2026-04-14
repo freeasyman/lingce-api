@@ -43,6 +43,11 @@ func (s *Service) UnregisterDeviceToken(ctx context.Context, userID int64, req U
 	return s.store.UnregisterDeviceToken(ctx, userID, req.Token)
 }
 
+// DeleteDeviceTokenByID unregisters a device token by record ID.
+func (s *Service) DeleteDeviceTokenByID(ctx context.Context, userID, tokenID int64) error {
+	return s.store.DeleteDeviceTokenByID(ctx, userID, tokenID)
+}
+
 // GetUserDeviceTokens retrieves device tokens for a user
 func (s *Service) GetUserDeviceTokens(ctx context.Context, userID int64, userType string) ([]*DeviceToken, error) {
 	return s.store.GetUserDeviceTokens(ctx, userID, userType)
@@ -114,6 +119,16 @@ func (s *Service) ListNotifications(ctx context.Context, req NotificationListReq
 	}
 
 	return responses, total, nil
+}
+
+// GetNotificationByID retrieves a notification by ID.
+func (s *Service) GetNotificationByID(ctx context.Context, notificationID, userID int64) (*NotificationResponse, error) {
+	notification, err := s.store.GetNotificationByID(ctx, notificationID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return toNotificationResponse(notification), nil
 }
 
 // GetUnreadCount retrieves the count of unread notifications

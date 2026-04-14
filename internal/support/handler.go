@@ -23,12 +23,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
 	// Notification endpoints
+	mux.Handle("POST /api/v1/notifications/device-tokens", authMw(http.HandlerFunc(h.RegisterDeviceToken)))
+	mux.Handle("DELETE /api/v1/notifications/device-tokens/{id}", authMw(http.HandlerFunc(h.DeleteDeviceTokenByID)))
 	mux.Handle("POST /api/v1/notifications/device-tokens/register", authMw(http.HandlerFunc(h.RegisterDeviceToken)))
 	mux.Handle("POST /api/v1/notifications/device-tokens/unregister", authMw(http.HandlerFunc(h.UnregisterDeviceToken)))
 	mux.Handle("GET /api/v1/notifications/device-tokens/me", authMw(http.HandlerFunc(h.GetMyDeviceTokens)))
 	mux.Handle("POST /api/v1/notifications/push-to-app", authMw(http.HandlerFunc(h.PushNotification)))
 	mux.Handle("GET /api/v1/notifications", authMw(http.HandlerFunc(h.ListNotifications)))
+	mux.Handle("GET /api/v1/notifications/{id}", authMw(http.HandlerFunc(h.GetNotificationByID)))
 	mux.Handle("GET /api/v1/notifications/unread-count", authMw(http.HandlerFunc(h.GetUnreadCount)))
+	mux.Handle("POST /api/v1/notifications/{id}/actions/read", authMw(http.HandlerFunc(h.MarkNotificationAsRead)))
+	mux.Handle("POST /api/v1/notifications/actions/read-all", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
 	mux.Handle("PUT /api/v1/notifications/{id}/read", authMw(http.HandlerFunc(h.MarkNotificationAsRead)))
 	mux.Handle("PUT /api/v1/notifications/mark-all-read", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
 
@@ -125,6 +130,28 @@ func (h *Handler) UnregisterDeviceToken(w http.ResponseWriter, r *http.Request) 
 	httputil.WriteSuccess(w, map[string]string{"message": "Device token unregistered successfully"})
 }
 
+// DeleteDeviceTokenByID handles deleting device token by ID.
+func (h *Handler) DeleteDeviceTokenByID(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid device token ID")
+		return
+	}
+
+	if err := h.service.DeleteDeviceTokenByID(r.Context(), claims.UserID, id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Device token unregistered successfully"})
+}
+
 // GetMyDeviceTokens handles getting user's device tokens
 func (h *Handler) GetMyDeviceTokens(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
@@ -203,6 +230,29 @@ func (h *Handler) ListNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WritePaginated(w, notifications, int64(total), req.Page, req.PageSize)
+}
+
+// GetNotificationByID handles getting notification detail.
+func (h *Handler) GetNotificationByID(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid notification ID")
+		return
+	}
+
+	notification, err := h.service.GetNotificationByID(r.Context(), id, claims.UserID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, notification)
 }
 
 // GetUnreadCount handles getting unread notification count

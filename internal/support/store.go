@@ -88,6 +88,26 @@ func (s *Store) UnregisterDeviceToken(ctx context.Context, userID int64, token s
 	return nil
 }
 
+// DeleteDeviceTokenByID unregisters a device token by ID.
+func (s *Store) DeleteDeviceTokenByID(ctx context.Context, userID, tokenID int64) error {
+	query := `
+		UPDATE device_tokens
+		SET is_active = false, updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND is_active = true
+	`
+
+	result, err := s.pool.Exec(ctx, query, tokenID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to unregister device token: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("device token not found")
+	}
+
+	return nil
+}
+
 // GetUserDeviceTokens retrieves device tokens for a user
 func (s *Store) GetUserDeviceTokens(ctx context.Context, userID int64, userType string) ([]*DeviceToken, error) {
 	query := `
@@ -201,6 +221,27 @@ func (s *Store) ListNotifications(ctx context.Context, req NotificationListReque
 	}
 
 	return notifications, total, nil
+}
+
+// GetNotificationByID retrieves a notification by ID.
+func (s *Store) GetNotificationByID(ctx context.Context, notificationID, userID int64) (*Notification, error) {
+	query := `
+		SELECT id, user_id, user_type, title, content, type, is_read, related_id, related_type, extra_data, created_at, updated_at
+		FROM notifications
+		WHERE id = $1 AND user_id = $2
+	`
+
+	var notification Notification
+	err := s.pool.QueryRow(ctx, query, notificationID, userID).Scan(
+		&notification.ID, &notification.UserID, &notification.UserType, &notification.Title, &notification.Content,
+		&notification.Type, &notification.IsRead, &notification.RelatedID, &notification.RelatedType, &notification.ExtraData,
+		&notification.CreatedAt, &notification.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("notification not found")
+	}
+
+	return &notification, nil
 }
 
 // GetUnreadCount retrieves the count of unread notifications
