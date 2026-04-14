@@ -97,6 +97,25 @@ func (s *Store) GetOperationsRoleByID(ctx context.Context, id int64) (*Operation
 	return &r, nil
 }
 
+// GetOperationsRoleByCode retrieves an operations role by code.
+func (s *Store) GetOperationsRoleByCode(ctx context.Context, code string) (*OperationsRole, error) {
+	query := `
+		SELECT id, name, code, description, is_active, created_at, updated_at
+		FROM operations_roles
+		WHERE code = $1 AND deleted_at IS NULL
+	`
+
+	var r OperationsRole
+	err := s.pool.QueryRow(ctx, query, code).Scan(
+		&r.ID, &r.Name, &r.Code, &r.Description, &r.IsActive, &r.CreatedAt, &r.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("role not found: %w", err)
+	}
+
+	return &r, nil
+}
+
 // CreateOperationsRole creates a new operations role
 func (s *Store) CreateOperationsRole(ctx context.Context, req CreateRoleRequest) (*OperationsRole, error) {
 	query := `
@@ -494,7 +513,12 @@ func (s *Store) AssignMenusToRole(ctx context.Context, roleID int64, menuIDs []i
 // ListOperationsAdmins retrieves a paginated list of operations admins
 func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) ([]*AdminResponse, int, error) {
 	query := `
-		SELECT a.id, a.username, a.email, a.is_active, a.created_at, a.updated_at
+		SELECT a.id, COALESCE(a.username, ''), COALESCE(a.email, ''),
+		       CASE
+		           WHEN a.is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       a.created_at, a.updated_at
 		FROM operations_admins a
 		WHERE a.deleted_at IS NULL
 	`
@@ -514,9 +538,11 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	}
 
 	if req.IsActive != nil {
-		query += fmt.Sprintf(" AND a.is_active = $%d", argPos)
-		args = append(args, *req.IsActive)
-		argPos++
+		if *req.IsActive {
+			query += " AND a.is_active::text IN ('1','t','true','TRUE')"
+		} else {
+			query += " AND a.is_active::text NOT IN ('1','t','true','TRUE')"
+		}
 	}
 
 	// Count total
@@ -591,7 +617,12 @@ func (s *Store) GetAdminRoles(ctx context.Context, adminID int64) ([]RoleRespons
 // GetOperationsAdminByID retrieves an operations admin by ID
 func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminResponse, error) {
 	query := `
-		SELECT id, username, email, is_active, created_at, updated_at
+		SELECT id, COALESCE(username, ''), COALESCE(email, ''),
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at
 		FROM operations_admins
 		WHERE id = $1 AND deleted_at IS NULL
 	`

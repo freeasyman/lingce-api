@@ -23,6 +23,8 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
+	h.registerV2Routes(mux, jwtSecret)
+
 	// Device lifecycle management endpoints
 	mux.Handle("POST /api/v1/badge-control/acceptance/import", authMw(http.HandlerFunc(h.AcceptanceImport)))
 	mux.Handle("POST /api/v1/badge-control/assign/tenant", authMw(http.HandlerFunc(h.AssignToTenant)))

@@ -24,6 +24,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Employee endpoints require authentication
 	mux.Handle("GET /api/v1/employees", authMw(http.HandlerFunc(h.ListEmployees)))
+	mux.Handle("GET /api/v1/organization/employees", authMw(http.HandlerFunc(h.ListEmployees)))
+	mux.Handle("GET /api/v1/organization/employees/", authMw(http.HandlerFunc(h.ListEmployees)))
 	mux.Handle("GET /api/v1/employees/{id}", authMw(http.HandlerFunc(h.GetEmployee)))
 	mux.Handle("POST /api/v1/employees", authMw(http.HandlerFunc(h.CreateEmployee)))
 	mux.Handle("PUT /api/v1/employees/{id}", authMw(http.HandlerFunc(h.UpdateEmployee)))
@@ -46,8 +48,12 @@ func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 	if claims.UserType == auth.UserTypeAdmin {
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 		if tenantID == 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required for admin")
-			return
+			// Compatibility fallback: allow legacy requests without tenant_id.
+			if claims.TenantID != nil && *claims.TenantID > 0 {
+				tenantID = *claims.TenantID
+			} else {
+				tenantID = 1
+			}
 		}
 		req.TenantID = tenantID
 	} else {

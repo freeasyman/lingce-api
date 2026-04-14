@@ -24,6 +24,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
+	"github.com/freeasyman/lingce-api/internal/tenant"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/freeasyman/lingce-api/pkg/oss"
@@ -82,9 +83,12 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
+	// Register tenant module (new)
+	tenantStore := tenant.NewStore(pool)
+
 	// Register organization module
-	orgStore := organization.NewStore(pool)
-	orgService := organization.NewService(orgStore)
+	orgStore := organization.NewStore(pool, tenantStore)
+	orgService := organization.NewService(orgStore, tenantStore)
 	orgHandler := organization.NewHandler(orgService)
 	orgHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -107,8 +111,8 @@ func main() {
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register sysconfig module
-	sysconfigStore := sysconfig.NewStore(pool)
-	sysconfigService := sysconfig.NewService(sysconfigStore)
+	sysconfigStore := sysconfig.NewStore(pool, tenantStore)
+	sysconfigService := sysconfig.NewService(sysconfigStore, tenantStore)
 	sysconfigHandler := sysconfig.NewHandler(sysconfigService)
 	sysconfigHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 

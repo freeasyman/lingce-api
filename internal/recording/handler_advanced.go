@@ -247,6 +247,37 @@ func (h *Handler) TestPlayback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ReanalyzeMedicalRecording provides POST compatibility for legacy
+// /medical-recordings/{id}/reanalyze calls.
+func (h *Handler) ReanalyzeMedicalRecording(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	jobID, err := h.service.TriggerAnalyze(r.Context(), id, TriggerAnalyzeRequest{Force: true})
+	if err != nil {
+		if IsWorkerUnavailable(err) {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "WORKER_UNAVAILABLE", "recording worker unavailable, please retry", nil)
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{
+		"message": "Reanalysis triggered",
+		"job_id":  jobID,
+	})
+}
+
 // TriggerTranscribe handles triggering transcription
 func (h *Handler) TriggerTranscribe(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
@@ -333,6 +364,10 @@ func (h *Handler) TriggerClean(w http.ResponseWriter, r *http.Request) {
 
 	jobID, err := h.service.TriggerClean(r.Context(), id, req)
 	if err != nil {
+		if IsWorkerUnavailable(err) {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "WORKER_UNAVAILABLE", "recording worker unavailable, please retry", nil)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

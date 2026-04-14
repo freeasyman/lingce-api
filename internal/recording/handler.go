@@ -31,6 +31,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("POST /api/v1/recordings/", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
+	mux.Handle("PATCH /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
 	mux.Handle("DELETE /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.DeleteRecording)))
 
 	// Recording Statistics endpoints
@@ -84,6 +85,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/medical-recordings/", authMw(http.HandlerFunc(h.ListMedicalRecordings)))
 	mux.Handle("GET /api/v1/medical-recordings/{id}", authMw(http.HandlerFunc(h.GetMedicalRecording)))
 	mux.Handle("GET /api/v1/medical-recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
+	mux.Handle("POST /api/v1/medical-recordings/{id}/reanalyze", authMw(http.HandlerFunc(h.ReanalyzeMedicalRecording)))
 	mux.Handle("GET /api/v1/medical-recordings/{id}/route", authMw(http.HandlerFunc(h.GetMedicalRecordingRoute)))
 	mux.Handle("GET /api/v1/medical-recordings/{id}/segue", authMw(http.HandlerFunc(h.GetMedicalRecordingSegue)))
 	mux.Handle("GET /api/v1/medical-recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))

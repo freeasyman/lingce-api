@@ -68,23 +68,23 @@ type SubscriptionPlanResponse struct {
 
 // Subscription DTOs
 type SubscriptionResponse struct {
-	ID           int64                      `json:"id"`
-	TenantID     int64                      `json:"tenant_id"`
-	Plan         *SubscriptionPlanResponse  `json:"plan,omitempty"`
-	Status       string                     `json:"status"`
-	StartDate    string                     `json:"start_date"`
-	EndDate      string                     `json:"end_date"`
-	GraceEndDate *string                    `json:"grace_end_date,omitempty"`
-	CreatedAt    string                     `json:"created_at"`
-	UpdatedAt    string                     `json:"updated_at"`
+	ID           int64                     `json:"id"`
+	TenantID     int64                     `json:"tenant_id"`
+	Plan         *SubscriptionPlanResponse `json:"plan,omitempty"`
+	Status       string                    `json:"status"`
+	StartDate    string                    `json:"start_date"`
+	EndDate      string                    `json:"end_date"`
+	GraceEndDate *string                   `json:"grace_end_date,omitempty"`
+	CreatedAt    string                    `json:"created_at"`
+	UpdatedAt    string                    `json:"updated_at"`
 }
 
 type SubscriptionActionRequest struct {
-	Action       string     `json:"action"` // renew, upgrade, pause, cancel, activate
-	PlanID       *int64     `json:"plan_id,omitempty"`
-	ExtendDays   *int       `json:"extend_days,omitempty"`
-	NewEndDate   *time.Time `json:"new_end_date,omitempty"`
-	Notes        *string    `json:"notes,omitempty"`
+	Action     string     `json:"action"` // renew, upgrade, pause, cancel, activate
+	PlanID     *int64     `json:"plan_id,omitempty"`
+	ExtendDays *int       `json:"extend_days,omitempty"`
+	NewEndDate *time.Time `json:"new_end_date,omitempty"`
+	Notes      *string    `json:"notes,omitempty"`
 }
 
 type SubscriptionEventResponse struct {
@@ -116,26 +116,31 @@ type ValidityChangeLogResponse struct {
 
 // Feature Group DTOs
 type CreateFeatureGroupRequest struct {
-	Name        string  `json:"name"`
-	Code        string  `json:"code"`
-	Description *string `json:"description,omitempty"`
+	Name        string                     `json:"name"`
+	Code        string                     `json:"code"`
+	Description *string                    `json:"description,omitempty"`
+	Items       []FeaturePolicyItem        `json:"items,omitempty"`
+	Features    []FeatureGroupItemResponse `json:"features,omitempty"` // backward compatibility
 }
 
 type UpdateFeatureGroupRequest struct {
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	IsActive    *bool   `json:"is_active,omitempty"`
+	Name        *string                     `json:"name,omitempty"`
+	Description *string                     `json:"description,omitempty"`
+	IsActive    *bool                       `json:"is_active,omitempty"`
+	Items       *[]FeaturePolicyItem        `json:"items,omitempty"`
+	Features    *[]FeatureGroupItemResponse `json:"features,omitempty"` // backward compatibility
 }
 
 type FeatureGroupResponse struct {
-	ID          int64                       `json:"id"`
-	Name        string                      `json:"name"`
-	Code        string                      `json:"code"`
-	Description *string                     `json:"description,omitempty"`
-	IsActive    bool                        `json:"is_active"`
-	Features    []FeatureGroupItemResponse  `json:"features,omitempty"`
-	CreatedAt   time.Time                   `json:"created_at"`
-	UpdatedAt   time.Time                   `json:"updated_at"`
+	ID          int64                      `json:"id"`
+	Name        string                     `json:"name"`
+	Code        string                     `json:"code"`
+	Description *string                    `json:"description,omitempty"`
+	IsActive    bool                       `json:"is_active"`
+	Items       []FeaturePolicyItem        `json:"items,omitempty"`
+	Features    []FeatureGroupItemResponse `json:"features,omitempty"` // backward compatibility
+	CreatedAt   time.Time                  `json:"created_at"`
+	UpdatedAt   time.Time                  `json:"updated_at"`
 }
 
 type FeatureGroupItemResponse struct {
@@ -145,35 +150,61 @@ type FeatureGroupItemResponse struct {
 }
 
 type AssignFeatureGroupRequest struct {
-	GroupID int64 `json:"group_id"`
+	GroupID *int64 `json:"group_id"`
 }
 
 type FeatureOverrideRequest struct {
-	Overrides []FeatureOverrideItem `json:"overrides"`
+	Items     []FeatureOverrideItem `json:"items,omitempty"`
+	Overrides []FeatureOverrideItem `json:"overrides,omitempty"` // backward compatibility
+}
+
+type FeaturePolicyItem struct {
+	ItemType string `json:"item_type"`
+	ItemCode string `json:"item_code"`
 }
 
 type FeatureOverrideItem struct {
-	FeatureCode string `json:"feature_code"`
-	IsEnabled   bool   `json:"is_enabled"`
+	ItemType     string `json:"item_type,omitempty"`
+	ItemCode     string `json:"item_code,omitempty"`
+	OverrideMode string `json:"override_mode,omitempty"`
+	FeatureCode  string `json:"feature_code,omitempty"` // backward compatibility
+	IsEnabled    bool   `json:"is_enabled,omitempty"`   // backward compatibility
 }
 
 type FeatureOverrideResponse struct {
-	ID          int64  `json:"id"`
-	FeatureCode string `json:"feature_code"`
-	IsEnabled   bool   `json:"is_enabled"`
+	ID           int64  `json:"id"`
+	ItemType     string `json:"item_type"`
+	ItemCode     string `json:"item_code"`
+	OverrideMode string `json:"override_mode"`
+	FeatureCode  string `json:"feature_code,omitempty"` // backward compatibility
+	IsEnabled    *bool  `json:"is_enabled,omitempty"`   // backward compatibility
 }
 
 type EffectiveFeaturePolicyResponse struct {
-	TenantID    int64                   `json:"tenant_id"`
-	GroupID     *int64                  `json:"group_id,omitempty"`
-	GroupName   *string                 `json:"group_name,omitempty"`
-	Features    map[string]bool         `json:"features"`
-	Overrides   []FeatureOverrideResponse `json:"overrides,omitempty"`
+	TenantID        int64    `json:"tenant_id"`
+	FeatureGroupID  *int64   `json:"feature_group_id,omitempty"`
+	Unrestricted    bool     `json:"unrestricted"`
+	AllowedMenus    []string `json:"allowed_menus"`
+	AllowedFeatures []string `json:"allowed_features"`
 }
 
-type FeatureOptionResponse struct {
+type FeatureOptionItemResponse struct {
 	Code        string  `json:"code"`
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
 	Category    *string `json:"category,omitempty"`
+}
+
+type MenuFeatureOptionItemResponse struct {
+	ID         int64   `json:"id"`
+	Code       string  `json:"code"`
+	Name       string  `json:"name"`
+	ParentCode *string `json:"parent_code,omitempty"`
+	ParentName *string `json:"parent_name,omitempty"`
+	Path       *string `json:"path,omitempty"`
+}
+
+type TenantFeatureOptionsResponse struct {
+	MenuItems    []MenuFeatureOptionItemResponse `json:"menu_items"`
+	FeatureItems []FeatureOptionItemResponse     `json:"feature_items"`
 }

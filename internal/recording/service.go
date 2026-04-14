@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +18,30 @@ type Service struct {
 	workerURL   string
 	workerToken string
 	httpClient  *http.Client
+}
+
+type workerUnavailableError struct {
+	cause error
+}
+
+func (e *workerUnavailableError) Error() string {
+	if e == nil || e.cause == nil {
+		return "recording worker unavailable"
+	}
+	return fmt.Sprintf("recording worker unavailable: %v", e.cause)
+}
+
+func (e *workerUnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// IsWorkerUnavailable indicates whether an error is caused by recording-worker unavailability.
+func IsWorkerUnavailable(err error) bool {
+	var unavailable *workerUnavailableError
+	return errors.As(err, &unavailable)
 }
 
 func NewService(store *Store, workerURL, workerToken string) *Service {
@@ -327,11 +353,18 @@ func (s *Service) submitWorkerJob(ctx context.Context, req workerJobRequest) (st
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to call recording worker: %w", err)
+		var netErr net.Error
+		if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+			return "", &workerUnavailableError{cause: err}
+		}
+		return "", &workerUnavailableError{cause: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			return "", &workerUnavailableError{cause: fmt.Errorf("recording worker returned status %d", resp.StatusCode)}
+		}
 		return "", fmt.Errorf("recording worker returned status %d", resp.StatusCode)
 	}
 

@@ -3,14 +3,26 @@ package badge
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type Service struct {
-	store *Store
+	store            *Store
+	middlewareClient *MiddlewareClient
 }
 
 func NewService(store *Store) *Service {
-	return &Service{store: store}
+	return &Service{
+		store:            store,
+		middlewareClient: NewMiddlewareClient("", ""),
+	}
+}
+
+func NewServiceWithMiddleware(store *Store, middlewareURL, middlewareToken string) *Service {
+	return &Service{
+		store:            store,
+		middlewareClient: NewMiddlewareClient(middlewareURL, middlewareToken),
+	}
 }
 
 // Device Services
@@ -194,16 +206,28 @@ func (s *Service) GetDashboardSummary(ctx context.Context) (*DashboardSummaryRes
 
 // StartRecording starts recording
 func (s *Service) StartRecording(ctx context.Context, deviceNo string, operatorID *int64, extraData JSONObject) error {
-	// TODO: Call badge-middleware API to start recording
-	// For now, just log the action
-	return s.store.CreateRecordingControlLog(ctx, deviceNo, "start", "success", operatorID, nil, extraData)
+	return s.controlRecording(ctx, "start", deviceNo, operatorID, extraData)
 }
 
 // StopRecording stops recording
 func (s *Service) StopRecording(ctx context.Context, deviceNo string, operatorID *int64, extraData JSONObject) error {
-	// TODO: Call badge-middleware API to stop recording
-	// For now, just log the action
-	return s.store.CreateRecordingControlLog(ctx, deviceNo, "stop", "success", operatorID, nil, extraData)
+	return s.controlRecording(ctx, "stop", deviceNo, operatorID, extraData)
+}
+
+func (s *Service) controlRecording(ctx context.Context, action, deviceNo string, operatorID *int64, extraData JSONObject) error {
+	if strings.TrimSpace(deviceNo) == "" {
+		return fmt.Errorf("device_no is required")
+	}
+
+	if err := s.middlewareClient.ControlRecording(ctx, action, deviceNo, operatorID, extraData); err != nil {
+		msg := err.Error()
+		if logErr := s.store.CreateRecordingControlLog(ctx, deviceNo, action, "failed", operatorID, &msg, extraData); logErr != nil {
+			return fmt.Errorf("badge-middleware call failed: %v; failed to create recording control log: %w", err, logErr)
+		}
+		return fmt.Errorf("failed to %s recording via badge-middleware: %w", action, err)
+	}
+
+	return s.store.CreateRecordingControlLog(ctx, deviceNo, action, "success", operatorID, nil, extraData)
 }
 
 // ListRecordingControlLogs retrieves a paginated list of recording control logs

@@ -70,7 +70,14 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 	// Query departments
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, name, code, parent_id, is_active,
+		SELECT id, tenant_id, name,
+		       COALESCE(code, '') AS code,
+		       parent_id,
+		       CASE
+		           WHEN is_active IS NULL THEN true
+		           WHEN is_active::text IN ('1', 't', 'true') THEN true
+		           ELSE false
+		       END AS is_active,
 		       created_at, updated_at, deleted_at
 		FROM departments
 		WHERE %s
@@ -111,7 +118,14 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 // GetDepartmentByID retrieves a department by ID
 func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, error) {
 	query := `
-		SELECT id, tenant_id, name, code, parent_id, is_active,
+		SELECT id, tenant_id, name,
+		       COALESCE(code, '') AS code,
+		       parent_id,
+		       CASE
+		           WHEN is_active IS NULL THEN true
+		           WHEN is_active::text IN ('1', 't', 'true') THEN true
+		           ELSE false
+		       END AS is_active,
 		       created_at, updated_at, deleted_at
 		FROM departments
 		WHERE id = $1 AND deleted_at IS NULL

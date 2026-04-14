@@ -2,189 +2,64 @@ package sysconfig
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/tenant"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	tenantStore *tenant.Store
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
-}
-
-// Tenant operations
-
-// ListTenants retrieves a paginated list of tenants
-func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tenant, int, error) {
-	query := `
-		SELECT id, name, code, is_active, valid_from, valid_to, created_at, updated_at
-		FROM tenants
-		WHERE deleted_at IS NULL
-	`
-	args := []interface{}{}
-	argPos := 1
-
-	if req.Name != "" {
-		query += fmt.Sprintf(" AND name ILIKE $%d", argPos)
-		args = append(args, "%"+req.Name+"%")
-		argPos++
+func NewStore(pool *pgxpool.Pool, tenantStore *tenant.Store) *Store {
+	return &Store{
+		pool:        pool,
+		tenantStore: tenantStore,
 	}
-
-	if req.Code != "" {
-		query += fmt.Sprintf(" AND code ILIKE $%d", argPos)
-		args = append(args, "%"+req.Code+"%")
-		argPos++
-	}
-
-	if req.IsActive != nil {
-		query += fmt.Sprintf(" AND is_active = $%d", argPos)
-		args = append(args, *req.IsActive)
-		argPos++
-	}
-
-	// Count total
-	countQuery := "SELECT COUNT(*) FROM (" + query + ") AS count_query"
-	var total int
-	err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to count tenants: %w", err)
-	}
-
-	// Add pagination
-	query += " ORDER BY created_at DESC"
-	offset := (req.Page - 1) * req.PageSize
-	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argPos, argPos+1)
-	args = append(args, req.PageSize, offset)
-
-	rows, err := s.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to query tenants: %w", err)
-	}
-	defer rows.Close()
-
-	var tenants []*Tenant
-	for rows.Next() {
-		var t Tenant
-		err := rows.Scan(&t.ID, &t.Name, &t.Code, &t.IsActive, &t.ValidFrom, &t.ValidTo, &t.CreatedAt, &t.UpdatedAt)
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to scan tenant: %w", err)
-		}
-		tenants = append(tenants, &t)
-	}
-
-	return tenants, total, nil
-}
-
-// GetTenantByID retrieves a tenant by ID
-func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
-	query := `
-		SELECT id, name, code, is_active, valid_from, valid_to, created_at, updated_at
-		FROM tenants
-		WHERE id = $1 AND deleted_at IS NULL
-	`
-
-	var t Tenant
-	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&t.ID, &t.Name, &t.Code, &t.IsActive, &t.ValidFrom, &t.ValidTo, &t.CreatedAt, &t.UpdatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("tenant not found: %w", err)
-	}
-
-	return &t, nil
-}
-
-// UpdateTenant updates a tenant
-func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*Tenant, error) {
-	// Get current tenant for validity change log
-	oldTenant, err := s.GetTenantByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	query := "UPDATE tenants SET updated_at = NOW()"
-	args := []interface{}{}
-	argPos := 1
-
-	if req.Name != nil {
-		query += fmt.Sprintf(", name = $%d", argPos)
-		args = append(args, *req.Name)
-		argPos++
-	}
-
-	if req.Code != nil {
-		query += fmt.Sprintf(", code = $%d", argPos)
-		args = append(args, *req.Code)
-		argPos++
-	}
-
-	if req.IsActive != nil {
-		query += fmt.Sprintf(", is_active = $%d", argPos)
-		args = append(args, *req.IsActive)
-		argPos++
-	}
-
-	validityChanged := false
-	if req.ValidFrom != nil {
-		query += fmt.Sprintf(", valid_from = $%d", argPos)
-		args = append(args, *req.ValidFrom)
-		argPos++
-		validityChanged = true
-	}
-
-	if req.ValidTo != nil {
-		query += fmt.Sprintf(", valid_to = $%d", argPos)
-		args = append(args, *req.ValidTo)
-		argPos++
-		validityChanged = true
-	}
-
-	query += fmt.Sprintf(" WHERE id = $%d AND deleted_at IS NULL", argPos)
-	args = append(args, id)
-	query += " RETURNING id, name, code, is_active, valid_from, valid_to, created_at, updated_at"
-
-	var t Tenant
-	err = s.pool.QueryRow(ctx, query, args...).Scan(
-		&t.ID, &t.Name, &t.Code, &t.IsActive, &t.ValidFrom, &t.ValidTo, &t.CreatedAt, &t.UpdatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update tenant: %w", err)
-	}
-
-	// Log validity change if applicable
-	if validityChanged {
-		logQuery := `
-			INSERT INTO tenant_validity_change_logs
-			(tenant_id, old_valid_from, new_valid_from, old_valid_to, new_valid_to, created_at)
-			VALUES ($1, $2, $3, $4, $5, NOW())
-		`
-		_, err = s.pool.Exec(ctx, logQuery, id, oldTenant.ValidFrom, t.ValidFrom, oldTenant.ValidTo, t.ValidTo)
-		if err != nil {
-			// Log error but don't fail the update
-			fmt.Printf("failed to log validity change: %v\n", err)
-		}
-	}
-
-	return &t, nil
 }
 
 // Subscription Plan operations
 
+// LogValidityChange logs a validity period change for a tenant
+func (s *Store) LogValidityChange(ctx context.Context, tenantID int64, oldValidFrom, newValidFrom, oldValidTo, newValidTo *time.Time) error {
+	query := `
+		INSERT INTO tenant_validity_change_logs
+		(tenant_id, old_valid_from, new_valid_from, old_valid_to, new_valid_to, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+	`
+	_, err := s.pool.Exec(ctx, query, tenantID, oldValidFrom, newValidFrom, oldValidTo, newValidTo)
+	if err != nil {
+		return fmt.Errorf("failed to log validity change: %w", err)
+	}
+	return nil
+}
+
 // ListSubscriptionPlans retrieves all subscription plans
 func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*TenantSubscriptionPlan, error) {
 	query := `
-		SELECT id, name, code, description, duration_days, price, is_active, created_at, updated_at
+		SELECT id, name, code, description, duration_days, COALESCE(price, 0) AS price,
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at
 		FROM tenant_subscription_plans
 	`
 	args := []interface{}{}
 
 	if isActive != nil {
-		query += " WHERE is_active = $1"
-		args = append(args, *isActive)
+		if *isActive {
+			query += " WHERE is_active::text IN ('1','t','true','TRUE')"
+		} else {
+			query += " WHERE is_active::text NOT IN ('1','t','true','TRUE')"
+		}
 	}
 
 	query += " ORDER BY sort_order, created_at DESC"
@@ -412,7 +287,8 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 // GetSubscriptionEvents retrieves subscription events for a tenant
 func (s *Store) GetSubscriptionEvents(ctx context.Context, tenantID int64) ([]*TenantSubscriptionEvent, error) {
 	query := `
-		SELECT id, tenant_id, event_type, old_status, new_status, old_end_date, new_end_date, operator_id, operator_type, notes, created_at
+		SELECT id, tenant_id, event_type, old_status, COALESCE(new_status, '') AS new_status,
+		       old_end_date, new_end_date, operator_id, operator_type, notes, created_at
 		FROM tenant_subscription_events
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -470,14 +346,22 @@ func (s *Store) GetValidityChangeLogs(ctx context.Context, tenantID int64) ([]*T
 // ListFeatureGroups retrieves all feature groups
 func (s *Store) ListFeatureGroups(ctx context.Context, isActive *bool) ([]*TenantFeatureGroup, error) {
 	query := `
-		SELECT id, name, code, description, is_active, created_at, updated_at
+		SELECT id, name, code, description,
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at
 		FROM tenant_feature_groups
 	`
 	args := []interface{}{}
 
 	if isActive != nil {
-		query += " WHERE is_active = $1"
-		args = append(args, *isActive)
+		if *isActive {
+			query += " WHERE is_active::text IN ('1','t','true','TRUE')"
+		} else {
+			query += " WHERE is_active::text NOT IN ('1','t','true','TRUE')"
+		}
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -505,7 +389,12 @@ func (s *Store) ListFeatureGroups(ctx context.Context, isActive *bool) ([]*Tenan
 func (s *Store) GetFeatureGroupByID(ctx context.Context, id int64) (*TenantFeatureGroup, []*TenantFeatureGroupItem, error) {
 	// Get group
 	groupQuery := `
-		SELECT id, name, code, description, is_active, created_at, updated_at
+		SELECT id, name, code, description,
+		       CASE
+		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       created_at, updated_at
 		FROM tenant_feature_groups
 		WHERE id = $1
 	`
@@ -520,10 +409,15 @@ func (s *Store) GetFeatureGroupByID(ctx context.Context, id int64) (*TenantFeatu
 
 	// Get features
 	featuresQuery := `
-		SELECT id, group_id, feature_code, is_enabled
+		SELECT id, group_id,
+		       COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		       COALESCE(feature_code, COALESCE(item_code, '')) AS feature_code,
+		       COALESCE(is_enabled, true) AS is_enabled
 		FROM tenant_feature_group_items
 		WHERE group_id = $1
-		ORDER BY feature_code
+		ORDER BY COALESCE(NULLIF(item_type, ''), 'feature'),
+		         COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, ''))
 	`
 
 	rows, err := s.pool.Query(ctx, featuresQuery, id)
@@ -535,7 +429,7 @@ func (s *Store) GetFeatureGroupByID(ctx context.Context, id int64) (*TenantFeatu
 	var items []*TenantFeatureGroupItem
 	for rows.Next() {
 		var item TenantFeatureGroupItem
-		err := rows.Scan(&item.ID, &item.GroupID, &item.FeatureCode, &item.IsEnabled)
+		err := rows.Scan(&item.ID, &item.GroupID, &item.ItemType, &item.ItemCode, &item.FeatureCode, &item.IsEnabled)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to scan feature group item: %w", err)
 		}
@@ -546,7 +440,13 @@ func (s *Store) GetFeatureGroupByID(ctx context.Context, id int64) (*TenantFeatu
 }
 
 // CreateFeatureGroup creates a new feature group
-func (s *Store) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroupRequest) (*TenantFeatureGroup, error) {
+func (s *Store) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroupRequest, items []FeaturePolicyItem) (*TenantFeatureGroup, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	query := `
 		INSERT INTO tenant_feature_groups (name, code, description, is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, true, NOW(), NOW())
@@ -554,18 +454,30 @@ func (s *Store) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroupRe
 	`
 
 	var g TenantFeatureGroup
-	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description).Scan(
+	err = tx.QueryRow(ctx, query, req.Name, req.Code, req.Description).Scan(
 		&g.ID, &g.Name, &g.Code, &g.Description, &g.IsActive, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create feature group: %w", err)
 	}
 
+	if err := s.replaceFeatureGroupItems(ctx, tx, g.ID, items); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit feature group create: %w", err)
+	}
 	return &g, nil
 }
 
 // UpdateFeatureGroup updates a feature group
-func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeatureGroupRequest) (*TenantFeatureGroup, error) {
+func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeatureGroupRequest, items []FeaturePolicyItem, replaceItems bool) (*TenantFeatureGroup, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	query := "UPDATE tenant_feature_groups SET updated_at = NOW()"
 	args := []interface{}{}
 	argPos := 1
@@ -593,27 +505,67 @@ func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeat
 	query += " RETURNING id, name, code, description, is_active, created_at, updated_at"
 
 	var g TenantFeatureGroup
-	err := s.pool.QueryRow(ctx, query, args...).Scan(
+	err = tx.QueryRow(ctx, query, args...).Scan(
 		&g.ID, &g.Name, &g.Code, &g.Description, &g.IsActive, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update feature group: %w", err)
 	}
 
+	if replaceItems {
+		if err := s.replaceFeatureGroupItems(ctx, tx, id, items); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit feature group update: %w", err)
+	}
 	return &g, nil
 }
 
 // Feature Control operations
 
-// AssignFeatureGroupToTenant assigns a feature group to a tenant
-func (s *Store) AssignFeatureGroupToTenant(ctx context.Context, tenantID int64, groupID int64) error {
+// DeleteFeatureGroup deletes a feature group when it is not assigned.
+func (s *Store) DeleteFeatureGroup(ctx context.Context, id int64) error {
+	var cnt int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM tenant_feature_assignments WHERE group_id = $1", id).Scan(&cnt); err != nil {
+		return fmt.Errorf("failed to check feature group assignments: %w", err)
+	}
+	if cnt > 0 {
+		return fmt.Errorf("feature group is assigned to tenants")
+	}
+
+	if _, err := s.pool.Exec(ctx, "DELETE FROM tenant_feature_group_items WHERE group_id = $1", id); err != nil {
+		return fmt.Errorf("failed to delete feature group items: %w", err)
+	}
+	result, err := s.pool.Exec(ctx, "DELETE FROM tenant_feature_groups WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete feature group: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("feature group not found")
+	}
+	return nil
+}
+
+// AssignFeatureGroupToTenant assigns or unbinds a feature group to a tenant.
+func (s *Store) AssignFeatureGroupToTenant(ctx context.Context, tenantID int64, groupID *int64) error {
+	if groupID == nil {
+		_, err := s.pool.Exec(ctx, "DELETE FROM tenant_feature_assignments WHERE tenant_id = $1", tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to unassign feature group: %w", err)
+		}
+		return nil
+	}
+
 	query := `
 		INSERT INTO tenant_feature_assignments (tenant_id, group_id, created_at, updated_at)
 		VALUES ($1, $2, NOW(), NOW())
 		ON CONFLICT (tenant_id) DO UPDATE SET group_id = $2, updated_at = NOW()
 	`
 
-	_, err := s.pool.Exec(ctx, query, tenantID, groupID)
+	_, err := s.pool.Exec(ctx, query, tenantID, *groupID)
 	if err != nil {
 		return fmt.Errorf("failed to assign feature group: %w", err)
 	}
@@ -638,10 +590,12 @@ func (s *Store) SetFeatureOverrides(ctx context.Context, tenantID int64, overrid
 	// Insert new overrides
 	for _, override := range overrides {
 		query := `
-			INSERT INTO tenant_feature_overrides (tenant_id, feature_code, is_enabled, created_at, updated_at)
-			VALUES ($1, $2, $3, NOW(), NOW())
+			INSERT INTO tenant_feature_overrides (
+				tenant_id, item_type, item_code, override_mode, feature_code, is_enabled, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
 		`
-		_, err = tx.Exec(ctx, query, tenantID, override.FeatureCode, override.IsEnabled)
+		_, err = tx.Exec(ctx, query, tenantID, override.ItemType, override.ItemCode, override.OverrideMode, override.ItemCode, override.OverrideMode == "allow")
 		if err != nil {
 			return fmt.Errorf("failed to insert override: %w", err)
 		}
@@ -651,7 +605,7 @@ func (s *Store) SetFeatureOverrides(ctx context.Context, tenantID int64, overrid
 			INSERT INTO tenant_feature_change_logs (tenant_id, feature_code, new_value, created_at)
 			VALUES ($1, $2, $3, NOW())
 		`
-		_, err = tx.Exec(ctx, logQuery, tenantID, override.FeatureCode, override.IsEnabled)
+		_, err = tx.Exec(ctx, logQuery, tenantID, override.ItemCode, override.OverrideMode == "allow")
 		if err != nil {
 			// Log error but don't fail
 			fmt.Printf("failed to log feature change: %v\n", err)
@@ -664,10 +618,17 @@ func (s *Store) SetFeatureOverrides(ctx context.Context, tenantID int64, overrid
 // GetFeatureOverrides retrieves feature overrides for a tenant
 func (s *Store) GetFeatureOverrides(ctx context.Context, tenantID int64) ([]*TenantFeatureOverride, error) {
 	query := `
-		SELECT id, tenant_id, feature_code, is_enabled, created_at, updated_at
+		SELECT id, tenant_id,
+		       COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode,
+		       COALESCE(feature_code, COALESCE(item_code, '')) AS feature_code,
+		       COALESCE(is_enabled, true) AS is_enabled,
+		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at
 		FROM tenant_feature_overrides
 		WHERE tenant_id = $1
-		ORDER BY feature_code
+		ORDER BY COALESCE(NULLIF(item_type, ''), 'feature'),
+		         COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, ''))
 	`
 
 	rows, err := s.pool.Query(ctx, query, tenantID)
@@ -679,7 +640,7 @@ func (s *Store) GetFeatureOverrides(ctx context.Context, tenantID int64) ([]*Ten
 	var overrides []*TenantFeatureOverride
 	for rows.Next() {
 		var o TenantFeatureOverride
-		err := rows.Scan(&o.ID, &o.TenantID, &o.FeatureCode, &o.IsEnabled, &o.CreatedAt, &o.UpdatedAt)
+		err := rows.Scan(&o.ID, &o.TenantID, &o.ItemType, &o.ItemCode, &o.OverrideMode, &o.FeatureCode, &o.IsEnabled, &o.CreatedAt, &o.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan feature override: %w", err)
 		}
@@ -690,77 +651,177 @@ func (s *Store) GetFeatureOverrides(ctx context.Context, tenantID int64) ([]*Ten
 }
 
 // GetEffectiveFeaturePolicy retrieves the effective feature policy for a tenant
-func (s *Store) GetEffectiveFeaturePolicy(ctx context.Context, tenantID int64) (map[string]bool, *int64, *string, []*TenantFeatureOverride, error) {
+func (s *Store) GetEffectiveFeaturePolicy(ctx context.Context, tenantID int64) ([]string, []string, *int64, bool, error) {
 	// Get assigned group
 	var groupID *int64
-	var groupName *string
 	assignmentQuery := `
-		SELECT g.id, g.name
+		SELECT g.id
 		FROM tenant_feature_assignments a
 		JOIN tenant_feature_groups g ON a.group_id = g.id
-		WHERE a.tenant_id = $1 AND g.is_active = true
+		WHERE a.tenant_id = $1
+		  AND CASE
+		      WHEN g.is_active::text IN ('1','t','true','TRUE') THEN true
+		      ELSE false
+		  END = true
 	`
-	err := s.pool.QueryRow(ctx, assignmentQuery, tenantID).Scan(&groupID, &groupName)
-	if err != nil && err.Error() != "no rows in result set" {
-		return nil, nil, nil, nil, fmt.Errorf("failed to query feature assignment: %w", err)
+	err := s.pool.QueryRow(ctx, assignmentQuery, tenantID).Scan(&groupID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil, false, fmt.Errorf("failed to query feature assignment: %w", err)
 	}
 
-	// Get group features
-	features := make(map[string]bool)
+	allowedMenus := map[string]struct{}{}
+	allowedFeatures := map[string]struct{}{}
+	unrestricted := groupID == nil
 	if groupID != nil {
 		featuresQuery := `
-			SELECT feature_code, is_enabled
+			SELECT COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+			       COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+			       COALESCE(is_enabled, true) AS is_enabled
 			FROM tenant_feature_group_items
 			WHERE group_id = $1
 		`
 		rows, err := s.pool.Query(ctx, featuresQuery, *groupID)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to query group features: %w", err)
+			return nil, nil, nil, false, fmt.Errorf("failed to query group features: %w", err)
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			var code string
+			var itemType, code string
 			var enabled bool
-			err := rows.Scan(&code, &enabled)
+			err := rows.Scan(&itemType, &code, &enabled)
 			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("failed to scan group feature: %w", err)
+				return nil, nil, nil, false, fmt.Errorf("failed to scan group feature: %w", err)
 			}
-			features[code] = enabled
+			if !enabled || strings.TrimSpace(code) == "" {
+				continue
+			}
+			if itemType == "menu" {
+				allowedMenus[code] = struct{}{}
+			} else {
+				allowedFeatures[code] = struct{}{}
+			}
 		}
 	}
 
 	// Get overrides
 	overrides, err := s.GetFeatureOverrides(ctx, tenantID)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
 
 	// Apply overrides
 	for _, override := range overrides {
-		features[override.FeatureCode] = override.IsEnabled
+		if strings.TrimSpace(override.ItemCode) == "" {
+			continue
+		}
+		target := allowedFeatures
+		if override.ItemType == "menu" {
+			target = allowedMenus
+		}
+		if override.OverrideMode == "allow" {
+			target[override.ItemCode] = struct{}{}
+		} else {
+			delete(target, override.ItemCode)
+		}
 	}
 
-	return features, groupID, groupName, overrides, nil
+	return mapKeys(allowedMenus), mapKeys(allowedFeatures), groupID, unrestricted, nil
 }
 
 // GetFeatureOptions retrieves all available feature codes
-func (s *Store) GetFeatureOptions(ctx context.Context) ([]string, error) {
-	// This would typically come from a features table or enum
-	// For now, return a hardcoded list based on the system's features
-	features := []string{
-		"recording_transcription",
-		"recording_analysis",
-		"recording_export",
-		"badge_management",
-		"content_management",
-		"customer_management",
-		"advanced_analytics",
-		"api_access",
-		"custom_branding",
-		"sso_integration",
+func (s *Store) GetFeatureOptions(ctx context.Context) ([]MenuFeatureOptionItemResponse, []FeatureOptionItemResponse, error) {
+	menuItems, err := s.listMenuFeatureOptions(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	return features, nil
+	featureItems := []FeatureOptionItemResponse{
+		{Code: "recording_transcription", Name: "录音转写"},
+		{Code: "recording_analysis", Name: "录音分析"},
+		{Code: "recording_tasks", Name: "录音任务"},
+		{Code: "customer_management", Name: "客户管理"},
+		{Code: "content_management", Name: "内容管理"},
+		{Code: "badge_management", Name: "徽章管理"},
+		{Code: "report_dashboard", Name: "报表看板"},
+	}
+	return menuItems, featureItems, nil
 }
 
+func (s *Store) replaceFeatureGroupItems(ctx context.Context, tx pgx.Tx, groupID int64, items []FeaturePolicyItem) error {
+	if _, err := tx.Exec(ctx, "DELETE FROM tenant_feature_group_items WHERE group_id = $1", groupID); err != nil {
+		return fmt.Errorf("failed to clear feature group items: %w", err)
+	}
+	for _, item := range items {
+		featureCode := ""
+		if item.ItemType == "feature" {
+			featureCode = item.ItemCode
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO tenant_feature_group_items (group_id, item_type, item_code, feature_code, is_enabled, created_at)
+			VALUES ($1, $2, $3, $4, true, NOW())
+		`, groupID, item.ItemType, item.ItemCode, featureCode)
+		if err != nil {
+			return fmt.Errorf("failed to insert feature group item: %w", err)
+		}
+	}
+	return nil
+}
+
+func mapKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOptionItemResponse, error) {
+	var institutionExists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('public.institution_menus') IS NOT NULL").Scan(&institutionExists); err != nil {
+		return nil, fmt.Errorf("failed to detect institution menu table: %w", err)
+	}
+
+	items := make([]MenuFeatureOptionItemResponse, 0)
+	if institutionExists {
+		rows, err := s.pool.Query(ctx, `
+			SELECT m.id, m.code, m.name, p.code AS parent_code, p.name AS parent_name, m.path
+			FROM institution_menus m
+			LEFT JOIN institution_menus p ON p.id = m.parent_id
+			WHERE m.deleted_at IS NULL AND m.is_active = true
+			ORDER BY m.sort_order, m.id
+		`)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query institution menu options: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item MenuFeatureOptionItemResponse
+			if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.ParentCode, &item.ParentName, &item.Path); err != nil {
+				return nil, fmt.Errorf("failed to scan institution menu option: %w", err)
+			}
+			items = append(items, item)
+		}
+		return items, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.id, m.code, m.name, p.code AS parent_code, p.name AS parent_name, m.path
+		FROM inst_menus m
+		LEFT JOIN inst_menus p ON p.id = m.parent_id
+		WHERE COALESCE(m.is_active, true) = true
+		ORDER BY COALESCE(m.order_index, 0), m.id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query inst menu options: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item MenuFeatureOptionItemResponse
+		if err := rows.Scan(&item.ID, &item.Code, &item.Name, &item.ParentCode, &item.ParentName, &item.Path); err != nil {
+			return nil, fmt.Errorf("failed to scan inst menu option: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}

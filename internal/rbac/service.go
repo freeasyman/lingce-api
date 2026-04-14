@@ -53,6 +53,15 @@ func (s *Service) GetOperationsRole(ctx context.Context, id int64) (*RoleRespons
 	return toRoleResponse(role), nil
 }
 
+// GetOperationsRoleByCode retrieves an operations role by code.
+func (s *Service) GetOperationsRoleByCode(ctx context.Context, code string) (*RoleResponse, error) {
+	role, err := s.store.GetOperationsRoleByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	return toRoleResponse(role), nil
+}
+
 // CreateOperationsRole creates a new operations role
 func (s *Service) CreateOperationsRole(ctx context.Context, req CreateRoleRequest) (*RoleResponse, error) {
 	// Validate request

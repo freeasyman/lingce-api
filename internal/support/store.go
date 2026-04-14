@@ -1227,7 +1227,8 @@ func (s *Store) ClearImportData(ctx context.Context) (int, error) {
 		if err := rows.Scan(&t); err != nil {
 			return count, fmt.Errorf("failed to scan import table: %w", err)
 		}
-		if _, err := s.pool.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", quoteIdent(t))); err != nil {
+		// CASCADE prevents FK-linked import tables from failing mid-cleanup.
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", quoteIdent(t))); err != nil {
 			return count, fmt.Errorf("failed to truncate %s: %w", t, err)
 		}
 		count++

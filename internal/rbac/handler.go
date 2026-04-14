@@ -1,6 +1,7 @@
 package rbac
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -36,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Operations RBAC - Menu management (admin only)
 	mux.Handle("GET /api/v1/rbac/menus", authMw(http.HandlerFunc(h.ListOperationsMenus)))
+	mux.Handle("GET /api/v1/rbac/menus/all", authMw(http.HandlerFunc(h.ListOperationsMenus)))
 	mux.Handle("POST /api/v1/rbac/menus", authMw(http.HandlerFunc(h.CreateOperationsMenu)))
 	mux.Handle("GET /api/v1/rbac/menus/{id}", authMw(http.HandlerFunc(h.GetOperationsMenu)))
 	mux.Handle("PUT /api/v1/rbac/menus/{id}", authMw(http.HandlerFunc(h.UpdateOperationsMenu)))
@@ -54,6 +56,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Operations RBAC - Role menus (admin only)
 	mux.Handle("GET /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.GetRoleMenus)))
 	mux.Handle("PUT /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRole)))
+	mux.Handle("POST /api/v1/rbac/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRole)))
 
 	// Institution RBAC - Role management
 	mux.Handle("GET /api/v1/institution/rbac/roles", authMw(http.HandlerFunc(h.ListInstitutionRoles)))
@@ -459,8 +462,14 @@ func (h *Handler) GetRoleMenus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	roleIdentifier := r.PathValue("id")
+	id, err := h.parseRoleID(r.Context(), roleIdentifier)
 	if err != nil {
+		// Compatibility: role code may be preconfigured in frontend but not yet in DB.
+		if _, parseErr := strconv.ParseInt(roleIdentifier, 10, 64); parseErr != nil {
+			httputil.WriteSuccess(w, []MenuResponse{})
+			return
+		}
 		httputil.WriteBadRequest(w, "Invalid role ID")
 		return
 	}
@@ -481,7 +490,7 @@ func (h *Handler) AssignMenusToRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid role ID")
 		return
@@ -499,4 +508,15 @@ func (h *Handler) AssignMenusToRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Menus assigned successfully"})
+}
+
+func (h *Handler) parseRoleID(ctx context.Context, roleIdentifier string) (int64, error) {
+	if id, err := strconv.ParseInt(roleIdentifier, 10, 64); err == nil {
+		return id, nil
+	}
+	role, err := h.service.GetOperationsRoleByCode(ctx, roleIdentifier)
+	if err != nil {
+		return 0, err
+	}
+	return role.ID, nil
 }

@@ -3,14 +3,20 @@ package organization
 import (
 	"context"
 	"fmt"
+
+	"github.com/freeasyman/lingce-api/internal/tenant"
 )
 
 type Service struct {
-	store *Store
+	store       *Store
+	tenantStore *tenant.Store
 }
 
-func NewService(store *Store) *Service {
-	return &Service{store: store}
+func NewService(store *Store, tenantStore *tenant.Store) *Service {
+	return &Service{
+		store:       store,
+		tenantStore: tenantStore,
+	}
 }
 
 // ListTenants retrieves a paginated list of tenants
@@ -26,14 +32,32 @@ func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*Te
 		req.PageSize = 100
 	}
 
-	tenants, total, err := s.store.ListTenants(ctx, req)
+	// Convert to tenant module request
+	tenantReq := tenant.TenantListRequest{
+		Name:     req.Name,
+		Code:     req.Code,
+		IsActive: req.IsActive,
+		Page:     req.Page,
+		PageSize: req.PageSize,
+	}
+
+	tenants, total, err := s.tenantStore.ListTenants(ctx, tenantReq)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	responses := make([]*TenantResponse, len(tenants))
 	for i, t := range tenants {
-		responses[i] = toTenantResponse(t)
+		responses[i] = &TenantResponse{
+			ID:        t.ID,
+			Name:      t.Name,
+			Code:      t.Code,
+			IsActive:  t.IsActive,
+			ValidFrom: t.ValidFrom,
+			ValidTo:   t.ValidTo,
+			CreatedAt: t.CreatedAt,
+			UpdatedAt: t.UpdatedAt,
+		}
 	}
 
 	return responses, total, nil
@@ -41,12 +65,21 @@ func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*Te
 
 // GetTenant retrieves a tenant by ID
 func (s *Service) GetTenant(ctx context.Context, id int64) (*TenantResponse, error) {
-	tenant, err := s.store.GetTenantByID(ctx, id)
+	t, err := s.tenantStore.GetTenantByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	return toTenantResponse(tenant), nil
+	return &TenantResponse{
+		ID:        t.ID,
+		Name:      t.Name,
+		Code:      t.Code,
+		IsActive:  t.IsActive,
+		ValidFrom: t.ValidFrom,
+		ValidTo:   t.ValidTo,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
+	}, nil
 }
 
 // CreateTenant creates a new tenant
@@ -59,31 +92,19 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 		return nil, fmt.Errorf("code is required")
 	}
 
-	tenant, err := s.store.CreateTenant(ctx, req)
+	// Convert to tenant module request
+	tenantReq := tenant.CreateTenantRequest{
+		Name:      req.Name,
+		Code:      req.Code,
+		ValidFrom: req.ValidFrom,
+		ValidTo:   req.ValidTo,
+	}
+
+	t, err := s.tenantStore.CreateTenant(ctx, tenantReq)
 	if err != nil {
 		return nil, err
 	}
 
-	return toTenantResponse(tenant), nil
-}
-
-// UpdateTenant updates a tenant
-func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*TenantResponse, error) {
-	tenant, err := s.store.UpdateTenant(ctx, id, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return toTenantResponse(tenant), nil
-}
-
-// DeleteTenant deletes a tenant
-func (s *Service) DeleteTenant(ctx context.Context, id int64) error {
-	return s.store.DeleteTenant(ctx, id)
-}
-
-// toTenantResponse converts a Tenant to TenantResponse
-func toTenantResponse(t *Tenant) *TenantResponse {
 	return &TenantResponse{
 		ID:        t.ID,
 		Name:      t.Name,
@@ -93,8 +114,43 @@ func toTenantResponse(t *Tenant) *TenantResponse {
 		ValidTo:   t.ValidTo,
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
-	}
+	}, nil
 }
+
+// UpdateTenant updates a tenant
+func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*TenantResponse, error) {
+	// Convert to tenant module request
+	tenantReq := tenant.UpdateTenantRequest{
+		Name:      req.Name,
+		Code:      req.Code,
+		IsActive:  req.IsActive,
+		ValidFrom: req.ValidFrom,
+		ValidTo:   req.ValidTo,
+	}
+
+	t, err := s.tenantStore.UpdateTenant(ctx, id, tenantReq)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TenantResponse{
+		ID:        t.ID,
+		Name:      t.Name,
+		Code:      t.Code,
+		IsActive:  t.IsActive,
+		ValidFrom: t.ValidFrom,
+		ValidTo:   t.ValidTo,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
+	}, nil
+}
+
+// DeleteTenant deletes a tenant
+func (s *Service) DeleteTenant(ctx context.Context, id int64) error {
+	return s.tenantStore.DeleteTenant(ctx, id)
+}
+
+// toTenantResponse converts a Tenant to TenantResponse (removed, no longer needed)
 
 // ListMedicalSpecialties retrieves all medical specialties as a tree
 func (s *Service) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialtyResponse, error) {

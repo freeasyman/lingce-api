@@ -2,8 +2,12 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 )
+
+var ErrMenuOutOfPolicy = errors.New("menu out of tenant policy")
 
 // Institution Role operations
 
@@ -99,12 +103,68 @@ func (s *Service) ListInstitutionMenus(ctx context.Context, tenantID *int64, req
 		return nil, err
 	}
 
+	if tenantID != nil {
+		unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, *tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted {
+			menus = filterMenusByAllowedCodes(menus, allowedCodes)
+		}
+	}
+
 	responses := make([]*InstitutionMenuResponse, len(menus))
 	for i, m := range menus {
 		responses[i] = toInstitutionMenuResponse(m)
 	}
 
 	return responses, nil
+}
+
+func filterMenusByAllowedCodes(menus []*InstitutionMenu, allowed map[string]struct{}) []*InstitutionMenu {
+	if len(allowed) == 0 {
+		return []*InstitutionMenu{}
+	}
+
+	byID := make(map[int64]*InstitutionMenu, len(menus))
+	selected := make(map[int64]struct{}, len(menus))
+	for _, m := range menus {
+		byID[m.ID] = m
+		if _, ok := allowed[m.Code]; ok {
+			selected[m.ID] = struct{}{}
+		}
+	}
+
+	changed := true
+	for changed {
+		changed = false
+		for id := range selected {
+			menu := byID[id]
+			if menu == nil || menu.ParentID == nil {
+				continue
+			}
+			if _, ok := selected[*menu.ParentID]; !ok {
+				if _, exists := byID[*menu.ParentID]; exists {
+					selected[*menu.ParentID] = struct{}{}
+					changed = true
+				}
+			}
+		}
+	}
+
+	out := make([]*InstitutionMenu, 0, len(selected))
+	for _, m := range menus {
+		if _, ok := selected[m.ID]; ok {
+			out = append(out, m)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SortOrder == out[j].SortOrder {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].SortOrder < out[j].SortOrder
+	})
+	return out
 }
 
 // GetInstitutionMenu retrieves an institution menu by ID
@@ -233,4 +293,41 @@ func (s *Service) SetEmployeeRole(ctx context.Context, employeeID int64, req Set
 // RemoveEmployeeRole removes the role from an employee
 func (s *Service) RemoveEmployeeRole(ctx context.Context, employeeID int64) error {
 	return s.store.RemoveEmployeeRole(ctx, employeeID)
+}
+
+func (s *Service) ValidateInstitutionRoleMenuScope(ctx context.Context, tenantID int64, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if unrestricted {
+		return nil
+	}
+
+	menus, err := s.store.ListInstitutionMenus(ctx, &tenantID, InstitutionMenuListRequest{})
+	if err != nil {
+		return err
+	}
+	allowedMenus := filterMenusByAllowedCodes(menus, allowedCodes)
+	allowedByID := make(map[int64]struct{}, len(allowedMenus))
+	allByID := make(map[int64]struct{}, len(menus))
+	for _, m := range allowedMenus {
+		allowedByID[m.ID] = struct{}{}
+	}
+	for _, m := range menus {
+		allByID[m.ID] = struct{}{}
+	}
+
+	for _, id := range ids {
+		if _, exists := allByID[id]; !exists {
+			continue
+		}
+		if _, ok := allowedByID[id]; !ok {
+			return fmt.Errorf("%w: %d", ErrMenuOutOfPolicy, id)
+		}
+	}
+	return nil
 }

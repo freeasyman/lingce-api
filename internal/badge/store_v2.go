@@ -1,0 +1,554 @@
+package badge
+
+import (
+	"context"
+	"encoding/csv"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*BadgeDevice, int, error) {
+	var conditions []string
+	var args []interface{}
+	argIndex := 1
+
+	conditions = append(conditions, "deleted_at IS NULL")
+	if req.Status != nil {
+		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
+		args = append(args, *req.Status)
+		argIndex++
+	}
+	if req.HealthStatus != nil {
+		conditions = append(conditions, fmt.Sprintf("health_status = $%d", argIndex))
+		args = append(args, *req.HealthStatus)
+		argIndex++
+	}
+	if req.ManufacturerCode != nil {
+		conditions = append(conditions, fmt.Sprintf("manufacturer_code = $%d", argIndex))
+		args = append(args, *req.ManufacturerCode)
+		argIndex++
+	}
+	if req.DeviceNo != nil {
+		conditions = append(conditions, fmt.Sprintf("device_no ILIKE $%d", argIndex))
+		args = append(args, "%"+*req.DeviceNo+"%")
+		argIndex++
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM badge_devices WHERE %s", whereClause)
+	var total int
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count devices: %w", err)
+	}
+
+	offset := (req.Page - 1) * req.PageSize
+	query := fmt.Sprintf(`
+		SELECT id, device_no, device_id, manufacturer_code, manufacturer_name, hardware_model,
+		       status, health_status, health_check_result,
+		       tenant_id, tenant_name, employee_id, employee_name, employee_phone,
+		       assigned_at, battery_level, last_check_at, last_online_at, import_batch_no,
+		       metadata, created_at, updated_at
+		FROM badge_devices
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+	args = append(args, req.PageSize, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list devices: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []*BadgeDevice
+	for rows.Next() {
+		var d BadgeDevice
+		if err := rows.Scan(
+			&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
+			&d.Status, &d.HealthStatus, &d.HealthCheckResult,
+			&d.TenantID, &d.TenantName, &d.EmployeeID, &d.EmployeeName, &d.EmployeePhone,
+			&d.AssignedAt, &d.BatteryLevel, &d.LastCheckAt, &d.LastOnlineAt, &d.ImportBatchNo,
+			&d.Metadata, &d.CreatedAt, &d.UpdatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan device: %w", err)
+		}
+		devices = append(devices, &d)
+	}
+	return devices, total, nil
+}
+
+func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []*BadgeDeviceLog, error) {
+	var d BadgeDevice
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, device_no, device_id, manufacturer_code, manufacturer_name, hardware_model,
+		       status, health_status, health_check_result,
+		       tenant_id, tenant_name, employee_id, employee_name, employee_phone,
+		       assigned_at, battery_level, last_check_at, last_online_at, import_batch_no,
+		       metadata, created_at, updated_at
+		FROM badge_devices
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id).Scan(
+		&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
+		&d.Status, &d.HealthStatus, &d.HealthCheckResult,
+		&d.TenantID, &d.TenantName, &d.EmployeeID, &d.EmployeeName, &d.EmployeePhone,
+		&d.AssignedAt, &d.BatteryLevel, &d.LastCheckAt, &d.LastOnlineAt, &d.ImportBatchNo,
+		&d.Metadata, &d.CreatedAt, &d.UpdatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil, fmt.Errorf("device not found")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get device: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, device_id, device_no, operation, from_status, to_status,
+		       operator_id, operator_name, operator_type, detail, created_at
+		FROM badge_device_logs
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+		LIMIT 20
+	`, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get device logs: %w", err)
+	}
+	defer rows.Close()
+	logs := make([]*BadgeDeviceLog, 0, 20)
+	for rows.Next() {
+		var l BadgeDeviceLog
+		if err := rows.Scan(&l.ID, &l.DeviceID, &l.DeviceNo, &l.Operation, &l.FromStatus, &l.ToStatus, &l.OperatorID, &l.OperatorName, &l.OperatorType, &l.Detail, &l.CreatedAt); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan device log: %w", err)
+		}
+		logs = append(logs, &l)
+	}
+	return &d, logs, nil
+}
+
+func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, operatorID int64, operatorName string) (int, int, []string, []int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	batchNo := strings.TrimSpace(req.ImportBatchNo)
+	if batchNo == "" {
+		batchNo = fmt.Sprintf("BATCH-%s", time.Now().Format("20060102-150405"))
+	}
+
+	success := 0
+	failed := 0
+	duplicates := make([]string, 0)
+	createdIDs := make([]int64, 0, len(req.Devices))
+
+	for _, item := range req.Devices {
+		deviceNo := strings.TrimSpace(item.DeviceNo)
+		if deviceNo == "" {
+			failed++
+			continue
+		}
+		var existing int64
+		err := tx.QueryRow(ctx, `SELECT id FROM badge_devices WHERE device_no = $1 AND deleted_at IS NULL LIMIT 1`, deviceNo).Scan(&existing)
+		if err == nil {
+			duplicates = append(duplicates, deviceNo)
+			continue
+		}
+		if err != nil && err != pgx.ErrNoRows {
+			return 0, 0, nil, nil, fmt.Errorf("failed to check duplicate: %w", err)
+		}
+
+		var createdID int64
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO badge_devices (
+				device_no, manufacturer_code, manufacturer_name, hardware_model,
+				status, health_status, import_batch_no, metadata, created_at, updated_at
+			) VALUES ($1, $2, $3, NULLIF($4, ''), 'draft', 'unknown', $5, '{}'::jsonb, NOW(), NOW())
+			RETURNING id
+		`, deviceNo, req.ManufacturerCode, req.ManufacturerName, item.HardwareModel, batchNo).Scan(&createdID); err != nil {
+			failed++
+			continue
+		}
+		success++
+		createdIDs = append(createdIDs, createdID)
+
+		if err := s.v2InsertDeviceLogTx(ctx, tx, createdID, deviceNo, "import", nil, strPtr("draft"), &operatorID, &operatorName, strPtr("admin"), JSONObject{
+			"import_batch_no":   batchNo,
+			"manufacturer_code": req.ManufacturerCode,
+			"manufacturer_name": req.ManufacturerName,
+			"hardware_model":    item.HardwareModel,
+		}); err != nil {
+			return 0, 0, nil, nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("failed to commit tx: %w", err)
+	}
+	return success, failed, duplicates, createdIDs, nil
+}
+
+func (s *Store) V2UpdateDeviceStatusWithHealth(ctx context.Context, deviceID int64, toStatus string, healthStatus string, healthResult JSONObject, operatorID int64, operatorName, operation string, detail JSONObject) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var deviceNo string
+	var fromStatus string
+	if err := tx.QueryRow(ctx, `SELECT device_no, status FROM badge_devices WHERE id = $1 AND deleted_at IS NULL`, deviceID).Scan(&deviceNo, &fromStatus); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("device not found")
+		}
+		return fmt.Errorf("failed to load device: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET status = $2,
+		    health_status = $3,
+		    health_check_result = $4,
+		    last_check_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, deviceID, toStatus, healthStatus, healthResult); err != nil {
+		return fmt.Errorf("failed to update device status: %w", err)
+	}
+
+	if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, operation, &fromStatus, &toStatus, &operatorID, &operatorName, strPtr("admin"), detail); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, operatorID int64, operatorName string) (int, int, []string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	success := 0
+	failed := 0
+	errors := make([]string, 0)
+	for _, deviceID := range req.DeviceIDs {
+		var deviceNo string
+		var fromStatus string
+		err := tx.QueryRow(ctx, `SELECT device_no, status FROM badge_devices WHERE id=$1 AND deleted_at IS NULL`, deviceID).Scan(&deviceNo, &fromStatus)
+		if err != nil {
+			failed++
+			errors = append(errors, fmt.Sprintf("device %d not found", deviceID))
+			continue
+		}
+		// 状态校验：只允许 available 和 returned 状态的设备被分配
+		if fromStatus != "available" && fromStatus != "returned" {
+			failed++
+			errors = append(errors, fmt.Sprintf("device %s status is %s, only available or returned devices can be assigned", deviceNo, fromStatus))
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE badge_devices
+			SET status='in_use', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
+			    assigned_at=NOW(), updated_at=NOW()
+			WHERE id=$1
+		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
+			failed++
+			errors = append(errors, fmt.Sprintf("device %d assign failed", deviceID))
+			continue
+		}
+		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "assign", &fromStatus, strPtr("in_use"), &operatorID, &operatorName, strPtr("admin"), JSONObject{
+			"tenant_id":      req.TenantID,
+			"tenant_name":    req.TenantName,
+			"employee_id":    req.EmployeeID,
+			"employee_name":  req.EmployeeName,
+			"employee_phone": req.EmployeePhone,
+		}); err != nil {
+			return 0, 0, nil, err
+		}
+		success++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, nil, err
+	}
+	return success, failed, errors, nil
+}
+
+func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, operatorID int64, operatorName string) (int, int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+	success := 0
+	failed := 0
+	for _, deviceID := range req.DeviceIDs {
+		var deviceNo string
+		var fromStatus string
+		err := tx.QueryRow(ctx, `SELECT device_no, status FROM badge_devices WHERE id=$1 AND deleted_at IS NULL`, deviceID).Scan(&deviceNo, &fromStatus)
+		if err != nil {
+			failed++
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE badge_devices
+			SET status='returned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
+			WHERE id=$1
+		`, deviceID); err != nil {
+			failed++
+			continue
+		}
+		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "reclaim", &fromStatus, strPtr("returned"), &operatorID, &operatorName, strPtr("admin"), JSONObject{"reason": req.Reason}); err != nil {
+			return 0, 0, err
+		}
+		success++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, err
+	}
+	return success, failed, nil
+}
+
+func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRequest, operatorID int64, operatorName string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var deviceNo string
+	var fromStatus string
+	if err := tx.QueryRow(ctx, `SELECT device_no, status FROM badge_devices WHERE id=$1 AND deleted_at IS NULL`, deviceID).Scan(&deviceNo, &fromStatus); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("device not found")
+		}
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET status='in_use', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
+		WHERE id=$1
+	`, deviceID, req.ToTenantID, req.ToTenantName, req.ToEmployeeID, req.ToEmployeeName); err != nil {
+		return err
+	}
+	if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "transfer", &fromStatus, strPtr("in_use"), &operatorID, &operatorName, strPtr("admin"), JSONObject{
+		"to_tenant_id":     req.ToTenantID,
+		"to_tenant_name":   req.ToTenantName,
+		"to_employee_id":   req.ToEmployeeID,
+		"to_employee_name": req.ToEmployeeName,
+		"reason":           req.Reason,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) V2UpdateDevice(ctx context.Context, id int64, req V2UpdateDeviceRequest, operatorID int64, operatorName string) error {
+	setClauses := make([]string, 0, 2)
+	args := make([]interface{}, 0, 4)
+	argIndex := 1
+	if req.HardwareModel != nil {
+		setClauses = append(setClauses, fmt.Sprintf("hardware_model = $%d", argIndex))
+		args = append(args, *req.HardwareModel)
+		argIndex++
+	}
+	if req.Metadata != nil {
+		setClauses = append(setClauses, fmt.Sprintf("metadata = $%d", argIndex))
+		args = append(args, req.Metadata)
+		argIndex++
+	}
+	if len(setClauses) == 0 {
+		return nil
+	}
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, id)
+	query := fmt.Sprintf("UPDATE badge_devices SET %s WHERE id = $%d AND deleted_at IS NULL", strings.Join(setClauses, ", "), argIndex)
+	res, err := s.pool.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("device not found")
+	}
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO badge_device_logs (device_id, device_no, operation, operator_id, operator_name, operator_type, detail, created_at)
+		SELECT id, device_no, 'check', $2, $3, 'admin', $4, NOW() FROM badge_devices WHERE id = $1
+	`, id, operatorID, operatorName, JSONObject{"action": "update"})
+	return nil
+}
+
+func (s *Store) V2Dashboard(ctx context.Context) (JSONObject, error) {
+	resp := JSONObject{
+		"total":           int64(0),
+		"by_status":       JSONObject{},
+		"by_health":       JSONObject{},
+		"assigned_count":  int64(0),
+		"available_count": int64(0),
+		"today_imported":  int64(0),
+		"today_accepted":  int64(0),
+		"today_assigned":  int64(0),
+	}
+	var total int64
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL`).Scan(&total); err != nil {
+		return nil, err
+	}
+	resp["total"] = total
+	statusRows, err := s.pool.Query(ctx, `SELECT status, COUNT(*) FROM badge_devices WHERE deleted_at IS NULL GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer statusRows.Close()
+	byStatus := JSONObject{}
+	for statusRows.Next() {
+		var k string
+		var v int64
+		if err := statusRows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		byStatus[k] = v
+	}
+	resp["by_status"] = byStatus
+
+	healthRows, err := s.pool.Query(ctx, `SELECT health_status, COUNT(*) FROM badge_devices WHERE deleted_at IS NULL GROUP BY health_status`)
+	if err != nil {
+		return nil, err
+	}
+	defer healthRows.Close()
+	byHealth := JSONObject{}
+	for healthRows.Next() {
+		var k string
+		var v int64
+		if err := healthRows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		byHealth[k] = v
+	}
+	resp["by_health"] = byHealth
+	var assignedCount int64
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL AND employee_id IS NOT NULL`).Scan(&assignedCount)
+	resp["assigned_count"] = assignedCount
+	var availableCount int64
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL AND status = 'available'`).Scan(&availableCount)
+	resp["available_count"] = availableCount
+	var todayImported int64
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_device_logs WHERE operation = 'import' AND created_at >= CURRENT_DATE`).Scan(&todayImported)
+	resp["today_imported"] = todayImported
+	var todayAccepted int64
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_device_logs WHERE operation = 'accept' AND created_at >= CURRENT_DATE`).Scan(&todayAccepted)
+	resp["today_accepted"] = todayAccepted
+	var todayAssigned int64
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_device_logs WHERE operation = 'assign' AND created_at >= CURRENT_DATE`).Scan(&todayAssigned)
+	resp["today_assigned"] = todayAssigned
+	return resp, nil
+}
+
+func (s *Store) V2ListDeviceLogs(ctx context.Context, deviceID int64, operation *string, page, pageSize int) ([]*BadgeDeviceLog, int, error) {
+	where := "device_id = $1"
+	args := []interface{}{deviceID}
+	argIndex := 2
+	if operation != nil && strings.TrimSpace(*operation) != "" {
+		where += fmt.Sprintf(" AND operation = $%d", argIndex)
+		args = append(args, strings.TrimSpace(*operation))
+		argIndex++
+	}
+	var total int
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM badge_device_logs WHERE %s", where)
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	query := fmt.Sprintf(`
+		SELECT id, device_id, device_no, operation, from_status, to_status, operator_id, operator_name, operator_type, detail, created_at
+		FROM badge_device_logs
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIndex, argIndex+1)
+	args = append(args, pageSize, offset)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := make([]*BadgeDeviceLog, 0, pageSize)
+	for rows.Next() {
+		var l BadgeDeviceLog
+		if err := rows.Scan(&l.ID, &l.DeviceID, &l.DeviceNo, &l.Operation, &l.FromStatus, &l.ToStatus, &l.OperatorID, &l.OperatorName, &l.OperatorType, &l.Detail, &l.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, &l)
+	}
+	return items, total, nil
+}
+
+func (s *Store) V2ExportDevicesCSV(ctx context.Context, req V2DeviceListRequest) (string, error) {
+	items, _, err := s.V2ListDevices(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	w := csv.NewWriter(&b)
+	_ = w.Write([]string{"id", "device_no", "manufacturer_code", "manufacturer_name", "hardware_model", "status", "health_status", "tenant_id", "tenant_name", "employee_id", "employee_name", "battery_level", "last_online_at", "created_at"})
+	for _, d := range items {
+		tenantID := ""
+		if d.TenantID != nil {
+			tenantID = strconv.FormatInt(*d.TenantID, 10)
+		}
+		employeeID := ""
+		if d.EmployeeID != nil {
+			employeeID = strconv.FormatInt(*d.EmployeeID, 10)
+		}
+		battery := ""
+		if d.BatteryLevel != nil {
+			battery = strconv.Itoa(*d.BatteryLevel)
+		}
+		lastOnline := ""
+		if d.LastOnlineAt != nil {
+			lastOnline = d.LastOnlineAt.Format(time.RFC3339)
+		}
+		_ = w.Write([]string{
+			strconv.FormatInt(d.ID, 10),
+			d.DeviceNo,
+			d.ManufacturerCode,
+			valueOrEmptyString(d.ManufacturerName),
+			valueOrEmptyString(d.HardwareModel),
+			d.Status,
+			d.HealthStatus,
+			tenantID,
+			valueOrEmptyString(d.TenantName),
+			employeeID,
+			valueOrEmptyString(d.EmployeeName),
+			battery,
+			lastOnline,
+			d.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	w.Flush()
+	return b.String(), w.Error()
+}
+
+func (s *Store) v2InsertDeviceLogTx(ctx context.Context, tx pgx.Tx, deviceID int64, deviceNo, operation string, fromStatus, toStatus *string, operatorID *int64, operatorName, operatorType *string, detail JSONObject) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO badge_device_logs (
+			device_id, device_no, operation, from_status, to_status,
+			operator_id, operator_name, operator_type, detail, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+	`, deviceID, deviceNo, operation, fromStatus, toStatus, operatorID, operatorName, operatorType, detail)
+	if err != nil {
+		return fmt.Errorf("failed to insert badge_device_log: %w", err)
+	}
+	return nil
+}
+
+func strPtr(s string) *string { return &s }
+
+func valueOrEmptyString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}

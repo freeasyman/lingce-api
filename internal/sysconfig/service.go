@@ -3,14 +3,22 @@ package sysconfig
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/tenant"
 )
 
 type Service struct {
-	store *Store
+	store       *Store
+	tenantStore *tenant.Store
 }
 
-func NewService(store *Store) *Service {
-	return &Service{store: store}
+func NewService(store *Store, tenantStore *tenant.Store) *Service {
+	return &Service{
+		store:       store,
+		tenantStore: tenantStore,
+	}
 }
 
 // Tenant operations
@@ -28,14 +36,32 @@ func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*Te
 		req.PageSize = 100
 	}
 
-	tenants, total, err := s.store.ListTenants(ctx, req)
+	// Convert to tenant module request
+	tenantReq := tenant.TenantListRequest{
+		Name:     req.Name,
+		Code:     req.Code,
+		IsActive: req.IsActive,
+		Page:     req.Page,
+		PageSize: req.PageSize,
+	}
+
+	tenants, total, err := s.tenantStore.ListTenants(ctx, tenantReq)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	responses := make([]*TenantResponse, len(tenants))
 	for i, t := range tenants {
-		responses[i] = toTenantResponse(t)
+		responses[i] = &TenantResponse{
+			ID:        t.ID,
+			Name:      t.Name,
+			Code:      t.Code,
+			IsActive:  t.IsActive,
+			ValidFrom: t.ValidFrom,
+			ValidTo:   t.ValidTo,
+			CreatedAt: t.CreatedAt,
+			UpdatedAt: t.UpdatedAt,
+		}
 	}
 
 	return responses, total, nil
@@ -43,26 +69,11 @@ func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*Te
 
 // GetTenant retrieves a tenant by ID
 func (s *Service) GetTenant(ctx context.Context, id int64) (*TenantResponse, error) {
-	tenant, err := s.store.GetTenantByID(ctx, id)
+	t, err := s.tenantStore.GetTenantByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	return toTenantResponse(tenant), nil
-}
-
-// UpdateTenant updates a tenant
-func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*TenantResponse, error) {
-	tenant, err := s.store.UpdateTenant(ctx, id, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return toTenantResponse(tenant), nil
-}
-
-// toTenantResponse converts a Tenant to TenantResponse
-func toTenantResponse(t *Tenant) *TenantResponse {
 	return &TenantResponse{
 		ID:        t.ID,
 		Name:      t.Name,
@@ -72,7 +83,57 @@ func toTenantResponse(t *Tenant) *TenantResponse {
 		ValidTo:   t.ValidTo,
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
+	}, nil
+}
+
+// UpdateTenant updates a tenant
+func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*TenantResponse, error) {
+	// Get old tenant for validity change logging
+	oldTenant, err := s.tenantStore.GetTenantByID(ctx, id)
+	if err != nil {
+		return nil, err
 	}
+
+	// Convert to tenant module request
+	tenantReq := tenant.UpdateTenantRequest{
+		Name:      req.Name,
+		Code:      req.Code,
+		IsActive:  req.IsActive,
+		ValidFrom: req.ValidFrom,
+		ValidTo:   req.ValidTo,
+	}
+
+	t, err := s.tenantStore.UpdateTenant(ctx, id, tenantReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Log validity change if applicable
+	validityChanged := false
+	if req.ValidFrom != nil && (oldTenant.ValidFrom == nil || !oldTenant.ValidFrom.Equal(*req.ValidFrom)) {
+		validityChanged = true
+	}
+	if req.ValidTo != nil && (oldTenant.ValidTo == nil || !oldTenant.ValidTo.Equal(*req.ValidTo)) {
+		validityChanged = true
+	}
+
+	if validityChanged {
+		if err := s.store.LogValidityChange(ctx, id, oldTenant.ValidFrom, t.ValidFrom, oldTenant.ValidTo, t.ValidTo); err != nil {
+			// Log error but don't fail the update
+			fmt.Printf("failed to log validity change: %v\n", err)
+		}
+	}
+
+	return &TenantResponse{
+		ID:        t.ID,
+		Name:      t.Name,
+		Code:      t.Code,
+		IsActive:  t.IsActive,
+		ValidFrom: t.ValidFrom,
+		ValidTo:   t.ValidTo,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
+	}, nil
 }
 
 // Subscription Plan operations
@@ -319,28 +380,47 @@ func (s *Service) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroup
 		return nil, fmt.Errorf("code is required")
 	}
 
-	group, err := s.store.CreateFeatureGroup(ctx, req)
+	items, err := normalizeGroupItems(req.Items, req.Features)
 	if err != nil {
 		return nil, err
 	}
 
-	return toFeatureGroupResponse(group, nil), nil
+	group, err := s.store.CreateFeatureGroup(ctx, req, items)
+	if err != nil {
+		return nil, err
+	}
+
+	_, storedItems, err := s.store.GetFeatureGroupByID(ctx, group.ID)
+	if err != nil {
+		return nil, err
+	}
+	return toFeatureGroupResponse(group, storedItems), nil
 }
 
 // UpdateFeatureGroup updates a feature group
 func (s *Service) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeatureGroupRequest) (*FeatureGroupResponse, error) {
-	group, err := s.store.UpdateFeatureGroup(ctx, id, req)
+	items, err := normalizeGroupItemsPtr(req.Items, req.Features)
+	if err != nil {
+		return nil, err
+	}
+
+	group, err := s.store.UpdateFeatureGroup(ctx, id, req, items, req.Items != nil || req.Features != nil)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get features
-	_, items, err := s.store.GetFeatureGroupByID(ctx, id)
+	_, storedItems, err := s.store.GetFeatureGroupByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	return toFeatureGroupResponse(group, items), nil
+	return toFeatureGroupResponse(group, storedItems), nil
+}
+
+// DeleteFeatureGroup deletes a feature group if no tenant assignment exists.
+func (s *Service) DeleteFeatureGroup(ctx context.Context, id int64) error {
+	return s.store.DeleteFeatureGroup(ctx, id)
 }
 
 // toFeatureGroupResponse converts a TenantFeatureGroup to FeatureGroupResponse
@@ -356,15 +436,21 @@ func toFeatureGroupResponse(g *TenantFeatureGroup, items []*TenantFeatureGroupIt
 	}
 
 	if items != nil {
-		features := make([]FeatureGroupItemResponse, len(items))
-		for i, item := range items {
-			features[i] = FeatureGroupItemResponse{
+		normalizedItems := make([]FeaturePolicyItem, 0, len(items))
+		legacyFeatures := make([]FeatureGroupItemResponse, 0, len(items))
+		for _, item := range items {
+			normalizedItems = append(normalizedItems, FeaturePolicyItem{
+				ItemType: item.ItemType,
+				ItemCode: item.ItemCode,
+			})
+			legacyFeatures = append(legacyFeatures, FeatureGroupItemResponse{
 				ID:          item.ID,
-				FeatureCode: item.FeatureCode,
-				IsEnabled:   item.IsEnabled,
-			}
+				FeatureCode: item.ItemCode,
+				IsEnabled:   item.ItemType != "feature" || item.IsEnabled,
+			})
 		}
-		response.Features = features
+		response.Items = normalizedItems
+		response.Features = legacyFeatures
 	}
 
 	return response
@@ -379,7 +465,11 @@ func (s *Service) AssignFeatureGroup(ctx context.Context, tenantID int64, req As
 
 // SetFeatureOverrides sets feature overrides for a tenant
 func (s *Service) SetFeatureOverrides(ctx context.Context, tenantID int64, req FeatureOverrideRequest) error {
-	return s.store.SetFeatureOverrides(ctx, tenantID, req.Overrides)
+	items, err := normalizeOverrideItems(req.Items, req.Overrides)
+	if err != nil {
+		return err
+	}
+	return s.store.SetFeatureOverrides(ctx, tenantID, items)
 }
 
 // GetFeatureOverrides retrieves feature overrides for a tenant
@@ -391,10 +481,14 @@ func (s *Service) GetFeatureOverrides(ctx context.Context, tenantID int64) ([]*F
 
 	responses := make([]*FeatureOverrideResponse, len(overrides))
 	for i, o := range overrides {
+		legacyEnabled := o.OverrideMode == "allow"
 		responses[i] = &FeatureOverrideResponse{
-			ID:          o.ID,
-			FeatureCode: o.FeatureCode,
-			IsEnabled:   o.IsEnabled,
+			ID:           o.ID,
+			ItemType:     o.ItemType,
+			ItemCode:     o.ItemCode,
+			OverrideMode: o.OverrideMode,
+			FeatureCode:  o.ItemCode,
+			IsEnabled:    &legacyEnabled,
 		}
 	}
 
@@ -403,48 +497,150 @@ func (s *Service) GetFeatureOverrides(ctx context.Context, tenantID int64) ([]*F
 
 // GetEffectiveFeaturePolicy retrieves the effective feature policy for a tenant
 func (s *Service) GetEffectiveFeaturePolicy(ctx context.Context, tenantID int64) (*EffectiveFeaturePolicyResponse, error) {
-	features, groupID, groupName, overrides, err := s.store.GetEffectiveFeaturePolicy(ctx, tenantID)
+	allowedMenus, allowedFeatures, groupID, unrestricted, err := s.store.GetEffectiveFeaturePolicy(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 
-	response := &EffectiveFeaturePolicyResponse{
-		TenantID:  tenantID,
-		GroupID:   groupID,
-		GroupName: groupName,
-		Features:  features,
-	}
-
-	if overrides != nil {
-		overrideResponses := make([]FeatureOverrideResponse, len(overrides))
-		for i, o := range overrides {
-			overrideResponses[i] = FeatureOverrideResponse{
-				ID:          o.ID,
-				FeatureCode: o.FeatureCode,
-				IsEnabled:   o.IsEnabled,
-			}
-		}
-		response.Overrides = overrideResponses
-	}
-
-	return response, nil
+	return &EffectiveFeaturePolicyResponse{
+		TenantID:        tenantID,
+		FeatureGroupID:  groupID,
+		Unrestricted:    unrestricted,
+		AllowedMenus:    allowedMenus,
+		AllowedFeatures: allowedFeatures,
+	}, nil
 }
 
 // GetFeatureOptions retrieves all available feature codes
-func (s *Service) GetFeatureOptions(ctx context.Context) ([]*FeatureOptionResponse, error) {
-	codes, err := s.store.GetFeatureOptions(ctx)
+func (s *Service) GetFeatureOptions(ctx context.Context) (*TenantFeatureOptionsResponse, error) {
+	menuItems, featureItems, err := s.store.GetFeatureOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	responses := make([]*FeatureOptionResponse, len(codes))
-	for i, code := range codes {
-		responses[i] = &FeatureOptionResponse{
-			Code: code,
-			Name: code, // In a real system, this would be a human-readable name
-		}
-	}
-
-	return responses, nil
+	return &TenantFeatureOptionsResponse{
+		MenuItems:    menuItems,
+		FeatureItems: featureItems,
+	}, nil
 }
 
+func normalizeGroupItems(items []FeaturePolicyItem, legacy []FeatureGroupItemResponse) ([]FeaturePolicyItem, error) {
+	normalized := make([]FeaturePolicyItem, 0, len(items)+len(legacy))
+	for _, item := range items {
+		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
+		itemCode := strings.TrimSpace(item.ItemCode)
+		if itemType == "" || itemCode == "" {
+			return nil, fmt.Errorf("item_type and item_code are required")
+		}
+		if itemType != "menu" && itemType != "feature" {
+			return nil, fmt.Errorf("invalid item_type: %s", itemType)
+		}
+		normalized = append(normalized, FeaturePolicyItem{ItemType: itemType, ItemCode: itemCode})
+	}
+	for _, item := range legacy {
+		if strings.TrimSpace(item.FeatureCode) == "" {
+			continue
+		}
+		normalized = append(normalized, FeaturePolicyItem{ItemType: "feature", ItemCode: strings.TrimSpace(item.FeatureCode)})
+	}
+	return dedupPolicyItems(normalized), nil
+}
+
+func normalizeGroupItemsPtr(items *[]FeaturePolicyItem, legacy *[]FeatureGroupItemResponse) ([]FeaturePolicyItem, error) {
+	inItems := []FeaturePolicyItem{}
+	inLegacy := []FeatureGroupItemResponse{}
+	if items != nil {
+		inItems = *items
+	}
+	if legacy != nil {
+		inLegacy = *legacy
+	}
+	return normalizeGroupItems(inItems, inLegacy)
+}
+
+func normalizeOverrideItems(items []FeatureOverrideItem, legacy []FeatureOverrideItem) ([]FeatureOverrideItem, error) {
+	all := make([]FeatureOverrideItem, 0, len(items)+len(legacy))
+	all = append(all, items...)
+	all = append(all, legacy...)
+
+	out := make([]FeatureOverrideItem, 0, len(all))
+	for _, item := range all {
+		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
+		itemCode := strings.TrimSpace(item.ItemCode)
+		overrideMode := strings.ToLower(strings.TrimSpace(item.OverrideMode))
+
+		if itemType == "" && strings.TrimSpace(item.FeatureCode) != "" {
+			itemType = "feature"
+			itemCode = strings.TrimSpace(item.FeatureCode)
+			if overrideMode == "" {
+				if item.IsEnabled {
+					overrideMode = "allow"
+				} else {
+					overrideMode = "deny"
+				}
+			}
+		}
+		if itemType == "" || itemCode == "" {
+			return nil, fmt.Errorf("item_type and item_code are required")
+		}
+		if itemType != "menu" && itemType != "feature" {
+			return nil, fmt.Errorf("invalid item_type: %s", itemType)
+		}
+		if overrideMode == "" {
+			overrideMode = "allow"
+		}
+		if overrideMode != "allow" && overrideMode != "deny" {
+			return nil, fmt.Errorf("invalid override_mode: %s", overrideMode)
+		}
+		out = append(out, FeatureOverrideItem{
+			ItemType:     itemType,
+			ItemCode:     itemCode,
+			OverrideMode: overrideMode,
+			FeatureCode:  itemCode,
+			IsEnabled:    overrideMode == "allow",
+		})
+	}
+	return dedupOverrideItems(out), nil
+}
+
+func dedupPolicyItems(items []FeaturePolicyItem) []FeaturePolicyItem {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]FeaturePolicyItem, 0, len(items))
+	for _, item := range items {
+		key := item.ItemType + ":" + item.ItemCode
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ItemType == out[j].ItemType {
+			return out[i].ItemCode < out[j].ItemCode
+		}
+		return out[i].ItemType < out[j].ItemType
+	})
+	return out
+}
+
+func dedupOverrideItems(items []FeatureOverrideItem) []FeatureOverrideItem {
+	last := make(map[string]FeatureOverrideItem, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		key := item.ItemType + ":" + item.ItemCode
+		if _, ok := last[key]; !ok {
+			order = append(order, key)
+		}
+		last[key] = item
+	}
+	out := make([]FeatureOverrideItem, 0, len(order))
+	for _, key := range order {
+		out = append(out, last[key])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ItemType == out[j].ItemType {
+			return out[i].ItemCode < out[j].ItemCode
+		}
+		return out[i].ItemType < out[j].ItemType
+	})
+	return out
+}

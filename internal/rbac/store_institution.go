@@ -2,7 +2,10 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Institution RBAC Store operations
@@ -167,6 +170,53 @@ func (s *Store) DeleteInstitutionRole(ctx context.Context, tenantID, id int64) e
 
 // ListInstitutionMenus retrieves all institution menus
 func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req InstitutionMenuListRequest) ([]*InstitutionMenu, error) {
+	var institutionMenusExists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('public.institution_menus') IS NOT NULL").Scan(&institutionMenusExists); err != nil {
+		return nil, fmt.Errorf("failed to detect institution menu table: %w", err)
+	}
+
+	if !institutionMenusExists {
+		query := `
+			SELECT id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id,
+			       COALESCE(order_index, 0) AS sort_order,
+			       COALESCE(is_active, true) AS is_active,
+			       created_at,
+			       COALESCE(created_at, NOW()) AS updated_at
+			FROM inst_menus
+			WHERE 1 = 1
+		`
+		args := []interface{}{}
+		argPos := 1
+
+		if req.Name != "" {
+			query += fmt.Sprintf(" AND name ILIKE $%d", argPos)
+			args = append(args, "%"+req.Name+"%")
+			argPos++
+		}
+		if req.IsActive != nil {
+			query += fmt.Sprintf(" AND COALESCE(is_active, true) = $%d", argPos)
+			args = append(args, *req.IsActive)
+			argPos++
+		}
+		query += " ORDER BY COALESCE(order_index, 0), id"
+
+		rows, err := s.pool.Query(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query inst menus: %w", err)
+		}
+		defer rows.Close()
+
+		var menus []*InstitutionMenu
+		for rows.Next() {
+			var m InstitutionMenu
+			if err := rows.Scan(&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt); err != nil {
+				return nil, fmt.Errorf("failed to scan inst menu: %w", err)
+			}
+			menus = append(menus, &m)
+		}
+		return menus, nil
+	}
+
 	query := `
 		SELECT id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at
 		FROM institution_menus
@@ -214,6 +264,79 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 	}
 
 	return menus, nil
+}
+
+// GetTenantAllowedMenuCodes returns whether tenant is unrestricted and explicit allowed menu codes.
+func (s *Store) GetTenantAllowedMenuCodes(ctx context.Context, tenantID int64) (bool, map[string]struct{}, error) {
+	allowed := make(map[string]struct{})
+
+	var groupID *int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT g.id
+		FROM tenant_feature_assignments a
+		JOIN tenant_feature_groups g ON g.id = a.group_id
+		WHERE a.tenant_id = $1
+		  AND CASE
+		      WHEN g.is_active::text IN ('1','t','true','TRUE') THEN true
+		      ELSE false
+		  END = true
+	`, tenantID).Scan(&groupID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, nil, fmt.Errorf("failed to query tenant feature assignment: %w", err)
+	}
+
+	if groupID == nil {
+		return true, allowed, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		       COALESCE(is_enabled, true) AS is_enabled
+		FROM tenant_feature_group_items
+		WHERE group_id = $1
+		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+	`, *groupID)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to query feature group menu items: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var code string
+		var enabled bool
+		if err := rows.Scan(&code, &enabled); err != nil {
+			return false, nil, fmt.Errorf("failed to scan feature group menu item: %w", err)
+		}
+		if enabled && code != "" {
+			allowed[code] = struct{}{}
+		}
+	}
+
+	overrideRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode
+		FROM tenant_feature_overrides
+		WHERE tenant_id = $1
+		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+	`, tenantID)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to query feature overrides: %w", err)
+	}
+	defer overrideRows.Close()
+	for overrideRows.Next() {
+		var code, mode string
+		if err := overrideRows.Scan(&code, &mode); err != nil {
+			return false, nil, fmt.Errorf("failed to scan feature override: %w", err)
+		}
+		if code == "" {
+			continue
+		}
+		if mode == "allow" {
+			allowed[code] = struct{}{}
+		} else {
+			delete(allowed, code)
+		}
+	}
+	return false, allowed, nil
 }
 
 // GetInstitutionMenuByID retrieves an institution menu by ID

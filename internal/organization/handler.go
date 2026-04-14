@@ -31,6 +31,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Medical specialties (authenticated users)
 	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
+	mux.Handle("GET /api/v1/organization/profile", authMw(http.HandlerFunc(h.GetOrganizationProfile)))
+	mux.Handle("PUT /api/v1/organization/profile", authMw(http.HandlerFunc(h.UpdateOrganizationProfile)))
 
 	// Employee assistants (authenticated users)
 	mux.Handle("GET /api/v1/organization/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
@@ -211,6 +213,91 @@ func (h *Handler) ListMedicalSpecialties(w http.ResponseWriter, r *http.Request)
 	}
 
 	httputil.WriteSuccess(w, specialties)
+}
+
+// GetOrganizationProfile handles getting current organization profile.
+func (h *Handler) GetOrganizationProfile(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.resolveProfileTenantID(r)
+	if !ok {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+
+	tenant, err := h.service.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"id":         tenant.ID,
+		"name":       tenant.Name,
+		"org_code":   tenant.Code,
+		"created_at": tenant.CreatedAt,
+	})
+}
+
+// UpdateOrganizationProfile handles updating current organization profile.
+func (h *Handler) UpdateOrganizationProfile(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.resolveProfileTenantID(r)
+	if !ok {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	var req UpdateTenantRequest
+	if name, ok := payload["name"].(string); ok && name != "" {
+		req.Name = &name
+	}
+
+	tenant, err := h.service.UpdateTenant(r.Context(), tenantID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	resp := map[string]interface{}{
+		"id":         tenant.ID,
+		"name":       tenant.Name,
+		"org_code":   tenant.Code,
+		"created_at": tenant.CreatedAt,
+	}
+	if v, ok := payload["contact_name"]; ok {
+		resp["contact_name"] = v
+	}
+	if v, ok := payload["contact_phone"]; ok {
+		resp["contact_phone"] = v
+	}
+	if v, ok := payload["contact_email"]; ok {
+		resp["contact_email"] = v
+	}
+
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) resolveProfileTenantID(r *http.Request) (int64, bool) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		return 0, false
+	}
+	if claims.TenantID != nil && *claims.TenantID > 0 {
+		return *claims.TenantID, true
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+			if tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil && tenantID > 0 {
+				return tenantID, true
+			}
+		}
+		return 1, true
+	}
+	return 0, false
 }
 
 // GetEmployeeAssistants handles getting assistants for an employee

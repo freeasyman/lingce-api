@@ -286,6 +286,12 @@ func (h *Handler) BatchAssignTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
 	for _, id := range req.TaskIDs {
 		_, err := h.service.store.pool.Exec(r.Context(), `
 			UPDATE recording_tasks
@@ -293,8 +299,8 @@ func (h *Handler) BatchAssignTasks(w http.ResponseWriter, r *http.Request) {
 			    assigned_by = $2,
 			    status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END,
 			    updated_at = NOW()
-			WHERE id = $3
-		`, req.AssignedTo, claims.UserID, id)
+			WHERE id = $3 AND tenant_id = $4
+		`, req.AssignedTo, "manual", id, tenantID)
 		if err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return

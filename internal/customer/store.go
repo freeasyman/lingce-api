@@ -237,9 +237,9 @@ func (s *Store) GetCustomerByID(ctx context.Context, id int64) (*Customer, error
 // CreateCustomer creates a new customer
 func (s *Store) CreateCustomer(ctx context.Context, tenantID, createdBy int64, req CreateCustomerRequest) (*Customer, error) {
 	query := `
-		INSERT INTO customers (tenant_id, name, phone, email, gender, age, source, status, momentum,
+		INSERT INTO customers (tenant_id, name, phone, email, gender, age, source, lifecycle_stage, status, momentum,
 		                       assigned_to, next_follow_up_at, notes, extra_data, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'lead', 50, $8, $9, $10, $11, $12, NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'unknown', 'lead', 50, $8, $9, $10, COALESCE($11::jsonb, '{}'::jsonb), $12, NOW(), NOW())
 		RETURNING id, tenant_id, name, phone, email, gender, age, source, status, momentum,
 		          assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
 		          notes, extra_data, created_by, created_at, updated_at

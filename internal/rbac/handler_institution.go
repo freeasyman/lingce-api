@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -413,6 +414,15 @@ func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *h
 	var req AssignPermissionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.ValidateInstitutionRoleMenuScope(r.Context(), *tenantID, req.PermissionIDs); err != nil {
+		if errors.Is(err, ErrMenuOutOfPolicy) {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 

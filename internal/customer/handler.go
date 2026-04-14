@@ -232,6 +232,17 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 	tenantID := int64(0)
 	if claims.TenantID != nil {
 		tenantID = *claims.TenantID
+	} else if tenantIDStr := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantIDStr != "" {
+		parsedTenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
+		if err != nil || parsedTenantID <= 0 {
+			httputil.WriteBadRequest(w, "Invalid tenant_id")
+			return
+		}
+		tenantID = parsedTenantID
+	}
+	if tenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
 	}
 
 	customer, err := h.service.CreateCustomer(r.Context(), tenantID, claims.UserID, req)
