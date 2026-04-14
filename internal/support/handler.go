@@ -70,6 +70,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/metadata/validate-template", authMw(http.HandlerFunc(h.ValidateTemplate)))
 
 	// Data browser endpoints
+	mux.Handle("GET /api/v1/operation-logs/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
+	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
+	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/data", authMw(http.HandlerFunc(h.GetTableData)))
+	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/export", authMw(http.HandlerFunc(h.ExportTableData)))
+	mux.Handle("GET /api/v1/operation-logs/data-browser/statistics", authMw(http.HandlerFunc(h.GetDatabaseStatistics)))
+	mux.Handle("DELETE /api/v1/operation-logs/data-browser/tables/{table_name}/truncate", authMw(http.HandlerFunc(h.TruncateTable)))
+	mux.Handle("POST /api/v1/operation-logs/data-browser/clear-import-data", authMw(http.HandlerFunc(h.ClearImportData)))
 	mux.Handle("GET /api/v1/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
 	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
 	mux.Handle("GET /api/v1/data-browser/tables/{table_name}/data", authMw(http.HandlerFunc(h.GetTableData)))
