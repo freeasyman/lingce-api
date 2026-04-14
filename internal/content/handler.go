@@ -37,20 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	h.registerContentItemRoutes(mux, authMw)
 
 	// Content seeds endpoints
-	mux.Handle("GET /api/v1/content-seeds", authMw(http.HandlerFunc(h.ListSeeds)))
-	mux.Handle("GET /api/v1/content-seeds/", authMw(http.HandlerFunc(h.ListSeeds)))
-	mux.Handle("GET /api/v1/content-seeds/stats", authMw(http.HandlerFunc(h.GetSeedStats)))
-	mux.Handle("GET /api/v1/content-seeds/stats/", authMw(http.HandlerFunc(h.GetSeedStats)))
-	mux.Handle("GET /api/v1/content-seeds/clusters", authMw(http.HandlerFunc(h.GetClusters)))
-	mux.Handle("GET /api/v1/content-seeds/clusters/", authMw(http.HandlerFunc(h.GetClusters)))
-	mux.Handle("GET /api/v1/content-seeds/my-inspirations", authMw(http.HandlerFunc(h.GetMyInspirations)))
-	mux.Handle("POST /api/v1/content-seeds/{seed_id}/generate-draft", authMw(http.HandlerFunc(h.GenerateDraftFromSeed)))
-	mux.Handle("POST /api/v1/content-seeds/{seed_id}/dismiss", authMw(http.HandlerFunc(h.DismissSeed)))
-	mux.Handle("GET /api/v1/content-seeds/{seed_id}", authMw(http.HandlerFunc(h.GetSeed)))
-	mux.Handle("PATCH /api/v1/content-seeds/{seed_id}/status", authMw(http.HandlerFunc(h.UpdateSeedStatus)))
-	mux.Handle("GET /api/v1/content-seeds/honor-list", authMw(http.HandlerFunc(h.GetHonorList)))
-	mux.Handle("GET /api/v1/content-seeds/my-stats", authMw(http.HandlerFunc(h.GetMyStats)))
-	mux.Handle("GET /api/v1/content-seeds/my-adopted", authMw(http.HandlerFunc(h.GetMyAdopted)))
+	h.registerContentSeedRoutes(mux, authMw)
 
 	// Prompt templates endpoints
 	mux.Handle("GET /api/v1/prompt-templates", authMw(http.HandlerFunc(h.ListTemplates)))

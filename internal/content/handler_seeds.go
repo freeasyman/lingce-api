@@ -202,7 +202,7 @@ func (h *Handler) GenerateDraftFromSeed(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("seed_id"), 10, 64)
+	id, err := parseSeedID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid seed ID")
 		return
@@ -228,6 +228,31 @@ func (h *Handler) GenerateDraftFromSeed(w http.ResponseWriter, r *http.Request) 
 	httputil.WriteSuccess(w, map[string]string{"message": "Draft generated successfully"})
 }
 
+// AdoptSeed handles adopting a seed
+func (h *Handler) AdoptSeed(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := parseSeedID(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid seed ID")
+		return
+	}
+
+	seedStateMu.Lock()
+	seedStatusOverrides[id] = "adopted"
+	seedAdoptedBy[id] = claims.UserID
+	seedStateMu.Unlock()
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"id":      id,
+		"status":  "adopted",
+		"message": "Seed adopted successfully",
+	})
+}
+
 // DismissSeed handles dismissing a seed
 func (h *Handler) DismissSeed(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
@@ -236,7 +261,7 @@ func (h *Handler) DismissSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("seed_id"), 10, 64)
+	id, err := parseSeedID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid seed ID")
 		return
@@ -246,7 +271,11 @@ func (h *Handler) DismissSeed(w http.ResponseWriter, r *http.Request) {
 	seedStatusOverrides[id] = "dismissed"
 	seedDismissedBy[id] = claims.UserID
 	seedStateMu.Unlock()
-	httputil.WriteSuccess(w, map[string]string{"message": "Seed dismissed successfully"})
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"id":      id,
+		"status":  "dismissed",
+		"message": "Seed dismissed successfully",
+	})
 }
 
 // GetSeed handles getting seed by ID
@@ -257,7 +286,7 @@ func (h *Handler) GetSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("seed_id"), 10, 64)
+	id, err := parseSeedID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid seed ID")
 		return
@@ -279,7 +308,7 @@ func (h *Handler) UpdateSeedStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("seed_id"), 10, 64)
+	id, err := parseSeedID(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid seed ID")
 		return
@@ -303,6 +332,10 @@ func (h *Handler) UpdateSeedStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	seedStateMu.Unlock()
 	httputil.WriteSuccess(w, map[string]string{"message": "Seed status updated successfully"})
+}
+
+func parseSeedID(r *http.Request) (int64, error) {
+	return strconv.ParseInt(r.PathValue("id"), 10, 64)
 }
 
 // GetHonorList handles getting honor list
