@@ -429,6 +429,60 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (admin_id, role_id)
 		)`,
+		`INSERT INTO operations_roles (name, code, description, is_active, created_at, updated_at)
+			SELECT
+				COALESCE(NULLIF(r.name_cn, ''), r.code),
+				r.code,
+				r.description,
+				COALESCE(r.is_active, true),
+				COALESCE(r.created_at, NOW()),
+				COALESCE(r.updated_at, NOW())
+			FROM ops_roles r
+			WHERE NOT EXISTS (
+				SELECT 1 FROM operations_roles nr WHERE nr.code = r.code
+			)`,
+		`INSERT INTO operations_menus (id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at, deleted_at)
+			SELECT
+				m.id,
+				m.name,
+				m.code,
+				COALESCE(m.path, ''),
+				m.icon,
+				m.parent_id,
+				COALESCE(m.order_index, 0),
+				COALESCE(m.is_active, true),
+				COALESCE(m.created_at, NOW()),
+				COALESCE(m.created_at, NOW()),
+				NULL
+			FROM ops_menus m
+			WHERE NOT EXISTS (
+				SELECT 1 FROM operations_menus nm WHERE nm.id = m.id OR nm.code = m.code
+			)`,
+		`SELECT setval('operations_menus_id_seq', COALESCE((SELECT MAX(id) FROM operations_menus), 1), true)`,
+		`INSERT INTO operations_role_menus (role_id, menu_id, created_at)
+			SELECT
+				r.id,
+				rm.menu_id,
+				COALESCE(rm.created_at, NOW())
+			FROM ops_role_menus rm
+			JOIN operations_roles r ON r.code = rm.role_code
+			JOIN operations_menus m ON m.id = rm.menu_id
+			WHERE NOT EXISTS (
+				SELECT 1 FROM operations_role_menus nrm
+				WHERE nrm.role_id = r.id AND nrm.menu_id = rm.menu_id
+			)`,
+		`INSERT INTO operations_admin_roles (admin_id, role_id, created_at)
+			SELECT
+				ar.admin_id,
+				r.id,
+				COALESCE(ar.created_at, NOW())
+			FROM ops_admin_roles ar
+			JOIN operations_roles r ON r.code = ar.role_code
+			JOIN operations_admins a ON a.id = ar.admin_id AND a.deleted_at IS NULL
+			WHERE NOT EXISTS (
+				SELECT 1 FROM operations_admin_roles nar
+				WHERE nar.admin_id = ar.admin_id AND nar.role_id = r.id
+			)`,
 
 		// Customer detail compatibility
 		`ALTER TABLE IF EXISTS customer_memberships ADD COLUMN IF NOT EXISTS tenant_id BIGINT`,
