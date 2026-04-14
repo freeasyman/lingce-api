@@ -90,11 +90,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 	}
 
 	router.Register(mux, routes, deps)
-
-	// Legacy route proxies (Phase 2: keep for backward compatibility)
-	mux.HandleFunc("POST /api/v1/auth/login/employee", h.LoginInstitution)       // Alias for institution login
-	mux.HandleFunc("POST /api/v1/auth/mobile/sms/send", h.SendSMS)               // Old SMS path
-	mux.HandleFunc("POST /api/v1/auth/mobile/sms/login", h.SMSLogin)             // Old SMS path
 }
 
 // LoginAdmin handles operations admin login
