@@ -88,7 +88,7 @@ func (h *Handler) GetRole(w http.ResponseWriter, r *http.Request) {
 		h.GetInstitutionRole(w, r)
 		return
 	}
-	h.GetOperationsRole(w, r)
+	h.GetOperationsRoleByIdentifier(w, r)
 }
 
 func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +96,7 @@ func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		h.UpdateInstitutionRole(w, r)
 		return
 	}
-	h.UpdateOperationsRole(w, r)
+	h.UpdateOperationsRoleByIdentifier(w, r)
 }
 
 func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		h.DeleteInstitutionRole(w, r)
 		return
 	}
-	h.DeleteOperationsRole(w, r)
+	h.DeleteOperationsRoleByIdentifier(w, r)
 }
 
 func (h *Handler) GetRolePermissionsByScope(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +112,7 @@ func (h *Handler) GetRolePermissionsByScope(w http.ResponseWriter, r *http.Reque
 		h.GetInstitutionRolePermissions(w, r)
 		return
 	}
-	h.GetRolePermissions(w, r)
+	h.GetOperationsRolePermissionsByIdentifier(w, r)
 }
 
 func (h *Handler) AssignPermissionsToRoleByScope(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,7 @@ func (h *Handler) AssignPermissionsToRoleByScope(w http.ResponseWriter, r *http.
 		h.AssignPermissionsToInstitutionRole(w, r)
 		return
 	}
-	h.AssignPermissionsToRole(w, r)
+	h.AssignOperationsPermissionsByIdentifier(w, r)
 }
 
 func (h *Handler) RemovePermissionsFromRoleByScope(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +128,7 @@ func (h *Handler) RemovePermissionsFromRoleByScope(w http.ResponseWriter, r *htt
 		h.RemovePermissionsFromInstitutionRole(w, r)
 		return
 	}
-	h.RemovePermissionsFromRole(w, r)
+	h.RemoveOperationsPermissionsByIdentifier(w, r)
 }
 
 func (h *Handler) GetRoleMenusByScope(w http.ResponseWriter, r *http.Request) {
@@ -639,4 +639,145 @@ func (h *Handler) parseRoleID(ctx context.Context, roleIdentifier string) (int64
 		return 0, err
 	}
 	return role.ID, nil
+}
+
+func (h *Handler) GetOperationsRoleByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	role, err := h.service.GetOperationsRole(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, role)
+}
+
+func (h *Handler) UpdateOperationsRoleByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	var req UpdateRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	role, err := h.service.UpdateOperationsRole(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, role)
+}
+
+func (h *Handler) DeleteOperationsRoleByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	if err := h.service.DeleteOperationsRole(r.Context(), id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Role deleted successfully"})
+}
+
+func (h *Handler) GetOperationsRolePermissionsByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	permissions, err := h.service.GetRolePermissions(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, permissions)
+}
+
+func (h *Handler) AssignOperationsPermissionsByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	var req AssignPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.AssignPermissionsToRole(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Permissions assigned successfully"})
+}
+
+func (h *Handler) RemoveOperationsPermissionsByIdentifier(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := h.parseRoleID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid role ID")
+		return
+	}
+
+	var req AssignPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.RemovePermissionsFromRole(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Permissions removed successfully"})
 }
