@@ -22,13 +22,6 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Tenant management (admin only)
-	mux.Handle("GET /api/v1/tenants", authMw(http.HandlerFunc(h.ListTenants)))
-	mux.Handle("GET /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
-	mux.Handle("POST /api/v1/tenants", authMw(http.HandlerFunc(h.CreateTenant)))
-	mux.Handle("PUT /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
-	mux.Handle("DELETE /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.DeleteTenant)))
-
 	// Medical specialties (authenticated users)
 	mux.Handle("GET /api/v1/organization/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
 	mux.Handle("GET /api/v1/organization/profile", authMw(http.HandlerFunc(h.GetOrganizationProfile)))

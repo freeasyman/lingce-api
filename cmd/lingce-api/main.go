@@ -85,6 +85,9 @@ func main() {
 
 	// Register tenant module (new)
 	tenantStore := tenant.NewStore(pool)
+	tenantService := tenant.NewService(tenantStore)
+	tenantHandler := tenant.NewHandler(tenantService)
+	tenantHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register organization module
 	orgStore := organization.NewStore(pool, tenantStore)
