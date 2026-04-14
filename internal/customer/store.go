@@ -373,6 +373,22 @@ func (s *Store) UpdateCustomer(ctx context.Context, id int64, req UpdateCustomer
 	return &c, nil
 }
 
+// DeleteCustomer soft-deletes a customer.
+func (s *Store) DeleteCustomer(ctx context.Context, id int64) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE customers
+		SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete customer: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("customer not found")
+	}
+	return nil
+}
+
 // MarkCustomerConverted marks a customer as converted
 func (s *Store) MarkCustomerConverted(ctx context.Context, id int64) error {
 	query := `

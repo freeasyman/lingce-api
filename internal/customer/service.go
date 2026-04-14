@@ -81,6 +81,11 @@ func (s *Service) UpdateCustomer(ctx context.Context, id int64, req UpdateCustom
 	return toCustomerResponse(customer), nil
 }
 
+// DeleteCustomer deletes a customer.
+func (s *Service) DeleteCustomer(ctx context.Context, id int64) error {
+	return s.store.DeleteCustomer(ctx, id)
+}
+
 // MarkCustomerConverted marks a customer as converted
 func (s *Service) MarkCustomerConverted(ctx context.Context, id int64) error {
 	return s.store.MarkCustomerConverted(ctx, id)

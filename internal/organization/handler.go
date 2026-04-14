@@ -47,14 +47,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.GetDoctorEmployees)))
 	mux.Handle("POST /api/v1/doctors/{id}/employees", authMw(http.HandlerFunc(h.UpdateDoctorEmployees)))
 
-	// Patient management endpoints
-	mux.Handle("GET /api/v1/patients", authMw(http.HandlerFunc(h.ListPatients)))
-	mux.Handle("POST /api/v1/patients/sync-from-visits", authMw(http.HandlerFunc(h.SyncPatientsFromVisits)))
-	mux.Handle("GET /api/v1/patients/{id}", authMw(http.HandlerFunc(h.GetPatient)))
-	mux.Handle("POST /api/v1/patients", authMw(http.HandlerFunc(h.CreatePatient)))
-	mux.Handle("PUT /api/v1/patients/{id}", authMw(http.HandlerFunc(h.UpdatePatient)))
-	mux.Handle("DELETE /api/v1/patients/{id}", authMw(http.HandlerFunc(h.DeletePatient)))
-	mux.Handle("GET /api/v1/patients/{id}/360", authMw(http.HandlerFunc(h.GetPatient360View)))
 }
 
 // ListTenants handles listing tenants

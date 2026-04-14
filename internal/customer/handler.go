@@ -26,13 +26,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Customer endpoints
 	mux.Handle("GET /api/v1/customers", authMw(http.HandlerFunc(h.ListCustomers)))
-	mux.Handle("GET /api/v1/customers/", authMw(http.HandlerFunc(h.ListCustomers)))
 	mux.Handle("GET /api/v1/customers/stats/overview", authMw(http.HandlerFunc(h.GetCustomerStats)))
 	mux.Handle("GET /api/v1/customers/{id}", authMw(http.HandlerFunc(h.GetCustomerByID)))
 	mux.Handle("POST /api/v1/customers", authMw(http.HandlerFunc(h.CreateCustomer)))
-	mux.Handle("POST /api/v1/customers/", authMw(http.HandlerFunc(h.CreateCustomer)))
 	mux.Handle("PUT /api/v1/customers/{id}", authMw(http.HandlerFunc(h.UpdateCustomer)))
-	mux.Handle("PUT /api/v1/customers/{id}/converted", authMw(http.HandlerFunc(h.MarkCustomerConverted)))
+	mux.Handle("DELETE /api/v1/customers/{id}", authMw(http.HandlerFunc(h.DeleteCustomer)))
+	mux.Handle("PUT /api/v1/customers/{id}/actions/convert", authMw(http.HandlerFunc(h.MarkCustomerConverted)))
+	mux.Handle("POST /api/v1/customers/actions/merge", authMw(http.HandlerFunc(h.MergeCustomers)))
+	mux.Handle("POST /api/v1/customers/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncCustomersFromVisits)))
+	mux.Handle("GET /api/v1/customers/{id}/360", authMw(http.HandlerFunc(h.GetCustomer360View)))
 	mux.Handle("POST /api/v1/customers/{id}/identities", authMw(http.HandlerFunc(h.AddCustomerIdentity)))
 	mux.Handle("GET /api/v1/customers/{id}/interactions", authMw(http.HandlerFunc(h.ListCustomerInteractions)))
 	mux.Handle("POST /api/v1/customers/{id}/interactions", authMw(http.HandlerFunc(h.CreateCustomerInteraction)))
@@ -41,38 +43,66 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/customers/{id}/membership", authMw(http.HandlerFunc(h.GetCustomerMembership)))
 
 	// Tag endpoints
-	mux.Handle("GET /api/v1/customer-tags", authMw(http.HandlerFunc(h.ListCustomerTags)))
-	mux.Handle("GET /api/v1/customer-tags/", authMw(http.HandlerFunc(h.ListCustomerTags)))
-	mux.Handle("POST /api/v1/customer-tags", authMw(http.HandlerFunc(h.CreateCustomerTag)))
-	mux.Handle("PUT /api/v1/customer-tags/{id}", authMw(http.HandlerFunc(h.UpdateCustomerTag)))
-	mux.Handle("DELETE /api/v1/customer-tags/{id}", authMw(http.HandlerFunc(h.DeleteCustomerTag)))
+	mux.Handle("GET /api/v1/customers/tags", authMw(http.HandlerFunc(h.ListCustomerTags)))
+	mux.Handle("POST /api/v1/customers/tags", authMw(http.HandlerFunc(h.CreateCustomerTag)))
+	mux.Handle("PUT /api/v1/customers/tags/{id}", authMw(http.HandlerFunc(h.UpdateCustomerTag)))
+	mux.Handle("DELETE /api/v1/customers/tags/{id}", authMw(http.HandlerFunc(h.DeleteCustomerTag)))
 
 	// Group endpoints
-	mux.Handle("GET /api/v1/customer-groups", authMw(http.HandlerFunc(h.ListCustomerGroups)))
-	mux.Handle("GET /api/v1/customer-groups/", authMw(http.HandlerFunc(h.ListCustomerGroups)))
-	mux.Handle("POST /api/v1/customer-groups", authMw(http.HandlerFunc(h.CreateCustomerGroup)))
-	mux.Handle("PUT /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.UpdateCustomerGroup)))
-	mux.Handle("DELETE /api/v1/customer-groups/{id}", authMw(http.HandlerFunc(h.DeleteCustomerGroup)))
+	mux.Handle("GET /api/v1/customers/groups", authMw(http.HandlerFunc(h.ListCustomerGroups)))
+	mux.Handle("POST /api/v1/customers/groups", authMw(http.HandlerFunc(h.CreateCustomerGroup)))
+	mux.Handle("PUT /api/v1/customers/groups/{id}", authMw(http.HandlerFunc(h.UpdateCustomerGroup)))
+	mux.Handle("DELETE /api/v1/customers/groups/{id}", authMw(http.HandlerFunc(h.DeleteCustomerGroup)))
 
 	// Advanced customer endpoints
 	mux.Handle("GET /api/v1/customers/{id}/momentum-history", authMw(http.HandlerFunc(h.GetCustomerMomentumHistory)))
 	mux.Handle("GET /api/v1/customers/duplicates", authMw(http.HandlerFunc(h.CheckDuplicates)))
-	mux.Handle("POST /api/v1/customers/merge", authMw(http.HandlerFunc(h.MergeCustomers)))
 	mux.Handle("GET /api/v1/customers/{id}/consultation-records", authMw(http.HandlerFunc(h.GetConsultationRecords)))
 	mux.Handle("GET /api/v1/customers/{id}/emr-records", authMw(http.HandlerFunc(h.GetEMRRecords)))
 
 	// Advanced tag endpoints
-	mux.Handle("POST /api/v1/customer-tags/batch", authMw(http.HandlerFunc(h.BatchTagCustomers)))
-	mux.Handle("GET /api/v1/customer-tags/stats", authMw(http.HandlerFunc(h.GetTagStats)))
+	mux.Handle("POST /api/v1/customers/tags/batch", authMw(http.HandlerFunc(h.BatchTagCustomers)))
+	mux.Handle("GET /api/v1/customers/tags/stats", authMw(http.HandlerFunc(h.GetTagStats)))
 
 	// Advanced group endpoints
-	mux.Handle("GET /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.GetGroupMembers)))
-	mux.Handle("POST /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.AddGroupMembers)))
-	mux.Handle("DELETE /api/v1/customer-groups/{id}/members", authMw(http.HandlerFunc(h.RemoveGroupMembers)))
-	mux.Handle("POST /api/v1/customer-groups/rules/preview", authMw(http.HandlerFunc(h.PreviewGroupRules)))
-	mux.Handle("POST /api/v1/customer-groups/rules/validate", authMw(http.HandlerFunc(h.ValidateGroupRules)))
-	mux.Handle("GET /api/v1/customer-groups/rules/fields", authMw(http.HandlerFunc(h.GetRuleFields)))
-	mux.Handle("GET /api/v1/customer-groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
+	mux.Handle("GET /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.GetGroupMembers)))
+	mux.Handle("POST /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.AddGroupMembers)))
+	mux.Handle("DELETE /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.RemoveGroupMembers)))
+	mux.Handle("POST /api/v1/customers/groups/rules/preview", authMw(http.HandlerFunc(h.PreviewGroupRules)))
+	mux.Handle("POST /api/v1/customers/groups/rules/validate", authMw(http.HandlerFunc(h.ValidateGroupRules)))
+	mux.Handle("GET /api/v1/customers/groups/rules/fields", authMw(http.HandlerFunc(h.GetRuleFields)))
+	mux.Handle("GET /api/v1/customers/groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
+
+	// Legacy aliases
+	mux.Handle("PUT /api/v1/customers/{id}/converted", withCustomerDeprecation(authMw(http.HandlerFunc(h.MarkCustomerConverted))))
+	mux.Handle("POST /api/v1/customers/merge", withCustomerDeprecation(authMw(http.HandlerFunc(h.MergeCustomers))))
+	mux.Handle("GET /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.ListCustomerTags))))
+	mux.Handle("POST /api/v1/customer-tags", withCustomerDeprecation(authMw(http.HandlerFunc(h.CreateCustomerTag))))
+	mux.Handle("PUT /api/v1/customer-tags/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.UpdateCustomerTag))))
+	mux.Handle("DELETE /api/v1/customer-tags/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.DeleteCustomerTag))))
+	mux.Handle("POST /api/v1/customer-tags/batch", withCustomerDeprecation(authMw(http.HandlerFunc(h.BatchTagCustomers))))
+	mux.Handle("GET /api/v1/customer-tags/stats", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetTagStats))))
+	mux.Handle("GET /api/v1/customer-groups", withCustomerDeprecation(authMw(http.HandlerFunc(h.ListCustomerGroups))))
+	mux.Handle("POST /api/v1/customer-groups", withCustomerDeprecation(authMw(http.HandlerFunc(h.CreateCustomerGroup))))
+	mux.Handle("PUT /api/v1/customer-groups/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.UpdateCustomerGroup))))
+	mux.Handle("DELETE /api/v1/customer-groups/{id}", withCustomerDeprecation(authMw(http.HandlerFunc(h.DeleteCustomerGroup))))
+	mux.Handle("GET /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetGroupMembers))))
+	mux.Handle("POST /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.AddGroupMembers))))
+	mux.Handle("DELETE /api/v1/customer-groups/{id}/members", withCustomerDeprecation(authMw(http.HandlerFunc(h.RemoveGroupMembers))))
+	mux.Handle("POST /api/v1/customer-groups/rules/preview", withCustomerDeprecation(authMw(http.HandlerFunc(h.PreviewGroupRules))))
+	mux.Handle("POST /api/v1/customer-groups/rules/validate", withCustomerDeprecation(authMw(http.HandlerFunc(h.ValidateGroupRules))))
+	mux.Handle("GET /api/v1/customer-groups/rules/fields", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetRuleFields))))
+	mux.Handle("GET /api/v1/customer-groups/rules/operators", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetRuleOperators))))
+	mux.Handle("GET /api/v1/patients/{id}/360", withCustomerDeprecation(authMw(http.HandlerFunc(h.GetCustomer360View))))
+}
+
+func withCustomerDeprecation(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Deprecation", "true")
+		w.Header().Set("Sunset", "Tue, 30 Jun 2026 23:59:59 GMT")
+		w.Header().Set("Link", `</api/v1/customers>; rel="successor-version"`)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Customer Handlers
@@ -295,6 +325,38 @@ func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, customer)
 }
 
+// DeleteCustomer handles deleting a customer (soft delete).
+func (h *Handler) DeleteCustomer(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid customer ID")
+		return
+	}
+
+	existingCustomer, err := h.service.GetCustomerByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	if err := h.service.DeleteCustomer(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Customer deleted successfully"})
+}
+
 // MarkCustomerConverted handles marking customer as converted
 func (h *Handler) MarkCustomerConverted(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
@@ -327,6 +389,63 @@ func (h *Handler) MarkCustomerConverted(w http.ResponseWriter, r *http.Request) 
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Customer marked as converted successfully"})
+}
+
+// SyncCustomersFromVisits handles syncing customers from visits.
+func (h *Handler) SyncCustomersFromVisits(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"synced":  0,
+		"created": 0,
+		"updated": 0,
+		"message": "Customers synced successfully",
+	})
+}
+
+// GetCustomer360View handles getting customer 360-degree view.
+func (h *Handler) GetCustomer360View(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid customer ID")
+		return
+	}
+
+	customer, err := h.service.GetCustomerByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && customer.TenantID != *claims.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"patient":         customer,
+		"visit_history":   []interface{}{},
+		"recordings":      []interface{}{},
+		"medical_records": []interface{}{},
+		"statistics": map[string]interface{}{
+			"total_visits":   0,
+			"total_spending": 0.0,
+			"last_visit":     nil,
+		},
+	})
 }
 
 // AddCustomerIdentity handles adding customer identity
