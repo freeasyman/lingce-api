@@ -67,11 +67,47 @@ check_proxy() {
   rm -f "$out"
 }
 
+check_proxy_any() {
+  local path="$1"
+  local expected_csv="$2"
+  local name="$3"
+
+  if [[ -z "$TOKEN" ]]; then
+    fail "${name} skipped: TOKEN missing"
+    return 1
+  fi
+
+  local out
+  out="$(mktemp)"
+  local code
+  code="$(curl -sS -o "$out" -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${FRONTEND_URL}${path}")"
+
+  local matched=0
+  local expected
+  IFS=',' read -r -a expected_arr <<< "$expected_csv"
+  for expected in "${expected_arr[@]}"; do
+    if [[ "$code" == "$expected" ]]; then
+      matched=1
+      break
+    fi
+  done
+
+  if [[ "$matched" -eq 1 ]]; then
+    pass "${name} (${code})"
+  else
+    fail "${name} http=${code} expected one of ${expected_csv}"
+    cat "$out" >&2
+  fi
+
+  rm -f "$out"
+}
+
 check_runtime_endpoints() {
-  local content_mod customer_mod recording_mod
+  local content_mod customer_mod recording_mod route_tree
   content_mod="$(curl -sS "${FRONTEND_URL}/src/api/content.ts")"
   customer_mod="$(curl -sS "${FRONTEND_URL}/src/api/customers.ts")"
   recording_mod="$(curl -sS "${FRONTEND_URL}/src/api/doctor-recordings.ts")"
+  route_tree="$(curl -sS "${FRONTEND_URL}/src/routeTree.gen.ts")"
 
   if printf '%s' "$content_mod" | rg -q '/api/v1/content-prompt-templates'; then
     fail "runtime content.ts still contains legacy content-prompt-templates"
@@ -90,6 +126,12 @@ check_runtime_endpoints() {
   else
     pass "runtime doctor-recordings.ts uses /recordings"
   fi
+
+  if printf '%s' "$route_tree" | rg -q 'path: "/config/logs"'; then
+    pass "runtime routeTree contains /config/logs route"
+  else
+    fail "runtime routeTree missing /config/logs route"
+  fi
 }
 
 main() {
@@ -104,6 +146,7 @@ main() {
   check_page "/content/topics"
   check_page "/doctor-recordings"
   check_page "/consultant-recordings"
+  check_page "/config/logs"
 
   check_runtime_endpoints
 
@@ -112,6 +155,10 @@ main() {
   check_proxy "/api/v1/content-items/prompts?tenant_id=${TENANT_ID}&function_type=content_article&page=1&page_size=100" 200 "proxy content prompts"
   check_proxy "/api/v1/content-items?tenant_id=${TENANT_ID}&page=1&page_size=20" 200 "proxy content items"
   check_proxy "/api/v1/recordings?tenant_id=${TENANT_ID}&page=1&page_size=20" 200 "proxy recordings list"
+  check_proxy_any "/api/v1/operation-logs?page=1&page_size=20" "200,403" "proxy operation-logs list"
+  check_proxy_any "/api/v1/operation-logs/data-browser/statistics" "200,403" "proxy operation-logs data-browser stats"
+  check_proxy "/api/v1/visits?page=1&page_size=20&tenant_id=${TENANT_ID}" 200 "proxy visits list"
+  check_proxy "/api/v1/departments?page=1&page_size=20&tenant_id=${TENANT_ID}" 200 "proxy departments list"
 
   log ""
   log "Summary: pass=${PASS_COUNT} fail=${FAIL_COUNT}"
