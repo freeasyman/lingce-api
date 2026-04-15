@@ -65,7 +65,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 	}
 	defer rows.Close()
 
-	var devices []*BadgeDevice
+	devices := make([]*BadgeDevice, 0)
 	for rows.Next() {
 		var d BadgeDevice
 		if err := rows.Scan(
@@ -140,6 +140,22 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 	if batchNo == "" {
 		batchNo = fmt.Sprintf("BATCH-%s", time.Now().Format("20060102-150405"))
 	}
+	var manufacturerID int64
+	var appID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id, COALESCE(NULLIF(app_id, ''), code)
+		FROM badge_manufacturers
+		WHERE code = $1
+		LIMIT 1
+	`, req.ManufacturerCode).Scan(&manufacturerID, &appID); err != nil {
+		if err == pgx.ErrNoRows {
+			return 0, 0, nil, nil, fmt.Errorf("manufacturer not found: %s", req.ManufacturerCode)
+		}
+		return 0, 0, nil, nil, fmt.Errorf("failed to load manufacturer: %w", err)
+	}
+	if strings.TrimSpace(appID) == "" {
+		appID = req.ManufacturerCode
+	}
 
 	success := 0
 	failed := 0
@@ -163,13 +179,21 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 		}
 
 		var createdID int64
+		deviceUID := fmt.Sprintf("%s:%s:%s", req.ManufacturerCode, appID, deviceNo)
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO badge_devices (
-				device_no, manufacturer_code, manufacturer_name, hardware_model,
-				status, health_status, import_batch_no, metadata, created_at, updated_at
-			) VALUES ($1, $2, $3, NULLIF($4, ''), 'draft', 'unknown', $5, '{}'::jsonb, NOW(), NOW())
+				manufacturer_id, app_id, device_no, device_uid,
+				current_status, lifecycle_status, assignment_status, inspection_result,
+				manufacturer_code, manufacturer_name, hardware_model,
+				status, health_status, import_batch_no, metadata, ext_json, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4,
+				'pending_acceptance', 'pending_acceptance', 'unassigned', 'unknown',
+				$5, $6, NULLIF($7, ''),
+				'draft', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+			)
 			RETURNING id
-		`, deviceNo, req.ManufacturerCode, req.ManufacturerName, item.HardwareModel, batchNo).Scan(&createdID); err != nil {
+		`, manufacturerID, appID, deviceNo, deviceUID, req.ManufacturerCode, req.ManufacturerName, item.HardwareModel, batchNo).Scan(&createdID); err != nil {
 			failed++
 			continue
 		}

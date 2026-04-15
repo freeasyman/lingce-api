@@ -148,13 +148,13 @@ pick_ids() {
     fi
   done
   for ((i = 1; i <= attempts; i++)); do
-    tags_json="$(curl -sS "${BASE_URL}${API_PREFIX}/customer-tags?tenant_id=${TENANT_ID}&page=1&page_size=20" -H "Authorization: Bearer ${TOKEN}")" && break
+    tags_json="$(curl -sS "${BASE_URL}${API_PREFIX}/customers/tags?tenant_id=${TENANT_ID}&page=1&page_size=20" -H "Authorization: Bearer ${TOKEN}")" && break
     if [[ "$i" -lt "$attempts" ]]; then
       sleep "$delay"
     fi
   done
   for ((i = 1; i <= attempts; i++)); do
-    groups_json="$(curl -sS "${BASE_URL}${API_PREFIX}/customer-groups?tenant_id=${TENANT_ID}&page=1&page_size=20" -H "Authorization: Bearer ${TOKEN}")" && break
+    groups_json="$(curl -sS "${BASE_URL}${API_PREFIX}/customers/groups?tenant_id=${TENANT_ID}&page=1&page_size=20" -H "Authorization: Bearer ${TOKEN}")" && break
     if [[ "$i" -lt "$attempts" ]]; then
       sleep "$delay"
     fi
@@ -206,21 +206,21 @@ main() {
   request GET "/customers/duplicates?tenant_id=${TENANT_ID}&phone=${CUSTOMER_PHONE}" 200 "success" "duplicates-by-phone"
   request GET "/customers/${CUSTOMER_ID}/consultation-records?page=1&page_size=5" 200 "success" "consultation-records"
   request GET "/customers/${CUSTOMER_ID}/emr-records?page=1&page_size=5" 200 "success" "emr-records"
-  request POST "/customer-tags/batch?tenant_id=${TENANT_ID}" 200 "success" "batch-tag-add" "{\"customer_ids\":[${CUSTOMER_ID}],\"tag_ids\":[${TAG_ID}],\"action\":\"add\"}"
-  request GET "/customer-tags/stats?tenant_id=${TENANT_ID}" 200 "success" "tag-stats"
-  request GET "/customer-groups/${GROUP_ID}/members?page=1&page_size=5" 200 "success" "group-members-list"
-  request POST "/customer-groups/${GROUP_ID}/members" 200 "success" "group-members-add" "{\"customer_ids\":[${CUSTOMER_ID}]}"
-  request DELETE "/customer-groups/${GROUP_ID}/members" 200 "success" "group-members-remove" "{\"customer_ids\":[${CUSTOMER_ID}]}"
-  request POST "/customer-groups/rules/validate" 200 "success" "rules-validate-empty" "{\"rules\":{}}"
+  request POST "/customers/tags/batch?tenant_id=${TENANT_ID}" 200 "success" "batch-tag-add" "{\"customer_ids\":[${CUSTOMER_ID}],\"tag_ids\":[${TAG_ID}],\"action\":\"add\"}"
+  request GET "/customers/tags/stats?tenant_id=${TENANT_ID}" 200 "success" "tag-stats"
+  request GET "/customers/groups/${GROUP_ID}/members?page=1&page_size=5" 200 "success" "group-members-list"
+  request POST "/customers/groups/${GROUP_ID}/members" 200 "success" "group-members-add" "{\"customer_ids\":[${CUSTOMER_ID}]}"
+  request DELETE "/customers/groups/${GROUP_ID}/members" 200 "success" "group-members-remove" "{\"customer_ids\":[${CUSTOMER_ID}]}"
+  request POST "/customers/groups/rules/validate" 200 "success" "rules-validate-empty" "{\"rules\":{}}"
 
   # Parameter error cases
   request GET "/customers/duplicates?tenant_id=${TENANT_ID}" 400 "param_error" "duplicates-missing-params"
-  request POST "/customers/merge" 400 "param_error" "merge-target-equals-source" "{\"target_id\":${CUSTOMER_ID},\"source_ids\":[${CUSTOMER_ID}]}"
-  request POST "/customer-groups/rules/preview?tenant_id=${TENANT_ID}" 400 "param_error" "rules-preview-empty" "{\"rules\":{}}"
+  request POST "/customers/actions/merge" 400 "param_error" "merge-target-equals-source" "{\"target_id\":${CUSTOMER_ID},\"source_ids\":[${CUSTOMER_ID}]}"
+  request POST "/customers/groups/rules/preview?tenant_id=${TENANT_ID}" 400 "param_error" "rules-preview-empty" "{\"rules\":{}}"
 
   # Permission/auth error cases
   request GET "/customers/${CUSTOMER_ID}/momentum-history" 401 "permission_error" "momentum-history-no-auth" "" "none"
-  request GET "/customer-tags/stats?tenant_id=${TENANT_ID}" 401 "permission_error" "tag-stats-invalid-token" "" "invalid"
+  request GET "/customers/tags/stats?tenant_id=${TENANT_ID}" 401 "permission_error" "tag-stats-invalid-token" "" "invalid"
 
   log ""
   log "Summary: pass=${PASS_COUNT} fail=${FAIL_COUNT}"

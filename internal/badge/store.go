@@ -508,7 +508,7 @@ func (s *Store) ListManufacturers(ctx context.Context) ([]*BadgeManufacturer, er
 	}
 	defer rows.Close()
 
-	var manufacturers []*BadgeManufacturer
+	manufacturers := make([]*BadgeManufacturer, 0)
 	for rows.Next() {
 		var m BadgeManufacturer
 		if err := rows.Scan(&m.ID, &m.Code, &m.Name, &m.ContactPerson, &m.ContactPhone,
