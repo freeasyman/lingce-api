@@ -36,4 +36,7 @@
 - `docs/regression/logs/2026-04-15-operation-log-resource-regression.log`
 - `docs/regression/logs/2026-04-15-visit-resource-regression.log`
 - `docs/regression/logs/2026-04-15-department-resource-regression.log`
+- `docs/regression/logs/2026-04-15-customer-resource-regression.log`
 
+## 关联矩阵
+- `docs/regression/2026-04-15-resource-test-matrix.md`
