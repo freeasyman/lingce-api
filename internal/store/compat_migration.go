@@ -226,6 +226,7 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) NOT NULL DEFAULT 0`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS feature_group_id BIGINT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`UPDATE tenant_subscription_plans SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
@@ -240,6 +241,38 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP`,
+		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS end_date TIMESTAMP`,
+		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS grace_end_date TIMESTAMP`,
+		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'tenant_subscriptions' AND column_name = 'started_on'
+			) THEN
+				EXECUTE 'UPDATE tenant_subscriptions
+				           SET start_date = COALESCE(start_date, started_on::timestamp, created_at, NOW())
+				         WHERE start_date IS NULL';
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'tenant_subscriptions' AND column_name = 'expired_on'
+			) THEN
+				EXECUTE 'UPDATE tenant_subscriptions
+				           SET end_date = COALESCE(end_date, expired_on::timestamp, start_date, NOW())
+				         WHERE end_date IS NULL';
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'tenant_subscriptions' AND column_name = 'grace_end_on'
+			) THEN
+				EXECUTE 'UPDATE tenant_subscriptions
+				           SET grace_end_date = COALESCE(grace_end_date, grace_end_on::timestamp)
+				         WHERE grace_end_date IS NULL';
+			END IF;
+		END $$`,
 		`CREATE TABLE IF NOT EXISTS tenant_subscription_events (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -257,10 +290,19 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS new_status TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS old_end_date TIMESTAMP`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS new_end_date TIMESTAMP`,
+		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS subscription_id BIGINT`,
+		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS request_id TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS operator_id BIGINT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS operator_type TEXT`,
+		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS operator_name TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS notes TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`UPDATE tenant_subscription_events
+		    SET request_id = COALESCE(NULLIF(request_id, ''), CONCAT('compat_', tenant_id::text, '_', EXTRACT(EPOCH FROM created_at)::bigint::text))
+		  WHERE request_id IS NULL OR request_id = ''`,
+		`UPDATE tenant_subscription_events
+		    SET operator_name = COALESCE(NULLIF(operator_name, ''), 'system')
+		  WHERE operator_name IS NULL OR operator_name = ''`,
 		`CREATE TABLE IF NOT EXISTS tenant_validity_change_logs (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,

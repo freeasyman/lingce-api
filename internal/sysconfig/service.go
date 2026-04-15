@@ -66,15 +66,16 @@ func (s *Service) UpdateSubscriptionPlan(ctx context.Context, id int64, req Upda
 // toSubscriptionPlanResponse converts a TenantSubscriptionPlan to SubscriptionPlanResponse
 func toSubscriptionPlanResponse(p *TenantSubscriptionPlan) *SubscriptionPlanResponse {
 	return &SubscriptionPlanResponse{
-		ID:           p.ID,
-		Name:         p.Name,
-		Code:         p.Code,
-		Description:  p.Description,
-		DurationDays: p.DurationDays,
-		Price:        p.Price,
-		IsActive:     p.IsActive,
-		CreatedAt:    p.CreatedAt,
-		UpdatedAt:    p.UpdatedAt,
+		ID:             p.ID,
+		Name:           p.Name,
+		Code:           p.Code,
+		Description:    p.Description,
+		DurationDays:   p.DurationDays,
+		FeatureGroupID: p.FeatureGroupID,
+		Price:          p.Price,
+		IsActive:       p.IsActive,
+		CreatedAt:      p.CreatedAt,
+		UpdatedAt:      p.UpdatedAt,
 	}
 }
 
@@ -111,12 +112,22 @@ func (s *Service) GetTenantSubscription(ctx context.Context, tenantID int64) (*S
 
 // PerformSubscriptionAction performs an action on a tenant's subscription
 func (s *Service) PerformSubscriptionAction(ctx context.Context, tenantID int64, req SubscriptionActionRequest) error {
+	if req.Action == "resume" {
+		req.Action = "activate"
+	}
+
 	// Validate action
 	validActions := map[string]bool{
 		"renew": true, "upgrade": true, "pause": true, "cancel": true, "activate": true,
 	}
 	if !validActions[req.Action] {
 		return fmt.Errorf("invalid action: %s", req.Action)
+	}
+	if req.Action == "upgrade" && req.PlanID == nil {
+		return fmt.Errorf("plan_id is required for upgrade")
+	}
+	if (req.Action == "renew" || req.Action == "upgrade") && req.ExtendDays != nil && *req.ExtendDays <= 0 {
+		return fmt.Errorf("extend_days must be positive")
 	}
 
 	return s.store.PerformSubscriptionAction(ctx, tenantID, req)

@@ -2,8 +2,11 @@ package tenant
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -217,12 +220,22 @@ func (h *Handler) PerformSubscriptionAction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req SubscriptionActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			httputil.WriteBadRequest(w, "Invalid request body")
+			return
+		}
 	}
 	if err := h.service.PerformSubscriptionAction(r.Context(), id, action, req); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		msg := err.Error()
+		if strings.Contains(msg, "invalid action") ||
+			strings.Contains(msg, "plan not found") ||
+			strings.Contains(msg, "plan_id is required") ||
+			strings.Contains(msg, "extend_days must be positive") {
+			httputil.WriteBadRequest(w, msg)
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Subscription action performed successfully"})

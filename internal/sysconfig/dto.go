@@ -39,31 +39,34 @@ type TenantResponse struct {
 
 // Subscription Plan DTOs
 type CreateSubscriptionPlanRequest struct {
-	Name         string   `json:"name"`
-	Code         string   `json:"code"`
-	Description  *string  `json:"description,omitempty"`
-	DurationDays int      `json:"duration_days"`
-	Price        *float64 `json:"price,omitempty"`
+	Name           string   `json:"name"`
+	Code           string   `json:"code"`
+	Description    *string  `json:"description,omitempty"`
+	DurationDays   int      `json:"duration_days"`
+	FeatureGroupID *int64   `json:"feature_group_id,omitempty"`
+	Price          *float64 `json:"price,omitempty"`
 }
 
 type UpdateSubscriptionPlanRequest struct {
-	Name         *string  `json:"name,omitempty"`
-	Description  *string  `json:"description,omitempty"`
-	DurationDays *int     `json:"duration_days,omitempty"`
-	Price        *float64 `json:"price,omitempty"`
-	IsActive     *bool    `json:"is_active,omitempty"`
+	Name           *string  `json:"name,omitempty"`
+	Description    *string  `json:"description,omitempty"`
+	DurationDays   *int     `json:"duration_days,omitempty"`
+	FeatureGroupID *int64   `json:"feature_group_id,omitempty"`
+	Price          *float64 `json:"price,omitempty"`
+	IsActive       *bool    `json:"is_active,omitempty"`
 }
 
 type SubscriptionPlanResponse struct {
-	ID           int64     `json:"id"`
-	Name         string    `json:"name"`
-	Code         string    `json:"code"`
-	Description  *string   `json:"description,omitempty"`
-	DurationDays int       `json:"duration_days"`
-	Price        *float64  `json:"price,omitempty"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID             int64     `json:"id"`
+	Name           string    `json:"name"`
+	Code           string    `json:"code"`
+	Description    *string   `json:"description,omitempty"`
+	DurationDays   int       `json:"duration_days"`
+	FeatureGroupID *int64    `json:"feature_group_id,omitempty"`
+	Price          *float64  `json:"price,omitempty"`
+	IsActive       bool      `json:"is_active"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Subscription DTOs

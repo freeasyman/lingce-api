@@ -39,7 +39,7 @@ func (s *Store) LogValidityChange(ctx context.Context, tenantID int64, oldValidF
 // ListSubscriptionPlans retrieves all subscription plans
 func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*TenantSubscriptionPlan, error) {
 	query := `
-		SELECT id, name, code, description, duration_days, COALESCE(price, 0) AS price,
+		SELECT id, name, code, description, duration_days, feature_group_id, COALESCE(price, 0) AS price,
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -68,7 +68,7 @@ func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*T
 	var plans []*TenantSubscriptionPlan
 	for rows.Next() {
 		var p TenantSubscriptionPlan
-		err := rows.Scan(&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+		err := rows.Scan(&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan subscription plan: %w", err)
 		}
@@ -81,14 +81,14 @@ func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*T
 // CreateSubscriptionPlan creates a new subscription plan
 func (s *Store) CreateSubscriptionPlan(ctx context.Context, req CreateSubscriptionPlanRequest) (*TenantSubscriptionPlan, error) {
 	query := `
-		INSERT INTO tenant_subscription_plans (name, code, description, duration_days, price, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())
-		RETURNING id, name, code, description, duration_days, price, is_active, created_at, updated_at
+		INSERT INTO tenant_subscription_plans (name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())
+		RETURNING id, name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at
 	`
 
 	var p TenantSubscriptionPlan
-	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.Price).Scan(
-		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.FeatureGroupID, req.Price).Scan(
+		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subscription plan: %w", err)
@@ -121,6 +121,12 @@ func (s *Store) UpdateSubscriptionPlan(ctx context.Context, id int64, req Update
 		argPos++
 	}
 
+	if req.FeatureGroupID != nil {
+		query += fmt.Sprintf(", feature_group_id = $%d", argPos)
+		args = append(args, *req.FeatureGroupID)
+		argPos++
+	}
+
 	if req.Price != nil {
 		query += fmt.Sprintf(", price = $%d", argPos)
 		args = append(args, *req.Price)
@@ -135,11 +141,11 @@ func (s *Store) UpdateSubscriptionPlan(ctx context.Context, id int64, req Update
 
 	query += fmt.Sprintf(" WHERE id = $%d", argPos)
 	args = append(args, id)
-	query += " RETURNING id, name, code, description, duration_days, price, is_active, created_at, updated_at"
+	query += " RETURNING id, name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at"
 
 	var p TenantSubscriptionPlan
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update subscription plan: %w", err)
@@ -152,9 +158,26 @@ func (s *Store) UpdateSubscriptionPlan(ctx context.Context, id int64, req Update
 
 // GetTenantSubscription retrieves a tenant's subscription
 func (s *Store) GetTenantSubscription(ctx context.Context, tenantID int64) (*TenantSubscription, *TenantSubscriptionPlan, error) {
+	if err := s.ensureDefaultSubscription(ctx, tenantID); err != nil {
+		return nil, nil, err
+	}
+
 	query := `
-		SELECT s.id, s.tenant_id, s.plan_id, s.status, s.start_date, s.end_date, s.grace_end_date, s.created_at, s.updated_at,
-		       p.id, p.name, p.code, p.description, p.duration_days, p.price, p.is_active, p.created_at, p.updated_at
+		SELECT s.id, s.tenant_id, s.plan_id, s.status,
+		       COALESCE(s.start_date, s.started_on::timestamp) AS start_date,
+		       COALESCE(s.end_date, s.expired_on::timestamp) AS end_date,
+		       COALESCE(s.grace_end_date, s.grace_end_on::timestamp) AS grace_end_date,
+		       COALESCE(s.created_at, NOW()) AS created_at,
+		       COALESCE(s.updated_at, s.created_at, NOW()) AS updated_at,
+		       p.id, COALESCE(p.name, ''), COALESCE(p.code, ''), p.description,
+		       p.feature_group_id,
+		       COALESCE(p.duration_days, 0), COALESCE(p.price, 0),
+		       CASE
+		           WHEN p.is_active::text IN ('1','t','true','TRUE') THEN true
+		           ELSE false
+		       END AS is_active,
+		       COALESCE(p.created_at, NOW()),
+		       COALESCE(p.updated_at, p.created_at, NOW())
 		FROM tenant_subscriptions s
 		LEFT JOIN tenant_subscription_plans p ON s.plan_id = p.id
 		WHERE s.tenant_id = $1
@@ -168,7 +191,7 @@ func (s *Store) GetTenantSubscription(ctx context.Context, tenantID int64) (*Ten
 
 	err := s.pool.QueryRow(ctx, query, tenantID).Scan(
 		&sub.ID, &sub.TenantID, &sub.PlanID, &sub.Status, &sub.StartDate, &sub.EndDate, &sub.GraceEndDate, &sub.CreatedAt, &sub.UpdatedAt,
-		&planID, &plan.Name, &plan.Code, &plan.Description, &plan.DurationDays, &plan.Price, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt,
+		&planID, &plan.Name, &plan.Code, &plan.Description, &plan.FeatureGroupID, &plan.DurationDays, &plan.Price, &plan.IsActive, &plan.CreatedAt, &plan.UpdatedAt,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("subscription not found: %w", err)
@@ -193,7 +216,12 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 	// Get current subscription
 	var currentSub TenantSubscription
 	query := `
-		SELECT id, tenant_id, plan_id, status, start_date, end_date, grace_end_date, created_at, updated_at
+		SELECT id, tenant_id, plan_id, status,
+		       COALESCE(start_date, started_on::timestamp) AS start_date,
+		       COALESCE(end_date, expired_on::timestamp) AS end_date,
+		       COALESCE(grace_end_date, grace_end_on::timestamp) AS grace_end_date,
+		       COALESCE(created_at, NOW()) AS created_at,
+		       COALESCE(updated_at, created_at, NOW()) AS updated_at
 		FROM tenant_subscriptions
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -204,6 +232,16 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 		&currentSub.StartDate, &currentSub.EndDate, &currentSub.GraceEndDate,
 		&currentSub.CreatedAt, &currentSub.UpdatedAt,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := s.ensureDefaultSubscriptionTx(ctx, tx, tenantID); err != nil {
+			return err
+		}
+		err = tx.QueryRow(ctx, query, tenantID).Scan(
+			&currentSub.ID, &currentSub.TenantID, &currentSub.PlanID, &currentSub.Status,
+			&currentSub.StartDate, &currentSub.EndDate, &currentSub.GraceEndDate,
+			&currentSub.CreatedAt, &currentSub.UpdatedAt,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("subscription not found: %w", err)
 	}
@@ -215,28 +253,47 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 
 	switch req.Action {
 	case "renew":
-		if req.ExtendDays != nil {
-			newEndDate = currentSub.EndDate.Add(time.Duration(*req.ExtendDays) * 24 * time.Hour)
-		} else if req.NewEndDate != nil {
+		extendDays := 365
+		if req.ExtendDays != nil && *req.ExtendDays > 0 {
+			extendDays = *req.ExtendDays
+		}
+		if req.NewEndDate != nil {
 			newEndDate = *req.NewEndDate
 		} else {
-			return fmt.Errorf("extend_days or new_end_date required for renew action")
+			newEndDate = currentSub.EndDate.Add(time.Duration(extendDays) * 24 * time.Hour)
 		}
 		newStatus = "active"
 
 	case "upgrade":
-		if req.PlanID == nil {
-			return fmt.Errorf("plan_id required for upgrade action")
+		if req.PlanID != nil {
+			// Upgrade to a target plan if provided.
+			var durationDays int
+			var planFeatureGroupID *int64
+			err = tx.QueryRow(ctx, "SELECT duration_days, feature_group_id FROM tenant_subscription_plans WHERE id = $1", *req.PlanID).Scan(&durationDays, &planFeatureGroupID)
+			if err != nil {
+				return fmt.Errorf("plan not found: %w", err)
+			}
+			newEndDate = time.Now().Add(time.Duration(durationDays) * 24 * time.Hour)
+			currentSub.PlanID = req.PlanID
+			if planFeatureGroupID != nil {
+				_, err = tx.Exec(ctx, `
+					INSERT INTO tenant_feature_assignments (tenant_id, group_id, created_at, updated_at)
+					VALUES ($1, $2, NOW(), NOW())
+					ON CONFLICT (tenant_id) DO UPDATE SET group_id = EXCLUDED.group_id, updated_at = NOW()
+				`, tenantID, *planFeatureGroupID)
+				if err != nil {
+					return fmt.Errorf("failed to sync feature group from subscription plan: %w", err)
+				}
+			}
+		} else {
+			// Backward-compatible upgrade: keep current plan and extend validity.
+			extendDays := 365
+			if req.ExtendDays != nil && *req.ExtendDays > 0 {
+				extendDays = *req.ExtendDays
+			}
+			newEndDate = currentSub.EndDate.Add(time.Duration(extendDays) * 24 * time.Hour)
 		}
-		// Get new plan duration
-		var durationDays int
-		err = tx.QueryRow(ctx, "SELECT duration_days FROM tenant_subscription_plans WHERE id = $1", *req.PlanID).Scan(&durationDays)
-		if err != nil {
-			return fmt.Errorf("plan not found: %w", err)
-		}
-		newEndDate = time.Now().Add(time.Duration(durationDays) * 24 * time.Hour)
 		newStatus = "active"
-		currentSub.PlanID = req.PlanID
 
 	case "pause":
 		newStatus = "paused"
@@ -246,7 +303,7 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 		newStatus = "expired"
 		newEndDate = time.Now()
 
-	case "activate":
+	case "activate", "resume":
 		newStatus = "active"
 		newEndDate = currentSub.EndDate
 
@@ -266,17 +323,99 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 	}
 
 	// Log event
+	requestID := fmt.Sprintf("sub_%d_%d", tenantID, time.Now().Unix())
 	eventQuery := `
 		INSERT INTO tenant_subscription_events
-		(tenant_id, event_type, old_status, new_status, old_end_date, new_end_date, notes, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		(tenant_id, subscription_id, event_type, old_status, new_status, old_end_date, new_end_date, notes,
+		 request_id, operator_type, operator_id, operator_name, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+		        $9,
+		        'admin', 0, 'system', NOW())
 	`
-	_, err = tx.Exec(ctx, eventQuery, tenantID, req.Action, oldStatus, newStatus, oldEndDate, newEndDate, req.Notes)
+	_, err = tx.Exec(
+		ctx,
+		eventQuery,
+		tenantID,
+		currentSub.ID,
+		req.Action,
+		oldStatus,
+		newStatus,
+		oldEndDate,
+		newEndDate,
+		req.Notes,
+		requestID,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to log subscription event: %w", err)
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (s *Store) ensureDefaultSubscription(ctx context.Context, tenantID int64) error {
+	var count int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM tenant_subscriptions WHERE tenant_id = $1", tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("failed to check subscription existence: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin default subscription transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := s.ensureDefaultSubscriptionTx(ctx, tx, tenantID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit default subscription transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureDefaultSubscriptionTx(ctx context.Context, tx pgx.Tx, tenantID int64) error {
+	var count int
+	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM tenant_subscriptions WHERE tenant_id = $1", tenantID).Scan(&count); err != nil {
+		return fmt.Errorf("failed to check subscription existence in transaction: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	var planID *int64
+	durationDays := 365
+	var pid int64
+	var pdays int
+	err := tx.QueryRow(ctx, `
+		SELECT id, duration_days
+		FROM tenant_subscription_plans
+		WHERE is_active::text IN ('1','t','true','TRUE')
+		ORDER BY sort_order, created_at
+		LIMIT 1
+	`).Scan(&pid, &pdays)
+	if err == nil {
+		planID = &pid
+		if pdays > 0 {
+			durationDays = pdays
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to query default subscription plan: %w", err)
+	}
+
+	startDate := time.Now()
+	endDate := startDate.Add(time.Duration(durationDays) * 24 * time.Hour)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, start_date, end_date, created_at, updated_at)
+		VALUES ($1, $2, 'active', $3, $4, NOW(), NOW())
+	`, tenantID, planID, startDate, endDate)
+	if err != nil {
+		return fmt.Errorf("failed to initialize tenant subscription: %w", err)
+	}
+	return nil
 }
 
 // GetSubscriptionEvents retrieves subscription events for a tenant
