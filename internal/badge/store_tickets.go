@@ -11,7 +11,7 @@ import (
 
 // CreateTicket creates a ticket.
 func (s *Store) CreateTicket(ctx context.Context, submitterID int64, req TicketSubmitRequest) (*BadgeTicket, error) {
-	ticketNo := fmt.Sprintf("TK%d", time.Now().Unix())
+	ticketNo := fmt.Sprintf("TK%d", time.Now().UnixNano())
 
 	query := `
 		INSERT INTO badge_tickets (ticket_no, type, status, device_id, device_no, title, description,
