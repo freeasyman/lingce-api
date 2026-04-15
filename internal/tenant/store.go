@@ -58,16 +58,24 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 	// Query tenants
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, name, COALESCE(code, '') AS code,
+		SELECT t.id, t.name, COALESCE(t.code, '') AS code,
+		       COALESCE(t.contact_name, '') AS contact_name,
+		       COALESCE(t.contact_phone, '') AS contact_phone,
+		       COALESCE(t.contact_email, '') AS contact_email,
+		       COALESCE(t.industry, '') AS industry,
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
-		       valid_from, valid_to,
-		       created_at, updated_at, deleted_at
-		FROM tenants
+		       t.valid_from, t.valid_to,
+		       '' AS plan_name,
+		       '' AS service_status,
+		       NULL::timestamp AS expires_at,
+		       NULL::bigint AS feature_group_id,
+		       t.created_at, t.updated_at, t.deleted_at
+		FROM tenants t
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY t.created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 
@@ -86,9 +94,17 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 			&t.ID,
 			&t.Name,
 			&t.Code,
+			&t.ContactName,
+			&t.ContactPhone,
+			&t.ContactEmail,
+			&t.Industry,
 			&t.IsActive,
 			&t.ValidFrom,
 			&t.ValidTo,
+			&t.SubscriptionPlan,
+			&t.SubscriptionState,
+			&t.SubscriptionEndAt,
+			&t.FeatureGroupID,
 			&t.CreatedAt,
 			&t.UpdatedAt,
 			&t.DeletedAt,
@@ -104,15 +120,23 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 // GetTenantByID retrieves a tenant by ID
 func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 	query := `
-		SELECT id, name, COALESCE(code, '') AS code,
+		SELECT t.id, t.name, COALESCE(t.code, '') AS code,
+		       COALESCE(t.contact_name, '') AS contact_name,
+		       COALESCE(t.contact_phone, '') AS contact_phone,
+		       COALESCE(t.contact_email, '') AS contact_email,
+		       COALESCE(t.industry, '') AS industry,
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
-		       valid_from, valid_to,
-		       created_at, updated_at, deleted_at
-		FROM tenants
-		WHERE id = $1 AND deleted_at IS NULL
+		       t.valid_from, t.valid_to,
+		       '' AS plan_name,
+		       '' AS service_status,
+		       NULL::timestamp AS expires_at,
+		       NULL::bigint AS feature_group_id,
+		       t.created_at, t.updated_at, t.deleted_at
+		FROM tenants t
+		WHERE t.id = $1 AND t.deleted_at IS NULL
 	`
 
 	var t Tenant
@@ -120,9 +144,17 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.ContactName,
+		&t.ContactPhone,
+		&t.ContactEmail,
+		&t.Industry,
 		&t.IsActive,
 		&t.ValidFrom,
 		&t.ValidTo,
+		&t.SubscriptionPlan,
+		&t.SubscriptionState,
+		&t.SubscriptionEndAt,
+		&t.FeatureGroupID,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 		&t.DeletedAt,
@@ -141,25 +173,34 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 // CreateTenant creates a new tenant
 func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Tenant, error) {
 	query := `
-		INSERT INTO tenants (name, code, is_active, valid_from, valid_to, created_at, updated_at)
-		VALUES ($1, $2, true, $3, $4, NOW(), NOW())
-		RETURNING id, name, code,
+		INSERT INTO tenants (name, code, contact_name, contact_phone, contact_email, industry, is_active, valid_from, valid_to, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, NOW(), NOW())
+		RETURNING id, name, code, COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          valid_from, valid_to,
+		          '' AS plan_name, '' AS service_status, NULL::timestamp AS expires_at, NULL::bigint AS feature_group_id,
 		          created_at, updated_at, deleted_at
 	`
 
 	var t Tenant
-	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.ValidFrom, req.ValidTo).Scan(
+	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, req.ValidFrom, req.ValidTo).Scan(
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.ContactName,
+		&t.ContactPhone,
+		&t.ContactEmail,
+		&t.Industry,
 		&t.IsActive,
 		&t.ValidFrom,
 		&t.ValidTo,
+		&t.SubscriptionPlan,
+		&t.SubscriptionState,
+		&t.SubscriptionEndAt,
+		&t.FeatureGroupID,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 		&t.DeletedAt,
@@ -187,6 +228,30 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 	if req.Code != nil {
 		setClauses = append(setClauses, fmt.Sprintf("code = $%d", argIndex))
 		args = append(args, *req.Code)
+		argIndex++
+	}
+
+	if req.ContactName != nil {
+		setClauses = append(setClauses, fmt.Sprintf("contact_name = $%d", argIndex))
+		args = append(args, *req.ContactName)
+		argIndex++
+	}
+
+	if req.ContactPhone != nil {
+		setClauses = append(setClauses, fmt.Sprintf("contact_phone = $%d", argIndex))
+		args = append(args, *req.ContactPhone)
+		argIndex++
+	}
+
+	if req.ContactEmail != nil {
+		setClauses = append(setClauses, fmt.Sprintf("contact_email = $%d", argIndex))
+		args = append(args, *req.ContactEmail)
+		argIndex++
+	}
+
+	if req.Industry != nil {
+		setClauses = append(setClauses, fmt.Sprintf("industry = $%d", argIndex))
+		args = append(args, *req.Industry)
 		argIndex++
 	}
 
@@ -219,12 +284,13 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		UPDATE tenants
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, name, code,
+		RETURNING id, name, code, COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          valid_from, valid_to,
+		          '' AS plan_name, '' AS service_status, NULL::timestamp AS expires_at, NULL::bigint AS feature_group_id,
 		          created_at, updated_at, deleted_at
 	`, strings.Join(setClauses, ", "), argIndex)
 
@@ -233,9 +299,17 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.ContactName,
+		&t.ContactPhone,
+		&t.ContactEmail,
+		&t.Industry,
 		&t.IsActive,
 		&t.ValidFrom,
 		&t.ValidTo,
+		&t.SubscriptionPlan,
+		&t.SubscriptionState,
+		&t.SubscriptionEndAt,
+		&t.FeatureGroupID,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 		&t.DeletedAt,

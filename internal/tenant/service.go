@@ -133,16 +133,24 @@ func (s *Service) GetTenantProfile(ctx context.Context, tenantID int64) (*Tenant
 	}
 
 	return &TenantProfileResponse{
-		ID:        t.ID,
-		Name:      t.Name,
-		OrgCode:   t.Code,
-		CreatedAt: t.CreatedAt,
+		ID:           t.ID,
+		Name:         t.Name,
+		OrgCode:      t.Code,
+		ContactName:  t.ContactName,
+		ContactPhone: t.ContactPhone,
+		ContactEmail: t.ContactEmail,
+		Industry:     t.Industry,
+		CreatedAt:    t.CreatedAt,
 	}, nil
 }
 
 func (s *Service) UpdateTenantProfile(ctx context.Context, tenantID int64, req UpdateTenantProfileRequest) (*TenantProfileResponse, error) {
 	updateReq := UpdateTenantRequest{
-		Name: req.Name,
+		Name:         req.Name,
+		ContactName:  req.ContactName,
+		ContactPhone: req.ContactPhone,
+		ContactEmail: req.ContactEmail,
+		Industry:     req.Industry,
 	}
 	if req.Code != nil {
 		updateReq.Code = req.Code
@@ -157,10 +165,14 @@ func (s *Service) UpdateTenantProfile(ctx context.Context, tenantID int64, req U
 	}
 
 	return &TenantProfileResponse{
-		ID:        t.ID,
-		Name:      t.Name,
-		OrgCode:   t.Code,
-		CreatedAt: t.CreatedAt,
+		ID:           t.ID,
+		Name:         t.Name,
+		OrgCode:      t.Code,
+		ContactName:  t.ContactName,
+		ContactPhone: t.ContactPhone,
+		ContactEmail: t.ContactEmail,
+		Industry:     t.Industry,
+		CreatedAt:    t.CreatedAt,
 	}, nil
 }
 

@@ -13,19 +13,27 @@ type TenantListRequest struct {
 
 // CreateTenantRequest represents tenant creation request
 type CreateTenantRequest struct {
-	Name      string     `json:"name"`
-	Code      string     `json:"code"`
-	ValidFrom *time.Time `json:"valid_from"`
-	ValidTo   *time.Time `json:"valid_to"`
+	Name         string     `json:"name"`
+	Code         string     `json:"code"`
+	ContactName  *string    `json:"contact_name,omitempty"`
+	ContactPhone *string    `json:"contact_phone,omitempty"`
+	ContactEmail *string    `json:"contact_email,omitempty"`
+	Industry     *string    `json:"industry,omitempty"`
+	ValidFrom    *time.Time `json:"valid_from"`
+	ValidTo      *time.Time `json:"valid_to"`
 }
 
 // UpdateTenantRequest represents tenant update request
 type UpdateTenantRequest struct {
-	Name      *string    `json:"name"`
-	Code      *string    `json:"code"`
-	IsActive  *bool      `json:"is_active"`
-	ValidFrom *time.Time `json:"valid_from"`
-	ValidTo   *time.Time `json:"valid_to"`
+	Name         *string    `json:"name"`
+	Code         *string    `json:"code"`
+	ContactName  *string    `json:"contact_name,omitempty"`
+	ContactPhone *string    `json:"contact_phone,omitempty"`
+	ContactEmail *string    `json:"contact_email,omitempty"`
+	Industry     *string    `json:"industry,omitempty"`
+	IsActive     *bool      `json:"is_active"`
+	ValidFrom    *time.Time `json:"valid_from"`
+	ValidTo      *time.Time `json:"valid_to"`
 }
 
 // SubscriptionActionRequest represents request payload for subscription actions.
@@ -54,16 +62,24 @@ type FeatureOverrideItem struct {
 }
 
 type UpdateTenantProfileRequest struct {
-	Name    *string `json:"name,omitempty"`
-	OrgCode *string `json:"org_code,omitempty"`
-	Code    *string `json:"code,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	OrgCode      *string `json:"org_code,omitempty"`
+	Code         *string `json:"code,omitempty"`
+	ContactName  *string `json:"contact_name,omitempty"`
+	ContactPhone *string `json:"contact_phone,omitempty"`
+	ContactEmail *string `json:"contact_email,omitempty"`
+	Industry     *string `json:"industry,omitempty"`
 }
 
 type TenantProfileResponse struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	OrgCode   string    `json:"org_code"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	OrgCode      string    `json:"org_code"`
+	ContactName  string    `json:"contact_name,omitempty"`
+	ContactPhone string    `json:"contact_phone,omitempty"`
+	ContactEmail string    `json:"contact_email,omitempty"`
+	Industry     string    `json:"industry,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type MedicalSpecialtyResponse struct {
