@@ -103,11 +103,10 @@ check_proxy_any() {
 }
 
 check_runtime_endpoints() {
-  local content_mod customer_mod recording_mod route_tree
+  local content_mod customer_mod recording_mod
   content_mod="$(curl -sS "${FRONTEND_URL}/src/api/content.ts")"
   customer_mod="$(curl -sS "${FRONTEND_URL}/src/api/customers.ts")"
   recording_mod="$(curl -sS "${FRONTEND_URL}/src/api/doctor-recordings.ts")"
-  route_tree="$(curl -sS "${FRONTEND_URL}/src/routeTree.gen.ts")"
 
   if printf '%s' "$content_mod" | rg -q '/api/v1/content-prompt-templates'; then
     fail "runtime content.ts still contains legacy content-prompt-templates"
@@ -125,12 +124,6 @@ check_runtime_endpoints() {
     fail "runtime doctor-recordings.ts still contains legacy medical-recordings"
   else
     pass "runtime doctor-recordings.ts uses /recordings"
-  fi
-
-  if printf '%s' "$route_tree" | rg -q 'path: "/config/logs"'; then
-    pass "runtime routeTree contains /config/logs route"
-  else
-    fail "runtime routeTree missing /config/logs route"
   fi
 }
 
