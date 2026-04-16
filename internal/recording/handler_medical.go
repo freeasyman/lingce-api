@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
 )
@@ -163,19 +166,81 @@ func (h *Handler) GetMedicalRecordingSegue(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_, err = h.service.GetRecording(r.Context(), id)
+	recording, err := h.service.GetRecording(r.Context(), id)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
 
+	analysisResult := recording.AnalysisResult
+	if analysisResult == nil {
+		analysisResult = map[string]any{}
+	}
+	analysisSummary := recording.AnalysisSummary
+	if analysisSummary == nil {
+		analysisSummary = map[string]any{}
+	}
+	if _, ok := analysisSummary["recording_id"]; !ok {
+		analysisSummary["recording_id"] = id
+	}
+
+	// Keep /segue contract rich enough for communication detail page:
+	// prefer existing segue_scores, then derive from segue.group_scores when available.
+	segueScores := map[string]any{}
+	if raw, ok := analysisResult["segue_scores"].(map[string]any); ok && len(raw) > 0 {
+		for k, v := range raw {
+			segueScores[k] = v
+		}
+	}
+	segueDetail := map[string]any{}
+	if raw, ok := analysisResult["segue"].(map[string]any); ok {
+		segueDetail = raw
+		if len(segueScores) == 0 {
+			if groupScores, ok := raw["group_scores"].(map[string]any); ok {
+				for k, v := range groupScores {
+					segueScores[k] = v
+				}
+			}
+			if overall, ok := raw["overall_score"]; ok {
+				segueScores["overall"] = overall
+			}
+		}
+	}
+	if len(segueScores) == 0 {
+		if recording.SegueScore != nil {
+			segueScores["overall"] = *recording.SegueScore
+		}
+	}
+	if feedback := strings.TrimSpace(pickStringAny(analysisResult, "feedback_report")); feedback != "" {
+		analysisSummary["feedback_report"] = feedback
+	}
+	if summary := strings.TrimSpace(pickStringAny(analysisResult, "critical_summary")); summary != "" {
+		analysisSummary["critical_summary"] = summary
+	}
+
 	resp := map[string]any{
-		"segue_scores": map[string]any{},
-		"analysis_summary": map[string]any{
-			"recording_id": id,
-		},
+		"segue_scores":     segueScores,
+		"analysis_summary": analysisSummary,
+		"segue_detail":     segueDetail,
+		"analysis_result":  analysisResult,
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func pickStringAny(source map[string]any, key string) string {
+	if source == nil {
+		return ""
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return v
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // GetCommunicationAnalysis handles getting communication analysis
@@ -603,6 +668,375 @@ func (h *Handler) GetAnalysisSettings(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+type confirmEMRRequest struct {
+	Confirmed  *bool                  `json:"confirmed,omitempty"`
+	EMRContent map[string]interface{} `json:"emr_content,omitempty"`
+}
+
+type routeReviewRequest struct {
+	Action         string  `json:"action"`
+	Reason         *string `json:"reason,omitempty"`
+	SpecialtyGroup *string `json:"specialty_group,omitempty"`
+	SceneType      *string `json:"scene_type,omitempty"`
+}
+
+func (h *Handler) assertRecordingAccess(r *http.Request, recordingID int64) (*RecordingResponse, error) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		return nil, fmt.Errorf("invalid token")
+	}
+	recording, err := h.service.GetRecording(r.Context(), recordingID)
+	if err != nil {
+		return nil, err
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
+			return nil, fmt.Errorf("access denied")
+		}
+	}
+	return recording, nil
+}
+
+// SearchRecordingPatients handles listing patients for doctor-recording customer linkage.
+func (h *Handler) SearchRecordingPatients(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	limit := 20
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if n, parseErr := strconv.Atoi(limitStr); parseErr == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	like := "%" + q + "%"
+
+	rows, err := h.service.store.pool.Query(r.Context(), `
+		SELECT id, COALESCE(name, '') AS name, COALESCE(phone, '') AS phone, COALESCE(gender, '') AS gender, age
+		FROM customers
+		WHERE tenant_id = $1
+		  AND deleted_at IS NULL
+		  AND ($2 = '' OR COALESCE(name, '') ILIKE $3 OR COALESCE(phone, '') ILIKE $3)
+		ORDER BY COALESCE(updated_at, created_at, NOW()) DESC
+		LIMIT $4
+	`, tenantID, q, like, limit)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var (
+			id     int64
+			name   string
+			phone  string
+			gender string
+			age    *int
+		)
+		if scanErr := rows.Scan(&id, &name, &phone, &gender, &age); scanErr != nil {
+			httputil.WriteInternalError(w, scanErr.Error())
+			return
+		}
+		item := map[string]interface{}{
+			"id":   id,
+			"name": name,
+		}
+		if phone != "" {
+			item["phone"] = phone
+		}
+		if gender != "" {
+			item["gender"] = gender
+		}
+		if age != nil {
+			item["age"] = *age
+		}
+		items = append(items, item)
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items})
+}
+
+// GetRecordingEMR handles loading EMR draft for a recording.
+func (h *Handler) GetRecordingEMR(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	recording, err := h.assertRecordingAccess(r, id)
+	if err != nil {
+		if err.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	var analysisDisplay map[string]interface{}
+	if queryErr := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT COALESCE(analysis_display, '{}'::json)
+		FROM recordings
+		WHERE id = $1
+	`, id).Scan(&analysisDisplay); queryErr != nil {
+		httputil.WriteInternalError(w, queryErr.Error())
+		return
+	}
+
+	var emrDraft map[string]interface{}
+	if raw, ok := analysisDisplay["emr_draft"].(map[string]interface{}); ok {
+		emrDraft = raw
+	}
+	if emrDraft == nil {
+		emrDraft = map[string]interface{}{
+			"chief_complaint": recording.PatientName,
+			"present_illness": firstNonEmpty(recording.DoctorSummary, recording.TranscriptText),
+		}
+	}
+	status := "draft"
+	if s, ok := analysisDisplay["emr_status"].(string); ok && s != "" {
+		status = s
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"status":    status,
+		"emr_draft": emrDraft,
+		"content":   emrDraft,
+	})
+}
+
+// ConfirmRecordingEMR handles confirming/persisting EMR content.
+func (h *Handler) ConfirmRecordingEMR(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	if _, accessErr := h.assertRecordingAccess(r, id); accessErr != nil {
+		if accessErr.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		httputil.WriteNotFound(w, accessErr.Error())
+		return
+	}
+
+	var req confirmEMRRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.EMRContent == nil {
+		req.EMRContent = map[string]interface{}{}
+	}
+	status := "confirmed"
+	if req.Confirmed != nil && !*req.Confirmed {
+		status = "draft"
+	}
+
+	emrJSON, _ := json.Marshal(req.EMRContent)
+	if _, execErr := h.service.store.pool.Exec(r.Context(), `
+		UPDATE recordings
+		SET analysis_display = jsonb_set(
+			jsonb_set(COALESCE(analysis_display, '{}'::jsonb), '{emr_draft}', COALESCE($1::jsonb, '{}'::jsonb), true),
+			'{emr_status}',
+			to_jsonb($2::text),
+			true
+		),
+		updated_at = NOW()
+		WHERE id = $3
+	`, string(emrJSON), status, id); execErr != nil {
+		httputil.WriteInternalError(w, execErr.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"success":    true,
+		"emr_status": status,
+	})
+}
+
+// RouteReviewRecording handles recording route-review action.
+func (h *Handler) RouteReviewRecording(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	if _, accessErr := h.assertRecordingAccess(r, id); accessErr != nil {
+		if accessErr.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		httputil.WriteNotFound(w, accessErr.Error())
+		return
+	}
+
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req routeReviewRequest
+	if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		httputil.WriteBadRequest(w, "action is required")
+		return
+	}
+	review := map[string]interface{}{
+		"action":      action,
+		"reviewed_at": time.Now().UTC().Format(time.RFC3339),
+		"reviewed_by": claims.UserID,
+	}
+	if req.Reason != nil && strings.TrimSpace(*req.Reason) != "" {
+		review["reason"] = strings.TrimSpace(*req.Reason)
+	}
+	if req.SpecialtyGroup != nil && strings.TrimSpace(*req.SpecialtyGroup) != "" {
+		review["specialty_group"] = strings.TrimSpace(*req.SpecialtyGroup)
+	}
+	if req.SceneType != nil && strings.TrimSpace(*req.SceneType) != "" {
+		review["scene_type"] = strings.TrimSpace(*req.SceneType)
+	}
+
+	reviewJSON, _ := json.Marshal(review)
+	if _, execErr := h.service.store.pool.Exec(r.Context(), `
+		UPDATE recordings
+		SET analysis_display = jsonb_set(COALESCE(analysis_display, '{}'::jsonb), '{route_review}', COALESCE($1::jsonb, '{}'::jsonb), true),
+		    updated_at = NOW()
+		WHERE id = $2
+	`, string(reviewJSON), id); execErr != nil {
+		httputil.WriteInternalError(w, execErr.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"success":      true,
+		"route_review": review,
+	})
+}
+
+// GetSegueDashboard returns lightweight segue aggregation shape used by frontend.
+func (h *Handler) GetSegueDashboard(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	resp := map[string]interface{}{
+		"period":    strings.TrimSpace(r.URL.Query().Get("period")),
+		"tenant_id": tenantID,
+		"segue_stats": map[string]interface{}{
+			"G1": map[string]interface{}{"avg_score": 0, "count": 0},
+			"G2": map[string]interface{}{"avg_score": 0, "count": 0},
+			"G3": map[string]interface{}{"avg_score": 0, "count": 0},
+			"G4": map[string]interface{}{"avg_score": 0, "count": 0},
+			"G5": map[string]interface{}{"avg_score": 0, "count": 0},
+			"G6": map[string]interface{}{"avg_score": 0, "count": 0},
+		},
+		"trend_data": []map[string]interface{}{},
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+// GetDoctorAbilitySegue returns doctor segue ability list.
+func (h *Handler) GetDoctorAbilitySegue(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	list, svcErr := h.service.GetDoctorAbilityRanking(r.Context(), tenantID)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	items := make([]map[string]interface{}, 0, len(list))
+	for _, row := range list {
+		items = append(items, map[string]interface{}{
+			"employee_id":     row.EmployeeID,
+			"employee_name":   row.EmployeeName,
+			"recording_count": row.RecordingCount,
+			"segue_scores": map[string]interface{}{
+				"overall": row.AvgScore,
+			},
+		})
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"items":  items,
+		"period": strings.TrimSpace(r.URL.Query().Get("period")),
+	})
+}
+
+// GetDoctorAbilitySegueDetail returns doctor segue ability detail.
+func (h *Handler) GetDoctorAbilitySegueDetail(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	detail, svcErr := h.service.GetDoctorAbilityDetail(r.Context(), tenantID, employeeID)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"employee_id":   detail.EmployeeID,
+		"employee_name": detail.EmployeeName,
+		"trend_data":    []map[string]interface{}{},
+		"details": map[string]interface{}{
+			"communication_score":   detail.CommunicationScore,
+			"professionalism_score": detail.ProfessionalismScore,
+			"empathy_score":         detail.EmpathyScore,
+			"efficiency_score":      detail.EfficiencyScore,
+		},
+	})
+}
+
+func firstNonEmpty(values ...*string) string {
+	for _, v := range values {
+		if v != nil && strings.TrimSpace(*v) != "" {
+			return strings.TrimSpace(*v)
+		}
+	}
+	return ""
 }
 
 func joinComma(parts []string) string {

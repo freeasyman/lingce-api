@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,7 +93,11 @@ func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingRespons
 		return nil, err
 	}
 
-	return toRecordingResponse(recording), nil
+	resp := toRecordingResponse(recording)
+	if err := s.enrichRecordingResponse(ctx, id, resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // CreateRecording creates a new medical recording
@@ -139,7 +144,11 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 	resp := &RecordingResponse{
 		ID:                r.ID,
 		TenantID:          r.TenantID,
+		TenantName:        r.TenantName,
 		EmployeeID:        r.EmployeeID,
+		EmployeeName:      r.EmployeeName,
+		CustomerID:        r.CustomerID,
+		CustomerName:      r.CustomerName,
 		PatientName:       r.PatientName,
 		PatientAge:        r.PatientAge,
 		PatientGender:     r.PatientGender,
@@ -154,6 +163,53 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		ProcessingError:   r.ProcessingError,
 		CreatedAt:         r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:         r.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+	if len(r.AnalysisDisplay) > 0 {
+		resp.AnalysisDisplay = map[string]interface{}(r.AnalysisDisplay)
+	}
+
+	if len(r.AnalysisDisplay) > 0 {
+		analysisDisplay := map[string]interface{}(r.AnalysisDisplay)
+		resp.AnalysisResult = pickMap(analysisDisplay, "analysis_result")
+		if resp.AnalysisResult == nil {
+			resp.AnalysisResult = analysisDisplay
+		}
+		resp.AnalysisSummary = pickMap(resp.AnalysisResult, "analysis_summary")
+		if resp.AnalysisSummary == nil {
+			resp.AnalysisSummary = pickMap(analysisDisplay, "analysis_summary")
+		}
+		resp.RouteReview = pickMap(analysisDisplay, "route_review")
+		resp.EMRDraft = pickMap(analysisDisplay, "emr_draft")
+		resp.SceneType = pickStringPtr(
+			pickString(resp.AnalysisResult, "scene_type"),
+			pickString(resp.AnalysisResult, "scene"),
+			pickString(analysisDisplay, "scene_type"),
+		)
+		resp.VisitOutcome = pickStringPtr(
+			pickString(resp.AnalysisResult, "visit_outcome"),
+			pickString(resp.AnalysisResult, "decision_status"),
+			pickString(analysisDisplay, "visit_outcome"),
+		)
+		resp.SubjectiveSummary = pickStringPtr(
+			pickString(resp.AnalysisResult, "subjective_summary"),
+			pickString(resp.AnalysisResult, "summary"),
+			pickString(analysisDisplay, "subjective_summary"),
+		)
+		resp.QualityScore = pickFloatPtr(
+			pickFloat(resp.AnalysisResult, "quality_score"),
+			pickFloat(resp.AnalysisResult, "quality"),
+			pickFloat(analysisDisplay, "quality_score"),
+		)
+		resp.SegueScore = pickFloatPtr(
+			pickFloat(resp.AnalysisResult, "segue_score"),
+			pickFloat(resp.AnalysisResult, "communication_score"),
+			pickFloat(analysisDisplay, "segue_score"),
+		)
+		resp.CriticalGap = pickBoolPtr(
+			pickBool(resp.AnalysisResult, "critical_gap"),
+			pickBool(analysisDisplay, "critical_gap"),
+		)
+		resp.AnalysisSummary = normalizeInsightSummary(resp.AnalysisSummary, resp.AnalysisResult)
 	}
 
 	if r.RecordingStartedAt != nil {
@@ -172,6 +228,567 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 	}
 
 	return resp
+}
+
+func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64, resp *RecordingResponse) error {
+	if resp == nil {
+		return nil
+	}
+
+	type analysisRow struct {
+		PromptCode string
+		ResultData map[string]interface{}
+	}
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT prompt_code, COALESCE(result_data, '{}'::json)
+		FROM recording_analysis_results
+		WHERE recording_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 12
+	`, recordingID)
+	if err != nil {
+		return fmt.Errorf("failed to query analysis result: %w", err)
+	}
+	defer rows.Close()
+
+	analysisRows := make([]analysisRow, 0, 12)
+	for rows.Next() {
+		var row analysisRow
+		if scanErr := rows.Scan(&row.PromptCode, &row.ResultData); scanErr != nil {
+			return fmt.Errorf("failed to scan analysis result: %w", scanErr)
+		}
+		analysisRows = append(analysisRows, row)
+	}
+
+	var analysisResult map[string]interface{}
+	var analysisSummary map[string]interface{}
+
+	for _, row := range analysisRows {
+		code := strings.ToLower(strings.TrimSpace(row.PromptCode))
+		data := row.ResultData
+		if data == nil {
+			continue
+		}
+		if analysisResult == nil {
+			analysisResult = data
+		}
+		if strings.Contains(code, "structured") {
+			analysisResult = data
+			if summary := pickMap(data, "analysis_summary"); summary != nil {
+				analysisSummary = summary
+			}
+		}
+		if strings.Contains(code, "narrative") {
+			if final := pickMap(data, "final"); final != nil {
+				if analysisSummary == nil {
+					analysisSummary = map[string]interface{}{}
+				}
+				mergeMap(analysisSummary, final)
+			}
+		}
+		if strings.Contains(code, "content_gen") && resp.EMRDraft == nil {
+			if emr := pickMap(data, "emr"); emr != nil {
+				resp.EMRDraft = map[string]interface{}{
+					"emr_content": emr,
+				}
+				if conf := pickString(emr, "confidence"); conf != "" {
+					resp.EMRDraft["confidence"] = conf
+				}
+				if missing, ok := emr["missing_fields"]; ok {
+					resp.EMRDraft["missing_fields"] = missing
+				}
+			}
+		}
+		if strings.Contains(code, "content_gen") && len(resp.ContentSeeds) == 0 {
+			resp.ContentSeeds = toMapSlice(pickArray(data, "content_seeds"))
+		}
+	}
+
+	if analysisResult != nil {
+		resp.AnalysisResult = analysisResult
+	}
+	if analysisSummary != nil {
+		resp.AnalysisSummary = analysisSummary
+	}
+	resp.AnalysisSummary = normalizeInsightSummary(resp.AnalysisSummary, resp.AnalysisResult)
+
+	if resp.SceneType == nil {
+		resp.SceneType = pickStringPtr(
+			pickString(resp.AnalysisResult, "scene_type"),
+			pickString(resp.AnalysisResult, "scene"),
+			pickString(resp.AnalysisSummary, "scene_type"),
+		)
+	}
+	if resp.VisitOutcome == nil {
+		resp.VisitOutcome = pickStringPtr(
+			pickString(resp.AnalysisResult, "visit_outcome"),
+			pickString(resp.AnalysisResult, "decision_status"),
+			pickNestedStatus(resp.AnalysisSummary, "visit_outcome"),
+			pickString(resp.AnalysisSummary, "visit_outcome"),
+			pickString(resp.AnalysisSummary, "status"),
+		)
+	}
+	if resp.SubjectiveSummary == nil {
+		resp.SubjectiveSummary = pickStringPtr(
+			pickString(resp.AnalysisResult, "subjective_summary"),
+			pickString(resp.AnalysisResult, "conversation_summary"),
+			pickString(resp.AnalysisSummary, "summary"),
+			pickString(resp.AnalysisSummary, "critical_summary"),
+		)
+	}
+	if resp.QualityScore == nil {
+		resp.QualityScore = pickFloatPtr(
+			pickFloat(resp.AnalysisResult, "quality_score"),
+			pickFloat(resp.AnalysisResult, "quality"),
+		)
+	}
+	if resp.SegueScore == nil {
+		resp.SegueScore = pickFloatPtr(
+			pickFloat(resp.AnalysisResult, "segue_score"),
+			pickFloat(resp.AnalysisResult, "overall_score"),
+			pickFloat(pickMap(resp.AnalysisResult, "segue"), "overall_score"),
+		)
+	}
+	if resp.CriticalGap == nil {
+		resp.CriticalGap = pickBoolPtr(
+			pickBool(resp.AnalysisSummary, "critical_gap"),
+			pickBool(resp.AnalysisResult, "critical_gap"),
+		)
+	}
+	if resp.RouteReview == nil {
+		resp.RouteReview = pickMap(resp.AnalysisResult, "route_review")
+		if resp.RouteReview == nil {
+			resp.RouteReview = pickMap(resp.AnalysisSummary, "route_review")
+		}
+	}
+	if len(resp.ContentSeeds) == 0 {
+		contentSeedsRaw := pickArray(resp.AnalysisResult, "content_seeds")
+		if len(contentSeedsRaw) == 0 {
+			contentSeedsRaw = pickArray(resp.AnalysisSummary, "content_seeds")
+		}
+		resp.ContentSeeds = toMapSlice(contentSeedsRaw)
+	}
+	if len(resp.StructuredTranscript) == 0 {
+		resp.StructuredTranscript = toMapSlice(
+			firstNonEmptyArray(
+				pickArray(resp.AnalysisResult, "structured_transcript"),
+				pickArray(resp.AnalysisResult, "structured_transcription"),
+				pickArray(resp.AnalysisResult, "transcript_structured"),
+				pickArray(resp.AnalysisSummary, "structured_transcript"),
+				pickArray(resp.AnalysisSummary, "structured_transcription"),
+			),
+		)
+	}
+	if len(resp.TimelineTranscript) == 0 {
+		resp.TimelineTranscript = toMapSlice(
+			firstNonEmptyArray(
+				pickArray(resp.AnalysisResult, "timeline_transcript"),
+				pickArray(resp.AnalysisResult, "timeline_transcription"),
+				pickArray(resp.AnalysisResult, "transcript_timeline"),
+				pickArray(resp.AnalysisSummary, "timeline_transcript"),
+				pickArray(resp.AnalysisSummary, "timeline_transcription"),
+			),
+		)
+	}
+	if len(resp.StructuredTranscript) == 0 && len(resp.TimelineTranscript) == 0 && resp.TranscriptText != nil {
+		resp.StructuredTranscript, resp.TimelineTranscript = buildTranscriptFallback(*resp.TranscriptText)
+	}
+
+	if resp.EMRDraft == nil {
+		var (
+			patientID            *int64
+			patientNameExtracted *string
+			patientMatchSource   *string
+			emrContent           map[string]interface{}
+			confidence           *string
+			missingFields        interface{}
+			isConfirmed          *bool
+			confirmedAt          interface{}
+		)
+		err = s.store.pool.QueryRow(ctx, `
+			SELECT
+				patient_id,
+				NULLIF(patient_name_extracted, ''),
+				NULLIF(patient_match_source, ''),
+				COALESCE(emr_content, '{}'::jsonb),
+				NULLIF(confidence, ''),
+				COALESCE(missing_fields, '[]'::jsonb),
+				is_confirmed,
+				confirmed_at
+			FROM recording_emr_drafts
+			WHERE recording_id = $1
+			ORDER BY generated_at DESC NULLS LAST, id DESC
+			LIMIT 1
+		`, recordingID).Scan(
+			&patientID,
+			&patientNameExtracted,
+			&patientMatchSource,
+			&emrContent,
+			&confidence,
+			&missingFields,
+			&isConfirmed,
+			&confirmedAt,
+		)
+		if err == nil {
+			draft := map[string]interface{}{
+				"emr_content": emrContent,
+			}
+			if patientID != nil {
+				draft["patient_id"] = *patientID
+			}
+			if patientNameExtracted != nil {
+				draft["patient_name_extracted"] = *patientNameExtracted
+			}
+			if patientMatchSource != nil {
+				draft["patient_match_source"] = *patientMatchSource
+			}
+			if confidence != nil {
+				draft["confidence"] = *confidence
+			}
+			if missingFields != nil {
+				draft["missing_fields"] = missingFields
+			}
+			if isConfirmed != nil {
+				draft["is_confirmed"] = *isConfirmed
+			}
+			if confirmedAt != nil {
+				draft["confirmed_at"] = confirmedAt
+			}
+			resp.EMRDraft = draft
+		}
+	}
+	if resp.AnalysisDisplay == nil {
+		resp.AnalysisDisplay = map[string]interface{}{}
+	}
+	if resp.AnalysisResult != nil {
+		resp.AnalysisDisplay["analysis_result"] = resp.AnalysisResult
+	}
+	if resp.AnalysisSummary != nil {
+		resp.AnalysisDisplay["analysis_summary"] = resp.AnalysisSummary
+	}
+	if resp.RouteReview != nil {
+		resp.AnalysisDisplay["route_review"] = resp.RouteReview
+	}
+	if resp.EMRDraft != nil {
+		resp.AnalysisDisplay["emr_draft"] = resp.EMRDraft
+	}
+	if len(resp.ContentSeeds) > 0 {
+		resp.AnalysisDisplay["content_seeds"] = resp.ContentSeeds
+		if resp.AnalysisResult != nil {
+			if _, exists := resp.AnalysisResult["content_seeds"]; !exists {
+				resp.AnalysisResult["content_seeds"] = resp.ContentSeeds
+			}
+		}
+	}
+	if len(resp.StructuredTranscript) > 0 {
+		resp.AnalysisDisplay["structured_transcript"] = resp.StructuredTranscript
+		resp.AnalysisDisplay["structured_transcription"] = resp.StructuredTranscript
+		if resp.AnalysisResult != nil {
+			if _, exists := resp.AnalysisResult["structured_transcript"]; !exists {
+				resp.AnalysisResult["structured_transcript"] = resp.StructuredTranscript
+			}
+			if _, exists := resp.AnalysisResult["structured_transcription"]; !exists {
+				resp.AnalysisResult["structured_transcription"] = resp.StructuredTranscript
+			}
+		}
+	}
+	if len(resp.TimelineTranscript) > 0 {
+		resp.AnalysisDisplay["timeline_transcript"] = resp.TimelineTranscript
+		resp.AnalysisDisplay["timeline_transcription"] = resp.TimelineTranscript
+		if resp.AnalysisResult != nil {
+			if _, exists := resp.AnalysisResult["timeline_transcript"]; !exists {
+				resp.AnalysisResult["timeline_transcript"] = resp.TimelineTranscript
+			}
+			if _, exists := resp.AnalysisResult["timeline_transcription"]; !exists {
+				resp.AnalysisResult["timeline_transcription"] = resp.TimelineTranscript
+			}
+		}
+	}
+
+	return nil
+}
+
+func mergeMap(dst map[string]interface{}, src map[string]interface{}) {
+	if dst == nil || src == nil {
+		return
+	}
+	for k, v := range src {
+		if _, exists := dst[k]; !exists {
+			dst[k] = v
+		}
+	}
+}
+
+func normalizeInsightSummary(summary map[string]interface{}, result map[string]interface{}) map[string]interface{} {
+	if result == nil {
+		return summary
+	}
+	out := summary
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+
+	if _, exists := out["patient_mindset"]; !exists {
+		if patientMindset := pickMap(result, "patient_mindset"); patientMindset != nil {
+			out["patient_mindset"] = patientMindset
+		}
+	}
+
+	business := pickMap(result, "business")
+	if business != nil {
+		if _, exists := out["care_progress"]; !exists {
+			if careProgress := pickMap(business, "care_progress"); careProgress != nil {
+				out["care_progress"] = careProgress
+			}
+		}
+		if _, exists := out["visit_outcome"]; !exists {
+			if visitOutcome := pickMap(business, "visit_outcome"); visitOutcome != nil {
+				out["visit_outcome"] = visitOutcome
+			}
+		}
+		for _, key := range []string{"core_blockers", "conversion_opportunity", "current_state"} {
+			if _, exists := out[key]; exists {
+				continue
+			}
+			if value, ok := business[key]; ok && value != nil {
+				out[key] = value
+			}
+		}
+	}
+
+	return out
+}
+
+func pickMap(source map[string]interface{}, key string) map[string]interface{} {
+	if source == nil {
+		return nil
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		return v
+	case JSONObject:
+		return map[string]interface{}(v)
+	default:
+		return nil
+	}
+}
+
+func pickNestedStatus(source map[string]interface{}, key string) string {
+	m := pickMap(source, key)
+	if m == nil {
+		return ""
+	}
+	return pickString(m, "status")
+}
+
+func pickArray(source map[string]interface{}, key string) []interface{} {
+	if source == nil {
+		return nil
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		return v
+	case JSONArray:
+		return []interface{}(v)
+	default:
+		return nil
+	}
+}
+
+func toMapSlice(items []interface{}) []map[string]interface{} {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]map[string]interface{}, 0, len(items))
+	for _, raw := range items {
+		switch v := raw.(type) {
+		case map[string]interface{}:
+			result = append(result, v)
+		case JSONObject:
+			result = append(result, map[string]interface{}(v))
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func firstNonEmptyArray(candidates ...[]interface{}) []interface{} {
+	for _, candidate := range candidates {
+		if len(candidate) > 0 {
+			return candidate
+		}
+	}
+	return nil
+}
+
+func buildTranscriptFallback(text string) ([]map[string]interface{}, []map[string]interface{}) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	structured := make([]map[string]interface{}, 0, len(lines))
+	timeline := make([]map[string]interface{}, 0, len(lines))
+	cursor := 0
+	for _, line := range lines {
+		content := strings.TrimSpace(line)
+		if content == "" {
+			continue
+		}
+		speaker := "对话"
+		if idx := strings.Index(content, ":"); idx > 0 && idx < 12 {
+			candidate := strings.TrimSpace(content[:idx])
+			if candidate != "" {
+				speaker = candidate
+				content = strings.TrimSpace(content[idx+1:])
+			}
+		}
+		if content == "" {
+			continue
+		}
+		duration := estimateDurationSeconds(content)
+		start := cursor
+		end := start + duration
+		structured = append(structured, map[string]interface{}{
+			"speaker": speaker,
+			"content": content,
+		})
+		timeline = append(timeline, map[string]interface{}{
+			"speaker":       speaker,
+			"text":          content,
+			"start_seconds": start,
+			"end_seconds":   end,
+		})
+		cursor = end
+	}
+	if len(structured) == 0 {
+		structured = []map[string]interface{}{{"speaker": "对话", "content": trimmed}}
+		timeline = []map[string]interface{}{{"speaker": "对话", "text": trimmed, "start_seconds": 0, "end_seconds": estimateDurationSeconds(trimmed)}}
+	}
+	return structured, timeline
+}
+
+func estimateDurationSeconds(text string) int {
+	runes := len([]rune(strings.TrimSpace(text)))
+	if runes <= 0 {
+		return 5
+	}
+	seconds := runes / 6
+	if seconds < 5 {
+		return 5
+	}
+	if seconds > 90 {
+		return 90
+	}
+	return seconds
+}
+
+func pickString(source map[string]interface{}, key string) string {
+	if source == nil {
+		return ""
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	if v, ok := raw.(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return fmt.Sprintf("%v", raw)
+}
+
+func pickStringPtr(values ...string) *string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			s := strings.TrimSpace(v)
+			return &s
+		}
+	}
+	return nil
+}
+
+func pickFloat(source map[string]interface{}, key string) *float64 {
+	if source == nil {
+		return nil
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		return &v
+	case float32:
+		x := float64(v)
+		return &x
+	case int:
+		x := float64(v)
+		return &x
+	case int64:
+		x := float64(v)
+		return &x
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		if x, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return &x
+		}
+	}
+	return nil
+}
+
+func pickFloatPtr(values ...*float64) *float64 {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func pickBool(source map[string]interface{}, key string) *bool {
+	if source == nil {
+		return nil
+	}
+	raw, ok := source[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case bool:
+		return &v
+	case string:
+		s := strings.ToLower(strings.TrimSpace(v))
+		if s == "true" || s == "1" || s == "yes" || s == "y" {
+			b := true
+			return &b
+		}
+		if s == "false" || s == "0" || s == "no" || s == "n" {
+			b := false
+			return &b
+		}
+	}
+	return nil
+}
+
+func pickBoolPtr(values ...*bool) *bool {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
 }
 
 // Recording Statistics Services
