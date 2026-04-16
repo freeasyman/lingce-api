@@ -260,48 +260,100 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		analysisRows = append(analysisRows, row)
 	}
 
-	var analysisResult map[string]interface{}
-	var analysisSummary map[string]interface{}
-
+	var (
+		latestAny          map[string]interface{}
+		latestConsultation map[string]interface{}
+		latestStructured   map[string]interface{}
+		latestNarrative    map[string]interface{}
+		latestContentGen   map[string]interface{}
+		latestOpsPlan      map[string]interface{}
+	)
 	for _, row := range analysisRows {
 		code := strings.ToLower(strings.TrimSpace(row.PromptCode))
 		data := row.ResultData
 		if data == nil {
 			continue
 		}
-		if analysisResult == nil {
-			analysisResult = data
+		if latestAny == nil {
+			latestAny = data
 		}
-		if strings.Contains(code, "structured") {
-			analysisResult = data
-			if summary := pickMap(data, "analysis_summary"); summary != nil {
-				analysisSummary = summary
+		switch {
+		case strings.Contains(code, "consultation_analysis"):
+			if latestConsultation == nil {
+				latestConsultation = data
+			}
+		case strings.Contains(code, "structured"):
+			if latestStructured == nil {
+				latestStructured = data
+			}
+		case strings.Contains(code, "narrative"):
+			if latestNarrative == nil {
+				latestNarrative = data
+			}
+		case strings.Contains(code, "content_gen"):
+			if latestContentGen == nil {
+				latestContentGen = data
+			}
+		case strings.Contains(code, "customer_operations_plan"):
+			if latestOpsPlan == nil {
+				latestOpsPlan = data
 			}
 		}
-		if strings.Contains(code, "narrative") {
-			if final := pickMap(data, "final"); final != nil {
-				if analysisSummary == nil {
-					analysisSummary = map[string]interface{}{}
-				}
-				mergeMap(analysisSummary, final)
+	}
+
+	var analysisResult map[string]interface{}
+	var analysisSummary map[string]interface{}
+	switch {
+	case latestConsultation != nil:
+		analysisResult = latestConsultation
+	case latestStructured != nil:
+		analysisResult = latestStructured
+	case latestNarrative != nil:
+		analysisResult = latestNarrative
+	default:
+		analysisResult = latestAny
+	}
+	if summary := pickMap(analysisResult, "analysis_summary"); summary != nil {
+		analysisSummary = summary
+	}
+	if summary := pickMap(latestConsultation, "analysis_summary"); summary != nil {
+		analysisSummary = summary
+	}
+	if final := pickMap(latestNarrative, "final"); final != nil {
+		if analysisSummary == nil {
+			analysisSummary = map[string]interface{}{}
+		}
+		mergeMap(analysisSummary, final)
+	}
+	if summary := pickMap(latestOpsPlan, "analysis_summary"); summary != nil {
+		if analysisSummary == nil {
+			analysisSummary = map[string]interface{}{}
+		}
+		mergeMap(analysisSummary, summary)
+	}
+
+	if latestContentGen != nil && resp.EMRDraft == nil {
+		if emr := pickMap(latestContentGen, "emr"); emr != nil {
+			resp.EMRDraft = map[string]interface{}{
+				"emr_content": emr,
+			}
+			if conf := pickString(emr, "confidence"); conf != "" {
+				resp.EMRDraft["confidence"] = conf
+			}
+			if missing, ok := emr["missing_fields"]; ok {
+				resp.EMRDraft["missing_fields"] = missing
 			}
 		}
-		if strings.Contains(code, "content_gen") && resp.EMRDraft == nil {
-			if emr := pickMap(data, "emr"); emr != nil {
-				resp.EMRDraft = map[string]interface{}{
-					"emr_content": emr,
-				}
-				if conf := pickString(emr, "confidence"); conf != "" {
-					resp.EMRDraft["confidence"] = conf
-				}
-				if missing, ok := emr["missing_fields"]; ok {
-					resp.EMRDraft["missing_fields"] = missing
-				}
-			}
-		}
-		if strings.Contains(code, "content_gen") && len(resp.ContentSeeds) == 0 {
-			resp.ContentSeeds = toMapSlice(pickArray(data, "content_seeds"))
-		}
+	}
+	if latestContentGen != nil && len(resp.ContentSeeds) == 0 {
+		resp.ContentSeeds = toMapSlice(pickArray(latestContentGen, "content_seeds"))
+	}
+	if len(resp.ContentSeeds) == 0 {
+		resp.ContentSeeds = toMapSlice(firstNonEmptyArray(
+			pickArray(latestConsultation, "content_seeds"),
+			pickArray(analysisResult, "content_seeds"),
+			pickArray(analysisSummary, "content_seeds"),
+		))
 	}
 
 	if analysisResult != nil {
@@ -333,6 +385,30 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 			pickString(resp.AnalysisResult, "subjective_summary"),
 			pickString(resp.AnalysisResult, "conversation_summary"),
 			pickString(resp.AnalysisSummary, "summary"),
+			pickString(resp.AnalysisSummary, "critical_summary"),
+		)
+	}
+	if resp.StatusSummary == nil {
+		resp.StatusSummary = pickStringPtr(
+			pickString(resp.AnalysisResult, "status_summary"),
+			pickString(resp.AnalysisSummary, "current_state"),
+			pickString(resp.AnalysisSummary, "critical_summary"),
+		)
+	}
+	if resp.DealOutcome == nil {
+		resp.DealOutcome = pickMap(resp.AnalysisResult, "deal_outcome")
+	}
+	if resp.SuggestedTask == nil {
+		resp.SuggestedTask = pickMap(resp.AnalysisResult, "suggested_task")
+	}
+	if resp.ConsultationRecord == nil {
+		resp.ConsultationRecord = pickMap(resp.AnalysisResult, "consultation_record")
+	}
+	if resp.Report == nil {
+		resp.Report = pickStringPtr(
+			pickString(resp.AnalysisResult, "report"),
+			pickString(resp.AnalysisResult, "feedback_report"),
+			pickString(resp.AnalysisSummary, "feedback_report"),
 			pickString(resp.AnalysisSummary, "critical_summary"),
 		)
 	}
@@ -371,9 +447,11 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 	if len(resp.StructuredTranscript) == 0 {
 		resp.StructuredTranscript = toMapSlice(
 			firstNonEmptyArray(
+				pickArray(resp.AnalysisResult, "annotated_transcription"),
 				pickArray(resp.AnalysisResult, "structured_transcript"),
 				pickArray(resp.AnalysisResult, "structured_transcription"),
 				pickArray(resp.AnalysisResult, "transcript_structured"),
+				pickArray(latestConsultation, "annotated_transcription"),
 				pickArray(resp.AnalysisSummary, "structured_transcript"),
 				pickArray(resp.AnalysisSummary, "structured_transcription"),
 			),
