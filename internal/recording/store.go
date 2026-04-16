@@ -14,6 +14,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+var (
+	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
+	consultantScopeRoleCodes = []string{"consultant"}
+)
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -40,6 +45,42 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		conditions = append(conditions, fmt.Sprintf("r.employee_id = $%d", argIndex))
 		args = append(args, *req.EmployeeID)
 		argIndex++
+	}
+
+	if req.Scope != nil {
+		switch *req.Scope {
+		case RecordingScopeDoctor:
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, doctorScopeRoleCodes)
+			argIndex++
+		case RecordingScopeConsultant:
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, consultantScopeRoleCodes)
+			argIndex++
+
+			// Doctor scope wins on dual-role employees, so consultant scope excludes doctor roles.
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, doctorScopeRoleCodes)
+			argIndex++
+		}
 	}
 
 	if req.PatientName != nil {
@@ -387,6 +428,12 @@ func (s *Store) UpdateRecording(ctx context.Context, id int64, req UpdateRecordi
 	if req.TranscriptText != nil {
 		setClauses = append(setClauses, fmt.Sprintf("transcription_text = $%d", argIndex))
 		args = append(args, *req.TranscriptText)
+		argIndex++
+	}
+
+	if req.CustomerID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("customer_id = $%d", argIndex))
+		args = append(args, *req.CustomerID)
 		argIndex++
 	}
 

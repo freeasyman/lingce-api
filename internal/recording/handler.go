@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -69,6 +70,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasks)))
 	mux.Handle("GET /api/v1/recordings/{id}/route", authMw(http.HandlerFunc(h.GetMedicalRecordingRoute)))
 	mux.Handle("GET /api/v1/recordings/{id}/segue", authMw(http.HandlerFunc(h.GetMedicalRecordingSegue)))
+	mux.Handle("GET /api/v1/recordings/{id}/emr", authMw(http.HandlerFunc(h.GetRecordingEMR)))
+	mux.Handle("POST /api/v1/recordings/{id}/emr/confirm", authMw(http.HandlerFunc(h.ConfirmRecordingEMR)))
+	mux.Handle("POST /api/v1/recordings/{id}/route-review", authMw(http.HandlerFunc(h.RouteReviewRecording)))
+	mux.Handle("GET /api/v1/recordings/search-patients", authMw(http.HandlerFunc(h.SearchRecordingPatients)))
 
 	// Medical Recording Dashboard endpoints
 	mux.Handle("GET /api/v1/recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))
@@ -78,6 +83,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/recordings/weekly-meeting", authMw(http.HandlerFunc(h.GetWeeklyMeetingMaterial)))
 	mux.Handle("GET /api/v1/recordings/weekly-summary", authMw(http.HandlerFunc(h.GetWeeklySummary)))
 	mux.Handle("GET /api/v1/recordings/team-trends", authMw(http.HandlerFunc(h.GetTeamTrends)))
+	mux.Handle("GET /api/v1/recordings/segue-dashboard", authMw(http.HandlerFunc(h.GetSegueDashboard)))
+	mux.Handle("GET /api/v1/recordings/doctor-ability-segue", authMw(http.HandlerFunc(h.GetDoctorAbilitySegue)))
+	mux.Handle("GET /api/v1/recordings/doctor-ability-segue/employees/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilitySegueDetail)))
 	mux.Handle("GET /api/v1/recordings/best-practices", authMw(http.HandlerFunc(h.ListBestPractices)))
 	mux.Handle("POST /api/v1/recordings/{id}/best-practice", authMw(http.HandlerFunc(h.AddBestPractice)))
 	mux.Handle("DELETE /api/v1/recordings/{id}/best-practice", authMw(http.HandlerFunc(h.DeleteBestPractice)))
@@ -159,6 +167,20 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse optional filters
+	defaultIncludeShort := false
+	req.IncludeShort = &defaultIncludeShort
+
+	if scopeStr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("recording_scope"))); scopeStr != "" {
+		scope := RecordingScope(scopeStr)
+		switch scope {
+		case RecordingScopeDoctor, RecordingScopeConsultant:
+			req.Scope = &scope
+		default:
+			httputil.WriteBadRequest(w, "Invalid recording scope")
+			return
+		}
+	}
+
 	if empIDStr := r.URL.Query().Get("employee_id"); empIDStr != "" {
 		empID, _ := strconv.ParseInt(empIDStr, 10, 64)
 		req.EmployeeID = &empID
@@ -167,10 +189,33 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	if patientName := r.URL.Query().Get("patient_name"); patientName != "" {
 		req.PatientName = &patientName
 	}
+	if keyword := r.URL.Query().Get("keyword"); keyword != "" {
+		req.Keyword = &keyword
+	}
 
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
 		status := RecordingStatus(statusStr)
 		req.Status = &status
+	}
+	if sceneType := r.URL.Query().Get("scene_type"); sceneType != "" {
+		req.SceneType = &sceneType
+	}
+	if visitOutcome := r.URL.Query().Get("visit_outcome"); visitOutcome != "" {
+		req.VisitOutcome = &visitOutcome
+	}
+	if includeShortStr := r.URL.Query().Get("include_short"); includeShortStr != "" {
+		includeShort := includeShortStr == "true" || includeShortStr == "1"
+		req.IncludeShort = &includeShort
+	}
+	if segueMinStr := r.URL.Query().Get("segue_min"); segueMinStr != "" {
+		if segueMin, err := strconv.ParseFloat(segueMinStr, 64); err == nil {
+			req.SegueMin = &segueMin
+		}
+	}
+	if segueMaxStr := r.URL.Query().Get("segue_max"); segueMaxStr != "" {
+		if segueMax, err := strconv.ParseFloat(segueMaxStr, 64); err == nil {
+			req.SegueMax = &segueMax
+		}
 	}
 
 	if startDateStr := r.URL.Query().Get("start_date"); startDateStr != "" {
@@ -178,10 +223,21 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 			req.StartDate = &startDate
 		}
 	}
+	if dateFromStr := r.URL.Query().Get("date_from"); dateFromStr != "" {
+		if startDate, err := time.Parse("2006-01-02", dateFromStr); err == nil {
+			req.StartDate = &startDate
+		}
+	}
 
 	if endDateStr := r.URL.Query().Get("end_date"); endDateStr != "" {
 		if endDate, err := time.Parse("2006-01-02", endDateStr); err == nil {
 			// Set to end of day
+			endDate = endDate.Add(24*time.Hour - time.Second)
+			req.EndDate = &endDate
+		}
+	}
+	if dateToStr := r.URL.Query().Get("date_to"); dateToStr != "" {
+		if endDate, err := time.Parse("2006-01-02", dateToStr); err == nil {
 			endDate = endDate.Add(24*time.Hour - time.Second)
 			req.EndDate = &endDate
 		}

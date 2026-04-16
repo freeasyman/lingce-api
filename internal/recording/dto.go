@@ -22,6 +22,7 @@ type UpdateRecordingRequest struct {
 	PatientAge        *int             `json:"patient_age,omitempty"`
 	PatientGender     *string          `json:"patient_gender,omitempty"`
 	PatientPhone      *string          `json:"patient_phone,omitempty"`
+	CustomerID        *int64           `json:"customer_id,omitempty"`
 	TranscriptText    *string          `json:"transcript_text,omitempty"`
 	DoctorSummary     *string          `json:"doctor_summary,omitempty"`
 	TherapistSummary  *string          `json:"therapist_summary,omitempty"`
@@ -82,6 +83,7 @@ type RecordingResponse struct {
 type RecordingListRequest struct {
 	TenantID     int64            `json:"tenant_id"`
 	TenantIDs    []int64          `json:"tenant_ids,omitempty"`
+	Scope        *RecordingScope  `json:"recording_scope,omitempty"`
 	EmployeeID   *int64           `json:"employee_id,omitempty"`
 	PatientName  *string          `json:"patient_name,omitempty"`
 	Status       *RecordingStatus `json:"status,omitempty"`
