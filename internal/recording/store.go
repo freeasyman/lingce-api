@@ -48,6 +48,42 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		argIndex++
 	}
 
+	if req.Keyword != nil && strings.TrimSpace(*req.Keyword) != "" {
+		keyword := "%" + strings.TrimSpace(*req.Keyword) + "%"
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(c.name, '') ILIKE $%d OR
+			COALESCE(c.phone, '') ILIKE $%d OR
+			COALESCE(e.name, '') ILIKE $%d OR
+			COALESCE(e.full_name, '') ILIKE $%d OR
+			COALESCE(oa.username, '') ILIKE $%d OR
+			COALESCE(oa.email, '') ILIKE $%d OR
+			COALESCE(r.transcription_text, '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'subjective_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'doctor_summary', '') ILIKE $%d
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, keyword)
+		argIndex++
+	}
+
+	if req.SceneType != nil && strings.TrimSpace(*req.SceneType) != "" {
+		scene := strings.TrimSpace(*req.SceneType)
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(NULLIF(r.analysis_display->>'scene_type', ''), NULLIF(r.analysis_display->>'scene', ''), COALESCE(r.scene, '')) = $%d
+		)`, argIndex))
+		args = append(args, scene)
+		argIndex++
+	}
+
+	if req.VisitOutcome != nil && strings.TrimSpace(*req.VisitOutcome) != "" {
+		outcome := strings.TrimSpace(*req.VisitOutcome)
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(NULLIF(r.analysis_display->>'visit_outcome', ''), NULLIF(r.analysis_display->>'decision_status', ''), '') = $%d
+		)`, argIndex))
+		args = append(args, outcome)
+		argIndex++
+	}
+
 	if req.Status != nil {
 		conditions = append(conditions, fmt.Sprintf(`
 			(CASE
@@ -72,12 +108,46 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		argIndex++
 	}
 
+	if req.IncludeShort != nil && !*req.IncludeShort {
+		conditions = append(conditions, "COALESCE(r.duration, 0) >= 60")
+	}
+
+	if req.SegueMin != nil {
+		conditions = append(conditions, fmt.Sprintf(`(
+			CASE
+				WHEN COALESCE(r.analysis_display->>'segue_score', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+					THEN (r.analysis_display->>'segue_score')::double precision
+				WHEN COALESCE(r.analysis_display->'segue_scores'->>'overall', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+					THEN (r.analysis_display->'segue_scores'->>'overall')::double precision
+				ELSE NULL
+			END
+		) >= $%d`, argIndex))
+		args = append(args, *req.SegueMin)
+		argIndex++
+	}
+
+	if req.SegueMax != nil {
+		conditions = append(conditions, fmt.Sprintf(`(
+			CASE
+				WHEN COALESCE(r.analysis_display->>'segue_score', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+					THEN (r.analysis_display->>'segue_score')::double precision
+				WHEN COALESCE(r.analysis_display->'segue_scores'->>'overall', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+					THEN (r.analysis_display->'segue_scores'->>'overall')::double precision
+				ELSE NULL
+			END
+		) < $%d`, argIndex))
+		args = append(args, *req.SegueMax)
+		argIndex++
+	}
+
 	whereClause := strings.Join(conditions, " AND ")
 
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
 		WHERE %s
 	`, whereClause)
 	var total int
@@ -90,7 +160,18 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		SELECT
 			r.id,
 			r.tenant_id,
+			COALESCE(NULLIF(t.name, ''), CONCAT('租户#', r.tenant_id::text)) AS tenant_name,
 			r.employee_id,
+			COALESCE(
+				NULLIF(e.name, ''),
+				NULLIF(e.full_name, ''),
+				NULLIF(e.phone, ''),
+				NULLIF(oa.username, ''),
+				NULLIF(oa.email, ''),
+				'未知员工'
+			) AS employee_name,
+			r.customer_id,
+			NULLIF(c.name, '') AS customer_name,
 			COALESCE(c.name, '') AS patient_name,
 			c.age AS patient_age,
 			c.gender AS patient_gender,
@@ -101,6 +182,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
 			CASE
 				WHEN r.analysis_status = 'completed' THEN 'completed'
 				WHEN r.analysis_status = 'failed' OR r.transcription_status = 'failed' THEN 'failed'
@@ -116,6 +198,9 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			NULL::timestamp AS deleted_at
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE %s
 		ORDER BY r.created_at DESC
 		LIMIT $%d OFFSET $%d
@@ -135,7 +220,11 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		if err := rows.Scan(
 			&r.ID,
 			&r.TenantID,
+			&r.TenantName,
 			&r.EmployeeID,
+			&r.EmployeeName,
+			&r.CustomerID,
+			&r.CustomerName,
 			&r.PatientName,
 			&r.PatientAge,
 			&r.PatientGender,
@@ -146,6 +235,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			&r.DoctorSummary,
 			&r.TherapistSummary,
 			&r.ConsultantSummary,
+			&r.AnalysisDisplay,
 			&r.Status,
 			&r.ProcessingError,
 			&r.RecordingStartedAt,
@@ -169,7 +259,18 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		SELECT
 			r.id,
 			r.tenant_id,
+			COALESCE(NULLIF(t.name, ''), CONCAT('租户#', r.tenant_id::text)) AS tenant_name,
 			r.employee_id,
+			COALESCE(
+				NULLIF(e.name, ''),
+				NULLIF(e.full_name, ''),
+				NULLIF(e.phone, ''),
+				NULLIF(oa.username, ''),
+				NULLIF(oa.email, ''),
+				'未知员工'
+			) AS employee_name,
+			r.customer_id,
+			NULLIF(c.name, '') AS customer_name,
 			COALESCE(c.name, '') AS patient_name,
 			c.age AS patient_age,
 			c.gender AS patient_gender,
@@ -180,6 +281,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
 			CASE
 				WHEN r.analysis_status = 'completed' THEN 'completed'
 				WHEN r.analysis_status = 'failed' OR r.transcription_status = 'failed' THEN 'failed'
@@ -195,6 +297,9 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			NULL::timestamp AS deleted_at
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE r.id = $1
 	`
 
@@ -202,7 +307,11 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&r.ID,
 		&r.TenantID,
+		&r.TenantName,
 		&r.EmployeeID,
+		&r.EmployeeName,
+		&r.CustomerID,
+		&r.CustomerName,
 		&r.PatientName,
 		&r.PatientAge,
 		&r.PatientGender,
@@ -213,6 +322,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		&r.DoctorSummary,
 		&r.TherapistSummary,
 		&r.ConsultantSummary,
+		&r.AnalysisDisplay,
 		&r.Status,
 		&r.ProcessingError,
 		&r.RecordingStartedAt,
@@ -493,7 +603,9 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	// Query tasks
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description, assigned_to, NULL::bigint AS assigned_by,
+		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
+		       customer_name, priority, script, contact_reason, source_type, source_detail,
+		       assigned_to, NULL::bigint AS assigned_by,
 		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by, NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason, created_at, updated_at
 		FROM recording_tasks
 		WHERE %s
@@ -514,6 +626,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		var t RecordingTask
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
+			&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
 			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
@@ -528,7 +641,9 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 // GetTaskByID retrieves a recording task by ID
 func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, error) {
 	query := `
-		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description, assigned_to, NULL::bigint AS assigned_by,
+		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
+		       customer_name, priority, script, contact_reason, source_type, source_detail,
+		       assigned_to, NULL::bigint AS assigned_by,
 		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by, NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason, created_at, updated_at
 		FROM recording_tasks
 		WHERE id = $1
@@ -537,6 +652,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, erro
 	var t RecordingTask
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
+		&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
 		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.CreatedAt, &t.UpdatedAt,
 	)
