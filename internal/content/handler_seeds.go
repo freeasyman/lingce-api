@@ -54,12 +54,39 @@ func (h *Handler) ListSeeds(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
+	if status := strings.TrimSpace(r.URL.Query().Get("status")); status != "" {
+		req.Status = &status
+	}
+	if category := strings.TrimSpace(r.URL.Query().Get("seed_type")); category != "" {
+		req.Category = &category
+	}
+	if category := strings.TrimSpace(r.URL.Query().Get("category")); category != "" {
+		req.Category = &category
+	}
+	if clusterIDStr := strings.TrimSpace(r.URL.Query().Get("concern_cluster_id")); clusterIDStr != "" {
+		if v, convErr := strconv.ParseInt(clusterIDStr, 10, 64); convErr == nil && v > 0 {
+			req.ClusterID = &v
+		}
+	} else if clusterIDStr := strings.TrimSpace(r.URL.Query().Get("cluster_id")); clusterIDStr != "" {
+		if v, convErr := strconv.ParseInt(clusterIDStr, 10, 64); convErr == nil && v > 0 {
+			req.ClusterID = &v
+		}
+	}
+	employeeIDFilter := int64(0)
+	if employeeIDStr := strings.TrimSpace(r.URL.Query().Get("employee_id")); employeeIDStr != "" {
+		if v, convErr := strconv.ParseInt(employeeIDStr, 10, 64); convErr == nil && v > 0 {
+			employeeIDFilter = v
+		}
+	}
+	startDateFilter := strings.TrimSpace(r.URL.Query().Get("start_date"))
+	endDateFilter := strings.TrimSpace(r.URL.Query().Get("end_date"))
 
 	seeds, err := h.buildSeedsFromTopics(r.Context(), req.TenantID, req.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
+	seeds = filterSeeds(seeds, req, employeeIDFilter, startDateFilter, endDateFilter)
 	total := len(seeds)
 	if req.Page <= 0 {
 		req.Page = 1
@@ -110,9 +137,9 @@ func (h *Handler) GetSeedStats(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, seed := range seeds {
 		switch seed.Status {
-		case "adopted":
+		case "used":
 			response.AdoptedSeeds++
-		case "dismissed":
+		case "ignored":
 			response.DismissedSeeds++
 		case "draft_generated":
 			response.DraftGenerated++
@@ -292,7 +319,21 @@ func (h *Handler) GetSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seed, err := h.getSeedByID(r.Context(), claims.TenantID, id)
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if len(scope.TenantIDs) == 0 {
+		httputil.WriteNotFound(w, "seed not found")
+		return
+	}
+
+	seed, err := h.getSeedByID(r.Context(), scope.TenantID, id, scope.TenantIDs...)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
@@ -425,6 +466,11 @@ func (h *Handler) GetMyAdopted(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
+	seedsFromRecording, err := h.buildSeedsFromRecordingTable(ctx, tenantID, tenantIDs...)
+	if err != nil {
+		return nil, err
+	}
+
 	topics, _, err := h.service.ListTopics(ctx, TopicListRequest{
 		TenantID:  tenantID,
 		TenantIDs: tenantIDs,
@@ -435,6 +481,30 @@ func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, ten
 		return nil, err
 	}
 
+	employeeNameByID := map[int64]string{}
+	creatorIDs := make([]int64, 0, len(topics))
+	tenantIDSet := make(map[int64]struct{}, len(tenantIDs))
+	for _, id := range tenantIDs {
+		if id > 0 {
+			tenantIDSet[id] = struct{}{}
+		}
+	}
+	for _, topic := range topics {
+		if topic.CreatedBy > 0 {
+			creatorIDs = append(creatorIDs, topic.CreatedBy)
+		}
+		if topic.TenantID > 0 {
+			tenantIDSet[topic.TenantID] = struct{}{}
+		}
+	}
+	if len(creatorIDs) > 0 && len(tenantIDSet) > 0 {
+		tenantIDList := make([]int64, 0, len(tenantIDSet))
+		for tid := range tenantIDSet {
+			tenantIDList = append(tenantIDList, tid)
+		}
+		employeeNameByID, _ = h.loadEmployeeNames(ctx, creatorIDs, tenantIDList)
+	}
+
 	seedStateMu.RLock()
 	defer seedStateMu.RUnlock()
 	result := make([]SeedResponse, 0, len(topics))
@@ -442,24 +512,46 @@ func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, ten
 		status := "pending"
 		switch topic.Status {
 		case "selected", "completed":
-			status = "adopted"
+			status = "used"
 		case "archived":
-			status = "dismissed"
+			status = "ignored"
 		}
 		if override, ok := seedStatusOverrides[topic.ID]; ok {
-			status = override
+			status = normalizeFilterStatus(override)
 		}
 		seed := SeedResponse{
 			ID:        topic.ID,
 			TenantID:  topic.TenantID,
+			Topic:     topic.Title,
 			Title:     topic.Title,
 			Content:   valueOrEmpty(topic.Description),
 			Category:  topic.Category,
 			Tags:      topic.Tags,
 			Status:    status,
+			SeedData:  topic.ExtraData,
 			ExtraData: topic.ExtraData,
 			CreatedAt: topic.CreatedAt,
 			UpdatedAt: topic.UpdatedAt,
+		}
+		if seedType := inferSeedType(topic); seedType != "" {
+			seed.SeedType = &seedType
+		}
+		if contentAngle := inferContentAngle(topic); contentAngle != "" {
+			seed.ContentAngle = &contentAngle
+		}
+		seed.SuggestedPlatforms = inferSuggestedPlatforms(topic)
+		viral := inferViralPotential(topic)
+		seed.ViralPotential = &viral
+		if clusterID := inferConcernClusterID(topic); clusterID != nil {
+			seed.ConcernClusterID = clusterID
+			seed.ClusterID = clusterID
+		}
+		if topic.CreatedBy > 0 {
+			creatorID := topic.CreatedBy
+			seed.EmployeeID = &creatorID
+			if name := strings.TrimSpace(employeeNameByID[topic.CreatedBy]); name != "" {
+				seed.EmployeeName = &name
+			}
 		}
 		if uid, ok := seedAdoptedBy[topic.ID]; ok {
 			seed.AdoptedBy = &uid
@@ -467,21 +559,393 @@ func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, ten
 		}
 		result = append(result, seed)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID > result[j].ID })
+	merged := mergeSeedResults(seedsFromRecording, result)
+	sort.Slice(merged, func(i, j int) bool { return merged[i].ID > merged[j].ID })
+	return merged, nil
+}
+
+func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
+	scopeTenantIDs := mergeSeedTenantScope(tenantID, tenantIDs)
+	if len(scopeTenantIDs) == 0 {
+		return []SeedResponse{}, nil
+	}
+
+	query := `
+		SELECT
+			rcs.id,
+			rcs.tenant_id,
+			rcs.employee_id,
+			e.name AS employee_name,
+			rcs.recording_id,
+			rcs.seed_type,
+			rcs.topic,
+			rcs.content_angle,
+			rcs.suggested_platforms,
+			rcs.viral_potential,
+			rcs.patient_concern,
+			rcs.status,
+			rcs.concern_cluster_id,
+			rcs.seed_data,
+			rcs.created_at
+		FROM recording_content_seeds rcs
+		LEFT JOIN employees e
+		  ON e.id = rcs.employee_id
+		 AND e.deleted_at IS NULL
+		WHERE rcs.tenant_id = ANY($1)
+		ORDER BY rcs.id DESC
+	`
+	rows, err := h.service.store.pool.Query(ctx, query, scopeTenantIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]SeedResponse, 0, 64)
+	seedStateMu.RLock()
+	defer seedStateMu.RUnlock()
+	for rows.Next() {
+		var (
+			seedID         int64
+			tid            int64
+			employeeID     *int64
+			employeeName   *string
+			recordingID    *int64
+			seedType       string
+			topic          string
+			contentAngle   *string
+			suggestedRaw   []byte
+			viralPotential string
+			patientConcern *string
+			statusRaw      string
+			clusterID      *int64
+			seedData       JSONObject
+			createdAt      time.Time
+		)
+		if err := rows.Scan(
+			&seedID,
+			&tid,
+			&employeeID,
+			&employeeName,
+			&recordingID,
+			&seedType,
+			&topic,
+			&contentAngle,
+			&suggestedRaw,
+			&viralPotential,
+			&patientConcern,
+			&statusRaw,
+			&clusterID,
+			&seedData,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+
+		status := mapRecordingSeedStatusToLegacy(statusRaw)
+		if override, ok := seedStatusOverrides[seedID]; ok {
+			status = mapRecordingSeedStatusToLegacy(override)
+		}
+		suggestedPlatforms := parseJSONStringArray(suggestedRaw)
+
+		seedType = strings.TrimSpace(strings.ToLower(seedType))
+		var seedTypePtr *string
+		if seedType != "" {
+			seedTypePtr = &seedType
+		}
+		viral := strings.TrimSpace(strings.ToLower(viralPotential))
+		if viral == "" {
+			viral = "medium"
+		}
+
+		seed := SeedResponse{
+			ID:                 seedID,
+			TenantID:           tid,
+			EmployeeID:         employeeID,
+			EmployeeName:       employeeName,
+			RecordingID:        recordingID,
+			SeedType:           seedTypePtr,
+			Topic:              topic,
+			ContentAngle:       contentAngle,
+			SuggestedPlatforms: suggestedPlatforms,
+			ViralPotential:     &viral,
+			ConcernClusterID:   clusterID,
+			Title:              topic,
+			Content:            valueOrEmpty(patientConcern),
+			Status:             status,
+			ClusterID:          clusterID,
+			SeedData:           seedData,
+			ExtraData:          seedData,
+			CreatedAt:          createdAt.Format(time.RFC3339),
+			UpdatedAt:          createdAt.Format(time.RFC3339),
+		}
+		if uid, ok := seedAdoptedBy[seedID]; ok {
+			seed.AdoptedBy = &uid
+			seed.AdoptedAt = strPtr(time.Now().Format(time.RFC3339))
+		}
+		result = append(result, seed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
 func (h *Handler) getSeedByID(ctx context.Context, tenantID *int64, id int64, tenantIDs ...int64) (*SeedResponse, error) {
-	seeds, err := h.buildSeedsFromTopics(ctx, tenantID, tenantIDs...)
-	if err != nil {
-		return nil, err
+	scopeTenantIDs := mergeSeedTenantScope(tenantID, tenantIDs)
+	if len(scopeTenantIDs) == 0 {
+		return nil, fmt.Errorf("seed not found")
 	}
-	for i := range seeds {
-		if seeds[i].ID == id {
-			return &seeds[i], nil
+
+	if seed, found, err := h.getSeedByIDFromRecordingTable(ctx, id, scopeTenantIDs); err != nil {
+		return nil, err
+	} else if found {
+		return seed, nil
+	}
+
+	if seed, found, err := h.getSeedByIDFromTopicTable(ctx, id, scopeTenantIDs); err != nil {
+		return nil, err
+	} else if found {
+		return seed, nil
+	}
+
+	return nil, fmt.Errorf("seed not found")
+}
+
+func (h *Handler) getSeedByIDFromRecordingTable(ctx context.Context, seedID int64, tenantIDs []int64) (*SeedResponse, bool, error) {
+	query := `
+		SELECT
+			rcs.id,
+			rcs.tenant_id,
+			rcs.employee_id,
+			e.name AS employee_name,
+			rcs.recording_id,
+			rcs.seed_type,
+			rcs.topic,
+			rcs.content_angle,
+			rcs.suggested_platforms,
+			rcs.viral_potential,
+			rcs.patient_concern,
+			rcs.status,
+			rcs.concern_cluster_id,
+			rcs.seed_data,
+			rcs.created_at
+		FROM recording_content_seeds rcs
+		LEFT JOIN employees e
+		  ON e.id = rcs.employee_id
+		 AND e.deleted_at IS NULL
+		WHERE rcs.id = $1
+		  AND rcs.tenant_id = ANY($2)
+		LIMIT 1
+	`
+	rows, err := h.service.store.pool.Query(ctx, query, seedID, tenantIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, false, nil
+	}
+
+	var (
+		id             int64
+		tid            int64
+		employeeID     *int64
+		employeeName   *string
+		recordingID    *int64
+		seedType       string
+		topic          string
+		contentAngle   *string
+		suggestedRaw   []byte
+		viralPotential string
+		patientConcern *string
+		statusRaw      string
+		clusterID      *int64
+		seedData       JSONObject
+		createdAt      time.Time
+	)
+	if err := rows.Scan(
+		&id,
+		&tid,
+		&employeeID,
+		&employeeName,
+		&recordingID,
+		&seedType,
+		&topic,
+		&contentAngle,
+		&suggestedRaw,
+		&viralPotential,
+		&patientConcern,
+		&statusRaw,
+		&clusterID,
+		&seedData,
+		&createdAt,
+	); err != nil {
+		return nil, false, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	status := mapRecordingSeedStatusToLegacy(statusRaw)
+	if override, ok := seedStatusOverrides[id]; ok {
+		status = mapRecordingSeedStatusToLegacy(override)
+	}
+	seedType = strings.TrimSpace(strings.ToLower(seedType))
+	var seedTypePtr *string
+	if seedType != "" {
+		seedTypePtr = &seedType
+	}
+	viral := strings.TrimSpace(strings.ToLower(viralPotential))
+	if viral == "" {
+		viral = "medium"
+	}
+	seed := &SeedResponse{
+		ID:                 id,
+		TenantID:           tid,
+		EmployeeID:         employeeID,
+		EmployeeName:       employeeName,
+		RecordingID:        recordingID,
+		SeedType:           seedTypePtr,
+		Topic:              topic,
+		ContentAngle:       contentAngle,
+		SuggestedPlatforms: parseJSONStringArray(suggestedRaw),
+		ViralPotential:     &viral,
+		ConcernClusterID:   clusterID,
+		SeedData:           seedData,
+		Title:              topic,
+		Content:            valueOrEmpty(patientConcern),
+		Status:             status,
+		ClusterID:          clusterID,
+		ExtraData:          seedData,
+		CreatedAt:          createdAt.Format(time.RFC3339),
+		UpdatedAt:          createdAt.Format(time.RFC3339),
+	}
+	return seed, true, nil
+}
+
+func (h *Handler) getSeedByIDFromTopicTable(ctx context.Context, topicID int64, tenantIDs []int64) (*SeedResponse, bool, error) {
+	query := `
+		SELECT
+			t.id,
+			t.tenant_id,
+			t.title,
+			t.description,
+			t.category,
+			t.status,
+			t.extra_data,
+			t.created_by,
+			t.created_at,
+			t.updated_at,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), NULLIF(e.username, ''), '') AS employee_name
+		FROM content_topics t
+		LEFT JOIN employees e
+		  ON e.id = t.created_by
+		 AND e.tenant_id = t.tenant_id
+		 AND e.deleted_at IS NULL
+		WHERE t.deleted_at IS NULL
+		  AND t.id = $1
+		  AND t.tenant_id = ANY($2)
+		LIMIT 1
+	`
+	rows, err := h.service.store.pool.Query(ctx, query, topicID, tenantIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, false, nil
+	}
+
+	var (
+		id          int64
+		tid         int64
+		title       string
+		description *string
+		category    *string
+		statusRaw   string
+		extraData   JSONObject
+		createdBy   int64
+		createdAt   time.Time
+		updatedAt   time.Time
+		employee    string
+	)
+	if err := rows.Scan(
+		&id,
+		&tid,
+		&title,
+		&description,
+		&category,
+		&statusRaw,
+		&extraData,
+		&createdBy,
+		&createdAt,
+		&updatedAt,
+		&employee,
+	); err != nil {
+		return nil, false, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	status := "pending"
+	switch strings.TrimSpace(strings.ToLower(statusRaw)) {
+	case "selected", "completed":
+		status = "used"
+	case "archived":
+		status = "ignored"
+	}
+	if override, ok := seedStatusOverrides[id]; ok {
+		status = normalizeFilterStatus(override)
+	}
+
+	topic := &TopicResponse{
+		ID:          id,
+		TenantID:    tid,
+		Title:       title,
+		Description: description,
+		Category:    category,
+		Status:      statusRaw,
+		ExtraData:   extraData,
+		CreatedBy:   createdBy,
+		CreatedAt:   createdAt.Format(time.RFC3339),
+		UpdatedAt:   updatedAt.Format(time.RFC3339),
+	}
+
+	seed := &SeedResponse{
+		ID:        id,
+		TenantID:  tid,
+		Topic:     title,
+		Title:     title,
+		Content:   valueOrEmpty(description),
+		Category:  category,
+		Status:    status,
+		SeedData:  extraData,
+		ExtraData: extraData,
+		CreatedAt: createdAt.Format(time.RFC3339),
+		UpdatedAt: updatedAt.Format(time.RFC3339),
+	}
+	if seedType := inferSeedType(topic); seedType != "" {
+		seed.SeedType = &seedType
+	}
+	if contentAngle := inferContentAngle(topic); contentAngle != "" {
+		seed.ContentAngle = &contentAngle
+	}
+	seed.SuggestedPlatforms = inferSuggestedPlatforms(topic)
+	viral := inferViralPotential(topic)
+	seed.ViralPotential = &viral
+	if clusterID := inferConcernClusterID(topic); clusterID != nil {
+		seed.ConcernClusterID = clusterID
+		seed.ClusterID = clusterID
+	}
+	if createdBy > 0 {
+		seed.EmployeeID = &createdBy
+		if strings.TrimSpace(employee) != "" {
+			name := strings.TrimSpace(employee)
+			seed.EmployeeName = &name
 		}
 	}
-	return nil, fmt.Errorf("seed not found")
+	return seed, true, nil
 }
 
 func valueOrEmpty(v *string) string {
@@ -489,4 +953,397 @@ func valueOrEmpty(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+func mergeSeedTenantScope(tenantID *int64, tenantIDs []int64) []int64 {
+	set := make(map[int64]struct{}, len(tenantIDs)+1)
+	if tenantID != nil && *tenantID > 0 {
+		set[*tenantID] = struct{}{}
+	}
+	for _, id := range tenantIDs {
+		if id > 0 {
+			set[id] = struct{}{}
+		}
+	}
+	out := make([]int64, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func mapRecordingSeedStatusToLegacy(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "used", "adopted", "draft_generated":
+		return "used"
+	case "ignored", "dismissed":
+		return "ignored"
+	default:
+		return "pending"
+	}
+}
+
+func mergeSeedResults(primary []SeedResponse, fallback []SeedResponse) []SeedResponse {
+	if len(primary) == 0 {
+		return fallback
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+
+	indexByID := make(map[int64]int, len(fallback))
+	merged := make([]SeedResponse, 0, len(primary)+len(fallback))
+	for _, item := range fallback {
+		indexByID[item.ID] = len(merged)
+		merged = append(merged, item)
+	}
+
+	for _, item := range primary {
+		if pos, ok := indexByID[item.ID]; ok {
+			merged[pos] = item
+			continue
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func filterSeeds(seeds []SeedResponse, req SeedListRequest, employeeID int64, startDate, endDate string) []SeedResponse {
+	if len(seeds) == 0 {
+		return seeds
+	}
+	seedTypeSet := parseCSVSet(valueOrString(req.Category))
+	statusSet := parseStatusSet(valueOrString(req.Status))
+	filterByCluster := req.ClusterID != nil && *req.ClusterID > 0
+	filterByEmployee := employeeID > 0
+	start := parseDateAtStart(startDate)
+	endExclusive := parseDateEndExclusive(endDate)
+
+	out := make([]SeedResponse, 0, len(seeds))
+	for _, seed := range seeds {
+		if len(seedTypeSet) > 0 {
+			typ := strings.TrimSpace(strings.ToLower(valueOrString(seed.SeedType)))
+			if typ == "" || !seedTypeSet[typ] {
+				continue
+			}
+		}
+		if len(statusSet) > 0 {
+			normalized := normalizeFilterStatus(seed.Status)
+			if !statusSet[normalized] {
+				continue
+			}
+		}
+		if filterByCluster {
+			if seed.ClusterID == nil || *seed.ClusterID != *req.ClusterID {
+				continue
+			}
+		}
+		if filterByEmployee {
+			if seed.EmployeeID == nil || *seed.EmployeeID != employeeID {
+				continue
+			}
+		}
+		if !start.IsZero() || !endExclusive.IsZero() {
+			createdAt, err := time.Parse(time.RFC3339, seed.CreatedAt)
+			if err != nil {
+				createdAt, err = time.Parse(time.RFC3339Nano, seed.CreatedAt)
+			}
+			if err == nil {
+				if !start.IsZero() && createdAt.Before(start) {
+					continue
+				}
+				if !endExclusive.IsZero() && !createdAt.Before(endExclusive) {
+					continue
+				}
+			}
+		}
+		out = append(out, seed)
+	}
+	return out
+}
+
+func parseCSVSet(raw string) map[string]bool {
+	result := map[string]bool{}
+	if strings.TrimSpace(raw) == "" {
+		return result
+	}
+	for _, item := range strings.Split(raw, ",") {
+		v := strings.TrimSpace(strings.ToLower(item))
+		if v != "" {
+			result[v] = true
+		}
+	}
+	return result
+}
+
+func parseStatusSet(raw string) map[string]bool {
+	result := map[string]bool{}
+	for status := range parseCSVSet(raw) {
+		result[normalizeFilterStatus(status)] = true
+	}
+	return result
+}
+
+func normalizeFilterStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "used", "adopted", "draft_generated":
+		return "used"
+	case "ignored", "dismissed":
+		return "ignored"
+	default:
+		return "pending"
+	}
+}
+
+func valueOrString(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return strings.TrimSpace(*ptr)
+}
+
+func parseDateAtStart(raw string) time.Time {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+func parseDateEndExclusive(raw string) time.Time {
+	start := parseDateAtStart(raw)
+	if start.IsZero() {
+		return time.Time{}
+	}
+	return start.Add(24 * time.Hour)
+}
+
+func parseJSONStringArray(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			v := strings.TrimSpace(strings.ToLower(item))
+			if v != "" {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	var generic []interface{}
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(generic))
+	for _, item := range generic {
+		if s, ok := item.(string); ok {
+			v := strings.TrimSpace(strings.ToLower(s))
+			if v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func (h *Handler) loadEmployeeNames(ctx context.Context, employeeIDs []int64, tenantIDs []int64) (map[int64]string, error) {
+	if len(employeeIDs) == 0 || len(tenantIDs) == 0 {
+		return map[int64]string{}, nil
+	}
+	query := `
+		SELECT e.id,
+		       CASE
+		         WHEN e.full_name IS NULL OR e.full_name = '' OR e.full_name = 'unknown'
+		         THEN COALESCE(NULLIF(e.name, ''), NULLIF(e.username, ''), '')
+		         ELSE e.full_name
+		       END AS full_name
+		FROM employees e
+		WHERE e.deleted_at IS NULL
+		  AND e.id = ANY($1)
+		  AND e.tenant_id = ANY($2)
+	`
+	rows, err := h.service.store.pool.Query(ctx, query, employeeIDs, tenantIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64]string, len(employeeIDs))
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(name) != "" {
+			result[id] = strings.TrimSpace(name)
+		}
+	}
+	return result, rows.Err()
+}
+
+func inferSeedType(topic *TopicResponse) string {
+	if topic == nil {
+		return ""
+	}
+	candidates := []string{}
+	if topic.ExtraData != nil {
+		candidates = append(candidates,
+			toSeedTypeValue(topic.ExtraData["seed_type"]),
+			toSeedTypeValue(topic.ExtraData["type"]),
+			toSeedTypeValue(topic.ExtraData["content_seed_type"]),
+		)
+	}
+	for _, c := range candidates {
+		if isValidSeedType(c) {
+			return c
+		}
+	}
+	category := strings.TrimSpace(strings.ToLower(valueOrEmpty(topic.Category)))
+	switch category {
+	case "relatable_scene", "golden_quote", "aha_moment", "practical_qa", "concern_handling":
+		return category
+	}
+	return ""
+}
+
+func toSeedTypeValue(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return strings.TrimSpace(strings.ToLower(val))
+	default:
+		return ""
+	}
+}
+
+func isValidSeedType(v string) bool {
+	switch v {
+	case "relatable_scene", "golden_quote", "aha_moment", "practical_qa", "concern_handling":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferContentAngle(topic *TopicResponse) string {
+	if topic == nil {
+		return ""
+	}
+	if topic.ExtraData != nil {
+		for _, key := range []string{"content_angle", "angle", "summary", "description", "content"} {
+			if v := toStringValue(topic.ExtraData[key]); v != "" {
+				return v
+			}
+		}
+	}
+	return strings.TrimSpace(valueOrEmpty(topic.Description))
+}
+
+func inferSuggestedPlatforms(topic *TopicResponse) []string {
+	if topic == nil || topic.ExtraData == nil {
+		return nil
+	}
+	for _, key := range []string{"suggested_platforms", "recommended_platforms", "platforms"} {
+		if arr := toStringSlice(topic.ExtraData[key]); len(arr) > 0 {
+			return arr
+		}
+	}
+	return nil
+}
+
+func inferViralPotential(topic *TopicResponse) string {
+	if topic == nil || topic.ExtraData == nil {
+		return "medium"
+	}
+	raw := strings.TrimSpace(strings.ToLower(toStringValue(topic.ExtraData["viral_potential"])))
+	switch {
+	case strings.HasPrefix(raw, "high"):
+		return "high"
+	case strings.HasPrefix(raw, "low"):
+		return "low"
+	case strings.HasPrefix(raw, "medium"):
+		return "medium"
+	default:
+		return "medium"
+	}
+}
+
+func inferConcernClusterID(topic *TopicResponse) *int64 {
+	if topic == nil || topic.ExtraData == nil {
+		return nil
+	}
+	for _, key := range []string{"concern_cluster_id", "cluster_id"} {
+		if v := toInt64Ptr(topic.ExtraData[key]); v != nil && *v > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
+func toStringValue(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return strings.TrimSpace(val)
+	default:
+		return ""
+	}
+}
+
+func toStringSlice(v interface{}) []string {
+	switch val := v.(type) {
+	case []string:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			s := strings.TrimSpace(strings.ToLower(item))
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				v := strings.TrimSpace(strings.ToLower(s))
+				if v != "" {
+					out = append(out, v)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func toInt64Ptr(v interface{}) *int64 {
+	switch val := v.(type) {
+	case int64:
+		return &val
+	case int:
+		n := int64(val)
+		return &n
+	case float64:
+		n := int64(val)
+		return &n
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return nil
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil
+		}
+		return &n
+	default:
+		return nil
+	}
 }

@@ -267,20 +267,29 @@ type SeedListRequest struct {
 
 // SeedResponse represents seed response
 type SeedResponse struct {
-	ID          int64      `json:"id"`
-	TenantID    int64      `json:"tenant_id"`
-	RecordingID *int64     `json:"recording_id,omitempty"`
-	Title       string     `json:"title"`
-	Content     string     `json:"content"`
-	Category    *string    `json:"category,omitempty"`
-	Tags        []string   `json:"tags,omitempty"`
-	Status      string     `json:"status"`
-	ClusterID   *int64     `json:"cluster_id,omitempty"`
-	AdoptedBy   *int64     `json:"adopted_by,omitempty"`
-	AdoptedAt   *string    `json:"adopted_at,omitempty"`
-	ExtraData   JSONObject `json:"extra_data,omitempty"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	ID                 int64      `json:"id"`
+	TenantID           int64      `json:"tenant_id"`
+	EmployeeID         *int64     `json:"employee_id,omitempty"`
+	EmployeeName       *string    `json:"employee_name,omitempty"`
+	RecordingID        *int64     `json:"recording_id,omitempty"`
+	SeedType           *string    `json:"seed_type,omitempty"`
+	Topic              string     `json:"topic,omitempty"`
+	ContentAngle       *string    `json:"content_angle,omitempty"`
+	SuggestedPlatforms []string   `json:"suggested_platforms,omitempty"`
+	ViralPotential     *string    `json:"viral_potential,omitempty"`
+	ConcernClusterID   *int64     `json:"concern_cluster_id,omitempty"`
+	SeedData           JSONObject `json:"seed_data,omitempty"`
+	Title              string     `json:"title"`
+	Content            string     `json:"content"`
+	Category           *string    `json:"category,omitempty"`
+	Tags               []string   `json:"tags,omitempty"`
+	Status             string     `json:"status"`
+	ClusterID          *int64     `json:"cluster_id,omitempty"`
+	AdoptedBy          *int64     `json:"adopted_by,omitempty"`
+	AdoptedAt          *string    `json:"adopted_at,omitempty"`
+	ExtraData          JSONObject `json:"extra_data,omitempty"`
+	CreatedAt          string     `json:"created_at"`
+	UpdatedAt          string     `json:"updated_at"`
 }
 
 // SeedStatsResponse represents seed statistics
