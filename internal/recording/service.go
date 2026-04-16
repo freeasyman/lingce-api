@@ -390,6 +390,17 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 			),
 		)
 	}
+	if len(resp.StructuredTranscript) == 0 || len(resp.TimelineTranscript) == 0 {
+		if segments, err := s.loadRawTranscriptionSegments(ctx, recordingID); err == nil && len(segments) > 0 {
+			structured, timeline := buildTranscriptFromSegments(segments)
+			if len(resp.StructuredTranscript) == 0 {
+				resp.StructuredTranscript = structured
+			}
+			if len(resp.TimelineTranscript) == 0 {
+				resp.TimelineTranscript = timeline
+			}
+		}
+	}
 	if len(resp.StructuredTranscript) == 0 && len(resp.TimelineTranscript) == 0 && resp.TranscriptText != nil {
 		resp.StructuredTranscript, resp.TimelineTranscript = buildTranscriptFallback(*resp.TranscriptText)
 	}
@@ -410,9 +421,9 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 				patient_id,
 				NULLIF(patient_name_extracted, ''),
 				NULLIF(patient_match_source, ''),
-				COALESCE(emr_content, '{}'::jsonb),
+				COALESCE(emr_content::jsonb, '{}'::jsonb),
 				NULLIF(confidence, ''),
-				COALESCE(missing_fields, '[]'::jsonb),
+				COALESCE(missing_fields::jsonb, '[]'::jsonb),
 				is_confirmed,
 				confirmed_at
 			FROM recording_emr_drafts
@@ -676,6 +687,190 @@ func buildTranscriptFallback(text string) ([]map[string]interface{}, []map[strin
 		timeline = []map[string]interface{}{{"speaker": "对话", "text": trimmed, "start_seconds": 0, "end_seconds": estimateDurationSeconds(trimmed)}}
 	}
 	return structured, timeline
+}
+
+func buildTranscriptFromSegments(segments []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+	structured := make([]map[string]interface{}, 0, len(segments))
+	timeline := make([]map[string]interface{}, 0, len(segments))
+	cursor := 0
+	for _, segment := range segments {
+		content := firstNonEmptyText(
+			segment["text"],
+			segment["content"],
+			segment["transcript"],
+			segment["utterance"],
+		)
+		if content == "" {
+			continue
+		}
+		speaker := firstNonEmptyText(segment["speaker_role"], segment["speaker"], segment["role"])
+		if speaker == "" {
+			speaker = "unknown"
+		}
+		start := pickInt(segment["start_seconds"], segment["start_time"], segment["start"], segment["offset"])
+		if start == nil {
+			if startMs := pickInt(segment["start_ms"]); startMs != nil {
+				value := *startMs / 1000
+				start = &value
+			}
+		}
+		end := pickInt(segment["end_seconds"], segment["end_time"], segment["end"])
+		if end == nil {
+			if endMs := pickInt(segment["end_ms"]); endMs != nil {
+				value := *endMs / 1000
+				end = &value
+			}
+		}
+		startSec := cursor
+		if start != nil && *start >= 0 {
+			startSec = *start
+		}
+		endSec := startSec + estimateDurationSeconds(content)
+		if end != nil && *end >= startSec {
+			endSec = *end
+		}
+		if endSec < startSec {
+			endSec = startSec
+		}
+		structured = append(structured, map[string]interface{}{
+			"speaker": speaker,
+			"content": content,
+		})
+		timeline = append(timeline, map[string]interface{}{
+			"speaker":       speaker,
+			"text":          content,
+			"start_seconds": startSec,
+			"end_seconds":   endSec,
+		})
+		cursor = endSec
+	}
+	if len(structured) == 0 {
+		return nil, nil
+	}
+	return structured, timeline
+}
+
+func (s *Service) loadRawTranscriptionSegments(ctx context.Context, recordingID int64) ([]map[string]interface{}, error) {
+	var raw interface{}
+	err := s.store.pool.QueryRow(ctx, `SELECT transcription_segments FROM recordings WHERE id = $1`, recordingID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSegmentsJSON(raw), nil
+}
+
+func decodeSegmentsJSON(raw interface{}) []map[string]interface{} {
+	decoded := decodeNestedJSONValue(raw, 0)
+	switch value := decoded.(type) {
+	case []interface{}:
+		return toMapSlice(value)
+	case []map[string]interface{}:
+		return value
+	case map[string]interface{}:
+		for _, key := range []string{"segments", "items", "data"} {
+			if nested, ok := value[key]; ok {
+				return decodeSegmentsJSON(nested)
+			}
+		}
+	}
+	return nil
+}
+
+func decodeNestedJSONValue(raw interface{}, depth int) interface{} {
+	if depth > 3 || raw == nil {
+		return raw
+	}
+	switch value := raw.(type) {
+	case []byte:
+		trimmed := strings.TrimSpace(string(value))
+		if trimmed == "" {
+			return nil
+		}
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return raw
+		}
+		return decodeNestedJSONValue(parsed, depth+1)
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil
+		}
+		if !(strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")) {
+			return value
+		}
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return value
+		}
+		return decodeNestedJSONValue(parsed, depth+1)
+	default:
+		return raw
+	}
+}
+
+func firstNonEmptyText(values ...interface{}) string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		text := strings.TrimSpace(fmt.Sprintf("%v", value))
+		if text != "" && text != "<nil>" {
+			return text
+		}
+	}
+	return ""
+}
+
+func pickInt(values ...interface{}) *int {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case int:
+			out := v
+			return &out
+		case int32:
+			out := int(v)
+			return &out
+		case int64:
+			out := int(v)
+			return &out
+		case float32:
+			out := int(v)
+			return &out
+		case float64:
+			out := int(v)
+			return &out
+		case json.Number:
+			if i64, err := v.Int64(); err == nil {
+				out := int(i64)
+				return &out
+			}
+			if f64, err := v.Float64(); err == nil {
+				out := int(f64)
+				return &out
+			}
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				continue
+			}
+			if i64, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+				out := int(i64)
+				return &out
+			}
+			if f64, err := strconv.ParseFloat(trimmed, 64); err == nil {
+				out := int(f64)
+				return &out
+			}
+		}
+	}
+	return nil
 }
 
 func estimateDurationSeconds(text string) int {
@@ -1382,24 +1577,31 @@ func strOrDefault(v *string, def string) string {
 // toTaskResponse converts a RecordingTask to TaskResponse
 func toTaskResponse(t *RecordingTask) *TaskResponse {
 	resp := &TaskResponse{
-		ID:           t.ID,
-		TenantID:     t.TenantID,
-		RecordingID:  t.RecordingID,
-		TaskType:     string(t.TaskType),
-		Title:        t.Title,
-		Description:  t.Description,
-		AssignedTo:   t.AssignedTo,
-		AssignedBy:   t.AssignedBy,
-		Status:       string(t.Status),
-		CompletedBy:  t.CompletedBy,
-		CancelReason: t.CancelReason,
-		CreatedAt:    t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:    t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:            t.ID,
+		TenantID:      t.TenantID,
+		RecordingID:   t.RecordingID,
+		TaskType:      string(t.TaskType),
+		Title:         t.Title,
+		Description:   t.Description,
+		CustomerName:  t.CustomerName,
+		Priority:      t.Priority,
+		Script:        t.Script,
+		ContactReason: t.ContactReason,
+		SourceType:    t.SourceType,
+		SourceDetail:  t.SourceDetail,
+		AssignedTo:    t.AssignedTo,
+		AssignedBy:    t.AssignedBy,
+		Status:        string(t.Status),
+		CompletedBy:   t.CompletedBy,
+		CancelReason:  t.CancelReason,
+		CreatedAt:     t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:     t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if t.DueDate != nil {
 		formatted := t.DueDate.Format("2006-01-02T15:04:05Z07:00")
 		resp.DueDate = &formatted
+		resp.DueAt = &formatted
 	}
 
 	if t.CompletedAt != nil {
