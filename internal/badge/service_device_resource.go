@@ -31,6 +31,13 @@ func (s *Service) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([
 	if req.PageSize > 100 {
 		req.PageSize = 100
 	}
+	if req.HealthStatus != nil {
+		parsed, ok := parseHealthStatusFilter(*req.HealthStatus)
+		if !ok {
+			return nil, 0, fmt.Errorf("invalid health_status, allowed: unknown, healthy, warning, error")
+		}
+		req.HealthStatus = &parsed
+	}
 	return s.store.V2ListDevices(ctx, req)
 }
 
@@ -187,37 +194,37 @@ func (s *Service) V2BatchHealthCheck(ctx context.Context, deviceIDs []int64) (JS
 
 func determineHealthStatus(online bool, batteryLevel *int, recordingOK bool, offlineDuration *time.Duration, exists bool) string {
 	if !exists || !recordingOK {
-		return "error"
+		return HealthStatusError
 	}
 
 	if batteryLevel != nil {
 		if *batteryLevel < 10 {
-			return "error"
+			return HealthStatusError
 		}
 	}
 
 	if offlineDuration != nil && *offlineDuration > 24*time.Hour {
-		return "error"
+		return HealthStatusError
 	}
 
 	if batteryLevel != nil && *batteryLevel >= 10 && *batteryLevel <= 20 {
-		return "warning"
+		return HealthStatusWarning
 	}
 
 	if offlineDuration != nil && *offlineDuration > 12*time.Hour {
-		return "warning"
+		return HealthStatusWarning
 	}
 
 	if !online {
-		return "warning"
+		return HealthStatusWarning
 	}
 
 	if batteryLevel != nil && *batteryLevel > 20 {
-		return "healthy"
+		return HealthStatusHealthy
 	}
 
 	// Unknown battery, online and recording is healthy: keep healthy by default.
-	return "healthy"
+	return HealthStatusHealthy
 }
 
 func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, operatorID int64, operatorName string) (JSONObject, error) {
@@ -240,7 +247,7 @@ func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, o
 				DeviceID:          device.ID,
 				DeviceNo:          device.DeviceNo,
 				Passed:            true,
-				HealthStatus:      "unknown",
+				HealthStatus:      HealthStatusUnknown,
 				HealthCheckResult: JSONObject{"skipped": true},
 			}
 		} else {
@@ -250,9 +257,9 @@ func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, o
 				continue
 			}
 		}
-		toStatus := "available"
+		toStatus := "ready"
 		if !health.Passed {
-			toStatus = "broken"
+			toStatus = "blocked"
 		}
 		if err := s.store.V2UpdateDeviceStatusWithHealth(ctx, id, toStatus, health.HealthStatus, health.HealthCheckResult, operatorID, operatorName, "accept", JSONObject{
 			"acceptance_batch_no": req.AcceptanceBatchNo,

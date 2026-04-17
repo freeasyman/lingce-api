@@ -196,6 +196,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS import_batch_no TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`UPDATE badge_devices SET health_status = 'unknown' WHERE health_status IS NULL`,
+		`UPDATE badge_devices SET health_status = 'healthy' WHERE lower(trim(COALESCE(health_status, ''))) = 'normal'`,
+		`UPDATE badge_devices
+		 SET health_status = 'unknown'
+		 WHERE trim(COALESCE(health_status, '')) = ''
+		    OR lower(trim(COALESCE(health_status, ''))) NOT IN ('unknown', 'healthy', 'warning', 'error')`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'chk_badge_devices_health_status_enum'
+			) THEN
+				ALTER TABLE badge_devices
+					ADD CONSTRAINT chk_badge_devices_health_status_enum
+					CHECK (health_status IN ('unknown', 'healthy', 'warning', 'error'));
+			END IF;
+		END $$`,
 		`UPDATE badge_devices SET metadata = '{}'::jsonb WHERE metadata IS NULL`,
 		`CREATE TABLE IF NOT EXISTS badge_device_logs (
 			id BIGSERIAL PRIMARY KEY,

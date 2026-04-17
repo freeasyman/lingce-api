@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func v2CurrentStatusFromStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending":
+		return "pending"
+	case "ready":
+		return "ready"
+	case "in_use":
+		return "in_use"
+	case "blocked":
+		return "blocked"
+	case "retired":
+		return "retired"
+	default:
+		return "pending"
+	}
+}
+
+func v2LifecycleStatusFromStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending":
+		return "pending_acceptance"
+	case "retired":
+		return "scrapped"
+	default:
+		return "active"
+	}
+}
+
 func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*BadgeDevice, int, error) {
 	var conditions []string
 	var args []interface{}
@@ -77,6 +105,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan device: %w", err)
 		}
+		d.HealthStatus = normalizeHealthStatus(d.HealthStatus)
 		devices = append(devices, &d)
 	}
 	return devices, total, nil
@@ -105,6 +134,7 @@ func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get device: %w", err)
 	}
+	d.HealthStatus = normalizeHealthStatus(d.HealthStatus)
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, device_id, device_no, operation, from_status, to_status,
@@ -188,9 +218,9 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 				status, health_status, import_batch_no, metadata, ext_json, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
-				'pending_acceptance', 'pending_acceptance', 'unassigned', 'unknown',
+				'pending', 'pending_acceptance', 'unassigned', 'unknown',
 				$5, $6, NULLIF($7, ''),
-				'draft', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+				'pending', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
 			RETURNING id
 		`, manufacturerID, appID, deviceNo, deviceUID, req.ManufacturerCode, req.ManufacturerName, item.HardwareModel, batchNo).Scan(&createdID); err != nil {
@@ -200,7 +230,7 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 		success++
 		createdIDs = append(createdIDs, createdID)
 
-		if err := s.v2InsertDeviceLogTx(ctx, tx, createdID, deviceNo, "import", nil, strPtr("draft"), &operatorID, &operatorName, strPtr("admin"), JSONObject{
+		if err := s.v2InsertDeviceLogTx(ctx, tx, createdID, deviceNo, "import", nil, strPtr("pending"), &operatorID, &operatorName, strPtr("admin"), JSONObject{
 			"import_batch_no":   batchNo,
 			"manufacturer_code": req.ManufacturerCode,
 			"manufacturer_name": req.ManufacturerName,
@@ -232,15 +262,18 @@ func (s *Store) V2UpdateDeviceStatusWithHealth(ctx context.Context, deviceID int
 		return fmt.Errorf("failed to load device: %w", err)
 	}
 
+	normalizedHealthStatus := normalizeHealthStatus(healthStatus)
 	if _, err := tx.Exec(ctx, `
 		UPDATE badge_devices
 		SET status = $2,
+		    current_status = $5,
+		    lifecycle_status = $6,
 		    health_status = $3,
 		    health_check_result = $4,
 		    last_check_at = NOW(),
 		    updated_at = NOW()
 		WHERE id = $1
-	`, deviceID, toStatus, healthStatus, healthResult); err != nil {
+	`, deviceID, toStatus, normalizedHealthStatus, healthResult, v2CurrentStatusFromStatus(toStatus), v2LifecycleStatusFromStatus(toStatus)); err != nil {
 		return fmt.Errorf("failed to update device status: %w", err)
 	}
 
@@ -270,15 +303,15 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 			errors = append(errors, fmt.Sprintf("device %d not found", deviceID))
 			continue
 		}
-		// 状态校验：只允许 available 和 returned 状态的设备被分配
-		if fromStatus != "available" && fromStatus != "returned" {
+		// 状态校验：只允许 ready 状态的设备被分配
+		if fromStatus != "ready" {
 			failed++
-			errors = append(errors, fmt.Sprintf("device %s status is %s, only available or returned devices can be assigned", deviceNo, fromStatus))
+			errors = append(errors, fmt.Sprintf("device %s status is %s, only ready devices can be assigned", deviceNo, fromStatus))
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='in_use', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
+			SET status='in_use', current_status='in_use', lifecycle_status='active', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
 			    assigned_at=NOW(), updated_at=NOW()
 			WHERE id=$1
 		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
@@ -321,13 +354,13 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='returned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
+			SET status='ready', current_status='ready', lifecycle_status='active', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
 			failed++
 			continue
 		}
-		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "reclaim", &fromStatus, strPtr("returned"), &operatorID, &operatorName, strPtr("admin"), JSONObject{"reason": req.Reason}); err != nil {
+		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "reclaim", &fromStatus, strPtr("ready"), &operatorID, &operatorName, strPtr("admin"), JSONObject{"reason": req.Reason}); err != nil {
 			return 0, 0, err
 		}
 		success++
@@ -354,7 +387,7 @@ func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRe
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE badge_devices
-		SET status='in_use', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
+		SET status='in_use', current_status='in_use', lifecycle_status='active', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
 		WHERE id=$1
 	`, deviceID, req.ToTenantID, req.ToTenantName, req.ToEmployeeID, req.ToEmployeeName); err != nil {
 		return err
@@ -442,21 +475,28 @@ func (s *Store) V2Dashboard(ctx context.Context) (JSONObject, error) {
 		return nil, err
 	}
 	defer healthRows.Close()
-	byHealth := JSONObject{}
+	byHealth := JSONObject{
+		HealthStatusUnknown: int64(0),
+		HealthStatusHealthy: int64(0),
+		HealthStatusWarning: int64(0),
+		HealthStatusError:   int64(0),
+	}
 	for healthRows.Next() {
 		var k string
 		var v int64
 		if err := healthRows.Scan(&k, &v); err != nil {
 			return nil, err
 		}
-		byHealth[k] = v
+		nk := normalizeHealthStatus(k)
+		current, _ := byHealth[nk].(int64)
+		byHealth[nk] = current + v
 	}
 	resp["by_health"] = byHealth
 	var assignedCount int64
 	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL AND employee_id IS NOT NULL`).Scan(&assignedCount)
 	resp["assigned_count"] = assignedCount
 	var availableCount int64
-	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL AND status = 'available'`).Scan(&availableCount)
+	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_devices WHERE deleted_at IS NULL AND status = 'ready'`).Scan(&availableCount)
 	resp["available_count"] = availableCount
 	var todayImported int64
 	_ = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM badge_device_logs WHERE operation = 'import' AND created_at >= CURRENT_DATE`).Scan(&todayImported)
