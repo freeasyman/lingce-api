@@ -20,6 +20,39 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// GetTenantNameMap returns tenant_id -> tenant_name map.
+func (s *Store) GetTenantNameMap(ctx context.Context, tenantIDs []int64) (map[int64]string, error) {
+	result := make(map[int64]string, len(tenantIDs))
+	if len(tenantIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(name, ''), CONCAT('租户#', id::text)) AS tenant_name
+		FROM tenants
+		WHERE id = ANY($1) AND deleted_at IS NULL
+	`, tenantIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tenant names: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("failed to scan tenant name: %w", err)
+		}
+		result[id] = name
+	}
+	for _, id := range tenantIDs {
+		if _, ok := result[id]; !ok {
+			result[id] = fmt.Sprintf("租户#%d", id)
+		}
+	}
+	return result, nil
+}
+
 // Notification Methods
 
 // RegisterDeviceToken registers a device token for push notifications
@@ -527,7 +560,21 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 	// Query configs
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at
+		SELECT id,
+		       COALESCE(tenant_id, 0),
+		       COALESCE(model_code, ''),
+		       COALESCE(function_type, 'general'),
+		       COALESCE(model_name, ''),
+		       COALESCE(provider, ''),
+		       COALESCE(api_endpoint, ''),
+		       COALESCE(api_key, ''),
+		       COALESCE(model_params, '{}'::json),
+		       COALESCE(is_default, false),
+		       COALESCE(is_active, true),
+		       description,
+		       COALESCE(created_by, 0),
+		       created_at,
+		       updated_at
 		FROM llm_model_configs
 		WHERE %s
 		ORDER BY is_default DESC, created_at DESC
@@ -545,7 +592,7 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 	var configs []*LLMModelConfig
 	for rows.Next() {
 		var c LLMModelConfig
-		if err := rows.Scan(&c.ID, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
 			&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan LLM model config: %w", err)
 		}
@@ -558,14 +605,28 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 // GetLLMModelConfigByID retrieves an LLM model config by ID
 func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelConfig, error) {
 	query := `
-		SELECT id, model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at
+		SELECT id,
+		       COALESCE(tenant_id, 0),
+		       COALESCE(model_code, ''),
+		       COALESCE(function_type, 'general'),
+		       COALESCE(model_name, ''),
+		       COALESCE(provider, ''),
+		       COALESCE(api_endpoint, ''),
+		       COALESCE(api_key, ''),
+		       COALESCE(model_params, '{}'::json),
+		       COALESCE(is_default, false),
+		       COALESCE(is_active, true),
+		       description,
+		       COALESCE(created_by, 0),
+		       created_at,
+		       updated_at
 		FROM llm_model_configs
 		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&c.ID, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
 		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
@@ -592,13 +653,27 @@ func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req C
 	query := `
 		INSERT INTO llm_model_configs (model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-		RETURNING id, model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at
+		RETURNING id,
+		          COALESCE(tenant_id, 0),
+		          COALESCE(model_code, ''),
+		          COALESCE(function_type, 'general'),
+		          COALESCE(model_name, ''),
+		          COALESCE(provider, ''),
+		          COALESCE(api_endpoint, ''),
+		          COALESCE(api_key, ''),
+		          COALESCE(model_params, '{}'::json),
+		          COALESCE(is_default, false),
+		          COALESCE(is_active, true),
+		          description,
+		          COALESCE(created_by, 0),
+		          created_at,
+		          updated_at
 	`
 
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, req.ModelName, req.Provider, req.APIEndpoint, req.APIKey, req.ModelParams,
 		req.IsDefault, req.IsActive, req.Description, createdBy).Scan(
-		&c.ID, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
 		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
@@ -662,12 +737,26 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		UPDATE llm_model_configs
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at
+		RETURNING id,
+		          COALESCE(tenant_id, 0),
+		          COALESCE(model_code, ''),
+		          COALESCE(function_type, 'general'),
+		          COALESCE(model_name, ''),
+		          COALESCE(provider, ''),
+		          COALESCE(api_endpoint, ''),
+		          COALESCE(api_key, ''),
+		          COALESCE(model_params, '{}'::json),
+		          COALESCE(is_default, false),
+		          COALESCE(is_active, true),
+		          description,
+		          COALESCE(created_by, 0),
+		          created_at,
+		          updated_at
 	`, strings.Join(setClauses, ", "), argIndex)
 
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&c.ID, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
 		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 

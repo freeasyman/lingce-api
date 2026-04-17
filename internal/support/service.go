@@ -6,14 +6,18 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
 type Service struct {
-	store *Store
+	store     *Store
+	llmClient *llmgateway.Client
 }
 
-func NewService(store *Store) *Service {
-	return &Service{store: store}
+func NewService(store *Store, llmClient *llmgateway.Client) *Service {
+	return &Service{store: store, llmClient: llmClient}
 }
 
 // Notification Services
@@ -275,55 +279,263 @@ func (s *Service) SetDefaultLLMModelConfig(ctx context.Context, id int64) error 
 
 // ListLLMCallRecords retrieves a paginated list of LLM call records
 func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListRequest) ([]*LLMCallRecordResponse, int, error) {
+	if s.llmClient == nil {
+		return nil, 0, fmt.Errorf("LLM gateway is not configured")
+	}
+
 	// Set default pagination
 	if req.Page <= 0 {
 		req.Page = 1
 	}
-	if req.PageSize <= 0 {
-		req.PageSize = 20
+	size := req.Size
+	if size <= 0 {
+		size = req.PageSize
 	}
-	if req.PageSize > 100 {
-		req.PageSize = 100
+	if size <= 0 {
+		size = 50
+	}
+	if size > 100 {
+		size = 100
 	}
 
-	records, total, err := s.store.ListLLMCallRecords(ctx, req)
+	startDate, endDate := normalizeDateRange(req.StartDate, req.EndDate)
+	params := map[string]string{
+		"page":       fmt.Sprintf("%d", req.Page),
+		"size":       fmt.Sprintf("%d", size),
+		"start_date": startDate,
+		"end_date":   endDate,
+	}
+	if req.TenantID != nil {
+		params["tenant_id"] = fmt.Sprintf("%d", *req.TenantID)
+	}
+	if req.FunctionType != nil {
+		params["function_type"] = *req.FunctionType
+	}
+	if req.Module != nil {
+		params["module"] = *req.Module
+	}
+	if req.ModelCode != nil {
+		params["model_code"] = *req.ModelCode
+	}
+	if req.Provider != nil {
+		params["provider"] = *req.Provider
+	}
+	if req.Success != nil {
+		params["success"] = fmt.Sprintf("%t", *req.Success)
+	}
+	if req.TraceID != nil {
+		params["trace_id"] = *req.TraceID
+	}
+
+	resp, err := s.llmClient.ListAuditRecords(ctx, params)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	responses := make([]*LLMCallRecordResponse, len(records))
-	for i, r := range records {
-		responses[i] = toLLMCallRecordResponse(r)
+	tenantIDs := make([]int64, 0, len(resp.Items))
+	seen := make(map[int64]struct{})
+	for _, item := range resp.Items {
+		if _, ok := seen[item.TenantID]; ok {
+			continue
+		}
+		seen[item.TenantID] = struct{}{}
+		tenantIDs = append(tenantIDs, item.TenantID)
+	}
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, tenantIDs)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	return responses, total, nil
+	out := make([]*LLMCallRecordResponse, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		tenantID := item.TenantID
+		tenantName := tenantNameMap[tenantID]
+		functionType := item.FunctionType
+		module := item.Module
+		traceID := item.RequestID
+		modelCode := item.ModelCode
+		success := item.Success
+		inCost := item.InputCost
+		outCost := item.OutputCost
+		out = append(out, &LLMCallRecordResponse{
+			ID:               item.ID,
+			RequestID:        item.RequestID,
+			TenantID:         &tenantID,
+			TenantName:       &tenantName,
+			ModelName:        item.ModelCode,
+			FunctionType:     &functionType,
+			Module:           &module,
+			TraceID:          &traceID,
+			ModelCode:        &modelCode,
+			Provider:         item.Provider,
+			PromptTokens:     int(item.InputTokens),
+			CompletionTokens: int(item.OutputTokens),
+			TotalTokens:      int(item.TotalTokens),
+			Cost:             item.TotalCost,
+			Duration:         int(item.LatencyMS),
+			Status:           boolToStatus(item.Success),
+			Success:          &success,
+			InputCost:        &inCost,
+			OutputCost:       &outCost,
+			CreatedAt:        item.CreatedAt,
+		})
+	}
+
+	return out, int(resp.Total), nil
 }
 
 // GetLLMCallRecordStats retrieves LLM call record statistics
 func (s *Service) GetLLMCallRecordStats(ctx context.Context, tenantID *int64, startDate, endDate *string) (*LLMCallRecordStatsResponse, error) {
-	return s.store.GetLLMCallRecordStats(ctx, tenantID, startDate, endDate)
-}
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	sd, ed := normalizeDateRange(startDate, endDate)
+	params := map[string]string{
+		"start_date": sd,
+		"end_date":   ed,
+	}
+	if tenantID != nil {
+		params["tenant_id"] = fmt.Sprintf("%d", *tenantID)
+	}
 
-// GetLLMCallRecordByID retrieves an LLM call record by ID
-func (s *Service) GetLLMCallRecordByID(ctx context.Context, id int64) (*LLMCallRecordResponse, error) {
-	record, err := s.store.GetLLMCallRecordByID(ctx, id)
+	resp, err := s.llmClient.GetAuditRecordStats(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 
-	return toLLMCallRecordResponse(record), nil
+	return &LLMCallRecordStatsResponse{
+		TotalCalls:        resp.TotalCalls,
+		SuccessCalls:      resp.SuccessCount,
+		FailedCalls:       resp.FailureCount,
+		SuccessCount:      resp.SuccessCount,
+		FailureCount:      resp.FailureCount,
+		SuccessRate:       resp.SuccessRate,
+		TotalTokens:       resp.TotalTokens,
+		TotalInputTokens:  resp.TotalInputTokens,
+		TotalOutputTokens: resp.TotalOutputTokens,
+		TotalCost:         resp.TotalCost,
+		AvgDuration:       resp.AvgLatencyMS,
+		AvgLatencyMS:      resp.AvgLatencyMS,
+	}, nil
+}
+
+// GetLLMCallRecordByRequestID retrieves an LLM call record by request ID.
+func (s *Service) GetLLMCallRecordByRequestID(ctx context.Context, requestID string) (*LLMCallRecordResponse, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	record, err := s.llmClient.GetAuditRecordByRequestID(ctx, requestID)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantID := record.TenantID
+	tenantName := ""
+	if nameMap, err := s.store.GetTenantNameMap(ctx, []int64{tenantID}); err == nil {
+		tenantName = nameMap[tenantID]
+	}
+	functionType := record.FunctionType
+	module := record.Module
+	traceID := record.TraceID
+	modelCode := record.ModelCode
+	success := record.Success
+	inCost := record.InputCost
+	outCost := record.OutputCost
+	errMessage := record.ErrorMessage
+	return &LLMCallRecordResponse{
+		ID:               record.ID,
+		RequestID:        record.RequestID,
+		TenantID:         &tenantID,
+		TenantName:       &tenantName,
+		ModelName:        record.ModelCode,
+		FunctionType:     &functionType,
+		Module:           &module,
+		TraceID:          &traceID,
+		ModelCode:        &modelCode,
+		Provider:         record.Provider,
+		PromptTokens:     int(record.InputTokens),
+		CompletionTokens: int(record.OutputTokens),
+		TotalTokens:      int(record.TotalTokens),
+		Cost:             record.TotalCost,
+		Duration:         int(record.LatencyMS),
+		Status:           boolToStatus(record.Success),
+		Success:          &success,
+		InputCost:        &inCost,
+		OutputCost:       &outCost,
+		ErrorMessage:     &errMessage,
+		CreatedAt:        record.CreatedAt,
+	}, nil
 }
 
 // LLM Cost Services
 
 // GetLLMCostByTenant retrieves LLM cost for a tenant
 func (s *Service) GetLLMCostByTenant(ctx context.Context, tenantID int64, startDate, endDate *string) (*LLMCostTenantResponse, error) {
-	return s.store.GetLLMCostByTenant(ctx, tenantID, startDate, endDate)
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	sd, ed := normalizeDateRange(startDate, endDate)
+	resp, err := s.llmClient.GetAuditCostByTenant(ctx, tenantID, sd, ed)
+	if err != nil {
+		return nil, err
+	}
+	tenantName := ""
+	if nameMap, err := s.store.GetTenantNameMap(ctx, []int64{tenantID}); err == nil {
+		tenantName = nameMap[tenantID]
+	}
+	return &LLMCostTenantResponse{
+		TenantID:           tenantID,
+		TenantName:         tenantName,
+		TotalCost:          resp.TotalCost,
+		TotalCalls:         resp.TotalCalls,
+		TotalTokens:        resp.TotalTokens,
+		CostByFunctionType: toCostBreakdown(resp.CostByFunctionType),
+		CostByModule:       toCostBreakdown(resp.CostByModule),
+		CostByModel:        toCostBreakdown(resp.CostByModel),
+		CostTrend:          toCostTrend(resp.CostTrend),
+	}, nil
 }
 
 // GetLLMCostSummary retrieves overall LLM cost summary
 func (s *Service) GetLLMCostSummary(ctx context.Context, startDate, endDate *string) (*LLMCostSummaryResponse, error) {
-	return s.store.GetLLMCostSummary(ctx, startDate, endDate)
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	sd, ed := normalizeDateRange(startDate, endDate)
+	resp, err := s.llmClient.GetAuditCostSummary(ctx, sd, ed)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantIDs := make([]int64, 0, len(resp.CostByTenant))
+	for _, item := range resp.CostByTenant {
+		tenantIDs = append(tenantIDs, item.TenantID)
+	}
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, tenantIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	byTenant := make([]TenantCostSummary, 0, len(resp.CostByTenant))
+	for _, item := range resp.CostByTenant {
+		byTenant = append(byTenant, TenantCostSummary{
+			TenantID:    item.TenantID,
+			TenantName:  tenantNameMap[item.TenantID],
+			CallCount:   item.CallCount,
+			TotalTokens: item.TotalTokens,
+			TotalCost:   item.TotalCost,
+		})
+	}
+
+	return &LLMCostSummaryResponse{
+		TotalCost:          resp.TotalCost,
+		TotalCalls:         resp.TotalCalls,
+		TotalTokens:        resp.TotalTokens,
+		CostByTenant:       byTenant,
+		CostByFunctionType: toCostBreakdown(resp.CostByFunctionType),
+		CostByModule:       toCostBreakdown(resp.CostByModule),
+		CostByModel:        toCostBreakdown(resp.CostByModel),
+	}, nil
 }
 
 // Metadata Services
@@ -527,39 +739,69 @@ func toOperationLogResponse(l *OperationLog) *OperationLogResponse {
 // toLLMModelConfigResponse converts an LLMModelConfig to LLMModelConfigResponse
 func toLLMModelConfigResponse(c *LLMModelConfig) *LLMModelConfigResponse {
 	return &LLMModelConfigResponse{
-		ID:          c.ID,
-		ModelName:   c.ModelName,
-		Provider:    c.Provider,
-		APIEndpoint: c.APIEndpoint,
-		ModelParams: c.ModelParams,
-		IsDefault:   c.IsDefault,
-		IsActive:    c.IsActive,
-		Description: c.Description,
-		CreatedAt:   c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:   c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:           c.ID,
+		TenantID:     c.TenantID,
+		ModelCode:    c.ModelCode,
+		FunctionType: c.FunctionType,
+		ModelName:    c.ModelName,
+		Provider:     c.Provider,
+		APIEndpoint:  c.APIEndpoint,
+		ModelParams:  c.ModelParams,
+		IsDefault:    c.IsDefault,
+		IsActive:     c.IsActive,
+		Description:  c.Description,
+		CreatedAt:    c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:    c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
-// toLLMCallRecordResponse converts an LLMCallRecord to LLMCallRecordResponse
-func toLLMCallRecordResponse(r *LLMCallRecord) *LLMCallRecordResponse {
-	return &LLMCallRecordResponse{
-		ID:               r.ID,
-		TenantID:         r.TenantID,
-		UserID:           r.UserID,
-		ModelName:        r.ModelName,
-		Provider:         r.Provider,
-		PromptTokens:     r.PromptTokens,
-		CompletionTokens: r.CompletionTokens,
-		TotalTokens:      r.TotalTokens,
-		Cost:             r.Cost,
-		Duration:         r.Duration,
-		Status:           r.Status,
-		ErrorMessage:     r.ErrorMessage,
-		Purpose:          r.Purpose,
-		RelatedID:        r.RelatedID,
-		RelatedType:      r.RelatedType,
-		CreatedAt:        r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+func boolToStatus(success bool) string {
+	if success {
+		return "success"
 	}
+	return "failed"
+}
+
+func normalizeDateRange(startDate, endDate *string) (string, string) {
+	if startDate != nil && endDate != nil {
+		return *startDate, *endDate
+	}
+	now := time.Now()
+	end := now.Format("2006-01-02")
+	start := now.AddDate(0, 0, -30).Format("2006-01-02")
+	if startDate != nil {
+		start = *startDate
+	}
+	if endDate != nil {
+		end = *endDate
+	}
+	return start, end
+}
+
+func toCostBreakdown(items []llmgateway.AuditCostByGroupItem) []CostBreakdownItem {
+	out := make([]CostBreakdownItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, CostBreakdownItem{
+			Key:         item.Key,
+			CallCount:   item.CallCount,
+			TotalTokens: item.TotalTokens,
+			TotalCost:   item.TotalCost,
+		})
+	}
+	return out
+}
+
+func toCostTrend(items []llmgateway.AuditCostByGroupItem) []CostTrendItem {
+	out := make([]CostTrendItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, CostTrendItem{
+			Date:        item.Key,
+			CallCount:   item.CallCount,
+			TotalTokens: item.TotalTokens,
+			TotalCost:   item.TotalCost,
+		})
+	}
+	return out
 }
 
 func normalizeMetadataFieldType(dataType string) string {

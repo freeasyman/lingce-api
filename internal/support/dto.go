@@ -60,14 +60,14 @@ type UnreadCountResponse struct {
 
 // OperationLogListRequest represents the request for listing operation logs
 type OperationLogListRequest struct {
-	TenantID     *int64  `json:"tenant_id,omitempty"`
-	UserID       *int64  `json:"user_id,omitempty"`
-	Action       *string `json:"action,omitempty"`
-	Resource     *string `json:"resource,omitempty"`
-	StartDate    *string `json:"start_date,omitempty"`
-	EndDate      *string `json:"end_date,omitempty"`
-	Page         int     `json:"page"`
-	PageSize     int     `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	UserID    *int64  `json:"user_id,omitempty"`
+	Action    *string `json:"action,omitempty"`
+	Resource  *string `json:"resource,omitempty"`
+	StartDate *string `json:"start_date,omitempty"`
+	EndDate   *string `json:"end_date,omitempty"`
+	Page      int     `json:"page"`
+	PageSize  int     `json:"page_size"`
 }
 
 // OperationLogResponse represents an operation log response
@@ -90,13 +90,13 @@ type OperationLogResponse struct {
 
 // OperationLogStatsResponse represents operation log statistics
 type OperationLogStatsResponse struct {
-	TotalLogs       int64              `json:"total_logs"`
-	SuccessCount    int64              `json:"success_count"`
-	FailureCount    int64              `json:"failure_count"`
-	AvgDuration     float64            `json:"avg_duration"`
-	TopActions      []ActionCount      `json:"top_actions"`
-	TopResources    []ResourceCount    `json:"top_resources"`
-	TopUsers        []UserActivityCount `json:"top_users"`
+	TotalLogs    int64               `json:"total_logs"`
+	SuccessCount int64               `json:"success_count"`
+	FailureCount int64               `json:"failure_count"`
+	AvgDuration  float64             `json:"avg_duration"`
+	TopActions   []ActionCount       `json:"top_actions"`
+	TopResources []ResourceCount     `json:"top_resources"`
+	TopUsers     []UserActivityCount `json:"top_users"`
 }
 
 // ActionCount represents action count
@@ -152,16 +152,19 @@ type UpdateLLMModelConfigRequest struct {
 
 // LLMModelConfigResponse represents an LLM model config response
 type LLMModelConfigResponse struct {
-	ID          int64      `json:"id"`
-	ModelName   string     `json:"model_name"`
-	Provider    string     `json:"provider"`
-	APIEndpoint string     `json:"api_endpoint"`
-	ModelParams JSONObject `json:"model_params,omitempty"`
-	IsDefault   bool       `json:"is_default"`
-	IsActive    bool       `json:"is_active"`
-	Description *string    `json:"description,omitempty"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	ID           int64      `json:"id"`
+	TenantID     int64      `json:"tenant_id"`
+	ModelCode    string     `json:"model_code"`
+	FunctionType string     `json:"function_type"`
+	ModelName    string     `json:"model_name"`
+	Provider     string     `json:"provider"`
+	APIEndpoint  string     `json:"api_endpoint"`
+	ModelParams  JSONObject `json:"model_params,omitempty"`
+	IsDefault    bool       `json:"is_default"`
+	IsActive     bool       `json:"is_active"`
+	Description  *string    `json:"description,omitempty"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
 }
 
 // LLM Call Record DTOs
@@ -174,42 +177,63 @@ type LLMCallRecordListRequest struct {
 	Provider      *string `json:"provider,omitempty"`
 	Status        *string `json:"status,omitempty"`
 	Purpose       *string `json:"purpose,omitempty"`
+	FunctionType  *string `json:"function_type,omitempty"`
+	Module        *string `json:"module,omitempty"`
+	ModelCode     *string `json:"model_code,omitempty"`
+	Success       *bool   `json:"success,omitempty"`
+	TraceID       *string `json:"trace_id,omitempty"`
 	StartDate     *string `json:"start_date,omitempty"`
 	EndDate       *string `json:"end_date,omitempty"`
 	Page          int     `json:"page"`
 	PageSize      int     `json:"page_size"`
+	Size          int     `json:"size"`
 }
 
 // LLMCallRecordResponse represents an LLM call record response
 type LLMCallRecordResponse struct {
-	ID               int64   `json:"id"`
-	TenantID         *int64  `json:"tenant_id,omitempty"`
-	UserID           *int64  `json:"user_id,omitempty"`
-	ModelName        string  `json:"model_name"`
-	Provider         string  `json:"provider"`
-	PromptTokens     int     `json:"prompt_tokens"`
-	CompletionTokens int     `json:"completion_tokens"`
-	TotalTokens      int     `json:"total_tokens"`
-	Cost             float64 `json:"cost"`
-	Duration         int     `json:"duration"`
-	Status           string  `json:"status"`
-	ErrorMessage     *string `json:"error_message,omitempty"`
-	Purpose          *string `json:"purpose,omitempty"`
-	RelatedID        *int64  `json:"related_id,omitempty"`
-	RelatedType      *string `json:"related_type,omitempty"`
-	CreatedAt        string  `json:"created_at"`
+	ID               int64    `json:"id"`
+	RequestID        string   `json:"request_id"`
+	TenantID         *int64   `json:"tenant_id,omitempty"`
+	TenantName       *string  `json:"tenant_name,omitempty"`
+	UserID           *int64   `json:"user_id,omitempty"`
+	ModelName        string   `json:"model_name"`
+	FunctionType     *string  `json:"function_type,omitempty"`
+	Module           *string  `json:"module,omitempty"`
+	TraceID          *string  `json:"trace_id,omitempty"`
+	ModelCode        *string  `json:"model_code,omitempty"`
+	Provider         string   `json:"provider"`
+	PromptTokens     int      `json:"prompt_tokens"`
+	CompletionTokens int      `json:"completion_tokens"`
+	TotalTokens      int      `json:"total_tokens"`
+	Cost             float64  `json:"cost"`
+	Duration         int      `json:"duration"`
+	Status           string   `json:"status"`
+	Success          *bool    `json:"success,omitempty"`
+	InputCost        *float64 `json:"input_cost,omitempty"`
+	OutputCost       *float64 `json:"output_cost,omitempty"`
+	ErrorMessage     *string  `json:"error_message,omitempty"`
+	Purpose          *string  `json:"purpose,omitempty"`
+	RelatedID        *int64   `json:"related_id,omitempty"`
+	RelatedType      *string  `json:"related_type,omitempty"`
+	CreatedAt        string   `json:"created_at"`
 }
 
 // LLMCallRecordStatsResponse represents LLM call record statistics
 type LLMCallRecordStatsResponse struct {
-	TotalCalls       int64              `json:"total_calls"`
-	SuccessCalls     int64              `json:"success_calls"`
-	FailedCalls      int64              `json:"failed_calls"`
-	TotalTokens      int64              `json:"total_tokens"`
-	TotalCost        float64            `json:"total_cost"`
-	AvgDuration      float64            `json:"avg_duration"`
-	TopModels        []ModelUsageCount  `json:"top_models"`
-	TopPurposes      []PurposeCount     `json:"top_purposes"`
+	TotalCalls        int64             `json:"total_calls"`
+	SuccessCalls      int64             `json:"success_calls,omitempty"`
+	FailedCalls       int64             `json:"failed_calls,omitempty"`
+	SuccessCount      int64             `json:"success_count"`
+	FailureCount      int64             `json:"failure_count"`
+	SuccessRate       float64           `json:"success_rate"`
+	TotalTokens       int64             `json:"total_tokens"`
+	TotalInputTokens  int64             `json:"total_input_tokens"`
+	TotalOutputTokens int64             `json:"total_output_tokens"`
+	TotalCost         float64           `json:"total_cost"`
+	AvgDuration       float64           `json:"avg_duration,omitempty"`
+	AvgLatencyMS      float64           `json:"avg_latency_ms"`
+	TopModels         []ModelUsageCount `json:"top_models,omitempty"`
+	TopPurposes       []PurposeCount    `json:"top_purposes,omitempty"`
 }
 
 // ModelUsageCount represents model usage count
@@ -229,53 +253,51 @@ type PurposeCount struct {
 
 // LLMCostTenantResponse represents tenant LLM cost
 type LLMCostTenantResponse struct {
-	TenantID    int64              `json:"tenant_id"`
-	TenantName  string             `json:"tenant_name"`
-	TotalCost   float64            `json:"total_cost"`
-	TotalCalls  int64              `json:"total_calls"`
-	TotalTokens int64              `json:"total_tokens"`
-	ByModel     []ModelCostSummary `json:"by_model"`
-	ByPurpose   []PurposeCostSummary `json:"by_purpose"`
+	TenantID           int64               `json:"tenant_id"`
+	TenantName         string              `json:"tenant_name"`
+	TotalCost          float64             `json:"total_cost"`
+	TotalCalls         int64               `json:"total_calls"`
+	TotalTokens        int64               `json:"total_tokens"`
+	CostByFunctionType []CostBreakdownItem `json:"cost_by_function_type"`
+	CostByModule       []CostBreakdownItem `json:"cost_by_module"`
+	CostByModel        []CostBreakdownItem `json:"cost_by_model"`
+	CostTrend          []CostTrendItem     `json:"cost_trend"`
 }
 
-// ModelCostSummary represents model cost summary
-type ModelCostSummary struct {
-	ModelName string  `json:"model_name"`
-	Cost      float64 `json:"cost"`
-	Calls     int64   `json:"calls"`
-	Tokens    int64   `json:"tokens"`
+// CostBreakdownItem represents cost breakdown item.
+type CostBreakdownItem struct {
+	Key         string  `json:"key"`
+	CallCount   int64   `json:"call_count"`
+	TotalTokens int64   `json:"total_tokens"`
+	TotalCost   float64 `json:"total_cost"`
 }
 
-// PurposeCostSummary represents purpose cost summary
-type PurposeCostSummary struct {
-	Purpose string  `json:"purpose"`
-	Cost    float64 `json:"cost"`
-	Calls   int64   `json:"calls"`
+// CostTrendItem represents trend item.
+type CostTrendItem struct {
+	Date        string  `json:"date"`
+	CallCount   int64   `json:"call_count"`
+	TotalTokens int64   `json:"total_tokens"`
+	TotalCost   float64 `json:"total_cost"`
 }
 
 // LLMCostSummaryResponse represents overall LLM cost summary
 type LLMCostSummaryResponse struct {
-	TotalCost      float64              `json:"total_cost"`
-	TotalCalls     int64                `json:"total_calls"`
-	TotalTokens    int64                `json:"total_tokens"`
-	ByTenant       []TenantCostSummary  `json:"by_tenant"`
-	ByModel        []ModelCostSummary   `json:"by_model"`
-	ByProvider     []ProviderCostSummary `json:"by_provider"`
+	TotalCost          float64             `json:"total_cost"`
+	TotalCalls         int64               `json:"total_calls"`
+	TotalTokens        int64               `json:"total_tokens"`
+	CostByTenant       []TenantCostSummary `json:"cost_by_tenant"`
+	CostByFunctionType []CostBreakdownItem `json:"cost_by_function_type"`
+	CostByModule       []CostBreakdownItem `json:"cost_by_module"`
+	CostByModel        []CostBreakdownItem `json:"cost_by_model"`
 }
 
 // TenantCostSummary represents tenant cost summary
 type TenantCostSummary struct {
-	TenantID   int64   `json:"tenant_id"`
-	TenantName string  `json:"tenant_name"`
-	Cost       float64 `json:"cost"`
-	Calls      int64   `json:"calls"`
-}
-
-// ProviderCostSummary represents provider cost summary
-type ProviderCostSummary struct {
-	Provider string  `json:"provider"`
-	Cost     float64 `json:"cost"`
-	Calls    int64   `json:"calls"`
+	TenantID    int64   `json:"tenant_id"`
+	TenantName  string  `json:"tenant_name"`
+	CallCount   int64   `json:"call_count"`
+	TotalTokens int64   `json:"total_tokens"`
+	TotalCost   float64 `json:"total_cost"`
 }
 
 // Metadata DTOs
@@ -292,8 +314,8 @@ type ValidateTemplateRequest struct {
 
 // ValidateTemplateResponse represents the response for validating template
 type ValidateTemplateResponse struct {
-	IsValid      bool     `json:"is_valid"`
-	Errors       []string `json:"errors,omitempty"`
-	UsedFields   []string `json:"used_fields,omitempty"`
+	IsValid       bool     `json:"is_valid"`
+	Errors        []string `json:"errors,omitempty"`
+	UsedFields    []string `json:"used_fields,omitempty"`
 	MissingFields []string `json:"missing_fields,omitempty"`
 }

@@ -382,6 +382,25 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_feature_overrides ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS tenant_feature_overrides ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_feature_overrides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		// LLM model config compatibility (old schema -> support module schema)
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS api_endpoint VARCHAR(500)`,
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS api_key VARCHAR(500)`,
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS model_params JSON`,
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS description TEXT`,
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE IF EXISTS llm_model_configs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN tenant_id SET DEFAULT 0`,
+		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN model_code SET DEFAULT ''`,
+		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN function_type SET DEFAULT 'general'`,
+		`UPDATE llm_model_configs
+			SET api_endpoint = COALESCE(api_endpoint, api_base_url)
+			WHERE api_endpoint IS NULL`,
+		`UPDATE llm_model_configs
+			SET api_key = COALESCE(api_key, api_key_encrypted)
+			WHERE api_key IS NULL`,
+		`UPDATE llm_model_configs
+			SET model_params = COALESCE(model_params, extra_params)
+			WHERE model_params IS NULL`,
 		`DO $$
 		BEGIN
 			IF EXISTS (
