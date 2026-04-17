@@ -281,57 +281,57 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 	var args []interface{}
 	argIndex := 1
 
-	conditions = append(conditions, "deleted_at IS NULL")
+	conditions = append(conditions, "ci.deleted_at IS NULL")
 
 	if len(req.TenantIDs) > 0 {
-		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.tenant_id = ANY($%d)", argIndex))
 		args = append(args, req.TenantIDs)
 		argIndex++
 	} else if req.TenantID != nil {
-		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.tenant_id = $%d", argIndex))
 		args = append(args, *req.TenantID)
 		argIndex++
 	}
 
 	if req.TopicID != nil {
-		conditions = append(conditions, fmt.Sprintf("topic_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.topic_id = $%d", argIndex))
 		args = append(args, *req.TopicID)
 		argIndex++
 	}
 
 	if req.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.status = $%d", argIndex))
 		args = append(args, *req.Status)
 		argIndex++
 	}
 
 	if req.Category != nil {
-		conditions = append(conditions, fmt.Sprintf("category = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.category = $%d", argIndex))
 		args = append(args, *req.Category)
 		argIndex++
 	}
 
 	if req.CreatedBy != nil {
-		conditions = append(conditions, fmt.Sprintf("created_by = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.created_by = $%d", argIndex))
 		args = append(args, *req.CreatedBy)
 		argIndex++
 	}
 
 	if req.StartDate != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.created_at >= $%d", argIndex))
 		args = append(args, *req.StartDate)
 		argIndex++
 	}
 
 	if req.EndDate != nil {
-		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ci.created_at <= $%d", argIndex))
 		args = append(args, *req.EndDate)
 		argIndex++
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
 
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM content_items WHERE %s", whereClause)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM content_items ci WHERE %s", whereClause)
 	var total int
 	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count contents: %w", err)
@@ -339,12 +339,14 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, topic_id, title, content, summary, category, tags, status,
-		       published_at, unpublished_at, view_count, like_count, share_count, images,
-		       extra_data, created_by, created_at, updated_at
-		FROM content_items
+		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
+		       ci.published_at, ci.unpublished_at, ci.view_count, ci.like_count, ci.share_count, ci.images,
+		       ci.extra_data, ci.created_by, ci.created_at, ci.updated_at,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS creator_name
+		FROM content_items ci
+		LEFT JOIN employees e ON e.id = ci.created_by
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY ci.created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 
@@ -363,7 +365,7 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 			&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 			&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 			&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan content item: %w", err)
 		}
@@ -376,11 +378,13 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 // GetContentByID retrieves a content item by ID
 func (s *Store) GetContentByID(ctx context.Context, id int64) (*ContentItem, error) {
 	query := `
-		SELECT id, tenant_id, topic_id, title, content, summary, category, tags, status,
-		       published_at, unpublished_at, view_count, like_count, share_count, images,
-		       extra_data, created_by, created_at, updated_at
-		FROM content_items
-		WHERE id = $1 AND deleted_at IS NULL
+		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
+		       ci.published_at, ci.unpublished_at, ci.view_count, ci.like_count, ci.share_count, ci.images,
+		       ci.extra_data, ci.created_by, ci.created_at, ci.updated_at,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS creator_name
+		FROM content_items ci
+		LEFT JOIN employees e ON e.id = ci.created_by
+		WHERE ci.id = $1 AND ci.deleted_at IS NULL
 	`
 
 	var item ContentItem
@@ -388,7 +392,7 @@ func (s *Store) GetContentByID(ctx context.Context, id int64) (*ContentItem, err
 		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -409,7 +413,8 @@ func (s *Store) CreateContent(ctx context.Context, tenantID, createdBy int64, re
 		VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', $8, $9, $10, NOW(), NOW())
 		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
-		          extra_data, created_by, created_at, updated_at
+		          extra_data, created_by, created_at, updated_at,
+		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
 	`
 
 	var item ContentItem
@@ -420,7 +425,7 @@ func (s *Store) CreateContent(ctx context.Context, tenantID, createdBy int64, re
 		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 	)
 
 	if err != nil {
@@ -490,7 +495,8 @@ func (s *Store) UpdateContent(ctx context.Context, id int64, req UpdateContentRe
 		WHERE id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
-		          extra_data, created_by, created_at, updated_at
+		          extra_data, created_by, created_at, updated_at,
+		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
 	`, strings.Join(setClauses, ", "), argIndex)
 
 	var item ContentItem
@@ -498,7 +504,7 @@ func (s *Store) UpdateContent(ctx context.Context, id int64, req UpdateContentRe
 		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("content not found")
@@ -535,7 +541,8 @@ func (s *Store) PublishContent(ctx context.Context, id int64) (*ContentItem, err
 		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
-		          extra_data, created_by, created_at, updated_at
+		          extra_data, created_by, created_at, updated_at,
+		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
 	`
 
 	var item ContentItem
@@ -543,7 +550,7 @@ func (s *Store) PublishContent(ctx context.Context, id int64) (*ContentItem, err
 		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("content not found")
@@ -562,7 +569,8 @@ func (s *Store) UnpublishContent(ctx context.Context, id int64) (*ContentItem, e
 		WHERE id = $1 AND deleted_at IS NULL
 		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
-		          extra_data, created_by, created_at, updated_at
+		          extra_data, created_by, created_at, updated_at,
+		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
 	`
 
 	var item ContentItem
@@ -570,7 +578,7 @@ func (s *Store) UnpublishContent(ctx context.Context, id int64) (*ContentItem, e
 		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("content not found")
