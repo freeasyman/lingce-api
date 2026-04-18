@@ -6,6 +6,7 @@ package customer
 type CustomerListRequest struct {
 	TenantID    *int64   `json:"tenant_id,omitempty"`
 	TenantIDs   []int64  `json:"tenant_ids,omitempty"`
+	Search      *string  `json:"search,omitempty"`
 	Name        *string  `json:"name,omitempty"`
 	Phone       *string  `json:"phone,omitempty"`
 	Status      *string  `json:"status,omitempty"`

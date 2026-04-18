@@ -51,6 +51,15 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		argIndex++
 	}
 
+	if req.Search != nil {
+		kw := strings.TrimSpace(*req.Search)
+		if kw != "" {
+			conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR phone ILIKE $%d)", argIndex, argIndex+1))
+			args = append(args, "%"+kw+"%", "%"+kw+"%")
+			argIndex += 2
+		}
+	}
+
 	if req.Status != nil {
 		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
 		args = append(args, *req.Status)
@@ -1324,6 +1333,127 @@ func (s *Store) ListEMRRecords(ctx context.Context, customerID int64, page, page
 	}
 	if pageSize <= 0 {
 		pageSize = 20
+	}
+
+	draftExists, err := s.tableExists(ctx, "recording_emr_drafts")
+	if err != nil {
+		return nil, 0, err
+	}
+	if draftExists {
+		var total int
+		if err := s.pool.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM recording_emr_drafts d
+			LEFT JOIN recordings r ON r.id = d.recording_id
+			WHERE COALESCE(d.customer_id, r.customer_id, d.patient_id) = $1
+		`, customerID).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("failed to count EMR draft records: %w", err)
+		}
+
+		offset := (page - 1) * pageSize
+		rows, err := s.pool.Query(ctx, `
+			SELECT
+				d.id,
+				d.recording_id,
+				CASE
+					WHEN COALESCE(r.recorded_at, r.created_at) IS NULL THEN NULL
+					ELSE to_char(COALESCE(r.recorded_at, r.created_at), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				END AS recorded_at,
+				COALESCE(NULLIF(e.name, ''), NULLIF(e.full_name, ''), NULLIF(e.phone, ''), NULL) AS employee_name,
+				COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene::text, ''), NULL) AS scene_name,
+				COALESCE(d.emr_content, '{}'::jsonb)::text AS emr_content,
+				NULLIF(d.confidence, '') AS confidence,
+				COALESCE(d.missing_fields, '[]'::jsonb)::text AS missing_fields,
+				d.is_confirmed,
+				CASE
+					WHEN d.confirmed_at IS NULL THEN NULL
+					ELSE to_char(d.confirmed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				END AS confirmed_at,
+				CASE
+					WHEN d.generated_at IS NULL THEN NULL
+					ELSE to_char(d.generated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				END AS generated_at
+			FROM recording_emr_drafts d
+			LEFT JOIN recordings r ON r.id = d.recording_id
+			LEFT JOIN employees e ON e.id = r.employee_id
+			WHERE COALESCE(d.customer_id, r.customer_id, d.patient_id) = $1
+			ORDER BY COALESCE(d.generated_at, d.confirmed_at, r.recorded_at, r.created_at) DESC
+			LIMIT $2 OFFSET $3
+		`, customerID, pageSize, offset)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to query EMR draft records: %w", err)
+		}
+		defer rows.Close()
+
+		records := make([]map[string]interface{}, 0, pageSize)
+		for rows.Next() {
+			var (
+				id          int64
+				recordingID int64
+				recordedAt  *string
+				employee    *string
+				scene       *string
+				emrText     string
+				confidence  *string
+				missingText string
+				isConfirmed bool
+				confirmedAt *string
+				generatedAt *string
+			)
+			if err := rows.Scan(
+				&id,
+				&recordingID,
+				&recordedAt,
+				&employee,
+				&scene,
+				&emrText,
+				&confidence,
+				&missingText,
+				&isConfirmed,
+				&confirmedAt,
+				&generatedAt,
+			); err != nil {
+				return nil, 0, fmt.Errorf("failed to scan EMR draft record: %w", err)
+			}
+
+			emrContent := map[string]interface{}{}
+			if strings.TrimSpace(emrText) != "" {
+				_ = json.Unmarshal([]byte(emrText), &emrContent)
+			}
+			missingFields := []interface{}{}
+			if strings.TrimSpace(missingText) != "" {
+				_ = json.Unmarshal([]byte(missingText), &missingFields)
+			}
+
+			item := map[string]interface{}{
+				"id":             id,
+				"recording_id":   recordingID,
+				"emr_content":    emrContent,
+				"missing_fields": missingFields,
+				"is_confirmed":   isConfirmed,
+			}
+			if recordedAt != nil {
+				item["recorded_at"] = *recordedAt
+			}
+			if employee != nil {
+				item["employee_name"] = *employee
+			}
+			if scene != nil {
+				item["scene_name"] = *scene
+			}
+			if confidence != nil {
+				item["confidence"] = *confidence
+			}
+			if confirmedAt != nil {
+				item["confirmed_at"] = *confirmedAt
+			}
+			if generatedAt != nil {
+				item["generated_at"] = *generatedAt
+			}
+			records = append(records, item)
+		}
+
+		return records, total, nil
 	}
 
 	exists, err := s.tableExists(ctx, "medical_records")

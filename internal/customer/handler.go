@@ -114,6 +114,21 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		req.Phone = &phone
 	}
 
+	// Backward compatibility: customer-center list uses "search" for name/phone fuzzy lookup.
+	if search := strings.TrimSpace(r.URL.Query().Get("search")); search != "" {
+		req.Search = &search
+	}
+	if req.Search == nil {
+		if keyword := strings.TrimSpace(r.URL.Query().Get("keyword")); keyword != "" {
+			req.Search = &keyword
+		}
+	}
+	if req.Search == nil {
+		if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+			req.Search = &q
+		}
+	}
+
 	if status := r.URL.Query().Get("status"); status != "" {
 		req.Status = &status
 	}
@@ -145,8 +160,26 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		req.EndDate = &endDate
 	}
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	pageSize, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size")))
+	// Backward compatibility: list page sends skip/limit instead of page/page_size.
+	if page <= 0 {
+		if skip, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("skip"))); err == nil && skip >= 0 {
+			if pageSize <= 0 {
+				if limit, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit"))); err == nil && limit > 0 {
+					pageSize = limit
+				}
+			}
+			if pageSize > 0 {
+				page = (skip / pageSize) + 1
+			}
+		}
+	}
+	if pageSize <= 0 {
+		if limit, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit"))); err == nil && limit > 0 {
+			pageSize = limit
+		}
+	}
 	req.Page = page
 	req.PageSize = pageSize
 
