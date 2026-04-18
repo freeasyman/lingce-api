@@ -12,6 +12,18 @@ type V2DeviceListRequest struct {
 	PageSize         int
 }
 
+type V2DeviceLogListRequest struct {
+	DeviceID         *int64
+	DeviceNo         *string
+	ManufacturerCode *string
+	Operation        *string
+	OperatorName     *string
+	StartDate        *string
+	EndDate          *string
+	Page             int
+	PageSize         int
+}
+
 type V2BatchImportRequest struct {
 	ManufacturerCode string `json:"manufacturer_code"`
 	ManufacturerName string `json:"manufacturer_name"`

@@ -556,6 +556,19 @@ func (s *Service) V2ListDeviceLogs(ctx context.Context, deviceID int64, operatio
 	return s.store.V2ListDeviceLogs(ctx, deviceID, operation, page, pageSize)
 }
 
+func (s *Service) V2ListAllDeviceLogs(ctx context.Context, req V2DeviceLogListRequest) ([]*BadgeDeviceLog, int, error) {
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+	return s.store.V2ListAllDeviceLogs(ctx, req)
+}
+
 func (s *Service) V2ExportDevicesCSV(ctx context.Context, req V2DeviceListRequest) (string, error) {
 	if req.Page <= 0 {
 		req.Page = 1

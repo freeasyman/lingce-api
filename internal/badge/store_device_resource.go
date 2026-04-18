@@ -284,6 +284,35 @@ func (s *Store) V2UpdateDeviceStatusWithHealth(ctx context.Context, deviceID int
 	return tx.Commit(ctx)
 }
 
+func (s *Store) V2UpdateRealtimeSnapshot(ctx context.Context, deviceID int64, batteryLevel *int, lastOnlineAt *time.Time) error {
+	setClauses := make([]string, 0, 3)
+	args := make([]interface{}, 0, 4)
+	argIndex := 1
+
+	if batteryLevel != nil {
+		setClauses = append(setClauses, fmt.Sprintf("battery_level = $%d", argIndex))
+		args = append(args, *batteryLevel)
+		argIndex++
+	}
+	if lastOnlineAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("last_online_at = $%d", argIndex))
+		args = append(args, *lastOnlineAt)
+		argIndex++
+	}
+	if len(setClauses) == 0 {
+		return nil
+	}
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, deviceID)
+
+	query := fmt.Sprintf("UPDATE badge_devices SET %s WHERE id = $%d AND deleted_at IS NULL", strings.Join(setClauses, ", "), argIndex)
+	_, err := s.pool.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update realtime snapshot: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, operatorID int64, operatorName string) (int, int, []string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -543,6 +572,87 @@ func (s *Store) V2ListDeviceLogs(ctx context.Context, deviceID int64, operation 
 		var l BadgeDeviceLog
 		if err := rows.Scan(&l.ID, &l.DeviceID, &l.DeviceNo, &l.Operation, &l.FromStatus, &l.ToStatus, &l.OperatorID, &l.OperatorName, &l.OperatorType, &l.Detail, &l.CreatedAt); err != nil {
 			return nil, 0, err
+		}
+		items = append(items, &l)
+	}
+	return items, total, nil
+}
+
+func (s *Store) V2ListAllDeviceLogs(ctx context.Context, req V2DeviceLogListRequest) ([]*BadgeDeviceLog, int, error) {
+	conditions := []string{"d.deleted_at IS NULL"}
+	args := make([]interface{}, 0, 8)
+	argIndex := 1
+
+	if req.DeviceID != nil && *req.DeviceID > 0 {
+		conditions = append(conditions, fmt.Sprintf("l.device_id = $%d", argIndex))
+		args = append(args, *req.DeviceID)
+		argIndex++
+	}
+	if req.DeviceNo != nil && strings.TrimSpace(*req.DeviceNo) != "" {
+		conditions = append(conditions, fmt.Sprintf("l.device_no ILIKE $%d", argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.DeviceNo)+"%")
+		argIndex++
+	}
+	if req.ManufacturerCode != nil && strings.TrimSpace(*req.ManufacturerCode) != "" {
+		conditions = append(conditions, fmt.Sprintf("d.manufacturer_code = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.ManufacturerCode))
+		argIndex++
+	}
+	if req.Operation != nil && strings.TrimSpace(*req.Operation) != "" {
+		conditions = append(conditions, fmt.Sprintf("l.operation = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.Operation))
+		argIndex++
+	}
+	if req.OperatorName != nil && strings.TrimSpace(*req.OperatorName) != "" {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(l.operator_name,'') ILIKE $%d", argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.OperatorName)+"%")
+		argIndex++
+	}
+	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
+		conditions = append(conditions, fmt.Sprintf("l.created_at >= $%d::date", argIndex))
+		args = append(args, strings.TrimSpace(*req.StartDate))
+		argIndex++
+	}
+	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
+		conditions = append(conditions, fmt.Sprintf("l.created_at < ($%d::date + INTERVAL '1 day')", argIndex))
+		args = append(args, strings.TrimSpace(*req.EndDate))
+		argIndex++
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+	countSQL := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM badge_device_logs l
+		JOIN badge_devices d ON d.id = l.device_id
+		WHERE %s
+	`, whereClause)
+	var total int
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count badge_device_logs: %w", err)
+	}
+
+	offset := (req.Page - 1) * req.PageSize
+	query := fmt.Sprintf(`
+		SELECT l.id, l.device_id, l.device_no, l.operation, l.from_status, l.to_status,
+		       l.operator_id, l.operator_name, l.operator_type, l.detail, l.created_at
+		FROM badge_device_logs l
+		JOIN badge_devices d ON d.id = l.device_id
+		WHERE %s
+		ORDER BY l.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+	queryArgs := append(args, req.PageSize, offset)
+	rows, err := s.pool.Query(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list badge_device_logs: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*BadgeDeviceLog, 0, req.PageSize)
+	for rows.Next() {
+		var l BadgeDeviceLog
+		if err := rows.Scan(&l.ID, &l.DeviceID, &l.DeviceNo, &l.Operation, &l.FromStatus, &l.ToStatus, &l.OperatorID, &l.OperatorName, &l.OperatorType, &l.Detail, &l.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan badge_device_log: %w", err)
 		}
 		items = append(items, &l)
 	}

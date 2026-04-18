@@ -218,6 +218,45 @@ func (h *Handler) V2DeviceLogs(w http.ResponseWriter, r *http.Request) {
 	httputil.WritePaginated(w, items, int64(total), page, pageSize)
 }
 
+func (h *Handler) V2AllDeviceLogs(w http.ResponseWriter, r *http.Request) {
+	req := V2DeviceLogListRequest{}
+	if v := strings.TrimSpace(r.URL.Query().Get("device_id")); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			httputil.WriteBadRequest(w, "invalid device_id")
+			return
+		}
+		req.DeviceID = &id
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("device_no")); v != "" {
+		req.DeviceNo = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("manufacturer_code")); v != "" {
+		req.ManufacturerCode = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("operation")); v != "" {
+		req.Operation = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("operator_name")); v != "" {
+		req.OperatorName = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("start_date")); v != "" {
+		req.StartDate = &v
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("end_date")); v != "" {
+		req.EndDate = &v
+	}
+	req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
+
+	items, total, err := h.service.V2ListAllDeviceLogs(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, int64(total), req.Page, req.PageSize)
+}
+
 func (h *Handler) V2ExportDevices(w http.ResponseWriter, r *http.Request) {
 	req := V2DeviceListRequest{Page: 1, PageSize: 10000}
 	if v := r.URL.Query().Get("status"); v != "" {

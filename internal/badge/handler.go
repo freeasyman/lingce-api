@@ -64,6 +64,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/badge-devices/me/actions/stop-recording", authMw(http.HandlerFunc(h.StopMyRecording)))
 
 	mux.Handle("GET /api/v1/badge-devices/{id}/logs", authMw(http.HandlerFunc(h.V2DeviceLogs)))
+	mux.Handle("GET /api/v1/badge-devices/logs", authMw(http.HandlerFunc(h.V2AllDeviceLogs)))
 	mux.Handle("GET /api/v1/badge-devices/{device_id}/lifecycle", authMw(http.HandlerFunc(h.GetDeviceLifecycle)))
 
 	mux.Handle("GET /api/v1/badge-devices/manufacturers", authMw(http.HandlerFunc(h.V2Manufacturers)))
