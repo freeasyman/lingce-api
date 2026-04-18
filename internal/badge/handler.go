@@ -12,11 +12,16 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service              *Service
+	callbackGatewayToken string
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) SetCallbackGatewayToken(token string) {
+	h.callbackGatewayToken = token
 }
 
 // RegisterRoutes registers badge module routes
@@ -78,6 +83,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/badge-devices/callbacks/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
 	mux.Handle("POST /api/v1/badge-devices/callbacks/audio", authMw(http.HandlerFunc(h.AudioCallback)))
 	mux.Handle("POST /api/v1/badge-devices/actions/process-pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
+
+	// Internal callback endpoints for badge-middleware dispatch worker.
+	// These endpoints are token-protected (X-Gateway-Token) and do not require JWT.
+	mux.Handle("POST /api/v1/smart-badge/callback/developer", http.HandlerFunc(h.InternalDeveloperCallback))
+	mux.Handle("POST /api/v1/smart-badge/callback/audio", http.HandlerFunc(h.InternalAudioCallback))
 
 	mux.Handle("GET /api/v1/badge-devices/export", authMw(http.HandlerFunc(h.V2ExportDevices)))
 	mux.Handle("GET /api/v1/badge-devices/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))

@@ -1242,6 +1242,7 @@ func (s *Service) submitWorkerJob(ctx context.Context, req workerJobRequest) (st
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if s.workerToken != "" {
+		httpReq.Header.Set("X-Internal-Token", s.workerToken)
 		httpReq.Header.Set("Authorization", "Bearer "+s.workerToken)
 	}
 

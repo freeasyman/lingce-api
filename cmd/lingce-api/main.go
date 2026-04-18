@@ -126,9 +126,12 @@ func main() {
 	rbacHandler := rbac.NewHandler(rbacService)
 	rbacHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Create LLM gateway client
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+
 	// Register support module
 	supportStore := support.NewStore(pool)
-	supportService := support.NewService(supportStore)
+	supportService := support.NewService(supportStore, llmClient)
 	supportHandler := support.NewHandler(supportService)
 	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -147,10 +150,8 @@ func main() {
 		cfg.External.BadgeMiddlewareToken,
 	)
 	badgeHandler := badge.NewHandler(badgeService)
+	badgeHandler.SetCallbackGatewayToken(cfg.External.BadgeCallbackGatewayToken)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	// Create LLM gateway client
-	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 
 	// Create OSS client
 	var ossClient *oss.Client

@@ -2,8 +2,10 @@ package badge
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -58,38 +60,7 @@ func (h *Handler) DeveloperCallback(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-
-	var req map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-
-	payload := CallbackPayload{
-		DeviceNo:  toString(req["device_no"]),
-		EventType: toString(req["event_type"]),
-	}
-	if data, ok := req["data"].(map[string]interface{}); ok {
-		payload.Data = data
-	}
-	if payload.DeviceNo == "" {
-		httputil.WriteBadRequest(w, "device_no is required")
-		return
-	}
-	if payload.EventType == "" {
-		payload.EventType = "developer_event"
-	}
-
-	if err := h.service.CreateCallbackLog(r.Context(), payload, "developer"); err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"message":    "Callback processed successfully",
-		"device_no":  payload.DeviceNo,
-		"event_type": payload.EventType,
-	})
+	h.handleCallback(w, r, "developer_event", "developer", false)
 }
 
 // AudioCallback handles audio callback
@@ -99,38 +70,23 @@ func (h *Handler) AudioCallback(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	h.handleCallback(w, r, "audio_event", "audio", false)
+}
 
-	var req map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
+// InternalDeveloperCallback handles callback from badge-middleware dispatch worker.
+func (h *Handler) InternalDeveloperCallback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeInternalCallback(w, r) {
 		return
 	}
+	h.handleCallback(w, r, "developer_event", "developer", true)
+}
 
-	payload := CallbackPayload{
-		DeviceNo:  toString(req["device_no"]),
-		EventType: toString(req["event_type"]),
-	}
-	if data, ok := req["data"].(map[string]interface{}); ok {
-		payload.Data = data
-	}
-	if payload.DeviceNo == "" {
-		httputil.WriteBadRequest(w, "device_no is required")
+// InternalAudioCallback handles callback from badge-middleware dispatch worker.
+func (h *Handler) InternalAudioCallback(w http.ResponseWriter, r *http.Request) {
+	if !h.authorizeInternalCallback(w, r) {
 		return
 	}
-	if payload.EventType == "" {
-		payload.EventType = "audio_event"
-	}
-
-	if err := h.service.CreateCallbackLog(r.Context(), payload, "audio"); err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"message":    "Audio callback processed successfully",
-		"device_no":  payload.DeviceNo,
-		"event_type": payload.EventType,
-	})
+	h.handleCallback(w, r, "audio_event", "audio", true)
 }
 
 // ProcessPendingEvents handles processing pending events
@@ -196,4 +152,116 @@ func toString(v interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func (h *Handler) authorizeInternalCallback(w http.ResponseWriter, r *http.Request) bool {
+	token := strings.TrimSpace(r.Header.Get("X-Gateway-Token"))
+	if token == "" {
+		httputil.WriteUnauthorized(w, "Missing X-Gateway-Token")
+		return false
+	}
+	if strings.TrimSpace(h.callbackGatewayToken) == "" {
+		httputil.WriteInternalError(w, "Callback gateway token is not configured")
+		return false
+	}
+	if token != strings.TrimSpace(h.callbackGatewayToken) {
+		httputil.WriteUnauthorized(w, "Invalid X-Gateway-Token")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request, defaultEventType, source string, internal bool) {
+	payloads, err := parseCallbackPayloads(r, defaultEventType)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	processed := 0
+	failed := 0
+	lastErr := ""
+	for _, payload := range payloads {
+		if err := h.service.CreateCallbackLog(r.Context(), payload, source); err != nil {
+			failed++
+			lastErr = err.Error()
+			continue
+		}
+		processed++
+	}
+
+	if processed == 0 {
+		httputil.WriteInternalError(w, "failed to process callback: "+lastErr)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"message":   "Callback processed successfully",
+		"processed": processed,
+		"failed":    failed,
+		"internal":  internal,
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func parseCallbackPayloads(r *http.Request, defaultEventType string) ([]CallbackPayload, error) {
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
+	}
+
+	// Standard single callback payload.
+	if deviceNo := toString(req["device_no"]); deviceNo != "" {
+		eventType := toString(req["event_type"])
+		if eventType == "" {
+			eventType = defaultEventType
+		}
+		payload := CallbackPayload{
+			DeviceNo:  deviceNo,
+			EventType: eventType,
+		}
+		if data, ok := req["data"].(map[string]interface{}); ok {
+			payload.Data = JSONObject(data)
+		}
+		return []CallbackPayload{payload}, nil
+	}
+
+	// badge-middleware AUDIO_INFORM/DEVELOPER_INFORM batched callback payload.
+	callbackType := toString(req["callback"])
+	if callbackType == "" {
+		callbackType = toString(req["event_type"])
+	}
+	eventType := defaultEventType
+	if callbackType != "" {
+		eventType = callbackType
+	}
+
+	rows, ok := req["data"].([]interface{})
+	if !ok || len(rows) == 0 {
+		return nil, fmt.Errorf("data is required")
+	}
+	payloads := make([]CallbackPayload, 0, len(rows))
+	for _, row := range rows {
+		item, ok := row.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		deviceNo := toString(item["device_no"])
+		if deviceNo == "" {
+			deviceNo = toString(item["deviceNo"])
+		}
+		if deviceNo == "" {
+			continue
+		}
+		payloads = append(payloads, CallbackPayload{
+			DeviceNo:  deviceNo,
+			EventType: eventType,
+			Data:      JSONObject(item),
+		})
+	}
+
+	if len(payloads) == 0 {
+		return nil, fmt.Errorf("no valid device_no found in callback payload")
+	}
+	return payloads, nil
 }

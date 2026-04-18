@@ -32,12 +32,13 @@ type JWTConfig struct {
 }
 
 type ExternalConfig struct {
-	LLMGatewayURL      string
-	LLMGatewayAPIKey   string
-	BadgeMiddlewareURL string
-	BadgeMiddlewareToken string
-	RecordingWorkerURL string
-	RecordingWorkerToken string
+	LLMGatewayURL             string
+	LLMGatewayAPIKey          string
+	BadgeMiddlewareURL        string
+	BadgeMiddlewareToken      string
+	BadgeCallbackGatewayToken string
+	RecordingWorkerURL        string
+	RecordingWorkerToken      string
 }
 
 type AliyunConfig struct {
@@ -72,12 +73,13 @@ func Load() (*Config, error) {
 			ExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
 		},
 		External: ExternalConfig{
-			LLMGatewayURL:        getEnv("LLM_GATEWAY_URL", "http://localhost:8080"),
-			LLMGatewayAPIKey:     getEnv("LLM_GATEWAY_API_KEY", ""),
-			BadgeMiddlewareURL:   getEnv("BADGE_MIDDLEWARE_URL", "http://localhost:18082"),
-			BadgeMiddlewareToken: getEnv("BADGE_MIDDLEWARE_TOKEN", ""),
-			RecordingWorkerURL:   getEnv("RECORDING_WORKER_URL", "http://localhost:18090"),
-			RecordingWorkerToken: getEnv("RECORDING_WORKER_TOKEN", ""),
+			LLMGatewayURL:             getEnv("LLM_GATEWAY_URL", "http://localhost:8080"),
+			LLMGatewayAPIKey:          getEnv("LLM_GATEWAY_API_KEY", ""),
+			BadgeMiddlewareURL:        getEnv("BADGE_MIDDLEWARE_URL", "http://localhost:18082"),
+			BadgeMiddlewareToken:      getEnv("BADGE_MIDDLEWARE_TOKEN", ""),
+			BadgeCallbackGatewayToken: getEnv("BADGE_CALLBACK_GATEWAY_TOKEN", ""),
+			RecordingWorkerURL:        getEnv("RECORDING_WORKER_URL", "http://localhost:18090"),
+			RecordingWorkerToken:      getEnv("RECORDING_WORKER_TOKEN", ""),
 		},
 		Aliyun: AliyunConfig{
 			AccessKeyID:     getEnv("ALIYUN_ACCESS_KEY_ID", ""),

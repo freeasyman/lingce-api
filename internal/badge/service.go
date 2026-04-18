@@ -287,18 +287,18 @@ func (s *Service) ListRecordingControlLogs(ctx context.Context, req RecordingCon
 
 // CreateCallbackLog stores callback event as a recording-control log record.
 func (s *Service) CreateCallbackLog(ctx context.Context, payload CallbackPayload, source string) error {
-	device, err := s.store.GetDeviceByDeviceNo(ctx, payload.DeviceNo)
-	if err != nil {
-		return err
-	}
-
 	extra := payload.Data
 	if extra == nil {
 		extra = JSONObject{}
 	}
 	extra["source"] = source
 	extra["event_type"] = payload.EventType
-	extra["device_id"] = device.ID
+
+	// Device may not exist yet (e.g. upstream callback arrives before local sync),
+	// keep callback observability by logging best-effort.
+	if device, err := s.store.GetDeviceByDeviceNo(ctx, payload.DeviceNo); err == nil && device != nil {
+		extra["device_id"] = device.ID
+	}
 
 	return s.store.CreateRecordingControlLog(ctx, payload.DeviceNo, "callback", "success", nil, nil, extra)
 }
