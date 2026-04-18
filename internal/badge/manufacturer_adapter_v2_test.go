@@ -2,7 +2,7 @@ package badge
 
 import "testing"
 
-func TestReadDeviceNoList(t *testing.T) {
+func TestReadVendorDeviceSnapshots(t *testing.T) {
 	data := map[string]interface{}{
 		"items": []interface{}{
 			map[string]interface{}{"device_no": "XM001"},
@@ -10,9 +10,9 @@ func TestReadDeviceNoList(t *testing.T) {
 			"XM003",
 		},
 	}
-	got := readDeviceNoList(data)
+	got := readVendorDeviceSnapshots(data)
 	if len(got) != 3 {
-		t.Fatalf("len(readDeviceNoList)=%d, want=3", len(got))
+		t.Fatalf("len(readVendorDeviceSnapshots)=%d, want=3", len(got))
 	}
 }
 

@@ -18,8 +18,11 @@ type ManufacturerAdapter interface {
 	GetBatteryLevel(ctx context.Context, deviceNo string) (*int, error)
 	StartRecording(ctx context.Context, deviceNo string) error
 	StopRecording(ctx context.Context, deviceNo string) error
-	SyncDevices(ctx context.Context) ([]string, error)
+	SyncDevices(ctx context.Context) ([]VendorDeviceSnapshot, error)
 }
+
+var manufacturerSyncLock sync.Mutex
+var manufacturerSyncInFlight = map[string]bool{}
 
 func (s *Service) getManufacturerAdapter(vendorCode string) ManufacturerAdapter {
 	return newManufacturerAdapter(vendorCode, s.middlewareClient)
@@ -568,44 +571,268 @@ func (s *Service) V2ListManufacturers(ctx context.Context) ([]*BadgeManufacturer
 }
 
 func (s *Service) V2SyncManufacturer(ctx context.Context, code string) (JSONObject, error) {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if code == "" {
+		return nil, fmt.Errorf("manufacturer code is required")
+	}
+	if !acquireManufacturerSync(code) {
+		return nil, fmt.Errorf("manufacturer sync is already in progress")
+	}
+	defer releaseManufacturerSync(code)
+
 	adapter := s.getManufacturerAdapter(code)
 	vendorDevices, err := adapter.SyncDevices(ctx)
 	if err != nil {
 		return nil, err
 	}
-	internalReq := V2DeviceListRequest{ManufacturerCode: &code, Page: 1, PageSize: 10000}
-	internalDevices, _, err := s.V2ListDevices(ctx, internalReq)
+
+	manufacturers, err := s.store.ListManufacturers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	internalSet := make(map[string]struct{}, len(internalDevices))
-	for _, d := range internalDevices {
-		internalSet[d.DeviceNo] = struct{}{}
+	var manufacturerID int64
+	manufacturerName := code
+	for _, item := range manufacturers {
+		if strings.EqualFold(strings.TrimSpace(item.Code), code) {
+			manufacturerID = item.ID
+			manufacturerName = strings.TrimSpace(item.Name)
+			break
+		}
 	}
+	if manufacturerID == 0 {
+		return nil, fmt.Errorf("manufacturer not found: %s", code)
+	}
+
+	type existingDevice struct {
+		ID           int64
+		DeviceNo     string
+		Status       string
+		EmployeeID   *int64
+		Hardware     *string
+		BatteryLevel *int
+		LastOnlineAt *time.Time
+		HealthStatus string
+	}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT id, device_no, status, employee_id, hardware_model, battery_level, last_online_at, health_status
+		FROM badge_devices
+		WHERE manufacturer_code = $1 AND deleted_at IS NULL
+	`, code)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list internal devices: %w", err)
+	}
+	defer rows.Close()
+
+	existingMap := make(map[string]*existingDevice)
+	for rows.Next() {
+		var item existingDevice
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.DeviceNo,
+			&item.Status,
+			&item.EmployeeID,
+			&item.Hardware,
+			&item.BatteryLevel,
+			&item.LastOnlineAt,
+			&item.HealthStatus,
+		); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan internal device: %w", scanErr)
+		}
+		existingMap[item.DeviceNo] = &item
+	}
+
 	newCount := 0
-	missing := make([]string, 0)
-	for _, no := range vendorDevices {
-		if _, ok := internalSet[no]; !ok {
-			newCount++
+	updatedCount := 0
+	unchangedCount := 0
+	missingCount := 0
+	pendingAssignmentCount := 0
+	failedCount := 0
+	failedItems := make([]JSONObject, 0)
+	missingDevices := make([]string, 0)
+	vendorSet := make(map[string]struct{}, len(vendorDevices))
+
+	for _, item := range vendorDevices {
+		deviceNo := strings.TrimSpace(item.DeviceNo)
+		if deviceNo == "" {
+			failedCount++
+			failedItems = append(failedItems, JSONObject{
+				"device_no": "",
+				"reason":    "empty device_no in vendor payload",
+			})
+			continue
 		}
-	}
-	for no := range internalSet {
-		found := false
-		for _, vendorNo := range vendorDevices {
-			if no == vendorNo {
-				found = true
-				break
+		vendorSet[deviceNo] = struct{}{}
+
+		healthStatus := HealthStatusUnknown
+		if item.VendorStatus != "" {
+			mapped, ok := mapVendorStatusToHealthStatus(item.VendorStatus)
+			if !ok {
+				failedCount++
+				failedItems = append(failedItems, JSONObject{
+					"device_no":      deviceNo,
+					"vendor_status":  item.VendorStatus,
+					"reason":         "unknown vendor status",
+					"manufacturer":   code,
+					"hardware_model": item.HardwareModel,
+				})
+				continue
 			}
+			healthStatus = mapped
 		}
-		if !found {
-			missing = append(missing, no)
+
+		existing, ok := existingMap[deviceNo]
+		if ok {
+			if existing.EmployeeID == nil {
+				pendingAssignmentCount++
+			}
+			targetHardware := strings.TrimSpace(item.HardwareModel)
+			existingHardware := strings.TrimSpace(valueOrEmptyString(existing.Hardware))
+			changed := existingHardware != targetHardware ||
+				intPtrValue(existing.BatteryLevel, -1) != intPtrValue(item.BatteryLevel, -1) ||
+				!timePtrEqual(existing.LastOnlineAt, item.LastOnlineAt) ||
+				normalizeHealthStatus(existing.HealthStatus) != normalizeHealthStatus(healthStatus)
+
+			_, err = s.store.pool.Exec(ctx, `
+				UPDATE badge_devices
+				SET manufacturer_id = $2,
+				    manufacturer_name = $3,
+				    hardware_model = NULLIF($4, ''),
+				    battery_level = $5,
+				    last_online_at = $6,
+				    health_status = $7,
+				    updated_at = NOW()
+				WHERE id = $1
+			`, existing.ID, manufacturerID, manufacturerName, targetHardware, item.BatteryLevel, item.LastOnlineAt, normalizeHealthStatus(healthStatus))
+			if err != nil {
+				failedCount++
+				failedItems = append(failedItems, JSONObject{
+					"device_no": deviceNo,
+					"reason":    fmt.Sprintf("failed to update local device: %v", err),
+				})
+				continue
+			}
+			if changed {
+				updatedCount++
+			} else {
+				unchangedCount++
+			}
+			continue
+		}
+
+		deviceUID := fmt.Sprintf("%s:%d:%s", code, manufacturerID, deviceNo)
+		_, err = s.store.pool.Exec(ctx, `
+			INSERT INTO badge_devices (
+				manufacturer_id, app_id, device_no, device_uid,
+				current_status, lifecycle_status, assignment_status, inspection_result,
+				manufacturer_code, manufacturer_name, hardware_model,
+				status, health_status, battery_level, last_online_at,
+				metadata, ext_json, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4,
+				'pending', 'pending_acceptance', 'unassigned', 'unknown',
+				$5, $6, NULLIF($7, ''),
+				'pending', $8, $9, $10,
+				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+			)
+		`, manufacturerID, code, deviceNo, deviceUID, code, manufacturerName, item.HardwareModel, normalizeHealthStatus(healthStatus), item.BatteryLevel, item.LastOnlineAt)
+		if err != nil {
+			failedCount++
+			failedItems = append(failedItems, JSONObject{
+				"device_no": deviceNo,
+				"reason":    fmt.Sprintf("failed to insert local device: %v", err),
+			})
+			continue
+		}
+		newCount++
+	}
+
+	for deviceNo := range existingMap {
+		if _, ok := vendorSet[deviceNo]; ok {
+			continue
+		}
+		missingCount++
+		if len(missingDevices) < 200 {
+			missingDevices = append(missingDevices, deviceNo)
 		}
 	}
+
+	vendorTotal := len(vendorSet)
+	syncBatchID := fmt.Sprintf("%d", time.Now().Unix())
+
 	return JSONObject{
-		"manufacturer_code": code,
-		"vendor_total":      len(vendorDevices),
-		"internal_total":    len(internalDevices),
-		"new_devices":       newCount,
-		"missing_devices":   missing,
+		"sync_batch_id":            syncBatchID,
+		"manufacturer_code":        code,
+		"manufacturer_name":        manufacturerName,
+		"vendor_total":             vendorTotal,
+		"internal_total":           len(existingMap),
+		"new_devices":              newCount,
+		"updated_devices":          updatedCount,
+		"unchanged_devices":        unchangedCount,
+		"missing_devices_count":    missingCount,
+		"missing_devices":          missingDevices,
+		"failed_count":             failedCount,
+		"failed_items":             failedItems,
+		"new_arrival_count":        newCount,
+		"pending_assignment_count": pendingAssignmentCount,
+		"anomaly_count":            missingCount,
+		"consistent_count":         maxInt(vendorTotal-newCount, 0),
+		"synced_at":                time.Now().Format(time.RFC3339),
 	}, nil
+}
+
+func mapVendorStatusToHealthStatus(vendorStatus string) (string, bool) {
+	status := strings.ToLower(strings.TrimSpace(vendorStatus))
+	switch status {
+	case "", "unknown":
+		return HealthStatusUnknown, true
+	case "online", "recording", "idle":
+		return HealthStatusHealthy, true
+	case "offline", "sleep":
+		return HealthStatusWarning, true
+	case "fault", "error", "abnormal":
+		return HealthStatusError, true
+	default:
+		return "", false
+	}
+}
+
+func intPtrValue(v *int, fallback int) int {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+func timePtrEqual(a, b *time.Time) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Equal(*b)
+}
+
+func maxInt(a, b int) int {
+	if a >= b {
+		return a
+	}
+	return b
+}
+
+func acquireManufacturerSync(code string) bool {
+	manufacturerSyncLock.Lock()
+	defer manufacturerSyncLock.Unlock()
+	if manufacturerSyncInFlight[code] {
+		return false
+	}
+	manufacturerSyncInFlight[code] = true
+	return true
+}
+
+func releaseManufacturerSync(code string) {
+	manufacturerSyncLock.Lock()
+	defer manufacturerSyncLock.Unlock()
+	delete(manufacturerSyncInFlight, code)
 }

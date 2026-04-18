@@ -35,7 +35,7 @@ func newManufacturerAdapter(vendorCode string, client *MiddlewareClient) Manufac
 }
 
 func (a *middlewareManufacturerAdapter) CheckDeviceExists(ctx context.Context, deviceNo string) (bool, error) {
-	path := fmt.Sprintf("/v1/vendors/%s/devices/%s", url.PathEscape(a.vendorCode), url.PathEscape(deviceNo))
+	path := fmt.Sprintf("/v1/devices/%s?vendor_code=%s", url.PathEscape(deviceNo), url.QueryEscape(a.vendorCode))
 	status, _, err := a.requestJSON(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		if status == http.StatusNotFound {
@@ -47,7 +47,7 @@ func (a *middlewareManufacturerAdapter) CheckDeviceExists(ctx context.Context, d
 }
 
 func (a *middlewareManufacturerAdapter) CheckOnline(ctx context.Context, deviceNo string) (bool, *time.Time, error) {
-	path := fmt.Sprintf("/v1/vendors/%s/devices/%s/status", url.PathEscape(a.vendorCode), url.PathEscape(deviceNo))
+	path := fmt.Sprintf("/v1/devices/%s?vendor_code=%s", url.PathEscape(deviceNo), url.QueryEscape(a.vendorCode))
 	status, data, err := a.requestJSON(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		if status == http.StatusNotFound {
@@ -59,15 +59,17 @@ func (a *middlewareManufacturerAdapter) CheckOnline(ctx context.Context, deviceN
 	online := false
 	if v, ok := readBoolField(data, "online", "is_online"); ok {
 		online = v
+	} else if v, ok := readIntField(data, "online_status", "onlineStatus"); ok {
+		online = v == 1
 	} else if v, ok := readStringField(data, "status", "online_status"); ok {
 		online = strings.EqualFold(v, "online")
 	}
-	lastOnline := readTimeField(data, "last_online_at", "online_at", "updated_at")
+	lastOnline := readTimeField(data, "last_seen_at", "last_online_at", "online_at", "updated_at")
 	return online, lastOnline, nil
 }
 
 func (a *middlewareManufacturerAdapter) GetBatteryLevel(ctx context.Context, deviceNo string) (*int, error) {
-	path := fmt.Sprintf("/v1/vendors/%s/devices/%s/battery", url.PathEscape(a.vendorCode), url.PathEscape(deviceNo))
+	path := fmt.Sprintf("/v1/devices/%s?vendor_code=%s", url.PathEscape(deviceNo), url.QueryEscape(a.vendorCode))
 	status, data, err := a.requestJSON(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		if status == http.StatusNotFound {
@@ -76,7 +78,7 @@ func (a *middlewareManufacturerAdapter) GetBatteryLevel(ctx context.Context, dev
 		return nil, err
 	}
 
-	if level, ok := readIntField(data, "battery_level", "battery", "power"); ok {
+	if level, ok := readIntField(data, "remain_power", "battery_level", "battery", "power"); ok {
 		return &level, nil
 	}
 	return nil, nil
@@ -94,13 +96,44 @@ func (a *middlewareManufacturerAdapter) StopRecording(ctx context.Context, devic
 	})
 }
 
-func (a *middlewareManufacturerAdapter) SyncDevices(ctx context.Context) ([]string, error) {
-	path := fmt.Sprintf("/v1/vendors/%s/devices", url.PathEscape(a.vendorCode))
-	_, data, err := a.requestJSON(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
+func (a *middlewareManufacturerAdapter) SyncDevices(ctx context.Context) ([]VendorDeviceSnapshot, error) {
+	const pageSize = 200
+	const maxPages = 200
+
+	byDeviceNo := make(map[string]VendorDeviceSnapshot)
+	for page := 1; page <= maxPages; page++ {
+		path := fmt.Sprintf("/v1/devices?vendor_code=%s&page=%d&size=%d", url.QueryEscape(a.vendorCode), page, pageSize)
+		_, data, err := a.requestJSON(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		pageItems := readVendorDeviceSnapshots(data)
+		if len(pageItems) == 0 {
+			break
+		}
+		for _, item := range pageItems {
+			if strings.TrimSpace(item.DeviceNo) == "" {
+				continue
+			}
+			byDeviceNo[item.DeviceNo] = item
+		}
+		total, hasTotal := readIntField(data, "total")
+		if hasTotal && total > 0 {
+			if len(byDeviceNo) >= total {
+				break
+			}
+			continue
+		}
+		if len(pageItems) < pageSize {
+			break
+		}
 	}
-	return readDeviceNoList(data), nil
+
+	result := make([]VendorDeviceSnapshot, 0, len(byDeviceNo))
+	for _, item := range byDeviceNo {
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 func (a *middlewareManufacturerAdapter) requestJSON(ctx context.Context, method, path string, body interface{}) (int, map[string]interface{}, error) {
@@ -265,9 +298,9 @@ func readTimeField(data map[string]interface{}, keys ...string) *time.Time {
 	return nil
 }
 
-func readDeviceNoList(data map[string]interface{}) []string {
-	list := make([]string, 0)
-	candidates := []string{"items", "devices", "list"}
+func readVendorDeviceSnapshots(data map[string]interface{}) []VendorDeviceSnapshot {
+	list := make([]VendorDeviceSnapshot, 0)
+	candidates := []string{"rows", "items", "devices", "list"}
 	for _, key := range candidates {
 		raw, ok := data[key]
 		if !ok {
@@ -281,12 +314,37 @@ func readDeviceNoList(data map[string]interface{}) []string {
 			switch v := item.(type) {
 			case string:
 				if strings.TrimSpace(v) != "" {
-					list = append(list, strings.TrimSpace(v))
+					list = append(list, VendorDeviceSnapshot{DeviceNo: strings.TrimSpace(v)})
 				}
 			case map[string]interface{}:
-				if no, ok := readStringField(v, "device_no", "deviceNo", "sn"); ok && no != "" {
-					list = append(list, no)
+				no, ok := readStringField(v, "device_no", "deviceNo", "sn")
+				if !ok || no == "" {
+					continue
 				}
+				hardwareModel, _ := readStringField(v, "hardware_model", "hardwareModel", "device_type", "deviceType", "model")
+				vendorStatus, _ := readStringField(v, "status", "device_status", "deviceStatus")
+				if vendorStatus == "" {
+					if onlineStatus, found := readIntField(v, "online_status", "onlineStatus"); found {
+						if onlineStatus == 1 {
+							vendorStatus = "online"
+						} else {
+							vendorStatus = "offline"
+						}
+					}
+				}
+				batteryLevel, hasBattery := readIntField(v, "remain_power", "battery_level", "battery", "power")
+				var batteryPtr *int
+				if hasBattery {
+					batteryPtr = &batteryLevel
+				}
+				lastOnlineAt := readTimeField(v, "last_seen_at", "last_online_at", "online_at", "updated_at")
+				list = append(list, VendorDeviceSnapshot{
+					DeviceNo:      no,
+					HardwareModel: hardwareModel,
+					VendorStatus:  vendorStatus,
+					BatteryLevel:  batteryPtr,
+					LastOnlineAt:  lastOnlineAt,
+				})
 			}
 		}
 		if len(list) > 0 {

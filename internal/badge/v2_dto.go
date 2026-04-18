@@ -1,5 +1,7 @@
 package badge
 
+import "time"
+
 type V2DeviceListRequest struct {
 	Status           *string
 	HealthStatus     *string
@@ -60,4 +62,12 @@ type V2HealthCheckResult struct {
 	Passed            bool       `json:"passed"`
 	HealthStatus      string     `json:"health_status"`
 	HealthCheckResult JSONObject `json:"health_check_result"`
+}
+
+type VendorDeviceSnapshot struct {
+	DeviceNo      string     `json:"device_no"`
+	HardwareModel string     `json:"hardware_model,omitempty"`
+	VendorStatus  string     `json:"vendor_status,omitempty"`
+	BatteryLevel  *int       `json:"battery_level,omitempty"`
+	LastOnlineAt  *time.Time `json:"last_online_at,omitempty"`
 }
