@@ -504,6 +504,9 @@ func (s *Service) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, o
 	if len(req.DeviceIDs) == 0 || req.TenantID <= 0 || req.EmployeeID <= 0 {
 		return nil, fmt.Errorf("device_ids, tenant_id and employee_id are required")
 	}
+	if len(req.DeviceIDs) > 1 {
+		return nil, fmt.Errorf("each assignment can only target one device")
+	}
 	success, failed, errors, err := s.store.V2BatchAssign(ctx, req, operatorID, operatorName)
 	if err != nil {
 		return nil, err
