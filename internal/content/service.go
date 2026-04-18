@@ -3,16 +3,19 @@ package content
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/freeasyman/lingce-api/pkg/oss"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -51,6 +54,13 @@ type ideaTopicSession struct {
 	Keywords      []string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type llmModelSelection struct {
+	FunctionType string
+	Provider     string
+	ModelCode    string
+	ModelParams  JSONObject
 }
 
 // Topic Services
@@ -155,12 +165,19 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
   {"title": "选题标题2", "description": "选题描述2"}
 ]`, req.Count, req.Context)
 
+	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_topic", "topic_generation", "chat"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve llm config for topic generation: %w", err)
+	}
+
 	// Call LLM gateway
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
 		CallerModule:  "content",
-		FunctionType:  "topic_generation",
+		FunctionType:  selectedModel.FunctionType,
+		Provider:      selectedModel.Provider,
+		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -171,6 +188,7 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
 			ResponseFormat: "json",
 		},
 	}
+	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
 
 	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
@@ -456,6 +474,7 @@ func (s *Service) CreateContent(ctx context.Context, tenantID, createdBy int64, 
 	if req.Content == "" {
 		return nil, fmt.Errorf("content is required")
 	}
+	enrichContentRequestExtraData(&req)
 
 	item, err := s.store.CreateContent(ctx, tenantID, createdBy, req)
 	if err != nil {
@@ -466,6 +485,7 @@ func (s *Service) CreateContent(ctx context.Context, tenantID, createdBy int64, 
 
 // UpdateContent updates a content item.
 func (s *Service) UpdateContent(ctx context.Context, id int64, req UpdateContentRequest) (*ContentResponse, error) {
+	enrichUpdateContentExtraData(&req)
 	item, err := s.store.UpdateContent(ctx, id, req)
 	if err != nil {
 		return nil, err
@@ -484,60 +504,341 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		return nil, fmt.Errorf("title is required")
 	}
 
-	var generatedText string
 	if s.llmClient == nil {
-		generatedText = fallbackGeneratedContent(req.Title, req.Context)
-	} else {
-		systemPrompt := "你是医疗运营内容写作助手，请输出结构清晰、可执行的中文内容。"
-		contextText := ""
-		if req.Context != nil {
-			contextText = *req.Context
-		}
-		styleText := "专业"
-		if req.Style != nil && *req.Style != "" {
-			styleText = *req.Style
-		}
-		length := 600
-		if req.Length != nil && *req.Length > 0 {
-			length = *req.Length
-		}
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
 
-		userPrompt := fmt.Sprintf("标题：%s\n背景：%s\n风格：%s\n目标字数：%d\n请直接输出正文内容。", req.Title, contextText, styleText, length)
-		llmResp, err := s.llmClient.TextInference(ctx, llmgateway.TextInferenceRequest{
-			TenantID:      tenantID,
-			CallerService: "lingce-api",
-			CallerModule:  "content",
-			FunctionType:  "content_generation",
-			Messages: []llmgateway.Message{
-				{Role: "system", Content: systemPrompt},
-				{Role: "user", Content: userPrompt},
-			},
-			Params: &llmgateway.Params{
-				Temperature: 0.7,
-				MaxTokens:   3000,
-			},
-		})
+	systemPrompt := "你是医疗运营内容写作助手，请输出结构清晰、可执行的中文内容。"
+	contextText := ""
+	if req.Context != nil {
+		contextText = strings.TrimSpace(*req.Context)
+	}
+	styleText := "专业"
+	if req.Style != nil && strings.TrimSpace(*req.Style) != "" {
+		styleText = strings.TrimSpace(*req.Style)
+	}
+	length := 600
+	if req.Length != nil && *req.Length > 0 {
+		length = *req.Length
+	} else if req.WordCount != nil && *req.WordCount > 0 {
+		length = *req.WordCount
+	}
+
+	userPrompt := fmt.Sprintf("标题：%s\n背景：%s\n风格：%s\n目标字数：%d\n请直接输出正文内容。", req.Title, contextText, styleText, length)
+	if req.PromptTemplateID != nil && *req.PromptTemplateID > 0 {
+		tpl, err := s.store.GetContentPromptTemplateByID(ctx, *req.PromptTemplateID)
 		if err != nil {
-			generatedText = fallbackGeneratedContent(req.Title, req.Context)
-		} else {
-			generatedText = strings.TrimSpace(llmResp.Content)
+			return nil, fmt.Errorf("failed to load prompt template %d: %w", *req.PromptTemplateID, err)
+		}
+		if tpl.TenantID != nil && *tpl.TenantID != tenantID {
+			return nil, fmt.Errorf("prompt template %d does not belong to tenant %d", *req.PromptTemplateID, tenantID)
+		}
+		userPrompt = renderContentPromptTemplate(tpl.PromptTemplate, req, contextText, styleText, length)
+	}
+
+	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, contentGenerationFunctionTypeCandidates(req.ContentType))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve llm config for content generation: %w", err)
+	}
+
+	llmReq := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "content",
+		FunctionType:  selectedModel.FunctionType,
+		Provider:      selectedModel.Provider,
+		ModelCode:     selectedModel.ModelCode,
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Params: &llmgateway.Params{
+			Temperature: 0.7,
+			MaxTokens:   3000,
+		},
+	}
+	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+
+	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate content via LLM: %w", err)
+	}
+	generatedText := strings.TrimSpace(llmResp.Content)
+	if generatedText == "" {
+		return nil, fmt.Errorf("empty content from LLM")
+	}
+
+	var generatedNoteStructure JSONObject
+	if isGraphicContentType(req.ContentType) {
+		if obj, ok := parseJSONObjectFromLLMText(generatedText); ok {
+			generatedNoteStructure = obj
 		}
 	}
 
 	createReq := CreateContentRequest{
-		TopicID:   req.TopicID,
-		Title:     req.Title,
-		Content:   generatedText,
-		Category:  nil,
-		Tags:      nil,
-		Images:    nil,
-		ExtraData: req.ExtraData,
+		TopicID:         req.TopicID,
+		ContentType:     req.ContentType,
+		Platform:        req.Platform,
+		Title:           req.Title,
+		Content:         generatedText,
+		Subtitle:        req.Subtitle,
+		Category:        nil,
+		Tags:            nil,
+		Images:          nil,
+		ScriptStructure: generatedNoteStructure,
+		NoteStructure:   generatedNoteStructure,
+		ExtraData:       req.ExtraData,
 	}
+	enrichContentRequestExtraData(&createReq)
 	item, err := s.store.CreateContent(ctx, tenantID, createdBy, createReq)
 	if err != nil {
 		return nil, err
 	}
 	return toContentResponse(item), nil
+}
+
+func contentGenerationFunctionTypeCandidates(contentType *string) []string {
+	normalized := ""
+	if contentType != nil {
+		normalized = strings.ToLower(strings.TrimSpace(*contentType))
+	}
+	switch normalized {
+	case "script", "video_script", "short_video_script":
+		return []string{"content_script", "content_generation", "chat"}
+	case "note", "graphic_note", "xhs_note":
+		return []string{"content_graphic_note", "content_generation", "chat"}
+	default:
+		return []string{"content_article", "content_generation", "chat"}
+	}
+}
+
+func (s *Service) resolveLLMModelConfig(ctx context.Context, tenantID int64, functionTypeCandidates []string) (*llmModelSelection, error) {
+	if len(functionTypeCandidates) == 0 {
+		return nil, fmt.Errorf("function type candidates are required")
+	}
+	for _, functionType := range functionTypeCandidates {
+		functionType = strings.TrimSpace(functionType)
+		if functionType == "" {
+			continue
+		}
+		query := `
+			SELECT
+				COALESCE(function_type, ''),
+				COALESCE(provider, ''),
+				COALESCE(model_code, ''),
+				COALESCE(model_params, extra_params, '{}'::json)
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND COALESCE(is_active, true) = true
+			  AND function_type = $1
+			  AND tenant_id IN ($2, 0)
+			ORDER BY
+			  CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END,
+			  CASE WHEN COALESCE(is_default, false) THEN 0 ELSE 1 END,
+			  updated_at DESC,
+			  id DESC
+			LIMIT 1
+		`
+
+		selection := &llmModelSelection{}
+		if err := s.store.pool.QueryRow(ctx, query, functionType, tenantID).Scan(
+			&selection.FunctionType,
+			&selection.Provider,
+			&selection.ModelCode,
+			&selection.ModelParams,
+		); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, fmt.Errorf("query llm config failed for function_type=%s: %w", functionType, err)
+		}
+		if strings.TrimSpace(selection.ModelCode) == "" {
+			continue
+		}
+		if strings.TrimSpace(selection.FunctionType) == "" {
+			selection.FunctionType = functionType
+		}
+		return selection, nil
+	}
+	return nil, fmt.Errorf("no active llm config found for tenant=%d candidates=%v", tenantID, functionTypeCandidates)
+}
+
+func applyModelParamsToLLMRequest(req *llmgateway.TextInferenceRequest, modelParams JSONObject) {
+	if req == nil || len(modelParams) == 0 {
+		return
+	}
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	if value, ok := modelParams["temperature"]; ok {
+		if v, ok := toFloat64(value); ok {
+			req.Params.Temperature = v
+		}
+	}
+	if value, ok := modelParams["max_tokens"]; ok {
+		if v, ok := toInt(value); ok && v > 0 {
+			req.Params.MaxTokens = v
+		}
+	}
+	if value, ok := modelParams["timeout_seconds"]; ok {
+		if v, ok := toInt(value); ok && v > 0 {
+			req.Params.TimeoutSeconds = v
+		}
+	}
+	if value, ok := modelParams["response_format"]; ok {
+		if v, ok := value.(string); ok {
+			v = strings.TrimSpace(v)
+			if v != "" {
+				req.Params.ResponseFormat = v
+			}
+		}
+	}
+}
+
+func toFloat64(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
+func toInt(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case int32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i), true
+		}
+		f, ferr := v.Float64()
+		if ferr != nil {
+			return 0, false
+		}
+		return int(f), true
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return i, true
+	default:
+		return 0, false
+	}
+}
+
+func isGraphicContentType(contentType *string) bool {
+	if contentType == nil {
+		return false
+	}
+	v := strings.ToLower(strings.TrimSpace(*contentType))
+	return v == "graphic" || v == "note" || v == "graphic_note" || v == "xhs_note"
+}
+
+func parseJSONObjectFromLLMText(text string) (JSONObject, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, false
+	}
+
+	parse := func(raw string) (JSONObject, bool) {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+			return nil, false
+		}
+		if len(obj) == 0 {
+			return nil, false
+		}
+		return JSONObject(obj), true
+	}
+
+	if obj, ok := parse(trimmed); ok {
+		return obj, true
+	}
+
+	// 兼容 ```json ... ``` 包裹输出
+	if strings.HasPrefix(trimmed, "```") {
+		parts := strings.Split(trimmed, "```")
+		if len(parts) >= 3 {
+			candidate := strings.TrimSpace(parts[1])
+			candidate = strings.TrimPrefix(candidate, "json")
+			candidate = strings.TrimSpace(candidate)
+			if obj, ok := parse(candidate); ok {
+				return obj, true
+			}
+		}
+	}
+
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start >= 0 && end > start {
+		if obj, ok := parse(trimmed[start : end+1]); ok {
+			return obj, true
+		}
+	}
+
+	return nil, false
+}
+
+func renderContentPromptTemplate(tpl string, req GenerateContentRequest, contextText, styleText string, length int) string {
+	prompt := tpl
+	replacements := map[string]string{
+		"topic":                   req.Title,
+		"title":                   req.Title,
+		"context":                 contextText,
+		"style":                   styleText,
+		"length":                  fmt.Sprintf("%d", length),
+		"word_count":              fmt.Sprintf("%d", length),
+		"content_type":            valueOrDefaultStringPtr(req.ContentType, "article"),
+		"selected_headline":       valueOrDefaultStringPtr(req.SelectedTitle, req.Title),
+		"strategy_text":           valueOrDefaultStringPtr(req.StrategyText, ""),
+		"additional_requirements": valueOrDefaultStringPtr(req.AdditionalRequirements, ""),
+	}
+	for key, value := range replacements {
+		prompt = strings.ReplaceAll(prompt, "{{"+key+"}}", value)
+	}
+	return prompt
+}
+
+func valueOrDefaultStringPtr(v *string, fallback string) string {
+	if v == nil {
+		return fallback
+	}
+	trimmed := strings.TrimSpace(*v)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
 }
 
 // PublishContent publishes a content item.
@@ -908,10 +1209,15 @@ func toTopicResponse(t *ContentTopic) *TopicResponse {
 }
 
 func toContentResponse(item *ContentItem) *ContentResponse {
+	contentType := normalizeContentTypeValue(stringPtrOrNil(stringFromJSON(item.ExtraData, "content_type")), item.ContentType)
+	platform := firstNonEmptyPtr(item.Platform, stringPtrOrNil(stringFromJSON(item.ExtraData, "platform")), stringPtrOrNil(stringFromJSON(item.ExtraData, "target_platform")))
 	return &ContentResponse{
 		ID:            item.ID,
 		TenantID:      item.TenantID,
 		TopicID:       item.TopicID,
+		ContentType:   contentType,
+		Platform:      platform,
+		CreatorName:   item.CreatorName,
 		Title:         item.Title,
 		Content:       item.Content,
 		Summary:       item.Summary,
@@ -929,6 +1235,130 @@ func toContentResponse(item *ContentItem) *ContentResponse {
 		CreatedAt:     item.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:     item.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+func enrichContentRequestExtraData(req *CreateContentRequest) {
+	if req == nil {
+		return
+	}
+	extra := cloneJSONObject(req.ExtraData)
+	setIfNonEmpty(extra, "content_type", req.ContentType)
+	setIfNonEmpty(extra, "platform", req.Platform)
+	setIfNonEmpty(extra, "subtitle", req.Subtitle)
+	if req.ScriptStructure != nil {
+		extra["script_structure"] = req.ScriptStructure
+	}
+	if req.NoteStructure != nil {
+		extra["note_structure"] = req.NoteStructure
+	}
+	req.ExtraData = extra
+}
+
+func enrichUpdateContentExtraData(req *UpdateContentRequest) {
+	if req == nil {
+		return
+	}
+	extra := cloneJSONObject(req.ExtraData)
+	setIfNonEmpty(extra, "content_type", req.ContentType)
+	setIfNonEmpty(extra, "platform", req.Platform)
+	setIfNonEmpty(extra, "subtitle", req.Subtitle)
+	if req.ScriptStructure != nil {
+		extra["script_structure"] = req.ScriptStructure
+	}
+	if req.NoteStructure != nil {
+		extra["note_structure"] = req.NoteStructure
+	}
+	req.ExtraData = extra
+}
+
+func cloneJSONObject(src JSONObject) JSONObject {
+	if src == nil {
+		return JSONObject{}
+	}
+	dst := make(JSONObject, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func setIfNonEmpty(dst JSONObject, key string, value *string) {
+	if dst == nil || value == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return
+	}
+	dst[key] = trimmed
+}
+
+func stringFromJSON(data JSONObject, key string) string {
+	if data == nil {
+		return ""
+	}
+	raw, ok := data[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []byte:
+		return strings.TrimSpace(string(v))
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func normalizeContentTypeValue(values ...*string) *string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		v := strings.TrimSpace(strings.ToLower(*value))
+		if v == "" {
+			continue
+		}
+		switch v {
+		case "article", "wechat_article", "公众号文章", "文章":
+			normalized := "article"
+			return &normalized
+		case "video_script", "script", "视频脚本", "口播脚本":
+			normalized := "video_script"
+			return &normalized
+		case "graphic", "note", "图文", "小红书图文":
+			normalized := "graphic"
+			return &normalized
+		default:
+			normalized := v
+			return &normalized
+		}
+	}
+	return nil
+}
+
+func firstNonEmptyPtr(values ...*string) *string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*value)
+		if trimmed == "" {
+			continue
+		}
+		v := trimmed
+		return &v
+	}
+	return nil
+}
+
+func stringPtrOrNil(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func toPublishTaskResponse(task *ContentPublishTask, contentTitle string) *PublishTaskResponse {
