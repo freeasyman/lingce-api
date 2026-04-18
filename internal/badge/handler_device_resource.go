@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
 func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
-	req := V2DeviceListRequest{}
+	req := V2DeviceListRequest{Realtime: true}
 	if v := r.URL.Query().Get("status"); v != "" {
 		req.Status = &v
 	}
@@ -22,6 +23,14 @@ func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := r.URL.Query().Get("device_no"); v != "" {
 		req.DeviceNo = &v
+	}
+	if v := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("realtime"))); v != "" {
+		switch v {
+		case "0", "false", "no", "off":
+			req.Realtime = false
+		default:
+			req.Realtime = true
+		}
 	}
 	req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -127,12 +136,17 @@ func (h *Handler) V2TransferDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) V2HealthCheck(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "invalid id")
 		return
 	}
-	resp, err := h.service.V2HealthCheck(r.Context(), id)
+	resp, err := h.service.V2HealthCheckAndPersist(r.Context(), id, claims.UserID, "")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

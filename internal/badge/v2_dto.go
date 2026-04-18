@@ -5,6 +5,7 @@ type V2DeviceListRequest struct {
 	HealthStatus     *string
 	ManufacturerCode *string
 	DeviceNo         *string
+	Realtime         bool
 	Page             int
 	PageSize         int
 }
@@ -55,6 +56,7 @@ type V2UpdateDeviceRequest struct {
 type V2HealthCheckResult struct {
 	DeviceID          int64      `json:"device_id"`
 	DeviceNo          string     `json:"device_no"`
+	Status            string     `json:"status,omitempty"`
 	Passed            bool       `json:"passed"`
 	HealthStatus      string     `json:"health_status"`
 	HealthCheckResult JSONObject `json:"health_check_result"`

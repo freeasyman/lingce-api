@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+const healthCheckRecordingDuration = 10 * time.Second
+const healthCheckCallbackWaitTimeout = 12 * time.Second
+const healthCheckCallbackPollInterval = 1 * time.Second
+
 type ManufacturerAdapter interface {
 	CheckDeviceExists(ctx context.Context, deviceNo string) (bool, error)
 	CheckOnline(ctx context.Context, deviceNo string) (bool, *time.Time, error)
@@ -38,11 +42,60 @@ func (s *Service) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([
 		}
 		req.HealthStatus = &parsed
 	}
-	return s.store.V2ListDevices(ctx, req)
+	devices, total, err := s.store.V2ListDevices(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+	if req.Realtime {
+		s.hydrateRealtimeStatus(ctx, devices)
+	}
+	return devices, total, nil
 }
 
 func (s *Service) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []*BadgeDeviceLog, error) {
-	return s.store.V2GetDeviceByID(ctx, id)
+	device, logs, err := s.store.V2GetDeviceByID(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.hydrateRealtimeStatus(ctx, []*BadgeDevice{device})
+	return device, logs, nil
+}
+
+func (s *Service) V2GetLiveStatus(ctx context.Context, deviceID int64) (JSONObject, error) {
+	device, _, err := s.store.V2GetDeviceByID(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	adapter := s.getManufacturerAdapter(device.ManufacturerCode)
+
+	online, onlineAt, onlineErr := adapter.CheckOnline(ctx, device.DeviceNo)
+	batteryLevel, batteryErr := adapter.GetBatteryLevel(ctx, device.DeviceNo)
+
+	if online && onlineAt == nil {
+		now := time.Now()
+		onlineAt = &now
+	}
+
+	if onlineErr == nil || batteryErr == nil {
+		_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, batteryLevel, onlineAt)
+	}
+
+	resp := JSONObject{
+		"device_id":  deviceID,
+		"online":     online,
+		"battery":    batteryLevel,
+		"checked_at": time.Now().Format(time.RFC3339),
+	}
+	if onlineAt != nil {
+		resp["online_at"] = onlineAt.Format(time.RFC3339)
+	}
+	if onlineErr != nil {
+		resp["online_error"] = onlineErr.Error()
+	}
+	if batteryErr != nil {
+		resp["battery_error"] = batteryErr.Error()
+	}
+	return resp, nil
 }
 
 func (s *Service) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, operatorID int64, operatorName string) (JSONObject, error) {
@@ -98,17 +151,43 @@ func (s *Service) V2HealthCheck(ctx context.Context, deviceID int64) (*V2HealthC
 		result["battery_level"] = *batteryLevel
 	}
 
+	checkStartedAt := time.Now()
+	startRecordingOK := true
+	stopRecordingOK := true
 	recordingOK := true
 	if err := adapter.StartRecording(ctx, device.DeviceNo); err != nil {
+		startRecordingOK = false
 		recordingOK = false
 		result["start_recording_error"] = err.Error()
+	} else {
+		// Hardware requires a minimum recording duration before stop.
+		time.Sleep(healthCheckRecordingDuration)
 	}
-	time.Sleep(2 * time.Second)
+
 	if err := adapter.StopRecording(ctx, device.DeviceNo); err != nil {
-		recordingOK = false
-		result["stop_recording_error"] = err.Error()
+		// Retry once after a short grace period to reduce false negatives
+		// when device-side stop arrives a bit later than start acknowledgement.
+		time.Sleep(3 * time.Second)
+		if retryErr := adapter.StopRecording(ctx, device.DeviceNo); retryErr != nil {
+			stopRecordingOK = false
+			recordingOK = false
+			result["stop_recording_error"] = retryErr.Error()
+		}
 	}
 	result["recording_ok"] = recordingOK
+	result["recording_test"] = JSONObject{
+		"start": startRecordingOK,
+		"stop":  stopRecordingOK,
+	}
+	result["recording_duration_seconds"] = int(healthCheckRecordingDuration / time.Second)
+	if startRecordingOK && stopRecordingOK {
+		callbackOK := s.waitForAudioCallback(ctx, device.DeviceNo, checkStartedAt, healthCheckCallbackWaitTimeout)
+		result["callback_ok"] = callbackOK
+		if recordingTest, ok := result["recording_test"].(JSONObject); ok {
+			recordingTest["callback"] = callbackOK
+			result["recording_test"] = recordingTest
+		}
+	}
 
 	lastOnline := device.LastOnlineAt
 	if onlineAt != nil {
@@ -128,10 +207,101 @@ func (s *Service) V2HealthCheck(ctx context.Context, deviceID int64) (*V2HealthC
 	return &V2HealthCheckResult{
 		DeviceID:          device.ID,
 		DeviceNo:          device.DeviceNo,
+		Status:            device.Status,
 		Passed:            healthStatus != "error",
 		HealthStatus:      healthStatus,
 		HealthCheckResult: result,
 	}, nil
+}
+
+func (s *Service) V2HealthCheckAndPersist(ctx context.Context, deviceID int64, operatorID int64, operatorName string) (*V2HealthCheckResult, error) {
+	health, err := s.V2HealthCheck(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+
+	device, _, err := s.store.V2GetDeviceByID(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+
+	toStatus := deriveStatusAfterHealthCheck(device.Status, health.Passed)
+	if err := s.store.V2UpdateDeviceStatusWithHealth(
+		ctx,
+		deviceID,
+		toStatus,
+		health.HealthStatus,
+		health.HealthCheckResult,
+		operatorID,
+		operatorName,
+		"check",
+		JSONObject{
+			"trigger": "single_health_check",
+			"passed":  health.Passed,
+		},
+	); err != nil {
+		return nil, err
+	}
+
+	health.Status = toStatus
+	return health, nil
+}
+
+func deriveStatusAfterHealthCheck(currentStatus string, passed bool) string {
+	current := strings.ToLower(strings.TrimSpace(currentStatus))
+	if current == "retired" {
+		return "retired"
+	}
+	if !passed {
+		return "blocked"
+	}
+	if current == "in_use" {
+		return "in_use"
+	}
+	return "ready"
+}
+
+func (s *Service) waitForAudioCallback(ctx context.Context, deviceNo string, since time.Time, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	action := "callback"
+	status := "success"
+	for time.Now().Before(deadline) {
+		logs, _, err := s.store.ListRecordingControlLogs(ctx, RecordingControlLogListRequest{
+			DeviceNo: &deviceNo,
+			Action:   &action,
+			Status:   &status,
+			Page:     1,
+			PageSize: 50,
+		})
+		if err == nil {
+			for _, log := range logs {
+				if log == nil {
+					continue
+				}
+				if log.CreatedAt.Before(since.Add(-2 * time.Second)) {
+					continue
+				}
+				source := strings.ToLower(strings.TrimSpace(anyToString(log.ExtraData["source"])))
+				eventType := strings.ToLower(strings.TrimSpace(anyToString(log.ExtraData["event_type"])))
+				if source == "audio" || strings.Contains(eventType, "audio") {
+					return true
+				}
+			}
+		}
+		time.Sleep(healthCheckCallbackPollInterval)
+	}
+	return false
+}
+
+func anyToString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return ""
+	}
 }
 
 func (s *Service) V2BatchHealthCheck(ctx context.Context, deviceIDs []int64) (JSONObject, error) {
@@ -225,6 +395,58 @@ func determineHealthStatus(online bool, batteryLevel *int, recordingOK bool, off
 
 	// Unknown battery, online and recording is healthy: keep healthy by default.
 	return HealthStatusHealthy
+}
+
+func (s *Service) hydrateRealtimeStatus(ctx context.Context, devices []*BadgeDevice) {
+	if len(devices) == 0 {
+		return
+	}
+
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, d := range devices {
+		if d == nil || strings.TrimSpace(d.DeviceNo) == "" {
+			continue
+		}
+		device := d
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			perReqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			adapter := s.getManufacturerAdapter(device.ManufacturerCode)
+			online, onlineAt, onlineErr := adapter.CheckOnline(perReqCtx, device.DeviceNo)
+			batteryLevel, batteryErr := adapter.GetBatteryLevel(perReqCtx, device.DeviceNo)
+			if onlineErr != nil && batteryErr != nil {
+				device.LastOnlineAt = nil
+				device.BatteryLevel = nil
+				return
+			}
+
+			if onlineErr == nil && online && onlineAt == nil {
+				now := time.Now()
+				onlineAt = &now
+			}
+
+			if batteryErr != nil {
+				device.BatteryLevel = nil
+			} else {
+				device.BatteryLevel = batteryLevel
+			}
+			if onlineErr != nil {
+				device.LastOnlineAt = nil
+			} else {
+				device.LastOnlineAt = onlineAt
+			}
+
+			_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, batteryLevel, onlineAt)
+		}()
+	}
+	wg.Wait()
 }
 
 func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, operatorID int64, operatorName string) (JSONObject, error) {
