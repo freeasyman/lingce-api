@@ -1705,6 +1705,12 @@ func (s *Service) ListRecordingTasks(ctx context.Context, req TaskListRequest) (
 	for i, t := range tasks {
 		responses[i] = toTaskResponse(t)
 	}
+	if err := s.enrichTaskListResponse(ctx, responses); err != nil {
+		return nil, 0, err
+	}
+	for _, item := range responses {
+		compactTaskListItem(item)
+	}
 
 	return responses, total, nil
 }
@@ -2292,6 +2298,188 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		formatted := t.CancelledAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.CancelledAt = &formatted
 	}
+	if resp.SourceType != nil {
+		if label := sourceTypeLabel(*resp.SourceType); label != "" {
+			resp.SourceTypeLabel = &label
+		}
+	}
+	if resp.SourceDetail != nil {
+		if label := sourceDetailLabel(*resp.SourceDetail); label != "" {
+			resp.SourceDetailLabel = &label
+		}
+	}
 
 	return resp
+}
+
+func compactTaskListItem(item *TaskResponse) {
+	if item == nil {
+		return
+	}
+	item.Description = nil
+	item.Script = nil
+	item.ContactReason = nil
+	item.SourceDetail = nil
+	item.SourceDetailLabel = nil
+}
+
+func (s *Service) enrichTaskListResponse(ctx context.Context, items []*TaskResponse) error {
+	if len(items) == 0 {
+		return nil
+	}
+	assignedIDs := make([]int64, 0, len(items))
+	recordingIDs := make([]int64, 0, len(items))
+	assignedSeen := map[int64]struct{}{}
+	recordingSeen := map[int64]struct{}{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if item.AssignedTo != nil && *item.AssignedTo > 0 {
+			if _, ok := assignedSeen[*item.AssignedTo]; !ok {
+				assignedSeen[*item.AssignedTo] = struct{}{}
+				assignedIDs = append(assignedIDs, *item.AssignedTo)
+			}
+		}
+		if item.RecordingID > 0 {
+			if _, ok := recordingSeen[item.RecordingID]; !ok {
+				recordingSeen[item.RecordingID] = struct{}{}
+				recordingIDs = append(recordingIDs, item.RecordingID)
+			}
+		}
+	}
+
+	assignedNameMap := map[int64]string{}
+	if len(assignedIDs) > 0 {
+		rows, err := s.store.pool.Query(ctx, `
+			SELECT id, COALESCE(name, '')
+			FROM employees
+			WHERE id = ANY($1)
+		`, assignedIDs)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var name string
+			if err := rows.Scan(&id, &name); err != nil {
+				return err
+			}
+			assignedNameMap[id] = strings.TrimSpace(name)
+		}
+	}
+
+	type recordingMeta struct {
+		OwnerName    string
+		RoleCategory string
+	}
+	recordingMetaMap := map[int64]recordingMeta{}
+	if len(recordingIDs) > 0 {
+		rows, err := s.store.pool.Query(ctx, `
+			SELECT
+				r.id AS recording_id,
+				COALESCE(e.name, '') AS owner_name,
+				CASE
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = ANY($2)
+					) THEN 'doctor'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = ANY($3)
+					) THEN 'consultant'
+					ELSE 'other'
+				END AS role_category
+			FROM recordings r
+			LEFT JOIN employees e ON e.id = r.employee_id
+			WHERE r.id = ANY($1)
+		`, recordingIDs, []string{"doctor", "therapist", "doctor_assistant"}, []string{"consultant"})
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var recordingID int64
+			var ownerName string
+			var roleCategory string
+			if err := rows.Scan(&recordingID, &ownerName, &roleCategory); err != nil {
+				return err
+			}
+			recordingMetaMap[recordingID] = recordingMeta{
+				OwnerName:    strings.TrimSpace(ownerName),
+				RoleCategory: strings.TrimSpace(roleCategory),
+			}
+		}
+	}
+
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if item.AssignedTo != nil {
+			if name := strings.TrimSpace(assignedNameMap[*item.AssignedTo]); name != "" {
+				item.AssignedToName = &name
+			}
+		}
+		if meta, ok := recordingMetaMap[item.RecordingID]; ok {
+			if meta.OwnerName != "" {
+				item.RecordingOwnerName = &meta.OwnerName
+			}
+			if meta.RoleCategory != "" {
+				category := meta.RoleCategory
+				label := recordingRoleLabel(category)
+				item.RecordingRoleCategory = &category
+				item.RecordingRoleLabel = &label
+			}
+		}
+	}
+	return nil
+}
+
+func recordingRoleLabel(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "consultant":
+		return "咨询师录音"
+	case "customer_service":
+		return "客服录音"
+	case "doctor":
+		return "医生录音"
+	case "therapist":
+		return "康复师录音"
+	case "doctor_assistant":
+		return "医助录音"
+	default:
+		return "其他录音"
+	}
+}
+
+func sourceTypeLabel(sourceType string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceType)) {
+	case "ai":
+		return "AI任务"
+	case "follow_up":
+		return "跟进任务"
+	case "manual":
+		return "手动任务"
+	default:
+		return ""
+	}
+}
+
+func sourceDetailLabel(sourceDetail string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceDetail)) {
+	case "phone":
+		return "电话"
+	case "wechat":
+		return "微信"
+	case "sms":
+		return "短信"
+	default:
+		return ""
+	}
 }
