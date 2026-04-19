@@ -80,10 +80,33 @@ func (s *Service) ListRecordings(ctx context.Context, req RecordingListRequest) 
 
 	responses := make([]*RecordingResponse, len(recordings))
 	for i, r := range recordings {
-		responses[i] = toRecordingResponse(r)
+		resp := toRecordingResponse(r)
+		compactRecordingListItem(resp)
+		responses[i] = resp
 	}
 
 	return responses, total, nil
+}
+
+func compactRecordingListItem(resp *RecordingResponse) {
+	if resp == nil {
+		return
+	}
+	resp.TranscriptText = nil
+	resp.DoctorSummary = nil
+	resp.TherapistSummary = nil
+	resp.ConsultantSummary = nil
+	resp.AnalysisResult = nil
+	resp.AnalysisSummary = nil
+	resp.AnalysisDisplay = nil
+	resp.StructuredTranscript = nil
+	resp.TimelineTranscript = nil
+	resp.ContentSeeds = nil
+	resp.RouteReview = nil
+	resp.EMRDraft = nil
+	resp.ConsultationRecord = nil
+	resp.DealOutcome = nil
+	resp.SuggestedTask = nil
 }
 
 // GetRecording retrieves a medical recording by ID
@@ -141,6 +164,10 @@ func (s *Service) DeleteRecording(ctx context.Context, id int64) error {
 
 // toRecordingResponse converts a MedicalRecording to RecordingResponse
 func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
+	analysisStatus := strings.TrimSpace(string(r.Status))
+	if r.AnalysisStatus != nil && strings.TrimSpace(*r.AnalysisStatus) != "" {
+		analysisStatus = strings.TrimSpace(*r.AnalysisStatus)
+	}
 	resp := &RecordingResponse{
 		ID:                r.ID,
 		TenantID:          r.TenantID,
@@ -155,14 +182,20 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		PatientPhone:      r.PatientPhone,
 		RecordingURL:      r.RecordingURL,
 		RecordingDuration: r.RecordingDuration,
+		Duration:          r.RecordingDuration,
 		TranscriptText:    r.TranscriptText,
 		DoctorSummary:     r.DoctorSummary,
 		TherapistSummary:  r.TherapistSummary,
 		ConsultantSummary: r.ConsultantSummary,
+		AnalysisStatus:    pickStringPtr(analysisStatus),
+		ContentSeedsTypes: []string{},
 		Status:            string(r.Status),
 		ProcessingError:   r.ProcessingError,
-		CreatedAt:         r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:         r.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:         formatDBLocalTime(r.CreatedAt),
+		UpdatedAt:         formatDBLocalTime(r.UpdatedAt),
+	}
+	if len(r.AnalysisResult) > 0 {
+		resp.AnalysisResult = map[string]interface{}(r.AnalysisResult)
 	}
 	if len(r.AnalysisDisplay) > 0 {
 		resp.AnalysisDisplay = map[string]interface{}(r.AnalysisDisplay)
@@ -170,8 +203,10 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 
 	if len(r.AnalysisDisplay) > 0 {
 		analysisDisplay := map[string]interface{}(r.AnalysisDisplay)
-		resp.AnalysisResult = pickMap(analysisDisplay, "analysis_result")
-		if resp.AnalysisResult == nil {
+		if nested := pickMap(analysisDisplay, "analysis_result"); nested != nil {
+			resp.AnalysisResult = nested
+		}
+		if resp.AnalysisResult == nil && looksLikeAnalysisResult(analysisDisplay) {
 			resp.AnalysisResult = analysisDisplay
 		}
 		resp.AnalysisSummary = pickMap(resp.AnalysisResult, "analysis_summary")
@@ -201,8 +236,10 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 			pickFloat(analysisDisplay, "quality_score"),
 		)
 		resp.SegueScore = pickFloatPtr(
+			pickFloat(resp.AnalysisResult, "segue_percent"),
 			pickFloat(resp.AnalysisResult, "segue_score"),
 			pickFloat(resp.AnalysisResult, "communication_score"),
+			pickFloat(pickMap(resp.AnalysisResult, "segue"), "overall_score"),
 			pickFloat(analysisDisplay, "segue_score"),
 		)
 		resp.CriticalGap = pickBoolPtr(
@@ -213,21 +250,33 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 	}
 
 	if r.RecordingStartedAt != nil {
-		formatted := r.RecordingStartedAt.Format("2006-01-02T15:04:05Z07:00")
+		formatted := formatDBLocalTime(*r.RecordingStartedAt)
 		resp.RecordingStartedAt = &formatted
+		resp.RecordedAt = &formatted
 	}
 
 	if r.RecordingEndedAt != nil {
-		formatted := r.RecordingEndedAt.Format("2006-01-02T15:04:05Z07:00")
+		formatted := formatDBLocalTime(*r.RecordingEndedAt)
 		resp.RecordingEndedAt = &formatted
 	}
 
 	if r.ProcessedAt != nil {
-		formatted := r.ProcessedAt.Format("2006-01-02T15:04:05Z07:00")
+		formatted := formatDBLocalTime(*r.ProcessedAt)
 		resp.ProcessedAt = &formatted
 	}
 
+	populateCompatibilityFields(resp)
 	return resp
+}
+
+func formatDBLocalTime(t time.Time) string {
+	// DB uses timestamp without timezone; keep wall-clock semantics in API output.
+	localWallClock := time.Date(
+		t.Year(), t.Month(), t.Day(),
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(),
+		time.Local,
+	)
+	return localWallClock.Format("2006-01-02T15:04:05Z07:00")
 }
 
 func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64, resp *RecordingResponse) error {
@@ -469,6 +518,17 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		)
 	}
 	if len(resp.StructuredTranscript) == 0 || len(resp.TimelineTranscript) == 0 {
+		if cleaned, err := s.loadCleanedTranscriptionSegments(ctx, recordingID); err == nil && len(cleaned) > 0 {
+			structured, timeline := buildTranscriptFromSegments(cleaned)
+			if len(resp.StructuredTranscript) == 0 {
+				resp.StructuredTranscript = structured
+			}
+			if len(resp.TimelineTranscript) == 0 {
+				resp.TimelineTranscript = timeline
+			}
+		}
+	}
+	if len(resp.StructuredTranscript) == 0 || len(resp.TimelineTranscript) == 0 {
 		if segments, err := s.loadRawTranscriptionSegments(ctx, recordingID); err == nil && len(segments) > 0 {
 			structured, timeline := buildTranscriptFromSegments(segments)
 			if len(resp.StructuredTranscript) == 0 {
@@ -594,6 +654,7 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		}
 	}
 
+	populateCompatibilityFields(resp)
 	return nil
 }
 
@@ -646,6 +707,230 @@ func normalizeInsightSummary(summary map[string]interface{}, result map[string]i
 	}
 
 	return out
+}
+
+func looksLikeAnalysisResult(source map[string]interface{}) bool {
+	if source == nil {
+		return false
+	}
+	for _, key := range []string{
+		"scene_type", "scene", "segue_percent", "segue_score", "critical_gap",
+		"business", "patient_mindset", "analysis_summary", "visit_outcome",
+		"chief_complaint", "diagnosis", "consultation_record", "decision_status",
+	} {
+		if _, ok := source[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func populateCompatibilityFields(resp *RecordingResponse) {
+	if resp == nil {
+		return
+	}
+	if resp.Duration == nil {
+		resp.Duration = resp.RecordingDuration
+	}
+	if resp.AnalysisStatus == nil || strings.TrimSpace(*resp.AnalysisStatus) == "" {
+		resp.AnalysisStatus = pickStringPtr(resp.Status)
+	}
+	if resp.RecordedAt == nil {
+		resp.RecordedAt = resp.RecordingStartedAt
+	}
+
+	analysisDisplay := resp.AnalysisDisplay
+	analysisResult := resp.AnalysisResult
+	analysisSummary := resp.AnalysisSummary
+	if analysisSummary == nil {
+		analysisSummary = pickMap(analysisResult, "analysis_summary")
+	}
+	analysisResultBusiness := pickMap(analysisResult, "business")
+	analysisSummaryBusiness := pickMap(analysisSummary, "business")
+	analysisDisplayBusiness := pickMap(analysisDisplay, "business")
+	analysisResultDoctorContentGen := pickMap(analysisResult, "doctor_content_gen")
+	analysisResultRawDoctorContentGen := pickMap(pickMap(analysisResult, "raw"), "doctor_content_gen")
+	emrDraft := firstNonNilMap(resp.EMRDraft, pickMap(analysisDisplay, "emr_draft"), pickMap(analysisResult, "emr_draft"))
+	emrContent := firstNonNilMap(
+		pickMap(analysisResult, "emr"),
+		pickMap(analysisResultDoctorContentGen, "emr"),
+		pickMap(analysisResultRawDoctorContentGen, "emr"),
+		pickMap(emrDraft, "emr_content"),
+		pickMap(pickMap(analysisResult, "emr_draft"), "emr_content"),
+		pickMap(pickMap(analysisDisplay, "emr_draft"), "emr_content"),
+	)
+
+	if resp.SeguePercent == nil {
+		resp.SeguePercent = pickFloatPtr(
+			pickFloat(analysisResult, "segue_percent"),
+			pickFloat(analysisResult, "segue_score"),
+			pickFloat(analysisResult, "communication_score"),
+			pickFloat(pickMap(analysisResult, "segue"), "overall_score"),
+			pickFloat(pickMap(analysisResult, "segue"), "segue_percent"),
+			pickFloat(analysisDisplay, "segue_percent"),
+			pickFloat(analysisDisplay, "segue_score"),
+			pickFloat(pickMap(analysisDisplay, "segue_scores"), "overall"),
+		)
+	}
+	if resp.SegueScore == nil {
+		resp.SegueScore = resp.SeguePercent
+	}
+	if resp.CriticalGap == nil {
+		resp.CriticalGap = pickBoolPtr(
+			pickBool(analysisResult, "critical_gap"),
+			pickBool(analysisSummary, "critical_gap"),
+			pickBool(analysisDisplay, "critical_gap"),
+		)
+	}
+
+	visitOutcomeStatus := pickStringPtr(
+		pickNestedStatus(analysisResult, "visit_outcome"),
+		pickNestedStatus(analysisResultBusiness, "visit_outcome"),
+		pickNestedStatus(analysisSummary, "visit_outcome"),
+		pickNestedStatus(analysisSummaryBusiness, "visit_outcome"),
+		pickNestedStatus(analysisDisplay, "visit_outcome"),
+		pickNestedStatus(analysisDisplayBusiness, "visit_outcome"),
+		pickString(analysisResult, "visit_outcome_status"),
+		pickString(analysisResult, "visit_outcome"),
+		pickString(analysisResult, "decision_status"),
+		pickString(analysisSummary, "visit_outcome_status"),
+		pickString(analysisSummary, "visit_outcome"),
+		pickString(analysisDisplay, "visit_outcome_status"),
+		pickString(analysisDisplay, "visit_outcome"),
+	)
+	resp.VisitOutcomeStatus = visitOutcomeStatus
+	if resp.VisitOutcome == nil {
+		resp.VisitOutcome = visitOutcomeStatus
+	}
+
+	resp.DecisionStatus = pickStringPtr(
+		pickString(analysisResult, "decision_status"),
+		pickString(analysisSummary, "decision_status"),
+		pickString(analysisDisplay, "decision_status"),
+	)
+	resp.SoapSubjectiveSummary = pickStringPtr(
+		pickString(analysisResult, "subjective_summary"),
+		pickString(analysisResult, "soap_subjective_summary"),
+		pickString(analysisResult, "summary"),
+		pickString(analysisSummary, "subjective_summary"),
+		pickString(analysisDisplay, "subjective_summary"),
+	)
+	resp.ChiefComplaint = pickStringPtr(
+		pickString(analysisResult, "chief_complaint"),
+		pickString(emrContent, "chief_complaint"),
+		pickString(pickMap(analysisResult, "consultation_record"), "chief_complaint"),
+		pickString(pickMap(analysisResult, "emr_draft"), "chief_complaint"),
+		pickString(pickMap(pickMap(analysisResult, "emr_draft"), "emr_content"), "chief_complaint"),
+		pickString(pickMap(pickMap(analysisDisplay, "emr_draft"), "emr_content"), "chief_complaint"),
+		pickString(pickMap(resp.EMRDraft, "emr_content"), "chief_complaint"),
+	)
+	resp.Diagnosis = pickStringPtr(
+		pickString(analysisResult, "diagnosis"),
+		pickString(emrContent, "diagnosis"),
+		pickString(pickMap(analysisResult, "consultation_record"), "diagnosis"),
+	)
+	resp.CurrentState = pickStringPtr(
+		pickString(analysisSummary, "current_state"),
+		pickString(analysisResult, "current_state"),
+		pickString(pickMap(analysisResult, "business"), "current_state"),
+	)
+
+	if resp.RouteReview == nil {
+		resp.RouteReview = pickMap(analysisResult, "route_review")
+		if resp.RouteReview == nil {
+			resp.RouteReview = pickMap(analysisDisplay, "route_review")
+		}
+	}
+	resp.RouteReviewRequired = pickBoolPtr(
+		pickBool(resp.RouteReview, "required"),
+		pickBool(resp.RouteReview, "route_review_required"),
+		pickBool(analysisResult, "route_review_required"),
+		pickBool(analysisSummary, "route_review_required"),
+	)
+	resp.RouteReviewReason = pickStringPtr(
+		pickString(resp.RouteReview, "reason"),
+		pickString(resp.RouteReview, "route_review_reason"),
+		pickString(analysisResult, "route_review_reason"),
+		pickString(analysisSummary, "route_review_reason"),
+	)
+	resp.RouteAutoDecision = pickStringPtr(
+		pickString(resp.RouteReview, "auto_decision"),
+		pickString(resp.RouteReview, "route_auto_decision"),
+		pickString(analysisResult, "route_auto_decision"),
+		pickString(analysisSummary, "route_auto_decision"),
+	)
+	resp.RouteReviewStatus = pickStringPtr(
+		pickString(resp.RouteReview, "status"),
+		pickString(resp.RouteReview, "route_review_status"),
+		pickString(analysisResult, "route_review_status"),
+		pickString(analysisSummary, "route_review_status"),
+	)
+	if resp.RouteReviewRequired == nil {
+		resp.RouteReviewRequired = boolPtr(false)
+	}
+	if resp.RouteReviewReason == nil {
+		resp.RouteReviewReason = literalStringPtr("")
+	}
+	if resp.RouteAutoDecision == nil {
+		resp.RouteAutoDecision = literalStringPtr("")
+	}
+	if resp.RouteReviewStatus == nil {
+		resp.RouteReviewStatus = literalStringPtr("pending")
+	}
+
+	if len(resp.ContentSeeds) == 0 {
+		resp.ContentSeeds = toMapSlice(firstNonEmptyArray(
+			pickArray(analysisResult, "content_seeds"),
+			pickArray(analysisResultDoctorContentGen, "content_seeds"),
+			pickArray(analysisResultRawDoctorContentGen, "content_seeds"),
+			pickArray(analysisSummary, "content_seeds"),
+			pickArray(analysisDisplay, "content_seeds"),
+		))
+	}
+
+	if len(resp.ContentSeeds) > 0 {
+		types := make([]string, 0, len(resp.ContentSeeds))
+		seen := map[string]struct{}{}
+		for _, seed := range resp.ContentSeeds {
+			if seedType := strings.TrimSpace(pickString(seed, "seed_type")); seedType != "" {
+				if _, ok := seen[seedType]; !ok {
+					seen[seedType] = struct{}{}
+					types = append(types, seedType)
+				}
+			}
+		}
+		resp.ContentSeedsCount = len(resp.ContentSeeds)
+		resp.ContentSeedsTypes = types
+	} else if resp.ContentSeedsTypes == nil {
+		resp.ContentSeedsTypes = []string{}
+	}
+
+	if resp.EMRStatus == nil {
+		if draft := firstNonNilMap(resp.EMRDraft, pickMap(analysisDisplay, "emr_draft"), pickMap(analysisResult, "emr_draft")); draft != nil {
+			if confirmed := pickBool(draft, "is_confirmed"); confirmed != nil {
+				if *confirmed {
+					resp.EMRStatus = pickStringPtr("confirmed")
+				} else {
+					resp.EMRStatus = pickStringPtr("draft")
+				}
+			}
+		}
+	}
+	if resp.EMRStatus == nil {
+		resp.EMRStatus = pickStringPtr(
+			pickString(analysisDisplay, "emr_status"),
+			pickString(analysisResult, "emr_status"),
+		)
+	}
+}
+
+func firstNonNilMap(candidates ...map[string]interface{}) map[string]interface{} {
+	for _, candidate := range candidates {
+		if candidate != nil {
+			return candidate
+		}
+	}
+	return nil
 }
 
 func pickMap(source map[string]interface{}, key string) map[string]interface{} {
@@ -840,6 +1125,15 @@ func (s *Service) loadRawTranscriptionSegments(ctx context.Context, recordingID 
 	return decodeSegmentsJSON(raw), nil
 }
 
+func (s *Service) loadCleanedTranscriptionSegments(ctx context.Context, recordingID int64) ([]map[string]interface{}, error) {
+	var raw interface{}
+	err := s.store.pool.QueryRow(ctx, `SELECT cleaned_transcription FROM recordings WHERE id = $1`, recordingID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSegmentsJSON(raw), nil
+}
+
 func decodeSegmentsJSON(raw interface{}) []map[string]interface{} {
 	decoded := decodeNestedJSONValue(raw, 0)
 	switch value := decoded.(type) {
@@ -974,10 +1268,24 @@ func pickString(source map[string]interface{}, key string) string {
 	if !ok || raw == nil {
 		return ""
 	}
-	if v, ok := raw.(string); ok {
+	switch v := raw.(type) {
+	case string:
 		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, bool:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	default:
+		return ""
 	}
-	return fmt.Sprintf("%v", raw)
+}
+
+func literalStringPtr(v string) *string {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func pickStringPtr(values ...string) *string {
