@@ -149,12 +149,304 @@ func (s *Service) CreateRecording(ctx context.Context, req CreateRecordingReques
 
 // UpdateRecording updates a medical recording
 func (s *Service) UpdateRecording(ctx context.Context, id int64, req UpdateRecordingRequest) (*RecordingResponse, error) {
+	before, err := s.store.GetRecordingByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
 	recording, err := s.store.UpdateRecording(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
 
+	if req.CustomerID != nil && recording.CustomerID != nil && customerChanged(before.CustomerID, recording.CustomerID) {
+		_ = s.backfillEMRDraftCustomerID(ctx, id, *recording.CustomerID)
+		_ = s.dispatchMedicalFollowUpTasksIfPossible(ctx, id, "manual_link")
+		if refreshed, refreshErr := s.store.GetRecordingByID(ctx, id); refreshErr == nil {
+			recording = refreshed
+		}
+	}
+
 	return toRecordingResponse(recording), nil
+}
+
+func customerChanged(before *int64, after *int64) bool {
+	if before == nil && after == nil {
+		return false
+	}
+	if before == nil || after == nil {
+		return true
+	}
+	return *before != *after
+}
+
+func (s *Service) backfillEMRDraftCustomerID(ctx context.Context, recordingID, customerID int64) error {
+	_, err := s.store.pool.Exec(ctx, `
+		UPDATE recording_emr_drafts
+		SET customer_id = $1
+		WHERE recording_id = $2 AND customer_id IS NULL
+	`, customerID, recordingID)
+	return err
+}
+
+func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, recordingID int64, triggerSource string) error {
+	rec, err := s.store.GetRecordingByID(ctx, recordingID)
+	if err != nil {
+		return err
+	}
+
+	if !isMedicalRecording(rec.AnalysisResult) {
+		return s.persistFollowupDispatch(ctx, rec, map[string]interface{}{
+			"eligible":       false,
+			"reasons":        []string{"NON_MEDICAL_RECORDING"},
+			"created_count":  0,
+			"trigger_source": triggerSource,
+			"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	followUpTasks := extractFollowUpTasks(rec.AnalysisResult)
+	if len(followUpTasks) == 0 {
+		return s.persistFollowupDispatch(ctx, rec, map[string]interface{}{
+			"eligible":       false,
+			"reasons":        []string{"NO_FOLLOWUP_TASKS"},
+			"created_count":  0,
+			"trigger_source": triggerSource,
+			"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	if rec.CustomerID == nil || *rec.CustomerID <= 0 {
+		return s.persistFollowupDispatch(ctx, rec, map[string]interface{}{
+			"eligible":       false,
+			"reasons":        []string{"MISSING_CUSTOMER"},
+			"created_count":  0,
+			"trigger_source": triggerSource,
+			"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	var customerName string
+	var customerPhone string
+	customerQueryErr := s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(name, ''), COALESCE(phone, '')
+		FROM customers
+		WHERE id = $1
+	`, *rec.CustomerID).Scan(&customerName, &customerPhone)
+	if customerQueryErr != nil {
+		return s.persistFollowupDispatch(ctx, rec, map[string]interface{}{
+			"eligible":       false,
+			"reasons":        []string{"MISSING_CUSTOMER"},
+			"created_count":  0,
+			"trigger_source": triggerSource,
+			"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	var existingCount int
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM recording_tasks
+		WHERE tenant_id = $1 AND recording_id = $2
+	`, rec.TenantID, rec.ID).Scan(&existingCount); err != nil {
+		return err
+	}
+
+	createdCount := 0
+	for _, task := range followUpTasks {
+		title := firstNonEmptyText(task["title"], task["name"], task["action"])
+		if title == "" {
+			continue
+		}
+
+		var duplicateCount int
+		if err := s.store.pool.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			  AND recording_id = $2
+			  AND source_type = 'follow_up'
+			  AND title = $3
+		`, rec.TenantID, rec.ID, title).Scan(&duplicateCount); err != nil {
+			return err
+		}
+		if duplicateCount > 0 {
+			continue
+		}
+
+		description := firstNonEmptyText(task["description"], task["reason"], task["note"])
+		script := firstNonEmptyText(task["script"], task["call_script"])
+		channel := firstNonEmptyText(task["channel"])
+		priority := normalizeTaskPriority(firstNonEmptyText(task["priority"]))
+		contactReason := description
+		if contactReason == "" {
+			contactReason = title
+		}
+		timingHours := toPositiveInt(task["timing_hours"])
+		if timingHours <= 0 {
+			timingHours = 24
+		}
+		dueAt := time.Now().Add(time.Duration(timingHours) * time.Hour)
+
+		_, err := s.store.pool.Exec(ctx, `
+			INSERT INTO recording_tasks (
+				tenant_id,
+				recording_id,
+				customer_id,
+				customer_name,
+				customer_phone,
+				title,
+				description,
+				priority,
+				script,
+				contact_reason,
+				status,
+				source_type,
+				source_detail,
+				due_at,
+				created_at,
+				updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), 'pending', 'follow_up', NULLIF($11, ''), $12, NOW(), NOW())
+		`, rec.TenantID, rec.ID, *rec.CustomerID, customerName, customerPhone, title, description, priority, script, contactReason, channel, dueAt)
+		if err != nil {
+			return err
+		}
+		createdCount++
+	}
+
+	var totalCount int
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM recording_tasks
+		WHERE tenant_id = $1 AND recording_id = $2
+	`, rec.TenantID, rec.ID).Scan(&totalCount); err != nil {
+		return err
+	}
+
+	alreadyDispatched := createdCount == 0 && existingCount > 0 && totalCount >= existingCount
+	eligible := createdCount > 0 || alreadyDispatched
+	reasons := []string{}
+	if !eligible {
+		reasons = []string{"NO_TASKS_CREATED"}
+	}
+
+	return s.persistFollowupDispatch(ctx, rec, map[string]interface{}{
+		"eligible":       eligible,
+		"reasons":        reasons,
+		"created_count":  createdCount,
+		"existing_count": totalCount,
+		"trigger_source": triggerSource,
+		"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func isMedicalRecording(analysisResult map[string]interface{}) bool {
+	if analysisResult == nil {
+		return false
+	}
+	if b := pickBool(analysisResult, "is_medical_consultation"); b != nil && *b {
+		return true
+	}
+	if b := pickBool(pickMap(analysisResult, "doctor_routing"), "is_medical_consultation"); b != nil && *b {
+		return true
+	}
+	role := strings.ToLower(firstNonEmptyText(analysisResult["role"]))
+	return role == "doctor" || role == "medical"
+}
+
+func extractFollowUpTasks(analysisResult map[string]interface{}) []map[string]interface{} {
+	if analysisResult == nil {
+		return nil
+	}
+	candidates := []interface{}{
+		analysisResult["follow_up_tasks"],
+		pickMap(analysisResult, "analysis_summary")["follow_up_tasks"],
+		pickMap(pickMap(analysisResult, "doctor_segue_narrative"), "final")["follow_up_tasks"],
+	}
+	for _, candidate := range candidates {
+		items := toMapSliceFromUnknown(candidate)
+		if len(items) > 0 {
+			return items
+		}
+	}
+	return nil
+}
+
+func toMapSliceFromUnknown(raw interface{}) []map[string]interface{} {
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	case []map[string]interface{}:
+		return v
+	default:
+		return nil
+	}
+}
+
+func normalizeTaskPriority(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "high", "urgent":
+		return "high"
+	case "low":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func toPositiveInt(raw interface{}) int {
+	switch v := raw.(type) {
+	case int:
+		if v > 0 {
+			return v
+		}
+	case int64:
+		if v > 0 {
+			return int(v)
+		}
+	case float64:
+		if v > 0 {
+			return int(v)
+		}
+	case float32:
+		if v > 0 {
+			return int(v)
+		}
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0
+		}
+		if parsed, err := strconv.Atoi(trimmed); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func (s *Service) persistFollowupDispatch(ctx context.Context, rec *MedicalRecording, dispatch map[string]interface{}) error {
+	analysis := map[string]interface{}{}
+	if rec.AnalysisResult != nil {
+		analysis = map[string]interface{}(rec.AnalysisResult)
+	}
+	analysis["followup_dispatch"] = dispatch
+	payload, err := json.Marshal(analysis)
+	if err != nil {
+		return err
+	}
+	_, err = s.store.pool.Exec(ctx, `
+		UPDATE recordings
+		SET analysis_result = $1::jsonb, updated_at = NOW()
+		WHERE id = $2
+	`, payload, rec.ID)
+	return err
 }
 
 // DeleteRecording deletes a medical recording
