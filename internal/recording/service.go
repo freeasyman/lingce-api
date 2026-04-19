@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -161,6 +162,7 @@ func (s *Service) UpdateRecording(ctx context.Context, id int64, req UpdateRecor
 
 	if req.CustomerID != nil && recording.CustomerID != nil && customerChanged(before.CustomerID, recording.CustomerID) {
 		_ = s.backfillEMRDraftCustomerID(ctx, id, *recording.CustomerID)
+		_ = s.rebindOpenTasksCustomer(ctx, id, *recording.CustomerID)
 		_ = s.dispatchMedicalFollowUpTasksIfPossible(ctx, id, "manual_link")
 		if refreshed, refreshErr := s.store.GetRecordingByID(ctx, id); refreshErr == nil {
 			recording = refreshed
@@ -186,6 +188,30 @@ func (s *Service) backfillEMRDraftCustomerID(ctx context.Context, recordingID, c
 		SET customer_id = $1
 		WHERE recording_id = $2 AND customer_id IS NULL
 	`, customerID, recordingID)
+	return err
+}
+
+func (s *Service) rebindOpenTasksCustomer(ctx context.Context, recordingID, customerID int64) error {
+	var customerName string
+	var customerPhone string
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(name, ''), COALESCE(phone, '')
+		FROM customers
+		WHERE id = $1
+	`, customerID).Scan(&customerName, &customerPhone); err != nil {
+		return err
+	}
+
+	_, err := s.store.pool.Exec(ctx, `
+		UPDATE recording_tasks
+		SET customer_id = $1,
+			customer_name = $2,
+			customer_phone = $3,
+			updated_at = NOW()
+		WHERE recording_id = $4
+		  AND status IN ('pending', 'assigned')
+		  AND COALESCE(source_type, '') IN ('follow_up', 'ai')
+	`, customerID, customerName, customerPhone, recordingID)
 	return err
 }
 
@@ -253,6 +279,7 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 	}
 
 	createdCount := 0
+	assigneeID := s.resolveRecordingTaskAssignee(ctx, rec.TenantID, rec.EmployeeID)
 	for _, task := range followUpTasks {
 		title := firstNonEmptyText(task["title"], task["name"], task["action"])
 		if title == "" {
@@ -300,6 +327,7 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 				priority,
 				script,
 				contact_reason,
+				assigned_to,
 				status,
 				source_type,
 				source_detail,
@@ -307,8 +335,8 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 				created_at,
 				updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), 'pending', 'follow_up', NULLIF($11, ''), $12, NOW(), NOW())
-		`, rec.TenantID, rec.ID, *rec.CustomerID, customerName, customerPhone, title, description, priority, script, contactReason, channel, dueAt)
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), $11, 'pending', 'follow_up', NULLIF($12, ''), $13, NOW(), NOW())
+		`, rec.TenantID, rec.ID, *rec.CustomerID, customerName, customerPhone, title, description, priority, script, contactReason, assigneeID, channel, dueAt)
 		if err != nil {
 			return err
 		}
@@ -339,6 +367,37 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 		"trigger_source": triggerSource,
 		"dispatched_at":  time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s *Service) resolveRecordingTaskAssignee(ctx context.Context, tenantID, ownerEmployeeID int64) *int64 {
+	if tenantID <= 0 || ownerEmployeeID <= 0 {
+		return nil
+	}
+
+	var assignee int64
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT ep.partner_employee_id
+		FROM employee_partnerships ep
+		INNER JOIN employees e
+		  ON e.id = ep.partner_employee_id
+		 AND e.tenant_id = ep.tenant_id
+		 AND COALESCE(e.is_active, true) = true
+		WHERE ep.tenant_id = $1
+		  AND ep.primary_employee_id = $2
+		  AND COALESCE(ep.is_active, true) = true
+		ORDER BY COALESCE(ep.is_primary, false) DESC, ep.id DESC
+		LIMIT 1
+	`, tenantID, ownerEmployeeID).Scan(&assignee)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return nil
+	}
+	if assignee <= 0 {
+		return nil
+	}
+	return &assignee
 }
 
 func isMedicalRecording(analysisResult map[string]interface{}) bool {
