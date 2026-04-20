@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1767,8 +1767,11 @@ func (s *Service) ListRecordingTasks(ctx context.Context, req TaskListRequest) (
 	if err := s.enrichTaskListResponse(ctx, responses); err != nil {
 		return nil, 0, err
 	}
-	for _, item := range responses {
-		compactTaskListItem(item)
+	shouldCompact := req.RecordingID == nil
+	if shouldCompact {
+		for _, item := range responses {
+			compactTaskListItem(item)
+		}
 	}
 
 	return responses, total, nil
@@ -1948,12 +1951,6 @@ func (s *Service) triggerWorkerJob(ctx context.Context, id int64, jobType string
 		JobType:     jobType,
 		Force:       force,
 	})
-	if err != nil {
-		return "", err
-	}
-
-	status := StatusProcessing
-	_, err = s.store.UpdateRecording(ctx, id, UpdateRecordingRequest{Status: &status})
 	if err != nil {
 		return "", err
 	}
@@ -2229,77 +2226,892 @@ func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, period stri
 }
 
 // GetDailyReport retrieves daily report
-func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, date string) (*DailyReportResponse, error) {
-	stats, err := s.store.GetStatsOverview(ctx, tenantID, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	top, err := s.GetDoctorAbilityRanking(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if len(top) > 5 {
-		top = top[:5]
-	}
-	reportDate := date
+func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, dateTo, date string) (*DailyReportResponse, error) {
+	rangeClause, rangeArgs := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "")
+	rangeClauseR, rangeArgsR := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "r")
+	args := append([]interface{}{tenantID}, rangeArgs...)
+
+	reportDate := strings.TrimSpace(date)
 	if reportDate == "" {
 		reportDate = time.Now().Format("2006-01-02")
 	}
-	return &DailyReportResponse{
+	if strings.TrimSpace(dateTo) != "" {
+		reportDate = strings.TrimSpace(dateTo)
+	}
+
+	var (
+		confirmedCount int64
+		dealCount      int64
+		totalAmount    float64
+		totalRecordings int64
+		activeEmployees int64
+	)
+	overviewQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) FILTER (WHERE confirmed_deal_status IS NOT NULL) AS confirmed_count,
+			COUNT(*) FILTER (WHERE confirmed_deal_status = '成交了') AS deal_count,
+			COALESCE(SUM(converted_amount) FILTER (WHERE confirmed_deal_status = '成交了'), 0) AS total_amount,
+			COUNT(*) AS total_recordings,
+			COUNT(DISTINCT employee_id) AS active_employees
+		FROM recordings
+		WHERE tenant_id = $1 %s
+	`, rangeClause)
+	if err := s.store.pool.QueryRow(ctx, overviewQuery, args...).Scan(
+		&confirmedCount, &dealCount, &totalAmount, &totalRecordings, &activeEmployees,
+	); err != nil {
+		return nil, fmt.Errorf("failed to query dashboard overview: %w", err)
+	}
+
+	dealRate := safeRate(dealCount, confirmedCount)
+	avgDealAmount := 0.0
+	if dealCount > 0 {
+		avgDealAmount = roundFloat(totalAmount/float64(dealCount), 2)
+	}
+
+	// 跟进回收率（30天）
+	recoveryQuery := fmt.Sprintf(`
+		WITH follow_customers AS (
+			SELECT DISTINCT r.customer_id, MIN(rt.created_at) AS first_task_at
+			FROM recordings r
+			JOIN recording_tasks rt ON rt.recording_id = r.id
+			WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+			  AND r.customer_id IS NOT NULL
+			  AND r.tenant_id = $1 %s
+			GROUP BY r.customer_id
+		),
+		recovered_customers AS (
+			SELECT DISTINCT fc.customer_id
+			FROM follow_customers fc
+			JOIN recordings r2 ON r2.customer_id = fc.customer_id
+			WHERE r2.confirmed_deal_status = '成交了'
+			  AND COALESCE(r2.recorded_at, r2.created_at)
+			      BETWEEN fc.first_task_at AND fc.first_task_at + INTERVAL '30 days'
+		)
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE rc.customer_id IS NOT NULL) AS recovered
+		FROM follow_customers fc
+		LEFT JOIN recovered_customers rc ON rc.customer_id = fc.customer_id
+	`, rangeClauseR)
+	var followTotal int64
+	var followRecovered int64
+	if err := s.store.pool.QueryRow(ctx, recoveryQuery, append([]interface{}{tenantID}, rangeArgsR...)...).Scan(&followTotal, &followRecovered); err != nil {
+		return nil, fmt.Errorf("failed to query dashboard recovery: %w", err)
+	}
+	var recoveryRate *float64
+	if followTotal > 0 {
+		v := roundFloat(float64(followRecovered)/float64(followTotal)*100, 1)
+		recoveryRate = &v
+	}
+
+	// 跟进管线（当前）
+	var followingCount, active7dCount, overdueCount int64
+	pipelineQuery := `
+		WITH task_latest AS (
+			SELECT recording_id, MAX(updated_at) AS last_task_action_at
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			GROUP BY recording_id
+		),
+		follow_pipeline AS (
+			SELECT r.customer_id,
+			       MAX(COALESCE(r.recorded_at, r.created_at)) AS last_recording_at,
+			       MAX(tl.last_task_action_at) AS last_task_action_at
+			FROM recordings r
+			JOIN task_latest tl ON tl.recording_id = r.id
+			WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+			  AND r.customer_id IS NOT NULL
+			  AND r.tenant_id = $1
+			GROUP BY r.customer_id
+		)
+		SELECT
+			COUNT(*) AS following_count,
+			COUNT(*) FILTER (
+				WHERE GREATEST(last_recording_at, last_task_action_at) >= NOW() - INTERVAL '7 days'
+			) AS active_7d_count,
+			COUNT(*) FILTER (
+				WHERE GREATEST(last_recording_at, last_task_action_at) < NOW() - INTERVAL '7 days'
+			) AS overdue_count
+		FROM follow_pipeline
+	`
+	if err := s.store.pool.QueryRow(ctx, pipelineQuery, tenantID).Scan(&followingCount, &active7dCount, &overdueCount); err != nil {
+		return nil, fmt.Errorf("failed to query dashboard pipeline: %w", err)
+	}
+
+	// 月度目标
+	var targetNullable *float64
+	targetQuery := `SELECT monthly_revenue_target::float8 FROM tenants WHERE id = $1`
+	if err := s.store.pool.QueryRow(ctx, targetQuery, tenantID).Scan(&targetNullable); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("failed to query dashboard target: %w", err)
+	}
+	var targetProgress *float64
+	if targetNullable != nil && *targetNullable > 0 {
+		v := roundFloat(totalAmount/(*targetNullable)*100, 1)
+		targetProgress = &v
+	}
+
+	// 环比
+	var momAmount, momDealRate, momAvgAmount *float64
+	if p := buildPrevRange(dateFrom, dateTo); p != nil {
+		prevQuery := `
+			SELECT
+				COUNT(*) FILTER (WHERE confirmed_deal_status IS NOT NULL) AS confirmed,
+				COUNT(*) FILTER (WHERE confirmed_deal_status = '成交了') AS deals,
+				COALESCE(SUM(converted_amount) FILTER (WHERE confirmed_deal_status = '成交了'), 0)::float8 AS amount
+			FROM recordings
+			WHERE tenant_id = $1
+			  AND COALESCE(recorded_at, created_at) >= $2
+			  AND COALESCE(recorded_at, created_at) < $3
+		`
+		var pvConfirmed, pvDeals int64
+		var pvAmount float64
+		if err := s.store.pool.QueryRow(ctx, prevQuery, tenantID, p.From, p.ToEx).Scan(&pvConfirmed, &pvDeals, &pvAmount); err != nil {
+			return nil, fmt.Errorf("failed to query dashboard mom: %w", err)
+		}
+		pvRate := safeRate(pvDeals, pvConfirmed)
+		pvAvg := 0.0
+		if pvDeals > 0 {
+			pvAvg = roundFloat(pvAmount/float64(pvDeals), 2)
+		}
+		a := roundFloat(totalAmount-pvAmount, 2)
+		r := roundFloat(dealRate-pvRate, 1)
+		av := roundFloat(avgDealAmount-pvAvg, 2)
+		momAmount = &a
+		momDealRate = &r
+		momAvgAmount = &av
+	}
+
+	// 员工排行
+	empQuery := fmt.Sprintf(`
+		WITH task_latest AS (
+			SELECT recording_id
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			GROUP BY recording_id
+		)
+		SELECT
+			e.id AS eid,
+			COALESCE(NULLIF(e.name, ''), '未知员工') AS name,
+			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status IS NOT NULL) AS consultations,
+			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status = '成交了') AS deals,
+			COALESCE(SUM(r.converted_amount) FILTER (WHERE r.confirmed_deal_status = '成交了'), 0)::float8 AS amount,
+			COUNT(DISTINCT r.customer_id) FILTER (
+				WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+				  AND r.customer_id IS NOT NULL
+				  AND tl.recording_id IS NOT NULL
+			) AS following_count
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN task_latest tl ON tl.recording_id = r.id
+		WHERE r.tenant_id = $1 %s
+		GROUP BY e.id, e.name
+		ORDER BY amount DESC
+		LIMIT 20
+	`, rangeClauseR)
+	empRows, err := s.store.pool.Query(ctx, empQuery, append([]interface{}{tenantID}, rangeArgsR...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dashboard employee ranking: %w", err)
+	}
+	defer empRows.Close()
+
+	overdueByEmployee := map[int64]int64{}
+	overdueQuery := `
+		WITH task_latest AS (
+			SELECT recording_id, MAX(updated_at) AS last_task_action_at
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			GROUP BY recording_id
+		),
+		emp_customer_last AS (
+			SELECT r.employee_id, r.customer_id,
+			       GREATEST(MAX(COALESCE(r.recorded_at, r.created_at)), MAX(tl.last_task_action_at)) AS last_action_at
+			FROM recordings r
+			JOIN task_latest tl ON tl.recording_id = r.id
+			WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+			  AND r.customer_id IS NOT NULL
+			  AND r.tenant_id = $1
+			GROUP BY r.employee_id, r.customer_id
+		)
+		SELECT employee_id, COUNT(*) AS overdue_count
+		FROM emp_customer_last
+		WHERE last_action_at < NOW() - INTERVAL '7 days'
+		GROUP BY employee_id
+	`
+	overdueRows, err := s.store.pool.Query(ctx, overdueQuery, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dashboard overdue by employee: %w", err)
+	}
+	for overdueRows.Next() {
+		var eid, cnt int64
+		if scanErr := overdueRows.Scan(&eid, &cnt); scanErr != nil {
+			overdueRows.Close()
+			return nil, fmt.Errorf("failed to scan dashboard overdue by employee: %w", scanErr)
+		}
+		overdueByEmployee[eid] = cnt
+	}
+	overdueRows.Close()
+
+	abilityMap, err := s.calcEmployeeAbilityScores(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	employeeRanking := make([]DashboardEmployeeRankingItem, 0, 20)
+	topPerformers := make([]DoctorAbilityRankingResponse, 0, 5)
+	rank := 1
+	for empRows.Next() {
+		var (
+			eid int64
+			name string
+			consultations int64
+			deals int64
+			amount float64
+			following int64
+		)
+		if scanErr := empRows.Scan(&eid, &name, &consultations, &deals, &amount, &following); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan dashboard employee ranking: %w", scanErr)
+		}
+		ability := abilityMap[eid]
+		item := DashboardEmployeeRankingItem{
+			EmployeeID: eid,
+			Name: name,
+			DealAmount: amount,
+			DealRate: safeRate(deals, consultations),
+			Consultations: consultations,
+			AvgDealAmount: 0,
+			FollowingCount: following,
+			OverdueCount: overdueByEmployee[eid],
+			AbilityScore: ability.Score,
+			AbilitySampleCount: ability.SampleCount,
+		}
+		if deals > 0 {
+			item.AvgDealAmount = roundFloat(amount/float64(deals), 2)
+		}
+		employeeRanking = append(employeeRanking, item)
+		if len(topPerformers) < 5 {
+			topPerformers = append(topPerformers, DoctorAbilityRankingResponse{
+				EmployeeID: eid,
+				EmployeeName: name,
+				RecordingCount: consultations,
+				AvgScore: item.DealRate,
+				Rank: rank,
+			})
+		}
+		rank++
+	}
+
+	// 趋势
+	trendQuery := fmt.Sprintf(`
+		SELECT
+			DATE(COALESCE(recorded_at, created_at)) AS day,
+			COALESCE(SUM(converted_amount) FILTER (WHERE confirmed_deal_status = '成交了'), 0)::float8 AS amount,
+			COUNT(*) FILTER (WHERE confirmed_deal_status IS NOT NULL) AS total,
+			COUNT(*) FILTER (WHERE confirmed_deal_status = '成交了') AS deals
+		FROM recordings
+		WHERE tenant_id = $1 %s
+		GROUP BY day
+		ORDER BY day
+	`, rangeClause)
+	trendRows, err := s.store.pool.Query(ctx, trendQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dashboard trend: %w", err)
+	}
+	amountTrend := make([]DashboardAmountTrendItem, 0, 32)
+	for trendRows.Next() {
+		var day time.Time
+		var amount float64
+		var total int64
+		var deals int64
+		if scanErr := trendRows.Scan(&day, &amount, &total, &deals); scanErr != nil {
+			trendRows.Close()
+			return nil, fmt.Errorf("failed to scan dashboard trend: %w", scanErr)
+		}
+		amountTrend = append(amountTrend, DashboardAmountTrendItem{
+			Date: day.Format("2006-01-02"),
+			Amount: amount,
+			DealRate: safeRate(deals, total),
+		})
+	}
+	trendRows.Close()
+
+	var insight *string
+	if len(employeeRanking) > 0 {
+		s := fmt.Sprintf("本期录音 %d 条，成交率 %.1f%%，建议优先关注低转化员工与超期跟进客户。", totalRecordings, dealRate)
+		insight = &s
+	}
+
+	resp := &DailyReportResponse{
 		Date:            reportDate,
-		TotalRecordings: stats.TotalRecordings,
-		TotalDuration:   stats.TotalDuration,
-		AvgScore:        safeRate(stats.CompletedRecordings, stats.TotalRecordings),
-		TopPerformers:   top,
+		TotalRecordings: totalRecordings,
+		TotalDuration:   0,
+		AvgScore:        dealRate,
+		TopPerformers:   topPerformers,
 		KeyMetrics: JSONObject{
-			"pending_tasks": stats.PendingRecordings,
-			"failed_tasks":  stats.FailedRecordings,
+			"pending_tasks":            followingCount,
+			"failed_tasks":             overdueCount,
+			"deal_count":               dealCount,
+			"total_amount":             totalAmount,
+			"deal_rate":                dealRate,
+			"avg_deal_amount":          avgDealAmount,
+			"confirmed_count":          confirmedCount,
+			"active_employees":         activeEmployees,
+			"following_count":          followingCount,
+			"active_7d_count":          active7dCount,
+			"overdue_count":            overdueCount,
+			"historical_recovery_rate": recoveryRate,
+			"target":                   targetNullable,
 		},
-	}, nil
+		Revenue: &DashboardRevenue{
+			TotalAmount: totalAmount,
+			DealCount: dealCount,
+			DealRate: dealRate,
+			AvgDealAmount: avgDealAmount,
+			ConfirmedCount: confirmedCount,
+			TotalRecordings: totalRecordings,
+			ActiveEmployees: activeEmployees,
+			Target: targetNullable,
+			TargetProgress: targetProgress,
+			MomAmount: momAmount,
+			MomDealRate: momDealRate,
+			MomAvgAmount: momAvgAmount,
+		},
+		Pipeline: &DashboardPipeline{
+			FollowingCount: followingCount,
+			Active7DCount: active7dCount,
+			OverdueCount: overdueCount,
+			AvgDealAmount: avgDealAmount,
+			HistoricalRecoveryRate: recoveryRate,
+		},
+		EmployeeRanking: employeeRanking,
+		AmountTrend: amountTrend,
+		Insight: insight,
+	}
+	return resp, nil
 }
 
 // GetDiagnosis retrieves diagnosis
-func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64) (*DiagnosisResponse, error) {
-	stats, err := s.store.GetStatsOverview(ctx, tenantID, nil, nil)
-	if err != nil {
-		return nil, err
+func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, dateTo string) (*DiagnosisResponse, error) {
+	rangeClause, rangeArgs := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "")
+	rangeClauseR, rangeArgsR := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "r")
+	args := append([]interface{}{tenantID}, rangeArgs...)
+
+	var recCount, analyzed int64
+	qualityQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE analysis_status = 'completed') AS analyzed
+		FROM recordings
+		WHERE tenant_id = $1 %s
+	`, rangeClause)
+	if err := s.store.pool.QueryRow(ctx, qualityQuery, args...).Scan(&recCount, &analyzed); err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis quality: %w", err)
 	}
-	score := safeRate(stats.CompletedRecordings, stats.TotalRecordings)
+	analysisRate := safeRate(analyzed, recCount)
+
+	var fc, fd, fn int64
+	var dealAmount float64
+	funnelQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) FILTER (WHERE confirmed_deal_status IS NOT NULL) AS confirmed,
+			COUNT(*) FILTER (WHERE confirmed_deal_status = '成交了') AS deal_count,
+			COALESCE(SUM(converted_amount) FILTER (WHERE confirmed_deal_status = '成交了'), 0)::float8 AS deal_amount,
+			COUNT(*) FILTER (WHERE confirmed_deal_status IN ('没成交','还在跟进')) AS not_closed
+		FROM recordings r
+		WHERE r.tenant_id = $1 AND r.confirmed_deal_status IS NOT NULL %s
+	`, rangeClauseR)
+	if err := s.store.pool.QueryRow(ctx, funnelQuery, append([]interface{}{tenantID}, rangeArgsR...)...).Scan(&fc, &fd, &dealAmount, &fn); err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis funnel: %w", err)
+	}
+
+	var followingCount int64
+	followingQuery := fmt.Sprintf(`
+		SELECT COUNT(DISTINCT r.customer_id) AS following_count
+		FROM recordings r
+		JOIN recording_tasks rt ON rt.recording_id = r.id
+		WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+		  AND r.customer_id IS NOT NULL
+		  AND r.tenant_id = $1 %s
+	`, rangeClauseR)
+	if err := s.store.pool.QueryRow(ctx, followingQuery, append([]interface{}{tenantID}, rangeArgsR...)...).Scan(&followingCount); err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis following count: %w", err)
+	}
+
+	rate := func(n, d int64) *float64 {
+		if d <= 0 {
+			return nil
+		}
+		v := roundFloat(float64(n)/float64(d)*100, 1)
+		return &v
+	}
+	dealAmountCopy := dealAmount
+	funnel := []DashboardFunnelStage{
+		{Key: "confirmed", Label: "已确认咨询", Count: fc},
+		{Key: "deal", Label: "成交", Count: fd, Amount: &dealAmountCopy, Rate: rate(fd, fc)},
+		{Key: "not_closed", Label: "未成交", Count: fn, Rate: rate(fn, fc)},
+		{Key: "following", Label: "正在跟进", Count: followingCount, Rate: rate(followingCount, fn)},
+	}
+
+	concernQuery := fmt.Sprintf(`
+		SELECT COALESCE(not_closed_reason, ai_not_closed_reason) AS reason, COUNT(*) AS cnt
+		FROM recordings
+		WHERE tenant_id = $1
+		  AND COALESCE(not_closed_reason, ai_not_closed_reason) IS NOT NULL
+		  AND confirmed_deal_status IN ('没成交','还在跟进') %s
+		GROUP BY COALESCE(not_closed_reason, ai_not_closed_reason)
+		ORDER BY cnt DESC
+	`, rangeClause)
+	concernRows, err := s.store.pool.Query(ctx, concernQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis concern distribution: %w", err)
+	}
+	labelMap := map[string]string{
+		"price": "价格顾虑", "need_think": "还要考虑", "family": "家人意见",
+		"trust": "信任不足", "plan_mismatch": "方案不满意", "timing": "时间安排",
+		"competitor": "在比较", "other": "其他",
+	}
+	type concernTmp struct{ reason string; cnt int64 }
+	tmpConcerns := make([]concernTmp, 0, 16)
+	var totalConcern int64
+	for concernRows.Next() {
+		var reason string
+		var cnt int64
+		if scanErr := concernRows.Scan(&reason, &cnt); scanErr != nil {
+			concernRows.Close()
+			return nil, fmt.Errorf("failed to scan concern distribution: %w", scanErr)
+		}
+		tmpConcerns = append(tmpConcerns, concernTmp{reason: reason, cnt: cnt})
+		totalConcern += cnt
+	}
+	concernRows.Close()
+	concernDist := make([]DashboardConcernDistribution, 0, len(tmpConcerns))
+	issues := make([]IssueCount, 0, len(tmpConcerns))
+	for _, c := range tmpConcerns {
+		pct := 0.0
+		if totalConcern > 0 {
+			pct = roundFloat(float64(c.cnt)/float64(totalConcern)*100, 1)
+		}
+		label := c.reason
+		if mapped, ok := labelMap[c.reason]; ok {
+			label = mapped
+		}
+		concernDist = append(concernDist, DashboardConcernDistribution{
+			Reason: c.reason,
+			Label: label,
+			Count: c.cnt,
+			Percentage: pct,
+		})
+		issues = append(issues, IssueCount{Issue: label, Count: c.cnt})
+	}
+
+	empQuery := fmt.Sprintf(`
+		WITH task_latest AS (
+			SELECT recording_id
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			GROUP BY recording_id
+		)
+		SELECT
+			e.id AS eid,
+			COALESCE(NULLIF(e.name, ''), '未知员工') AS name,
+			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status IS NOT NULL) AS consultations,
+			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status = '成交了') AS deal_count,
+			COALESCE(SUM(r.converted_amount) FILTER (WHERE r.confirmed_deal_status = '成交了'), 0)::float8 AS deal_amount,
+			COUNT(DISTINCT r.customer_id) FILTER (
+				WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+				  AND r.customer_id IS NOT NULL
+				  AND tl.recording_id IS NOT NULL
+			) AS following_count
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN task_latest tl ON tl.recording_id = r.id
+		WHERE r.tenant_id = $1 %s
+		GROUP BY e.id, e.name
+		ORDER BY deal_amount DESC
+		LIMIT 20
+	`, rangeClauseR)
+	empRows, err := s.store.pool.Query(ctx, empQuery, append([]interface{}{tenantID}, rangeArgsR...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis employee details: %w", err)
+	}
+	defer empRows.Close()
+
+	overdueByEmployee := map[int64]int64{}
+	overdueQuery := `
+		SELECT employee_id, COUNT(*) AS overdue_count
+		FROM (
+			SELECT r.employee_id, r.customer_id
+			FROM recordings r
+			JOIN recording_tasks rt ON rt.recording_id = r.id
+			WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+			  AND r.customer_id IS NOT NULL
+			  AND r.tenant_id = $1
+			GROUP BY r.employee_id, r.customer_id
+			HAVING GREATEST(MAX(COALESCE(r.recorded_at, r.created_at)), MAX(rt.updated_at)) < NOW() - INTERVAL '7 days'
+		) sub
+		GROUP BY employee_id
+	`
+	overdueRows, err := s.store.pool.Query(ctx, overdueQuery, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query diagnosis overdue employee: %w", err)
+	}
+	for overdueRows.Next() {
+		var eid, cnt int64
+		if scanErr := overdueRows.Scan(&eid, &cnt); scanErr != nil {
+			overdueRows.Close()
+			return nil, fmt.Errorf("failed to scan diagnosis overdue employee: %w", scanErr)
+		}
+		overdueByEmployee[eid] = cnt
+	}
+	overdueRows.Close()
+
+	employeeDiagnosis := make([]DashboardEmployeeDiagnosisRow, 0, 20)
+	for empRows.Next() {
+		var eid int64
+		var name string
+		var consultations, dealCount, following int64
+		var dealAmountRow float64
+		if scanErr := empRows.Scan(&eid, &name, &consultations, &dealCount, &dealAmountRow, &following); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan diagnosis employee detail: %w", scanErr)
+		}
+		avg := 0.0
+		if dealCount > 0 {
+			avg = roundFloat(dealAmountRow/float64(dealCount), 2)
+		}
+		employeeDiagnosis = append(employeeDiagnosis, DashboardEmployeeDiagnosisRow{
+			EmployeeID: eid,
+			Name: name,
+			Consultations: consultations,
+			DealCount: dealCount,
+			DealRate: safeRate(dealCount, consultations),
+			DealAmount: dealAmountRow,
+			AvgDealAmount: avg,
+			FollowingCount: following,
+			OverdueCount: overdueByEmployee[eid],
+		})
+	}
+
+	// 兼容旧字段
 	health := "poor"
 	switch {
-	case score >= 90:
+	case analysisRate >= 90:
 		health = "excellent"
-	case score >= 75:
+	case analysisRate >= 75:
 		health = "good"
-	case score >= 60:
+	case analysisRate >= 60:
 		health = "fair"
 	}
-	issues := []IssueCount{}
-	if stats.PendingRecordings > 0 {
-		issues = append(issues, IssueCount{Issue: "待处理录音", Count: stats.PendingRecordings})
+	trends := make([]TrendDataPoint, 0, 30)
+	for _, item := range employeeDiagnosis {
+		_ = item
 	}
-	if stats.FailedRecordings > 0 {
-		issues = append(issues, IssueCount{Issue: "失败录音", Count: stats.FailedRecordings})
+	trendRows, err := s.store.pool.Query(ctx, `
+		SELECT DATE(COALESCE(created_at, recorded_at)) AS dt,
+		       COUNT(*) AS total,
+		       COUNT(*) FILTER (WHERE analysis_status='completed') AS completed
+		FROM recordings
+		WHERE tenant_id = $1
+		  AND COALESCE(created_at, recorded_at) >= NOW() - INTERVAL '30 days'
+		GROUP BY dt
+		ORDER BY dt ASC
+	`, tenantID)
+	if err == nil {
+		for trendRows.Next() {
+			var dt time.Time
+			var total, completed int64
+			if scanErr := trendRows.Scan(&dt, &total, &completed); scanErr == nil {
+				trends = append(trends, TrendDataPoint{
+					Date: dt.Format("2006-01-02"),
+					AvgScore: safeRate(completed, total),
+					RecordingCount: total,
+				})
+			}
+		}
+		trendRows.Close()
 	}
-	trends, err := s.GetTeamTrends(ctx, tenantID, "daily")
-	if err != nil {
-		return nil, err
-	}
-	data := trends.Data
-	if len(data) > 7 {
-		data = data[len(data)-7:]
-	}
-	sort.Slice(data, func(i, j int) bool { return data[i].Date < data[j].Date })
 
 	return &DiagnosisResponse{
 		OverallHealth: health,
-		Issues:        issues,
-		Recommendations: []string{
-			"优先处理超时与失败任务",
-			"提升录音分析完成率",
+		Issues: issues,
+		Recommendations: []string{"优先处理超7天未跟进客户", "重点复盘未成交原因Top项"},
+		Trends: trends,
+		DataQuality: &DashboardDataQuality{
+			RecordingCount: recCount,
+			AnalysisSuccessRate: analysisRate,
 		},
-		Trends: data,
+		Funnel: funnel,
+		ConcernDist: concernDist,
+		EmployeeDetails: employeeDiagnosis,
 	}, nil
+}
+
+func (s *Service) GetDashboardFunnelDetail(ctx context.Context, tenantID int64, dateFrom, dateTo, stageKey string) (*DashboardFunnelDetailResponse, error) {
+	stageLabelMap := map[string]string{
+		"deal": "成交",
+		"not_closed": "未成交",
+		"following": "正在跟进",
+	}
+	stageConditionMap := map[string]string{
+		"deal": "r.confirmed_deal_status = '成交了'",
+		"not_closed": "r.confirmed_deal_status IN ('没成交','还在跟进')",
+		"following": "r.confirmed_deal_status IN ('没成交','还在跟进') AND EXISTS (SELECT 1 FROM recording_tasks rt WHERE rt.recording_id = r.id)",
+	}
+	cond, ok := stageConditionMap[stageKey]
+	if !ok {
+		return nil, fmt.Errorf("invalid stage_key")
+	}
+
+	rangeClauseR, rangeArgsR := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "r")
+	query := fmt.Sprintf(`
+		SELECT e.id AS eid, COALESCE(NULLIF(e.name,''), '未知员工') AS name, COUNT(DISTINCT r.id) AS cnt
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND %s %s
+		GROUP BY e.id, e.name
+		ORDER BY cnt DESC
+	`, cond, rangeClauseR)
+	rows, err := s.store.pool.Query(ctx, query, append([]interface{}{tenantID}, rangeArgsR...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query funnel detail: %w", err)
+	}
+	defer rows.Close()
+
+	overdueByEmployee := map[int64]int64{}
+	if stageKey == "following" {
+		rangeClause, rangeArgs := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "r")
+		overdueQuery := fmt.Sprintf(`
+			SELECT employee_id, COUNT(*) AS overdue_count
+			FROM (
+				SELECT r.employee_id, r.customer_id
+				FROM recordings r
+				JOIN recording_tasks rt ON rt.recording_id = r.id
+				WHERE r.confirmed_deal_status IN ('没成交', '还在跟进')
+				  AND r.customer_id IS NOT NULL
+				  AND r.tenant_id = $1 %s
+				GROUP BY r.employee_id, r.customer_id
+				HAVING GREATEST(MAX(COALESCE(r.recorded_at, r.created_at)), MAX(rt.updated_at)) < NOW() - INTERVAL '7 days'
+			) sub
+			GROUP BY employee_id
+		`, rangeClause)
+		overdueRows, qerr := s.store.pool.Query(ctx, overdueQuery, append([]interface{}{tenantID}, rangeArgs...)...)
+		if qerr == nil {
+			for overdueRows.Next() {
+				var eid, cnt int64
+				if scanErr := overdueRows.Scan(&eid, &cnt); scanErr == nil {
+					overdueByEmployee[eid] = cnt
+				}
+			}
+			overdueRows.Close()
+		}
+	}
+
+	byEmployee := make([]DashboardFunnelDetailByEmployee, 0, 32)
+	var totalCount int64
+	for rows.Next() {
+		var eid int64
+		var name string
+		var cnt int64
+		if scanErr := rows.Scan(&eid, &name, &cnt); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan funnel detail: %w", scanErr)
+		}
+		byEmployee = append(byEmployee, DashboardFunnelDetailByEmployee{
+			EmployeeID: eid,
+			Name: name,
+			Count: cnt,
+			OverdueCount: overdueByEmployee[eid],
+		})
+		totalCount += cnt
+	}
+
+	return &DashboardFunnelDetailResponse{
+		StageKey: stageKey,
+		StageLabel: stageLabelMap[stageKey],
+		TotalCount: totalCount,
+		ByEmployee: byEmployee,
+	}, nil
+}
+
+type abilityScoreAggregate struct {
+	Score       *float64
+	SampleCount int64
+}
+
+func (s *Service) calcEmployeeAbilityScores(ctx context.Context, tenantID int64) (map[int64]abilityScoreAggregate, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT employee_id, analysis_result
+		FROM recordings
+		WHERE tenant_id = $1
+		  AND analysis_status = 'completed'
+		  AND analysis_result IS NOT NULL
+		  AND COALESCE(recorded_at, created_at) >= NOW() - INTERVAL '30 days'
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ability scores: %w", err)
+	}
+	defer rows.Close()
+
+	weights := map[string]float64{
+		"开场建立权威": 0.10,
+		"需求探索": 0.20,
+		"问题放大": 0.15,
+		"专业呈现": 0.15,
+		"方案定制": 0.10,
+		"异议化解": 0.20,
+		"促成与收尾": 0.10,
+	}
+	stageByEmployee := map[int64]map[string][]float64{}
+	sampleByEmployee := map[int64]int64{}
+
+	for rows.Next() {
+		var employeeID int64
+		var resultData map[string]interface{}
+		if scanErr := rows.Scan(&employeeID, &resultData); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan ability score row: %w", scanErr)
+		}
+		qualityScore := pickMap(resultData, "quality_score")
+		stagesRaw := qualityScore["stages"]
+		stageList, ok := stagesRaw.([]interface{})
+		if !ok || len(stageList) == 0 {
+			continue
+		}
+		hasValid := false
+		for _, stageAny := range stageList {
+			stageMap, ok := stageAny.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			stageName := strings.TrimSpace(fmt.Sprintf("%v", stageMap["name"]))
+			if _, exists := weights[stageName]; !exists {
+				continue
+			}
+			score, ok := toFloat(stageMap["score"])
+			if !ok {
+				continue
+			}
+			if _, exists := stageByEmployee[employeeID]; !exists {
+				stageByEmployee[employeeID] = map[string][]float64{}
+			}
+			stageByEmployee[employeeID][stageName] = append(stageByEmployee[employeeID][stageName], score)
+			hasValid = true
+		}
+		if hasValid {
+			sampleByEmployee[employeeID]++
+		}
+	}
+
+	out := map[int64]abilityScoreAggregate{}
+	for employeeID, stageMap := range stageByEmployee {
+		var weightedSum float64
+		var weightTotal float64
+		for stageName, values := range stageMap {
+			if len(values) == 0 {
+				continue
+			}
+			var sum float64
+			for _, v := range values {
+				sum += v
+			}
+			avg := sum / float64(len(values))
+			w := weights[stageName]
+			weightedSum += avg * w
+			weightTotal += w
+		}
+		var scorePtr *float64
+		if weightTotal > 0 {
+			score := roundFloat(weightedSum/weightTotal, 2)
+			scorePtr = &score
+		}
+		out[employeeID] = abilityScoreAggregate{
+			Score: scorePtr,
+			SampleCount: sampleByEmployee[employeeID],
+		}
+	}
+	return out, nil
+}
+
+type dashboardPrevRange struct {
+	From string
+	ToEx string
+}
+
+func buildPrevRange(dateFrom, dateTo string) *dashboardPrevRange {
+	if strings.TrimSpace(dateFrom) == "" || strings.TrimSpace(dateTo) == "" {
+		return nil
+	}
+	start, err := time.Parse("2006-01-02", dateFrom)
+	if err != nil {
+		return nil
+	}
+	end, err := time.Parse("2006-01-02", dateTo)
+	if err != nil {
+		return nil
+	}
+	delta := end.Sub(start) + 24*time.Hour
+	prevFrom := start.Add(-delta)
+	prevTo := end.Add(-delta).Add(24 * time.Hour)
+	return &dashboardPrevRange{
+		From: prevFrom.Format("2006-01-02"),
+		ToEx: prevTo.Format("2006-01-02"),
+	}
+}
+
+func buildDashboardDateRangeSQL(dateFrom, dateTo string, startArg int, alias string) (string, []interface{}) {
+	col := "COALESCE(recorded_at, created_at)"
+	if strings.TrimSpace(alias) != "" {
+		col = fmt.Sprintf("COALESCE(%s.recorded_at, %s.created_at)", alias, alias)
+	}
+	parts := make([]string, 0, 2)
+	args := make([]interface{}, 0, 2)
+	arg := startArg
+	if strings.TrimSpace(dateFrom) != "" {
+		parts = append(parts, fmt.Sprintf("%s >= $%d", col, arg))
+		args = append(args, strings.TrimSpace(dateFrom))
+		arg++
+	}
+	if strings.TrimSpace(dateTo) != "" {
+		parts = append(parts, fmt.Sprintf("%s < $%d", col, arg))
+		if dt, err := time.Parse("2006-01-02", strings.TrimSpace(dateTo)); err == nil {
+			args = append(args, dt.Add(24*time.Hour).Format("2006-01-02"))
+		} else {
+			args = append(args, strings.TrimSpace(dateTo))
+		}
+		arg++
+	}
+	if len(parts) == 0 {
+		return "", args
+	}
+	return " AND " + strings.Join(parts, " AND "), args
+}
+
+func roundFloat(v float64, precision int) float64 {
+	if precision < 0 {
+		return v
+	}
+	p := math.Pow(10, float64(precision))
+	return math.Round(v*p) / p
+}
+
+func toFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case json.Number:
+		parsed, err := n.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func safeRate(numerator, denominator int64) float64 {

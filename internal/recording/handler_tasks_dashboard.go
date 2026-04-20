@@ -429,7 +429,9 @@ func (h *Handler) GetDailyReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date := r.URL.Query().Get("date")
-	resp, err := h.service.GetDailyReport(r.Context(), tenantID, date)
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+	resp, err := h.service.GetDailyReport(r.Context(), tenantID, dateFrom, dateTo, date)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -450,7 +452,9 @@ func (h *Handler) GetOperationsDiagnosis(w http.ResponseWriter, r *http.Request)
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetDiagnosis(r.Context(), tenantID)
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+	resp, err := h.service.GetDiagnosis(r.Context(), tenantID, dateFrom, dateTo)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -471,24 +475,24 @@ func (h *Handler) UpdateMonthlyTarget(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	if req.Month == "" || req.Target < 0 {
-		httputil.WriteBadRequest(w, "month and target are required")
-		return
-	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	cfg := JSONObject{
-		"month":  req.Month,
-		"target": req.Target,
+	target := req.Target
+	if req.MonthlyRevenueTarget != nil {
+		target = *req.MonthlyRevenueTarget
 	}
-	cfgBytes, _ := json.Marshal(cfg)
+	if target < 0 {
+		httputil.WriteBadRequest(w, "target must be >= 0")
+		return
+	}
 	if _, err := h.service.store.pool.Exec(r.Context(), `
-		INSERT INTO recording_institution_rule_configs (tenant_id, doctor_call2_mode, internal_notes, is_active, created_at, updated_at)
-		VALUES ($1, 'monthly_target', $2::text, true, NOW(), NOW())
-	`, tenantID, string(cfgBytes)); err != nil {
+		UPDATE tenants
+		SET monthly_revenue_target = $1, updated_at = NOW()
+		WHERE id = $2
+	`, target, tenantID); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -508,37 +512,26 @@ func (h *Handler) GetFunnelDetail(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	stats, err := h.service.store.GetStatsOverview(r.Context(), tenantID, nil, nil)
+	dateFrom := r.URL.Query().Get("date_from")
+	dateTo := r.URL.Query().Get("date_to")
+	stageKey := strings.TrimSpace(r.URL.Query().Get("stage_key"))
+
+	if stageKey != "" {
+		detail, derr := h.service.GetDashboardFunnelDetail(r.Context(), tenantID, dateFrom, dateTo, stageKey)
+		if derr != nil {
+			httputil.WriteBadRequest(w, derr.Error())
+			return
+		}
+		httputil.WriteSuccess(w, detail)
+		return
+	}
+
+	resp, err := h.service.GetDiagnosis(r.Context(), tenantID, dateFrom, dateTo)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	total := float64(stats.TotalRecordings)
-	if total == 0 {
-		httputil.WriteSuccess(w, []FunnelDetailResponse{})
-		return
-	}
-	items := []FunnelDetailResponse{
-		{
-			Stage:      "录音总量",
-			Count:      stats.TotalRecordings,
-			Percentage: 100,
-			DropRate:   0,
-		},
-		{
-			Stage:      "处理完成",
-			Count:      stats.CompletedRecordings,
-			Percentage: float64(stats.CompletedRecordings) / total * 100,
-			DropRate:   float64(stats.TotalRecordings-stats.CompletedRecordings) / total * 100,
-		},
-		{
-			Stage:      "处理失败",
-			Count:      stats.FailedRecordings,
-			Percentage: float64(stats.FailedRecordings) / total * 100,
-			DropRate:   float64(stats.FailedRecordings) / total * 100,
-		},
-	}
-	httputil.WriteSuccess(w, items)
+	httputil.WriteSuccess(w, resp.Funnel)
 }
 
 // Analysis Dashboard Handlers

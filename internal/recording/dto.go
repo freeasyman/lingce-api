@@ -489,6 +489,11 @@ type DailyReportResponse struct {
 	AvgScore        float64                        `json:"avg_score"`
 	TopPerformers   []DoctorAbilityRankingResponse `json:"top_performers"`
 	KeyMetrics      JSONObject                     `json:"key_metrics"`
+	Revenue         *DashboardRevenue              `json:"revenue,omitempty"`
+	Pipeline        *DashboardPipeline             `json:"pipeline,omitempty"`
+	EmployeeRanking []DashboardEmployeeRankingItem `json:"employee_ranking,omitempty"`
+	AmountTrend     []DashboardAmountTrendItem     `json:"amount_trend,omitempty"`
+	Insight         *string                        `json:"insight,omitempty"`
 }
 
 // DiagnosisResponse represents diagnosis
@@ -497,12 +502,18 @@ type DiagnosisResponse struct {
 	Issues          []IssueCount     `json:"issues"`
 	Recommendations []string         `json:"recommendations"`
 	Trends          []TrendDataPoint `json:"trends"`
+	DataQuality     *DashboardDataQuality           `json:"data_quality,omitempty"`
+	Funnel          []DashboardFunnelStage          `json:"funnel,omitempty"`
+	ConcernDist     []DashboardConcernDistribution  `json:"concern_distribution,omitempty"`
+	EmployeeDetails []DashboardEmployeeDiagnosisRow `json:"employee_diagnosis,omitempty"`
 }
 
 // UpdateTargetRequest represents the request for updating target
 type UpdateTargetRequest struct {
-	Month  string `json:"month"` // YYYY-MM
-	Target int64  `json:"target"`
+	Month                string   `json:"month"` // YYYY-MM
+	Target               float64  `json:"target"`
+	TenantID             *int64   `json:"tenant_id,omitempty"`
+	MonthlyRevenueTarget *float64 `json:"monthly_revenue_target,omitempty"`
 }
 
 // FunnelDetailResponse represents funnel detail
@@ -511,6 +522,94 @@ type FunnelDetailResponse struct {
 	Count      int64   `json:"count"`
 	Percentage float64 `json:"percentage"`
 	DropRate   float64 `json:"drop_rate"`
+}
+
+type DashboardRevenue struct {
+	TotalAmount    float64  `json:"total_amount"`
+	DealCount      int64    `json:"deal_count"`
+	DealRate       float64  `json:"deal_rate"`
+	AvgDealAmount  float64  `json:"avg_deal_amount"`
+	ConfirmedCount int64    `json:"confirmed_count"`
+	TotalRecordings int64   `json:"total_recordings"`
+	ActiveEmployees int64   `json:"active_employees"`
+	Target         *float64 `json:"target,omitempty"`
+	TargetProgress *float64 `json:"target_progress,omitempty"`
+	MomAmount      *float64 `json:"mom_amount,omitempty"`
+	MomDealRate    *float64 `json:"mom_deal_rate,omitempty"`
+	MomAvgAmount   *float64 `json:"mom_avg_amount,omitempty"`
+}
+
+type DashboardPipeline struct {
+	FollowingCount         int64    `json:"following_count"`
+	Active7DCount          int64    `json:"active_7d_count"`
+	OverdueCount           int64    `json:"overdue_count"`
+	AvgDealAmount          float64  `json:"avg_deal_amount"`
+	HistoricalRecoveryRate *float64 `json:"historical_recovery_rate,omitempty"`
+}
+
+type DashboardEmployeeRankingItem struct {
+	EmployeeID        int64    `json:"employee_id"`
+	Name              string   `json:"name"`
+	DealAmount        float64  `json:"deal_amount"`
+	DealRate          float64  `json:"deal_rate"`
+	Consultations     int64    `json:"consultations"`
+	AvgDealAmount     float64  `json:"avg_deal_amount"`
+	FollowingCount    int64    `json:"following_count"`
+	OverdueCount      int64    `json:"overdue_count"`
+	AbilityScore      *float64 `json:"ability_score,omitempty"`
+	AbilitySampleCount int64   `json:"ability_sample_count"`
+}
+
+type DashboardAmountTrendItem struct {
+	Date     string  `json:"date"`
+	Amount   float64 `json:"amount"`
+	DealRate float64 `json:"deal_rate"`
+}
+
+type DashboardDataQuality struct {
+	RecordingCount      int64   `json:"recording_count"`
+	AnalysisSuccessRate float64 `json:"analysis_success_rate"`
+}
+
+type DashboardFunnelStage struct {
+	Key    string   `json:"key"`
+	Label  string   `json:"label"`
+	Count  int64    `json:"count"`
+	Amount *float64 `json:"amount,omitempty"`
+	Rate   *float64 `json:"rate,omitempty"`
+}
+
+type DashboardConcernDistribution struct {
+	Reason     string  `json:"reason"`
+	Label      string  `json:"label"`
+	Count      int64   `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+type DashboardEmployeeDiagnosisRow struct {
+	EmployeeID     int64   `json:"employee_id"`
+	Name           string  `json:"name"`
+	Consultations  int64   `json:"consultations"`
+	DealCount      int64   `json:"deal_count"`
+	DealRate       float64 `json:"deal_rate"`
+	DealAmount     float64 `json:"deal_amount"`
+	AvgDealAmount  float64 `json:"avg_deal_amount"`
+	FollowingCount int64   `json:"following_count"`
+	OverdueCount   int64   `json:"overdue_count"`
+}
+
+type DashboardFunnelDetailByEmployee struct {
+	EmployeeID   int64  `json:"employee_id"`
+	Name         string `json:"name"`
+	Count        int64  `json:"count"`
+	OverdueCount int64  `json:"overdue_count"`
+}
+
+type DashboardFunnelDetailResponse struct {
+	StageKey   string                          `json:"stage_key"`
+	StageLabel string                          `json:"stage_label"`
+	TotalCount int64                           `json:"total_count"`
+	ByEmployee []DashboardFunnelDetailByEmployee `json:"by_employee"`
 }
 
 // Recording Prompt DTOs
