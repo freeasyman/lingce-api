@@ -131,6 +131,8 @@ func toEmployeeResponse(e *Employee) *EmployeeResponse {
 		Phone:          e.Phone,
 		Email:          e.Email,
 		DepartmentID:   e.DepartmentID,
+		RoleCode:       e.RoleCode,
+		Role:           e.RoleName,
 		SessionVersion: e.SessionVersion,
 		IsActive:       e.IsActive,
 		CreatedAt:      e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),

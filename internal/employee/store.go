@@ -98,6 +98,21 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		           ELSE full_name
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
+		       COALESCE((
+		           SELECT er.role_code
+		           FROM inst_employee_roles er
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_code,
+		       COALESCE((
+		           SELECT COALESCE(r.name_cn, er.role_code)
+		           FROM inst_employee_roles er
+		           LEFT JOIN inst_roles r ON r.code = er.role_code
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
@@ -129,6 +144,8 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 			&e.FullName,
 			&e.Phone,
 			&e.Email,
+			&e.RoleCode,
+			&e.RoleName,
 			&e.DepartmentID,
 			&e.SessionVersion,
 			&e.IsActive,
@@ -153,6 +170,21 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		           ELSE full_name
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
+		       COALESCE((
+		           SELECT er.role_code
+		           FROM inst_employee_roles er
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_code,
+		       COALESCE((
+		           SELECT COALESCE(r.name_cn, er.role_code)
+		           FROM inst_employee_roles er
+		           LEFT JOIN inst_roles r ON r.code = er.role_code
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
@@ -172,6 +204,8 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		&e.FullName,
 		&e.Phone,
 		&e.Email,
+		&e.RoleCode,
+		&e.RoleName,
 		&e.DepartmentID,
 		&e.SessionVersion,
 		&e.IsActive,
@@ -366,6 +400,21 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		           ELSE full_name
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
+		       COALESCE((
+		           SELECT er.role_code
+		           FROM inst_employee_roles er
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_code,
+		       COALESCE((
+		           SELECT COALESCE(r.name_cn, er.role_code)
+		           FROM inst_employee_roles er
+		           LEFT JOIN inst_roles r ON r.code = er.role_code
+		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           ORDER BY er.created_at DESC
+		           LIMIT 1
+		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
@@ -394,6 +443,8 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 			&e.FullName,
 			&e.Phone,
 			&e.Email,
+			&e.RoleCode,
+			&e.RoleName,
 			&e.DepartmentID,
 			&e.SessionVersion,
 			&e.IsActive,

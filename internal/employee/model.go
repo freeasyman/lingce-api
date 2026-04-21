@@ -12,6 +12,8 @@ type Employee struct {
 	Phone          string     `json:"phone"`
 	Email          string     `json:"email"`
 	DepartmentID   *int64     `json:"department_id,omitempty"`
+	RoleCode       string     `json:"role_code,omitempty"`
+	RoleName       string     `json:"role,omitempty"`
 	SessionVersion int        `json:"session_version"`
 	IsActive       bool       `json:"is_active"`
 	CreatedAt      time.Time  `json:"created_at"`
