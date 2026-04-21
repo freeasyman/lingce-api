@@ -426,7 +426,7 @@ func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *h
 		return
 	}
 
-	if err := h.service.AssignPermissionsToInstitutionRole(r.Context(), id, req); err != nil {
+	if err := h.service.AssignPermissionsToInstitutionRole(r.Context(), *tenantID, id, req); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -454,7 +454,7 @@ func (h *Handler) RemovePermissionsFromInstitutionRole(w http.ResponseWriter, r 
 		return
 	}
 
-	if err := h.service.RemovePermissionsFromInstitutionRole(r.Context(), id, req); err != nil {
+	if err := h.service.RemovePermissionsFromInstitutionRole(r.Context(), *tenantID, id, req); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -476,7 +476,7 @@ func (h *Handler) GetInstitutionRolePermissions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	permissions, err := h.service.GetInstitutionRolePermissions(r.Context(), id)
+	permissions, err := h.service.GetInstitutionRolePermissions(r.Context(), *tenantID, id)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

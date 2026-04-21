@@ -131,16 +131,22 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can create employees
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	var req CreateEmployeeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		if req.TenantID == 0 {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+	} else {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		req.TenantID = *claims.TenantID
 	}
 
 	employee, err := h.service.CreateEmployee(r.Context(), req)
@@ -160,16 +166,25 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can update employees
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		existing, err := h.service.GetEmployee(r.Context(), id)
+		if err != nil {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		if existing.TenantID != *claims.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
 	}
 
 	var req UpdateEmployeeRequest
@@ -229,16 +244,25 @@ func (h *Handler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can delete employees
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		existing, err := h.service.GetEmployee(r.Context(), id)
+		if err != nil {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		if existing.TenantID != *claims.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
 	}
 
 	if err := h.service.DeleteEmployee(r.Context(), id); err != nil {

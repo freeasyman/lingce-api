@@ -52,11 +52,10 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		conditions = append(conditions, fmt.Sprintf(`
 			EXISTS (
 				SELECT 1
-				FROM institution_employee_roles er
-				JOIN institution_roles r ON r.id = er.role_id
-				WHERE er.employee_id = employees.id
-				  AND r.deleted_at IS NULL
-				  AND r.code = $%d
+				FROM inst_employee_roles er
+				WHERE er.tenant_id = employees.tenant_id
+				  AND er.employee_id = employees.id
+				  AND lower(er.role_code) = lower($%d)
 			)
 		`, argIndex))
 		args = append(args, req.Role)
@@ -194,13 +193,18 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 // CreateEmployee creates a new employee
 func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, passwordHash, fullName, phone, email string, departmentID *int64) (*Employee, error) {
 	query := `
-		INSERT INTO employees (tenant_id, username, password_hash, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 0, true, NOW(), NOW())
-		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at, deleted_at
+		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, NOW(), NOW())
+		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version,
+		          CASE
+		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              ELSE false
+		          END AS is_active,
+		          created_at, updated_at, deleted_at
 	`
 
 	var e Employee
-	err := s.pool.QueryRow(ctx, query, tenantID, username, passwordHash, fullName, phone, email, departmentID).Scan(
+	err := s.pool.QueryRow(ctx, query, tenantID, username, passwordHash, fullName, fullName, phone, email, departmentID, "1").Scan(
 		&e.ID,
 		&e.TenantID,
 		&e.Username,
@@ -255,7 +259,11 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 
 	if req.IsActive != nil {
 		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", argIndex))
-		args = append(args, *req.IsActive)
+		if *req.IsActive {
+			args = append(args, "1")
+		} else {
+			args = append(args, "0")
+		}
 		argIndex++
 	}
 
@@ -270,7 +278,12 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		UPDATE employees
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at, deleted_at
+		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version,
+		          CASE
+		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              ELSE false
+		          END AS is_active,
+		          created_at, updated_at, deleted_at
 	`, strings.Join(setClauses, ", "), argIndex)
 
 	var e Employee

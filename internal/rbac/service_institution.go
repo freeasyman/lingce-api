@@ -230,18 +230,18 @@ func toInstitutionMenuResponse(m *InstitutionMenu) *InstitutionMenuResponse {
 // Institution Permission operations
 
 // AssignPermissionsToInstitutionRole assigns permissions to an institution role
-func (s *Service) AssignPermissionsToInstitutionRole(ctx context.Context, roleID int64, req AssignPermissionsRequest) error {
-	return s.store.AssignPermissionsToInstitutionRole(ctx, roleID, req.PermissionIDs)
+func (s *Service) AssignPermissionsToInstitutionRole(ctx context.Context, tenantID, roleID int64, req AssignPermissionsRequest) error {
+	return s.store.AssignPermissionsToInstitutionRole(ctx, tenantID, roleID, req.PermissionIDs)
 }
 
 // RemovePermissionsFromInstitutionRole removes permissions from an institution role
-func (s *Service) RemovePermissionsFromInstitutionRole(ctx context.Context, roleID int64, req AssignPermissionsRequest) error {
-	return s.store.RemovePermissionsFromInstitutionRole(ctx, roleID, req.PermissionIDs)
+func (s *Service) RemovePermissionsFromInstitutionRole(ctx context.Context, tenantID, roleID int64, req AssignPermissionsRequest) error {
+	return s.store.RemovePermissionsFromInstitutionRole(ctx, tenantID, roleID, req.PermissionIDs)
 }
 
 // GetInstitutionRolePermissions retrieves permissions for an institution role
-func (s *Service) GetInstitutionRolePermissions(ctx context.Context, roleID int64) ([]*PermissionResponse, error) {
-	permissions, err := s.store.GetInstitutionRolePermissions(ctx, roleID)
+func (s *Service) GetInstitutionRolePermissions(ctx context.Context, tenantID, roleID int64) ([]*PermissionResponse, error) {
+	permissions, err := s.store.GetInstitutionRolePermissions(ctx, tenantID, roleID)
 	if err != nil {
 		return nil, err
 	}

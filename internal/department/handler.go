@@ -126,16 +126,22 @@ func (h *Handler) CreateDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can create departments
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	var req CreateDepartmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		if req.TenantID == 0 {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+	} else {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		req.TenantID = *claims.TenantID
 	}
 
 	department, err := h.service.CreateDepartment(r.Context(), req)
@@ -155,16 +161,25 @@ func (h *Handler) UpdateDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can update departments
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid department ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		existing, err := h.service.GetDepartment(r.Context(), id)
+		if err != nil {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		if existing.TenantID != *claims.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
 	}
 
 	var req UpdateDepartmentRequest
@@ -190,16 +205,25 @@ func (h *Handler) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only admin can delete departments
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid department ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil {
+			httputil.WriteForbidden(w, "No tenant access")
+			return
+		}
+		existing, err := h.service.GetDepartment(r.Context(), id)
+		if err != nil {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		if existing.TenantID != *claims.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
 	}
 
 	if err := h.service.DeleteDepartment(r.Context(), id); err != nil {
