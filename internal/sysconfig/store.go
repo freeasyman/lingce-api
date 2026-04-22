@@ -16,6 +16,23 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type featureOptionDomain struct {
+	RootMenuCode string
+	FeatureCode  string
+	FeatureName  string
+}
+
+var featureOptionDomains = []featureOptionDomain{
+	{RootMenuCode: "system", FeatureCode: "system_management", FeatureName: "系统管理"},
+	{RootMenuCode: "medical_recording_center", FeatureCode: "medical_recording_center", FeatureName: "医疗录音"},
+	{RootMenuCode: "recording_center", FeatureCode: "recording_center", FeatureName: "咨询录音"},
+	{RootMenuCode: "tasks_recording", FeatureCode: "tasks_recording", FeatureName: "录音任务"},
+	{RootMenuCode: "content-center", FeatureCode: "content_center", FeatureName: "内容中心"},
+	{RootMenuCode: "customers", FeatureCode: "customer_center", FeatureName: "客户中心"},
+	{RootMenuCode: "notifications", FeatureCode: "message_center", FeatureName: "消息中心"},
+	{RootMenuCode: "recording_badge_management", FeatureCode: "smart_badge", FeatureName: "工牌管理"},
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -869,15 +886,7 @@ func (s *Store) GetFeatureOptions(ctx context.Context) ([]MenuFeatureOptionItemR
 	if err != nil {
 		return nil, nil, err
 	}
-	featureItems := []FeatureOptionItemResponse{
-		{Code: "recording_transcription", Name: "录音转写"},
-		{Code: "recording_analysis", Name: "录音分析"},
-		{Code: "recording_tasks", Name: "录音任务"},
-		{Code: "customer_management", Name: "客户管理"},
-		{Code: "content_management", Name: "内容管理"},
-		{Code: "badge_management", Name: "徽章管理"},
-		{Code: "report_dashboard", Name: "报表看板"},
-	}
+	featureItems := buildFeatureOptionItems(menuItems)
 	return menuItems, featureItems, nil
 }
 
@@ -936,7 +945,7 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 			}
 			items = append(items, item)
 		}
-		return items, nil
+		return filterFeatureGroupMenuOptions(items), nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
@@ -957,5 +966,89 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 		}
 		items = append(items, item)
 	}
-	return items, nil
+	return filterFeatureGroupMenuOptions(items), nil
+}
+
+// filterFeatureGroupMenuOptions limits feature-group menu options to the
+// current institution menu domains and excludes legacy modules (knowledge/qa/reports, etc).
+func filterFeatureGroupMenuOptions(items []MenuFeatureOptionItemResponse) []MenuFeatureOptionItemResponse {
+	if len(items) == 0 {
+		return items
+	}
+
+	// Current institution domains used for tenant feature-group configuration.
+	allowedRoots := make(map[string]struct{}, len(featureOptionDomains))
+	for _, domain := range featureOptionDomains {
+		allowedRoots[domain.RootMenuCode] = struct{}{}
+	}
+
+	byCode := make(map[string]MenuFeatureOptionItemResponse, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.Code) == "" {
+			continue
+		}
+		byCode[item.Code] = item
+	}
+
+	allowedCodes := make(map[string]struct{}, len(allowedRoots)*4)
+	for code := range allowedRoots {
+		if _, ok := byCode[code]; ok {
+			allowedCodes[code] = struct{}{}
+		}
+	}
+
+	changed := true
+	for changed {
+		changed = false
+		for _, item := range items {
+			if item.ParentCode == nil {
+				continue
+			}
+			parentCode := strings.TrimSpace(*item.ParentCode)
+			if parentCode == "" {
+				continue
+			}
+			if _, ok := allowedCodes[parentCode]; !ok {
+				continue
+			}
+			if _, exists := allowedCodes[item.Code]; !exists {
+				allowedCodes[item.Code] = struct{}{}
+				changed = true
+			}
+		}
+	}
+
+	filtered := make([]MenuFeatureOptionItemResponse, 0, len(allowedCodes))
+	for _, item := range items {
+		if _, ok := allowedCodes[item.Code]; ok {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func buildFeatureOptionItems(menuItems []MenuFeatureOptionItemResponse) []FeatureOptionItemResponse {
+	if len(menuItems) == 0 {
+		return []FeatureOptionItemResponse{}
+	}
+
+	menuCodes := make(map[string]struct{}, len(menuItems))
+	for _, item := range menuItems {
+		if strings.TrimSpace(item.Code) == "" {
+			continue
+		}
+		menuCodes[item.Code] = struct{}{}
+	}
+
+	features := make([]FeatureOptionItemResponse, 0, len(featureOptionDomains))
+	for _, domain := range featureOptionDomains {
+		if _, ok := menuCodes[domain.RootMenuCode]; !ok {
+			continue
+		}
+		features = append(features, FeatureOptionItemResponse{
+			Code: domain.FeatureCode,
+			Name: domain.FeatureName,
+		})
+	}
+	return features
 }

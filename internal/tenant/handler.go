@@ -274,7 +274,7 @@ func (h *Handler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, policy)
+	httputil.WriteSuccess(w, httputil.Response{Data: policy})
 }
 
 func (h *Handler) AssignFeatureGroup(w http.ResponseWriter, r *http.Request) {

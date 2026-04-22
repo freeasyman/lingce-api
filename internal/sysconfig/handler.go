@@ -232,7 +232,7 @@ func (h *Handler) ListFeatureGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteSuccess(w, groups)
+	httputil.WriteSuccess(w, httputil.Response{Data: groups})
 }
 
 // GetFeatureGroup handles getting a feature group by ID
@@ -441,5 +441,5 @@ func (h *Handler) GetFeatureOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteSuccess(w, options)
+	httputil.WriteSuccess(w, httputil.Response{Data: options})
 }
