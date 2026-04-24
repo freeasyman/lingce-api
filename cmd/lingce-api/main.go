@@ -15,6 +15,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
+	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -31,7 +32,11 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/sms"
 )
 
-const version = "1.0.0"
+var (
+	version   = "1.0.0"
+	gitSHA    = "unknown"
+	buildTime = "unknown"
+)
 
 func main() {
 	// Setup logger
@@ -68,6 +73,16 @@ func main() {
 		httputil.WriteSuccess(w, map[string]string{
 			"status":  "ok",
 			"version": version,
+		})
+	})
+
+	// Version endpoint
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		httputil.WriteSuccess(w, map[string]string{
+			"service":    "lingce-api",
+			"version":    version,
+			"git_sha":    gitSHA,
+			"build_time": buildTime,
 		})
 	})
 
@@ -148,6 +163,8 @@ func main() {
 		empStore,
 		cfg.External.BadgeMiddlewareURL,
 		cfg.External.BadgeMiddlewareToken,
+		cfg.External.RecordingWorkerURL,
+		cfg.External.RecordingWorkerToken,
 	)
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.SetCallbackGatewayToken(cfg.External.BadgeCallbackGatewayToken)
@@ -173,6 +190,12 @@ func main() {
 	contentService := content.NewService(contentStore, llmClient, ossClient)
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// Register dashboard module
+	dashboardStore := dashboard.NewStore(pool)
+	dashboardService := dashboard.NewService(dashboardStore)
+	dashboardHandler := dashboard.NewHandler(dashboardService)
+	dashboardHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
 	// Apply middleware chain
 	handler := middleware.RequestID(
