@@ -67,7 +67,8 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
-		       t.valid_from, t.valid_to,
+		       COALESCE(t.valid_from, t.service_started_on) AS valid_from,
+		       COALESCE(t.valid_to, t.service_expired_on) AS valid_to,
 		       '' AS plan_name,
 		       '' AS service_status,
 		       NULL::timestamp AS expires_at,
@@ -129,7 +130,8 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
-		       t.valid_from, t.valid_to,
+		       COALESCE(t.valid_from, t.service_started_on) AS valid_from,
+		       COALESCE(t.valid_to, t.service_expired_on) AS valid_to,
 		       '' AS plan_name,
 		       '' AS service_status,
 		       NULL::timestamp AS expires_at,

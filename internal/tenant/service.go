@@ -3,6 +3,7 @@ package tenant
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 )
@@ -133,14 +134,17 @@ func (s *Service) GetTenantProfile(ctx context.Context, tenantID int64) (*Tenant
 	}
 
 	return &TenantProfileResponse{
-		ID:           t.ID,
-		Name:         t.Name,
-		OrgCode:      t.Code,
-		ContactName:  t.ContactName,
-		ContactPhone: t.ContactPhone,
-		ContactEmail: t.ContactEmail,
-		Industry:     t.Industry,
-		CreatedAt:    t.CreatedAt,
+		ID:            t.ID,
+		Name:          t.Name,
+		OrgCode:       t.Code,
+		ContactName:   t.ContactName,
+		ContactPhone:  t.ContactPhone,
+		ContactEmail:  t.ContactEmail,
+		Industry:      t.Industry,
+		ValidFrom:     t.ValidFrom,
+		ValidTo:       t.ValidTo,
+		DaysRemaining: calcDaysRemaining(t.ValidTo),
+		CreatedAt:     t.CreatedAt,
 	}, nil
 }
 
@@ -165,15 +169,30 @@ func (s *Service) UpdateTenantProfile(ctx context.Context, tenantID int64, req U
 	}
 
 	return &TenantProfileResponse{
-		ID:           t.ID,
-		Name:         t.Name,
-		OrgCode:      t.Code,
-		ContactName:  t.ContactName,
-		ContactPhone: t.ContactPhone,
-		ContactEmail: t.ContactEmail,
-		Industry:     t.Industry,
-		CreatedAt:    t.CreatedAt,
+		ID:            t.ID,
+		Name:          t.Name,
+		OrgCode:       t.Code,
+		ContactName:   t.ContactName,
+		ContactPhone:  t.ContactPhone,
+		ContactEmail:  t.ContactEmail,
+		Industry:      t.Industry,
+		ValidFrom:     t.ValidFrom,
+		ValidTo:       t.ValidTo,
+		DaysRemaining: calcDaysRemaining(t.ValidTo),
+		CreatedAt:     t.CreatedAt,
 	}, nil
+}
+
+func calcDaysRemaining(validTo *time.Time) int {
+	if validTo == nil {
+		return 0
+	}
+	today := time.Now()
+	y1, m1, d1 := today.Date()
+	y2, m2, d2 := validTo.Date()
+	start := time.Date(y1, m1, d1, 0, 0, 0, 0, today.Location())
+	end := time.Date(y2, m2, d2, 0, 0, 0, 0, today.Location())
+	return int(end.Sub(start).Hours() / 24)
 }
 
 func (s *Service) GetInstitutionStatistics(ctx context.Context, tenantID int64) (*InstitutionStatistics, error) {

@@ -72,14 +72,17 @@ type UpdateTenantProfileRequest struct {
 }
 
 type TenantProfileResponse struct {
-	ID           int64     `json:"id"`
-	Name         string    `json:"name"`
-	OrgCode      string    `json:"org_code"`
-	ContactName  string    `json:"contact_name,omitempty"`
-	ContactPhone string    `json:"contact_phone,omitempty"`
-	ContactEmail string    `json:"contact_email,omitempty"`
-	Industry     string    `json:"industry,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	OrgCode       string     `json:"org_code"`
+	ContactName   string     `json:"contact_name,omitempty"`
+	ContactPhone  string     `json:"contact_phone,omitempty"`
+	ContactEmail  string     `json:"contact_email,omitempty"`
+	Industry      string     `json:"industry,omitempty"`
+	ValidFrom     *time.Time `json:"valid_from,omitempty"`
+	ValidTo       *time.Time `json:"valid_to,omitempty"`
+	DaysRemaining int        `json:"days_remaining"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type MedicalSpecialtyResponse struct {
