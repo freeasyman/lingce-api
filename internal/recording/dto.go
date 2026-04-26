@@ -54,6 +54,7 @@ type RecordingResponse struct {
 	SceneType             *string                  `json:"scene_type,omitempty"`
 	VisitOutcome          *string                  `json:"visit_outcome,omitempty"`
 	SubjectiveSummary     *string                  `json:"subjective_summary,omitempty"`
+	ConversationSummary   *string                  `json:"conversation_summary,omitempty"`
 	QualityScore          *float64                 `json:"quality_score,omitempty"`
 	SegueScore            *float64                 `json:"segue_score,omitempty"`
 	CriticalGap           *bool                    `json:"critical_gap,omitempty"`
@@ -78,6 +79,7 @@ type RecordingResponse struct {
 	RouteReviewStatus     *string                  `json:"route_review_status"`
 	EMRStatus             *string                  `json:"emr_status"`
 	StatusSummary         *string                  `json:"status_summary,omitempty"`
+	KeyQuotes             []string                 `json:"key_quotes,omitempty"`
 	DealOutcome           map[string]interface{}   `json:"deal_outcome,omitempty"`
 	SuggestedTask         map[string]interface{}   `json:"suggested_task,omitempty"`
 	ConsultationRecord    map[string]interface{}   `json:"consultation_record,omitempty"`
@@ -260,6 +262,13 @@ type DoctorAbilityRankingResponse struct {
 	RecordingCount int64   `json:"recording_count"`
 	AvgScore       float64 `json:"avg_score"`
 	Rank           int     `json:"rank"`
+	SegueAvg       float64 `json:"segue_avg,omitempty"`
+	SegueTrend     float64 `json:"segue_trend,omitempty"`
+	StrongestDim   string  `json:"strongest_dimension,omitempty"`
+	WeakestDim     string  `json:"weakest_dimension,omitempty"`
+	AcceptanceRate float64 `json:"patient_acceptance_rate,omitempty"`
+	EmotionRate    float64 `json:"emotion_improvement_rate,omitempty"`
+	CriticalGaps   int64   `json:"critical_gap_count,omitempty"`
 }
 
 // DoctorAbilityDetailResponse represents detailed doctor ability
@@ -302,18 +311,139 @@ type BestPracticeItem struct {
 
 // WeeklySummaryResponse represents weekly summary
 type WeeklySummaryResponse struct {
-	WeekStart       string                         `json:"week_start"`
-	WeekEnd         string                         `json:"week_end"`
-	TotalRecordings int64                          `json:"total_recordings"`
-	AvgScore        float64                        `json:"avg_score"`
-	TopPerformers   []DoctorAbilityRankingResponse `json:"top_performers"`
-	KeyInsights     []string                       `json:"key_insights"`
+	WeekStart                string                         `json:"week_start"`
+	WeekEnd                  string                         `json:"week_end"`
+	TotalRecordings          int64                          `json:"total_recordings"`
+	AvgScore                 float64                        `json:"avg_score"`
+	TopPerformers            []DoctorAbilityRankingResponse `json:"top_performers"`
+	KeyInsights              []string                       `json:"key_insights"`
+	Week                     *WeeklySummaryWeek             `json:"week,omitempty"`
+	RecordingCount           int64                          `json:"recording_count,omitempty"`
+	RecordingCountPrev       int64                          `json:"recording_count_prev,omitempty"`
+	Attention                []WeeklySummaryAttentionItem   `json:"attention,omitempty"`
+	Highlights               []WeeklySummaryHighlightItem   `json:"highlights,omitempty"`
+	PatientStatus            map[string]int64               `json:"patient_status,omitempty"`
+	CoreBlockers             []WeeklySummaryBlockerItem     `json:"core_blockers,omitempty"`
+	HighlightCandidatesTotal int64                          `json:"highlight_candidates_total,omitempty"`
+	HighlightCandidates      []WeeklySummaryCandidateItem   `json:"highlight_candidates,omitempty"`
+}
+
+type WeeklySummaryWeek struct {
+	Start  string `json:"start"`
+	End    string `json:"end"`
+	Offset int    `json:"offset"`
+}
+
+type WeeklySummaryAttentionItem struct {
+	EmployeeID      *int64    `json:"employee_id,omitempty"`
+	EmployeeName    string    `json:"employee_name"`
+	Type            string    `json:"type"`
+	Dimension       string    `json:"dimension"`
+	Trend           []float64 `json:"trend,omitempty"`
+	CriticalSummary string    `json:"critical_summary,omitempty"`
+	RecordingIDs    []int64   `json:"recording_ids,omitempty"`
+}
+
+type WeeklySummaryHighlightItem struct {
+	EmployeeID    *int64   `json:"employee_id,omitempty"`
+	EmployeeName  string   `json:"employee_name"`
+	Type          string   `json:"type"`
+	Dimension     string   `json:"dimension"`
+	HighlightText string   `json:"highlight_text,omitempty"`
+	Value         *float64 `json:"value,omitempty"`
+	RecordingIDs  []int64  `json:"recording_ids,omitempty"`
+}
+
+type WeeklySummaryBlockerItem struct {
+	Blocker string `json:"blocker"`
+	Count   int64  `json:"count"`
+}
+
+type WeeklySummaryCandidateItem struct {
+	RecordingID        int64   `json:"recording_id"`
+	RecordedAt         *string `json:"recorded_at,omitempty"`
+	EmployeeID         *int64  `json:"employee_id,omitempty"`
+	EmployeeName       string  `json:"employee_name"`
+	PatientName        *string `json:"patient_name,omitempty"`
+	HighlightText      string  `json:"highlight_text"`
+	SuggestedDimension *string `json:"suggested_dimension,omitempty"`
 }
 
 // TeamTrendsResponse represents team trends
 type TeamTrendsResponse struct {
-	Period string           `json:"period"` // "daily", "weekly", "monthly"
-	Data   []TrendDataPoint `json:"data"`
+	Period             string                 `json:"period,omitempty"` // "daily", "weekly", "monthly"
+	Data               []TrendDataPoint       `json:"data,omitempty"`
+	DateFrom           string                 `json:"date_from,omitempty"`
+	DateTo             string                 `json:"date_to,omitempty"`
+	DimensionTrends    []TeamTrendDimension   `json:"dimension_trends,omitempty"`
+	PatientStatusTrend TeamTrendPatientStatus `json:"patient_status_trend,omitempty"`
+	CoreBlockers       []TeamTrendBlocker     `json:"core_blockers,omitempty"`
+}
+
+type TeamTrendDimension struct {
+	Group  string  `json:"group"`
+	Label  string  `json:"label"`
+	Start  float64 `json:"start"`
+	End    float64 `json:"end"`
+	Change float64 `json:"change"`
+}
+
+type TeamTrendPatientStatus struct {
+	StartAcceptanceRate         float64 `json:"start_acceptance_rate"`
+	EndAcceptanceRate           float64 `json:"end_acceptance_rate"`
+	StartEmotionImprovementRate float64 `json:"start_emotion_improvement_rate"`
+	EndEmotionImprovementRate   float64 `json:"end_emotion_improvement_rate"`
+}
+
+type TeamTrendBlocker struct {
+	Blocker string `json:"blocker"`
+	Count   int64  `json:"count"`
+}
+
+type TeamAbilityRadarScore struct {
+	Name  string  `json:"name"`
+	Score float64 `json:"score"`
+}
+
+type TeamAbilityRadar struct {
+	Current  []TeamAbilityRadarScore `json:"current"`
+	Previous []TeamAbilityRadarScore `json:"previous"`
+	Weakest  []string                `json:"weakest"`
+}
+
+type TeamAbilityEmployeeMatrixItem struct {
+	EmployeeID  int64              `json:"employee_id"`
+	Name        string             `json:"name"`
+	Overall     float64            `json:"overall"`
+	Stages      map[string]float64 `json:"stages"`
+	SampleCount int64              `json:"sample_count"`
+}
+
+type TeamAbilityGrowthPoint struct {
+	Month string  `json:"month"`
+	Score float64 `json:"score"`
+}
+
+type TeamAbilityHighlights struct {
+	FastestGrowth TeamAbilityFastestGrowth `json:"fastest_growth"`
+	MostStable    TeamAbilityMostStable    `json:"most_stable"`
+}
+
+type TeamAbilityFastestGrowth struct {
+	Name   string  `json:"name"`
+	Change float64 `json:"change"`
+}
+
+type TeamAbilityMostStable struct {
+	Name     string  `json:"name"`
+	Variance float64 `json:"variance"`
+}
+
+type TeamAbilityResponse struct {
+	TeamRadar      TeamAbilityRadar                `json:"team_radar"`
+	EmployeeMatrix []TeamAbilityEmployeeMatrixItem `json:"employee_matrix"`
+	GrowthTrend    []TeamAbilityGrowthPoint        `json:"growth_trend"`
+	Highlights     TeamAbilityHighlights           `json:"highlights"`
 }
 
 // TrendDataPoint represents a data point in trend
@@ -498,10 +628,10 @@ type DailyReportResponse struct {
 
 // DiagnosisResponse represents diagnosis
 type DiagnosisResponse struct {
-	OverallHealth   string           `json:"overall_health"` // "excellent", "good", "fair", "poor"
-	Issues          []IssueCount     `json:"issues"`
-	Recommendations []string         `json:"recommendations"`
-	Trends          []TrendDataPoint `json:"trends"`
+	OverallHealth   string                          `json:"overall_health"` // "excellent", "good", "fair", "poor"
+	Issues          []IssueCount                    `json:"issues"`
+	Recommendations []string                        `json:"recommendations"`
+	Trends          []TrendDataPoint                `json:"trends"`
 	DataQuality     *DashboardDataQuality           `json:"data_quality,omitempty"`
 	Funnel          []DashboardFunnelStage          `json:"funnel,omitempty"`
 	ConcernDist     []DashboardConcernDistribution  `json:"concern_distribution,omitempty"`
@@ -525,18 +655,18 @@ type FunnelDetailResponse struct {
 }
 
 type DashboardRevenue struct {
-	TotalAmount    float64  `json:"total_amount"`
-	DealCount      int64    `json:"deal_count"`
-	DealRate       float64  `json:"deal_rate"`
-	AvgDealAmount  float64  `json:"avg_deal_amount"`
-	ConfirmedCount int64    `json:"confirmed_count"`
-	TotalRecordings int64   `json:"total_recordings"`
-	ActiveEmployees int64   `json:"active_employees"`
-	Target         *float64 `json:"target,omitempty"`
-	TargetProgress *float64 `json:"target_progress,omitempty"`
-	MomAmount      *float64 `json:"mom_amount,omitempty"`
-	MomDealRate    *float64 `json:"mom_deal_rate,omitempty"`
-	MomAvgAmount   *float64 `json:"mom_avg_amount,omitempty"`
+	TotalAmount     float64  `json:"total_amount"`
+	DealCount       int64    `json:"deal_count"`
+	DealRate        float64  `json:"deal_rate"`
+	AvgDealAmount   float64  `json:"avg_deal_amount"`
+	ConfirmedCount  int64    `json:"confirmed_count"`
+	TotalRecordings int64    `json:"total_recordings"`
+	ActiveEmployees int64    `json:"active_employees"`
+	Target          *float64 `json:"target,omitempty"`
+	TargetProgress  *float64 `json:"target_progress,omitempty"`
+	MomAmount       *float64 `json:"mom_amount,omitempty"`
+	MomDealRate     *float64 `json:"mom_deal_rate,omitempty"`
+	MomAvgAmount    *float64 `json:"mom_avg_amount,omitempty"`
 }
 
 type DashboardPipeline struct {
@@ -548,16 +678,16 @@ type DashboardPipeline struct {
 }
 
 type DashboardEmployeeRankingItem struct {
-	EmployeeID        int64    `json:"employee_id"`
-	Name              string   `json:"name"`
-	DealAmount        float64  `json:"deal_amount"`
-	DealRate          float64  `json:"deal_rate"`
-	Consultations     int64    `json:"consultations"`
-	AvgDealAmount     float64  `json:"avg_deal_amount"`
-	FollowingCount    int64    `json:"following_count"`
-	OverdueCount      int64    `json:"overdue_count"`
-	AbilityScore      *float64 `json:"ability_score,omitempty"`
-	AbilitySampleCount int64   `json:"ability_sample_count"`
+	EmployeeID         int64    `json:"employee_id"`
+	Name               string   `json:"name"`
+	DealAmount         float64  `json:"deal_amount"`
+	DealRate           float64  `json:"deal_rate"`
+	Consultations      int64    `json:"consultations"`
+	AvgDealAmount      float64  `json:"avg_deal_amount"`
+	FollowingCount     int64    `json:"following_count"`
+	OverdueCount       int64    `json:"overdue_count"`
+	AbilityScore       *float64 `json:"ability_score,omitempty"`
+	AbilitySampleCount int64    `json:"ability_sample_count"`
 }
 
 type DashboardAmountTrendItem struct {
@@ -606,9 +736,9 @@ type DashboardFunnelDetailByEmployee struct {
 }
 
 type DashboardFunnelDetailResponse struct {
-	StageKey   string                          `json:"stage_key"`
-	StageLabel string                          `json:"stage_label"`
-	TotalCount int64                           `json:"total_count"`
+	StageKey   string                            `json:"stage_key"`
+	StageLabel string                            `json:"stage_label"`
+	TotalCount int64                             `json:"total_count"`
 	ByEmployee []DashboardFunnelDetailByEmployee `json:"by_employee"`
 }
 

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -82,11 +84,80 @@ func (s *Service) ListRecordings(ctx context.Context, req RecordingListRequest) 
 	responses := make([]*RecordingResponse, len(recordings))
 	for i, r := range recordings {
 		resp := toRecordingResponse(r)
-		compactRecordingListItem(resp)
 		responses[i] = resp
+	}
+	if err := s.backfillListChiefComplaintFromEMR(ctx, responses); err != nil {
+		slog.Warn("failed to backfill chief complaint for recording list", "error", err)
+	}
+	for i := range responses {
+		compactRecordingListItem(responses[i])
 	}
 
 	return responses, total, nil
+}
+
+func (s *Service) backfillListChiefComplaintFromEMR(ctx context.Context, responses []*RecordingResponse) error {
+	if len(responses) == 0 {
+		return nil
+	}
+	needIDs := make([]int64, 0, len(responses))
+	for _, resp := range responses {
+		if resp == nil || resp.ID <= 0 {
+			continue
+		}
+		if resp.ChiefComplaint != nil && strings.TrimSpace(*resp.ChiefComplaint) != "" {
+			continue
+		}
+		needIDs = append(needIDs, resp.ID)
+	}
+	if len(needIDs) == 0 {
+		return nil
+	}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT recording_id, COALESCE(emr_content::jsonb, '{}'::jsonb)
+		FROM recording_emr_drafts
+		WHERE recording_id = ANY($1::bigint[])
+	`, needIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byID := make(map[int64]map[string]interface{}, len(needIDs))
+	for rows.Next() {
+		var recordingID int64
+		var emrContent JSONObject
+		if scanErr := rows.Scan(&recordingID, &emrContent); scanErr != nil {
+			return scanErr
+		}
+		byID[recordingID] = map[string]interface{}(emrContent)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, resp := range responses {
+		if resp == nil || resp.ID <= 0 {
+			continue
+		}
+		if resp.ChiefComplaint != nil && strings.TrimSpace(*resp.ChiefComplaint) != "" {
+			continue
+		}
+		content, ok := byID[resp.ID]
+		if !ok || content == nil {
+			continue
+		}
+		chiefComplaint := pickString(content, "chief_complaint")
+		if chiefComplaint == "" {
+			chiefComplaint = pickString(content, "chiefComplaint")
+		}
+		if chiefComplaint != "" {
+			resp.ChiefComplaint = literalStringPtr(chiefComplaint)
+		}
+	}
+
+	return nil
 }
 
 func compactRecordingListItem(resp *RecordingResponse) {
@@ -578,9 +649,24 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		)
 		resp.SubjectiveSummary = pickStringPtr(
 			pickString(resp.AnalysisResult, "subjective_summary"),
+			pickString(resp.AnalysisResult, "conversation_summary"),
 			pickString(resp.AnalysisResult, "summary"),
 			pickString(analysisDisplay, "subjective_summary"),
 		)
+		resp.ConversationSummary = pickStringPtr(
+			pickString(resp.AnalysisResult, "conversation_summary"),
+			pickString(analysisDisplay, "conversation_summary"),
+			pickString(resp.AnalysisResult, "subjective_summary"),
+			pickString(analysisDisplay, "subjective_summary"),
+			pickString(resp.AnalysisResult, "summary"),
+		)
+			resp.KeyQuotes = pickStringSlice(
+				pickArray(resp.AnalysisResult, "key_quotes"),
+				pickArray(resp.AnalysisResult, "highlights"),
+				pickArray(analysisDisplay, "key_quotes"),
+				pickArray(analysisDisplay, "highlights"),
+				pickArray(resp.AnalysisSummary, "highlights"),
+			)
 		resp.QualityScore = pickFloatPtr(
 			pickFloat(resp.AnalysisResult, "quality_score"),
 			pickFloat(resp.AnalysisResult, "quality"),
@@ -788,12 +874,30 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 			pickString(resp.AnalysisSummary, "critical_summary"),
 		)
 	}
+	if resp.ConversationSummary == nil {
+		resp.ConversationSummary = pickStringPtr(
+			pickString(resp.AnalysisResult, "conversation_summary"),
+			pickString(resp.AnalysisDisplay, "conversation_summary"),
+			pickString(resp.AnalysisResult, "subjective_summary"),
+			pickString(resp.AnalysisSummary, "summary"),
+			pickString(resp.AnalysisSummary, "critical_summary"),
+		)
+	}
 	if resp.StatusSummary == nil {
 		resp.StatusSummary = pickStringPtr(
 			pickString(resp.AnalysisResult, "status_summary"),
 			pickString(resp.AnalysisSummary, "current_state"),
 			pickString(resp.AnalysisSummary, "critical_summary"),
 		)
+	}
+	if len(resp.KeyQuotes) == 0 {
+			resp.KeyQuotes = pickStringSlice(
+				pickArray(resp.AnalysisResult, "key_quotes"),
+				pickArray(resp.AnalysisResult, "highlights"),
+				pickArray(resp.AnalysisDisplay, "key_quotes"),
+				pickArray(resp.AnalysisDisplay, "highlights"),
+				pickArray(resp.AnalysisSummary, "highlights"),
+			)
 	}
 	if resp.DealOutcome == nil {
 		resp.DealOutcome = pickMap(resp.AnalysisResult, "deal_outcome")
@@ -1111,6 +1215,37 @@ func populateCompatibilityFields(resp *RecordingResponse) {
 		pickMap(pickMap(analysisDisplay, "emr_draft"), "emr_content"),
 	)
 
+	if resp.ConversationSummary == nil {
+		resp.ConversationSummary = pickStringPtr(
+			pickString(analysisResult, "conversation_summary"),
+			pickString(analysisDisplay, "conversation_summary"),
+			pickString(analysisResult, "subjective_summary"),
+			pickString(analysisSummary, "summary"),
+			pickString(analysisSummary, "critical_summary"),
+			pickString(analysisResult, "status_summary"),
+			pickString(analysisSummary, "current_state"),
+			pickString(analysisDisplay, "status_summary"),
+			pickString(analysisDisplay, "chief_complaint"),
+		)
+	}
+	if resp.StatusSummary == nil {
+		resp.StatusSummary = pickStringPtr(
+			pickString(analysisResult, "status_summary"),
+			pickString(analysisSummary, "current_state"),
+			pickString(analysisSummary, "critical_summary"),
+			pickString(analysisDisplay, "status_summary"),
+		)
+	}
+	if len(resp.KeyQuotes) == 0 {
+			resp.KeyQuotes = pickStringSlice(
+				pickArray(analysisResult, "key_quotes"),
+				pickArray(analysisResult, "highlights"),
+				pickArray(analysisDisplay, "key_quotes"),
+				pickArray(analysisDisplay, "highlights"),
+				pickArray(analysisSummary, "highlights"),
+			)
+	}
+
 	if resp.SeguePercent == nil {
 		resp.SeguePercent = pickFloatPtr(
 			pickFloat(analysisResult, "segue_percent"),
@@ -1326,6 +1461,26 @@ func pickArray(source map[string]interface{}, key string) []interface{} {
 	default:
 		return nil
 	}
+}
+
+func pickStringSlice(candidates ...[]interface{}) []string {
+	for _, candidate := range candidates {
+		if len(candidate) == 0 {
+			continue
+		}
+		result := make([]string, 0, len(candidate))
+		for _, raw := range candidate {
+			text := strings.TrimSpace(fmt.Sprintf("%v", raw))
+			if text == "" || text == "<nil>" {
+				continue
+			}
+			result = append(result, text)
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+	return nil
 }
 
 func toMapSlice(items []interface{}) []map[string]interface{} {
@@ -2038,27 +2193,222 @@ func (s *Service) GetQualityControlDashboard(ctx context.Context, tenantID int64
 	}, nil
 }
 
-// GetDoctorAbilityRanking retrieves doctor ability ranking
-func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64) ([]DoctorAbilityRankingResponse, error) {
-	rankingItems, err := s.employeeStore.GetAbilityRanking(ctx, tenantID, 20)
-	if err != nil {
-		return nil, err
+// GetDoctorAbilityRanking retrieves doctor list style ranking for medical recordings.
+func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, period string) ([]DoctorAbilityRankingResponse, error) {
+	windowDays := 30
+	switch strings.TrimSpace(strings.ToLower(period)) {
+	case "3m", "quarter":
+		windowDays = 90
+	case "6m", "half_year":
+		windowDays = 180
+	case "1m", "month", "":
+		windowDays = 30
 	}
 
-	ranking := make([]DoctorAbilityRankingResponse, 0, len(rankingItems))
-	for i, item := range rankingItems {
-		resp := DoctorAbilityRankingResponse{
-			Rank:           i + 1,
-			EmployeeID:     item.EmployeeID,
-			EmployeeName:   item.EmployeeName,
-			RecordingCount: item.RecordingCount,
-		}
-		if item.RecordingCount > 0 {
-			resp.AvgScore = float64(item.CompletedCount) / float64(item.RecordingCount) * 100
-		}
-		ranking = append(ranking, resp)
+	now := time.Now()
+	currentStart := now.AddDate(0, 0, -(windowDays - 1))
+	prevStart := currentStart.AddDate(0, 0, -windowDays)
+
+	type doctorAbilityRow struct {
+		EmployeeID int64
+		Name       string
+		TS         time.Time
+		Analysis   map[string]interface{}
 	}
-	return ranking, nil
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.employee_id,
+		       COALESCE(NULLIF(e.name, ''), '未知医生') AS employee_name,
+		       COALESCE(r.recorded_at, r.created_at) AS ts,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) <= $3
+		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+	`, tenantID, prevStart, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query doctor ability rows: %w", err)
+	}
+	defer rows.Close()
+
+	type doctorAbilityAgg struct {
+		EmployeeID          int64
+		Name                string
+		CurrentCount        int64
+		CurrentSegueScores  []float64
+		PreviousSegueScores []float64
+		StageScores         map[string][]float64
+		PatientStatusTotal  int64
+		PatientAcceptCount  int64
+		EmotionTotal        int64
+		EmotionImproveCount int64
+		CriticalGapCount    int64
+	}
+	aggByEmployee := map[int64]*doctorAbilityAgg{}
+
+	for rows.Next() {
+		var row doctorAbilityRow
+		if scanErr := rows.Scan(&row.EmployeeID, &row.Name, &row.TS, &row.Analysis); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan doctor ability row: %w", scanErr)
+		}
+		if row.EmployeeID <= 0 {
+			continue
+		}
+		agg := aggByEmployee[row.EmployeeID]
+		if agg == nil {
+			agg = &doctorAbilityAgg{
+				EmployeeID:  row.EmployeeID,
+				Name:        row.Name,
+				StageScores: map[string][]float64{"G1": {}, "G2": {}, "G3": {}, "G4": {}, "G5": {}, "G6": {}},
+			}
+			aggByEmployee[row.EmployeeID] = agg
+		}
+
+		score := resolveWeeklyDisplayScore(row.Analysis)
+		if row.TS.Before(currentStart) {
+			if score > 0 {
+				agg.PreviousSegueScores = append(agg.PreviousSegueScores, score)
+			}
+			continue
+		}
+
+		agg.CurrentCount++
+		if score > 0 {
+			agg.CurrentSegueScores = append(agg.CurrentSegueScores, score)
+		}
+
+		quality := pickMap(row.Analysis, "quality_score")
+		if stagesAny, ok := quality["stages"]; ok {
+			if stages, ok := stagesAny.([]interface{}); ok {
+				for _, item := range stages {
+					stage, ok := item.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					code := toDimensionCode(firstNonEmptyText(stage["group"], stage["code"], stage["key"], stage["name"]))
+					if code == "" {
+						continue
+					}
+					if stageScore, ok := toFloat(stage["score"]); ok {
+						agg.StageScores[code] = append(agg.StageScores[code], stageScore)
+					}
+				}
+			}
+		}
+
+		statusRaw := firstNonEmptyText(
+			pickNestedStatus(row.Analysis, "visit_outcome"),
+			pickString(row.Analysis, "visit_outcome_status"),
+			pickString(row.Analysis, "visit_outcome"),
+			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+		)
+		if normalized := normalizePatientStatus(statusRaw); normalized != "" {
+			agg.PatientStatusTotal++
+			if normalized == "顺利接受" {
+				agg.PatientAcceptCount++
+			}
+		}
+
+		if startEmotion, endEmotion, ok := readEmotionPair(row.Analysis); ok {
+			agg.EmotionTotal++
+			if isEmotionImproved(startEmotion, endEmotion) {
+				agg.EmotionImproveCount++
+			}
+		}
+
+		if critical := pickBool(row.Analysis, "critical_gap"); critical != nil && *critical {
+			agg.CriticalGapCount++
+		}
+	}
+
+	out := make([]DoctorAbilityRankingResponse, 0, len(aggByEmployee))
+	for _, agg := range aggByEmployee {
+		if agg.CurrentCount == 0 {
+			continue
+		}
+		curAvg := avgFloat(agg.CurrentSegueScores)
+		prevAvg := avgFloat(agg.PreviousSegueScores)
+		strongest, weakest := findStrongestWeakestDimension(agg.StageScores)
+		acceptRate := 0.0
+		if agg.PatientStatusTotal > 0 {
+			acceptRate = roundFloat((float64(agg.PatientAcceptCount)/float64(agg.PatientStatusTotal))*100, 1)
+		}
+		emotionRate := 0.0
+		if agg.EmotionTotal > 0 {
+			emotionRate = roundFloat((float64(agg.EmotionImproveCount)/float64(agg.EmotionTotal))*100, 1)
+		}
+
+		out = append(out, DoctorAbilityRankingResponse{
+			EmployeeID:     agg.EmployeeID,
+			EmployeeName:   agg.Name,
+			RecordingCount: agg.CurrentCount,
+			AvgScore:       roundFloat(curAvg, 1),
+			SegueAvg:       roundFloat(curAvg, 1),
+			SegueTrend:     roundFloat(curAvg-prevAvg, 1),
+			StrongestDim:   strongest,
+			WeakestDim:     weakest,
+			AcceptanceRate: acceptRate,
+			EmotionRate:    emotionRate,
+			CriticalGaps:   agg.CriticalGapCount,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SegueAvg == out[j].SegueAvg {
+			return out[i].RecordingCount > out[j].RecordingCount
+		}
+		return out[i].SegueAvg > out[j].SegueAvg
+	})
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+	return out, nil
+}
+
+func avgFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+func findStrongestWeakestDimension(stageScores map[string][]float64) (string, string) {
+	type dimAvg struct {
+		code string
+		avg  float64
+	}
+	labels := map[string]string{
+		"G1": "建立接诊环境",
+		"G2": "引出信息",
+		"G3": "给予信息",
+		"G4": "理解患者视角",
+		"G5": "结束接诊",
+		"G6": "治疗/预防计划",
+	}
+	all := make([]dimAvg, 0, 6)
+	for _, code := range []string{"G1", "G2", "G3", "G4", "G5", "G6"} {
+		avg := avgFloat(stageScores[code])
+		if avg <= 0 {
+			continue
+		}
+		all = append(all, dimAvg{code: code, avg: avg})
+	}
+	if len(all) == 0 {
+		return "", ""
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].avg > all[j].avg })
+	strongest := all[0].code + " " + labels[all[0].code]
+	weakest := all[len(all)-1].code + " " + labels[all[len(all)-1].code]
+	return strongest, weakest
 }
 
 // GetDoctorAbilityDetail retrieves detailed doctor ability
@@ -2101,7 +2451,7 @@ func (s *Service) GetCommunicationAnalysis(ctx context.Context, tenantID int64) 
 	if err != nil {
 		return nil, err
 	}
-	top, err := s.GetDoctorAbilityRanking(ctx, tenantID)
+	top, err := s.GetDoctorAbilityRanking(ctx, tenantID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -2162,67 +2512,1056 @@ func (s *Service) GetWeeklyMeetingMaterial(ctx context.Context, tenantID int64) 
 	}, nil
 }
 
+type weeklySummaryRow struct {
+	ID          int64
+	EmployeeID  int64
+	Employee    string
+	PatientName string
+	Analysis    map[string]interface{}
+	TS          time.Time
+}
+
+type weeklySummaryHighlightEntry struct {
+	Dimension string
+	Text      string
+}
+
+type medicalTrendRow struct {
+	Analysis map[string]interface{}
+	TS       time.Time
+}
+
 // GetWeeklySummary retrieves weekly summary
-func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64) (*WeeklySummaryResponse, error) {
+func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffset int) (*WeeklySummaryResponse, error) {
 	now := time.Now()
-	weekStart := now.AddDate(0, 0, -6)
-	stats, err := s.store.GetStatsOverview(ctx, tenantID, nil, nil)
-	if err != nil {
-		return nil, err
+	monday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -int(now.Weekday())+1)
+	if now.Weekday() == time.Sunday {
+		monday = monday.AddDate(0, 0, -6)
 	}
-	top, err := s.GetDoctorAbilityRanking(ctx, tenantID)
+	weekStart := monday.AddDate(0, 0, weekOffset*7)
+	weekEnd := weekStart.AddDate(0, 0, 7)
+	prevStart := weekStart.AddDate(0, 0, -7)
+	prev2Start := weekStart.AddDate(0, 0, -14)
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.id,
+		       r.employee_id,
+		       COALESCE(NULLIF(e.name, ''), '未知医生') AS employee_name,
+		       COALESCE(r.patient_name, '') AS patient_name,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		ORDER BY ts DESC
+	`, tenantID, prev2Start, weekEnd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query weekly summary rows: %w", err)
+	}
+	defer rows.Close()
+
+	allRows := make([]weeklySummaryRow, 0, 512)
+	for rows.Next() {
+		var item weeklySummaryRow
+		if scanErr := rows.Scan(&item.ID, &item.EmployeeID, &item.Employee, &item.PatientName, &item.Analysis, &item.TS); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan weekly summary row: %w", scanErr)
+		}
+		allRows = append(allRows, item)
+	}
+
+	currentRows := make([]weeklySummaryRow, 0, len(allRows))
+	prevRows := make([]weeklySummaryRow, 0, len(allRows))
+	prev2Rows := make([]weeklySummaryRow, 0, len(allRows))
+	for _, row := range allRows {
+		switch {
+		case !row.TS.Before(weekStart) && row.TS.Before(weekEnd):
+			currentRows = append(currentRows, row)
+		case !row.TS.Before(prevStart) && row.TS.Before(weekStart):
+			prevRows = append(prevRows, row)
+		case !row.TS.Before(prev2Start) && row.TS.Before(prevStart):
+			prev2Rows = append(prev2Rows, row)
+		}
+	}
+
+	patientStatusCounter := map[string]int64{}
+	blockerCounter := map[string]int64{}
+	highlights := make([]WeeklySummaryHighlightItem, 0, 64)
+	criticalAttention := make([]WeeklySummaryAttentionItem, 0, 64)
+	doctorIDMap := map[string]int64{}
+
+	for _, row := range currentRows {
+		doctorIDMap[row.Employee] = row.EmployeeID
+
+		rawStatus := firstNonEmptyText(
+			pickNestedStatus(row.Analysis, "visit_outcome"),
+			pickString(row.Analysis, "visit_outcome_status"),
+			pickString(row.Analysis, "visit_outcome"),
+			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+		)
+		if normalized := normalizePatientStatus(rawStatus); normalized != "" {
+			patientStatusCounter[normalized]++
+		}
+
+		blockers := extractCoreBlockers(row.Analysis)
+		for _, blocker := range blockers {
+			blockerCounter[blocker]++
+		}
+
+		score := resolveWeeklyDisplayScore(row.Analysis)
+		for _, entry := range extractWeeklyHighlightEntries(row.Analysis) {
+			recID := row.ID
+			item := WeeklySummaryHighlightItem{
+				EmployeeName:  row.Employee,
+				Type:          "highlight",
+				Dimension:     formatWeeklyDimension(entry.Dimension),
+				HighlightText: entry.Text,
+				RecordingIDs:  []int64{recID},
+			}
+			if row.EmployeeID > 0 {
+				eid := row.EmployeeID
+				item.EmployeeID = &eid
+			}
+			if score > 0 {
+				v := roundFloat(score, 1)
+				item.Value = &v
+			}
+			highlights = append(highlights, item)
+		}
+
+		if isCritical := pickBool(row.Analysis, "critical_gap"); isCritical != nil && *isCritical {
+			summary := strings.TrimSpace(firstNonEmptyText(pickString(row.Analysis, "critical_summary")))
+			if summary == "" && len(blockers) > 0 {
+				summary = blockers[0]
+			}
+			if summary == "" {
+				summary = "本周出现关键缺口"
+			}
+			recID := row.ID
+			item := WeeklySummaryAttentionItem{
+				EmployeeName:    row.Employee,
+				Type:            "attention",
+				Dimension:       "关键缺口",
+				CriticalSummary: summary,
+				RecordingIDs:    []int64{recID},
+			}
+			if row.EmployeeID > 0 {
+				eid := row.EmployeeID
+				item.EmployeeID = &eid
+			}
+			criticalAttention = append(criticalAttention, item)
+		}
+	}
+
+	curAvg := weeklyDoctorScoreAverage(currentRows)
+	prevAvg := weeklyDoctorScoreAverage(prevRows)
+	prev2Avg := weeklyDoctorScoreAverage(prev2Rows)
+
+	trendAttention := make([]WeeklySummaryAttentionItem, 0, 16)
+	for doctor, curVal := range curAvg {
+		prevVal, ok1 := prevAvg[doctor]
+		prev2Val, ok2 := prev2Avg[doctor]
+		if !ok1 || !ok2 {
+			continue
+		}
+		if prev2Val > prevVal && prevVal > curVal {
+			item := WeeklySummaryAttentionItem{
+				EmployeeName: doctor,
+				Type:         "attention",
+				Dimension:    "SEGUE 沟通分",
+				Trend: []float64{
+					roundFloat(prev2Val, 1),
+					roundFloat(prevVal, 1),
+					roundFloat(curVal, 1),
+				},
+			}
+			if eid := doctorIDMap[doctor]; eid > 0 {
+				id := eid
+				item.EmployeeID = &id
+			}
+			trendAttention = append(trendAttention, item)
+		}
+	}
+
+	sort.Slice(highlights, func(i, j int) bool {
+		iv := 0.0
+		jv := 0.0
+		if highlights[i].Value != nil {
+			iv = *highlights[i].Value
+		}
+		if highlights[j].Value != nil {
+			jv = *highlights[j].Value
+		}
+		return iv > jv
+	})
+	if len(highlights) > 10 {
+		highlights = highlights[:10]
+	}
+
+	attention := append(trendAttention, criticalAttention...)
+	if len(attention) > 20 {
+		attention = attention[:20]
+	}
+
+	coreBlockers := make([]WeeklySummaryBlockerItem, 0, len(blockerCounter))
+	for blocker, count := range blockerCounter {
+		coreBlockers = append(coreBlockers, WeeklySummaryBlockerItem{
+			Blocker: blocker,
+			Count:   count,
+		})
+	}
+	sort.Slice(coreBlockers, func(i, j int) bool { return coreBlockers[i].Count > coreBlockers[j].Count })
+	if len(coreBlockers) > 10 {
+		coreBlockers = coreBlockers[:10]
+	}
+
+	highlightCandidates, candidateTotal, candidateErr := s.loadWeeklyHighlightCandidates(ctx, tenantID)
+	if candidateErr != nil {
+		return nil, candidateErr
+	}
+
+	top, err := s.GetDoctorAbilityRanking(ctx, tenantID, "")
 	if err != nil {
 		return nil, err
 	}
 	if len(top) > 3 {
 		top = top[:3]
 	}
+
+	keyInsights := []string{}
+	if len(coreBlockers) > 0 {
+		keyInsights = append(keyInsights, "主要阻塞："+coreBlockers[0].Blocker)
+	}
+	if len(attention) > 0 {
+		keyInsights = append(keyInsights, "需重点关注人员："+attention[0].EmployeeName)
+	}
+	if len(keyInsights) == 0 {
+		keyInsights = append(keyInsights, "本周整体稳定")
+	}
+
+	stats, err := s.store.GetStatsOverview(ctx, tenantID, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	return &WeeklySummaryResponse{
 		WeekStart:       weekStart.Format("2006-01-02"),
-		WeekEnd:         now.Format("2006-01-02"),
+		WeekEnd:         weekEnd.AddDate(0, 0, -1).Format("2006-01-02"),
 		TotalRecordings: stats.TotalRecordings,
 		AvgScore:        safeRate(stats.CompletedRecordings, stats.TotalRecordings),
 		TopPerformers:   top,
-		KeyInsights:     []string{"完成率稳定", "建议继续提升任务及时率"},
+		KeyInsights:     keyInsights,
+		Week: &WeeklySummaryWeek{
+			Start:  weekStart.Format("2006-01-02"),
+			End:    weekEnd.AddDate(0, 0, -1).Format("2006-01-02"),
+			Offset: weekOffset,
+		},
+		RecordingCount:           int64(len(currentRows)),
+		RecordingCountPrev:       int64(len(prevRows)),
+		Attention:                attention,
+		Highlights:               highlights,
+		PatientStatus:            patientStatusCounter,
+		CoreBlockers:             coreBlockers,
+		HighlightCandidatesTotal: candidateTotal,
+		HighlightCandidates:      highlightCandidates,
 	}, nil
 }
 
-// GetTeamTrends retrieves team trends
-func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, period string) (*TeamTrendsResponse, error) {
-	if period == "" {
-		period = "daily"
+func normalizePatientStatus(raw string) string {
+	text := strings.TrimSpace(raw)
+	switch text {
+	case "顺利接受", "已接受治疗", "已决定治疗", "已成交", "已预约":
+		return "顺利接受"
+	case "接受但有疑虑", "倾向治疗", "疗程随访中", "继续观察":
+		return "接受但有疑虑"
+	case "待作决定", "犹豫中":
+		return "待作决定"
+	case "倾向拒绝", "倾向不做", "明确拒绝":
+		return "倾向拒绝"
+	default:
+		return ""
 	}
+}
+
+func extractCoreBlockers(analysis map[string]interface{}) []string {
+	raw, ok := analysis["core_blockers"]
+	if !ok {
+		return nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		switch v := item.(type) {
+		case map[string]interface{}:
+			text := strings.TrimSpace(firstNonEmptyText(v["blocker"], v["name"], v["text"]))
+			if text != "" {
+				out = append(out, text)
+			}
+		default:
+			text := strings.TrimSpace(firstNonEmptyText(v))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+	}
+	return out
+}
+
+func extractWeeklyHighlightEntries(analysis map[string]interface{}) []weeklySummaryHighlightEntry {
+	readEntries := func(src map[string]interface{}) []weeklySummaryHighlightEntry {
+		if src == nil {
+			return nil
+		}
+		candidates := []interface{}{}
+		for _, key := range []string{"best_practices", "highlight_candidates", "highlights"} {
+			if raw, exists := src[key]; exists {
+				if arr, ok := raw.([]interface{}); ok {
+					candidates = append(candidates, arr...)
+				}
+			}
+		}
+		out := make([]weeklySummaryHighlightEntry, 0, len(candidates))
+		for _, candidate := range candidates {
+			m, ok := candidate.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			text := strings.TrimSpace(firstNonEmptyText(m["highlight_text"], m["text"], m["summary"], m["detail"]))
+			if text == "" {
+				continue
+			}
+			dim := strings.TrimSpace(strings.ToUpper(firstNonEmptyText(m["dimension"], m["stage"], m["category"])))
+			out = append(out, weeklySummaryHighlightEntry{
+				Dimension: dim,
+				Text:      text,
+			})
+		}
+		return out
+	}
+
+	result := readEntries(analysis)
+	if len(result) > 0 {
+		return result
+	}
+	return readEntries(pickMap(analysis, "analysis_summary"))
+}
+
+func formatWeeklyDimension(raw string) string {
+	dim := strings.ToUpper(strings.TrimSpace(raw))
+	labels := map[string]string{
+		"G1": "建立接诊环境",
+		"G2": "引出信息",
+		"G3": "给予信息",
+		"G4": "理解患者视角",
+		"G5": "结束接诊",
+		"G6": "治疗/预防计划",
+	}
+	if label, ok := labels[dim]; ok {
+		return dim + " " + label
+	}
+	if dim == "" {
+		return "高光片段"
+	}
+	return dim
+}
+
+func resolveWeeklyDisplayScore(analysis map[string]interface{}) float64 {
+	candidates := []*float64{
+		pickFloat(analysis, "segue_percent"),
+		pickFloat(analysis, "segue_score"),
+		pickFloat(analysis, "communication_score"),
+		pickFloat(pickMap(analysis, "segue"), "overall_score"),
+		pickFloat(pickMap(analysis, "segue"), "overall"),
+		pickFloat(pickMap(analysis, "analysis_summary"), "segue_percent"),
+		pickFloat(pickMap(analysis, "analysis_summary"), "segue_score"),
+		pickFloat(pickMap(analysis, "quality_score"), "overall_score"),
+	}
+	for _, candidate := range candidates {
+		if candidate != nil && *candidate > 0 {
+			return *candidate
+		}
+	}
+	return 0
+}
+
+func weeklyDoctorScoreAverage(rows []weeklySummaryRow) map[string]float64 {
+	values := map[string][]float64{}
+	for _, row := range rows {
+		score := resolveWeeklyDisplayScore(row.Analysis)
+		if score <= 0 {
+			continue
+		}
+		values[row.Employee] = append(values[row.Employee], score)
+	}
+	out := map[string]float64{}
+	for doctor, scores := range values {
+		var total float64
+		for _, score := range scores {
+			total += score
+		}
+		out[doctor] = total / float64(len(scores))
+	}
+	return out
+}
+
+func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID int64) ([]WeeklySummaryCandidateItem, int64, error) {
+	since := time.Now().AddDate(0, 0, -21)
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT DATE(created_at) AS dt,
-		       COUNT(*) AS total,
-		       COUNT(CASE WHEN analysis_status = 'completed' THEN 1 END) AS completed
-		FROM recordings
-		WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
-		GROUP BY dt
-		ORDER BY dt ASC
-	`, tenantID)
+		SELECT r.id,
+		       COALESCE(r.recorded_at, r.created_at) AS ts,
+		       r.employee_id,
+		       COALESCE(NULLIF(e.name, ''), '-') AS employee_name,
+		       COALESCE(r.patient_name, '') AS patient_name,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		  AND r.id NOT IN (
+		      SELECT recording_id
+		      FROM recording_best_practices
+		      WHERE tenant_id = $1
+		  )
+		ORDER BY ts DESC
+		LIMIT 100
+	`, tenantID, since)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query team trends: %w", err)
+		return nil, 0, fmt.Errorf("failed to query weekly highlight candidates: %w", err)
 	}
 	defer rows.Close()
 
-	var points []TrendDataPoint
+	out := make([]WeeklySummaryCandidateItem, 0, 20)
 	for rows.Next() {
 		var (
-			dt        time.Time
-			total     int64
-			completed int64
+			recordingID int64
+			ts          time.Time
+			employeeID  int64
+			employee    string
+			patientName string
+			analysis    map[string]interface{}
 		)
-		if err := rows.Scan(&dt, &total, &completed); err != nil {
-			return nil, fmt.Errorf("failed to scan trend row: %w", err)
+		if scanErr := rows.Scan(&recordingID, &ts, &employeeID, &employee, &patientName, &analysis); scanErr != nil {
+			return nil, 0, fmt.Errorf("failed to scan weekly candidate row: %w", scanErr)
 		}
-		points = append(points, TrendDataPoint{
-			Date:           dt.Format("2006-01-02"),
-			AvgScore:       safeRate(completed, total),
-			RecordingCount: total,
+		entries := extractWeeklyHighlightEntries(analysis)
+		if len(entries) == 0 {
+			continue
+		}
+		entry := entries[0]
+		recordedAt := ts.Format("2006-01-02 15:04:05")
+		item := WeeklySummaryCandidateItem{
+			RecordingID:   recordingID,
+			RecordedAt:    &recordedAt,
+			EmployeeName:  employee,
+			HighlightText: entry.Text,
+		}
+		if employeeID > 0 {
+			eid := employeeID
+			item.EmployeeID = &eid
+		}
+		if strings.TrimSpace(patientName) != "" {
+			name := strings.TrimSpace(patientName)
+			item.PatientName = &name
+		}
+		if strings.TrimSpace(entry.Dimension) != "" {
+			dim := strings.ToUpper(strings.TrimSpace(entry.Dimension))
+			item.SuggestedDimension = &dim
+		}
+		out = append(out, item)
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out, int64(len(out)), nil
+}
+
+// GetTeamTrends retrieves team trends for medical recordings.
+func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, dateTo, specialtyGroup string) (*TeamTrendsResponse, error) {
+	_ = specialtyGroup // 兼容保留，当前后端暂无专科分组字段，先不做过滤。
+
+	now := time.Now()
+	start := now.AddDate(0, 0, -29)
+	end := now
+	if strings.TrimSpace(dateFrom) != "" {
+		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(dateFrom), now.Location()); err == nil {
+			start = parsed
+		}
+	}
+	if strings.TrimSpace(dateTo) != "" {
+		if parsed, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(dateTo), now.Location()); err == nil {
+			end = parsed.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		}
+	}
+	if end.Before(start) {
+		start, end = end, start
+	}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) <= $3
+		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		ORDER BY ts ASC
+	`, tenantID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query medical team trends rows: %w", err)
+	}
+	defer rows.Close()
+
+	allRows := make([]medicalTrendRow, 0, 512)
+	for rows.Next() {
+		var item medicalTrendRow
+		if scanErr := rows.Scan(&item.Analysis, &item.TS); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan medical trend row: %w", scanErr)
+		}
+		allRows = append(allRows, item)
+	}
+
+	dateSpanDays := int(end.Sub(start).Hours()/24) + 1
+	if dateSpanDays < 1 {
+		dateSpanDays = 1
+	}
+	windowDays := 7
+	if dateSpanDays < 14 {
+		windowDays = maxInt(1, dateSpanDays/2)
+	}
+	startWindowEnd := start.AddDate(0, 0, windowDays)
+	endWindowStart := end.AddDate(0, 0, -(windowDays - 1))
+
+	startRows := make([]medicalTrendRow, 0, len(allRows))
+	endRows := make([]medicalTrendRow, 0, len(allRows))
+	for _, row := range allRows {
+		if !row.TS.Before(start) && row.TS.Before(startWindowEnd) {
+			startRows = append(startRows, row)
+		}
+		if !row.TS.Before(endWindowStart) && !row.TS.After(end) {
+			endRows = append(endRows, row)
+		}
+	}
+
+	dimOrder := []string{"G1", "G2", "G3", "G4", "G5", "G6"}
+	dimLabels := map[string]string{
+		"G1": "建立接诊环境",
+		"G2": "引出信息",
+		"G3": "给予信息",
+		"G4": "理解患者视角",
+		"G5": "结束接诊",
+		"G6": "治疗/预防计划",
+	}
+	startDim := collectDimensionAvg(startRows)
+	endDim := collectDimensionAvg(endRows)
+	dimensionTrends := make([]TeamTrendDimension, 0, len(dimOrder))
+	for _, group := range dimOrder {
+		sv := roundFloat(startDim[group], 1)
+		ev := roundFloat(endDim[group], 1)
+		dimensionTrends = append(dimensionTrends, TeamTrendDimension{
+			Group:  group,
+			Label:  dimLabels[group],
+			Start:  sv,
+			End:    ev,
+			Change: roundFloat(ev-sv, 1),
 		})
 	}
-	return &TeamTrendsResponse{Period: period, Data: points}, nil
+
+	startAccept, startEmotion := collectPatientTrend(startRows)
+	endAccept, endEmotion := collectPatientTrend(endRows)
+
+	blockerCounter := map[string]int64{}
+	for _, row := range allRows {
+		for _, blocker := range extractCoreBlockers(row.Analysis) {
+			blockerCounter[blocker]++
+		}
+	}
+	coreBlockers := make([]TeamTrendBlocker, 0, len(blockerCounter))
+	for blocker, count := range blockerCounter {
+		coreBlockers = append(coreBlockers, TeamTrendBlocker{
+			Blocker: blocker,
+			Count:   count,
+		})
+	}
+	sort.Slice(coreBlockers, func(i, j int) bool { return coreBlockers[i].Count > coreBlockers[j].Count })
+	if len(coreBlockers) > 10 {
+		coreBlockers = coreBlockers[:10]
+	}
+
+	return &TeamTrendsResponse{
+		Period:          "custom",
+		DateFrom:        start.Format("2006-01-02"),
+		DateTo:          end.Format("2006-01-02"),
+		DimensionTrends: dimensionTrends,
+		PatientStatusTrend: TeamTrendPatientStatus{
+			StartAcceptanceRate:         startAccept,
+			EndAcceptanceRate:           endAccept,
+			StartEmotionImprovementRate: startEmotion,
+			EndEmotionImprovementRate:   endEmotion,
+		},
+		CoreBlockers: coreBlockers,
+	}, nil
+}
+
+func collectDimensionAvg(rows []medicalTrendRow) map[string]float64 {
+	values := map[string][]float64{
+		"G1": {}, "G2": {}, "G3": {}, "G4": {}, "G5": {}, "G6": {},
+	}
+	for _, row := range rows {
+		quality := pickMap(row.Analysis, "quality_score")
+		stagesAny, ok := quality["stages"]
+		if !ok {
+			continue
+		}
+		stages, ok := stagesAny.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, item := range stages {
+			stage, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name := strings.TrimSpace(firstNonEmptyText(stage["group"], stage["code"], stage["key"], stage["name"]))
+			code := toDimensionCode(name)
+			if code == "" {
+				continue
+			}
+			score, ok := toFloat(stage["score"])
+			if !ok {
+				continue
+			}
+			values[code] = append(values[code], score)
+		}
+	}
+	out := map[string]float64{"G1": 0, "G2": 0, "G3": 0, "G4": 0, "G5": 0, "G6": 0}
+	for code, arr := range values {
+		if len(arr) == 0 {
+			continue
+		}
+		var sum float64
+		for _, v := range arr {
+			sum += v
+		}
+		out[code] = sum / float64(len(arr))
+	}
+	return out
+}
+
+func toDimensionCode(raw string) string {
+	text := strings.ToUpper(strings.TrimSpace(raw))
+	switch {
+	case strings.HasPrefix(text, "G1") || strings.Contains(text, "建立接诊环境"):
+		return "G1"
+	case strings.HasPrefix(text, "G2") || strings.Contains(text, "引出信息"):
+		return "G2"
+	case strings.HasPrefix(text, "G3") || strings.Contains(text, "给予信息"):
+		return "G3"
+	case strings.HasPrefix(text, "G4") || strings.Contains(text, "理解患者视角"):
+		return "G4"
+	case strings.HasPrefix(text, "G5") || strings.Contains(text, "结束接诊"):
+		return "G5"
+	case strings.HasPrefix(text, "G6") || strings.Contains(text, "治疗/预防计划"):
+		return "G6"
+	default:
+		return ""
+	}
+}
+
+func collectPatientTrend(rows []medicalTrendRow) (acceptanceRate float64, emotionImproveRate float64) {
+	total := 0
+	acceptCount := 0
+	emotionTotal := 0
+	emotionImprove := 0
+	for _, row := range rows {
+		statusRaw := firstNonEmptyText(
+			pickNestedStatus(row.Analysis, "visit_outcome"),
+			pickString(row.Analysis, "visit_outcome_status"),
+			pickString(row.Analysis, "visit_outcome"),
+			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
+			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
+		)
+		if normalized := normalizePatientStatus(statusRaw); normalized != "" {
+			total++
+			if normalized == "顺利接受" {
+				acceptCount++
+			}
+		}
+
+		if startEmotion, endEmotion, ok := readEmotionPair(row.Analysis); ok {
+			emotionTotal++
+			if isEmotionImproved(startEmotion, endEmotion) {
+				emotionImprove++
+			}
+		}
+	}
+	if total > 0 {
+		acceptanceRate = roundFloat((float64(acceptCount)/float64(total))*100, 1)
+	}
+	if emotionTotal > 0 {
+		emotionImproveRate = roundFloat((float64(emotionImprove)/float64(emotionTotal))*100, 1)
+	}
+	return acceptanceRate, emotionImproveRate
+}
+
+func readEmotionPair(analysis map[string]interface{}) (string, string, bool) {
+	candidates := []map[string]interface{}{
+		pickMap(analysis, "patient_mindset"),
+		pickMap(pickMap(analysis, "analysis_summary"), "patient_mindset"),
+	}
+	for _, m := range candidates {
+		if m == nil {
+			continue
+		}
+		start := strings.TrimSpace(firstNonEmptyText(m["start_emotion"], m["initial_emotion"], m["before"]))
+		end := strings.TrimSpace(firstNonEmptyText(m["end_emotion"], m["final_emotion"], m["after"]))
+		if start != "" && end != "" {
+			return start, end, true
+		}
+	}
+	return "", "", false
+}
+
+func isEmotionImproved(start, end string) bool {
+	startText := strings.TrimSpace(start)
+	endText := strings.TrimSpace(end)
+	negativeSet := map[string]struct{}{"焦虑": {}, "迷茫": {}, "抵触": {}, "恐惧": {}, "担忧": {}}
+	positiveSet := map[string]struct{}{"缓解": {}, "稳定": {}, "满意": {}, "放心": {}, "积极": {}}
+	startNegative := false
+	for k := range negativeSet {
+		if strings.Contains(startText, k) {
+			startNegative = true
+			break
+		}
+	}
+	if !startNegative {
+		return false
+	}
+	for k := range positiveSet {
+		if strings.Contains(endText, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int) (*TeamAbilityResponse, error) {
+	if months <= 0 {
+		months = 3
+	}
+	if months > 12 {
+		months = 12
+	}
+
+	now := time.Now()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	currentPeriodStart := addMonths(currentMonthStart, -(months - 1))
+	currentPeriodEnd := addMonths(currentMonthStart, 1)
+	prevPeriodStart := addMonths(currentPeriodStart, -months)
+	prevPeriodEnd := currentPeriodStart
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.employee_id,
+		       COALESCE(NULLIF(e.name, ''), '未知员工') AS employee_name,
+		       r.analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		ORDER BY ts ASC
+	`, tenantID, prevPeriodStart, currentPeriodEnd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query team ability rows: %w", err)
+	}
+	defer rows.Close()
+
+	allRows := make([]teamAbilityRow, 0, 512)
+	for rows.Next() {
+		var item teamAbilityRow
+		if scanErr := rows.Scan(&item.EmployeeID, &item.EmployeeName, &item.Analysis, &item.TS); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan team ability row: %w", scanErr)
+		}
+		allRows = append(allRows, item)
+	}
+
+	currentRows := make([]teamAbilityRow, 0, len(allRows))
+	previousRows := make([]teamAbilityRow, 0, len(allRows))
+	for _, r := range allRows {
+		if !r.TS.Before(currentPeriodStart) {
+			currentRows = append(currentRows, r)
+		} else if !r.TS.Before(prevPeriodStart) && r.TS.Before(prevPeriodEnd) {
+			previousRows = append(previousRows, r)
+		}
+	}
+
+	currentStageAvg := avgStageMap(currentRows)
+	previousStageAvg := avgStageMap(previousRows)
+
+	teamRadar := TeamAbilityRadar{
+		Current:  make([]TeamAbilityRadarScore, 0, len(stageOrder)),
+		Previous: make([]TeamAbilityRadarScore, 0, len(stageOrder)),
+		Weakest:  weakestStages(currentStageAvg, 2),
+	}
+	for _, name := range stageOrder {
+		teamRadar.Current = append(teamRadar.Current, TeamAbilityRadarScore{Name: name, Score: currentStageAvg[name]})
+		teamRadar.Previous = append(teamRadar.Previous, TeamAbilityRadarScore{Name: name, Score: previousStageAvg[name]})
+	}
+
+	employeeGroup := map[int64][]teamAbilityRow{}
+	employeeNames := map[int64]string{}
+	for _, r := range currentRows {
+		employeeGroup[r.EmployeeID] = append(employeeGroup[r.EmployeeID], r)
+		employeeNames[r.EmployeeID] = r.EmployeeName
+	}
+	employeeMatrix := make([]TeamAbilityEmployeeMatrixItem, 0, len(employeeGroup))
+	for eid, group := range employeeGroup {
+		stageAvg := avgStageMap(group)
+		overall := calcOverall(stageAvg)
+		employeeMatrix = append(employeeMatrix, TeamAbilityEmployeeMatrixItem{
+			EmployeeID:  eid,
+			Name:        employeeNames[eid],
+			Overall:     overall,
+			Stages:      stageAvg,
+			SampleCount: int64(len(group)),
+		})
+	}
+	sort.Slice(employeeMatrix, func(i, j int) bool { return employeeMatrix[i].Overall > employeeMatrix[j].Overall })
+
+	growthTrend := make([]TeamAbilityGrowthPoint, 0, months)
+	monthPoints := make([]time.Time, 0, months)
+	for i := 0; i < months; i++ {
+		monthPoints = append(monthPoints, addMonths(currentPeriodStart, i))
+	}
+	for _, mStart := range monthPoints {
+		mEnd := addMonths(mStart, 1)
+		monthRows := make([]teamAbilityRow, 0, len(currentRows))
+		for _, r := range currentRows {
+			if !r.TS.Before(mStart) && r.TS.Before(mEnd) {
+				monthRows = append(monthRows, r)
+			}
+		}
+		monthAvg := avgStageMap(monthRows)
+		growthTrend = append(growthTrend, TeamAbilityGrowthPoint{
+			Month: fmt.Sprintf("%d月", int(mStart.Month())),
+			Score: calcOverall(monthAvg),
+		})
+	}
+
+	prevByEmployee := map[int64][]teamAbilityRow{}
+	for _, r := range previousRows {
+		prevByEmployee[r.EmployeeID] = append(prevByEmployee[r.EmployeeID], r)
+	}
+
+	fastestGrowth := TeamAbilityFastestGrowth{Name: "-", Change: 0}
+	mostStable := TeamAbilityMostStable{Name: "-", Variance: 0}
+
+	growthCandidates := make([]TeamAbilityFastestGrowth, 0, len(employeeMatrix))
+	stableCandidates := make([]TeamAbilityMostStable, 0, len(employeeMatrix))
+	for _, m := range employeeMatrix {
+		prevOverall := calcOverall(avgStageMap(prevByEmployee[m.EmployeeID]))
+		growthCandidates = append(growthCandidates, TeamAbilityFastestGrowth{
+			Name:   m.Name,
+			Change: roundFloat(m.Overall-prevOverall, 2),
+		})
+
+		monthlyScores := make([]float64, 0, months)
+		for _, mStart := range monthPoints {
+			mEnd := addMonths(mStart, 1)
+			empRows := make([]teamAbilityRow, 0, 32)
+			for _, r := range currentRows {
+				if r.EmployeeID == m.EmployeeID && !r.TS.Before(mStart) && r.TS.Before(mEnd) {
+					empRows = append(empRows, r)
+				}
+			}
+			if len(empRows) == 0 {
+				continue
+			}
+			monthlyScores = append(monthlyScores, calcOverall(avgStageMap(empRows)))
+		}
+		if len(monthlyScores) > 0 {
+			stableCandidates = append(stableCandidates, TeamAbilityMostStable{
+				Name:     m.Name,
+				Variance: variance(monthlyScores),
+			})
+		}
+	}
+	if len(growthCandidates) > 0 {
+		sort.Slice(growthCandidates, func(i, j int) bool { return growthCandidates[i].Change > growthCandidates[j].Change })
+		fastestGrowth = growthCandidates[0]
+	}
+	if len(stableCandidates) > 0 {
+		sort.Slice(stableCandidates, func(i, j int) bool { return stableCandidates[i].Variance < stableCandidates[j].Variance })
+		mostStable = stableCandidates[0]
+	}
+
+	return &TeamAbilityResponse{
+		TeamRadar:      teamRadar,
+		EmployeeMatrix: employeeMatrix,
+		GrowthTrend:    growthTrend,
+		Highlights: TeamAbilityHighlights{
+			FastestGrowth: fastestGrowth,
+			MostStable:    mostStable,
+		},
+	}, nil
+}
+
+var stageWeights = map[string]float64{
+	"开场建立权威": 0.10,
+	"需求探索":   0.20,
+	"问题放大":   0.15,
+	"专业呈现":   0.15,
+	"方案定制":   0.10,
+	"异议化解":   0.20,
+	"促成与收尾":  0.10,
+}
+
+var stageOrder = []string{"开场建立权威", "需求探索", "问题放大", "专业呈现", "方案定制", "异议化解", "促成与收尾"}
+
+type teamAbilityRow struct {
+	EmployeeID   int64
+	EmployeeName string
+	Analysis     map[string]interface{}
+	TS           time.Time
+}
+
+func extractStageScores(analysisResult map[string]interface{}) map[string]float64 {
+	out := map[string]float64{}
+	quality := pickMap(analysisResult, "quality_score")
+	stagesAny, ok := quality["stages"]
+	if !ok {
+		return out
+	}
+	stages, ok := stagesAny.([]interface{})
+	if !ok {
+		return out
+	}
+	for _, item := range stages {
+		stage, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(fmt.Sprintf("%v", stage["name"]))
+		if _, exists := stageWeights[name]; !exists {
+			continue
+		}
+		score, ok := toFloat(stage["score"])
+		if !ok {
+			continue
+		}
+		out[name] = score
+	}
+	return out
+}
+
+func avgStageMap(rows []teamAbilityRow) map[string]float64 {
+	stageValues := map[string][]float64{}
+	for _, name := range stageOrder {
+		stageValues[name] = []float64{}
+	}
+	for _, row := range rows {
+		stageScores := extractStageScores(row.Analysis)
+		for name, score := range stageScores {
+			stageValues[name] = append(stageValues[name], score)
+		}
+	}
+	out := map[string]float64{}
+	for _, name := range stageOrder {
+		values := stageValues[name]
+		if len(values) == 0 {
+			out[name] = 0
+			continue
+		}
+		var sum float64
+		for _, v := range values {
+			sum += v
+		}
+		out[name] = roundFloat(sum/float64(len(values)), 2)
+	}
+	return out
+}
+
+func calcOverall(stageAvg map[string]float64) float64 {
+	var weightedSum float64
+	var weightTotal float64
+	for _, name := range stageOrder {
+		score := stageAvg[name]
+		if score <= 0 {
+			continue
+		}
+		w := stageWeights[name]
+		weightedSum += score * w
+		weightTotal += w
+	}
+	if weightTotal <= 0 {
+		return 0
+	}
+	return roundFloat(weightedSum/weightTotal, 2)
+}
+
+func weakestStages(stageAvg map[string]float64, n int) []string {
+	type pair struct {
+		Name  string
+		Score float64
+	}
+	items := make([]pair, 0, len(stageOrder))
+	for _, name := range stageOrder {
+		items = append(items, pair{Name: name, Score: stageAvg[name]})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Score < items[j].Score })
+	if n > len(items) {
+		n = len(items)
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, items[i].Name)
+	}
+	return out
+}
+
+func addMonths(dt time.Time, months int) time.Time {
+	shifted := dt.AddDate(0, months, 0)
+	return time.Date(shifted.Year(), shifted.Month(), 1, 0, 0, 0, 0, dt.Location())
+}
+
+func variance(values []float64) float64 {
+	if len(values) == 0 {
+		return 999
+	}
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(len(values))
+	var sq float64
+	for _, v := range values {
+		d := v - mean
+		sq += d * d
+	}
+	return roundFloat(sq/float64(len(values)), 4)
 }
 
 // GetDailyReport retrieves daily report
@@ -2240,9 +3579,9 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 	}
 
 	var (
-		confirmedCount int64
-		dealCount      int64
-		totalAmount    float64
+		confirmedCount  int64
+		dealCount       int64
+		totalAmount     float64
 		totalRecordings int64
 		activeEmployees int64
 	)
@@ -2461,27 +3800,27 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 	rank := 1
 	for empRows.Next() {
 		var (
-			eid int64
-			name string
+			eid           int64
+			name          string
 			consultations int64
-			deals int64
-			amount float64
-			following int64
+			deals         int64
+			amount        float64
+			following     int64
 		)
 		if scanErr := empRows.Scan(&eid, &name, &consultations, &deals, &amount, &following); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan dashboard employee ranking: %w", scanErr)
 		}
 		ability := abilityMap[eid]
 		item := DashboardEmployeeRankingItem{
-			EmployeeID: eid,
-			Name: name,
-			DealAmount: amount,
-			DealRate: safeRate(deals, consultations),
-			Consultations: consultations,
-			AvgDealAmount: 0,
-			FollowingCount: following,
-			OverdueCount: overdueByEmployee[eid],
-			AbilityScore: ability.Score,
+			EmployeeID:         eid,
+			Name:               name,
+			DealAmount:         amount,
+			DealRate:           safeRate(deals, consultations),
+			Consultations:      consultations,
+			AvgDealAmount:      0,
+			FollowingCount:     following,
+			OverdueCount:       overdueByEmployee[eid],
+			AbilityScore:       ability.Score,
 			AbilitySampleCount: ability.SampleCount,
 		}
 		if deals > 0 {
@@ -2490,11 +3829,11 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 		employeeRanking = append(employeeRanking, item)
 		if len(topPerformers) < 5 {
 			topPerformers = append(topPerformers, DoctorAbilityRankingResponse{
-				EmployeeID: eid,
-				EmployeeName: name,
+				EmployeeID:     eid,
+				EmployeeName:   name,
 				RecordingCount: consultations,
-				AvgScore: item.DealRate,
-				Rank: rank,
+				AvgScore:       item.DealRate,
+				Rank:           rank,
 			})
 		}
 		rank++
@@ -2527,8 +3866,8 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 			return nil, fmt.Errorf("failed to scan dashboard trend: %w", scanErr)
 		}
 		amountTrend = append(amountTrend, DashboardAmountTrendItem{
-			Date: day.Format("2006-01-02"),
-			Amount: amount,
+			Date:     day.Format("2006-01-02"),
+			Amount:   amount,
 			DealRate: safeRate(deals, total),
 		})
 	}
@@ -2562,29 +3901,29 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 			"target":                   targetNullable,
 		},
 		Revenue: &DashboardRevenue{
-			TotalAmount: totalAmount,
-			DealCount: dealCount,
-			DealRate: dealRate,
-			AvgDealAmount: avgDealAmount,
-			ConfirmedCount: confirmedCount,
+			TotalAmount:     totalAmount,
+			DealCount:       dealCount,
+			DealRate:        dealRate,
+			AvgDealAmount:   avgDealAmount,
+			ConfirmedCount:  confirmedCount,
 			TotalRecordings: totalRecordings,
 			ActiveEmployees: activeEmployees,
-			Target: targetNullable,
-			TargetProgress: targetProgress,
-			MomAmount: momAmount,
-			MomDealRate: momDealRate,
-			MomAvgAmount: momAvgAmount,
+			Target:          targetNullable,
+			TargetProgress:  targetProgress,
+			MomAmount:       momAmount,
+			MomDealRate:     momDealRate,
+			MomAvgAmount:    momAvgAmount,
 		},
 		Pipeline: &DashboardPipeline{
-			FollowingCount: followingCount,
-			Active7DCount: active7dCount,
-			OverdueCount: overdueCount,
-			AvgDealAmount: avgDealAmount,
+			FollowingCount:         followingCount,
+			Active7DCount:          active7dCount,
+			OverdueCount:           overdueCount,
+			AvgDealAmount:          avgDealAmount,
 			HistoricalRecoveryRate: recoveryRate,
 		},
 		EmployeeRanking: employeeRanking,
-		AmountTrend: amountTrend,
-		Insight: insight,
+		AmountTrend:     amountTrend,
+		Insight:         insight,
 	}
 	return resp, nil
 }
@@ -2669,7 +4008,10 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 		"trust": "信任不足", "plan_mismatch": "方案不满意", "timing": "时间安排",
 		"competitor": "在比较", "other": "其他",
 	}
-	type concernTmp struct{ reason string; cnt int64 }
+	type concernTmp struct {
+		reason string
+		cnt    int64
+	}
 	tmpConcerns := make([]concernTmp, 0, 16)
 	var totalConcern int64
 	for concernRows.Next() {
@@ -2695,9 +4037,9 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 			label = mapped
 		}
 		concernDist = append(concernDist, DashboardConcernDistribution{
-			Reason: c.reason,
-			Label: label,
-			Count: c.cnt,
+			Reason:     c.reason,
+			Label:      label,
+			Count:      c.cnt,
 			Percentage: pct,
 		})
 		issues = append(issues, IssueCount{Issue: label, Count: c.cnt})
@@ -2778,15 +4120,15 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 			avg = roundFloat(dealAmountRow/float64(dealCount), 2)
 		}
 		employeeDiagnosis = append(employeeDiagnosis, DashboardEmployeeDiagnosisRow{
-			EmployeeID: eid,
-			Name: name,
-			Consultations: consultations,
-			DealCount: dealCount,
-			DealRate: safeRate(dealCount, consultations),
-			DealAmount: dealAmountRow,
-			AvgDealAmount: avg,
+			EmployeeID:     eid,
+			Name:           name,
+			Consultations:  consultations,
+			DealCount:      dealCount,
+			DealRate:       safeRate(dealCount, consultations),
+			DealAmount:     dealAmountRow,
+			AvgDealAmount:  avg,
 			FollowingCount: following,
-			OverdueCount: overdueByEmployee[eid],
+			OverdueCount:   overdueByEmployee[eid],
 		})
 	}
 
@@ -2820,8 +4162,8 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 			var total, completed int64
 			if scanErr := trendRows.Scan(&dt, &total, &completed); scanErr == nil {
 				trends = append(trends, TrendDataPoint{
-					Date: dt.Format("2006-01-02"),
-					AvgScore: safeRate(completed, total),
+					Date:           dt.Format("2006-01-02"),
+					AvgScore:       safeRate(completed, total),
 					RecordingCount: total,
 				})
 			}
@@ -2830,30 +4172,30 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 	}
 
 	return &DiagnosisResponse{
-		OverallHealth: health,
-		Issues: issues,
+		OverallHealth:   health,
+		Issues:          issues,
 		Recommendations: []string{"优先处理超7天未跟进客户", "重点复盘未成交原因Top项"},
-		Trends: trends,
+		Trends:          trends,
 		DataQuality: &DashboardDataQuality{
-			RecordingCount: recCount,
+			RecordingCount:      recCount,
 			AnalysisSuccessRate: analysisRate,
 		},
-		Funnel: funnel,
-		ConcernDist: concernDist,
+		Funnel:          funnel,
+		ConcernDist:     concernDist,
 		EmployeeDetails: employeeDiagnosis,
 	}, nil
 }
 
 func (s *Service) GetDashboardFunnelDetail(ctx context.Context, tenantID int64, dateFrom, dateTo, stageKey string) (*DashboardFunnelDetailResponse, error) {
 	stageLabelMap := map[string]string{
-		"deal": "成交",
+		"deal":       "成交",
 		"not_closed": "未成交",
-		"following": "正在跟进",
+		"following":  "正在跟进",
 	}
 	stageConditionMap := map[string]string{
-		"deal": "r.confirmed_deal_status = '成交了'",
+		"deal":       "r.confirmed_deal_status = '成交了'",
 		"not_closed": "r.confirmed_deal_status IN ('没成交','还在跟进')",
-		"following": "r.confirmed_deal_status IN ('没成交','还在跟进') AND EXISTS (SELECT 1 FROM recording_tasks rt WHERE rt.recording_id = r.id)",
+		"following":  "r.confirmed_deal_status IN ('没成交','还在跟进') AND EXISTS (SELECT 1 FROM recording_tasks rt WHERE rt.recording_id = r.id)",
 	}
 	cond, ok := stageConditionMap[stageKey]
 	if !ok {
@@ -2915,16 +4257,16 @@ func (s *Service) GetDashboardFunnelDetail(ctx context.Context, tenantID int64, 
 			return nil, fmt.Errorf("failed to scan funnel detail: %w", scanErr)
 		}
 		byEmployee = append(byEmployee, DashboardFunnelDetailByEmployee{
-			EmployeeID: eid,
-			Name: name,
-			Count: cnt,
+			EmployeeID:   eid,
+			Name:         name,
+			Count:        cnt,
 			OverdueCount: overdueByEmployee[eid],
 		})
 		totalCount += cnt
 	}
 
 	return &DashboardFunnelDetailResponse{
-		StageKey: stageKey,
+		StageKey:   stageKey,
 		StageLabel: stageLabelMap[stageKey],
 		TotalCount: totalCount,
 		ByEmployee: byEmployee,
@@ -2952,19 +4294,19 @@ func (s *Service) calcEmployeeAbilityScores(ctx context.Context, tenantID int64)
 
 	weights := map[string]float64{
 		"开场建立权威": 0.10,
-		"需求探索": 0.20,
-		"问题放大": 0.15,
-		"专业呈现": 0.15,
-		"方案定制": 0.10,
-		"异议化解": 0.20,
-		"促成与收尾": 0.10,
+		"需求探索":   0.20,
+		"问题放大":   0.15,
+		"专业呈现":   0.15,
+		"方案定制":   0.10,
+		"异议化解":   0.20,
+		"促成与收尾":  0.10,
 	}
 	stageByEmployee := map[int64]map[string][]float64{}
 	sampleByEmployee := map[int64]int64{}
 
 	for rows.Next() {
 		var employeeID int64
-		var resultData map[string]interface{}
+		var resultData JSONObject
 		if scanErr := rows.Scan(&employeeID, &resultData); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan ability score row: %w", scanErr)
 		}
@@ -3022,7 +4364,7 @@ func (s *Service) calcEmployeeAbilityScores(ctx context.Context, tenantID int64)
 			scorePtr = &score
 		}
 		out[employeeID] = abilityScoreAggregate{
-			Score: scorePtr,
+			Score:       scorePtr,
 			SampleCount: sampleByEmployee[employeeID],
 		}
 	}
