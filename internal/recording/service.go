@@ -660,13 +660,13 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 			pickString(analysisDisplay, "subjective_summary"),
 			pickString(resp.AnalysisResult, "summary"),
 		)
-			resp.KeyQuotes = pickStringSlice(
-				pickArray(resp.AnalysisResult, "key_quotes"),
-				pickArray(resp.AnalysisResult, "highlights"),
-				pickArray(analysisDisplay, "key_quotes"),
-				pickArray(analysisDisplay, "highlights"),
-				pickArray(resp.AnalysisSummary, "highlights"),
-			)
+		resp.KeyQuotes = pickStringSlice(
+			pickArray(resp.AnalysisResult, "key_quotes"),
+			pickArray(resp.AnalysisResult, "highlights"),
+			pickArray(analysisDisplay, "key_quotes"),
+			pickArray(analysisDisplay, "highlights"),
+			pickArray(resp.AnalysisSummary, "highlights"),
+		)
 		resp.QualityScore = pickFloatPtr(
 			pickFloat(resp.AnalysisResult, "quality_score"),
 			pickFloat(resp.AnalysisResult, "quality"),
@@ -891,13 +891,13 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		)
 	}
 	if len(resp.KeyQuotes) == 0 {
-			resp.KeyQuotes = pickStringSlice(
-				pickArray(resp.AnalysisResult, "key_quotes"),
-				pickArray(resp.AnalysisResult, "highlights"),
-				pickArray(resp.AnalysisDisplay, "key_quotes"),
-				pickArray(resp.AnalysisDisplay, "highlights"),
-				pickArray(resp.AnalysisSummary, "highlights"),
-			)
+		resp.KeyQuotes = pickStringSlice(
+			pickArray(resp.AnalysisResult, "key_quotes"),
+			pickArray(resp.AnalysisResult, "highlights"),
+			pickArray(resp.AnalysisDisplay, "key_quotes"),
+			pickArray(resp.AnalysisDisplay, "highlights"),
+			pickArray(resp.AnalysisSummary, "highlights"),
+		)
 	}
 	if resp.DealOutcome == nil {
 		resp.DealOutcome = pickMap(resp.AnalysisResult, "deal_outcome")
@@ -1237,13 +1237,13 @@ func populateCompatibilityFields(resp *RecordingResponse) {
 		)
 	}
 	if len(resp.KeyQuotes) == 0 {
-			resp.KeyQuotes = pickStringSlice(
-				pickArray(analysisResult, "key_quotes"),
-				pickArray(analysisResult, "highlights"),
-				pickArray(analysisDisplay, "key_quotes"),
-				pickArray(analysisDisplay, "highlights"),
-				pickArray(analysisSummary, "highlights"),
-			)
+		resp.KeyQuotes = pickStringSlice(
+			pickArray(analysisResult, "key_quotes"),
+			pickArray(analysisResult, "highlights"),
+			pickArray(analysisDisplay, "key_quotes"),
+			pickArray(analysisDisplay, "highlights"),
+			pickArray(analysisSummary, "highlights"),
+		)
 	}
 
 	if resp.SeguePercent == nil {
@@ -2227,7 +2227,21 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
-		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		  AND (
+			EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+			)
+			OR NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier_any
+				WHERE ier_any.tenant_id = r.tenant_id
+				  AND ier_any.employee_id = r.employee_id
+			)
+		  )
 	`, tenantID, prevStart, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query doctor ability rows: %w", err)
@@ -2557,7 +2571,21 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) < $3
-		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		  AND (
+			EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+			)
+			OR NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier_any
+				WHERE ier_any.tenant_id = r.tenant_id
+				  AND ier_any.employee_id = r.employee_id
+			)
+		  )
 		ORDER BY ts DESC
 	`, tenantID, prev2Start, weekEnd)
 	if err != nil {
@@ -2927,7 +2955,21 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 		WHERE r.tenant_id = $1
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
-		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		  AND (
+			EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+			)
+			OR NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier_any
+				WHERE ier_any.tenant_id = r.tenant_id
+				  AND ier_any.employee_id = r.employee_id
+			)
+		  )
 		  AND r.id NOT IN (
 		      SELECT recording_id
 		      FROM recording_best_practices
@@ -3016,7 +3058,21 @@ func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, d
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
-		  AND (r.recording_scope = 'doctor' OR r.recording_scope IS NULL)
+		  AND (
+			EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+			)
+			OR NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier_any
+				WHERE ier_any.tenant_id = r.tenant_id
+				  AND ier_any.employee_id = r.employee_id
+			)
+		  )
 		ORDER BY ts ASC
 	`, tenantID, start, end)
 	if err != nil {
@@ -3302,8 +3358,14 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 	allRows := make([]teamAbilityRow, 0, 512)
 	for rows.Next() {
 		var item teamAbilityRow
-		if scanErr := rows.Scan(&item.EmployeeID, &item.EmployeeName, &item.Analysis, &item.TS); scanErr != nil {
+		var analysisRaw interface{}
+		if scanErr := rows.Scan(&item.EmployeeID, &item.EmployeeName, &analysisRaw, &item.TS); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan team ability row: %w", scanErr)
+		}
+		if decoded, ok := decodeNestedJSONValue(analysisRaw, 0).(map[string]interface{}); ok && decoded != nil {
+			item.Analysis = decoded
+		} else {
+			item.Analysis = map[string]interface{}{}
 		}
 		allRows = append(allRows, item)
 	}
