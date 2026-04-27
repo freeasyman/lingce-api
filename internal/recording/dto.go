@@ -512,12 +512,14 @@ type RecordingAnalysisSettingsResponse struct {
 
 // RecordingTaskStatsResponse represents task statistics
 type RecordingTaskStatsResponse struct {
-	TotalTasks     int64 `json:"total_tasks"`
-	PendingTasks   int64 `json:"pending_tasks"`
-	AssignedTasks  int64 `json:"assigned_tasks"`
-	CompletedTasks int64 `json:"completed_tasks"`
-	CancelledTasks int64 `json:"cancelled_tasks"`
-	OverdueTasks   int64 `json:"overdue_tasks"`
+	TotalTasks      int64            `json:"total_tasks"`
+	PendingTasks    int64            `json:"pending_tasks"`
+	AssignedTasks   int64            `json:"assigned_tasks"`
+	CompletedTasks  int64            `json:"completed_tasks"`
+	CancelledTasks  int64            `json:"cancelled_tasks"`
+	OverdueTasks    int64            `json:"overdue_tasks"`
+	ByPriority      map[string]int64 `json:"by_priority,omitempty"`
+	ByRecordingRole map[string]int64 `json:"by_recording_role,omitempty"`
 }
 
 // DailyBriefingResponse represents daily briefing

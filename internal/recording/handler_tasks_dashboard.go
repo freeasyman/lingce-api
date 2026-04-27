@@ -38,10 +38,9 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 任务统计仪表板默认展示租户全量任务，不按当前登录人过滤。
+	// 如需“我的任务统计”，由前端显式传 assigned_to 参数（后续可扩展）。
 	var assignedTo *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		assignedTo = &claims.UserID
-	}
 
 	tenantID := int64(0)
 	if scope.TenantID != nil {
@@ -240,10 +239,15 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.service.store.pool.Query(r.Context(), `
-		SELECT DISTINCT e.id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
+		SELECT
+			e.id,
+			COALESCE(NULLIF(e.name, ''), e.phone, '未知员工') AS name,
+			NULLIF(e.phone, '') AS phone,
+			NULLIF(e.role, '') AS role
 		FROM employees e
-		INNER JOIN recording_tasks t ON t.assigned_to = e.id
 		WHERE e.tenant_id = ANY($1)
+		  AND COALESCE(e.is_active, 1) = 1
+		  AND e.deleted_at IS NULL
 		ORDER BY e.id DESC
 	`, scope.TenantIDs)
 	if err != nil {
@@ -253,13 +257,15 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type employeeItem struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
+		ID    int64   `json:"id"`
+		Name  string  `json:"name"`
+		Phone *string `json:"phone,omitempty"`
+		Role  *string `json:"role,omitempty"`
 	}
 	var items []employeeItem
 	for rows.Next() {
 		var item employeeItem
-		if err := rows.Scan(&item.ID, &item.Name); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Phone, &item.Role); err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
 		}
@@ -385,7 +391,32 @@ func (h *Handler) CreateEmployeePartnership(w http.ResponseWriter, r *http.Reque
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, item)
+
+	backfillTag, err := h.service.store.pool.Exec(r.Context(), `
+		UPDATE recording_tasks
+		SET assigned_to = $3,
+		    assigned_by = 'partnership',
+		    status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END,
+		    updated_at = NOW()
+		WHERE tenant_id = $1
+		  AND status IN ('pending', 'assigned', 'overdue')
+		  AND (assigned_to IS NULL OR assigned_to = $2)
+	`, tenantID, req.EmployeeID, req.PartnerID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	backfilled := backfillTag.RowsAffected()
+
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"id":           item.ID,
+		"tenant_id":    item.TenantID,
+		"employee_id":  item.EmployeeID,
+		"partner_id":   item.PartnerID,
+		"relationship": item.Relationship,
+		"created_at":   item.CreatedAt,
+		"backfilled":   backfilled,
+	})
 }
 
 // DeleteEmployeePartnership handles deleting employee partnership
@@ -549,7 +580,7 @@ func (h *Handler) GetEmployeeDiagnosis(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	items, err := h.service.GetDoctorAbilityRanking(r.Context(), tenantID)
+	items, err := h.service.GetDoctorAbilityRanking(r.Context(), tenantID, "")
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -570,7 +601,17 @@ func (h *Handler) GetTeamAbility(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetTeamTrends(r.Context(), tenantID, "weekly")
+	months := 3
+	if raw := strings.TrimSpace(r.URL.Query().Get("months")); raw != "" {
+		if parsed, perr := strconv.Atoi(raw); perr == nil {
+			months = parsed
+		}
+	}
+	if months <= 0 || months > 12 {
+		httputil.WriteBadRequest(w, "months must be between 1 and 12")
+		return
+	}
+	resp, err := h.service.GetTeamAbility(r.Context(), tenantID, months)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

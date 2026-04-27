@@ -23,6 +23,50 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func buildOverallSegueScoreSQL() string {
+	// Keep this aligned with frontend normalizeScoreToHundred:
+	// 0~1 => *100, 0~5 => *20, else keep original numeric value.
+	return `(
+		CASE
+			WHEN COALESCE(r.analysis_result->>'segue_percent', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->>'segue_percent')::double precision
+			WHEN COALESCE(r.analysis_result->>'segue_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->>'segue_score')::double precision
+			WHEN COALESCE(r.analysis_result->>'communication_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->>'communication_score')::double precision
+			WHEN COALESCE(r.analysis_result->'segue'->>'overall_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->'segue'->>'overall_score')::double precision
+			WHEN COALESCE(r.analysis_result->'segue'->>'overall', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->'segue'->>'overall')::double precision
+			WHEN COALESCE(r.analysis_result->'analysis_summary'->>'segue_percent', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->'analysis_summary'->>'segue_percent')::double precision
+			WHEN COALESCE(r.analysis_result->'analysis_summary'->>'segue_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_result->'analysis_summary'->>'segue_score')::double precision
+			WHEN COALESCE(r.analysis_display->>'segue_percent', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->>'segue_percent')::double precision
+			WHEN COALESCE(r.analysis_display->>'segue_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->>'segue_score')::double precision
+			WHEN COALESCE(r.analysis_display->'segue_scores'->>'overall', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'segue_scores'->>'overall')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->>'segue_percent', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->>'segue_percent')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->>'segue_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->>'segue_score')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->>'communication_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->>'communication_score')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->'segue'->>'overall_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->'segue'->>'overall_score')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->'segue'->>'overall', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->'segue'->>'overall')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->'analysis_summary'->>'segue_percent', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->'analysis_summary'->>'segue_percent')::double precision
+			WHEN COALESCE(r.analysis_display->'analysis_result'->'analysis_summary'->>'segue_score', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+				THEN (r.analysis_display->'analysis_result'->'analysis_summary'->>'segue_score')::double precision
+			ELSE NULL
+		END
+	)`
+}
+
 // ListRecordings retrieves a paginated list of medical recordings
 func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([]*MedicalRecording, int, error) {
 	var conditions []string
@@ -154,29 +198,29 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	if req.SegueMin != nil {
+		scoreExpr := buildOverallSegueScoreSQL()
 		conditions = append(conditions, fmt.Sprintf(`(
 			CASE
-				WHEN COALESCE(r.analysis_display->>'segue_score', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-					THEN (r.analysis_display->>'segue_score')::double precision
-				WHEN COALESCE(r.analysis_display->'segue_scores'->>'overall', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-					THEN (r.analysis_display->'segue_scores'->>'overall')::double precision
-				ELSE NULL
+				WHEN %s IS NULL THEN NULL
+				WHEN %s > 0 AND %s <= 1 THEN %s * 100
+				WHEN %s > 0 AND %s <= 5 THEN %s * 20
+				ELSE %s
 			END
-		) >= $%d`, argIndex))
+		) >= $%d`, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, argIndex))
 		args = append(args, *req.SegueMin)
 		argIndex++
 	}
 
 	if req.SegueMax != nil {
+		scoreExpr := buildOverallSegueScoreSQL()
 		conditions = append(conditions, fmt.Sprintf(`(
 			CASE
-				WHEN COALESCE(r.analysis_display->>'segue_score', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-					THEN (r.analysis_display->>'segue_score')::double precision
-				WHEN COALESCE(r.analysis_display->'segue_scores'->>'overall', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-					THEN (r.analysis_display->'segue_scores'->>'overall')::double precision
-				ELSE NULL
+				WHEN %s IS NULL THEN NULL
+				WHEN %s > 0 AND %s <= 1 THEN %s * 100
+				WHEN %s > 0 AND %s <= 5 THEN %s * 20
+				ELSE %s
 			END
-		) < $%d`, argIndex))
+		) < $%d`, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, scoreExpr, argIndex))
 		args = append(args, *req.SegueMax)
 		argIndex++
 	}
@@ -223,7 +267,9 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
+			NULLIF(r.analysis_status, '') AS analysis_status,
 			CASE
 				WHEN r.analysis_status = 'completed' THEN 'completed'
 				WHEN r.analysis_status = 'failed' OR r.transcription_status = 'failed' THEN 'failed'
@@ -276,7 +322,9 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			&r.DoctorSummary,
 			&r.TherapistSummary,
 			&r.ConsultantSummary,
+			&r.AnalysisResult,
 			&r.AnalysisDisplay,
+			&r.AnalysisStatus,
 			&r.Status,
 			&r.ProcessingError,
 			&r.RecordingStartedAt,
@@ -322,7 +370,9 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
+			NULLIF(r.analysis_status, '') AS analysis_status,
 			CASE
 				WHEN r.analysis_status = 'completed' THEN 'completed'
 				WHEN r.analysis_status = 'failed' OR r.transcription_status = 'failed' THEN 'failed'
@@ -363,7 +413,9 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		&r.DoctorSummary,
 		&r.TherapistSummary,
 		&r.ConsultantSummary,
+		&r.AnalysisResult,
 		&r.AnalysisDisplay,
+		&r.AnalysisStatus,
 		&r.Status,
 		&r.ProcessingError,
 		&r.RecordingStartedAt,
@@ -761,17 +813,17 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	argIndex := 1
 
 	if len(tenantIDs) > 0 {
-		conditions = append(conditions, fmt.Sprintf("tenant_id = ANY($%d)", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.tenant_id = ANY($%d)", argIndex))
 		args = append(args, tenantIDs)
 		argIndex++
 	} else {
-		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.tenant_id = $%d", argIndex))
 		args = append(args, tenantID)
 		argIndex++
 	}
 
 	if assignedTo != nil {
-		conditions = append(conditions, fmt.Sprintf("assigned_to = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.assigned_to = $%d", argIndex))
 		args = append(args, *assignedTo)
 		argIndex++
 	}
@@ -781,19 +833,33 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*) AS total_tasks,
-			COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_tasks,
-			COUNT(CASE WHEN status = 'assigned' THEN 1 END) AS assigned_tasks,
-			COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_tasks,
-			COUNT(CASE WHEN status = 'cancelled' THEN 1 END) AS cancelled_tasks,
+			COUNT(CASE WHEN t.status = 'pending' THEN 1 END) AS pending_tasks,
+			COUNT(CASE WHEN t.status = 'assigned' THEN 1 END) AS assigned_tasks,
+			COUNT(CASE WHEN t.status = 'completed' THEN 1 END) AS completed_tasks,
+			COUNT(CASE WHEN t.status = 'cancelled' THEN 1 END) AS cancelled_tasks,
 			COUNT(CASE
-				WHEN due_at < NOW() AND status NOT IN ('completed', 'cancelled')
+				WHEN t.due_at < NOW() AND t.status NOT IN ('completed', 'cancelled')
 				THEN 1
 			END) AS overdue_tasks
-		FROM recording_tasks
+		FROM recording_tasks t
 		WHERE %s
 	`, whereClause)
 
-	var stats RecordingTaskStatsResponse
+	stats := RecordingTaskStatsResponse{
+		ByPriority: map[string]int64{
+			"high":   0,
+			"medium": 0,
+			"low":    0,
+		},
+		ByRecordingRole: map[string]int64{
+			"consultant":       0,
+			"customer_service": 0,
+			"doctor":           0,
+			"therapist":        0,
+			"doctor_assistant": 0,
+			"other":            0,
+		},
+	}
 	if err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&stats.TotalTasks,
 		&stats.PendingTasks,
@@ -803,6 +869,92 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		&stats.OverdueTasks,
 	); err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
+	}
+
+	priorityQuery := fmt.Sprintf(`
+		SELECT
+			CASE
+				WHEN lower(COALESCE(t.priority, 'medium')) IN ('high', 'h', '高') THEN 'high'
+				WHEN lower(COALESCE(t.priority, 'medium')) IN ('low', 'l', '低') THEN 'low'
+				ELSE 'medium'
+			END AS priority_bucket,
+			COUNT(*) AS cnt
+		FROM recording_tasks t
+		WHERE %s
+		GROUP BY 1
+	`, whereClause)
+	if rows, err := s.pool.Query(ctx, priorityQuery, args...); err != nil {
+		return nil, fmt.Errorf("failed to get task priority stats: %w", err)
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var bucket string
+			var cnt int64
+			if err := rows.Scan(&bucket, &cnt); err != nil {
+				return nil, fmt.Errorf("failed to scan task priority stats: %w", err)
+			}
+			stats.ByPriority[bucket] = cnt
+		}
+	}
+
+	roleQuery := fmt.Sprintf(`
+		SELECT role_category, COUNT(*) AS cnt
+		FROM (
+			SELECT
+				CASE
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = 'doctor'
+					) THEN 'doctor'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = 'therapist'
+					) THEN 'therapist'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = 'doctor_assistant'
+					) THEN 'doctor_assistant'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = ANY($%d)
+					) THEN 'customer_service'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = r.tenant_id
+						  AND ier.employee_id = r.employee_id
+						  AND lower(ier.role_code) = ANY($%d)
+					) THEN 'consultant'
+					ELSE 'other'
+				END AS role_category
+			FROM recording_tasks t
+			LEFT JOIN recordings r ON r.id = t.recording_id AND r.tenant_id = t.tenant_id
+			WHERE %s
+		) role_rows
+		GROUP BY role_category
+	`, argIndex, argIndex+1, whereClause)
+	roleArgs := append(append([]interface{}{}, args...), []string{"customer_service", "service", "cs", "frontdesk", "reception"}, []string{"consultant"})
+	if rows, err := s.pool.Query(ctx, roleQuery, roleArgs...); err != nil {
+		return nil, fmt.Errorf("failed to get task recording role stats: %w", err)
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var category string
+			var cnt int64
+			if err := rows.Scan(&category, &cnt); err != nil {
+				return nil, fmt.Errorf("failed to scan task recording role stats: %w", err)
+			}
+			if _, ok := stats.ByRecordingRole[category]; ok {
+				stats.ByRecordingRole[category] = cnt
+			}
+		}
 	}
 
 	return &stats, nil
