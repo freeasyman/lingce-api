@@ -3,10 +3,20 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// roundFloat 将浮点数四舍五入到指定小数位，并处理极小值
+func roundFloat(val float64, precision int) float64 {
+	if math.Abs(val) < 0.01 {
+		return 0
+	}
+	ratio := math.Pow(10, float64(precision))
+	return math.Round(val*ratio) / ratio
+}
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -17,100 +27,193 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // GetAdminDashboardData retrieves admin dashboard statistics
+// This function now uses the same date range logic as the consultant dashboard (last 30 days)
 func (s *Store) GetAdminDashboardData(ctx context.Context, tenantID int64) (*AdminDashboardData, error) {
 	now := time.Now()
-	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	lastMonthStart := currentMonthStart.AddDate(0, -1, 0)
+	// Use last 30 days as the date range (same as consultant dashboard "month" option)
+	// This matches the frontend getDateRange function: start.setDate(end.getDate() - 29)
+	currentPeriodEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, now.Location())
+	currentPeriodStart := currentPeriodEnd.AddDate(0, 0, -29) // Last 30 days
+	lastPeriodEnd := currentPeriodStart.Add(-time.Second)
+	lastPeriodStart := lastPeriodEnd.AddDate(0, 0, -29) // Previous 30 days
 
 	data := &AdminDashboardData{
-		Metrics: AdminDashboardMetrics{},
-		Alerts:  []AdminDashboardAlert{},
+		Metrics:       AdminDashboardMetrics{},
+		Alerts:        []AdminDashboardAlert{},
 		TopPerformers: []AdminDashboardTopPerformer{},
 	}
 
-	// 查询本月录音统计
-	var currentMonthCount, lastMonthCount int
-	var currentMonthDuration, lastMonthDuration int64
+	// 查询最近30天录音统计（使用 recorded_at 或 created_at，与 daily-report 一致）
+	var currentPeriodCount, lastPeriodCount int
+	var currentPeriodDuration, lastPeriodDuration int64
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE created_at >= $1) as current_count,
-			COUNT(*) FILTER (WHERE created_at >= $2 AND created_at < $1) as last_count,
-			COALESCE(SUM(duration) FILTER (WHERE created_at >= $1), 0) as current_duration,
-			COALESCE(SUM(duration) FILTER (WHERE created_at >= $2 AND created_at < $1), 0) as last_duration
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2) as current_count,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4) as last_count,
+			COALESCE(SUM(duration) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2), 0) as current_duration,
+			COALESCE(SUM(duration) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4), 0) as last_duration
 		FROM recordings
-		WHERE tenant_id = $3 AND deleted_at IS NULL
-	`, currentMonthStart, lastMonthStart, tenantID).Scan(
-		&currentMonthCount, &lastMonthCount, &currentMonthDuration, &lastMonthDuration,
+		WHERE tenant_id = $5
+	`, currentPeriodStart, currentPeriodEnd, lastPeriodStart, lastPeriodEnd, tenantID).Scan(
+		&currentPeriodCount, &lastPeriodCount, &currentPeriodDuration, &lastPeriodDuration,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	// 计算患者数趋势
-	data.Metrics.Patients.Value = currentMonthCount
-	if lastMonthCount > 0 {
-		data.Metrics.Patients.Trend = float64(currentMonthCount-lastMonthCount) / float64(lastMonthCount) * 100
+	data.Metrics.Patients.Value = currentPeriodCount
+	if lastPeriodCount > 0 {
+		data.Metrics.Patients.Trend = roundFloat(float64(currentPeriodCount-lastPeriodCount)/float64(lastPeriodCount)*100, 1)
 	}
 
-	// 查询成交相关数据（从 recordings 表的 analysis_result 中提取）
-	var dealCount, totalCount int
+	// 查询成交相关数据（与 daily-report 一致）
+	var currentDealCount, currentConfirmedCount int
+	var lastDealCount, lastConfirmedCount int
 	err = s.pool.QueryRow(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE
-				analysis_result::text LIKE '%成交%' OR
-				analysis_result::text LIKE '%deal%'
-			) as deal_count,
-			COUNT(*) as total_count
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2 AND confirmed_deal_status = '成交了') as current_deal_count,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2 AND confirmed_deal_status IS NOT NULL) as current_confirmed_count,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4 AND confirmed_deal_status = '成交了') as last_deal_count,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4 AND confirmed_deal_status IS NOT NULL) as last_confirmed_count
 		FROM recordings
-		WHERE tenant_id = $1
-			AND created_at >= $2
-			AND deleted_at IS NULL
-			AND analysis_result IS NOT NULL
-	`, tenantID, currentMonthStart).Scan(&dealCount, &totalCount)
+		WHERE tenant_id = $5
+	`, currentPeriodStart, currentPeriodEnd, lastPeriodStart, lastPeriodEnd, tenantID).Scan(&currentDealCount, &currentConfirmedCount, &lastDealCount, &lastConfirmedCount)
 
-	if err == nil && totalCount > 0 {
-		data.Metrics.DealRate.Value = float64(dealCount) / float64(totalCount) * 100
-		// 简化处理，设置一个默认趋势
-		data.Metrics.DealRate.Trend = 3.1
-	} else {
-		data.Metrics.DealRate.Value = 0
-		data.Metrics.DealRate.Trend = 0
+	if err == nil {
+		if currentConfirmedCount > 0 {
+			data.Metrics.DealRate.Value = roundFloat(float64(currentDealCount)/float64(currentConfirmedCount)*100, 1)
+		}
+		if lastConfirmedCount > 0 {
+			lastDealRate := roundFloat(float64(lastDealCount)/float64(lastConfirmedCount)*100, 1)
+			data.Metrics.DealRate.Trend = roundFloat(data.Metrics.DealRate.Value-lastDealRate, 1)
+		}
 	}
 
-	// 设置默认值（这些数据需要根据实际业务表来查询）
-	data.Metrics.Revenue.Value = float64(currentMonthCount * 3500) // 假设平均每次3500元
-	data.Metrics.Revenue.Trend = data.Metrics.Patients.Trend
+	// 查询营收数据（与 daily-report 一致，使用 converted_amount）
+	var currentRevenue, lastRevenue float64
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(converted_amount) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2 AND confirmed_deal_status = '成交了'), 0) as current_revenue,
+			COALESCE(SUM(converted_amount) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4 AND confirmed_deal_status = '成交了'), 0) as last_revenue
+		FROM recordings
+		WHERE tenant_id = $5
+	`, currentPeriodStart, currentPeriodEnd, lastPeriodStart, lastPeriodEnd, tenantID).Scan(&currentRevenue, &lastRevenue)
 
-	data.Metrics.TaskCompletion.Value = 92.3
-	data.Metrics.TaskCompletion.Trend = -2.1
-	data.Metrics.TargetAchievement.Value = 85.6
-	data.Metrics.TargetAchievement.Trend = 5.2
-	data.Metrics.ServiceQuality.Value = 4.8
-	data.Metrics.ServiceQuality.Trend = 0.3
+	if err == nil {
+		data.Metrics.Revenue.Value = roundFloat(currentRevenue, 0)
+		if lastRevenue > 0 {
+			data.Metrics.Revenue.Trend = roundFloat((currentRevenue-lastRevenue)/lastRevenue*100, 1)
+		} else if currentRevenue > 0 {
+			data.Metrics.Revenue.Trend = 100
+		}
+	}
 
-	// 查询团队业绩排行（按录音数量）
+	// 查询任务完成率
+	var totalTasks, completedTasks int
+	var lastTotalTasks, lastCompletedTasks int
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2) as current_total,
+			COUNT(*) FILTER (WHERE created_at >= $1 AND created_at <= $2 AND status = 'completed') as current_completed,
+			COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4) as last_total,
+			COUNT(*) FILTER (WHERE created_at >= $3 AND created_at <= $4 AND status = 'completed') as last_completed
+		FROM recording_tasks
+		WHERE tenant_id = $5
+	`, currentPeriodStart, currentPeriodEnd, lastPeriodStart, lastPeriodEnd, tenantID).Scan(&totalTasks, &completedTasks, &lastTotalTasks, &lastCompletedTasks)
+
+	if err == nil && totalTasks > 0 {
+		data.Metrics.TaskCompletion.Value = roundFloat(float64(completedTasks)/float64(totalTasks)*100, 1)
+		var lastRate float64
+		if lastTotalTasks > 0 {
+			lastRate = float64(lastCompletedTasks) / float64(lastTotalTasks) * 100
+		}
+		data.Metrics.TaskCompletion.Trend = roundFloat(data.Metrics.TaskCompletion.Value-lastRate, 1)
+	}
+
+	// 查询目标达成率（从 tenants 表获取月度目标）
+	var targetNullable *float64
+	err = s.pool.QueryRow(ctx, `SELECT monthly_revenue_target::float8 FROM tenants WHERE id = $1`, tenantID).Scan(&targetNullable)
+	if err == nil && targetNullable != nil && *targetNullable > 0 {
+		targetProgress := roundFloat((currentRevenue/(*targetNullable))*100, 1)
+		data.Metrics.TargetAchievement.Value = targetProgress
+		// 趋势暂时设为0，需要历史数据对比
+		data.Metrics.TargetAchievement.Trend = 0
+	} else {
+		data.Metrics.TargetAchievement.Value = 0
+		data.Metrics.TargetAchievement.Trend = 0
+	}
+
+	// 查询服务质量（基于录音质检评分的平均值）
+	var currentQuality, lastQuality float64
+	var currentQualityCount, lastQualityCount int
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(AVG(
+				CASE
+					WHEN (analysis_result->>'overall_score')::text ~ '^[0-9]+(\.[0-9]+)?$'
+					THEN (analysis_result->>'overall_score')::float
+					WHEN (analysis_result->'quality_score'->>'overall')::text ~ '^[0-9]+(\.[0-9]+)?$'
+					THEN (analysis_result->'quality_score'->>'overall')::float
+					ELSE NULL
+				END
+			) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2), 0) as current_quality,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $1 AND COALESCE(recorded_at, created_at) <= $2 AND (
+				(analysis_result->>'overall_score')::text ~ '^[0-9]+(\.[0-9]+)?$' OR
+				(analysis_result->'quality_score'->>'overall')::text ~ '^[0-9]+(\.[0-9]+)?$'
+			)) as current_count,
+			COALESCE(AVG(
+				CASE
+					WHEN (analysis_result->>'overall_score')::text ~ '^[0-9]+(\.[0-9]+)?$'
+					THEN (analysis_result->>'overall_score')::float
+					WHEN (analysis_result->'quality_score'->>'overall')::text ~ '^[0-9]+(\.[0-9]+)?$'
+					THEN (analysis_result->'quality_score'->>'overall')::float
+					ELSE NULL
+				END
+			) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4), 0) as last_quality,
+			COUNT(*) FILTER (WHERE COALESCE(recorded_at, created_at) >= $3 AND COALESCE(recorded_at, created_at) <= $4 AND (
+				(analysis_result->>'overall_score')::text ~ '^[0-9]+(\.[0-9]+)?$' OR
+				(analysis_result->'quality_score'->>'overall')::text ~ '^[0-9]+(\.[0-9]+)?$'
+			)) as last_count
+		FROM recordings
+		WHERE tenant_id = $5
+			AND analysis_result IS NOT NULL
+	`, currentPeriodStart, currentPeriodEnd, lastPeriodStart, lastPeriodEnd, tenantID).Scan(&currentQuality, &currentQualityCount, &lastQuality, &lastQualityCount)
+
+	if err == nil && currentQualityCount > 0 {
+		data.Metrics.ServiceQuality.Value = roundFloat(currentQuality, 1)
+		data.Metrics.ServiceQuality.Trend = roundFloat(currentQuality-lastQuality, 1)
+	} else {
+		data.Metrics.ServiceQuality.Value = 0
+		data.Metrics.ServiceQuality.Trend = 0
+	}
+
+	// 查询团队业绩排行（按成交金额，与 daily-report 一致）
 	rows, err := s.pool.Query(ctx, `
 		SELECT
-			e.full_name,
-			COUNT(r.id) as recording_count,
-			ROW_NUMBER() OVER (ORDER BY COUNT(r.id) DESC) as rank
+			COALESCE(NULLIF(e.name, ''), NULLIF(e.full_name, ''), '未知员工') as employee_name,
+			COALESCE(SUM(r.converted_amount), 0) as total_revenue,
+			ROW_NUMBER() OVER (ORDER BY COALESCE(SUM(r.converted_amount), 0) DESC) as rank
 		FROM employees e
-		LEFT JOIN recordings r ON r.employee_id = e.id AND r.created_at >= $1 AND r.deleted_at IS NULL
-		WHERE e.tenant_id = $2 AND e.deleted_at IS NULL
-		GROUP BY e.id, e.full_name
-		HAVING COUNT(r.id) > 0
-		ORDER BY recording_count DESC
+		LEFT JOIN recordings r ON r.employee_id = e.id
+			AND COALESCE(r.recorded_at, r.created_at) >= $1
+			AND COALESCE(r.recorded_at, r.created_at) <= $2
+			AND r.confirmed_deal_status = '成交了'
+		WHERE e.tenant_id = $3
+		GROUP BY e.id, e.full_name, e.name
+		HAVING COALESCE(SUM(r.converted_amount), 0) > 0
+		ORDER BY total_revenue DESC
 		LIMIT 3
-	`, currentMonthStart, tenantID)
+	`, currentPeriodStart, currentPeriodEnd, tenantID)
 
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var performer AdminDashboardTopPerformer
-			var recordingCount int
-			if err := rows.Scan(&performer.Name, &recordingCount, &performer.Rank); err == nil {
-				performer.Revenue = float64(recordingCount * 3500) // 假设平均每次3500元
+			var revenue float64
+			if err := rows.Scan(&performer.Name, &revenue, &performer.Rank); err == nil {
+				performer.Revenue = revenue
 				data.TopPerformers = append(data.TopPerformers, performer)
 			}
 		}
@@ -124,11 +227,11 @@ func (s *Store) GetAdminDashboardData(ctx context.Context, tenantID int64) (*Adm
 	}
 
 	// 添加默认告警
-	if currentMonthCount == 0 {
+	if currentPeriodCount == 0 {
 		data.Alerts = append(data.Alerts, AdminDashboardAlert{
 			ID:          1,
 			Priority:    "medium",
-			Title:       "本月暂无录音数据",
+			Title:       "最近30天暂无录音数据",
 			Description: "建议检查录音设备状态和员工使用情况",
 		})
 	} else {
@@ -136,7 +239,7 @@ func (s *Store) GetAdminDashboardData(ctx context.Context, tenantID int64) (*Adm
 			ID:          1,
 			Priority:    "low",
 			Title:       "系统运行正常",
-			Description: fmt.Sprintf("本月已有 %d 条录音记录", currentMonthCount),
+			Description: fmt.Sprintf("最近30天已有 %d 条录音记录", currentPeriodCount),
 		})
 	}
 
@@ -176,7 +279,6 @@ func (s *Store) GetConsultantDashboardData(ctx context.Context, tenantID int64, 
 		WHERE tenant_id = $1
 			AND employee_id = $2
 			AND created_at >= $3
-			AND deleted_at IS NULL
 			AND (
 				analysis_result::text LIKE '%成交%' OR
 				analysis_result::text LIKE '%deal%'
@@ -197,7 +299,6 @@ func (s *Store) GetConsultantDashboardData(ctx context.Context, tenantID int64, 
 		FROM recordings
 		WHERE tenant_id = $1
 			AND employee_id = $2
-			AND deleted_at IS NULL
 	`, tenantID, *employeeID).Scan(&followingCount, &pendingCount)
 
 	if err == nil {
@@ -220,7 +321,6 @@ func (s *Store) GetConsultantDashboardData(ctx context.Context, tenantID int64, 
 			FROM recordings
 			WHERE tenant_id = $1
 				AND created_at >= NOW() - INTERVAL '30 days'
-				AND deleted_at IS NULL
 			GROUP BY employee_id
 		),
 		ranked_employees AS (
@@ -306,7 +406,6 @@ func (s *Store) GetDoctorDashboardData(ctx context.Context, tenantID int64, empl
 		WHERE tenant_id = $1
 			AND employee_id = $2
 			AND created_at >= $3
-			AND deleted_at IS NULL
 	`, tenantID, *employeeID, todayStart).Scan(&todayCount, &todayAvgDuration)
 
 	if err == nil {
@@ -325,7 +424,6 @@ func (s *Store) GetDoctorDashboardData(ctx context.Context, tenantID int64, empl
 		WHERE tenant_id = $1
 			AND employee_id = $2
 			AND created_at >= $3
-			AND deleted_at IS NULL
 	`, tenantID, *employeeID, weekStart).Scan(&weekCount, &weekAvgDuration)
 
 	if err == nil {
@@ -343,7 +441,6 @@ func (s *Store) GetDoctorDashboardData(ctx context.Context, tenantID int64, empl
 		WHERE tenant_id = $1
 			AND employee_id = $2
 			AND created_at >= $3
-			AND deleted_at IS NULL
 	`, tenantID, *employeeID, weekStart).Scan(&totalCount, &successCount)
 
 	if err == nil && totalCount > 0 {
@@ -365,7 +462,6 @@ func (s *Store) GetDoctorDashboardData(ctx context.Context, tenantID int64, empl
 			FROM recordings
 			WHERE tenant_id = $1
 				AND created_at >= $2
-				AND deleted_at IS NULL
 			GROUP BY employee_id
 		)
 		SELECT ROW_NUMBER() OVER (ORDER BY recording_count DESC) as rank
@@ -394,4 +490,237 @@ func (s *Store) GetDoctorDashboardData(ctx context.Context, tenantID int64, empl
 	})
 
 	return data, nil
+}
+
+func (s *Store) GetOpsWorkbenchOverview(ctx context.Context, tenantID *int64, dateFrom, dateTo string) (*OpsWorkbenchOverview, error) {
+	res := &OpsWorkbenchOverview{}
+	var tenantFilter int64
+	if tenantID != nil {
+		tenantFilter = *tenantID
+	}
+
+	err := s.pool.QueryRow(ctx, `
+		WITH tenant_scope AS (
+			SELECT id, name
+			FROM tenants
+			WHERE ($1::bigint = 0 OR id = $1)
+		),
+		rec AS (
+			SELECT
+				COUNT(*)::bigint AS recording_count,
+				COALESCE(SUM(COALESCE(r.duration, 0)), 0)::bigint AS recording_duration_sec,
+				COUNT(*) FILTER (WHERE r.confirmed_deal_status = '成交了')::bigint AS deal_count,
+				COALESCE(SUM(CASE WHEN r.confirmed_deal_status = '成交了' THEN COALESCE(r.converted_amount, 0) ELSE 0 END), 0)::bigint AS deal_amount
+			FROM recordings r
+			JOIN tenant_scope t ON t.id = r.tenant_id
+			WHERE COALESCE(r.recorded_at, r.created_at)::date BETWEEN $2::date AND $3::date
+		),
+		tasks AS (
+			SELECT
+				COUNT(*)::bigint AS task_total,
+				COUNT(*) FILTER (WHERE rt.status = 'completed')::bigint AS task_done,
+				COUNT(*) FILTER (WHERE rt.status <> 'completed')::bigint AS task_undone
+			FROM recording_tasks rt
+			JOIN tenant_scope t ON t.id = rt.tenant_id
+			WHERE rt.created_at::date BETWEEN $2::date AND $3::date
+		),
+		devs AS (
+			SELECT COUNT(*)::bigint AS device_count
+			FROM badge_devices bd
+			JOIN tenant_scope t ON t.id = bd.tenant_id
+		)
+		SELECT
+			(SELECT COUNT(*)::bigint FROM tenant_scope) AS institution_count,
+			COALESCE((SELECT device_count FROM devs), 0) AS device_count,
+			COALESCE((SELECT recording_count FROM rec), 0) AS recording_count,
+			COALESCE((SELECT recording_duration_sec FROM rec), 0) AS recording_duration_sec,
+			COALESCE((SELECT task_total FROM tasks), 0) AS task_total,
+			COALESCE((SELECT task_done FROM tasks), 0) AS task_done,
+			COALESCE((SELECT task_undone FROM tasks), 0) AS task_undone,
+			COALESCE((SELECT deal_count FROM rec), 0) AS deal_count,
+			COALESCE((SELECT deal_amount FROM rec), 0) AS deal_amount
+	`, tenantFilter, dateFrom, dateTo).Scan(
+		&res.InstitutionCount,
+		&res.DeviceCount,
+		&res.RecordingCount,
+		&res.RecordingDuration,
+		&res.TaskTotal,
+		&res.TaskDone,
+		&res.TaskUndone,
+		&res.DealCount,
+		&res.DealAmount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (s *Store) GetOpsWorkbenchTrend(ctx context.Context, tenantID *int64, dateFrom, dateTo, metric string) (*OpsWorkbenchTrend, error) {
+	var tenantFilter int64
+	if tenantID != nil {
+		tenantFilter = *tenantID
+	}
+	allowed := map[string]bool{"recording": true, "duration": true, "task": true, "deal": true}
+	if !allowed[metric] {
+		metric = "recording"
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		WITH tenant_scope AS (
+			SELECT id FROM tenants WHERE ($1::bigint = 0 OR id = $1)
+		),
+		days AS (
+			SELECT generate_series($2::date, $3::date, interval '1 day')::date AS d
+		),
+		rec AS (
+			SELECT
+				COALESCE(r.recorded_at, r.created_at)::date AS d,
+				COUNT(*)::bigint AS recording_count,
+				COALESCE(SUM(COALESCE(r.duration, 0)), 0)::bigint AS duration_sum,
+				COALESCE(SUM(CASE WHEN r.confirmed_deal_status = '成交了' THEN COALESCE(r.converted_amount, 0) ELSE 0 END), 0)::bigint AS deal_amount
+			FROM recordings r
+			JOIN tenant_scope t ON t.id = r.tenant_id
+			WHERE COALESCE(r.recorded_at, r.created_at)::date BETWEEN $2::date AND $3::date
+			GROUP BY COALESCE(r.recorded_at, r.created_at)::date
+		),
+		task_daily AS (
+			SELECT
+				rt.created_at::date AS d,
+				COUNT(*)::bigint AS task_count
+			FROM recording_tasks rt
+			JOIN tenant_scope t ON t.id = rt.tenant_id
+			WHERE rt.created_at::date BETWEEN $2::date AND $3::date
+			GROUP BY rt.created_at::date
+		)
+		SELECT
+			to_char(days.d, 'YYYY-MM-DD') AS d,
+			CASE
+				WHEN $4 = 'duration' THEN COALESCE(rec.duration_sum, 0)
+				WHEN $4 = 'deal' THEN COALESCE(rec.deal_amount, 0)
+				WHEN $4 = 'task' THEN COALESCE(task_daily.task_count, 0)
+				ELSE COALESCE(rec.recording_count, 0)
+			END AS v
+		FROM days
+		LEFT JOIN rec ON rec.d = days.d
+		LEFT JOIN task_daily ON task_daily.d = days.d
+		ORDER BY days.d ASC
+	`, tenantFilter, dateFrom, dateTo, metric)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	resp := &OpsWorkbenchTrend{Metric: metric, Points: make([]OpsWorkbenchTrendPoint, 0, 64)}
+	for rows.Next() {
+		var p OpsWorkbenchTrendPoint
+		if err := rows.Scan(&p.Date, &p.Value); err != nil {
+			return nil, err
+		}
+		resp.Points = append(resp.Points, p)
+	}
+	return resp, rows.Err()
+}
+
+func (s *Store) GetOpsWorkbenchTable(
+	ctx context.Context,
+	tenantID *int64,
+	dateFrom, dateTo string,
+	page, pageSize int,
+) ([]OpsWorkbenchTableRow, int64, error) {
+	var tenantFilter int64
+	if tenantID != nil {
+		tenantFilter = *tenantID
+	}
+	offset := (page - 1) * pageSize
+	if offset < 0 {
+		offset = 0
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::bigint
+		FROM tenants
+		WHERE ($1::bigint = 0 OR id = $1)
+	`, tenantFilter).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		WITH tenant_scope AS (
+			SELECT id, name
+			FROM tenants
+			WHERE ($1::bigint = 0 OR id = $1)
+			ORDER BY id ASC
+			LIMIT $4 OFFSET $5
+		),
+		rec AS (
+			SELECT
+				r.tenant_id,
+				COUNT(*)::bigint AS recording_count,
+				COALESCE(SUM(COALESCE(r.duration, 0)), 0)::bigint AS recording_duration_sec,
+				COUNT(*) FILTER (WHERE r.confirmed_deal_status = '成交了')::bigint AS deal_count,
+				COALESCE(SUM(CASE WHEN r.confirmed_deal_status = '成交了' THEN COALESCE(r.converted_amount, 0) ELSE 0 END), 0)::bigint AS deal_amount
+			FROM recordings r
+			JOIN tenant_scope t ON t.id = r.tenant_id
+			WHERE COALESCE(r.recorded_at, r.created_at)::date BETWEEN $2::date AND $3::date
+			GROUP BY r.tenant_id
+		),
+		task_agg AS (
+			SELECT
+				rt.tenant_id,
+				COUNT(*) FILTER (WHERE rt.status = 'completed')::bigint AS task_done,
+				COUNT(*) FILTER (WHERE rt.status <> 'completed')::bigint AS task_undone
+			FROM recording_tasks rt
+			JOIN tenant_scope t ON t.id = rt.tenant_id
+			WHERE rt.created_at::date BETWEEN $2::date AND $3::date
+			GROUP BY rt.tenant_id
+		),
+		dev_agg AS (
+			SELECT bd.tenant_id, COUNT(*)::bigint AS device_count
+			FROM badge_devices bd
+			JOIN tenant_scope t ON t.id = bd.tenant_id
+			GROUP BY bd.tenant_id
+		)
+		SELECT
+			t.id,
+			t.name,
+			COALESCE(d.device_count, 0) AS device_count,
+			COALESCE(r.recording_count, 0) AS recording_count,
+			COALESCE(r.recording_duration_sec, 0) AS recording_duration_sec,
+			COALESCE(ta.task_done, 0) AS task_done,
+			COALESCE(ta.task_undone, 0) AS task_undone,
+			COALESCE(r.deal_count, 0) AS deal_count,
+			COALESCE(r.deal_amount, 0) AS deal_amount
+		FROM tenant_scope t
+		LEFT JOIN rec r ON r.tenant_id = t.id
+		LEFT JOIN task_agg ta ON ta.tenant_id = t.id
+		LEFT JOIN dev_agg d ON d.tenant_id = t.id
+		ORDER BY t.id ASC
+	`, tenantFilter, dateFrom, dateTo, pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result := make([]OpsWorkbenchTableRow, 0, pageSize)
+	for rows.Next() {
+		var row OpsWorkbenchTableRow
+		if err := rows.Scan(
+			&row.TenantID,
+			&row.TenantName,
+			&row.DeviceCount,
+			&row.RecordingCount,
+			&row.RecordingDurationSec,
+			&row.TaskDone,
+			&row.TaskUndone,
+			&row.DealCount,
+			&row.DealAmount,
+		); err != nil {
+			return nil, 0, err
+		}
+		result = append(result, row)
+	}
+
+	return result, total, rows.Err()
 }
