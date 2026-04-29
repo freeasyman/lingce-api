@@ -2,6 +2,7 @@ package recording
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -130,6 +131,12 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	if req.PatientName != nil {
 		conditions = append(conditions, fmt.Sprintf("COALESCE(c.name, '') ILIKE $%d", argIndex))
 		args = append(args, "%"+*req.PatientName+"%")
+		argIndex++
+	}
+
+	if req.RecordingID != nil && *req.RecordingID > 0 {
+		conditions = append(conditions, fmt.Sprintf("r.id = $%d", argIndex))
+		args = append(args, *req.RecordingID)
 		argIndex++
 	}
 
@@ -1064,7 +1071,10 @@ func (s *Store) ListRecordingPrompts(ctx context.Context, req RecordingPromptLis
 	// Query prompts
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, code, name, description, user_prompt_template AS prompt_text, '[]'::json AS variables, is_active, created_at, updated_at
+		SELECT id, code, name, description, COALESCE(category, 'default') AS category,
+		       COALESCE(system_prompt, '') AS system_prompt,
+		       user_prompt_template AS prompt_text, COALESCE(output_schema, '{}'::json) AS output_schema,
+		       COALESCE(version, 'v1') AS version, '[]'::json AS variables, is_active, created_at, updated_at
 		FROM recording_analysis_prompts
 		WHERE %s
 		ORDER BY created_at DESC
@@ -1082,7 +1092,10 @@ func (s *Store) ListRecordingPrompts(ctx context.Context, req RecordingPromptLis
 	var prompts []*RecordingPrompt
 	for rows.Next() {
 		var p RecordingPrompt
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.Description, &p.PromptText, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&p.ID, &p.Code, &p.Name, &p.Description, &p.Category, &p.SystemPrompt,
+			&p.PromptText, &p.OutputSchema, &p.Version, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan prompt: %w", err)
 		}
 		prompts = append(prompts, &p)
@@ -1094,14 +1107,18 @@ func (s *Store) ListRecordingPrompts(ctx context.Context, req RecordingPromptLis
 // GetRecordingPromptByCode retrieves a recording prompt by code
 func (s *Store) GetRecordingPromptByCode(ctx context.Context, code string) (*RecordingPrompt, error) {
 	query := `
-		SELECT id, code, name, description, user_prompt_template AS prompt_text, '[]'::json AS variables, is_active, created_at, updated_at
+		SELECT id, code, name, description, COALESCE(category, 'default') AS category,
+		       COALESCE(system_prompt, '') AS system_prompt,
+		       user_prompt_template AS prompt_text, COALESCE(output_schema, '{}'::json) AS output_schema,
+		       COALESCE(version, 'v1') AS version, '[]'::json AS variables, is_active, created_at, updated_at
 		FROM recording_analysis_prompts
 		WHERE code = $1
 	`
 
 	var p RecordingPrompt
 	err := s.pool.QueryRow(ctx, query, code).Scan(
-		&p.ID, &p.Code, &p.Name, &p.Description, &p.PromptText, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+		&p.ID, &p.Code, &p.Name, &p.Description, &p.Category, &p.SystemPrompt,
+		&p.PromptText, &p.OutputSchema, &p.Version, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -1118,13 +1135,31 @@ func (s *Store) GetRecordingPromptByCode(ctx context.Context, code string) (*Rec
 func (s *Store) CreateRecordingPrompt(ctx context.Context, req CreateRecordingPromptRequest) (*RecordingPrompt, error) {
 	query := `
 		INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, created_at, updated_at)
-		VALUES ($1, $2, $3, 'default', '', $4, '{}'::json, 'v1', $5, 1, 1, NOW(), NOW())
-		RETURNING id, code, name, description, user_prompt_template AS prompt_text, '[]'::json AS variables, is_active, created_at, updated_at
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 1, NOW(), NOW())
+		RETURNING id, code, name, description, COALESCE(category, 'default') AS category,
+		          COALESCE(system_prompt, '') AS system_prompt,
+		          user_prompt_template AS prompt_text, COALESCE(output_schema, '{}'::json) AS output_schema,
+		          COALESCE(version, 'v1') AS version, '[]'::json AS variables, is_active, created_at, updated_at
 	`
 
 	var p RecordingPrompt
-	err := s.pool.QueryRow(ctx, query, req.Code, req.Name, req.Description, req.PromptText, req.IsActive).Scan(
-		&p.ID, &p.Code, &p.Name, &p.Description, &p.PromptText, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+	category := "default"
+	if req.Category != nil && strings.TrimSpace(*req.Category) != "" {
+		category = strings.TrimSpace(*req.Category)
+	}
+	version := "v1"
+	if req.Version != nil && strings.TrimSpace(*req.Version) != "" {
+		version = strings.TrimSpace(*req.Version)
+	}
+	outputSchema := JSONObject{}
+	if req.OutputSchema != nil {
+		outputSchema = req.OutputSchema
+	}
+	err := s.pool.QueryRow(
+		ctx, query, req.Code, req.Name, req.Description, category, req.SystemPrompt, req.PromptText, outputSchema, version, req.IsActive,
+	).Scan(
+		&p.ID, &p.Code, &p.Name, &p.Description, &p.Category, &p.SystemPrompt,
+		&p.PromptText, &p.OutputSchema, &p.Version, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 
 	if err != nil {
@@ -1157,6 +1192,26 @@ func (s *Store) UpdateRecordingPrompt(ctx context.Context, code string, req Upda
 		args = append(args, *req.PromptText)
 		argIndex++
 	}
+	if req.SystemPrompt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("system_prompt = $%d", argIndex))
+		args = append(args, *req.SystemPrompt)
+		argIndex++
+	}
+	if req.Category != nil {
+		setClauses = append(setClauses, fmt.Sprintf("category = $%d", argIndex))
+		args = append(args, *req.Category)
+		argIndex++
+	}
+	if req.Version != nil {
+		setClauses = append(setClauses, fmt.Sprintf("version = $%d", argIndex))
+		args = append(args, *req.Version)
+		argIndex++
+	}
+	if req.OutputSchema != nil {
+		setClauses = append(setClauses, fmt.Sprintf("output_schema = $%d", argIndex))
+		args = append(args, req.OutputSchema)
+		argIndex++
+	}
 
 	if req.IsActive != nil {
 		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", argIndex))
@@ -1175,12 +1230,16 @@ func (s *Store) UpdateRecordingPrompt(ctx context.Context, code string, req Upda
 		UPDATE recording_analysis_prompts
 		SET %s
 		WHERE code = $%d
-		RETURNING id, code, name, description, user_prompt_template AS prompt_text, '[]'::json AS variables, is_active, created_at, updated_at
+		RETURNING id, code, name, description, COALESCE(category, 'default') AS category,
+		          COALESCE(system_prompt, '') AS system_prompt,
+		          user_prompt_template AS prompt_text, COALESCE(output_schema, '{}'::json) AS output_schema,
+		          COALESCE(version, 'v1') AS version, '[]'::json AS variables, is_active, created_at, updated_at
 	`, strings.Join(setClauses, ", "), argIndex)
 
 	var p RecordingPrompt
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&p.ID, &p.Code, &p.Name, &p.Description, &p.PromptText, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+		&p.ID, &p.Code, &p.Name, &p.Description, &p.Category, &p.SystemPrompt,
+		&p.PromptText, &p.OutputSchema, &p.Version, &p.Variables, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -1278,4 +1337,521 @@ func (s *Store) DeleteBestPractice(ctx context.Context, recordingID int64) error
 	}
 
 	return nil
+}
+
+// Front-desk analysis methods
+
+// ListShiftAnalyses lists shift analyses for a tenant
+func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pageSize int, employeeID *int64, dateStr string) ([]map[string]interface{}, int64, error) {
+	offset := (page - 1) * pageSize
+
+	query := `
+		SELECT id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		       recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
+		       estimated_walkin_count, analysis_json, created_at
+		FROM frontdesk_shift_analyses
+		WHERE tenant_id = $1
+	`
+	countQuery := `SELECT COUNT(*) FROM frontdesk_shift_analyses WHERE tenant_id = $1`
+
+	args := []interface{}{tenantID}
+	countArgs := []interface{}{tenantID}
+
+	if employeeID != nil {
+		query += ` AND employee_id = $2`
+		countQuery += ` AND employee_id = $2`
+		args = append(args, *employeeID)
+		countArgs = append(countArgs, *employeeID)
+	}
+
+	if dateStr != "" {
+		argIdx := len(args) + 1
+		query += fmt.Sprintf(` AND shift_date = $%d`, argIdx)
+		countQuery += fmt.Sprintf(` AND shift_date = $%d`, argIdx)
+		args = append(args, dateStr)
+		countArgs = append(countArgs, dateStr)
+	}
+
+	query += ` ORDER BY shift_date DESC, created_at DESC LIMIT $` + fmt.Sprintf("%d", len(args)+1) + ` OFFSET $` + fmt.Sprintf("%d", len(args)+2)
+	args = append(args, pageSize, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query shift analyses: %w", err)
+	}
+	defer rows.Close()
+
+	var analyses []map[string]interface{}
+	for rows.Next() {
+		var id, tenantID, recordingID, employeeID int64
+		var shiftDate, shiftType string
+		var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
+		var analysisJSON map[string]interface{}
+		var createdAt string
+
+		if err := rows.Scan(&id, &tenantID, &recordingID, &employeeID, &shiftDate, &shiftType,
+			&recordingDurationSeconds, &estimatedInteractionCount, &estimatedAppointmentCount,
+			&estimatedWalkinCount, &analysisJSON, &createdAt); err != nil {
+			return nil, 0, fmt.Errorf("scan shift analysis: %w", err)
+		}
+
+		analyses = append(analyses, map[string]interface{}{
+			"id":                             id,
+			"tenant_id":                      tenantID,
+			"recording_id":                   recordingID,
+			"employee_id":                    employeeID,
+			"shift_date":                     shiftDate,
+			"shift_type":                     shiftType,
+			"recording_duration_seconds":     recordingDurationSeconds,
+			"estimated_interaction_count":    estimatedInteractionCount,
+			"estimated_appointment_count":    estimatedAppointmentCount,
+			"estimated_walkin_count":         estimatedWalkinCount,
+			"analysis_json":                  analysisJSON,
+			"created_at":                     createdAt,
+		})
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count shift analyses: %w", err)
+	}
+
+	return analyses, total, nil
+}
+
+// GetShiftAnalysis gets a single shift analysis
+func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[string]interface{}, error) {
+	query := `
+		SELECT id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		       recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
+		       estimated_walkin_count, analysis_json, transcript, created_at
+		FROM frontdesk_shift_analyses
+		WHERE tenant_id = $1 AND id = $2
+	`
+
+	var recordingID, employeeID int64
+	var shiftDate, shiftType string
+	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
+	var analysisJSON map[string]interface{}
+	var transcript *string
+	var createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, id).Scan(&id, &tenantID, &recordingID, &employeeID, &shiftDate, &shiftType,
+		&recordingDurationSeconds, &estimatedInteractionCount, &estimatedAppointmentCount,
+		&estimatedWalkinCount, &analysisJSON, &transcript, &createdAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("shift analysis not found")
+		}
+		return nil, fmt.Errorf("query shift analysis: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":                             id,
+		"tenant_id":                      tenantID,
+		"recording_id":                   recordingID,
+		"employee_id":                    employeeID,
+		"shift_date":                     shiftDate,
+		"shift_type":                     shiftType,
+		"recording_duration_seconds":     recordingDurationSeconds,
+		"estimated_interaction_count":    estimatedInteractionCount,
+		"estimated_appointment_count":    estimatedAppointmentCount,
+		"estimated_walkin_count":         estimatedWalkinCount,
+		"analysis_json":                  analysisJSON,
+		"transcript":                     transcript,
+		"created_at":                     createdAt,
+	}, nil
+}
+
+// CreateShiftAnalysis creates a new shift analysis
+func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *ShiftAnalysisCreateReq) (map[string]interface{}, error) {
+	query := `
+		INSERT INTO frontdesk_shift_analyses (tenant_id, recording_id, employee_id, shift_date, shift_type,
+		                            recording_duration_seconds, estimated_interaction_count,
+		                            estimated_appointment_count, estimated_walkin_count,
+		                            analysis_json, transcript, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+		RETURNING id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		          recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
+		          estimated_walkin_count, analysis_json, created_at
+	`
+
+	var id, recordingID, employeeID int64
+	var shiftDate, shiftType string
+	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
+	var analysisJSON map[string]interface{}
+	var createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, req.RecordingID, req.EmployeeID, req.ShiftDate, req.ShiftType,
+		req.RecordingDurationSeconds, req.EstimatedInteractionCount, req.EstimatedAppointmentCount,
+		req.EstimatedWalkinCount, req.AnalysisJSON, req.Transcript).Scan(&id, &tenantID, &recordingID, &employeeID,
+		&shiftDate, &shiftType, &recordingDurationSeconds, &estimatedInteractionCount, &estimatedAppointmentCount,
+		&estimatedWalkinCount, &analysisJSON, &createdAt); err != nil {
+		return nil, fmt.Errorf("insert shift analysis: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":                             id,
+		"tenant_id":                      tenantID,
+		"recording_id":                   recordingID,
+		"employee_id":                    employeeID,
+		"shift_date":                     shiftDate,
+		"shift_type":                     shiftType,
+		"recording_duration_seconds":     recordingDurationSeconds,
+		"estimated_interaction_count":    estimatedInteractionCount,
+		"estimated_appointment_count":    estimatedAppointmentCount,
+		"estimated_walkin_count":         estimatedWalkinCount,
+		"analysis_json":                  analysisJSON,
+		"created_at":                     createdAt,
+	}, nil
+}
+
+// ListDailyReports lists daily reports for a tenant
+func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	offset := (page - 1) * pageSize
+
+	query := `
+		SELECT id, tenant_id, report_date, total_estimated_interactions, estimated_appointment_count,
+		       estimated_walkin_count, estimated_walkin_capture_rate, top_questions, competitor_mentions,
+		       doctor_inquiries, channel_feedback, lost_reasons, risk_event_count, testimonial_materials, created_at
+		FROM frontdesk_daily_reports
+		WHERE tenant_id = $1
+		ORDER BY report_date DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := s.pool.Query(ctx, query, tenantID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query daily reports: %w", err)
+	}
+	defer rows.Close()
+
+	var reports []map[string]interface{}
+	for rows.Next() {
+		var id, tenantID int64
+		var reportDate string
+		var totalEstimatedInteractions, estimatedAppointmentCount, estimatedWalkinCount, riskEventCount int
+		var estimatedWalkinCaptureRate float64
+		var topQuestions, competitorMentions, doctorInquiries, channelFeedback, lostReasons, testimonialMaterials map[string]interface{}
+		var createdAt string
+
+		if err := rows.Scan(&id, &tenantID, &reportDate, &totalEstimatedInteractions, &estimatedAppointmentCount,
+			&estimatedWalkinCount, &estimatedWalkinCaptureRate, &topQuestions, &competitorMentions,
+			&doctorInquiries, &channelFeedback, &lostReasons, &riskEventCount, &testimonialMaterials, &createdAt); err != nil {
+			return nil, 0, fmt.Errorf("scan daily report: %w", err)
+		}
+
+		reports = append(reports, map[string]interface{}{
+			"id":                             id,
+			"tenant_id":                      tenantID,
+			"report_date":                    reportDate,
+			"total_estimated_interactions":   totalEstimatedInteractions,
+			"estimated_appointment_count":    estimatedAppointmentCount,
+			"estimated_walkin_count":         estimatedWalkinCount,
+			"estimated_walkin_capture_rate":  estimatedWalkinCaptureRate,
+			"top_questions":                  topQuestions,
+			"competitor_mentions":            competitorMentions,
+			"doctor_inquiries":               doctorInquiries,
+			"channel_feedback":               channelFeedback,
+			"lost_reasons":                   lostReasons,
+			"risk_event_count":               riskEventCount,
+			"testimonial_materials":          testimonialMaterials,
+			"created_at":                     createdAt,
+		})
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM frontdesk_daily_reports WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count daily reports: %w", err)
+	}
+
+	return reports, total, nil
+}
+
+// GetFrontdeskDailyReport gets a frontdesk daily report by date
+func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
+	query := `
+		SELECT id, tenant_id, report_date, total_estimated_interactions, estimated_appointment_count,
+		       estimated_walkin_count, estimated_walkin_capture_rate, top_questions, competitor_mentions,
+		       doctor_inquiries, channel_feedback, lost_reasons, risk_event_count, testimonial_materials, created_at
+		FROM frontdesk_daily_reports
+		WHERE tenant_id = $1 AND report_date = $2
+	`
+
+	var id int64
+	var reportDate string
+	var totalEstimatedInteractions, estimatedAppointmentCount, estimatedWalkinCount, riskEventCount int
+	var estimatedWalkinCaptureRate float64
+	var topQuestions, competitorMentions, doctorInquiries, channelFeedback, lostReasons, testimonialMaterials map[string]interface{}
+	var createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, dateStr).Scan(&id, &tenantID, &reportDate, &totalEstimatedInteractions,
+		&estimatedAppointmentCount, &estimatedWalkinCount, &estimatedWalkinCaptureRate, &topQuestions, &competitorMentions,
+		&doctorInquiries, &channelFeedback, &lostReasons, &riskEventCount, &testimonialMaterials, &createdAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("daily report not found")
+		}
+		return nil, fmt.Errorf("query daily report: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":                             id,
+		"tenant_id":                      tenantID,
+		"report_date":                    reportDate,
+		"total_estimated_interactions":   totalEstimatedInteractions,
+		"estimated_appointment_count":    estimatedAppointmentCount,
+		"estimated_walkin_count":         estimatedWalkinCount,
+		"estimated_walkin_capture_rate":  estimatedWalkinCaptureRate,
+		"top_questions":                  topQuestions,
+		"competitor_mentions":            competitorMentions,
+		"doctor_inquiries":               doctorInquiries,
+		"channel_feedback":               channelFeedback,
+		"lost_reasons":                   lostReasons,
+		"risk_event_count":               riskEventCount,
+		"testimonial_materials":          testimonialMaterials,
+		"created_at":                     createdAt,
+	}, nil
+}
+
+// ListKnowledgeBases lists knowledge bases for a tenant
+func (s *Store) ListKnowledgeBases(ctx context.Context, tenantID int64, kbType string) ([]map[string]interface{}, error) {
+	query := `
+		SELECT id, tenant_id, kb_type, content, version, status, updated_at, created_at
+		FROM frontdesk_knowledge_bases
+		WHERE tenant_id = $1 AND status = 'active'
+	`
+	args := []interface{}{tenantID}
+
+	if kbType != "" {
+		query += ` AND kb_type = $2`
+		args = append(args, kbType)
+	}
+
+	query += ` ORDER BY kb_type, version DESC`
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query knowledge bases: %w", err)
+	}
+	defer rows.Close()
+
+	var bases []map[string]interface{}
+	for rows.Next() {
+		var id, tenantID int64
+		var kbType, status, updatedAt, createdAt string
+		var content map[string]interface{}
+		var version int
+
+		if err := rows.Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan knowledge base: %w", err)
+		}
+
+		bases = append(bases, map[string]interface{}{
+			"id":         id,
+			"tenant_id":  tenantID,
+			"kb_type":    kbType,
+			"content":    content,
+			"version":    version,
+			"status":     status,
+			"updated_at": updatedAt,
+			"created_at": createdAt,
+		})
+	}
+
+	return bases, nil
+}
+
+// GetKnowledgeBase gets a knowledge base by type
+func (s *Store) GetKnowledgeBase(ctx context.Context, tenantID int64, kbType string) (map[string]interface{}, error) {
+	query := `
+		SELECT id, tenant_id, kb_type, content, version, status, updated_at, created_at
+		FROM frontdesk_knowledge_bases
+		WHERE tenant_id = $1 AND kb_type = $2 AND status = 'active'
+		ORDER BY version DESC
+		LIMIT 1
+	`
+
+	var id int64
+	var content map[string]interface{}
+	var version int
+	var status, updatedAt, createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, kbType).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("knowledge base not found")
+		}
+		return nil, fmt.Errorf("query knowledge base: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":         id,
+		"tenant_id":  tenantID,
+		"kb_type":    kbType,
+		"content":    content,
+		"version":    version,
+		"status":     status,
+		"updated_at": updatedAt,
+		"created_at": createdAt,
+	}, nil
+}
+
+// CreateKnowledgeBase creates a new knowledge base
+func (s *Store) CreateKnowledgeBase(ctx context.Context, tenantID int64, kbType string, content map[string]interface{}) (map[string]interface{}, error) {
+	query := `
+		INSERT INTO frontdesk_knowledge_bases (tenant_id, kb_type, content, version, status, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'active', NOW(), NOW())
+		RETURNING id, tenant_id, kb_type, content, version, status, updated_at, created_at
+	`
+
+	var id int64
+	var version int
+	var status, updatedAt, createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, kbType, content).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
+		return nil, fmt.Errorf("insert knowledge base: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":         id,
+		"tenant_id":  tenantID,
+		"kb_type":    kbType,
+		"content":    content,
+		"version":    version,
+		"status":     status,
+		"updated_at": updatedAt,
+		"created_at": createdAt,
+	}, nil
+}
+
+// UpdateKnowledgeBase updates a knowledge base
+func (s *Store) UpdateKnowledgeBase(ctx context.Context, tenantID int64, kbType string, content map[string]interface{}) (map[string]interface{}, error) {
+	// Get current version
+	var currentVersion int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0)
+		FROM frontdesk_knowledge_bases
+		WHERE tenant_id = $1 AND kb_type = $2
+	`, tenantID, kbType).Scan(&currentVersion); err != nil {
+		return nil, fmt.Errorf("get current version: %w", err)
+	}
+
+	newVersion := currentVersion + 1
+
+	query := `
+		INSERT INTO frontdesk_knowledge_bases (tenant_id, kb_type, content, version, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())
+		RETURNING id, tenant_id, kb_type, content, version, status, updated_at, created_at
+	`
+
+	var id int64
+	var version int
+	var status, updatedAt, createdAt string
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, kbType, content, newVersion).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
+		return nil, fmt.Errorf("insert knowledge base version: %w", err)
+	}
+
+	return map[string]interface{}{
+		"id":         id,
+		"tenant_id":  tenantID,
+		"kb_type":    kbType,
+		"content":    content,
+		"version":    version,
+		"status":     status,
+		"updated_at": updatedAt,
+		"created_at": createdAt,
+	}, nil
+}
+
+// ListWeeklyReports lists weekly reports for a tenant
+func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	offset := (page - 1) * pageSize
+
+	// Get total count
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM frontdesk_daily_reports
+		WHERE tenant_id = $1
+		  AND report_date >= DATE_TRUNC('week', CURRENT_DATE - INTERVAL '12 weeks')
+	`, tenantID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count weekly reports: %w", err)
+	}
+
+	// Get paginated results
+	query := `
+		SELECT id, tenant_id, report_date, analysis_json, created_at, updated_at
+		FROM frontdesk_daily_reports
+		WHERE tenant_id = $1
+		  AND report_date >= DATE_TRUNC('week', CURRENT_DATE - INTERVAL '12 weeks')
+		ORDER BY report_date DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := s.pool.Query(ctx, query, tenantID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query weekly reports: %w", err)
+	}
+	defer rows.Close()
+
+	var reports []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var reportDate, createdAt, updatedAt string
+		var analysisJSON []byte
+
+		if err := rows.Scan(&id, &tenantID, &reportDate, &analysisJSON, &createdAt, &updatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan weekly report: %w", err)
+		}
+
+		var analysis map[string]interface{}
+		if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
+			analysis = make(map[string]interface{})
+		}
+
+		reports = append(reports, map[string]interface{}{
+			"id":              id,
+			"tenant_id":       tenantID,
+			"report_date":     reportDate,
+			"analysis":        analysis,
+			"created_at":      createdAt,
+			"updated_at":      updatedAt,
+		})
+	}
+
+	return reports, total, nil
+}
+
+// GetWeeklyReport gets a weekly report by date
+func (s *Store) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
+	query := `
+		SELECT id, tenant_id, report_date, analysis_json, created_at, updated_at
+		FROM frontdesk_daily_reports
+		WHERE tenant_id = $1 AND report_date = $2
+		LIMIT 1
+	`
+
+	var id int64
+	var reportDate, createdAt, updatedAt string
+	var analysisJSON []byte
+
+	if err := s.pool.QueryRow(ctx, query, tenantID, dateStr).Scan(&id, &tenantID, &reportDate, &analysisJSON, &createdAt, &updatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("weekly report not found")
+		}
+		return nil, fmt.Errorf("query weekly report: %w", err)
+	}
+
+	var analysis map[string]interface{}
+	if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
+		analysis = make(map[string]interface{})
+	}
+
+	return map[string]interface{}{
+		"id":          id,
+		"tenant_id":   tenantID,
+		"report_date": reportDate,
+		"analysis":    analysis,
+		"created_at":  createdAt,
+		"updated_at":  updatedAt,
+	}, nil
 }
