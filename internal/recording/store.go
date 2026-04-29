@@ -18,6 +18,7 @@ type Store struct {
 var (
 	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
+	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
 )
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -115,7 +116,38 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			args = append(args, consultantScopeRoleCodes)
 			argIndex++
 
-			// Doctor scope wins on dual-role employees, so consultant scope excludes doctor roles.
+			// Doctor/frontdesk scope wins on dual-role employees, so consultant scope excludes them.
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, doctorScopeRoleCodes)
+			argIndex++
+
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, frontdeskScopeRoleCodes)
+			argIndex++
+		case RecordingScopeFrontdesk:
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, frontdeskScopeRoleCodes)
+			argIndex++
+
+			// Doctor scope wins on dual-role employees.
 			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
 				SELECT 1
 				FROM inst_employee_roles ier

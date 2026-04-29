@@ -126,6 +126,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings/prompts/tenant-configs", authMw(http.HandlerFunc(h.CreateTenantPromptConfig)))
 	mux.Handle("PUT /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
 	mux.Handle("DELETE /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
+
+	// Front-desk Analysis endpoints
+	h.RegisterFrontdeskAnalysisRoutes(mux, jwtSecret)
 }
 
 // ListRecordings handles listing medical recordings
@@ -173,7 +176,7 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	if scopeStr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("recording_scope"))); scopeStr != "" {
 		scope := RecordingScope(scopeStr)
 		switch scope {
-		case RecordingScopeDoctor, RecordingScopeConsultant:
+		case RecordingScopeDoctor, RecordingScopeConsultant, RecordingScopeFrontdesk:
 			req.Scope = &scope
 		default:
 			httputil.WriteBadRequest(w, "Invalid recording scope")
@@ -191,6 +194,14 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	if keyword := r.URL.Query().Get("keyword"); keyword != "" {
 		req.Keyword = &keyword
+	}
+	if recordingIDStr := strings.TrimSpace(r.URL.Query().Get("recording_id")); recordingIDStr != "" {
+		recordingID, err := strconv.ParseInt(recordingIDStr, 10, 64)
+		if err != nil || recordingID <= 0 {
+			httputil.WriteBadRequest(w, "recording_id must be a positive integer")
+			return
+		}
+		req.RecordingID = &recordingID
 	}
 
 	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
@@ -254,7 +265,57 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Scope != nil && *req.Scope == RecordingScopeDoctor {
+		httputil.WritePaginated(w, projectDoctorRecordingListItems(recordings), int64(total), req.Page, req.PageSize)
+		return
+	}
+
 	httputil.WritePaginated(w, recordings, int64(total), req.Page, req.PageSize)
+}
+
+type doctorRecordingListItem struct {
+	ID             int64    `json:"id"`
+	TenantID       int64    `json:"tenant_id,omitempty"`
+	TenantName     string   `json:"tenant_name,omitempty"`
+	EmployeeID     int64    `json:"employee_id"`
+	EmployeeName   string   `json:"employee_name,omitempty"`
+	CustomerName   *string  `json:"customer_name"`
+	PatientName    *string  `json:"patient_name"`
+	AnalysisStatus *string  `json:"analysis_status"`
+	Duration       *int     `json:"duration"`
+	SeguePercent   *float64 `json:"segue_percent"`
+	CriticalGap    *bool    `json:"critical_gap"`
+	RecordedAt     *string  `json:"recorded_at"`
+	ChiefComplaint *string  `json:"chief_complaint,omitempty"`
+}
+
+func projectDoctorRecordingListItems(items []*RecordingResponse) []*doctorRecordingListItem {
+	out := make([]*doctorRecordingListItem, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		var patientName *string
+		if v := strings.TrimSpace(item.PatientName); v != "" {
+			patientName = &v
+		}
+		out = append(out, &doctorRecordingListItem{
+			ID:             item.ID,
+			TenantID:       item.TenantID,
+			TenantName:     item.TenantName,
+			EmployeeID:     item.EmployeeID,
+			EmployeeName:   item.EmployeeName,
+			CustomerName:   item.CustomerName,
+			PatientName:    patientName,
+			AnalysisStatus: item.AnalysisStatus,
+			Duration:       item.Duration,
+			SeguePercent:   item.SeguePercent,
+			CriticalGap:    item.CriticalGap,
+			RecordedAt:     item.RecordedAt,
+			ChiefComplaint: item.ChiefComplaint,
+		})
+	}
+	return out
 }
 
 // GetRecording handles getting a medical recording by ID

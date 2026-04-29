@@ -3,6 +3,7 @@ package recording
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,7 @@ type RecordingScope string
 const (
 	RecordingScopeDoctor     RecordingScope = "doctor"
 	RecordingScopeConsultant RecordingScope = "consultant"
+	RecordingScopeFrontdesk  RecordingScope = "frontdesk"
 )
 
 // TaskStatus represents the status of a recording task
@@ -83,7 +85,9 @@ type MedicalRecording struct {
 	DoctorSummary      *string          `json:"doctor_summary,omitempty"`
 	TherapistSummary   *string          `json:"therapist_summary,omitempty"`
 	ConsultantSummary  *string          `json:"consultant_summary,omitempty"`
+	AnalysisResult     JSONObject       `json:"analysis_result,omitempty"`
 	AnalysisDisplay    JSONObject       `json:"analysis_display,omitempty"`
+	AnalysisStatus     *string          `json:"analysis_status,omitempty"`
 	Status             RecordingStatus  `json:"status"`
 	ProcessingError    *string          `json:"processing_error,omitempty"`
 	RecordingStartedAt *time.Time       `json:"recording_started_at,omitempty"`
@@ -147,7 +151,11 @@ type RecordingPrompt struct {
 	Code        string     `json:"code"`
 	Name        string     `json:"name"`
 	Description *string    `json:"description,omitempty"`
+	Category    string     `json:"category"`
+	SystemPrompt string    `json:"system_prompt"`
 	PromptText  string     `json:"prompt_text"`
+	OutputSchema JSONObject `json:"output_schema,omitempty"`
+	Version     string     `json:"version"`
 	Variables   JSONArray  `json:"variables,omitempty"`
 	IsActive    bool       `json:"is_active"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -238,11 +246,33 @@ func (j *JSONObject) Scan(value interface{}) error {
 		*j = nil
 		return nil
 	}
-	bytes, ok := value.([]byte)
-	if !ok {
+
+	var raw []byte
+	switch v := value.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
 		return nil
 	}
-	return json.Unmarshal(bytes, j)
+
+	// Normal path: JSON object payload.
+	if err := json.Unmarshal(raw, j); err == nil {
+		return nil
+	}
+
+	// Backward-compat path: DB stored a JSON string whose content is another JSON object.
+	var nested string
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return err
+	}
+	nested = strings.TrimSpace(nested)
+	if nested == "" {
+		*j = nil
+		return nil
+	}
+	return json.Unmarshal([]byte(nested), j)
 }
 
 // Value implements the driver.Valuer interface
