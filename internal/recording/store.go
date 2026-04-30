@@ -175,17 +175,20 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	if req.Keyword != nil && strings.TrimSpace(*req.Keyword) != "" {
 		keyword := "%" + strings.TrimSpace(*req.Keyword) + "%"
 		conditions = append(conditions, fmt.Sprintf(`(
+			r.id::text ILIKE $%d OR
 			COALESCE(c.name, '') ILIKE $%d OR
 			COALESCE(c.phone, '') ILIKE $%d OR
 			COALESCE(e.name, '') ILIKE $%d OR
 			COALESCE(e.full_name, '') ILIKE $%d OR
 			COALESCE(oa.username, '') ILIKE $%d OR
 			COALESCE(oa.email, '') ILIKE $%d OR
+			COALESCE(sbe.device_no, '') ILIKE $%d OR
+			COALESCE(r.file_url, '') ILIKE $%d OR
 			COALESCE(r.transcription_text, '') ILIKE $%d OR
 			COALESCE(r.analysis_display->>'summary', '') ILIKE $%d OR
 			COALESCE(r.analysis_display->>'subjective_summary', '') ILIKE $%d OR
 			COALESCE(r.analysis_display->>'doctor_summary', '') ILIKE $%d
-		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
 		args = append(args, keyword)
 		argIndex++
 	}
@@ -272,6 +275,13 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		LEFT JOIN LATERAL (
+			SELECT sae.device_no
+			FROM smart_badge_audio_events sae
+			WHERE sae.recording_id = r.id
+			ORDER BY sae.updated_at DESC NULLS LAST, sae.created_at DESC NULLS LAST, sae.id DESC
+			LIMIT 1
+		) sbe ON TRUE
 		WHERE %s
 	`, whereClause)
 	var total int
@@ -326,6 +336,13 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		LEFT JOIN LATERAL (
+			SELECT sae.device_no
+			FROM smart_badge_audio_events sae
+			WHERE sae.recording_id = r.id
+			ORDER BY sae.updated_at DESC NULLS LAST, sae.created_at DESC NULLS LAST, sae.id DESC
+			LIMIT 1
+		) sbe ON TRUE
 		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE %s
 		ORDER BY r.created_at DESC
@@ -1572,7 +1589,7 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 			return nil, 0, fmt.Errorf("scan daily report: %w", err)
 		}
 
-		reports = append(reports, map[string]interface{}{
+		item := map[string]interface{}{
 			"id":                            id,
 			"tenant_id":                     tenantID,
 			"report_date":                   reportDate,
@@ -1588,7 +1605,9 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 			"risk_event_count":              riskEventCount,
 			"testimonial_materials":         testimonialMaterials,
 			"created_at":                    createdAt,
-		})
+		}
+		mergeDailyExtendedFields(item, testimonialMaterials)
+		reports = append(reports, item)
 	}
 
 	var total int64
@@ -1625,7 +1644,7 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 		return nil, fmt.Errorf("query daily report: %w", err)
 	}
 
-	return map[string]interface{}{
+	item := map[string]interface{}{
 		"id":                            id,
 		"tenant_id":                     tenantID,
 		"report_date":                   reportDate,
@@ -1641,7 +1660,97 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 		"risk_event_count":              riskEventCount,
 		"testimonial_materials":         testimonialMaterials,
 		"created_at":                    createdAt,
-	}, nil
+	}
+	mergeDailyExtendedFields(item, testimonialMaterials)
+	return item, nil
+}
+
+func mergeDailyExtendedFields(target map[string]interface{}, testimonial map[string]interface{}) {
+	if target == nil {
+		return
+	}
+	var source map[string]interface{}
+	if testimonial != nil {
+		source = testimonial
+	} else {
+		source = map[string]interface{}{}
+	}
+	target["regular_response_coverage"] = source["regular_response_coverage"]
+	target["response_accuracy"] = source["response_accuracy"]
+	target["response_completeness"] = source["response_completeness"]
+	target["response_compliance"] = source["response_compliance"]
+	actions := valueOrStringSlice(source["priority_actions"])
+	if len(actions) == 0 {
+		actions = derivePriorityActions(target)
+	}
+	target["priority_actions"] = actions
+	fillMissingDailyQuality(target)
+}
+
+func fillMissingDailyQuality(target map[string]interface{}) {
+	if target == nil {
+		return
+	}
+	total := asFloat(target["total_estimated_interactions"])
+	appointments := asFloat(target["estimated_appointment_count"])
+	walkins := asFloat(target["estimated_walkin_count"])
+	risks := asFloat(target["risk_event_count"])
+	if target["regular_response_coverage"] == nil && total > 0 {
+		target["regular_response_coverage"] = round2((appointments + walkins) / total * 100.0)
+	}
+	if target["response_accuracy"] == nil && total > 0 {
+		target["response_accuracy"] = round2(appointments / total * 100.0)
+	}
+	if target["response_completeness"] == nil && total > 0 {
+		target["response_completeness"] = round2(walkins / total * 100.0)
+	}
+	if target["response_compliance"] == nil {
+		score := 100.0 - risks*5.0
+		if score < 0 {
+			score = 0
+		}
+		target["response_compliance"] = round2(score)
+	}
+}
+
+func derivePriorityActions(target map[string]interface{}) []string {
+	if target == nil {
+		return []string{}
+	}
+	out := make([]string, 0, 3)
+	if asFloat(target["risk_event_count"]) > 0 {
+		out = append(out, "优先复盘高风险事件并明确责任人")
+	}
+	topQuestions := valueOrStringSlice(target["top_questions"])
+	if len(topQuestions) > 0 {
+		out = append(out, "更新高频问题应答知识并同步培训")
+	}
+	if asFloat(target["estimated_walkin_count"]) > 0 {
+		out = append(out, "优化 walk-in 承接话术与转化流程")
+	}
+	if len(out) == 0 {
+		out = append(out, "数据不足，建议先补齐录音样本")
+	}
+	return out
+}
+
+func asFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func round2(v float64) float64 {
+	return float64(int(v*100+0.5)) / 100
 }
 
 // ListKnowledgeBases lists knowledge bases for a tenant
@@ -1809,16 +1918,17 @@ func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pag
 		return nil, 0, fmt.Errorf("count weekly reports: %w", err)
 	}
 
-	// Get paginated results
 	query := `
-		SELECT id, tenant_id, report_date, analysis_json, created_at, updated_at
+		SELECT id, tenant_id, report_date,
+		       total_estimated_interactions, estimated_appointment_count, estimated_walkin_count, risk_event_count,
+		       top_questions, competitor_mentions, doctor_inquiries, channel_feedback, testimonial_materials,
+		       created_at, created_at
 		FROM frontdesk_daily_reports
 		WHERE tenant_id = $1
 		  AND report_date >= DATE_TRUNC('week', CURRENT_DATE - INTERVAL '12 weeks')
 		ORDER BY report_date DESC
 		LIMIT $2 OFFSET $3
 	`
-
 	rows, err := s.pool.Query(ctx, query, tenantID, pageSize, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query weekly reports: %w", err)
@@ -1827,39 +1937,56 @@ func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pag
 
 	var reports []map[string]interface{}
 	for rows.Next() {
-		var id int64
-		var reportDate, createdAt, updatedAt string
-		var analysisJSON []byte
-
-		if err := rows.Scan(&id, &tenantID, &reportDate, &analysisJSON, &createdAt, &updatedAt); err != nil {
+		var (
+			id, totalInteractions, appointments, walkIns, riskEvents                                 int64
+			reportDate                                                                               time.Time
+			createdAt, updatedAt                                                                     time.Time
+			topQuestions, competitorMentions, doctorInquiries, channelFeedback, testimonialMaterials []byte
+		)
+		if err := rows.Scan(
+			&id, &tenantID, &reportDate,
+			&totalInteractions, &appointments, &walkIns, &riskEvents,
+			&topQuestions, &competitorMentions, &doctorInquiries, &channelFeedback, &testimonialMaterials,
+			&createdAt, &updatedAt,
+		); err != nil {
 			return nil, 0, fmt.Errorf("scan weekly report: %w", err)
 		}
-
-		var analysis map[string]interface{}
-		if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
-			analysis = make(map[string]interface{})
+		analysis := parseJSONAsMap(testimonialMaterials)
+		if len(analysis) == 0 {
+			analysis = map[string]interface{}{}
 		}
-		status, _ := analysis["status"].(string)
-		managerComment, _ := analysis["manager_comment"].(string)
-		publishedAt, _ := analysis["published_at"].(string)
-		publishedByName, _ := analysis["published_by_name"].(string)
-		publishedBy, _ := analysis["published_by"].(string)
-		if status == "" {
-			status = "draft"
-		}
-
+		analysis["summary"] = firstNonEmptyString(analysis["summary"], "历史结构周报，建议重新生成以获得完整洞察。")
+		analysis["total_interactions"] = totalInteractions
+		analysis["total_appointments"] = appointments
+		analysis["total_walk_ins"] = walkIns
+		analysis["risk_event_count"] = riskEvents
+		analysis["top_questions"] = parseJSONAsStringSlice(topQuestions)
+		analysis["competitor_mentions"] = parseJSONAsStringSlice(competitorMentions)
+		analysis["doctor_inquiries"] = parseJSONAsStringSlice(doctorInquiries)
+		analysis["channel_feedback"] = parseJSONAsStringSlice(channelFeedback)
+		analysis["key_changes"] = valueOrStringSlice(analysis["key_changes"])
+		analysis["next_actions"] = valueOrStringSlice(analysis["next_actions"])
+		analysis["question_structure"] = valueOrStringSlice(analysis["question_structure"])
+		analysis["response_quality"] = valueOrStringSlice(analysis["response_quality"])
+		analysis["key_insights"] = valueOrStringSlice(analysis["key_insights"])
+		analysis["issue_summary"] = valueOrStringSlice(analysis["issue_summary"])
+		analysis["staff_highlights"] = valueOrStringSlice(analysis["staff_highlights"])
+		analysis["staff_variances"] = valueOrStringSlice(analysis["staff_variances"])
+		analysis["staff_suggestions"] = valueOrStringSlice(analysis["staff_suggestions"])
+		analysis["improvement_suggestions"] = valueOrStringSlice(analysis["improvement_suggestions"])
+		analysis["status"] = firstNonEmptyString(analysis["status"], "draft")
 		reports = append(reports, map[string]interface{}{
 			"id":                id,
 			"tenant_id":         tenantID,
-			"report_date":       reportDate,
+			"report_date":       reportDate.Format("2006-01-02"),
 			"analysis":          analysis,
-			"status":            status,
-			"manager_comment":   managerComment,
-			"published_at":      publishedAt,
-			"published_by":      publishedBy,
-			"published_by_name": publishedByName,
-			"created_at":        createdAt,
-			"updated_at":        updatedAt,
+			"status":            firstNonEmptyString(analysis["status"], "draft"),
+			"manager_comment":   firstNonEmptyString(analysis["manager_comment"], ""),
+			"published_at":      firstNonEmptyString(analysis["published_at"], ""),
+			"published_by":      firstNonEmptyString(analysis["published_by"], ""),
+			"published_by_name": firstNonEmptyString(analysis["published_by_name"], ""),
+			"created_at":        createdAt.Format(time.RFC3339),
+			"updated_at":        updatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -1869,32 +1996,56 @@ func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pag
 // GetWeeklyReport gets a weekly report by date
 func (s *Store) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
 	query := `
-		SELECT id, tenant_id, report_date, analysis_json, created_at, updated_at
+		SELECT id, tenant_id, report_date,
+		       total_estimated_interactions, estimated_appointment_count, estimated_walkin_count, risk_event_count,
+		       top_questions, competitor_mentions, doctor_inquiries, channel_feedback, testimonial_materials,
+		       created_at, created_at
 		FROM frontdesk_daily_reports
 		WHERE tenant_id = $1 AND report_date = $2
 		LIMIT 1
 	`
-
-	var id int64
-	var reportDate, createdAt, updatedAt string
-	var analysisJSON []byte
-
-	if err := s.pool.QueryRow(ctx, query, tenantID, dateStr).Scan(&id, &tenantID, &reportDate, &analysisJSON, &createdAt, &updatedAt); err != nil {
+	var (
+		id, totalInteractions, appointments, walkIns, riskEvents                                 int64
+		reportDate                                                                               time.Time
+		createdAt, updatedAt                                                                     time.Time
+		topQuestions, competitorMentions, doctorInquiries, channelFeedback, testimonialMaterials []byte
+	)
+	if err := s.pool.QueryRow(ctx, query, tenantID, dateStr).Scan(
+		&id, &tenantID, &reportDate,
+		&totalInteractions, &appointments, &walkIns, &riskEvents,
+		&topQuestions, &competitorMentions, &doctorInquiries, &channelFeedback, &testimonialMaterials,
+		&createdAt, &updatedAt,
+	); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("weekly report not found")
 		}
 		return nil, fmt.Errorf("query weekly report: %w", err)
 	}
-
-	var analysis map[string]interface{}
-	if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
-		analysis = make(map[string]interface{})
+	analysis := parseJSONAsMap(testimonialMaterials)
+	if len(analysis) == 0 {
+		analysis = map[string]interface{}{}
 	}
+	analysis["summary"] = firstNonEmptyString(analysis["summary"], "历史结构周报，建议重新生成以获得完整洞察。")
+	analysis["total_interactions"] = totalInteractions
+	analysis["total_appointments"] = appointments
+	analysis["total_walk_ins"] = walkIns
+	analysis["risk_event_count"] = riskEvents
+	analysis["top_questions"] = parseJSONAsStringSlice(topQuestions)
+	analysis["competitor_mentions"] = parseJSONAsStringSlice(competitorMentions)
+	analysis["doctor_inquiries"] = parseJSONAsStringSlice(doctorInquiries)
+	analysis["channel_feedback"] = parseJSONAsStringSlice(channelFeedback)
+	analysis["key_changes"] = valueOrStringSlice(analysis["key_changes"])
+	analysis["next_actions"] = valueOrStringSlice(analysis["next_actions"])
+	analysis["question_structure"] = valueOrStringSlice(analysis["question_structure"])
+	analysis["response_quality"] = valueOrStringSlice(analysis["response_quality"])
+	analysis["key_insights"] = valueOrStringSlice(analysis["key_insights"])
+	analysis["issue_summary"] = valueOrStringSlice(analysis["issue_summary"])
+	analysis["staff_highlights"] = valueOrStringSlice(analysis["staff_highlights"])
+	analysis["staff_variances"] = valueOrStringSlice(analysis["staff_variances"])
+	analysis["staff_suggestions"] = valueOrStringSlice(analysis["staff_suggestions"])
+	analysis["improvement_suggestions"] = valueOrStringSlice(analysis["improvement_suggestions"])
+	analysis["status"] = firstNonEmptyString(analysis["status"], "draft")
 	status, _ := analysis["status"].(string)
-	managerComment, _ := analysis["manager_comment"].(string)
-	publishedAt, _ := analysis["published_at"].(string)
-	publishedByName, _ := analysis["published_by_name"].(string)
-	publishedBy, _ := analysis["published_by"].(string)
 	if status == "" {
 		status = "draft"
 	}
@@ -1902,14 +2053,71 @@ func (s *Store) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr str
 	return map[string]interface{}{
 		"id":                id,
 		"tenant_id":         tenantID,
-		"report_date":       reportDate,
+		"report_date":       reportDate.Format("2006-01-02"),
 		"analysis":          analysis,
 		"status":            status,
-		"manager_comment":   managerComment,
-		"published_at":      publishedAt,
-		"published_by":      publishedBy,
-		"published_by_name": publishedByName,
-		"created_at":        createdAt,
-		"updated_at":        updatedAt,
+		"manager_comment":   "",
+		"published_at":      "",
+		"published_by":      "",
+		"published_by_name": "",
+		"created_at":        createdAt.Format(time.RFC3339),
+		"updated_at":        updatedAt.Format(time.RFC3339),
 	}, nil
+}
+
+func parseJSONAsStringSlice(raw []byte) []string {
+	if len(raw) == 0 {
+		return []string{}
+	}
+	var arr []interface{}
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return []string{}
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		text := strings.TrimSpace(fmt.Sprintf("%v", item))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func parseJSONAsMap(raw []byte) map[string]interface{} {
+	if len(raw) == 0 {
+		return map[string]interface{}{}
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return map[string]interface{}{}
+	}
+	return obj
+}
+
+func valueOrStringSlice(v interface{}) []string {
+	list, ok := v.([]string)
+	if ok {
+		return list
+	}
+	switch arr := v.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			text := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if text != "" && text != "<nil>" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return []string{}
+	}
+}
+
+func firstNonEmptyString(v interface{}, fallback string) string {
+	text := strings.TrimSpace(fmt.Sprintf("%v", v))
+	if text == "" || text == "<nil>" {
+		return fallback
+	}
+	return text
 }
