@@ -53,6 +53,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("DELETE /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
 	mux.Handle("POST /api/v1/roles/admins/id/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
 
+	// Institution employee/department role routes
+	mux.Handle("GET /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
+	mux.Handle("PUT /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.SetEmployeeRole)))
+	mux.Handle("DELETE /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.RemoveEmployeeRole)))
+	mux.Handle("GET /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.GetDepartmentRole)))
+	mux.Handle("PUT /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.SetDepartmentRole)))
+	mux.Handle("DELETE /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.RemoveDepartmentRole)))
+
 }
 
 func (h *Handler) roleScope(r *http.Request) string {
@@ -207,6 +215,11 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 
 // getTenantID gets the tenant ID from the current user
 func (h *Handler) getTenantID(r *http.Request) *int64 {
+	if q := r.URL.Query().Get("tenant_id"); q != "" {
+		if id, err := strconv.ParseInt(q, 10, 64); err == nil && id > 0 {
+			return &id
+		}
+	}
 	claims := middleware.GetUserClaims(r.Context())
 	if claims != nil && claims.TenantID != nil {
 		return claims.TenantID
