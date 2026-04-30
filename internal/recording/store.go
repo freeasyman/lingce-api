@@ -96,65 +96,125 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	if req.Scope != nil {
 		switch *req.Scope {
 		case RecordingScopeDoctor:
-			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		case RecordingScopeConsultant:
-			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, consultantScopeRoleCodes)
 			argIndex++
 
 			// Doctor/frontdesk scope wins on dual-role employees, so consultant scope excludes them.
-			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				NOT EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 
-			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				NOT EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 		case RecordingScopeFrontdesk:
-			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 
 			// Doctor scope wins on dual-role employees.
-			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY($%d)
-			)`, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`(
+				NOT EXISTS (
+					SELECT 1
+					FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id
+					  AND ier.employee_id = r.employee_id
+					  AND lower(ier.role_code) = ANY($%d)
+				)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM institution_employee_roles ier2
+					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
+					WHERE ir.tenant_id = r.tenant_id
+					  AND ier2.employee_id = r.employee_id
+					  AND lower(ir.code) = ANY($%d)
+				)
+			)`, argIndex, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		}
@@ -1433,10 +1493,11 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 	var analyses []map[string]interface{}
 	for rows.Next() {
 		var id, tenantID, recordingID, employeeID int64
-		var shiftDate, shiftType string
+		var shiftDate time.Time
+		var shiftType string
 		var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 		var analysisJSON map[string]interface{}
-		var createdAt string
+		var createdAt time.Time
 
 		if err := rows.Scan(&id, &tenantID, &recordingID, &employeeID, &shiftDate, &shiftType,
 			&recordingDurationSeconds, &estimatedInteractionCount, &estimatedAppointmentCount,
@@ -1449,14 +1510,14 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 			"tenant_id":                   tenantID,
 			"recording_id":                recordingID,
 			"employee_id":                 employeeID,
-			"shift_date":                  shiftDate,
+			"shift_date":                  shiftDate.Format("2006-01-02"),
 			"shift_type":                  shiftType,
 			"recording_duration_seconds":  recordingDurationSeconds,
 			"estimated_interaction_count": estimatedInteractionCount,
 			"estimated_appointment_count": estimatedAppointmentCount,
 			"estimated_walkin_count":      estimatedWalkinCount,
 			"analysis_json":               analysisJSON,
-			"created_at":                  createdAt,
+			"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -1479,11 +1540,12 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 	`
 
 	var recordingID, employeeID int64
-	var shiftDate, shiftType string
+	var shiftDate time.Time
+	var shiftType string
 	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 	var analysisJSON map[string]interface{}
 	var transcript *string
-	var createdAt string
+	var createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, id).Scan(&id, &tenantID, &recordingID, &employeeID, &shiftDate, &shiftType,
 		&recordingDurationSeconds, &estimatedInteractionCount, &estimatedAppointmentCount,
@@ -1499,7 +1561,7 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 		"tenant_id":                   tenantID,
 		"recording_id":                recordingID,
 		"employee_id":                 employeeID,
-		"shift_date":                  shiftDate,
+		"shift_date":                  shiftDate.Format("2006-01-02"),
 		"shift_type":                  shiftType,
 		"recording_duration_seconds":  recordingDurationSeconds,
 		"estimated_interaction_count": estimatedInteractionCount,
@@ -1507,7 +1569,7 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 		"estimated_walkin_count":      estimatedWalkinCount,
 		"analysis_json":               analysisJSON,
 		"transcript":                  transcript,
-		"created_at":                  createdAt,
+		"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
 
@@ -1525,10 +1587,11 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 	`
 
 	var id, recordingID, employeeID int64
-	var shiftDate, shiftType string
+	var shiftDate time.Time
+	var shiftType string
 	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 	var analysisJSON map[string]interface{}
-	var createdAt string
+	var createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, req.RecordingID, req.EmployeeID, req.ShiftDate, req.ShiftType,
 		req.RecordingDurationSeconds, req.EstimatedInteractionCount, req.EstimatedAppointmentCount,
@@ -1543,14 +1606,14 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 		"tenant_id":                   tenantID,
 		"recording_id":                recordingID,
 		"employee_id":                 employeeID,
-		"shift_date":                  shiftDate,
+		"shift_date":                  shiftDate.Format("2006-01-02"),
 		"shift_type":                  shiftType,
 		"recording_duration_seconds":  recordingDurationSeconds,
 		"estimated_interaction_count": estimatedInteractionCount,
 		"estimated_appointment_count": estimatedAppointmentCount,
 		"estimated_walkin_count":      estimatedWalkinCount,
 		"analysis_json":               analysisJSON,
-		"created_at":                  createdAt,
+		"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
 
