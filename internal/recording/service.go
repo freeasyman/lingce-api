@@ -2000,6 +2000,9 @@ func (s *Service) CreateRecordingPrompt(ctx context.Context, req CreateRecording
 	if req.PromptText == "" {
 		return nil, fmt.Errorf("prompt_text is required")
 	}
+	if req.SystemPrompt == "" {
+		return nil, fmt.Errorf("system_prompt is required")
+	}
 
 	return s.store.CreateRecordingPrompt(ctx, req)
 }
@@ -4757,4 +4760,163 @@ func sourceDetailLabel(sourceDetail string) string {
 	default:
 		return ""
 	}
+}
+
+// Front-desk analysis methods
+
+// ListShiftAnalyses lists shift analyses for a tenant
+func (s *Service) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pageSize int, employeeID *int64, dateStr string) ([]map[string]interface{}, int64, error) {
+	return s.store.ListShiftAnalyses(ctx, tenantID, page, pageSize, employeeID, dateStr)
+}
+
+// GetShiftAnalysis gets a single shift analysis
+func (s *Service) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[string]interface{}, error) {
+	return s.store.GetShiftAnalysis(ctx, tenantID, id)
+}
+
+// CreateShiftAnalysis creates a new shift analysis
+func (s *Service) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *ShiftAnalysisCreateReq) (map[string]interface{}, error) {
+	return s.store.CreateShiftAnalysis(ctx, tenantID, req)
+}
+
+// ListDailyReports lists daily reports for a tenant
+func (s *Service) ListDailyReports(ctx context.Context, tenantID int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	return s.store.ListDailyReports(ctx, tenantID, page, pageSize)
+}
+
+// GetFrontdeskDailyReport gets a frontdesk daily report by date
+func (s *Service) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
+	return s.store.GetFrontdeskDailyReport(ctx, tenantID, dateStr)
+}
+
+// ListKnowledgeBases lists knowledge bases for a tenant
+func (s *Service) ListKnowledgeBases(ctx context.Context, tenantID int64, kbType string) ([]map[string]interface{}, error) {
+	return s.store.ListKnowledgeBases(ctx, tenantID, kbType)
+}
+
+// GetKnowledgeBase gets a knowledge base by type
+func (s *Service) GetKnowledgeBase(ctx context.Context, tenantID int64, kbType string) (map[string]interface{}, error) {
+	return s.store.GetKnowledgeBase(ctx, tenantID, kbType)
+}
+
+// CreateKnowledgeBase creates a new knowledge base
+func (s *Service) CreateKnowledgeBase(ctx context.Context, tenantID int64, kbType string, content map[string]interface{}) (map[string]interface{}, error) {
+	return s.store.CreateKnowledgeBase(ctx, tenantID, kbType, content)
+}
+
+// UpdateKnowledgeBase updates a knowledge base
+func (s *Service) UpdateKnowledgeBase(ctx context.Context, tenantID int64, kbType string, content map[string]interface{}) (map[string]interface{}, error) {
+	return s.store.UpdateKnowledgeBase(ctx, tenantID, kbType, content)
+}
+
+// ListWeeklyReports lists weekly reports for a tenant
+func (s *Service) ListWeeklyReports(ctx context.Context, tenantID int64, page, pageSize int) ([]map[string]interface{}, int64, error) {
+	return s.store.ListWeeklyReports(ctx, tenantID, page, pageSize)
+}
+
+// GetWeeklyReport gets a weekly report by date
+func (s *Service) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
+	return s.store.GetWeeklyReport(ctx, tenantID, dateStr)
+}
+
+// GenerateWeeklyReport generates a weekly report
+func (s *Service) GenerateWeeklyReport(ctx context.Context, tenantID int64, dateStr string) (map[string]interface{}, error) {
+	weekEndDate, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date format: %w", err)
+	}
+
+	weeklyService := NewWeeklyReportService(s.store, "", "", "", "", "", slog.Default())
+	reportData, err := weeklyService.GenerateWeeklyReport(ctx, tenantID, weekEndDate)
+	if err != nil {
+		return nil, fmt.Errorf("generate weekly report data: %w", err)
+	}
+
+	analysis := map[string]interface{}{
+		"summary":                 buildFrontdeskWeeklySummary(reportData),
+		"total_interactions":      reportData.TotalInteractions,
+		"total_appointments":      reportData.TotalAppointments,
+		"total_walk_ins":          reportData.TotalWalkIns,
+		"risk_event_count":        reportData.RiskEventCount,
+		"top_questions":           reportData.TopQuestions,
+		"competitor_mentions":     reportData.CompetitorMentions,
+		"doctor_inquiries":        reportData.DoctorInquiries,
+		"channel_feedback":        reportData.ChannelFeedback,
+		"key_insights":            reportData.KeyInsights,
+		"key_changes":             reportData.KeyInsights,
+		"next_actions":            reportData.ImprovementSuggestions,
+		"question_structure":      reportData.TopQuestions,
+		"response_quality":        []string{},
+		"issue_summary":           reportData.IssueSummary,
+		"staff_highlights":        []string{},
+		"staff_variances":         []string{},
+		"staff_suggestions":       []string{},
+		"improvement_suggestions": reportData.ImprovementSuggestions,
+		"trend_analysis":          reportData.TrendAnalysis,
+		"week_start_date":         reportData.WeekStartDate,
+		"week_end_date":           reportData.WeekEndDate,
+		"generated_at":            reportData.GeneratedAt.Format(time.RFC3339),
+		"status":                  "draft",
+	}
+
+	analysisJSON, err := json.Marshal(analysis)
+	if err != nil {
+		return nil, fmt.Errorf("marshal weekly analysis: %w", err)
+	}
+
+	const upsertQuery = `
+		INSERT INTO frontdesk_daily_reports (tenant_id, report_date, analysis_json, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (tenant_id, report_date) DO UPDATE
+		SET analysis_json = $3, updated_at = NOW()
+	`
+	if _, err := s.store.pool.Exec(ctx, upsertQuery, tenantID, dateStr, analysisJSON); err != nil {
+		return nil, fmt.Errorf("save weekly report: %w", err)
+	}
+
+	return s.store.GetWeeklyReport(ctx, tenantID, dateStr)
+}
+
+func (s *Service) PublishWeeklyReport(ctx context.Context, tenantID int64, dateStr, managerComment, publisherName string) (map[string]interface{}, error) {
+	report, err := s.store.GetWeeklyReport(ctx, tenantID, dateStr)
+	if err != nil {
+		return nil, err
+	}
+	analysis, _ := report["analysis"].(map[string]interface{})
+	if analysis == nil {
+		analysis = map[string]interface{}{}
+	}
+	analysis["status"] = "published"
+	analysis["manager_comment"] = strings.TrimSpace(managerComment)
+	analysis["published_at"] = time.Now().Format(time.RFC3339)
+	if strings.TrimSpace(publisherName) != "" {
+		analysis["published_by_name"] = strings.TrimSpace(publisherName)
+	}
+
+	analysisJSON, err := json.Marshal(analysis)
+	if err != nil {
+		return nil, fmt.Errorf("marshal published analysis: %w", err)
+	}
+	if _, err := s.store.pool.Exec(ctx, `
+		UPDATE frontdesk_daily_reports
+		SET analysis_json = $3, updated_at = NOW()
+		WHERE tenant_id = $1 AND report_date = $2
+	`, tenantID, dateStr, analysisJSON); err != nil {
+		return nil, fmt.Errorf("update weekly report publish status: %w", err)
+	}
+
+	return s.store.GetWeeklyReport(ctx, tenantID, dateStr)
+}
+
+func buildFrontdeskWeeklySummary(data *WeeklyReportData) string {
+	if data == nil {
+		return "本周暂无可用数据，建议优先补齐录音分析样本。"
+	}
+	return fmt.Sprintf(
+		"本周累计交互 %d 次（预约 %d / walk-in %d），风险事件 %d 起，建议围绕高频问题与风险场景优先优化应答。",
+		data.TotalInteractions,
+		data.TotalAppointments,
+		data.TotalWalkIns,
+		data.RiskEventCount,
+	)
 }

@@ -1428,18 +1428,18 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 		}
 
 		analyses = append(analyses, map[string]interface{}{
-			"id":                             id,
-			"tenant_id":                      tenantID,
-			"recording_id":                   recordingID,
-			"employee_id":                    employeeID,
-			"shift_date":                     shiftDate,
-			"shift_type":                     shiftType,
-			"recording_duration_seconds":     recordingDurationSeconds,
-			"estimated_interaction_count":    estimatedInteractionCount,
-			"estimated_appointment_count":    estimatedAppointmentCount,
-			"estimated_walkin_count":         estimatedWalkinCount,
-			"analysis_json":                  analysisJSON,
-			"created_at":                     createdAt,
+			"id":                          id,
+			"tenant_id":                   tenantID,
+			"recording_id":                recordingID,
+			"employee_id":                 employeeID,
+			"shift_date":                  shiftDate,
+			"shift_type":                  shiftType,
+			"recording_duration_seconds":  recordingDurationSeconds,
+			"estimated_interaction_count": estimatedInteractionCount,
+			"estimated_appointment_count": estimatedAppointmentCount,
+			"estimated_walkin_count":      estimatedWalkinCount,
+			"analysis_json":               analysisJSON,
+			"created_at":                  createdAt,
 		})
 	}
 
@@ -1478,19 +1478,19 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 	}
 
 	return map[string]interface{}{
-		"id":                             id,
-		"tenant_id":                      tenantID,
-		"recording_id":                   recordingID,
-		"employee_id":                    employeeID,
-		"shift_date":                     shiftDate,
-		"shift_type":                     shiftType,
-		"recording_duration_seconds":     recordingDurationSeconds,
-		"estimated_interaction_count":    estimatedInteractionCount,
-		"estimated_appointment_count":    estimatedAppointmentCount,
-		"estimated_walkin_count":         estimatedWalkinCount,
-		"analysis_json":                  analysisJSON,
-		"transcript":                     transcript,
-		"created_at":                     createdAt,
+		"id":                          id,
+		"tenant_id":                   tenantID,
+		"recording_id":                recordingID,
+		"employee_id":                 employeeID,
+		"shift_date":                  shiftDate,
+		"shift_type":                  shiftType,
+		"recording_duration_seconds":  recordingDurationSeconds,
+		"estimated_interaction_count": estimatedInteractionCount,
+		"estimated_appointment_count": estimatedAppointmentCount,
+		"estimated_walkin_count":      estimatedWalkinCount,
+		"analysis_json":               analysisJSON,
+		"transcript":                  transcript,
+		"created_at":                  createdAt,
 	}, nil
 }
 
@@ -1522,18 +1522,18 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 	}
 
 	return map[string]interface{}{
-		"id":                             id,
-		"tenant_id":                      tenantID,
-		"recording_id":                   recordingID,
-		"employee_id":                    employeeID,
-		"shift_date":                     shiftDate,
-		"shift_type":                     shiftType,
-		"recording_duration_seconds":     recordingDurationSeconds,
-		"estimated_interaction_count":    estimatedInteractionCount,
-		"estimated_appointment_count":    estimatedAppointmentCount,
-		"estimated_walkin_count":         estimatedWalkinCount,
-		"analysis_json":                  analysisJSON,
-		"created_at":                     createdAt,
+		"id":                          id,
+		"tenant_id":                   tenantID,
+		"recording_id":                recordingID,
+		"employee_id":                 employeeID,
+		"shift_date":                  shiftDate,
+		"shift_type":                  shiftType,
+		"recording_duration_seconds":  recordingDurationSeconds,
+		"estimated_interaction_count": estimatedInteractionCount,
+		"estimated_appointment_count": estimatedAppointmentCount,
+		"estimated_walkin_count":      estimatedWalkinCount,
+		"analysis_json":               analysisJSON,
+		"created_at":                  createdAt,
 	}, nil
 }
 
@@ -1573,21 +1573,21 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 		}
 
 		reports = append(reports, map[string]interface{}{
-			"id":                             id,
-			"tenant_id":                      tenantID,
-			"report_date":                    reportDate,
-			"total_estimated_interactions":   totalEstimatedInteractions,
-			"estimated_appointment_count":    estimatedAppointmentCount,
-			"estimated_walkin_count":         estimatedWalkinCount,
-			"estimated_walkin_capture_rate":  estimatedWalkinCaptureRate,
-			"top_questions":                  topQuestions,
-			"competitor_mentions":            competitorMentions,
-			"doctor_inquiries":               doctorInquiries,
-			"channel_feedback":               channelFeedback,
-			"lost_reasons":                   lostReasons,
-			"risk_event_count":               riskEventCount,
-			"testimonial_materials":          testimonialMaterials,
-			"created_at":                     createdAt,
+			"id":                            id,
+			"tenant_id":                     tenantID,
+			"report_date":                   reportDate,
+			"total_estimated_interactions":  totalEstimatedInteractions,
+			"estimated_appointment_count":   estimatedAppointmentCount,
+			"estimated_walkin_count":        estimatedWalkinCount,
+			"estimated_walkin_capture_rate": estimatedWalkinCaptureRate,
+			"top_questions":                 topQuestions,
+			"competitor_mentions":           competitorMentions,
+			"doctor_inquiries":              doctorInquiries,
+			"channel_feedback":              channelFeedback,
+			"lost_reasons":                  lostReasons,
+			"risk_event_count":              riskEventCount,
+			"testimonial_materials":         testimonialMaterials,
+			"created_at":                    createdAt,
 		})
 	}
 
@@ -1626,21 +1626,21 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 	}
 
 	return map[string]interface{}{
-		"id":                             id,
-		"tenant_id":                      tenantID,
-		"report_date":                    reportDate,
-		"total_estimated_interactions":   totalEstimatedInteractions,
-		"estimated_appointment_count":    estimatedAppointmentCount,
-		"estimated_walkin_count":         estimatedWalkinCount,
-		"estimated_walkin_capture_rate":  estimatedWalkinCaptureRate,
-		"top_questions":                  topQuestions,
-		"competitor_mentions":            competitorMentions,
-		"doctor_inquiries":               doctorInquiries,
-		"channel_feedback":               channelFeedback,
-		"lost_reasons":                   lostReasons,
-		"risk_event_count":               riskEventCount,
-		"testimonial_materials":          testimonialMaterials,
-		"created_at":                     createdAt,
+		"id":                            id,
+		"tenant_id":                     tenantID,
+		"report_date":                   reportDate,
+		"total_estimated_interactions":  totalEstimatedInteractions,
+		"estimated_appointment_count":   estimatedAppointmentCount,
+		"estimated_walkin_count":        estimatedWalkinCount,
+		"estimated_walkin_capture_rate": estimatedWalkinCaptureRate,
+		"top_questions":                 topQuestions,
+		"competitor_mentions":           competitorMentions,
+		"doctor_inquiries":              doctorInquiries,
+		"channel_feedback":              channelFeedback,
+		"lost_reasons":                  lostReasons,
+		"risk_event_count":              riskEventCount,
+		"testimonial_materials":         testimonialMaterials,
+		"created_at":                    createdAt,
 	}, nil
 }
 
@@ -1839,14 +1839,27 @@ func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pag
 		if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
 			analysis = make(map[string]interface{})
 		}
+		status, _ := analysis["status"].(string)
+		managerComment, _ := analysis["manager_comment"].(string)
+		publishedAt, _ := analysis["published_at"].(string)
+		publishedByName, _ := analysis["published_by_name"].(string)
+		publishedBy, _ := analysis["published_by"].(string)
+		if status == "" {
+			status = "draft"
+		}
 
 		reports = append(reports, map[string]interface{}{
-			"id":              id,
-			"tenant_id":       tenantID,
-			"report_date":     reportDate,
-			"analysis":        analysis,
-			"created_at":      createdAt,
-			"updated_at":      updatedAt,
+			"id":                id,
+			"tenant_id":         tenantID,
+			"report_date":       reportDate,
+			"analysis":          analysis,
+			"status":            status,
+			"manager_comment":   managerComment,
+			"published_at":      publishedAt,
+			"published_by":      publishedBy,
+			"published_by_name": publishedByName,
+			"created_at":        createdAt,
+			"updated_at":        updatedAt,
 		})
 	}
 
@@ -1877,13 +1890,26 @@ func (s *Store) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr str
 	if err := json.Unmarshal(analysisJSON, &analysis); err != nil {
 		analysis = make(map[string]interface{})
 	}
+	status, _ := analysis["status"].(string)
+	managerComment, _ := analysis["manager_comment"].(string)
+	publishedAt, _ := analysis["published_at"].(string)
+	publishedByName, _ := analysis["published_by_name"].(string)
+	publishedBy, _ := analysis["published_by"].(string)
+	if status == "" {
+		status = "draft"
+	}
 
 	return map[string]interface{}{
-		"id":          id,
-		"tenant_id":   tenantID,
-		"report_date": reportDate,
-		"analysis":    analysis,
-		"created_at":  createdAt,
-		"updated_at":  updatedAt,
+		"id":                id,
+		"tenant_id":         tenantID,
+		"report_date":       reportDate,
+		"analysis":          analysis,
+		"status":            status,
+		"manager_comment":   managerComment,
+		"published_at":      publishedAt,
+		"published_by":      publishedBy,
+		"published_by_name": publishedByName,
+		"created_at":        createdAt,
+		"updated_at":        updatedAt,
 	}, nil
 }

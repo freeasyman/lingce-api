@@ -65,6 +65,7 @@ func (h *Handler) RegisterFrontdeskAnalysisRoutes(mux *http.ServeMux, jwtSecret 
 	mux.Handle("GET /api/v1/frontdesk/weekly-reports", authMw(http.HandlerFunc(h.ListFrontdeskWeeklyReports)))
 	mux.Handle("GET /api/v1/frontdesk/weekly-reports/{date}", authMw(http.HandlerFunc(h.GetFrontdeskWeeklyReport)))
 	mux.Handle("POST /api/v1/frontdesk/weekly-reports/generate", authMw(http.HandlerFunc(h.GenerateFrontdeskWeeklyReport)))
+	mux.Handle("POST /api/v1/frontdesk/weekly-reports/publish", authMw(http.HandlerFunc(h.PublishFrontdeskWeeklyReport)))
 }
 
 // ListFrontdeskShiftAnalyses lists shift analyses for a tenant
@@ -420,4 +421,40 @@ func (h *Handler) GenerateFrontdeskWeeklyReport(w http.ResponseWriter, r *http.R
 	}
 
 	respondJSON(w, http.StatusCreated, report)
+}
+
+// PublishFrontdeskWeeklyReport publishes a weekly report
+func (h *Handler) PublishFrontdeskWeeklyReport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID, status := getFrontdeskTenantID(h, r)
+	if status != 0 {
+		respondError(w, status, "tenant_id required")
+		return
+	}
+
+	var req struct {
+		ReportDate     string `json:"report_date"`
+		ManagerComment string `json:"manager_comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ReportDate == "" {
+		respondError(w, http.StatusBadRequest, "report_date required")
+		return
+	}
+
+	claims := middleware.GetUserClaims(ctx)
+	publisher := ""
+	if claims != nil {
+		publisher = strconv.FormatInt(claims.UserID, 10)
+	}
+
+	report, err := h.service.PublishWeeklyReport(ctx, tenantID, req.ReportDate, req.ManagerComment, publisher)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, report)
 }
