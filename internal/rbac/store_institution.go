@@ -158,6 +158,28 @@ func (s *Store) ListInstitutionRoles(ctx context.Context, tenantID int64, req In
 		return roles, total, nil
 	}
 
+	// Self-heal sync: keep new role table aligned with legacy role definitions
+	// for tenants that previously only wrote inst_roles.
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+		SELECT $1,
+		       COALESCE(NULLIF(r.name_cn, ''), r.code),
+		       r.code,
+		       r.description,
+		       COALESCE(r.is_active, true),
+		       COALESCE(r.created_at, NOW()),
+		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
+		FROM inst_roles r
+		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
+		DO UPDATE SET
+		    name = EXCLUDED.name,
+		    description = EXCLUDED.description,
+		    is_active = EXCLUDED.is_active,
+		    updated_at = NOW()
+	`, tenantID); err != nil {
+		return nil, 0, fmt.Errorf("failed to sync institution roles: %w", err)
+	}
+
 	query := `
 		SELECT id, tenant_id, name, code, description, is_active, created_at, updated_at
 		FROM institution_roles
