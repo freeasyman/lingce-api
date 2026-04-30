@@ -52,10 +52,10 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		conditions = append(conditions, fmt.Sprintf(`
 			EXISTS (
 				SELECT 1
-				FROM inst_employee_roles er
-				WHERE er.tenant_id = employees.tenant_id
-				  AND er.employee_id = employees.id
-				  AND lower(er.role_code) = lower($%d)
+				FROM institution_employee_roles er
+				JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+				WHERE er.employee_id = employees.id
+				  AND lower(ir.code) = lower($%d)
 			)
 		`, argIndex))
 		args = append(args, req.Role)
@@ -99,17 +99,18 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT er.role_code
-		           FROM inst_employee_roles er
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.code
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT COALESCE(r.name_cn, er.role_code)
-		           FROM inst_employee_roles er
-		           LEFT JOIN inst_roles r ON r.code = er.role_code
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.name
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,
@@ -171,17 +172,18 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT er.role_code
-		           FROM inst_employee_roles er
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.code
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT COALESCE(r.name_cn, er.role_code)
-		           FROM inst_employee_roles er
-		           LEFT JOIN inst_roles r ON r.code = er.role_code
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.name
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,
@@ -401,17 +403,18 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		       END AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT er.role_code
-		           FROM inst_employee_roles er
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.code
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT COALESCE(r.name_cn, er.role_code)
-		           FROM inst_employee_roles er
-		           LEFT JOIN inst_roles r ON r.code = er.role_code
-		           WHERE er.tenant_id = employees.tenant_id AND er.employee_id = employees.id
+		           SELECT ir.name
+		           FROM institution_employee_roles er
+		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           WHERE er.employee_id = employees.id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,

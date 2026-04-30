@@ -75,6 +75,66 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`UPDATE employees SET full_name = COALESCE(NULLIF(full_name, ''), username, 'unknown')`,
 		`UPDATE employees SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
+		`CREATE TABLE IF NOT EXISTS institution_roles (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			name TEXT NOT NULL,
+			code TEXT NOT NULL,
+			description TEXT,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			deleted_at TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_roles_tenant_code ON institution_roles(tenant_id, code) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_institution_roles_tenant_id ON institution_roles(tenant_id)`,
+		`CREATE TABLE IF NOT EXISTS institution_employee_roles (
+			id BIGSERIAL PRIMARY KEY,
+			employee_id BIGINT NOT NULL,
+			role_id BIGINT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_employee_roles_employee_id ON institution_employee_roles(employee_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_institution_employee_roles_role_id ON institution_employee_roles(role_id)`,
+		`CREATE TABLE IF NOT EXISTS institution_department_roles (
+			id BIGSERIAL PRIMARY KEY,
+			department_id BIGINT NOT NULL,
+			role_id BIGINT NOT NULL,
+			is_default BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_department_roles_department_id ON institution_department_roles(department_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_institution_department_roles_role_id ON institution_department_roles(role_id)`,
+		`INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+		 SELECT t.id,
+		        COALESCE(NULLIF(r.name_cn, ''), r.code),
+		        r.code,
+		        r.description,
+		        COALESCE(r.is_active, true),
+		        COALESCE(r.created_at, NOW()),
+		        COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
+		 FROM tenants t
+		 CROSS JOIN inst_roles r
+		 ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   name = EXCLUDED.name,
+		   description = EXCLUDED.description,
+		   is_active = EXCLUDED.is_active,
+		   updated_at = NOW()`,
+		`INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
+		 SELECT er.employee_id, ir.id, COALESCE(er.created_at, NOW())
+		 FROM inst_employee_roles er
+		 JOIN institution_roles ir ON ir.tenant_id = er.tenant_id AND ir.code = er.role_code AND ir.deleted_at IS NULL
+		 JOIN employees e ON e.id = er.employee_id AND e.deleted_at IS NULL
+		 ON CONFLICT (employee_id)
+		 DO UPDATE SET role_id = EXCLUDED.role_id`,
+		`INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
+		 SELECT dr.department_id, ir.id, COALESCE(dr.is_default, true), COALESCE(dr.created_at, NOW())
+		 FROM inst_department_roles dr
+		 JOIN institution_roles ir ON ir.tenant_id = dr.tenant_id AND ir.code = dr.role_code AND ir.deleted_at IS NULL
+		 JOIN departments d ON d.id = dr.department_id AND d.deleted_at IS NULL
+		 ON CONFLICT (department_id)
+		 DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default`,
 
 		// Content module compatibility (deleted_at + missing content_items table)
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
@@ -236,6 +296,69 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_badge_devices_tenant_id ON badge_devices(tenant_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_badge_devices_employee_id ON badge_devices(employee_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_badge_devices_created_at ON badge_devices(created_at)`,
+
+		// Sandbox recording transfer compatibility
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS source_tenant_id BIGINT`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS source_recording_id BIGINT`,
+		`CREATE INDEX IF NOT EXISTS idx_recordings_source_tenant_id ON recordings(source_tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_recordings_source_recording_id ON recordings(source_recording_id)`,
+		`CREATE TABLE IF NOT EXISTS sandbox_transfer_tasks (
+			id BIGSERIAL PRIMARY KEY,
+			task_no TEXT NOT NULL UNIQUE,
+			source_tenant_id BIGINT NOT NULL,
+			target_tenant_id BIGINT NOT NULL,
+			filter_snapshot_json JSONB,
+			assignment_mode TEXT NOT NULL DEFAULT 'single',
+			assignment_snapshot_json JSONB,
+			status TEXT NOT NULL DEFAULT 'pending',
+			total_count INTEGER NOT NULL DEFAULT 0,
+			success_count INTEGER NOT NULL DEFAULT 0,
+			failed_count INTEGER NOT NULL DEFAULT 0,
+			created_by BIGINT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			started_at TIMESTAMP,
+			finished_at TIMESTAMP,
+			ttl_days INTEGER NOT NULL DEFAULT 15,
+			expire_at TIMESTAMP,
+			rollback_status TEXT,
+			rollback_at TIMESTAMP,
+			rollback_by BIGINT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_tasks_source_tenant_id ON sandbox_transfer_tasks(source_tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_tasks_target_tenant_id ON sandbox_transfer_tasks(target_tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_tasks_status ON sandbox_transfer_tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS sandbox_transfer_task_items (
+			id BIGSERIAL PRIMARY KEY,
+			task_id BIGINT NOT NULL,
+			source_recording_id BIGINT NOT NULL,
+			target_recording_id BIGINT,
+			source_object_key TEXT,
+			target_object_key TEXT,
+			target_employee_id BIGINT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			error_code TEXT,
+			error_message TEXT,
+			copied_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_task_items_task_id ON sandbox_transfer_task_items(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_task_items_source_recording_id ON sandbox_transfer_task_items(source_recording_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_transfer_task_items_target_recording_id ON sandbox_transfer_task_items(target_recording_id)`,
+		`CREATE TABLE IF NOT EXISTS sandbox_employee_mappings (
+			id BIGSERIAL PRIMARY KEY,
+			source_tenant_id BIGINT NOT NULL,
+			source_employee_id BIGINT NOT NULL,
+			target_tenant_id BIGINT NOT NULL,
+			target_employee_id BIGINT NOT NULL,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE(source_tenant_id, source_employee_id, target_tenant_id, target_employee_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_employee_mappings_target_tenant_id ON sandbox_employee_mappings(target_tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sandbox_employee_mappings_source_tenant_id ON sandbox_employee_mappings(source_tenant_id)`,
 
 		// Sysconfig compatibility
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS description TEXT`,
@@ -609,6 +732,173 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`,
 		`UPDATE recordings SET status = 'pending' WHERE status IS NULL`,
 		`UPDATE recordings SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
+
+		// Front-desk recording analysis tables
+		`CREATE TABLE IF NOT EXISTS frontdesk_shift_analyses (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			shift_date DATE NOT NULL,
+			shift_type VARCHAR(20),
+			recording_duration_seconds INTEGER,
+			estimated_interaction_count INTEGER,
+			estimated_appointment_count INTEGER,
+			estimated_walkin_count INTEGER,
+			analysis_json JSONB NOT NULL,
+			transcript TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_analyses_tenant_id ON frontdesk_shift_analyses(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_analyses_recording_id ON frontdesk_shift_analyses(recording_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_analyses_employee_id ON frontdesk_shift_analyses(employee_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_analyses_shift_date ON frontdesk_shift_analyses(shift_date)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_customer_questions (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			shift_analysis_id BIGINT NOT NULL REFERENCES frontdesk_shift_analyses(id),
+			employee_id BIGINT NOT NULL,
+			question_text TEXT NOT NULL,
+			question_category VARCHAR(30),
+			answer_text TEXT,
+			answer_quality VARCHAR(30),
+			customer_followup BOOLEAN,
+			followup_quote TEXT,
+			approx_time VARCHAR(10),
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_customer_questions_tenant_id ON frontdesk_customer_questions(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_customer_questions_shift_analysis_id ON frontdesk_customer_questions(shift_analysis_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_customer_questions_category ON frontdesk_customer_questions(question_category)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_business_signals (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			shift_analysis_id BIGINT NOT NULL REFERENCES frontdesk_shift_analyses(id),
+			signal_type VARCHAR(30),
+			signal_value TEXT,
+			evidence_quote TEXT,
+			sentiment VARCHAR(20),
+			approx_time VARCHAR(10),
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_business_signals_tenant_id ON frontdesk_business_signals(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_business_signals_shift_analysis_id ON frontdesk_business_signals(shift_analysis_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_business_signals_type ON frontdesk_business_signals(signal_type)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_risk_events (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			event_type VARCHAR(30),
+			severity VARCHAR(10),
+			event_time TIMESTAMP NOT NULL,
+			trigger_quote TEXT,
+			context TEXT,
+			suggested_action TEXT,
+			alerted BOOLEAN DEFAULT FALSE,
+			alert_time TIMESTAMP,
+			resolved BOOLEAN DEFAULT FALSE,
+			resolution_note TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_events_tenant_id ON frontdesk_risk_events(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_events_recording_id ON frontdesk_risk_events(recording_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_events_employee_id ON frontdesk_risk_events(employee_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_risk_events_severity ON frontdesk_risk_events(severity)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_shift_assessments (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			shift_analysis_id BIGINT NOT NULL REFERENCES frontdesk_shift_analyses(id),
+			employee_id BIGINT NOT NULL,
+			d1_opening_grade VARCHAR(5),
+			d2_response_grade VARCHAR(5),
+			d3_intelligence_grade VARCHAR(5),
+			d4_retention_grade VARCHAR(5),
+			d5_compliance_grade VARCHAR(5),
+			assessment_details JSONB,
+			has_compliance_issue BOOLEAN DEFAULT FALSE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_assessments_tenant_id ON frontdesk_shift_assessments(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_assessments_shift_analysis_id ON frontdesk_shift_assessments(shift_analysis_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_shift_assessments_employee_id ON frontdesk_shift_assessments(employee_id)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_daily_reports (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			report_date DATE NOT NULL,
+			total_estimated_interactions INTEGER,
+			estimated_appointment_count INTEGER,
+			estimated_walkin_count INTEGER,
+			estimated_walkin_capture_rate DECIMAL(4,3),
+			top_questions JSONB,
+			competitor_mentions JSONB,
+			doctor_inquiries JSONB,
+			channel_feedback JSONB,
+			lost_reasons JSONB,
+			risk_event_count INTEGER,
+			testimonial_materials JSONB,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tenant_id, report_date)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_daily_reports_tenant_id ON frontdesk_daily_reports(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_daily_reports_report_date ON frontdesk_daily_reports(report_date)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_knowledge_bases (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			kb_type VARCHAR(30) NOT NULL,
+			content JSONB NOT NULL,
+			version INTEGER NOT NULL DEFAULT 1,
+			status VARCHAR(20) DEFAULT 'active',
+			updated_by BIGINT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tenant_id, kb_type, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_knowledge_bases_tenant_id ON frontdesk_knowledge_bases(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_knowledge_bases_kb_type ON frontdesk_knowledge_bases(kb_type)`,
+
+		`CREATE TABLE IF NOT EXISTS frontdesk_prompt_knowledge_mapping (
+			id BIGSERIAL PRIMARY KEY,
+			prompt_id VARCHAR(50) NOT NULL,
+			kb_type VARCHAR(30) NOT NULL,
+			injection_template TEXT,
+			UNIQUE(prompt_id, kb_type)
+		)`,
+
+		// Front-desk analysis prompts
+		`INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, usage_count, created_at, updated_at)
+		VALUES ('P-SIGNAL-EXTRACT', '经营信号提取', '从前台录音中提取经营信号', 'analysis',
+			'你是一个医疗机构前台录音分析专家。从对话中提取经营信号，只提取有明确证据的信号，禁止推测。',
+			'以下是前台客服的工作录音转写文本（约1小时）。\n\n## 你的任务\n从对话中提取以下经营信号。\n\n## 需要提取的信号类型\n\n### 1. 客户问题与前台应答\n识别客户主动提出的实质性问题（关于价格、医生、恢复期、安全性、付款方式等），以及前台的回答。\n\n### 2. 竞品提及\n客户提到其他医院/机构的名称，以及对竞品的评价。\n\n### 3. 价格敏感信号\n客户表达对价格的关注。\n\n### 4. 医生关注\n客户询问特定医生或要求推荐医生。\n\n### 5. 渠道来源\n客户提到如何知道本机构。\n\n### 6. 决策角色\n识别咨询者是否为本人就诊。\n\n### 7. 决策障碍\n客户表达不能当场决定或就诊的原因。\n\n### 8. 口碑素材\n客户的正面评价、转介绍表述、对机构/医生的认可。\n\n## 转写文本\n{{ transcript_chunk }}\n\n## 输出格式\n严格按JSON格式输出，无证据的字段不要输出。',
+			'{}', '1', true, 1, 1, 0, NOW(), NOW())
+		ON CONFLICT (code) DO NOTHING`,
+
+		`INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, usage_count, created_at, updated_at)
+		VALUES ('P-RETENTION-OBSERVE', '留存行为观察', '识别客户留存相关行为', 'analysis',
+			'你是一个医疗机构前台录音分析专家。识别其中的客户留存相关行为。',
+			'以下是前台客服的工作录音转写文本（约1小时）。\n\n## 你的任务\n识别其中的客户留存相关行为。\n\n## 需要识别的内容\n\n### 1. 场景分类\n判断对话中的客户交互是\"预约到院\"还是\"无预约walk-in\"。\n\n### 2. 留存动作观察\n当客户表达离开意图时：\n- 前台是否做了挽留动作？\n- 是否了解了客户犹豫的原因？\n- 最终是否留下了联系方式？\n- 是否安排了具体的后续动作？\n\n### 3. 对话结束方式\n每段可识别的客户交互结束时：\n- 前台是否有结束收口？\n- 是否引导了留资？\n- 是否给出了具体的后续安排？\n\n## 转写文本\n{{ transcript_chunk }}\n\n## 输出格式\n严格按JSON格式输出。',
+			'{}', '1', true, 1, 1, 0, NOW(), NOW())
+		ON CONFLICT (code) DO NOTHING`,
+
+		`INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, usage_count, created_at, updated_at)
+		VALUES ('P-RISK-DETECT', '风险事件检测', '识别录音中的风险事件', 'analysis',
+			'你是一个医疗机构前台录音分析专家。识别其中的风险事件。只标记有明确证据的风险，不要过度标记。',
+			'以下是前台客服的工作录音转写文本（约1小时）。\n\n## 你的任务\n识别其中的风险事件。\n\n## 风险类型\n\n### 1. 情绪爆发（emotion_escalation）\n客户表达愤怒、强烈不满、威胁投诉。\n严重度：high（威胁投诉/要求见经理）/ medium（明显不耐烦）/ low（轻微不满）。\n\n### 2. 等待超时（wait_timeout）\n客户明确表示等待时间过长。\n\n### 3. 合规风险（compliance_risk）\n前台做出疗效承诺、越权诊断、虚假宣传。\n严重度：high（明确承诺疗效/越权诊断）/ medium（暗示性承诺）/ low（表述不够严谨）。\n\n### 4. 客户流失（customer_loss）\n客户表达离开意图且前台未有效挽留。\n\n## 转写文本\n{{ transcript_chunk }}\n\n## 输出格式\n严格按JSON格式输出。',
+			'{}', '1', true, 1, 1, 0, NOW(), NOW())
+		ON CONFLICT (code) DO NOTHING`,
+
+		`INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, usage_count, created_at, updated_at)
+		VALUES ('P-SHIFT-ASSESS', '班次表现评估', '对前台班次表现进行五维度评估', 'assessment',
+			'你是一个医疗机构前台服务质量评估专家。基于分析结果，对该前台的班次表现做五维度评估。',
+			'以下是某前台客服一个班次（半天）的录音分析结果。\n\n## 你的任务\n基于分析结果，对该前台的班次表现做五维度评估。\n\n## 评估维度\n\n### 维度一：开场与需求识别\n主动接触、需求/来意识别、场景适配。\n\n### 维度二：应答与专业呈现\n高频问题应答具体度、医生推荐质量、不确定问题的处理。\n\n### 维度三：信息捕捉与传递\n客户主动释放信号的捕捉、信息深化能力、信息传递与衔接。\n\n### 维度四：留存与承接\n留资动作、后续安排的具体度、犹豫/离场客户的挽留。\n\n### 维度五：合规底线\n疗效承诺、越权诊断、虚假/夸大宣传、严重失礼。\n\n## 评估规则\n1. 每个维度给出等级（A/A-/B+/B/B-/C+/C/D）和简要说明\n2. 每个等级判断必须引用具体证据（时间点+原话）\n3. 选取1-2个亮点时刻和1-2个改进时刻，附转写片段\n4. 改进时刻必须给出具体的改进建议\n5. 亮点在前，改进在后\n\n## 转写文本\n{{ transcript }}\n\n## 输出格式\n严格按JSON格式输出。',
+			'{}', '1', true, 1, 1, 0, NOW(), NOW())
+		ON CONFLICT (code) DO NOTHING`,
 	}
 
 	for i, stmt := range stmts {

@@ -70,7 +70,7 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 	// Query departments
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, name,
+		SELECT d.id, d.tenant_id, d.name,
 		       COALESCE(code, '') AS code,
 		       parent_id,
 		       CASE
@@ -78,10 +78,26 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 		           WHEN is_active::text IN ('1', 't', 'true') THEN true
 		           ELSE false
 		       END AS is_active,
-		       created_at, updated_at, deleted_at
-		FROM departments
+		       (
+		           SELECT ir.code
+		           FROM institution_department_roles dr
+		           JOIN institution_roles ir ON ir.id = dr.role_id AND ir.deleted_at IS NULL
+		           WHERE dr.department_id = d.id
+		           ORDER BY dr.created_at DESC
+		           LIMIT 1
+		       ) AS default_role_code,
+		       (
+		           SELECT ir.name
+		           FROM institution_department_roles dr
+		           JOIN institution_roles ir ON ir.id = dr.role_id AND ir.deleted_at IS NULL
+		           WHERE dr.department_id = d.id
+		           ORDER BY dr.created_at DESC
+		           LIMIT 1
+		       ) AS default_role_name,
+		       d.created_at, d.updated_at, d.deleted_at
+		FROM departments d
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY d.created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 
@@ -103,6 +119,8 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 			&d.Code,
 			&d.ParentID,
 			&d.IsActive,
+			&d.DefaultRoleCode,
+			&d.DefaultRoleName,
 			&d.CreatedAt,
 			&d.UpdatedAt,
 			&d.DeletedAt,
@@ -118,7 +136,7 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 // GetDepartmentByID retrieves a department by ID
 func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, error) {
 	query := `
-		SELECT id, tenant_id, name,
+		SELECT d.id, d.tenant_id, d.name,
 		       COALESCE(code, '') AS code,
 		       parent_id,
 		       CASE
@@ -126,9 +144,25 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		           WHEN is_active::text IN ('1', 't', 'true') THEN true
 		           ELSE false
 		       END AS is_active,
-		       created_at, updated_at, deleted_at
-		FROM departments
-		WHERE id = $1 AND deleted_at IS NULL
+		       (
+		           SELECT ir.code
+		           FROM institution_department_roles dr
+		           JOIN institution_roles ir ON ir.id = dr.role_id AND ir.deleted_at IS NULL
+		           WHERE dr.department_id = d.id
+		           ORDER BY dr.created_at DESC
+		           LIMIT 1
+		       ) AS default_role_code,
+		       (
+		           SELECT ir.name
+		           FROM institution_department_roles dr
+		           JOIN institution_roles ir ON ir.id = dr.role_id AND ir.deleted_at IS NULL
+		           WHERE dr.department_id = d.id
+		           ORDER BY dr.created_at DESC
+		           LIMIT 1
+		       ) AS default_role_name,
+		       d.created_at, d.updated_at, d.deleted_at
+		FROM departments d
+		WHERE d.id = $1 AND d.deleted_at IS NULL
 	`
 
 	var d Department
@@ -139,6 +173,8 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		&d.Code,
 		&d.ParentID,
 		&d.IsActive,
+		&d.DefaultRoleCode,
+		&d.DefaultRoleName,
 		&d.CreatedAt,
 		&d.UpdatedAt,
 		&d.DeletedAt,
