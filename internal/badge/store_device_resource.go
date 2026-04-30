@@ -745,7 +745,15 @@ func (s *Store) v2InsertDeviceLogTx(ctx context.Context, tx pgx.Tx, deviceID int
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 	`, deviceID, deviceNo, operation, fromStatus, toStatus, operatorID, operatorName, operatorType, detail)
 	if err != nil {
-		return fmt.Errorf("failed to insert badge_device_log: %w", err)
+		// Backward compatibility: some environments may still have legacy badge_device_logs schema.
+		_, fallbackErr := tx.Exec(ctx, `
+			INSERT INTO badge_device_logs (
+				device_id, device_no, operation, operator_id, operator_name, created_at
+			) VALUES ($1, $2, $3, $4, $5, NOW())
+		`, deviceID, deviceNo, operation, operatorID, operatorName)
+		if fallbackErr != nil {
+			return fmt.Errorf("failed to insert badge_device_log: %v; fallback failed: %w", err, fallbackErr)
+		}
 	}
 	return nil
 }
