@@ -44,30 +44,38 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 	var args []interface{}
 	argIndex := 1
 
-	conditions = append(conditions, "deleted_at IS NULL")
+	conditions = append(conditions, "bd.deleted_at IS NULL")
+
+	// Add tenant filtering for institution users
+	if req.TenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("bd.tenant_id = $%d", argIndex))
+		args = append(args, *req.TenantID)
+		argIndex++
+	}
+
 	if req.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("bd.status = $%d", argIndex))
 		args = append(args, *req.Status)
 		argIndex++
 	}
 	if req.HealthStatus != nil {
-		conditions = append(conditions, fmt.Sprintf("health_status = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("bd.health_status = $%d", argIndex))
 		args = append(args, *req.HealthStatus)
 		argIndex++
 	}
 	if req.ManufacturerCode != nil {
-		conditions = append(conditions, fmt.Sprintf("manufacturer_code = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("bd.manufacturer_code = $%d", argIndex))
 		args = append(args, *req.ManufacturerCode)
 		argIndex++
 	}
 	if req.DeviceNo != nil {
-		conditions = append(conditions, fmt.Sprintf("device_no ILIKE $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("bd.device_no ILIKE $%d", argIndex))
 		args = append(args, "%"+*req.DeviceNo+"%")
 		argIndex++
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM badge_devices WHERE %s", whereClause)
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM badge_devices bd LEFT JOIN employees e ON e.id = bd.employee_id LEFT JOIN departments d ON d.id = e.department_id WHERE %s", whereClause)
 	var total int
 	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count devices: %w", err)
@@ -75,14 +83,17 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, device_no, device_id, manufacturer_code, manufacturer_name, hardware_model,
-		       status, health_status, health_check_result,
-		       tenant_id, tenant_name, employee_id, employee_name, employee_phone,
-		       assigned_at, battery_level, last_check_at, last_online_at, import_batch_no,
-		       metadata, created_at, updated_at
-		FROM badge_devices
+		SELECT bd.id, bd.device_no, bd.device_id, bd.manufacturer_code, bd.manufacturer_name, bd.hardware_model,
+		       bd.status, bd.health_status, bd.health_check_result,
+		       bd.tenant_id, bd.tenant_name, bd.employee_id, bd.employee_name, bd.employee_phone,
+		       e.department_id, d.name as department_name,
+		       bd.assigned_at, bd.battery_level, bd.last_check_at, bd.last_online_at, bd.import_batch_no,
+		       bd.metadata, bd.created_at, bd.updated_at
+		FROM badge_devices bd
+		LEFT JOIN employees e ON e.id = bd.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY bd.created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 	args = append(args, req.PageSize, offset)
@@ -100,6 +111,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 			&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
 			&d.Status, &d.HealthStatus, &d.HealthCheckResult,
 			&d.TenantID, &d.TenantName, &d.EmployeeID, &d.EmployeeName, &d.EmployeePhone,
+			&d.DepartmentID, &d.DepartmentName,
 			&d.AssignedAt, &d.BatteryLevel, &d.LastCheckAt, &d.LastOnlineAt, &d.ImportBatchNo,
 			&d.Metadata, &d.CreatedAt, &d.UpdatedAt,
 		); err != nil {
@@ -284,9 +296,9 @@ func (s *Store) V2UpdateDeviceStatusWithHealth(ctx context.Context, deviceID int
 	return tx.Commit(ctx)
 }
 
-func (s *Store) V2UpdateRealtimeSnapshot(ctx context.Context, deviceID int64, batteryLevel *int, lastOnlineAt *time.Time) error {
-	setClauses := make([]string, 0, 3)
-	args := make([]interface{}, 0, 4)
+func (s *Store) V2UpdateRealtimeSnapshot(ctx context.Context, deviceID int64, batteryLevel *int, lastOnlineAt *time.Time, hardwareModel *string) error {
+	setClauses := make([]string, 0, 4)
+	args := make([]interface{}, 0, 5)
 	argIndex := 1
 
 	if batteryLevel != nil {
@@ -297,6 +309,11 @@ func (s *Store) V2UpdateRealtimeSnapshot(ctx context.Context, deviceID int64, ba
 	if lastOnlineAt != nil {
 		setClauses = append(setClauses, fmt.Sprintf("last_online_at = $%d", argIndex))
 		args = append(args, *lastOnlineAt)
+		argIndex++
+	}
+	if hardwareModel != nil && strings.TrimSpace(*hardwareModel) != "" {
+		setClauses = append(setClauses, fmt.Sprintf("hardware_model = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*hardwareModel))
 		argIndex++
 	}
 	if len(setClauses) == 0 {
@@ -373,11 +390,18 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 	defer tx.Rollback(ctx)
 	success := 0
 	failed := 0
-	for _, deviceID := range req.DeviceIDs {
+	for i, deviceID := range req.DeviceIDs {
+		savepoint := fmt.Sprintf("sp_reclaim_%d", i)
+		if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
+			return success, failed, fmt.Errorf("failed to create savepoint: %w", err)
+		}
+
 		var deviceNo string
 		var fromStatus string
 		err := tx.QueryRow(ctx, `SELECT device_no, status FROM badge_devices WHERE id=$1 AND deleted_at IS NULL`, deviceID).Scan(&deviceNo, &fromStatus)
 		if err != nil {
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
+			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
 			failed++
 			continue
 		}
@@ -386,11 +410,19 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 			SET status='ready', current_status='ready', lifecycle_status='active', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
+			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
 			failed++
 			continue
 		}
 		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "reclaim", &fromStatus, strPtr("ready"), &operatorID, &operatorName, strPtr("admin"), JSONObject{"reason": req.Reason}); err != nil {
-			return 0, 0, err
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
+			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
+			failed++
+			continue
+		}
+		if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+			return success, failed, fmt.Errorf("failed to release savepoint: %w", err)
 		}
 		success++
 	}
