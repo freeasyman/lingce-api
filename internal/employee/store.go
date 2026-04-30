@@ -312,7 +312,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		UPDATE employees
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version,
+		RETURNING id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''), COALESCE(full_name, ''), COALESCE(phone, ''), COALESCE(email, ''), department_id, session_version,
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false

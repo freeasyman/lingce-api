@@ -3,6 +3,7 @@ package employee
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -57,9 +58,6 @@ func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest)
 	if req.TenantID == 0 {
 		return nil, fmt.Errorf("tenant_id is required")
 	}
-	if req.Username == "" {
-		return nil, fmt.Errorf("username is required")
-	}
 	if req.Password == "" {
 		return nil, fmt.Errorf("password is required")
 	}
@@ -71,6 +69,11 @@ func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest)
 	}
 	if req.Phone == "" {
 		return nil, fmt.Errorf("phone is required")
+	}
+	// Backward compatibility: historical tenants use phone as primary login ID.
+	// If username is empty, default it to phone instead of blocking creation.
+	if strings.TrimSpace(req.Username) == "" {
+		req.Username = strings.TrimSpace(req.Phone)
 	}
 
 	// Hash password
