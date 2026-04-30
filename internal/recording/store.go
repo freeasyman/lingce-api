@@ -1455,7 +1455,7 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 	offset := (page - 1) * pageSize
 
 	query := `
-		SELECT id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		SELECT id, tenant_id, recording_id, employee_id, shift_date::text, shift_type,
 		       recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
 		       estimated_walkin_count, analysis_json, created_at
 		FROM frontdesk_shift_analyses
@@ -1493,8 +1493,7 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 	var analyses []map[string]interface{}
 	for rows.Next() {
 		var id, tenantID, recordingID, employeeID int64
-		var shiftDate time.Time
-		var shiftType string
+		var shiftDate, shiftType string
 		var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 		var analysisJSON map[string]interface{}
 		var createdAt time.Time
@@ -1510,7 +1509,7 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 			"tenant_id":                   tenantID,
 			"recording_id":                recordingID,
 			"employee_id":                 employeeID,
-			"shift_date":                  shiftDate.Format("2006-01-02"),
+			"shift_date":                  shiftDate,
 			"shift_type":                  shiftType,
 			"recording_duration_seconds":  recordingDurationSeconds,
 			"estimated_interaction_count": estimatedInteractionCount,
@@ -1532,7 +1531,7 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 // GetShiftAnalysis gets a single shift analysis
 func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[string]interface{}, error) {
 	query := `
-		SELECT id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		SELECT id, tenant_id, recording_id, employee_id, shift_date::text, shift_type,
 		       recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
 		       estimated_walkin_count, analysis_json, transcript, created_at
 		FROM frontdesk_shift_analyses
@@ -1540,8 +1539,7 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 	`
 
 	var recordingID, employeeID int64
-	var shiftDate time.Time
-	var shiftType string
+	var shiftDate, shiftType string
 	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 	var analysisJSON map[string]interface{}
 	var transcript *string
@@ -1561,7 +1559,7 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 		"tenant_id":                   tenantID,
 		"recording_id":                recordingID,
 		"employee_id":                 employeeID,
-		"shift_date":                  shiftDate.Format("2006-01-02"),
+		"shift_date":                  shiftDate,
 		"shift_type":                  shiftType,
 		"recording_duration_seconds":  recordingDurationSeconds,
 		"estimated_interaction_count": estimatedInteractionCount,
@@ -1581,14 +1579,13 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 		                            estimated_appointment_count, estimated_walkin_count,
 		                            analysis_json, transcript, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-		RETURNING id, tenant_id, recording_id, employee_id, shift_date, shift_type,
+		RETURNING id, tenant_id, recording_id, employee_id, shift_date::text, shift_type,
 		          recording_duration_seconds, estimated_interaction_count, estimated_appointment_count,
 		          estimated_walkin_count, analysis_json, created_at
 	`
 
 	var id, recordingID, employeeID int64
-	var shiftDate time.Time
-	var shiftType string
+	var shiftDate, shiftType string
 	var recordingDurationSeconds, estimatedInteractionCount, estimatedAppointmentCount, estimatedWalkinCount int
 	var analysisJSON map[string]interface{}
 	var createdAt time.Time
@@ -1606,7 +1603,7 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 		"tenant_id":                   tenantID,
 		"recording_id":                recordingID,
 		"employee_id":                 employeeID,
-		"shift_date":                  shiftDate.Format("2006-01-02"),
+		"shift_date":                  shiftDate,
 		"shift_type":                  shiftType,
 		"recording_duration_seconds":  recordingDurationSeconds,
 		"estimated_interaction_count": estimatedInteractionCount,
