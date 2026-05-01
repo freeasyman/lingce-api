@@ -87,6 +87,7 @@ type MedicalRecording struct {
 	DoctorSummary      *string          `json:"doctor_summary,omitempty"`
 	TherapistSummary   *string          `json:"therapist_summary,omitempty"`
 	ConsultantSummary  *string          `json:"consultant_summary,omitempty"`
+	BusinessScope      string           `json:"business_scope,omitempty"`
 	AnalysisResult     JSONObject       `json:"analysis_result,omitempty"`
 	AnalysisDisplay    JSONObject       `json:"analysis_display,omitempty"`
 	AnalysisStatus     *string          `json:"analysis_status,omitempty"`
@@ -149,20 +150,20 @@ type RecordingAnalysisResult struct {
 
 // RecordingPrompt represents a prompt template for recording analysis
 type RecordingPrompt struct {
-	ID          int64      `json:"id"`
-	Code        string     `json:"code"`
-	Name        string     `json:"name"`
-	Description *string    `json:"description,omitempty"`
-	Category    string     `json:"category"`
-	SystemPrompt string    `json:"system_prompt"`
-	PromptText  string     `json:"prompt_text"`
+	ID           int64      `json:"id"`
+	Code         string     `json:"code"`
+	Name         string     `json:"name"`
+	Description  *string    `json:"description,omitempty"`
+	Category     string     `json:"category"`
+	SystemPrompt string     `json:"system_prompt"`
+	PromptText   string     `json:"prompt_text"`
 	OutputSchema JSONObject `json:"output_schema,omitempty"`
-	Version     string     `json:"version"`
-	Variables   JSONArray  `json:"variables,omitempty"`
-	IsActive    bool       `json:"is_active"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	Version      string     `json:"version"`
+	Variables    JSONArray  `json:"variables,omitempty"`
+	IsActive     bool       `json:"is_active"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
 }
 
 // RecordingPromptTenantConfig represents tenant-specific prompt configuration
@@ -342,11 +343,11 @@ const (
 type ConversationPurpose string
 
 const (
-	PurposeFirstContact   ConversationPurpose = "first_contact"
-	PurposeNeedDiscovery  ConversationPurpose = "need_discovery"
-	PurposeDemo           ConversationPurpose = "demo"
-	PurposeObjection      ConversationPurpose = "objection"
-	PurposeClosing        ConversationPurpose = "closing"
+	PurposeFirstContact  ConversationPurpose = "first_contact"
+	PurposeNeedDiscovery ConversationPurpose = "need_discovery"
+	PurposeDemo          ConversationPurpose = "demo"
+	PurposeObjection     ConversationPurpose = "objection"
+	PurposeClosing       ConversationPurpose = "closing"
 )
 
 // Lingce Sales Scene Types

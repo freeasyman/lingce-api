@@ -46,6 +46,64 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`UPDATE customer_group_members SET created_at = COALESCE(created_at, NOW()) WHERE created_at IS NULL`,
 		`UPDATE customer_group_members SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 
+		// Recording business scope compatibility
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
+		`UPDATE recordings SET business_scope = 'unknown' WHERE business_scope IS NULL OR trim(business_scope) = ''`,
+		`CREATE INDEX IF NOT EXISTS idx_recordings_tenant_business_scope_created_at ON recordings(tenant_id, business_scope, created_at DESC)`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'chk_recordings_business_scope_enum'
+			) THEN
+				ALTER TABLE recordings
+				ADD CONSTRAINT chk_recordings_business_scope_enum
+				CHECK (business_scope IN ('doctor','consultant','frontdesk','therapist','nurse','lingce_sales','unknown'));
+			END IF;
+		END $$`,
+		`UPDATE recordings r
+		SET business_scope = CASE
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('frontdesk','reception','receptionist','customer_service','service') THEN 'frontdesk'
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('doctor','diagnosis','treatment','medical') THEN 'doctor'
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('consultant','consultation','sales') THEN 'consultant'
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('therapist') THEN 'therapist'
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('nurse') THEN 'nurse'
+			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('lingce_sales') THEN 'lingce_sales'
+			ELSE CASE
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
+				) THEN 'frontdesk'
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('doctor','therapist','doctor_assistant')
+				) THEN 'doctor'
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('consultant')
+				) THEN 'consultant'
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('therapist')
+				) THEN 'therapist'
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('nurse')
+				) THEN 'nurse'
+				WHEN EXISTS (
+					SELECT 1 FROM inst_employee_roles ier
+					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
+					AND lower(ier.role_code) IN ('lingce_sales')
+				) THEN 'lingce_sales'
+				ELSE 'unknown'
+			END
+		END
+		WHERE r.business_scope = 'unknown' OR r.business_scope IS NULL`,
+
 		// Organization module compatibility
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
@@ -121,13 +179,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		   description = EXCLUDED.description,
 		   is_active = EXCLUDED.is_active,
 		   updated_at = NOW()`,
-		`INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
-		 SELECT er.employee_id, ir.id, COALESCE(er.created_at, NOW())
-		 FROM inst_employee_roles er
-		 JOIN institution_roles ir ON ir.tenant_id = er.tenant_id AND ir.code = er.role_code AND ir.deleted_at IS NULL
-		 JOIN employees e ON e.id = er.employee_id AND e.deleted_at IS NULL
+		`WITH dedup AS (
+		     SELECT DISTINCT ON (er.employee_id)
+		            er.employee_id,
+		            ir.id AS role_id,
+		            COALESCE(er.created_at, NOW()) AS created_at
+		     FROM inst_employee_roles er
+		     JOIN institution_roles ir ON ir.tenant_id = er.tenant_id AND ir.code = er.role_code AND ir.deleted_at IS NULL
+		     JOIN employees e ON e.id = er.employee_id AND e.deleted_at IS NULL
+		     ORDER BY er.employee_id, COALESCE(er.created_at, NOW()) DESC, ir.id DESC
+		 )
+		 INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
+		 SELECT employee_id, role_id, created_at
+		 FROM dedup
 		 ON CONFLICT (employee_id)
-		 DO UPDATE SET role_id = EXCLUDED.role_id`,
+		 DO UPDATE SET
+		   role_id = EXCLUDED.role_id,
+		   created_at = EXCLUDED.created_at`,
 		`INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
 		 SELECT dr.department_id, ir.id, COALESCE(dr.is_default, true), COALESCE(dr.created_at, NOW())
 		 FROM inst_department_roles dr

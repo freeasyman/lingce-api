@@ -611,6 +611,7 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		DoctorSummary:     r.DoctorSummary,
 		TherapistSummary:  r.TherapistSummary,
 		ConsultantSummary: r.ConsultantSummary,
+		BusinessScope:     strings.TrimSpace(r.BusinessScope),
 		AnalysisStatus:    pickStringPtr(analysisStatus),
 		ContentSeedsTypes: []string{},
 		Status:            string(r.Status),

@@ -3,7 +3,10 @@ package badge
 import (
 	"context"
 	"fmt"
+	"path"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +14,12 @@ import (
 
 type Store struct {
 	pool *pgxpool.Pool
+}
+
+type AudioCallbackIngestResult struct {
+	RecordingID int64
+	TenantID    int64
+	Created     bool
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -169,7 +178,7 @@ func (s *Store) AcceptDevices(ctx context.Context, devices []AcceptanceDeviceInp
 		// Insert device
 		query := `
 			INSERT INTO badge_devices (device_no, manufacturer_code, model, status, accepted_at, created_at, updated_at)
-			VALUES ($1, $2, $3, 'pending_assignment', NOW(), NOW(), NOW())
+			VALUES ($1, $2, $3, 'ready', NOW(), NOW(), NOW())
 			RETURNING id
 		`
 		var deviceID int64
@@ -181,7 +190,7 @@ func (s *Store) AcceptDevices(ctx context.Context, devices []AcceptanceDeviceInp
 		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, created_at)
-			VALUES ($1, 'acceptance', 'pending_assignment', $2, NOW())
+			VALUES ($1, 'acceptance', 'ready', $2, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -207,7 +216,8 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET tenant_id = $1, status = 'in_use', assigned_to_tenant_at = NOW(), updated_at = NOW()
+			SET tenant_id = $1, status = 'in_use', current_status = 'in_use', lifecycle_status = 'active',
+			    assignment_status = 'tenant', assigned_to_tenant_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, tenantID, deviceID)
@@ -247,7 +257,8 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET employee_id = $1, assigned_to_emp_at = NOW(), updated_at = NOW()
+			SET employee_id = $1, status = 'in_use', current_status = 'in_use', lifecycle_status = 'active',
+			    assignment_status = 'employee', assigned_to_emp_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, employeeID, deviceID)
@@ -287,7 +298,16 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET employee_id = NULL, assigned_to_emp_at = NULL, updated_at = NOW()
+			SET status = 'ready',
+			    current_status = 'ready',
+			    lifecycle_status = 'active',
+			    assignment_status = CASE WHEN tenant_id IS NULL THEN 'unassigned' ELSE 'tenant' END,
+			    inspection_result = COALESCE(inspection_result, 'pass'),
+			    employee_id = NULL,
+			    employee_name = NULL,
+			    employee_phone = NULL,
+			    assigned_to_emp_at = NULL,
+			    updated_at = NOW()
 			WHERE id = $1 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, deviceID)
@@ -301,7 +321,7 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_employee', 'in_use', $2, $3, NOW())
+			VALUES ($1, 'reclaim_employee', 'ready', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -327,8 +347,19 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET tenant_id = NULL, employee_id = NULL, status = 'pending_assignment',
-			    assigned_to_tenant_at = NULL, assigned_to_emp_at = NULL, updated_at = NOW()
+			SET status = 'ready',
+			    current_status = 'ready',
+			    lifecycle_status = 'active',
+			    assignment_status = 'unassigned',
+			    inspection_result = COALESCE(inspection_result, 'pass'),
+			    tenant_id = NULL,
+			    tenant_name = NULL,
+			    employee_id = NULL,
+			    employee_name = NULL,
+			    employee_phone = NULL,
+			    assigned_to_tenant_at = NULL,
+			    assigned_to_emp_at = NULL,
+			    updated_at = NOW()
 			WHERE id = $1 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, deviceID)
@@ -342,7 +373,7 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_tenant', 'pending_assignment', $2, $3, NOW())
+			VALUES ($1, 'reclaim_tenant', 'ready', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -361,10 +392,10 @@ func (s *Store) GetDashboardSummary(ctx context.Context) (*DashboardSummaryRespo
 	query := `
 		SELECT
 			COUNT(*) as total_devices,
-			COUNT(CASE WHEN status = 'pending_acceptance' THEN 1 END) as pending_acceptance,
-			COUNT(CASE WHEN status = 'pending_assignment' THEN 1 END) as pending_assignment,
+			COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_acceptance,
+			COUNT(CASE WHEN status = 'ready' THEN 1 END) as pending_assignment,
 			COUNT(CASE WHEN status = 'in_use' THEN 1 END) as in_use,
-			COUNT(CASE WHEN status = 'maintenance' THEN 1 END) as maintenance,
+			COUNT(CASE WHEN status = 'blocked' THEN 1 END) as maintenance,
 			COUNT(CASE WHEN status = 'retired' THEN 1 END) as retired
 		FROM badge_devices
 		WHERE deleted_at IS NULL
@@ -396,6 +427,209 @@ func (s *Store) CreateRecordingControlLog(ctx context.Context, deviceNo string, 
 		return fmt.Errorf("failed to create recording control log: %w", err)
 	}
 
+	return nil
+}
+
+// UpsertRecordingFromAudioCallback ingests an audio callback as recordings + smart_badge_audio_events.
+func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload CallbackPayload) (*AudioCallbackIngestResult, error) {
+	deviceNo := strings.TrimSpace(payload.DeviceNo)
+	if deviceNo == "" {
+		return nil, fmt.Errorf("device_no is required")
+	}
+
+	data := payload.Data
+	if data == nil {
+		data = JSONObject{}
+	}
+	eventID := firstNonEmptyCallback(pickString(data, "event_id"), pickString(data, "eventId"))
+	orderNo := firstNonEmptyCallback(pickString(data, "order_no"), pickString(data, "orderNo"), eventID)
+	fileURL := firstNonEmptyCallback(pickString(data, "file_url"), pickString(data, "fileUrl"), pickString(data, "audio_file"))
+	if orderNo == "" {
+		return nil, fmt.Errorf("missing order_no/event_id")
+	}
+	if fileURL == "" {
+		return nil, fmt.Errorf("missing file_url")
+	}
+	fileName := firstNonEmptyCallback(pickString(data, "file_name"), pickString(data, "fileName"))
+	if fileName == "" {
+		base := path.Base(fileURL)
+		if strings.TrimSpace(base) != "" && base != "." && base != "/" {
+			fileName = base
+		} else {
+			fileName = orderNo + ".mp3"
+		}
+	}
+	seconds := pickInt(data, "seconds")
+	if seconds <= 0 {
+		seconds = pickInt(data, "duration")
+	}
+	if seconds <= 0 {
+		seconds = 1
+	}
+	startTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "start_time"), pickString(data, "startTime")))
+	endTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "end_time"), pickString(data, "endTime"), pickString(data, "stop_time"), pickString(data, "stopTime")))
+	appID := firstNonEmptyCallback(pickString(data, "app_id"), pickString(data, "appId"), "unknown")
+
+	var tenantID, employeeID int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id, employee_id
+		FROM badge_devices
+		WHERE device_no = $1
+		  AND tenant_id IS NOT NULL
+		  AND employee_id IS NOT NULL
+		  AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, deviceNo).Scan(&tenantID, &employeeID); err != nil {
+		return nil, fmt.Errorf("device mapping not ready for %s: %w", deviceNo, err)
+	}
+
+	var recordingID int64
+	var created bool
+	if err := s.pool.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO recordings (
+				tenant_id, employee_id, file_url, file_name, duration, mime_type,
+				source, business_scope, status, transcription_status, cleaned_transcription_status, analysis_status,
+				recorded_at, order_no, created_at, updated_at
+			)
+			SELECT
+				$1, $2, $3, $4, $5, 'audio/mpeg',
+				'smart_badge',
+				CASE
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
+					) THEN 'frontdesk'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('doctor','doctor_assistant')
+					) THEN 'doctor'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('consultant')
+					) THEN 'consultant'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('therapist')
+					) THEN 'therapist'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('nurse')
+					) THEN 'nurse'
+					WHEN EXISTS (
+						SELECT 1 FROM inst_employee_roles ier
+						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+						  AND lower(ier.role_code) IN ('lingce_sales')
+					) THEN 'lingce_sales'
+					ELSE 'unknown'
+				END,
+				'uploaded', 'queued', 'pending', 'pending',
+				$6::timestamp, $7::text, NOW(), NOW()
+			WHERE NOT EXISTS (
+				SELECT 1 FROM recordings WHERE order_no = $7::text
+			)
+			RETURNING id
+		)
+		SELECT id, true FROM ins
+		UNION ALL
+		SELECT id, false FROM recordings
+		WHERE order_no = $7::text AND NOT EXISTS (SELECT 1 FROM ins)
+		LIMIT 1
+	`, tenantID, employeeID, fileURL, fileName, seconds, startTime, orderNo).Scan(&recordingID, &created); err != nil {
+		return nil, fmt.Errorf("upsert recording from callback: %w", err)
+	}
+
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO smart_badge_audio_events (
+			app_id, event_id, device_no, order_no, audio_file, start_time, end_time,
+			seconds, raw_payload, status, recording_id, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6::timestamp, $7::timestamp,
+			$8, $9::jsonb, 'received', $10, NOW(), NOW()
+		)
+		ON CONFLICT (app_id, event_id) DO UPDATE SET
+			device_no = EXCLUDED.device_no,
+			order_no = EXCLUDED.order_no,
+			audio_file = EXCLUDED.audio_file,
+			start_time = COALESCE(EXCLUDED.start_time, smart_badge_audio_events.start_time),
+			end_time = COALESCE(EXCLUDED.end_time, smart_badge_audio_events.end_time),
+			seconds = COALESCE(EXCLUDED.seconds, smart_badge_audio_events.seconds),
+			raw_payload = EXCLUDED.raw_payload,
+			recording_id = COALESCE(smart_badge_audio_events.recording_id, EXCLUDED.recording_id),
+			updated_at = NOW()
+	`, appID, eventID, deviceNo, orderNo, fileURL, startTime, endTime, seconds, data, recordingID)
+
+	return &AudioCallbackIngestResult{
+		RecordingID: recordingID,
+		TenantID:    tenantID,
+		Created:     created,
+	}, nil
+}
+
+func firstNonEmptyCallback(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func pickString(data JSONObject, key string) string {
+	v, ok := data[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", t))
+	}
+}
+
+func pickInt(data JSONObject, key string) int {
+	v, ok := data[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(t))
+		return n
+	default:
+		return 0
+	}
+}
+
+func parseOptionalTime(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return &t
+		}
+	}
 	return nil
 }
 
@@ -489,6 +723,29 @@ func (s *Store) ListRecordingControlLogs(ctx context.Context, req RecordingContr
 	}
 
 	return logs, total, nil
+}
+
+func (s *Store) GetLatestAudioEventStatus(ctx context.Context, deviceNo string) (bool, bool, error) {
+	var status string
+	var recordingID *int64
+	var createdAt time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT status, recording_id, created_at
+		FROM smart_badge_audio_events
+		WHERE device_no = $1
+		  AND created_at >= (NOW() - INTERVAL '30 minutes')
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, deviceNo).Scan(&status, &recordingID, &createdAt)
+	if err == pgx.ErrNoRows {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("failed to query latest audio event: %w", err)
+	}
+	callbackOK := strings.TrimSpace(status) != ""
+	ingestOK := recordingID != nil && *recordingID > 0
+	return callbackOK, ingestOK, nil
 }
 
 // Manufacturer Methods
@@ -595,4 +852,243 @@ func (s *Store) GetLifecycleLogs(ctx context.Context, deviceID int64) ([]*BadgeD
 	}
 
 	return logs, nil
+}
+
+// GetRecordingStats retrieves recording statistics for a tenant
+func (s *Store) GetRecordingStats(ctx context.Context, tenantID int64, startDate, endDate time.Time) (*RecordingStatsResponse, error) {
+	stats := &RecordingStatsResponse{
+		Summary:     RecordingStatsSummary{},
+		DailyTrends: []DailyTrend{},
+		ByDevice:    []DeviceStats{},
+		ByEmployee:  []EmployeeStats{},
+	}
+
+	// Calculate previous period for comparison
+	duration := endDate.Sub(startDate)
+	prevStartDate := startDate.Add(-duration)
+	prevEndDate := startDate
+
+	// 1. Summary statistics
+	summaryQuery := `
+		SELECT
+			COUNT(*) as total_recordings,
+			COALESCE(AVG(duration), 0) as avg_duration_seconds
+		FROM recordings
+		WHERE tenant_id = $1
+			AND created_at >= $2
+			AND created_at < $3
+	`
+
+	var totalRecordings int
+	var avgDuration float64
+	err := s.pool.QueryRow(ctx, summaryQuery, tenantID, startDate, endDate).Scan(&totalRecordings, &avgDuration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get summary stats: %w", err)
+	}
+
+	// Previous period average duration
+	var prevAvgDuration float64
+	var prevTotalRecordings int
+	err = s.pool.QueryRow(ctx, summaryQuery, tenantID, prevStartDate, prevEndDate).Scan(&prevTotalRecordings, &prevAvgDuration)
+	if err != nil {
+		prevAvgDuration = 0
+	}
+
+	// Active devices count (via smart_badge_audio_events)
+	activeDevicesQuery := `
+		SELECT COUNT(DISTINCT sbae.device_no)
+		FROM recordings r
+		INNER JOIN smart_badge_audio_events sbae
+			ON (sbae.recording_id = r.id OR (sbae.recording_id IS NULL AND sbae.order_no = r.order_no))
+		WHERE r.tenant_id = $1
+			AND r.created_at >= $2
+			AND r.created_at < $3
+			AND sbae.device_no IS NOT NULL
+	`
+	var activeDeviceCount int
+	err = s.pool.QueryRow(ctx, activeDevicesQuery, tenantID, startDate, endDate).Scan(&activeDeviceCount)
+	if err != nil {
+		// If smart_badge_audio_events doesn't exist or no data, set to 0
+		activeDeviceCount = 0
+	}
+
+	// Total devices count
+	totalDevicesQuery := `SELECT COUNT(*) FROM badge_devices WHERE tenant_id = $1 AND deleted_at IS NULL`
+	var totalDeviceCount int
+	err = s.pool.QueryRow(ctx, totalDevicesQuery, tenantID).Scan(&totalDeviceCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get total devices: %w", err)
+	}
+
+	// Active employees count
+	activeEmployeesQuery := `
+		SELECT COUNT(DISTINCT employee_id)
+		FROM recordings
+		WHERE tenant_id = $1
+			AND created_at >= $2
+			AND created_at < $3
+			AND employee_id IS NOT NULL
+	`
+	var activeEmployeeCount int
+	err = s.pool.QueryRow(ctx, activeEmployeesQuery, tenantID, startDate, endDate).Scan(&activeEmployeeCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active employees: %w", err)
+	}
+
+	// Total employees count (employees with assigned devices)
+	totalEmployeesQuery := `
+		SELECT COUNT(DISTINCT employee_id)
+		FROM badge_devices
+		WHERE tenant_id = $1
+			AND employee_id IS NOT NULL
+			AND deleted_at IS NULL
+	`
+	var totalEmployeeCount int
+	err = s.pool.QueryRow(ctx, totalEmployeesQuery, tenantID).Scan(&totalEmployeeCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get total employees: %w", err)
+	}
+
+	stats.Summary = RecordingStatsSummary{
+		TotalRecordings:              totalRecordings,
+		ActiveDeviceCount:            activeDeviceCount,
+		TotalDeviceCount:             totalDeviceCount,
+		ActiveEmployeeCount:          activeEmployeeCount,
+		TotalEmployeeCount:           totalEmployeeCount,
+		AvgDurationSeconds:           int(avgDuration),
+		PrevPeriodAvgDurationSeconds: int(prevAvgDuration),
+	}
+
+	// 2. Daily trends (via smart_badge_audio_events)
+	dailyTrendsQuery := `
+		SELECT
+			DATE(r.created_at) as date,
+			COUNT(*) as recording_count,
+			COUNT(DISTINCT sbae.device_no) as active_device_count,
+			COALESCE(SUM(r.duration), 0) as total_duration_seconds
+		FROM recordings r
+		LEFT JOIN smart_badge_audio_events sbae
+			ON (sbae.recording_id = r.id OR (sbae.recording_id IS NULL AND sbae.order_no = r.order_no))
+		WHERE r.tenant_id = $1
+			AND r.created_at >= $2
+			AND r.created_at < $3
+		GROUP BY DATE(r.created_at)
+		ORDER BY date
+	`
+
+	rows, err := s.pool.Query(ctx, dailyTrendsQuery, tenantID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get daily trends: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var trend DailyTrend
+		var date time.Time
+		if err := rows.Scan(&date, &trend.RecordingCount, &trend.ActiveDeviceCount, &trend.TotalDurationSeconds); err != nil {
+			return nil, fmt.Errorf("failed to scan daily trend: %w", err)
+		}
+		trend.Date = date.Format("2006-01-02")
+		stats.DailyTrends = append(stats.DailyTrends, trend)
+	}
+
+	// 3. By device statistics (via smart_badge_audio_events)
+	byDeviceQuery := `
+		SELECT
+			bd.id as device_id,
+			bd.device_no,
+			bd.employee_id,
+			bd.employee_name,
+			COUNT(r.id) as recording_count,
+			COALESCE(SUM(r.duration), 0) as total_duration_seconds,
+			MAX(r.created_at) as last_recording_at,
+			CASE
+				WHEN bd.last_online_at > NOW() - INTERVAL '30 minutes' THEN true
+				ELSE false
+			END as is_online
+		FROM badge_devices bd
+		LEFT JOIN smart_badge_audio_events sbae ON sbae.device_no = bd.device_no
+		LEFT JOIN recordings r ON (
+			r.id = sbae.recording_id
+			OR (sbae.recording_id IS NULL AND r.order_no = sbae.order_no)
+		)
+			AND r.tenant_id = $1
+			AND r.created_at >= $2
+			AND r.created_at < $3
+		WHERE bd.tenant_id = $1
+			AND bd.deleted_at IS NULL
+		GROUP BY bd.id, bd.device_no, bd.employee_id, bd.employee_name, bd.last_online_at
+		ORDER BY recording_count ASC
+	`
+
+	rows, err = s.pool.Query(ctx, byDeviceQuery, tenantID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get device stats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ds DeviceStats
+		var lastRecordingAt *time.Time
+		if err := rows.Scan(&ds.DeviceID, &ds.DeviceNo, &ds.EmployeeID, &ds.EmployeeName,
+			&ds.RecordingCount, &ds.TotalDurationSeconds, &lastRecordingAt, &ds.IsOnline); err != nil {
+			return nil, fmt.Errorf("failed to scan device stats: %w", err)
+		}
+		if lastRecordingAt != nil {
+			formatted := lastRecordingAt.Format(time.RFC3339)
+			ds.LastRecordingAt = &formatted
+		}
+		stats.ByDevice = append(stats.ByDevice, ds)
+	}
+
+	// 4. By employee statistics (via smart_badge_audio_events)
+	byEmployeeQuery := `
+		SELECT
+			bd.employee_id,
+			bd.employee_name,
+			d.name as department_name,
+			bd.id as device_id,
+			bd.device_no,
+			COUNT(r.id) as recording_count,
+			COUNT(DISTINCT DATE(r.created_at)) as recording_days,
+			MAX(r.created_at) as last_recording_at
+		FROM badge_devices bd
+		LEFT JOIN employees e ON e.id = bd.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
+		LEFT JOIN smart_badge_audio_events sbae ON sbae.device_no = bd.device_no
+		LEFT JOIN recordings r ON (
+			r.id = sbae.recording_id
+			OR (sbae.recording_id IS NULL AND r.order_no = sbae.order_no)
+		)
+			AND r.tenant_id = $1
+			AND r.created_at >= $2
+			AND r.created_at < $3
+		WHERE bd.tenant_id = $1
+			AND bd.employee_id IS NOT NULL
+			AND bd.deleted_at IS NULL
+		GROUP BY bd.employee_id, bd.employee_name, d.name, bd.id, bd.device_no
+		ORDER BY recording_count ASC
+	`
+
+	rows, err = s.pool.Query(ctx, byEmployeeQuery, tenantID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get employee stats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var es EmployeeStats
+		var lastRecordingAt *time.Time
+		if err := rows.Scan(&es.EmployeeID, &es.EmployeeName, &es.Department, &es.DeviceID, &es.DeviceNo,
+			&es.RecordingCount, &es.RecordingDays, &lastRecordingAt); err != nil {
+			return nil, fmt.Errorf("failed to scan employee stats: %w", err)
+		}
+		if lastRecordingAt != nil {
+			formatted := lastRecordingAt.Format(time.RFC3339)
+			es.LastRecordingAt = &formatted
+		}
+		stats.ByEmployee = append(stats.ByEmployee, es)
+	}
+
+	return stats, nil
 }

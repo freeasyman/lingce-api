@@ -53,6 +53,7 @@ type RecordingResponse struct {
 	DoctorSummary         *string                  `json:"doctor_summary,omitempty"`
 	TherapistSummary      *string                  `json:"therapist_summary,omitempty"`
 	ConsultantSummary     *string                  `json:"consultant_summary,omitempty"`
+	BusinessScope         string                   `json:"business_scope,omitempty"`
 	SceneType             *string                  `json:"scene_type,omitempty"`
 	VisitOutcome          *string                  `json:"visit_outcome,omitempty"`
 	SubjectiveSummary     *string                  `json:"subjective_summary,omitempty"`
@@ -792,21 +793,21 @@ type ShiftAnalysisDTO struct {
 
 // DailyReportDTO represents a daily report
 type DailyReportDTO struct {
-	ID                          int64                  `json:"id"`
-	TenantID                    int64                  `json:"tenant_id"`
-	ReportDate                  string                 `json:"report_date"`
-	TotalEstimatedInteractions  int                    `json:"total_estimated_interactions"`
-	EstimatedAppointmentCount   int                    `json:"estimated_appointment_count"`
-	EstimatedWalkinCount        int                    `json:"estimated_walkin_count"`
-	EstimatedWalkinCaptureRate  float64                `json:"estimated_walkin_capture_rate"`
-	TopQuestions                map[string]interface{} `json:"top_questions"`
-	CompetitorMentions          map[string]interface{} `json:"competitor_mentions"`
-	DoctorInquiries             map[string]interface{} `json:"doctor_inquiries"`
-	ChannelFeedback             map[string]interface{} `json:"channel_feedback"`
-	LostReasons                 map[string]interface{} `json:"lost_reasons"`
-	RiskEventCount              int                    `json:"risk_event_count"`
-	TestimonialMaterials        map[string]interface{} `json:"testimonial_materials"`
-	CreatedAt                   string                 `json:"created_at"`
+	ID                         int64                  `json:"id"`
+	TenantID                   int64                  `json:"tenant_id"`
+	ReportDate                 string                 `json:"report_date"`
+	TotalEstimatedInteractions int                    `json:"total_estimated_interactions"`
+	EstimatedAppointmentCount  int                    `json:"estimated_appointment_count"`
+	EstimatedWalkinCount       int                    `json:"estimated_walkin_count"`
+	EstimatedWalkinCaptureRate float64                `json:"estimated_walkin_capture_rate"`
+	TopQuestions               map[string]interface{} `json:"top_questions"`
+	CompetitorMentions         map[string]interface{} `json:"competitor_mentions"`
+	DoctorInquiries            map[string]interface{} `json:"doctor_inquiries"`
+	ChannelFeedback            map[string]interface{} `json:"channel_feedback"`
+	LostReasons                map[string]interface{} `json:"lost_reasons"`
+	RiskEventCount             int                    `json:"risk_event_count"`
+	TestimonialMaterials       map[string]interface{} `json:"testimonial_materials"`
+	CreatedAt                  string                 `json:"created_at"`
 }
 
 // KnowledgeBaseDTO represents a knowledge base
@@ -821,32 +822,31 @@ type KnowledgeBaseDTO struct {
 	CreatedAt string                 `json:"created_at"`
 }
 
-
 // CreateRecordingPromptRequest represents the request for creating prompt
 type CreateRecordingPromptRequest struct {
-	Code        string   `json:"code"`
-	Name        string   `json:"name"`
-	Description *string  `json:"description,omitempty"`
-	Category    *string  `json:"category,omitempty"`
-	SystemPrompt string  `json:"system_prompt"`
-	PromptText  string   `json:"prompt_text"`
+	Code         string     `json:"code"`
+	Name         string     `json:"name"`
+	Description  *string    `json:"description,omitempty"`
+	Category     *string    `json:"category,omitempty"`
+	SystemPrompt string     `json:"system_prompt"`
+	PromptText   string     `json:"prompt_text"`
 	OutputSchema JSONObject `json:"output_schema,omitempty"`
-	Version     *string  `json:"version,omitempty"`
-	Variables   []string `json:"variables,omitempty"`
-	IsActive    bool     `json:"is_active"`
+	Version      *string    `json:"version,omitempty"`
+	Variables    []string   `json:"variables,omitempty"`
+	IsActive     bool       `json:"is_active"`
 }
 
 // UpdateRecordingPromptRequest represents the request for updating prompt
 type UpdateRecordingPromptRequest struct {
-	Name        *string  `json:"name,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	Category    *string  `json:"category,omitempty"`
-	SystemPrompt *string `json:"system_prompt,omitempty"`
-	PromptText  *string  `json:"prompt_text,omitempty"`
+	Name         *string    `json:"name,omitempty"`
+	Description  *string    `json:"description,omitempty"`
+	Category     *string    `json:"category,omitempty"`
+	SystemPrompt *string    `json:"system_prompt,omitempty"`
+	PromptText   *string    `json:"prompt_text,omitempty"`
 	OutputSchema JSONObject `json:"output_schema,omitempty"`
-	Version     *string  `json:"version,omitempty"`
-	Variables   []string `json:"variables,omitempty"`
-	IsActive    *bool    `json:"is_active,omitempty"`
+	Version      *string    `json:"version,omitempty"`
+	Variables    []string   `json:"variables,omitempty"`
+	IsActive     *bool      `json:"is_active,omitempty"`
 }
 
 // TestPromptRequest represents the request for testing prompt

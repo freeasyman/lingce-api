@@ -17,9 +17,12 @@ type Store struct {
 }
 
 var (
-	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
-	consultantScopeRoleCodes = []string{"consultant"}
-	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
+	doctorScopeRoleCodes      = []string{"doctor", "therapist", "doctor_assistant"}
+	consultantScopeRoleCodes  = []string{"consultant"}
+	frontdeskScopeRoleCodes   = []string{"frontdesk", "receptionist", "reception"}
+	doctorScopeSceneCodes     = []string{"doctor", "diagnosis", "treatment", "medical"}
+	consultantScopeSceneCodes = []string{"consultant", "consultation", "sales"}
+	frontdeskScopeSceneCodes  = []string{"frontdesk", "reception", "receptionist", "customer_service", "service"}
 )
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -95,9 +98,17 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	if req.Scope != nil {
+		sceneScopeExpr := `lower(COALESCE(NULLIF(r.analysis_display->>'scene_type', ''), NULLIF(r.analysis_display->>'scene', ''), COALESCE(r.scene, '')))`
+		businessScopeExpr := `lower(COALESCE(NULLIF(r.business_scope, ''), 'unknown'))`
 		switch *req.Scope {
 		case RecordingScopeDoctor:
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'doctor'
+				OR
+				(
+				%s = ANY($%d)
+				OR
+				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -113,11 +124,19 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
-			args = append(args, doctorScopeRoleCodes)
-			argIndex++
+				)
+				)
+			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+			args = append(args, doctorScopeSceneCodes, doctorScopeRoleCodes)
+			argIndex += 2
 		case RecordingScopeConsultant:
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'consultant'
+				OR
+				(
+				%s = ANY($%d)
+				OR
+				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -133,12 +152,17 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
-			args = append(args, consultantScopeRoleCodes)
-			argIndex++
+				)
+				)
+			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+			args = append(args, consultantScopeSceneCodes, consultantScopeRoleCodes)
+			argIndex += 2
 
 			// Doctor/frontdesk scope wins on dual-role employees, so consultant scope excludes them.
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'consultant'
+				OR
+				(
 				NOT EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -154,11 +178,15 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
+				)
+			)`, businessScopeExpr, argIndex, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'consultant'
+				OR
+				(
 				NOT EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -174,11 +202,25 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
+				)
+			)`, businessScopeExpr, argIndex, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 		case RecordingScopeFrontdesk:
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'frontdesk'
+				OR
+				(
+				%s = ANY($%d)
+				OR
+				EXISTS (
+					SELECT 1
+					FROM frontdesk_shift_analyses fsa
+					WHERE fsa.tenant_id = r.tenant_id
+					  AND fsa.recording_id = r.id
+				)
+				OR
+				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -194,12 +236,17 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
-			args = append(args, frontdeskScopeRoleCodes)
-			argIndex++
+				)
+				)
+			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+			args = append(args, frontdeskScopeSceneCodes, frontdeskScopeRoleCodes)
+			argIndex += 2
 
 			// Doctor scope wins on dual-role employees.
 			conditions = append(conditions, fmt.Sprintf(`(
+				%s = 'frontdesk'
+				OR
+				(
 				NOT EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -215,7 +262,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier2.employee_id = r.employee_id
 					  AND lower(ir.code) = ANY($%d)
 				)
-			)`, argIndex, argIndex))
+				)
+			)`, businessScopeExpr, argIndex, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		}
@@ -379,6 +427,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(NULLIF(r.business_scope, ''), 'unknown') AS business_scope,
 			COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
 			NULLIF(r.analysis_status, '') AS analysis_status,
@@ -444,6 +493,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			&r.DoctorSummary,
 			&r.TherapistSummary,
 			&r.ConsultantSummary,
+			&r.BusinessScope,
 			&r.AnalysisResult,
 			&r.AnalysisDisplay,
 			&r.AnalysisStatus,
@@ -492,6 +542,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			NULLIF(r.analysis_display->>'doctor_summary', '') AS doctor_summary,
 			NULLIF(r.analysis_display->>'therapist_summary', '') AS therapist_summary,
 			NULLIF(r.analysis_display->>'consultant_summary', '') AS consultant_summary,
+			COALESCE(NULLIF(r.business_scope, ''), 'unknown') AS business_scope,
 			COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 			COALESCE(r.analysis_display, '{}'::jsonb) AS analysis_display,
 			NULLIF(r.analysis_status, '') AS analysis_status,
@@ -535,6 +586,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		&r.DoctorSummary,
 		&r.TherapistSummary,
 		&r.ConsultantSummary,
+		&r.BusinessScope,
 		&r.AnalysisResult,
 		&r.AnalysisDisplay,
 		&r.AnalysisStatus,
@@ -571,10 +623,10 @@ func (s *Store) CreateRecording(ctx context.Context, req CreateRecordingRequest)
 	query := `
 		INSERT INTO recordings (
 			tenant_id, employee_id, file_url, file_name, duration, mime_type,
-			source, scene, notes, status, transcription_status, analysis_status,
+			source, scene, business_scope, notes, status, transcription_status, analysis_status,
 			recorded_at, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 'audio/wav', 'manual', 'consultation', $6, 'uploaded', 'pending', 'pending', NOW(), NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, 'audio/wav', 'manual', 'consultation', 'consultant', $6, 'uploaded', 'pending', 'pending', NOW(), NOW(), NOW())
 		RETURNING id
 	`
 	var newID int64

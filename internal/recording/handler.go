@@ -129,6 +129,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Front-desk Analysis endpoints
 	h.RegisterFrontdeskAnalysisRoutes(mux, jwtSecret)
+
+	// Lingce Sales endpoints
+	h.RegisterSalesRoutes(mux, jwtSecret)
 }
 
 // ListRecordings handles listing medical recordings
@@ -277,6 +280,7 @@ type doctorRecordingListItem struct {
 	ID             int64    `json:"id"`
 	TenantID       int64    `json:"tenant_id,omitempty"`
 	TenantName     string   `json:"tenant_name,omitempty"`
+	BusinessScope  string   `json:"business_scope,omitempty"`
 	EmployeeID     int64    `json:"employee_id"`
 	EmployeeName   string   `json:"employee_name,omitempty"`
 	CustomerName   *string  `json:"customer_name"`
@@ -303,6 +307,7 @@ func projectDoctorRecordingListItems(items []*RecordingResponse) []*doctorRecord
 			ID:             item.ID,
 			TenantID:       item.TenantID,
 			TenantName:     item.TenantName,
+			BusinessScope:  item.BusinessScope,
 			EmployeeID:     item.EmployeeID,
 			EmployeeName:   item.EmployeeName,
 			CustomerName:   item.CustomerName,
