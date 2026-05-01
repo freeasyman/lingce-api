@@ -12,10 +12,18 @@ const healthCheckRecordingDuration = 10 * time.Second
 const healthCheckCallbackWaitTimeout = 12 * time.Second
 const healthCheckCallbackPollInterval = 1 * time.Second
 
+type DeviceRealtimeInfo struct {
+	Online        bool
+	LastOnlineAt  *time.Time
+	BatteryLevel  *int
+	HardwareModel string
+}
+
 type ManufacturerAdapter interface {
 	CheckDeviceExists(ctx context.Context, deviceNo string) (bool, error)
 	CheckOnline(ctx context.Context, deviceNo string) (bool, *time.Time, error)
 	GetBatteryLevel(ctx context.Context, deviceNo string) (*int, error)
+	GetDeviceRealtimeInfo(ctx context.Context, deviceNo string) (*DeviceRealtimeInfo, error)
 	StartRecording(ctx context.Context, deviceNo string) error
 	StopRecording(ctx context.Context, deviceNo string) error
 	SyncDevices(ctx context.Context) ([]VendorDeviceSnapshot, error)
@@ -71,33 +79,44 @@ func (s *Service) V2GetLiveStatus(ctx context.Context, deviceID int64) (JSONObje
 	}
 	adapter := s.getManufacturerAdapter(device.ManufacturerCode)
 
-	online, onlineAt, onlineErr := adapter.CheckOnline(ctx, device.DeviceNo)
-	batteryLevel, batteryErr := adapter.GetBatteryLevel(ctx, device.DeviceNo)
-
-	if online && onlineAt == nil {
-		now := time.Now()
-		onlineAt = &now
-	}
-
-	if onlineErr == nil || batteryErr == nil {
-		_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, batteryLevel, onlineAt)
-	}
+	info, err := adapter.GetDeviceRealtimeInfo(ctx, device.DeviceNo)
 
 	resp := JSONObject{
 		"device_id":  deviceID,
-		"online":     online,
-		"battery":    batteryLevel,
 		"checked_at": time.Now().Format(time.RFC3339),
 	}
-	if onlineAt != nil {
-		resp["online_at"] = onlineAt.Format(time.RFC3339)
+
+	if err != nil {
+		resp["error"] = err.Error()
+		return resp, nil
 	}
-	if onlineErr != nil {
-		resp["online_error"] = onlineErr.Error()
+
+	if info == nil {
+		resp["error"] = "device not found"
+		return resp, nil
 	}
-	if batteryErr != nil {
-		resp["battery_error"] = batteryErr.Error()
+
+	if info.Online && info.LastOnlineAt == nil {
+		now := time.Now()
+		info.LastOnlineAt = &now
 	}
+
+	// Update database snapshot with fresh data
+	var hardwareModelPtr *string
+	if info.HardwareModel != "" {
+		hardwareModelPtr = &info.HardwareModel
+	}
+	_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr)
+
+	resp["online"] = info.Online
+	resp["battery"] = info.BatteryLevel
+	if info.LastOnlineAt != nil {
+		resp["online_at"] = info.LastOnlineAt.Format(time.RFC3339)
+	}
+	if info.HardwareModel != "" {
+		resp["hardware_model"] = info.HardwareModel
+	}
+
 	return resp, nil
 }
 
@@ -422,31 +441,33 @@ func (s *Service) hydrateRealtimeStatus(ctx context.Context, devices []*BadgeDev
 			defer cancel()
 
 			adapter := s.getManufacturerAdapter(device.ManufacturerCode)
-			online, onlineAt, onlineErr := adapter.CheckOnline(perReqCtx, device.DeviceNo)
-			batteryLevel, batteryErr := adapter.GetBatteryLevel(perReqCtx, device.DeviceNo)
-			if onlineErr != nil && batteryErr != nil {
-				device.LastOnlineAt = nil
-				device.BatteryLevel = nil
+			info, err := adapter.GetDeviceRealtimeInfo(perReqCtx, device.DeviceNo)
+
+			// If API call fails, keep the database values unchanged
+			// Do NOT set to nil - that would be mocking empty data
+			if err != nil || info == nil {
 				return
 			}
 
-			if onlineErr == nil && online && onlineAt == nil {
+			// If device is online but no timestamp, use current time
+			if info.Online && info.LastOnlineAt == nil {
 				now := time.Now()
-				onlineAt = &now
+				info.LastOnlineAt = &now
 			}
 
-			if batteryErr != nil {
-				device.BatteryLevel = nil
-			} else {
-				device.BatteryLevel = batteryLevel
-			}
-			if onlineErr != nil {
-				device.LastOnlineAt = nil
-			} else {
-				device.LastOnlineAt = onlineAt
+			// Update in-memory device object with fresh data
+			device.BatteryLevel = info.BatteryLevel
+			device.LastOnlineAt = info.LastOnlineAt
+			if info.HardwareModel != "" {
+				device.HardwareModel = &info.HardwareModel
 			}
 
-			_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, batteryLevel, onlineAt)
+			// Update database snapshot with fresh data
+			var hardwareModelPtr *string
+			if info.HardwareModel != "" {
+				hardwareModelPtr = &info.HardwareModel
+			}
+			_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr)
 		}()
 	}
 	wg.Wait()
@@ -734,21 +755,7 @@ func (s *Service) V2SyncManufacturer(ctx context.Context, code string) (JSONObje
 		}
 
 		deviceUID := fmt.Sprintf("%s:%d:%s", code, manufacturerID, deviceNo)
-		_, err = s.store.pool.Exec(ctx, `
-			INSERT INTO badge_devices (
-				manufacturer_id, app_id, device_no, device_uid,
-				current_status, lifecycle_status, assignment_status, inspection_result,
-				manufacturer_code, manufacturer_name, hardware_model,
-				status, health_status, battery_level, last_online_at,
-				metadata, ext_json, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4,
-				'pending', 'pending_acceptance', 'unassigned', 'unknown',
-				$5, $6, NULLIF($7, ''),
-				'pending', $8, $9, $10,
-				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
-			)
-		`, manufacturerID, code, deviceNo, deviceUID, code, manufacturerName, item.HardwareModel, normalizeHealthStatus(healthStatus), item.BatteryLevel, item.LastOnlineAt)
+		err = tryInsertVendorDevice(ctx, s, manufacturerID, code, deviceNo, deviceUID, manufacturerName, item.HardwareModel, normalizeHealthStatus(healthStatus), item.BatteryLevel, item.LastOnlineAt)
 		if err != nil {
 			failedCount++
 			failedItems = append(failedItems, JSONObject{
@@ -832,6 +839,93 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isBadgeStatusConstraintViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "ck_badge_devices_status") && strings.Contains(msg, "sqlstate 23514")
+}
+
+func tryInsertVendorDevice(
+	ctx context.Context,
+	s *Service,
+	manufacturerID int64,
+	code string,
+	deviceNo string,
+	deviceUID string,
+	manufacturerName string,
+	hardwareModel string,
+	healthStatus string,
+	batteryLevel *int,
+	lastOnlineAt *time.Time,
+) error {
+	insertWithDBDefaults := func() error {
+		_, err := s.store.pool.Exec(ctx, `
+			INSERT INTO badge_devices (
+				manufacturer_id, app_id, device_no, device_uid,
+				lifecycle_status, assignment_status, inspection_result,
+				manufacturer_code, manufacturer_name, hardware_model,
+				health_status, battery_level, last_online_at,
+				metadata, ext_json, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4,
+				'pending_acceptance', 'unassigned', 'unknown',
+				$5, $6, NULLIF($7, ''),
+				$8, $9, $10,
+				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+			)
+		`, manufacturerID, code, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
+		return err
+	}
+
+	insertWithStatus := func(currentStatus, status string) error {
+		_, err := s.store.pool.Exec(ctx, `
+			INSERT INTO badge_devices (
+				manufacturer_id, app_id, device_no, device_uid,
+				current_status, lifecycle_status, assignment_status, inspection_result,
+				manufacturer_code, manufacturer_name, hardware_model,
+				status, health_status, battery_level, last_online_at,
+				metadata, ext_json, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4,
+				$5, 'pending_acceptance', 'unassigned', 'unknown',
+				$6, $7, NULLIF($8, ''),
+				$9, $10, $11, $12,
+				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+			)
+		`, manufacturerID, code, deviceNo, deviceUID, currentStatus, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
+		return err
+	}
+
+	// Retry matrix for status-constraint compatibility across mixed schemas:
+	// 1) workflow current_status (prod), 2) new/new, 3) old/new, 4) old/old, 5) DB defaults.
+	if err := insertWithStatus("pending_acceptance", "pending"); err != nil {
+		if !isBadgeStatusConstraintViolation(err) {
+			return err
+		}
+		if err2 := insertWithStatus("pending", "pending"); err2 != nil {
+			if !isBadgeStatusConstraintViolation(err2) {
+				return err2
+			}
+			if err3 := insertWithStatus("draft", "pending"); err3 != nil {
+				if !isBadgeStatusConstraintViolation(err3) {
+					return err3
+				}
+				if err4 := insertWithStatus("draft", "draft"); err4 != nil {
+					if !isBadgeStatusConstraintViolation(err4) {
+						return err4
+					}
+					if err5 := insertWithDBDefaults(); err5 != nil {
+						return err5
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func acquireManufacturerSync(code string) bool {
