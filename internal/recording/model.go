@@ -71,6 +71,8 @@ type MedicalRecording struct {
 	TenantName         string           `json:"tenant_name"`
 	EmployeeID         int64            `json:"employee_id"`
 	EmployeeName       string           `json:"employee_name"`
+	DepartmentName     string           `json:"department_name,omitempty"`
+	DeviceNo           string           `json:"device_no,omitempty"`
 	CustomerID         *int64           `json:"customer_id,omitempty"`
 	CustomerName       *string          `json:"customer_name,omitempty"`
 	PatientName        string           `json:"patient_name"`
@@ -281,4 +283,149 @@ func (j JSONObject) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return json.Marshal(j)
+}
+
+// ===== Lingce Sales Models =====
+
+// DecisionStage represents the pipeline stage of a sales prospect
+type DecisionStage string
+
+const (
+	StageFirstContact  DecisionStage = "first_contact"
+	StageNeedConfirmed DecisionStage = "need_confirmed"
+	StageLogicShifted  DecisionStage = "logic_shifted"
+	StageEvaluating    DecisionStage = "evaluating"
+	StageReadyToClose  DecisionStage = "ready_to_close"
+	StageWon           DecisionStage = "won"
+	StageLost          DecisionStage = "lost"
+	StageDormant       DecisionStage = "dormant"
+)
+
+// SignalType represents the type of a trading signal
+type SignalType string
+
+const (
+	SignalTypeBuying     SignalType = "buying"
+	SignalTypeRisk       SignalType = "risk"
+	SignalTypeStall      SignalType = "stall"
+	SignalTypeCommitment SignalType = "commitment"
+)
+
+// ProspectStatus represents the status of a sales prospect
+type ProspectStatus string
+
+const (
+	ProspectStatusActive  ProspectStatus = "active"
+	ProspectStatusWon     ProspectStatus = "won"
+	ProspectStatusLost    ProspectStatus = "lost"
+	ProspectStatusDormant ProspectStatus = "dormant"
+)
+
+// StageChangeType represents how a stage change was initiated
+type StageChangeType string
+
+const (
+	StageChangeAISuggested StageChangeType = "ai_suggested"
+	StageChangeManual      StageChangeType = "manual"
+)
+
+// ConversationType represents the type of sales conversation
+type ConversationType string
+
+const (
+	ConversationFaceToFace ConversationType = "face_to_face"
+	ConversationPhone      ConversationType = "phone"
+	ConversationVideo      ConversationType = "video"
+)
+
+// ConversationPurpose represents the purpose of a sales conversation
+type ConversationPurpose string
+
+const (
+	PurposeFirstContact   ConversationPurpose = "first_contact"
+	PurposeNeedDiscovery  ConversationPurpose = "need_discovery"
+	PurposeDemo           ConversationPurpose = "demo"
+	PurposeObjection      ConversationPurpose = "objection"
+	PurposeClosing        ConversationPurpose = "closing"
+)
+
+// Lingce Sales Scene Types
+const (
+	SceneTypeLingceSalesConversation = "lingce_sales_conversation"
+	SceneTypeLingceSalesShift        = "lingce_sales_shift"
+	SceneTypeLingceSalesMemo         = "lingce_sales_memo"
+	RoleCategoryLingceSales          = "lingce_sales"
+)
+
+// LingceSalesProspect represents a sales prospect (customer)
+type LingceSalesProspect struct {
+	ID                 int64          `json:"id"`
+	TenantID           int64          `json:"tenant_id"`
+	InstitutionName    string         `json:"institution_name"`
+	InstitutionType    string         `json:"institution_type"`
+	InstitutionScale   string         `json:"institution_scale"`
+	Region             string         `json:"region"`
+	ContactName        string         `json:"contact_name"`
+	ContactRole        string         `json:"contact_role"`
+	ContactPhone       string         `json:"contact_phone"`
+	ContactWechat      string         `json:"contact_wechat"`
+	PainPoints         JSONObject     `json:"pain_points,omitempty"`
+	DecisionStage      DecisionStage  `json:"decision_stage"`
+	DealProbability    string         `json:"deal_probability"`
+	BudgetSignal       string         `json:"budget_signal"`
+	CompetitorMentions JSONObject     `json:"competitor_mentions,omitempty"`
+	DecisionChain      JSONObject     `json:"decision_chain,omitempty"`
+	InternalSupporters string         `json:"internal_supporters"`
+	InternalBlockers   string         `json:"internal_blockers"`
+	Source             string         `json:"source"`
+	AssignedTo         *int64         `json:"assigned_to,omitempty"`
+	NextAction         string         `json:"next_action"`
+	NextFollowUpAt     *time.Time     `json:"next_follow_up_at,omitempty"`
+	Status             ProspectStatus `json:"status"`
+	WonAt              *time.Time     `json:"won_at,omitempty"`
+	LostReason         string         `json:"lost_reason"`
+	Notes              string         `json:"notes"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+}
+
+// LingceSalesProspectRecording represents the association between a prospect and a recording
+type LingceSalesProspectRecording struct {
+	ID                  int64               `json:"id"`
+	ProspectID          int64               `json:"prospect_id"`
+	RecordingID         int64               `json:"recording_id"`
+	ConversationType    ConversationType    `json:"conversation_type"`
+	ConversationPurpose ConversationPurpose `json:"conversation_purpose"`
+	CreatedAt           time.Time           `json:"created_at"`
+}
+
+// LingceSalesProspectStageChange represents a stage change history record
+type LingceSalesProspectStageChange struct {
+	ID          int64           `json:"id"`
+	ProspectID  int64           `json:"prospect_id"`
+	RecordingID *int64          `json:"recording_id,omitempty"`
+	FromStage   DecisionStage   `json:"from_stage"`
+	ToStage     DecisionStage   `json:"to_stage"`
+	ChangeType  StageChangeType `json:"change_type"`
+	Reason      string          `json:"reason"`
+	ChangedBy   *int64          `json:"changed_by,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// SuggestedStageChange represents AI's suggestion for a stage change (embedded in analysis_result)
+type SuggestedStageChange struct {
+	CurrentStage   string   `json:"current_stage"`
+	SuggestedStage string   `json:"suggested_stage"`
+	Confidence     string   `json:"confidence"`
+	Reason         string   `json:"reason"`
+	EvidenceQuotes []string `json:"evidence_quotes"`
+}
+
+// Signal represents a trading signal extracted from a conversation (embedded in analysis_result)
+type Signal struct {
+	Type           string `json:"type"`
+	Text           string `json:"text"`
+	Timestamp      string `json:"timestamp"`
+	Confidence     string `json:"confidence"`
+	Interpretation string `json:"interpretation"`
 }

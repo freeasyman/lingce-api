@@ -596,6 +596,8 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		TenantName:        r.TenantName,
 		EmployeeID:        r.EmployeeID,
 		EmployeeName:      r.EmployeeName,
+		DepartmentName:    r.DepartmentName,
+		DeviceNo:          r.DeviceNo,
 		CustomerID:        r.CustomerID,
 		CustomerName:      r.CustomerName,
 		PatientName:       r.PatientName,
@@ -4845,14 +4847,19 @@ func (s *Service) GenerateWeeklyReport(ctx context.Context, tenantID int64, date
 		"key_insights":            reportData.KeyInsights,
 		"key_changes":             reportData.KeyInsights,
 		"next_actions":            reportData.ImprovementSuggestions,
+		"priority_actions":        reportData.ImprovementSuggestions,
 		"question_structure":      reportData.TopQuestions,
-		"response_quality":        []string{},
+		"response_quality":        buildWeeklyResponseQuality(reportData),
 		"issue_summary":           reportData.IssueSummary,
-		"staff_highlights":        []string{},
-		"staff_variances":         []string{},
-		"staff_suggestions":       []string{},
+		"staff_highlights":        buildWeeklyStaffHighlights(reportData),
+		"staff_variances":         buildWeeklyStaffVariances(reportData),
+		"staff_suggestions":       buildWeeklyStaffSuggestions(reportData),
 		"improvement_suggestions": reportData.ImprovementSuggestions,
 		"trend_analysis":          reportData.TrendAnalysis,
+		"evidence_count":          len(reportData.TopQuestions),
+		"evidence_items":          buildWeeklyEvidenceItems(reportData.TopQuestions),
+		"action_owners":           buildWeeklyActionOwners(reportData),
+		"action_effects":          buildWeeklyActionEffects(reportData),
 		"week_start_date":         reportData.WeekStartDate,
 		"week_end_date":           reportData.WeekEndDate,
 		"generated_at":            reportData.GeneratedAt.Format(time.RFC3339),
@@ -4864,13 +4871,28 @@ func (s *Service) GenerateWeeklyReport(ctx context.Context, tenantID int64, date
 		return nil, fmt.Errorf("marshal weekly analysis: %w", err)
 	}
 
-	const upsertQuery = `
-		INSERT INTO frontdesk_daily_reports (tenant_id, report_date, analysis_json, created_at, updated_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
+	if _, err := s.store.pool.Exec(ctx, `
+		INSERT INTO frontdesk_daily_reports (
+			tenant_id, report_date,
+			total_estimated_interactions, estimated_appointment_count, estimated_walkin_count,
+			top_questions, competitor_mentions, doctor_inquiries, channel_feedback, risk_event_count, testimonial_materials, created_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
 		ON CONFLICT (tenant_id, report_date) DO UPDATE
-		SET analysis_json = $3, updated_at = NOW()
-	`
-	if _, err := s.store.pool.Exec(ctx, upsertQuery, tenantID, dateStr, analysisJSON); err != nil {
+		SET total_estimated_interactions = EXCLUDED.total_estimated_interactions,
+		    estimated_appointment_count = EXCLUDED.estimated_appointment_count,
+		    estimated_walkin_count = EXCLUDED.estimated_walkin_count,
+		    top_questions = EXCLUDED.top_questions,
+		    competitor_mentions = EXCLUDED.competitor_mentions,
+		    doctor_inquiries = EXCLUDED.doctor_inquiries,
+		    channel_feedback = EXCLUDED.channel_feedback,
+		    risk_event_count = EXCLUDED.risk_event_count,
+		    testimonial_materials = EXCLUDED.testimonial_materials
+	`,
+		tenantID, dateStr,
+		reportData.TotalInteractions, reportData.TotalAppointments, reportData.TotalWalkIns,
+		reportData.TopQuestions, reportData.CompetitorMentions, reportData.DoctorInquiries, reportData.ChannelFeedback, reportData.RiskEventCount, analysisJSON,
+	); err != nil {
 		return nil, fmt.Errorf("save weekly report: %w", err)
 	}
 
@@ -4899,13 +4921,65 @@ func (s *Service) PublishWeeklyReport(ctx context.Context, tenantID int64, dateS
 	}
 	if _, err := s.store.pool.Exec(ctx, `
 		UPDATE frontdesk_daily_reports
-		SET analysis_json = $3, updated_at = NOW()
+		SET testimonial_materials = $3
 		WHERE tenant_id = $1 AND report_date = $2
 	`, tenantID, dateStr, analysisJSON); err != nil {
 		return nil, fmt.Errorf("update weekly report publish status: %w", err)
 	}
 
 	return s.store.GetWeeklyReport(ctx, tenantID, dateStr)
+}
+
+func (s *Service) AddWeeklyReportEvidence(ctx context.Context, tenantID int64, reportDate string, recordingID int64, shiftDate, summary string) (map[string]interface{}, error) {
+	targetDate := strings.TrimSpace(reportDate)
+	if targetDate == "" {
+		targetDate = strings.TrimSpace(shiftDate)
+	}
+	if targetDate == "" {
+		targetDate = time.Now().Format("2006-01-02")
+	}
+
+	report, err := s.store.GetWeeklyReport(ctx, tenantID, targetDate)
+	if err != nil {
+		if _, genErr := s.GenerateWeeklyReport(ctx, tenantID, targetDate); genErr != nil {
+			return nil, fmt.Errorf("prepare weekly report: %w", genErr)
+		}
+		report, err = s.store.GetWeeklyReport(ctx, tenantID, targetDate)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	analysis, _ := report["analysis"].(map[string]interface{})
+	if analysis == nil {
+		analysis = map[string]interface{}{}
+	}
+
+	items := make([]interface{}, 0, 8)
+	if raw, ok := analysis["evidence_items"].([]interface{}); ok {
+		items = append(items, raw...)
+	}
+	items = append(items, map[string]interface{}{
+		"recording_id": recordingID,
+		"shift_date":   strings.TrimSpace(shiftDate),
+		"summary":      strings.TrimSpace(summary),
+		"added_at":     time.Now().Format(time.RFC3339),
+	})
+	analysis["evidence_items"] = items
+	analysis["evidence_count"] = len(items)
+
+	analysisJSON, err := json.Marshal(analysis)
+	if err != nil {
+		return nil, fmt.Errorf("marshal evidence analysis: %w", err)
+	}
+	if _, err := s.store.pool.Exec(ctx, `
+		UPDATE frontdesk_daily_reports
+		SET testimonial_materials = $3
+		WHERE tenant_id = $1 AND report_date = $2
+	`, tenantID, targetDate, analysisJSON); err != nil {
+		return nil, fmt.Errorf("update weekly report evidence: %w", err)
+	}
+	return s.store.GetWeeklyReport(ctx, tenantID, targetDate)
 }
 
 func buildFrontdeskWeeklySummary(data *WeeklyReportData) string {
@@ -4919,4 +4993,115 @@ func buildFrontdeskWeeklySummary(data *WeeklyReportData) string {
 		data.TotalWalkIns,
 		data.RiskEventCount,
 	)
+}
+
+func buildWeeklyResponseQuality(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	out := make([]string, 0, 3)
+	if data.TotalInteractions > 0 {
+		appointmentRate := float64(data.TotalAppointments) / float64(data.TotalInteractions) * 100
+		walkInRate := float64(data.TotalWalkIns) / float64(data.TotalInteractions) * 100
+		out = append(out, fmt.Sprintf("预约承接占比 %.1f%%（%d/%d）", appointmentRate, data.TotalAppointments, data.TotalInteractions))
+		out = append(out, fmt.Sprintf("walk-in 占比 %.1f%%（%d/%d）", walkInRate, data.TotalWalkIns, data.TotalInteractions))
+	}
+	if data.RiskEventCount <= 0 {
+		out = append(out, "合规风险本周未检出明显异常")
+	} else {
+		out = append(out, fmt.Sprintf("合规风险共 %d 起，建议对高风险应答逐条复盘", data.RiskEventCount))
+	}
+	return out
+}
+
+func buildWeeklyStaffHighlights(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	out := make([]string, 0, 2)
+	if data.TotalAppointments > 0 {
+		out = append(out, fmt.Sprintf("预约承接完成 %d 次，建议复用高转化应答片段", data.TotalAppointments))
+	}
+	if len(data.ChannelFeedback) > 0 {
+		out = append(out, fmt.Sprintf("渠道反馈覆盖 %d 类问题，形成跨渠道标准答复基础", len(data.ChannelFeedback)))
+	}
+	return out
+}
+
+func buildWeeklyStaffVariances(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	out := make([]string, 0, 2)
+	if data.TotalInteractions > 0 && data.TotalWalkIns > data.TotalInteractions/2 {
+		out = append(out, "walk-in 占比偏高，班次承接稳定性波动风险上升")
+	}
+	if data.RiskEventCount > 0 {
+		out = append(out, fmt.Sprintf("风险事件 %d 起，个别场景应答一致性不足", data.RiskEventCount))
+	}
+	return out
+}
+
+func buildWeeklyStaffSuggestions(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	out := make([]string, 0, 3)
+	out = append(out, "按高频问题组织班次演练，统一标准应答")
+	if data.RiskEventCount > 0 {
+		out = append(out, "高风险录音建立日复盘机制，次日追踪改进结果")
+	}
+	if data.TotalWalkIns > 0 {
+		out = append(out, "针对 walk-in 场景补齐即时安排与恢复期说明话术")
+	}
+	return out
+}
+
+func buildWeeklyEvidenceItems(questions []string) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(questions))
+	for i, q := range questions {
+		topic := strings.TrimSpace(q)
+		if topic == "" {
+			continue
+		}
+		items = append(items, map[string]interface{}{
+			"recording_id": 0,
+			"shift_date":   "",
+			"summary":      fmt.Sprintf("高频问题主题：%s", topic),
+			"source":       "weekly_aggregation",
+			"rank":         i + 1,
+		})
+	}
+	return items
+}
+
+func buildWeeklyActionOwners(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	owners := []string{"前台主管"}
+	if data.RiskEventCount > 0 {
+		owners = append(owners, "合规负责人")
+	}
+	if len(data.TopQuestions) > 0 {
+		owners = append(owners, "培训负责人")
+	}
+	return owners
+}
+
+func buildWeeklyActionEffects(data *WeeklyReportData) []string {
+	if data == nil {
+		return []string{}
+	}
+	effects := make([]string, 0, 3)
+	if data.TotalInteractions > 0 {
+		effects = append(effects, "观察下周预约承接率与 walk-in 承接率变化")
+	}
+	if data.RiskEventCount > 0 {
+		effects = append(effects, "跟踪高风险场景复盘后复发率是否下降")
+	}
+	if len(data.TopQuestions) > 0 {
+		effects = append(effects, "验证高频问题命中后回答完整率是否提升")
+	}
+	return effects
 }

@@ -2,6 +2,7 @@ package recording
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -364,6 +365,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				NULLIF(oa.email, ''),
 				'未知员工'
 			) AS employee_name,
+			COALESCE(NULLIF(d.name, ''), '-') AS department_name,
+			COALESCE(NULLIF(sbe.device_no, ''), '') AS device_no,
 			r.customer_id,
 			NULLIF(c.name, '') AS customer_name,
 			COALESCE(c.name, '') AS patient_name,
@@ -395,6 +398,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
 		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
 		LEFT JOIN LATERAL (
 			SELECT sae.device_no
@@ -426,6 +430,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			&r.TenantName,
 			&r.EmployeeID,
 			&r.EmployeeName,
+			&r.DepartmentName,
+			&r.DeviceNo,
 			&r.CustomerID,
 			&r.CustomerName,
 			&r.PatientName,
@@ -1515,7 +1521,7 @@ func (s *Store) ListShiftAnalyses(ctx context.Context, tenantID int64, page, pag
 			"estimated_interaction_count": estimatedInteractionCount,
 			"estimated_appointment_count": estimatedAppointmentCount,
 			"estimated_walkin_count":      estimatedWalkinCount,
-			"analysis_json":               analysisJSON,
+			"analysis_json":               normalizeFrontdeskShiftAnalysisJSON(analysisJSON),
 			"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 		})
 	}
@@ -1565,7 +1571,7 @@ func (s *Store) GetShiftAnalysis(ctx context.Context, tenantID, id int64) (map[s
 		"estimated_interaction_count": estimatedInteractionCount,
 		"estimated_appointment_count": estimatedAppointmentCount,
 		"estimated_walkin_count":      estimatedWalkinCount,
-		"analysis_json":               analysisJSON,
+		"analysis_json":               normalizeFrontdeskShiftAnalysisJSON(analysisJSON),
 		"transcript":                  transcript,
 		"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
@@ -1609,7 +1615,7 @@ func (s *Store) CreateShiftAnalysis(ctx context.Context, tenantID int64, req *Sh
 		"estimated_interaction_count": estimatedInteractionCount,
 		"estimated_appointment_count": estimatedAppointmentCount,
 		"estimated_walkin_count":      estimatedWalkinCount,
-		"analysis_json":               analysisJSON,
+		"analysis_json":               normalizeFrontdeskShiftAnalysisJSON(analysisJSON),
 		"created_at":                  createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
@@ -1637,11 +1643,11 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 	var reports []map[string]interface{}
 	for rows.Next() {
 		var id, tenantID int64
-		var reportDate string
+		var reportDate time.Time
 		var totalEstimatedInteractions, estimatedAppointmentCount, estimatedWalkinCount, riskEventCount int
-		var estimatedWalkinCaptureRate float64
+		var estimatedWalkinCaptureRate sql.NullFloat64
 		var topQuestions, competitorMentions, doctorInquiries, channelFeedback, lostReasons, testimonialMaterials map[string]interface{}
-		var createdAt string
+		var createdAt time.Time
 
 		if err := rows.Scan(&id, &tenantID, &reportDate, &totalEstimatedInteractions, &estimatedAppointmentCount,
 			&estimatedWalkinCount, &estimatedWalkinCaptureRate, &topQuestions, &competitorMentions,
@@ -1649,14 +1655,19 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 			return nil, 0, fmt.Errorf("scan daily report: %w", err)
 		}
 
+		walkinCaptureRate := 0.0
+		if estimatedWalkinCaptureRate.Valid {
+			walkinCaptureRate = estimatedWalkinCaptureRate.Float64
+		}
+
 		item := map[string]interface{}{
 			"id":                            id,
 			"tenant_id":                     tenantID,
-			"report_date":                   reportDate,
+			"report_date":                   reportDate.Format("2006-01-02"),
 			"total_estimated_interactions":  totalEstimatedInteractions,
 			"estimated_appointment_count":   estimatedAppointmentCount,
 			"estimated_walkin_count":        estimatedWalkinCount,
-			"estimated_walkin_capture_rate": estimatedWalkinCaptureRate,
+			"estimated_walkin_capture_rate": walkinCaptureRate,
 			"top_questions":                 topQuestions,
 			"competitor_mentions":           competitorMentions,
 			"doctor_inquiries":              doctorInquiries,
@@ -1664,7 +1675,7 @@ func (s *Store) ListDailyReports(ctx context.Context, tenantID int64, page, page
 			"lost_reasons":                  lostReasons,
 			"risk_event_count":              riskEventCount,
 			"testimonial_materials":         testimonialMaterials,
-			"created_at":                    createdAt,
+			"created_at":                    createdAt.Format("2006-01-02 15:04:05"),
 		}
 		mergeDailyExtendedFields(item, testimonialMaterials)
 		reports = append(reports, item)
@@ -1689,11 +1700,11 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 	`
 
 	var id int64
-	var reportDate string
+	var reportDate time.Time
 	var totalEstimatedInteractions, estimatedAppointmentCount, estimatedWalkinCount, riskEventCount int
-	var estimatedWalkinCaptureRate float64
+	var estimatedWalkinCaptureRate sql.NullFloat64
 	var topQuestions, competitorMentions, doctorInquiries, channelFeedback, lostReasons, testimonialMaterials map[string]interface{}
-	var createdAt string
+	var createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, dateStr).Scan(&id, &tenantID, &reportDate, &totalEstimatedInteractions,
 		&estimatedAppointmentCount, &estimatedWalkinCount, &estimatedWalkinCaptureRate, &topQuestions, &competitorMentions,
@@ -1704,14 +1715,19 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 		return nil, fmt.Errorf("query daily report: %w", err)
 	}
 
+	walkinCaptureRate := 0.0
+	if estimatedWalkinCaptureRate.Valid {
+		walkinCaptureRate = estimatedWalkinCaptureRate.Float64
+	}
+
 	item := map[string]interface{}{
 		"id":                            id,
 		"tenant_id":                     tenantID,
-		"report_date":                   reportDate,
+		"report_date":                   reportDate.Format("2006-01-02"),
 		"total_estimated_interactions":  totalEstimatedInteractions,
 		"estimated_appointment_count":   estimatedAppointmentCount,
 		"estimated_walkin_count":        estimatedWalkinCount,
-		"estimated_walkin_capture_rate": estimatedWalkinCaptureRate,
+		"estimated_walkin_capture_rate": walkinCaptureRate,
 		"top_questions":                 topQuestions,
 		"competitor_mentions":           competitorMentions,
 		"doctor_inquiries":              doctorInquiries,
@@ -1719,7 +1735,7 @@ func (s *Store) GetFrontdeskDailyReport(ctx context.Context, tenantID int64, dat
 		"lost_reasons":                  lostReasons,
 		"risk_event_count":              riskEventCount,
 		"testimonial_materials":         testimonialMaterials,
-		"created_at":                    createdAt,
+		"created_at":                    createdAt.Format("2006-01-02 15:04:05"),
 	}
 	mergeDailyExtendedFields(item, testimonialMaterials)
 	return item, nil
@@ -2011,30 +2027,7 @@ func (s *Store) ListWeeklyReports(ctx context.Context, tenantID int64, page, pag
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan weekly report: %w", err)
 		}
-		analysis := parseJSONAsMap(testimonialMaterials)
-		if len(analysis) == 0 {
-			analysis = map[string]interface{}{}
-		}
-		analysis["summary"] = firstNonEmptyString(analysis["summary"], "历史结构周报，建议重新生成以获得完整洞察。")
-		analysis["total_interactions"] = totalInteractions
-		analysis["total_appointments"] = appointments
-		analysis["total_walk_ins"] = walkIns
-		analysis["risk_event_count"] = riskEvents
-		analysis["top_questions"] = parseJSONAsStringSlice(topQuestions)
-		analysis["competitor_mentions"] = parseJSONAsStringSlice(competitorMentions)
-		analysis["doctor_inquiries"] = parseJSONAsStringSlice(doctorInquiries)
-		analysis["channel_feedback"] = parseJSONAsStringSlice(channelFeedback)
-		analysis["key_changes"] = valueOrStringSlice(analysis["key_changes"])
-		analysis["next_actions"] = valueOrStringSlice(analysis["next_actions"])
-		analysis["question_structure"] = valueOrStringSlice(analysis["question_structure"])
-		analysis["response_quality"] = valueOrStringSlice(analysis["response_quality"])
-		analysis["key_insights"] = valueOrStringSlice(analysis["key_insights"])
-		analysis["issue_summary"] = valueOrStringSlice(analysis["issue_summary"])
-		analysis["staff_highlights"] = valueOrStringSlice(analysis["staff_highlights"])
-		analysis["staff_variances"] = valueOrStringSlice(analysis["staff_variances"])
-		analysis["staff_suggestions"] = valueOrStringSlice(analysis["staff_suggestions"])
-		analysis["improvement_suggestions"] = valueOrStringSlice(analysis["improvement_suggestions"])
-		analysis["status"] = firstNonEmptyString(analysis["status"], "draft")
+		analysis := normalizeFrontdeskWeeklyAnalysis(parseJSONAsMap(testimonialMaterials), totalInteractions, appointments, walkIns, riskEvents)
 		reports = append(reports, map[string]interface{}{
 			"id":                id,
 			"tenant_id":         tenantID,
@@ -2081,30 +2074,7 @@ func (s *Store) GetWeeklyReport(ctx context.Context, tenantID int64, dateStr str
 		}
 		return nil, fmt.Errorf("query weekly report: %w", err)
 	}
-	analysis := parseJSONAsMap(testimonialMaterials)
-	if len(analysis) == 0 {
-		analysis = map[string]interface{}{}
-	}
-	analysis["summary"] = firstNonEmptyString(analysis["summary"], "历史结构周报，建议重新生成以获得完整洞察。")
-	analysis["total_interactions"] = totalInteractions
-	analysis["total_appointments"] = appointments
-	analysis["total_walk_ins"] = walkIns
-	analysis["risk_event_count"] = riskEvents
-	analysis["top_questions"] = parseJSONAsStringSlice(topQuestions)
-	analysis["competitor_mentions"] = parseJSONAsStringSlice(competitorMentions)
-	analysis["doctor_inquiries"] = parseJSONAsStringSlice(doctorInquiries)
-	analysis["channel_feedback"] = parseJSONAsStringSlice(channelFeedback)
-	analysis["key_changes"] = valueOrStringSlice(analysis["key_changes"])
-	analysis["next_actions"] = valueOrStringSlice(analysis["next_actions"])
-	analysis["question_structure"] = valueOrStringSlice(analysis["question_structure"])
-	analysis["response_quality"] = valueOrStringSlice(analysis["response_quality"])
-	analysis["key_insights"] = valueOrStringSlice(analysis["key_insights"])
-	analysis["issue_summary"] = valueOrStringSlice(analysis["issue_summary"])
-	analysis["staff_highlights"] = valueOrStringSlice(analysis["staff_highlights"])
-	analysis["staff_variances"] = valueOrStringSlice(analysis["staff_variances"])
-	analysis["staff_suggestions"] = valueOrStringSlice(analysis["staff_suggestions"])
-	analysis["improvement_suggestions"] = valueOrStringSlice(analysis["improvement_suggestions"])
-	analysis["status"] = firstNonEmptyString(analysis["status"], "draft")
+	analysis := normalizeFrontdeskWeeklyAnalysis(parseJSONAsMap(testimonialMaterials), totalInteractions, appointments, walkIns, riskEvents)
 	status, _ := analysis["status"].(string)
 	if status == "" {
 		status = "draft"
@@ -2154,6 +2124,124 @@ func parseJSONAsMap(raw []byte) map[string]interface{} {
 	return obj
 }
 
+func normalizeFrontdeskShiftAnalysisJSON(input map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+	out := map[string]interface{}{
+		"summary":          firstNonEmptyString(input["summary"], ""),
+		"highlights":       valueOrStringSlice(input["highlights"]),
+		"next_actions":     valueOrStringSlice(input["next_actions"]),
+		"scenario":         firstNonEmptyString(input["scenario"], "consult_only"),
+		"key_insights":     normalizeFrontdeskInsightItems(input["key_insights"]),
+		"qa_quality_notes": valueOrStringSlice(input["qa_quality_notes"]),
+		"loss_signals":     valueOrStringSlice(input["loss_signals"]),
+		"risk_points":      valueOrStringSlice(input["risk_points"]),
+		"scores":           normalizeFrontdeskScoreItems(input["scores"]),
+	}
+	if v, ok := input["source_recording_id"]; ok {
+		out["source_recording_id"] = v
+	}
+	return out
+}
+
+func normalizeFrontdeskInsightItems(v interface{}) []map[string]interface{} {
+	switch arr := v.(type) {
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(arr))
+		for _, raw := range arr {
+			obj, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			item := map[string]interface{}{
+				"fact":     firstNonEmptyString(obj["fact"], ""),
+				"evidence": firstNonEmptyString(obj["evidence"], ""),
+				"meaning":  firstNonEmptyString(obj["meaning"], ""),
+			}
+			out = append(out, item)
+		}
+		return out
+	default:
+		return []map[string]interface{}{}
+	}
+}
+
+func normalizeFrontdeskScoreItems(v interface{}) []map[string]interface{} {
+	switch arr := v.(type) {
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(arr))
+		for _, raw := range arr {
+			obj, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			item := map[string]interface{}{
+				"name":   firstNonEmptyString(obj["name"], ""),
+				"score":  obj["score"],
+				"reason": firstNonEmptyString(obj["reason"], ""),
+			}
+			out = append(out, item)
+		}
+		return out
+	default:
+		return []map[string]interface{}{}
+	}
+}
+
+func normalizeFrontdeskWeeklyAnalysis(input map[string]interface{}, totalInteractions, appointments, walkIns, riskEvents int64) map[string]interface{} {
+	if input == nil {
+		input = map[string]interface{}{}
+	}
+	return map[string]interface{}{
+		"summary":                 firstNonEmptyString(input["summary"], ""),
+		"key_changes":             valueOrStringSlice(input["key_changes"]),
+		"next_actions":            valueOrStringSlice(input["next_actions"]),
+		"total_appointments":      appointments,
+		"total_walk_ins":          walkIns,
+		"total_interactions":      totalInteractions,
+		"question_structure":      valueOrStringSlice(input["question_structure"]),
+		"response_quality":        valueOrStringSlice(input["response_quality"]),
+		"key_insights":            valueOrStringSlice(input["key_insights"]),
+		"risk_event_count":        riskEvents,
+		"issue_summary":           valueOrStringSlice(input["issue_summary"]),
+		"staff_highlights":        valueOrStringSlice(input["staff_highlights"]),
+		"staff_variances":         valueOrStringSlice(input["staff_variances"]),
+		"staff_suggestions":       valueOrStringSlice(input["staff_suggestions"]),
+		"improvement_suggestions": valueOrStringSlice(input["improvement_suggestions"]),
+		"action_owners":           valueOrStringSlice(input["action_owners"]),
+		"action_effects":          valueOrStringSlice(input["action_effects"]),
+		"evidence_count":          asInt64(input["evidence_count"]),
+		"evidence_items":          normalizeWeeklyEvidenceItems(input["evidence_items"]),
+		"status":                  firstNonEmptyString(input["status"], "draft"),
+		"manager_comment":         firstNonEmptyString(input["manager_comment"], ""),
+		"published_at":            firstNonEmptyString(input["published_at"], ""),
+		"published_by":            firstNonEmptyString(input["published_by"], ""),
+		"published_by_name":       firstNonEmptyString(input["published_by_name"], ""),
+	}
+}
+
+func normalizeWeeklyEvidenceItems(v interface{}) []map[string]interface{} {
+	switch arr := v.(type) {
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(arr))
+		for _, raw := range arr {
+			obj, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			out = append(out, map[string]interface{}{
+				"recording_id": asInt64(obj["recording_id"]),
+				"shift_date":   firstNonEmptyString(obj["shift_date"], ""),
+				"summary":      firstNonEmptyString(obj["summary"], ""),
+			})
+		}
+		return out
+	default:
+		return []map[string]interface{}{}
+	}
+}
+
 func valueOrStringSlice(v interface{}) []string {
 	list, ok := v.([]string)
 	if ok {
@@ -2172,6 +2260,24 @@ func valueOrStringSlice(v interface{}) []string {
 	default:
 		return []string{}
 	}
+}
+
+func asInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case float32:
+		return int64(n)
+	case json.Number:
+		if parsed, err := n.Int64(); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func firstNonEmptyString(v interface{}, fallback string) string {

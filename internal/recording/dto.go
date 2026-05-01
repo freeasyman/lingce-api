@@ -39,6 +39,8 @@ type RecordingResponse struct {
 	TenantName            string                   `json:"tenant_name,omitempty"`
 	EmployeeID            int64                    `json:"employee_id"`
 	EmployeeName          string                   `json:"employee_name,omitempty"`
+	DepartmentName        string                   `json:"department_name,omitempty"`
+	DeviceNo              string                   `json:"device_no,omitempty"`
 	CustomerID            *int64                   `json:"customer_id,omitempty"`
 	CustomerName          *string                  `json:"customer_name,omitempty"`
 	PatientName           string                   `json:"patient_name"`
@@ -102,6 +104,7 @@ type RecordingResponse struct {
 type RecordingListRequest struct {
 	TenantID     int64            `json:"tenant_id"`
 	TenantIDs    []int64          `json:"tenant_ids,omitempty"`
+	RecordingID  *int64           `json:"recording_id,omitempty"`
 	Scope        *RecordingScope  `json:"recording_scope,omitempty"`
 	EmployeeID   *int64           `json:"employee_id,omitempty"`
 	PatientName  *string          `json:"patient_name,omitempty"`
@@ -755,12 +758,80 @@ type RecordingPromptListRequest struct {
 	PageSize int     `json:"page_size"`
 }
 
+// Front-desk Analysis DTOs
+
+// ShiftAnalysisCreateReq represents a request to create a shift analysis
+type ShiftAnalysisCreateReq struct {
+	RecordingID               int64                  `json:"recording_id"`
+	EmployeeID                int64                  `json:"employee_id"`
+	ShiftDate                 string                 `json:"shift_date"`
+	ShiftType                 string                 `json:"shift_type"`
+	RecordingDurationSeconds  int                    `json:"recording_duration_seconds"`
+	EstimatedInteractionCount int                    `json:"estimated_interaction_count"`
+	EstimatedAppointmentCount int                    `json:"estimated_appointment_count"`
+	EstimatedWalkinCount      int                    `json:"estimated_walkin_count"`
+	AnalysisJSON              map[string]interface{} `json:"analysis_json"`
+	Transcript                *string                `json:"transcript"`
+}
+
+// ShiftAnalysisDTO represents a shift analysis
+type ShiftAnalysisDTO struct {
+	ID                        int64                  `json:"id"`
+	TenantID                  int64                  `json:"tenant_id"`
+	RecordingID               int64                  `json:"recording_id"`
+	EmployeeID                int64                  `json:"employee_id"`
+	ShiftDate                 string                 `json:"shift_date"`
+	ShiftType                 string                 `json:"shift_type"`
+	RecordingDurationSeconds  int                    `json:"recording_duration_seconds"`
+	EstimatedInteractionCount int                    `json:"estimated_interaction_count"`
+	EstimatedAppointmentCount int                    `json:"estimated_appointment_count"`
+	EstimatedWalkinCount      int                    `json:"estimated_walkin_count"`
+	AnalysisJSON              map[string]interface{} `json:"analysis_json"`
+	CreatedAt                 string                 `json:"created_at"`
+}
+
+// DailyReportDTO represents a daily report
+type DailyReportDTO struct {
+	ID                          int64                  `json:"id"`
+	TenantID                    int64                  `json:"tenant_id"`
+	ReportDate                  string                 `json:"report_date"`
+	TotalEstimatedInteractions  int                    `json:"total_estimated_interactions"`
+	EstimatedAppointmentCount   int                    `json:"estimated_appointment_count"`
+	EstimatedWalkinCount        int                    `json:"estimated_walkin_count"`
+	EstimatedWalkinCaptureRate  float64                `json:"estimated_walkin_capture_rate"`
+	TopQuestions                map[string]interface{} `json:"top_questions"`
+	CompetitorMentions          map[string]interface{} `json:"competitor_mentions"`
+	DoctorInquiries             map[string]interface{} `json:"doctor_inquiries"`
+	ChannelFeedback             map[string]interface{} `json:"channel_feedback"`
+	LostReasons                 map[string]interface{} `json:"lost_reasons"`
+	RiskEventCount              int                    `json:"risk_event_count"`
+	TestimonialMaterials        map[string]interface{} `json:"testimonial_materials"`
+	CreatedAt                   string                 `json:"created_at"`
+}
+
+// KnowledgeBaseDTO represents a knowledge base
+type KnowledgeBaseDTO struct {
+	ID        int64                  `json:"id"`
+	TenantID  int64                  `json:"tenant_id"`
+	KBType    string                 `json:"kb_type"`
+	Content   map[string]interface{} `json:"content"`
+	Version   int                    `json:"version"`
+	Status    string                 `json:"status"`
+	UpdatedAt string                 `json:"updated_at"`
+	CreatedAt string                 `json:"created_at"`
+}
+
+
 // CreateRecordingPromptRequest represents the request for creating prompt
 type CreateRecordingPromptRequest struct {
 	Code        string   `json:"code"`
 	Name        string   `json:"name"`
 	Description *string  `json:"description,omitempty"`
+	Category    *string  `json:"category,omitempty"`
+	SystemPrompt string  `json:"system_prompt"`
 	PromptText  string   `json:"prompt_text"`
+	OutputSchema JSONObject `json:"output_schema,omitempty"`
+	Version     *string  `json:"version,omitempty"`
 	Variables   []string `json:"variables,omitempty"`
 	IsActive    bool     `json:"is_active"`
 }
@@ -769,7 +840,11 @@ type CreateRecordingPromptRequest struct {
 type UpdateRecordingPromptRequest struct {
 	Name        *string  `json:"name,omitempty"`
 	Description *string  `json:"description,omitempty"`
+	Category    *string  `json:"category,omitempty"`
+	SystemPrompt *string `json:"system_prompt,omitempty"`
 	PromptText  *string  `json:"prompt_text,omitempty"`
+	OutputSchema JSONObject `json:"output_schema,omitempty"`
+	Version     *string  `json:"version,omitempty"`
 	Variables   []string `json:"variables,omitempty"`
 	IsActive    *bool    `json:"is_active,omitempty"`
 }
@@ -804,4 +879,116 @@ type CreateRecordingPromptTenantConfigRequest struct {
 type UpdateRecordingPromptTenantConfigRequest struct {
 	PromptText *string `json:"prompt_text,omitempty"`
 	IsActive   *bool   `json:"is_active,omitempty"`
+}
+
+// ===== Lingce Sales DTOs =====
+
+// CreateLingceSalesProspectRequest represents request to create a prospect
+type CreateLingceSalesProspectRequest struct {
+	InstitutionName  string     `json:"institution_name"`
+	InstitutionType  string     `json:"institution_type"`
+	InstitutionScale string     `json:"institution_scale"`
+	Region           string     `json:"region"`
+	ContactName      string     `json:"contact_name"`
+	ContactRole      string     `json:"contact_role"`
+	ContactPhone     string     `json:"contact_phone"`
+	ContactWechat    string     `json:"contact_wechat,omitempty"`
+	DecisionStage    string     `json:"decision_stage"`
+	DealProbability  string     `json:"deal_probability"`
+	Source           string     `json:"source,omitempty"`
+	AssignedTo       *int64     `json:"assigned_to,omitempty"`
+	NextFollowUpAt   *time.Time `json:"next_follow_up_at,omitempty"`
+	Notes            string     `json:"notes,omitempty"`
+}
+
+// UpdateLingceSalesProspectRequest represents request to update a prospect
+type UpdateLingceSalesProspectRequest struct {
+	InstitutionName    *string    `json:"institution_name,omitempty"`
+	InstitutionType    *string    `json:"institution_type,omitempty"`
+	InstitutionScale   *string    `json:"institution_scale,omitempty"`
+	Region             *string    `json:"region,omitempty"`
+	ContactName        *string    `json:"contact_name,omitempty"`
+	ContactRole        *string    `json:"contact_role,omitempty"`
+	ContactPhone       *string    `json:"contact_phone,omitempty"`
+	ContactWechat      *string    `json:"contact_wechat,omitempty"`
+	DecisionStage      *string    `json:"decision_stage,omitempty"`
+	DealProbability    *string    `json:"deal_probability,omitempty"`
+	BudgetSignal       *string    `json:"budget_signal,omitempty"`
+	InternalSupporters *string    `json:"internal_supporters,omitempty"`
+	InternalBlockers   *string    `json:"internal_blockers,omitempty"`
+	AssignedTo         *int64     `json:"assigned_to,omitempty"`
+	NextAction         *string    `json:"next_action,omitempty"`
+	NextFollowUpAt     *time.Time `json:"next_follow_up_at,omitempty"`
+	Status             *string    `json:"status,omitempty"`
+	LostReason         *string    `json:"lost_reason,omitempty"`
+	Notes              *string    `json:"notes,omitempty"`
+}
+
+// LingceSalesProspectResponse represents prospect response
+type LingceSalesProspectResponse struct {
+	ID                 int64      `json:"id"`
+	TenantID           int64      `json:"tenant_id"`
+	InstitutionName    string     `json:"institution_name"`
+	InstitutionType    string     `json:"institution_type"`
+	InstitutionScale   string     `json:"institution_scale"`
+	Region             string     `json:"region"`
+	ContactName        string     `json:"contact_name"`
+	ContactRole        string     `json:"contact_role"`
+	ContactPhone       string     `json:"contact_phone"`
+	ContactWechat      string     `json:"contact_wechat,omitempty"`
+	PainPoints         JSONObject `json:"pain_points,omitempty"`
+	DecisionStage      string     `json:"decision_stage"`
+	DealProbability    string     `json:"deal_probability"`
+	BudgetSignal       string     `json:"budget_signal,omitempty"`
+	CompetitorMentions JSONObject `json:"competitor_mentions,omitempty"`
+	DecisionChain      JSONObject `json:"decision_chain,omitempty"`
+	InternalSupporters string     `json:"internal_supporters,omitempty"`
+	InternalBlockers   string     `json:"internal_blockers,omitempty"`
+	Source             string     `json:"source"`
+	AssignedTo         *int64     `json:"assigned_to,omitempty"`
+	NextAction         string     `json:"next_action,omitempty"`
+	NextFollowUpAt     *string    `json:"next_follow_up_at,omitempty"`
+	Status             string     `json:"status"`
+	WonAt              *string    `json:"won_at,omitempty"`
+	LostReason         string     `json:"lost_reason,omitempty"`
+	Notes              string     `json:"notes,omitempty"`
+	CreatedAt          string     `json:"created_at"`
+	UpdatedAt          string     `json:"updated_at"`
+}
+
+// LingceSalesProspectListRequest represents request to list prospects
+type LingceSalesProspectListRequest struct {
+	TenantID        int64   `json:"tenant_id"`
+	DecisionStage   *string `json:"decision_stage,omitempty"`
+	DealProbability *string `json:"deal_probability,omitempty"`
+	AssignedTo      *int64  `json:"assigned_to,omitempty"`
+	Status          *string `json:"status,omitempty"`
+	Page            int     `json:"page"`
+	PageSize        int     `json:"page_size"`
+}
+
+// ConfirmStageChangeRequest represents request to confirm a stage change
+type ConfirmStageChangeRequest struct {
+	ToStage string `json:"to_stage"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// LingceSalesStageChangeResponse represents stage change response
+type LingceSalesStageChangeResponse struct {
+	ID          int64  `json:"id"`
+	ProspectID  int64  `json:"prospect_id"`
+	RecordingID *int64 `json:"recording_id,omitempty"`
+	FromStage   string `json:"from_stage"`
+	ToStage     string `json:"to_stage"`
+	ChangeType  string `json:"change_type"`
+	Reason      string `json:"reason,omitempty"`
+	ChangedBy   *int64 `json:"changed_by,omitempty"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// AssociateRecordingToProspectRequest represents request to associate a recording to a prospect
+type AssociateRecordingToProspectRequest struct {
+	ProspectID          int64  `json:"prospect_id"`
+	ConversationType    string `json:"conversation_type"`
+	ConversationPurpose string `json:"conversation_purpose"`
 }
