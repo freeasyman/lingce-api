@@ -93,14 +93,19 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 // GetEmployeeByUsername retrieves an employee by username and tenant
 func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tenantID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
-		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
-		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
-		       department_id, COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
-		FROM employees
-		WHERE (name = $1 OR phone = $1 OR username = $1) AND tenant_id = $2 AND deleted_at IS NULL
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
+		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE (e.name = $1 OR e.phone = $1 OR e.username = $1)
+		  AND e.tenant_id = $2
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+		  AND t.is_active::text IN ('1','t','true','TRUE')
 	`
 
 	var emp Employee
@@ -133,14 +138,18 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 // GetEmployeeByLoginAnyTenant retrieves an employee by login id without tenant restriction.
 func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
-		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
-		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
-		       department_id, COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
-		FROM employees
-		WHERE (name = $1 OR phone = $1 OR username = $1) AND deleted_at IS NULL
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
+		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE (e.name = $1 OR e.phone = $1 OR e.username = $1)
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+		  AND t.is_active::text IN ('1','t','true','TRUE')
 		ORDER BY id ASC
 		LIMIT 1
 	`
@@ -170,17 +179,56 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 	return &emp, nil
 }
 
+// ListEmployeeTenantOptionsByLoginID returns all tenant options matched by the login identifier.
+func (s *Store) ListEmployeeTenantOptionsByLoginID(ctx context.Context, loginID string) ([]TenantOption, error) {
+	query := `
+		SELECT DISTINCT t.id, t.name,
+		       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS is_active
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE (e.name = $1 OR e.phone = $1 OR e.username = $1)
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+		ORDER BY t.id ASC
+	`
+
+	rows, err := s.pool.Query(ctx, query, loginID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query employee tenant options: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]TenantOption, 0)
+	for rows.Next() {
+		var item TenantOption
+		if scanErr := rows.Scan(&item.TenantID, &item.TenantName, &item.IsActive); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan tenant option: %w", scanErr)
+		}
+		items = append(items, item)
+	}
+
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("failed to iterate tenant options: %w", rows.Err())
+	}
+
+	return items, nil
+}
+
 // GetEmployeeByPhone retrieves an employee by phone
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
-		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
-		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
-		       department_id, COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
-		FROM employees
-		WHERE phone = $1 AND deleted_at IS NULL
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
+		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE e.phone = $1
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+		  AND t.is_active::text IN ('1','t','true','TRUE')
 		LIMIT 1
 	`
 
@@ -214,14 +262,18 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 // GetEmployeeByID retrieves an employee by ID
 func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employee, error) {
 	query := `
-		SELECT id, tenant_id, COALESCE(NULLIF(username, ''), name, phone) AS username, password_hash,
-		       COALESCE(NULLIF(full_name, ''), name, COALESCE(NULLIF(username, ''), phone)) AS full_name,
-		       COALESCE(phone, '') AS phone, COALESCE(email, '') AS email,
-		       department_id, COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, deleted_at
-		FROM employees
-		WHERE id = $1 AND deleted_at IS NULL
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
+		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE e.id = $1
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+		  AND t.is_active::text IN ('1','t','true','TRUE')
 	`
 
 	var emp Employee
@@ -259,7 +311,7 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 		       service_started_on AS valid_from, service_expired_on AS valid_to,
 		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
-		WHERE id = $1
+		WHERE id = $1 AND deleted_at IS NULL
 	`
 
 	var tenant Tenant
