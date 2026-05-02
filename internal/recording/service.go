@@ -724,6 +724,25 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		return nil
 	}
 
+	// Frontdesk recordings: the worker pipeline saves a complete aggregate
+	// to recordings.analysis_result with role="frontdesk". Use it directly
+	// instead of overriding with individual prompt-step results.
+	if resp.AnalysisResult != nil {
+		if role, _ := resp.AnalysisResult["role"].(string); role == "frontdesk" {
+			if resp.AnalysisSummary == nil {
+				resp.AnalysisSummary = pickMap(resp.AnalysisResult, "analysis_summary")
+			}
+			if resp.ConversationSummary == nil {
+				resp.ConversationSummary = pickStringPtr(pickString(resp.AnalysisResult, "summary"))
+			}
+			// Load cleaned transcription segments for structured display
+			if cleaned, err := s.loadCleanedTranscriptionSegments(ctx, recordingID); err == nil && len(cleaned) > 0 {
+				resp.StructuredTranscript = cleaned
+			}
+			return nil
+		}
+	}
+
 	type analysisRow struct {
 		PromptCode string
 		ResultData map[string]interface{}
@@ -4871,6 +4890,22 @@ func (s *Service) GenerateWeeklyReport(ctx context.Context, tenantID int64, date
 	if err != nil {
 		return nil, fmt.Errorf("marshal weekly analysis: %w", err)
 	}
+	topQuestionsJSON, err := json.Marshal(reportData.TopQuestions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal top_questions: %w", err)
+	}
+	competitorMentionsJSON, err := json.Marshal(reportData.CompetitorMentions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal competitor_mentions: %w", err)
+	}
+	doctorInquiriesJSON, err := json.Marshal(reportData.DoctorInquiries)
+	if err != nil {
+		return nil, fmt.Errorf("marshal doctor_inquiries: %w", err)
+	}
+	channelFeedbackJSON, err := json.Marshal(reportData.ChannelFeedback)
+	if err != nil {
+		return nil, fmt.Errorf("marshal channel_feedback: %w", err)
+	}
 
 	if _, err := s.store.pool.Exec(ctx, `
 		INSERT INTO frontdesk_daily_reports (
@@ -4892,7 +4927,7 @@ func (s *Service) GenerateWeeklyReport(ctx context.Context, tenantID int64, date
 	`,
 		tenantID, dateStr,
 		reportData.TotalInteractions, reportData.TotalAppointments, reportData.TotalWalkIns,
-		reportData.TopQuestions, reportData.CompetitorMentions, reportData.DoctorInquiries, reportData.ChannelFeedback, reportData.RiskEventCount, analysisJSON,
+		topQuestionsJSON, competitorMentionsJSON, doctorInquiriesJSON, channelFeedbackJSON, reportData.RiskEventCount, analysisJSON,
 	); err != nil {
 		return nil, fmt.Errorf("save weekly report: %w", err)
 	}
