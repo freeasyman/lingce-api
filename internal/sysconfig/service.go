@@ -66,16 +66,17 @@ func (s *Service) UpdateSubscriptionPlan(ctx context.Context, id int64, req Upda
 // toSubscriptionPlanResponse converts a TenantSubscriptionPlan to SubscriptionPlanResponse
 func toSubscriptionPlanResponse(p *TenantSubscriptionPlan) *SubscriptionPlanResponse {
 	return &SubscriptionPlanResponse{
-		ID:             p.ID,
-		Name:           p.Name,
-		Code:           p.Code,
-		Description:    p.Description,
-		DurationDays:   p.DurationDays,
-		FeatureGroupID: p.FeatureGroupID,
-		Price:          p.Price,
-		IsActive:       p.IsActive,
-		CreatedAt:      p.CreatedAt,
-		UpdatedAt:      p.UpdatedAt,
+		ID:               p.ID,
+		Name:             p.Name,
+		Code:             p.Code,
+		Description:      p.Description,
+		DurationDays:     p.DurationDays,
+		GraceDaysDefault: p.GraceDaysDefault,
+		FeatureGroupID:   p.FeatureGroupID,
+		Price:            p.Price,
+		IsActive:         p.IsActive,
+		CreatedAt:        p.CreatedAt,
+		UpdatedAt:        p.UpdatedAt,
 	}
 }
 

@@ -37,6 +37,22 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func (s *Store) subscriptionPlanIsActiveUsesInteger(ctx context.Context) (bool, error) {
+	var dataType string
+	err := s.pool.QueryRow(ctx, `
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'tenant_subscription_plans'
+		  AND column_name = 'is_active'
+		LIMIT 1
+	`).Scan(&dataType)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect tenant_subscription_plans.is_active type: %w", err)
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(dataType)), "int"), nil
+}
+
 // Subscription Plan operations
 
 // LogValidityChange logs a validity period change for a tenant
@@ -56,7 +72,7 @@ func (s *Store) LogValidityChange(ctx context.Context, tenantID int64, oldValidF
 // ListSubscriptionPlans retrieves all subscription plans
 func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*TenantSubscriptionPlan, error) {
 	query := `
-		SELECT id, name, code, description, duration_days, feature_group_id, COALESCE(price, 0) AS price,
+		SELECT id, name, code, description, duration_days, COALESCE(grace_days_default, 0) AS grace_days_default, feature_group_id, COALESCE(price, 0) AS price,
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -85,7 +101,7 @@ func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*T
 	var plans []*TenantSubscriptionPlan
 	for rows.Next() {
 		var p TenantSubscriptionPlan
-		err := rows.Scan(&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+		err := rows.Scan(&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.GraceDaysDefault, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan subscription plan: %w", err)
 		}
@@ -97,15 +113,29 @@ func (s *Store) ListSubscriptionPlans(ctx context.Context, isActive *bool) ([]*T
 
 // CreateSubscriptionPlan creates a new subscription plan
 func (s *Store) CreateSubscriptionPlan(ctx context.Context, req CreateSubscriptionPlanRequest) (*TenantSubscriptionPlan, error) {
+	usesInteger, err := s.subscriptionPlanIsActiveUsesInteger(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var isActiveValue interface{} = true
+	if usesInteger {
+		isActiveValue = 1
+	}
+
 	query := `
-		INSERT INTO tenant_subscription_plans (name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())
-		RETURNING id, name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at
+		INSERT INTO tenant_subscription_plans (name, code, description, duration_days, grace_days_default, feature_group_id, price, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		RETURNING id, name, code, description, duration_days, COALESCE(grace_days_default, 0) AS grace_days_default, feature_group_id, price,
+		          CASE
+		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              ELSE false
+		          END AS is_active,
+		          created_at, updated_at
 	`
 
 	var p TenantSubscriptionPlan
-	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.FeatureGroupID, req.Price).Scan(
-		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+	err = s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.GraceDaysDefault, req.FeatureGroupID, req.Price, isActiveValue).Scan(
+		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.GraceDaysDefault, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subscription plan: %w", err)
@@ -137,6 +167,11 @@ func (s *Store) UpdateSubscriptionPlan(ctx context.Context, id int64, req Update
 		args = append(args, *req.DurationDays)
 		argPos++
 	}
+	if req.GraceDaysDefault != nil {
+		query += fmt.Sprintf(", grace_days_default = $%d", argPos)
+		args = append(args, *req.GraceDaysDefault)
+		argPos++
+	}
 
 	if req.FeatureGroupID != nil {
 		query += fmt.Sprintf(", feature_group_id = $%d", argPos)
@@ -151,18 +186,35 @@ func (s *Store) UpdateSubscriptionPlan(ctx context.Context, id int64, req Update
 	}
 
 	if req.IsActive != nil {
+		usesInteger, typeErr := s.subscriptionPlanIsActiveUsesInteger(ctx)
+		if typeErr != nil {
+			return nil, typeErr
+		}
 		query += fmt.Sprintf(", is_active = $%d", argPos)
-		args = append(args, *req.IsActive)
+		if usesInteger {
+			if *req.IsActive {
+				args = append(args, 1)
+			} else {
+				args = append(args, 0)
+			}
+		} else {
+			args = append(args, *req.IsActive)
+		}
 		argPos++
 	}
 
 	query += fmt.Sprintf(" WHERE id = $%d", argPos)
 	args = append(args, id)
-	query += " RETURNING id, name, code, description, duration_days, feature_group_id, price, is_active, created_at, updated_at"
+	query += ` RETURNING id, name, code, description, duration_days, COALESCE(grace_days_default, 0) AS grace_days_default, feature_group_id, price,
+	                  CASE
+	                      WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+	                      ELSE false
+	                  END AS is_active,
+	                  created_at, updated_at`
 
 	var p TenantSubscriptionPlan
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
+		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.GraceDaysDefault, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update subscription plan: %w", err)
@@ -425,14 +477,65 @@ func (s *Store) ensureDefaultSubscriptionTx(ctx context.Context, tx pgx.Tx, tena
 
 	startDate := time.Now()
 	endDate := startDate.Add(time.Duration(durationDays) * 24 * time.Hour)
-	_, err = tx.Exec(ctx, `
-		INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, start_date, end_date, created_at, updated_at)
-		VALUES ($1, $2, 'active', $3, $4, NOW(), NOW())
-	`, tenantID, planID, startDate, endDate)
+
+	hasStartedOn, err := hasColumn(ctx, tx, "tenant_subscriptions", "started_on")
+	if err != nil {
+		return err
+	}
+	hasExpiredOn, err := hasColumn(ctx, tx, "tenant_subscriptions", "expired_on")
+	if err != nil {
+		return err
+	}
+	hasGraceEndOn, err := hasColumn(ctx, tx, "tenant_subscriptions", "grace_end_on")
+	if err != nil {
+		return err
+	}
+
+	args := []interface{}{tenantID, planID, startDate, endDate}
+	columns := []string{"tenant_id", "plan_id", "status", "start_date", "end_date", "created_at", "updated_at"}
+	values := []string{"$1", "$2", "'active'", "$3::timestamp", "$4::timestamp", "NOW()", "NOW()"}
+	if hasStartedOn {
+		args = append(args, startDate)
+		columns = append(columns, "started_on")
+		values = append(values, fmt.Sprintf("$%d::date", len(args)))
+	}
+	if hasExpiredOn {
+		args = append(args, endDate)
+		columns = append(columns, "expired_on")
+		values = append(values, fmt.Sprintf("$%d::date", len(args)))
+	}
+	if hasGraceEndOn {
+		columns = append(columns, "grace_end_on")
+		values = append(values, "NULL")
+	}
+
+	insertQuery := fmt.Sprintf(
+		"INSERT INTO tenant_subscriptions (%s) VALUES (%s)",
+		strings.Join(columns, ", "),
+		strings.Join(values, ", "),
+	)
+	_, err = tx.Exec(ctx, insertQuery, args...)
 	if err != nil {
 		return fmt.Errorf("failed to initialize tenant subscription: %w", err)
 	}
 	return nil
+}
+
+func hasColumn(ctx context.Context, tx pgx.Tx, tableName, columnName string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = $1
+			  AND column_name = $2
+		)
+	`, tableName, columnName).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect %s.%s column existence: %w", tableName, columnName, err)
+	}
+	return exists, nil
 }
 
 // GetSubscriptionEvents retrieves subscription events for a tenant
