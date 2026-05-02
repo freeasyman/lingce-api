@@ -51,12 +51,26 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 		return nil, fmt.Errorf("code is required")
 	}
 
-	return s.store.CreateTenant(ctx, req)
+	tenant, err := s.store.CreateTenant(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.syncTenantPlanAndFeatureGroup(ctx, tenant.ID, req.SubscriptionPlanID.Ptr(), req.SubscriptionPlanName); err != nil {
+		return nil, err
+	}
+	return tenant, nil
 }
 
 // UpdateTenant updates a tenant
 func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*Tenant, error) {
-	return s.store.UpdateTenant(ctx, id, req)
+	tenant, err := s.store.UpdateTenant(ctx, id, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.syncTenantPlanAndFeatureGroup(ctx, id, req.SubscriptionPlanID.Ptr(), req.SubscriptionPlanName); err != nil {
+		return nil, err
+	}
+	return tenant, nil
 }
 
 // DeleteTenant deletes a tenant
@@ -235,4 +249,20 @@ func buildSpecialtyTree(specialties []*MedicalSpecialty) []*MedicalSpecialtyResp
 	}
 
 	return roots
+}
+
+func (s *Service) syncTenantPlanAndFeatureGroup(ctx context.Context, tenantID int64, planID *int64, planName *string) error {
+	resolvedPlanID, err := s.store.ResolveSubscriptionPlanID(ctx, planID, planName)
+	if err != nil {
+		return err
+	}
+	if resolvedPlanID == nil {
+		return nil
+	}
+	notes := "sync_plan_on_tenant_upsert"
+	return s.sysconfigService.PerformSubscriptionAction(ctx, tenantID, sysconfig.SubscriptionActionRequest{
+		Action: "upgrade",
+		PlanID: resolvedPlanID,
+		Notes:  &notes,
+	})
 }

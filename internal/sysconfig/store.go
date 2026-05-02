@@ -922,6 +922,30 @@ func (s *Store) GetEffectiveFeaturePolicy(ctx context.Context, tenantID int64) (
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil, false, fmt.Errorf("failed to query feature assignment: %w", err)
 	}
+	if groupID == nil {
+		var fallbackGroupID int64
+		fallbackErr := s.pool.QueryRow(ctx, `
+			SELECT p.feature_group_id
+			FROM tenant_subscriptions s
+			JOIN tenant_subscription_plans p ON p.id = s.plan_id
+			WHERE s.tenant_id = $1
+			  AND p.feature_group_id IS NOT NULL
+			ORDER BY s.created_at DESC
+			LIMIT 1
+		`, tenantID).Scan(&fallbackGroupID)
+		if fallbackErr == nil && fallbackGroupID > 0 {
+			if _, upsertErr := s.pool.Exec(ctx, `
+				INSERT INTO tenant_feature_assignments (tenant_id, group_id, created_at, updated_at)
+				VALUES ($1, $2, NOW(), NOW())
+				ON CONFLICT (tenant_id) DO UPDATE SET group_id = EXCLUDED.group_id, updated_at = NOW()
+			`, tenantID, fallbackGroupID); upsertErr != nil {
+				return nil, nil, nil, false, fmt.Errorf("failed to backfill feature assignment from subscription: %w", upsertErr)
+			}
+			groupID = &fallbackGroupID
+		} else if fallbackErr != nil && !errors.Is(fallbackErr, pgx.ErrNoRows) {
+			return nil, nil, nil, false, fmt.Errorf("failed to query subscription plan feature group: %w", fallbackErr)
+		}
+	}
 
 	allowedMenus := map[string]struct{}{}
 	allowedFeatures := map[string]struct{}{}

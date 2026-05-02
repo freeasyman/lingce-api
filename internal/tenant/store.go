@@ -4,17 +4,37 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Store struct {
 	pool *pgxpool.Pool
 }
 
+const defaultTenantAdminPassword = "123456"
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) tenantIsActiveUsesInteger(ctx context.Context) (bool, error) {
+	var dataType string
+	err := s.pool.QueryRow(ctx, `
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'tenants'
+		  AND column_name = 'is_active'
+		LIMIT 1
+	`).Scan(&dataType)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect tenants.is_active type: %w", err)
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(dataType)), "int"), nil
 }
 
 // ListTenants retrieves a paginated list of tenants
@@ -174,9 +194,39 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 
 // CreateTenant creates a new tenant
 func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Tenant, error) {
+	usesInteger, err := s.tenantIsActiveUsesInteger(ctx)
+	if err != nil {
+		return nil, err
+	}
+	isActive := true
+	var isActiveValue interface{} = isActive
+	if usesInteger {
+		if isActive {
+			isActiveValue = 1
+		} else {
+			isActiveValue = 0
+		}
+	}
+	validFrom := req.ValidFrom
+	validTo := req.ValidTo
+	if validFrom == nil {
+		now := time.Now()
+		validFrom = &now
+	}
+	if validTo == nil {
+		end := validFrom.Add(365 * 24 * time.Hour)
+		validTo = &end
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin tenant creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	query := `
 		INSERT INTO tenants (name, code, contact_name, contact_phone, contact_email, industry, is_active, valid_from, valid_to, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 		RETURNING id, name, code, COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
@@ -188,7 +238,7 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	`
 
 	var t Tenant
-	err := s.pool.QueryRow(ctx, query, req.Name, req.Code, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, req.ValidFrom, req.ValidTo).Scan(
+	err = tx.QueryRow(ctx, query, req.Name, req.Code, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, isActiveValue, validFrom, validTo).Scan(
 		&t.ID,
 		&t.Name,
 		&t.Code,
@@ -212,7 +262,246 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 		return nil, fmt.Errorf("failed to create tenant: %w", err)
 	}
 
+	if err := s.ensureInstitutionRolesForTenantTx(ctx, tx, t.ID); err != nil {
+		return nil, err
+	}
+	if err := s.createDefaultTenantAdminTx(ctx, tx, t.ID, req); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit tenant creation transaction: %w", err)
+	}
+
 	return &t, nil
+}
+
+func (s *Store) ensureInstitutionRolesForTenantTx(ctx context.Context, tx pgx.Tx, tenantID int64) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+		SELECT $1,
+		       COALESCE(NULLIF(r.name_cn, ''), r.code),
+		       r.code,
+		       r.description,
+		       COALESCE(r.is_active, true),
+		       COALESCE(r.created_at, NOW()),
+		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
+		FROM inst_roles r
+		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
+		DO UPDATE SET
+		    name = EXCLUDED.name,
+		    description = EXCLUDED.description,
+		    is_active = EXCLUDED.is_active,
+		    updated_at = NOW()
+	`, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to initialize tenant roles: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenantID int64, req CreateTenantRequest) error {
+	baseUsername := strings.TrimSpace(derefString(req.ContactPhone))
+	if baseUsername == "" {
+		baseUsername = strings.TrimSpace(req.Code) + "_admin"
+	}
+	fullName := strings.TrimSpace(derefString(req.ContactName))
+	if fullName == "" {
+		fullName = strings.TrimSpace(req.Name) + "管理员"
+	}
+	phone := strings.TrimSpace(derefString(req.ContactPhone))
+	email := strings.TrimSpace(derefString(req.ContactEmail))
+	username, phoneValue, err := s.resolveUniqueEmployeeIdentityTx(ctx, tx, tenantID, baseUsername, phone)
+	if err != nil {
+		return err
+	}
+
+	passwordHashBytes, err := bcrypt.GenerateFromPassword([]byte(defaultTenantAdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash default tenant admin password: %w", err)
+	}
+	departmentName := "默认部门"
+	departmentCode := "default_department"
+	var departmentID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
+		RETURNING id
+	`, tenantID, departmentName, departmentCode).Scan(&departmentID)
+	if err != nil {
+		return fmt.Errorf("failed to create default department: %w", err)
+	}
+
+	var employeeID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::varchar, $5::text, $6, $7, $8, 1, NOW(), NOW())
+		RETURNING id
+	`, tenantID, username, string(passwordHashBytes), fullName, fullName, phoneValue, email, departmentID).Scan(&employeeID)
+	if err != nil {
+		return fmt.Errorf("failed to create default tenant admin employee: %w", err)
+	}
+
+	var adminRoleID int64
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM institution_roles
+		WHERE tenant_id = $1 AND lower(code) = 'admin' AND deleted_at IS NULL
+		ORDER BY id DESC
+		LIMIT 1
+	`, tenantID).Scan(&adminRoleID)
+	if err == pgx.ErrNoRows {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+			VALUES ($1, '管理员', 'admin', '系统管理员角色', true, NOW(), NOW())
+			RETURNING id
+		`, tenantID).Scan(&adminRoleID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to resolve tenant admin role: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (employee_id) DO UPDATE SET role_id = EXCLUDED.role_id
+	`, employeeID, adminRoleID)
+	if err != nil {
+		return fmt.Errorf("failed to assign tenant admin role: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
+		VALUES ($1, $2, true, NOW())
+		ON CONFLICT (department_id) DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default
+	`, departmentID, adminRoleID)
+	if err != nil {
+		return fmt.Errorf("failed to assign default department role: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) resolveUniqueEmployeeIdentityTx(ctx context.Context, tx pgx.Tx, tenantID int64, baseUsername, phone string) (string, string, error) {
+	username := strings.TrimSpace(baseUsername)
+	if username == "" {
+		username = fmt.Sprintf("tenant_%d_admin", tenantID)
+	}
+
+	isUsernameTaken := func(candidate string) (bool, error) {
+		var count int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM employees
+			WHERE username = $1 AND deleted_at IS NULL
+		`, candidate).Scan(&count); err != nil {
+			return false, fmt.Errorf("failed to check duplicate username: %w", err)
+		}
+		return count > 0, nil
+	}
+
+	taken, err := isUsernameTaken(username)
+	if err != nil {
+		return "", "", err
+	}
+	if taken {
+		base := username
+		for i := 0; i < 1000; i++ {
+			candidate := fmt.Sprintf("%s_t%d_%d", base, tenantID, i+1)
+			taken, err = isUsernameTaken(candidate)
+			if err != nil {
+				return "", "", err
+			}
+			if !taken {
+				username = candidate
+				break
+			}
+		}
+	}
+
+	isPhoneTaken := func(candidate string) (bool, error) {
+		var count int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM employees
+			WHERE phone = $1 AND deleted_at IS NULL
+		`, candidate).Scan(&count); err != nil {
+			return false, fmt.Errorf("failed to check duplicate employee phone: %w", err)
+		}
+		return count > 0, nil
+	}
+
+	phoneValue := strings.TrimSpace(phone)
+	if phoneValue == "" {
+		phoneValue = fmt.Sprintf("9%010d", tenantID)
+	}
+	phoneTaken, err := isPhoneTaken(phoneValue)
+	if err != nil {
+		return "", "", err
+	}
+	if phoneTaken {
+		for i := 0; i < 1000; i++ {
+			// deterministic unique fallback, still numeric-like and non-empty
+			candidate := fmt.Sprintf("9%06d%04d", tenantID%1000000, i+1)
+			taken, checkErr := isPhoneTaken(candidate)
+			if checkErr != nil {
+				return "", "", checkErr
+			}
+			if !taken {
+				phoneValue = candidate
+				break
+			}
+		}
+	}
+
+	return username, phoneValue, nil
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func (s *Store) ResolveSubscriptionPlanID(ctx context.Context, planID *int64, planName *string) (*int64, error) {
+	if planID != nil && *planID > 0 {
+		var id int64
+		err := s.pool.QueryRow(ctx, `
+			SELECT id
+			FROM tenant_subscription_plans
+			WHERE id = $1
+			  AND is_active::text IN ('1','t','true','TRUE')
+			LIMIT 1
+		`, *planID).Scan(&id)
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("subscription plan not found: %d", *planID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve subscription plan by id: %w", err)
+		}
+		return &id, nil
+	}
+
+	name := strings.TrimSpace(derefString(planName))
+	if name == "" {
+		return nil, nil
+	}
+
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM tenant_subscription_plans
+		WHERE (name = $1 OR code = $1)
+		  AND is_active::text IN ('1','t','true','TRUE')
+		ORDER BY sort_order, created_at
+		LIMIT 1
+	`, name).Scan(&id)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("subscription plan not found: %s", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve subscription plan by name: %w", err)
+	}
+	return &id, nil
 }
 
 // UpdateTenant updates a tenant
@@ -258,8 +547,20 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 	}
 
 	if req.IsActive != nil {
+		usesInteger, typeErr := s.tenantIsActiveUsesInteger(ctx)
+		if typeErr != nil {
+			return nil, typeErr
+		}
 		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", argIndex))
-		args = append(args, *req.IsActive)
+		if usesInteger {
+			if *req.IsActive {
+				args = append(args, 1)
+			} else {
+				args = append(args, 0)
+			}
+		} else {
+			args = append(args, *req.IsActive)
+		}
 		argIndex++
 	}
 

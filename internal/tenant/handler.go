@@ -61,11 +61,6 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 
 // ListTenants handles listing tenants
 func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
-	if !h.isAdmin(r) {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	var req TenantListRequest
 	req.Name = r.URL.Query().Get("name")
 	req.Code = r.URL.Query().Get("code")
@@ -79,6 +74,54 @@ func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+
+	// Tenant-side accounts can only see their own tenant in list API.
+	if !h.isAdmin(r) {
+		claims := middleware.GetUserClaims(r.Context())
+		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+			httputil.WriteForbidden(w, "Admin access required")
+			return
+		}
+
+		tenant, err := h.service.GetTenantByID(r.Context(), *claims.TenantID)
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+
+		matched := true
+		if name := strings.TrimSpace(req.Name); name != "" && !strings.Contains(strings.ToLower(tenant.Name), strings.ToLower(name)) {
+			matched = false
+		}
+		if code := strings.TrimSpace(req.Code); code != "" && !strings.Contains(strings.ToLower(tenant.Code), strings.ToLower(code)) {
+			matched = false
+		}
+		if req.IsActive != nil && tenant.IsActive != *req.IsActive {
+			matched = false
+		}
+
+		items := []*Tenant{}
+		total := int64(0)
+		if matched {
+			total = 1
+			if req.Page == 1 {
+				items = append(items, tenant)
+			}
+		}
+
+		httputil.WriteSuccess(w, map[string]interface{}{
+			"items": items,
+			"total": total,
+			"page":  req.Page,
+		})
+		return
+	}
 
 	tenants, total, err := h.service.ListTenants(r.Context(), req)
 	if err != nil {
@@ -260,14 +303,17 @@ func (h *Handler) GetSubscriptionEvents(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
-	if !h.isAdmin(r) {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
+	}
+	if !h.isAdmin(r) {
+		claims := middleware.GetUserClaims(r.Context())
+		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 || *claims.TenantID != id {
+			httputil.WriteForbidden(w, "Admin access required")
+			return
+		}
 	}
 	policy, err := h.service.GetTenantFeatures(r.Context(), id)
 	if err != nil {

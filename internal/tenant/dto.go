@@ -1,6 +1,52 @@
 package tenant
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type FlexibleInt64 struct {
+	value *int64
+}
+
+func (f *FlexibleInt64) Ptr() *int64 {
+	if f == nil {
+		return nil
+	}
+	return f.value
+}
+
+func (f *FlexibleInt64) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw == "null" {
+		f.value = nil
+		return nil
+	}
+
+	var num int64
+	if err := json.Unmarshal(data, &num); err == nil {
+		f.value = &num
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		f.value = nil
+		return nil
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return err
+	}
+	f.value = &parsed
+	return nil
+}
 
 // TenantListRequest represents tenant list query parameters
 type TenantListRequest struct {
@@ -13,27 +59,37 @@ type TenantListRequest struct {
 
 // CreateTenantRequest represents tenant creation request
 type CreateTenantRequest struct {
-	Name         string     `json:"name"`
-	Code         string     `json:"code"`
-	ContactName  *string    `json:"contact_name,omitempty"`
-	ContactPhone *string    `json:"contact_phone,omitempty"`
-	ContactEmail *string    `json:"contact_email,omitempty"`
-	Industry     *string    `json:"industry,omitempty"`
-	ValidFrom    *time.Time `json:"valid_from"`
-	ValidTo      *time.Time `json:"valid_to"`
+	Name                     string        `json:"name"`
+	Code                     string        `json:"code"`
+	ContactName              *string       `json:"contact_name,omitempty"`
+	ContactPhone             *string       `json:"contact_phone,omitempty"`
+	ContactEmail             *string       `json:"contact_email,omitempty"`
+	Industry                 *string       `json:"industry,omitempty"`
+	ValidFrom                *time.Time    `json:"valid_from"`
+	ValidTo                  *time.Time    `json:"valid_to"`
+	SubscriptionPlanID       FlexibleInt64 `json:"subscription_plan_id,omitempty"`
+	SubscriptionPlanName     *string       `json:"subscription_plan_name,omitempty"`
+	SubscriptionDurationDays *int          `json:"subscription_duration_days,omitempty"`
+	SubscriptionStartedOn    *string       `json:"subscription_started_on,omitempty"`
+	SubscriptionGraceDays    *int          `json:"subscription_grace_days,omitempty"`
 }
 
 // UpdateTenantRequest represents tenant update request
 type UpdateTenantRequest struct {
-	Name         *string    `json:"name"`
-	Code         *string    `json:"code"`
-	ContactName  *string    `json:"contact_name,omitempty"`
-	ContactPhone *string    `json:"contact_phone,omitempty"`
-	ContactEmail *string    `json:"contact_email,omitempty"`
-	Industry     *string    `json:"industry,omitempty"`
-	IsActive     *bool      `json:"is_active"`
-	ValidFrom    *time.Time `json:"valid_from"`
-	ValidTo      *time.Time `json:"valid_to"`
+	Name                     *string       `json:"name"`
+	Code                     *string       `json:"code"`
+	ContactName              *string       `json:"contact_name,omitempty"`
+	ContactPhone             *string       `json:"contact_phone,omitempty"`
+	ContactEmail             *string       `json:"contact_email,omitempty"`
+	Industry                 *string       `json:"industry,omitempty"`
+	IsActive                 *bool         `json:"is_active"`
+	ValidFrom                *time.Time    `json:"valid_from"`
+	ValidTo                  *time.Time    `json:"valid_to"`
+	SubscriptionPlanID       FlexibleInt64 `json:"subscription_plan_id,omitempty"`
+	SubscriptionPlanName     *string       `json:"subscription_plan_name,omitempty"`
+	SubscriptionDurationDays *int          `json:"subscription_duration_days,omitempty"`
+	SubscriptionStartedOn    *string       `json:"subscription_started_on,omitempty"`
+	SubscriptionGraceDays    *int          `json:"subscription_grace_days,omitempty"`
 }
 
 // SubscriptionActionRequest represents request payload for subscription actions.
