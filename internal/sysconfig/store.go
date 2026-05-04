@@ -1179,3 +1179,19 @@ func buildFeatureOptionItems(menuItems []MenuFeatureOptionItemResponse) []Featur
 	}
 	return features
 }
+
+func (s *Store) ListValidInstitutionMenuCodes(ctx context.Context) (map[string]struct{}, error) {
+	menuItems, err := s.listMenuFeatureOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(menuItems))
+	for _, item := range menuItems {
+		code := strings.TrimSpace(item.Code)
+		if code == "" {
+			continue
+		}
+		out[code] = struct{}{}
+	}
+	return out, nil
+}

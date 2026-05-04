@@ -275,6 +275,9 @@ func (s *Service) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroup
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateMenuItemCodes(ctx, items); err != nil {
+		return nil, err
+	}
 
 	group, err := s.store.CreateFeatureGroup(ctx, req, items)
 	if err != nil {
@@ -293,6 +296,11 @@ func (s *Service) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFe
 	items, err := normalizeGroupItemsPtr(req.Items, req.Features)
 	if err != nil {
 		return nil, err
+	}
+	if req.Items != nil || req.Features != nil {
+		if err := s.validateMenuItemCodes(ctx, items); err != nil {
+			return nil, err
+		}
 	}
 
 	group, err := s.store.UpdateFeatureGroup(ctx, id, req, items, req.Items != nil || req.Features != nil)
@@ -358,6 +366,9 @@ func (s *Service) AssignFeatureGroup(ctx context.Context, tenantID int64, req As
 func (s *Service) SetFeatureOverrides(ctx context.Context, tenantID int64, req FeatureOverrideRequest) error {
 	items, err := normalizeOverrideItems(req.Items, req.Overrides)
 	if err != nil {
+		return err
+	}
+	if err := s.validateOverrideMenuItemCodes(ctx, items); err != nil {
 		return err
 	}
 	return s.store.SetFeatureOverrides(ctx, tenantID, items)
@@ -534,4 +545,44 @@ func dedupOverrideItems(items []FeatureOverrideItem) []FeatureOverrideItem {
 		return out[i].ItemType < out[j].ItemType
 	})
 	return out
+}
+
+func (s *Service) validateMenuItemCodes(ctx context.Context, items []FeaturePolicyItem) error {
+	validCodes, err := s.store.ListValidInstitutionMenuCodes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ItemType != "menu" {
+			continue
+		}
+		code := strings.TrimSpace(item.ItemCode)
+		if code == "" {
+			return fmt.Errorf("menu item_code is required")
+		}
+		if _, ok := validCodes[code]; !ok {
+			return fmt.Errorf("invalid menu item_code: %s", code)
+		}
+	}
+	return nil
+}
+
+func (s *Service) validateOverrideMenuItemCodes(ctx context.Context, items []FeatureOverrideItem) error {
+	validCodes, err := s.store.ListValidInstitutionMenuCodes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ItemType != "menu" {
+			continue
+		}
+		code := strings.TrimSpace(item.ItemCode)
+		if code == "" {
+			return fmt.Errorf("menu item_code is required")
+		}
+		if _, ok := validCodes[code]; !ok {
+			return fmt.Errorf("invalid menu item_code: %s", code)
+		}
+	}
+	return nil
 }
