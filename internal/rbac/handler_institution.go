@@ -411,10 +411,17 @@ func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *h
 		return
 	}
 
-	var req AssignPermissionsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var raw struct {
+		PermissionIDs []int64 `json:"permission_ids"`
+		MenuIDs       []int64 `json:"menu_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+	req := AssignPermissionsRequest{PermissionIDs: raw.PermissionIDs}
+	if len(raw.MenuIDs) > 0 {
+		req.PermissionIDs = raw.MenuIDs
 	}
 
 	if err := h.service.ValidateInstitutionRoleMenuScope(r.Context(), *tenantID, req.PermissionIDs); err != nil {
@@ -540,4 +547,77 @@ func (h *Handler) RemoveEmployeeRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Employee role removed successfully"})
+}
+
+// GetDepartmentRole handles getting default role for a department.
+func (h *Handler) GetDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	tenantID := h.getTenantID(r)
+	if tenantID == nil {
+		httputil.WriteForbidden(w, "Tenant access required")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+
+	role, err := h.service.GetDepartmentRole(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, role)
+}
+
+// SetDepartmentRole handles setting default role for a department.
+func (h *Handler) SetDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	tenantID := h.getTenantID(r)
+	if tenantID == nil {
+		httputil.WriteForbidden(w, "Tenant access required")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+
+	var req SetDepartmentRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.SetDepartmentRole(r.Context(), id, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Department role set successfully"})
+}
+
+// RemoveDepartmentRole handles removing default role from a department.
+func (h *Handler) RemoveDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	tenantID := h.getTenantID(r)
+	if tenantID == nil {
+		httputil.WriteForbidden(w, "Tenant access required")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+
+	if err := h.service.RemoveDepartmentRole(r.Context(), id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]string{"message": "Department role removed successfully"})
 }
