@@ -295,6 +295,34 @@ func (s *Service) RemoveEmployeeRole(ctx context.Context, employeeID int64) erro
 	return s.store.RemoveEmployeeRole(ctx, employeeID)
 }
 
+// GetDepartmentRole retrieves the default role for a department.
+func (s *Service) GetDepartmentRole(ctx context.Context, departmentID int64) (*DepartmentRoleResponse, error) {
+	role, err := s.store.GetDepartmentRole(ctx, departmentID)
+	if err != nil {
+		return &DepartmentRoleResponse{
+			DepartmentID: departmentID,
+			Roles:        []InstitutionRoleResponse{},
+		}, nil
+	}
+	return &DepartmentRoleResponse{
+		DepartmentID: departmentID,
+		Roles:        []InstitutionRoleResponse{*toInstitutionRoleResponse(role)},
+	}, nil
+}
+
+// SetDepartmentRole sets the default role for a department.
+func (s *Service) SetDepartmentRole(ctx context.Context, departmentID int64, req SetDepartmentRoleRequest) error {
+	if req.RoleID == nil && (req.RoleCode == nil || *req.RoleCode == "") {
+		return fmt.Errorf("role_id or role_code is required")
+	}
+	return s.store.SetDepartmentRole(ctx, departmentID, req)
+}
+
+// RemoveDepartmentRole removes the default role for a department.
+func (s *Service) RemoveDepartmentRole(ctx context.Context, departmentID int64) error {
+	return s.store.RemoveDepartmentRole(ctx, departmentID)
+}
+
 func (s *Service) ValidateInstitutionRoleMenuScope(ctx context.Context, tenantID int64, ids []int64) error {
 	if len(ids) == 0 {
 		return nil

@@ -137,7 +137,7 @@ func (h *Handler) RemovePermissionsFromRoleByScope(w http.ResponseWriter, r *htt
 
 func (h *Handler) GetRoleMenusByScope(w http.ResponseWriter, r *http.Request) {
 	if h.roleScope(r) == "institution" {
-		httputil.WriteBadRequest(w, "institution scope menus are not supported")
+		h.GetInstitutionRolePermissions(w, r)
 		return
 	}
 	h.GetRoleMenus(w, r)
@@ -145,7 +145,7 @@ func (h *Handler) GetRoleMenusByScope(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) AssignMenusToRoleByScope(w http.ResponseWriter, r *http.Request) {
 	if h.roleScope(r) == "institution" {
-		httputil.WriteBadRequest(w, "institution scope menus are not supported")
+		h.AssignPermissionsToInstitutionRole(w, r)
 		return
 	}
 	h.AssignMenusToRole(w, r)

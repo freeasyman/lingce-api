@@ -39,6 +39,12 @@ type ExternalConfig struct {
 	BadgeCallbackGatewayToken string
 	RecordingWorkerURL        string
 	RecordingWorkerToken      string
+	TicketNotifySMTPHost      string
+	TicketNotifySMTPPort      int
+	TicketNotifySMTPUser      string
+	TicketNotifySMTPPass      string
+	TicketNotifyFrom          string
+	TicketNotifyTo            string
 }
 
 type AliyunConfig struct {
@@ -80,6 +86,12 @@ func Load() (*Config, error) {
 			BadgeCallbackGatewayToken: getEnv("BADGE_CALLBACK_GATEWAY_TOKEN", ""),
 			RecordingWorkerURL:        getEnv("RECORDING_WORKER_URL", "http://localhost:18090"),
 			RecordingWorkerToken:      getEnv("RECORDING_WORKER_TOKEN", ""),
+			TicketNotifySMTPHost:      getEnv("TICKET_NOTIFY_SMTP_HOST", ""),
+			TicketNotifySMTPPort:      getEnvInt("TICKET_NOTIFY_SMTP_PORT", 25),
+			TicketNotifySMTPUser:      getEnv("TICKET_NOTIFY_SMTP_USER", ""),
+			TicketNotifySMTPPass:      getEnv("TICKET_NOTIFY_SMTP_PASS", ""),
+			TicketNotifyFrom:          getEnv("TICKET_NOTIFY_FROM", ""),
+			TicketNotifyTo:            getEnv("TICKET_NOTIFY_TO", ""),
 		},
 		Aliyun: AliyunConfig{
 			AccessKeyID:     getEnv("ALIYUN_ACCESS_KEY_ID", ""),

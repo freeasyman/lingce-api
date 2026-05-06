@@ -39,6 +39,30 @@ func v2LifecycleStatusFromStatus(status string) string {
 	}
 }
 
+func (s *Store) resolveManufacturerAppID(ctx context.Context, manufacturerCode string) (string, error) {
+	manufacturerCode = strings.TrimSpace(manufacturerCode)
+	if manufacturerCode == "" {
+		return "", fmt.Errorf("manufacturer_code is required")
+	}
+
+	var appID string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT NULLIF(TRIM(COALESCE(app_id, '')), '')
+		FROM badge_manufacturers
+		WHERE code = $1
+		LIMIT 1
+	`, manufacturerCode).Scan(&appID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", fmt.Errorf("manufacturer not found: %s", manufacturerCode)
+		}
+		return "", fmt.Errorf("failed to resolve manufacturer app_id: %w", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(appID), manufacturerCode) {
+		return "", fmt.Errorf("invalid manufacturer app_id: app_id must be vendor app id, got manufacturer code %s", manufacturerCode)
+	}
+	return strings.TrimSpace(appID), nil
+}
+
 func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*BadgeDevice, int, error) {
 	var conditions []string
 	var args []interface{}
@@ -183,20 +207,20 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 		batchNo = fmt.Sprintf("BATCH-%s", time.Now().Format("20060102-150405"))
 	}
 	var manufacturerID int64
-	var appID string
 	if err := tx.QueryRow(ctx, `
-		SELECT id, COALESCE(NULLIF(app_id, ''), code)
+		SELECT id
 		FROM badge_manufacturers
 		WHERE code = $1
 		LIMIT 1
-	`, req.ManufacturerCode).Scan(&manufacturerID, &appID); err != nil {
+	`, req.ManufacturerCode).Scan(&manufacturerID); err != nil {
 		if err == pgx.ErrNoRows {
 			return 0, 0, nil, nil, fmt.Errorf("manufacturer not found: %s", req.ManufacturerCode)
 		}
 		return 0, 0, nil, nil, fmt.Errorf("failed to load manufacturer: %w", err)
 	}
-	if strings.TrimSpace(appID) == "" {
-		appID = req.ManufacturerCode
+	appID, err := s.resolveManufacturerAppID(ctx, req.ManufacturerCode)
+	if err != nil {
+		return 0, 0, nil, nil, err
 	}
 
 	success := 0

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -46,26 +47,11 @@ func respondError(w http.ResponseWriter, status int, message string) {
 func (h *Handler) RegisterFrontdeskAnalysisRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Shift analysis endpoints
-	mux.Handle("GET /api/v1/frontdesk/shift-analyses", authMw(http.HandlerFunc(h.ListFrontdeskShiftAnalyses)))
-	mux.Handle("GET /api/v1/frontdesk/shift-analyses/{id}", authMw(http.HandlerFunc(h.GetFrontdeskShiftAnalysis)))
-	mux.Handle("POST /api/v1/frontdesk/shift-analyses", authMw(http.HandlerFunc(h.CreateFrontdeskShiftAnalysis)))
-
-	// Daily report endpoints
-	mux.Handle("GET /api/v1/frontdesk/daily-reports", authMw(http.HandlerFunc(h.ListFrontdeskDailyReports)))
-	mux.Handle("GET /api/v1/frontdesk/daily-reports/{date}", authMw(http.HandlerFunc(h.GetFrontdeskDailyReport)))
-
 	// Knowledge base endpoints
 	mux.Handle("GET /api/v1/frontdesk/knowledge-bases", authMw(http.HandlerFunc(h.ListFrontdeskKnowledgeBases)))
 	mux.Handle("GET /api/v1/frontdesk/knowledge-bases/{kb_type}", authMw(http.HandlerFunc(h.GetFrontdeskKnowledgeBase)))
 	mux.Handle("POST /api/v1/frontdesk/knowledge-bases", authMw(http.HandlerFunc(h.CreateFrontdeskKnowledgeBase)))
 	mux.Handle("PUT /api/v1/frontdesk/knowledge-bases/{kb_type}", authMw(http.HandlerFunc(h.UpdateFrontdeskKnowledgeBase)))
-
-	// Weekly report endpoints
-	mux.Handle("GET /api/v1/frontdesk/weekly-reports", authMw(http.HandlerFunc(h.ListFrontdeskWeeklyReports)))
-	mux.Handle("GET /api/v1/frontdesk/weekly-reports/{date}", authMw(http.HandlerFunc(h.GetFrontdeskWeeklyReport)))
-	mux.Handle("POST /api/v1/frontdesk/weekly-reports/generate", authMw(http.HandlerFunc(h.GenerateFrontdeskWeeklyReport)))
-	mux.Handle("POST /api/v1/frontdesk/weekly-reports/publish", authMw(http.HandlerFunc(h.PublishFrontdeskWeeklyReport)))
 }
 
 // ListFrontdeskShiftAnalyses lists shift analyses for a tenant
@@ -435,6 +421,7 @@ func (h *Handler) PublishFrontdeskWeeklyReport(w http.ResponseWriter, r *http.Re
 	var req struct {
 		ReportDate     string `json:"report_date"`
 		ManagerComment string `json:"manager_comment"`
+		PublisherName  string `json:"publisher_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -447,11 +434,44 @@ func (h *Handler) PublishFrontdeskWeeklyReport(w http.ResponseWriter, r *http.Re
 
 	claims := middleware.GetUserClaims(ctx)
 	publisher := ""
-	if claims != nil {
+	if strings.TrimSpace(req.PublisherName) != "" {
+		publisher = strings.TrimSpace(req.PublisherName)
+	} else if claims != nil {
 		publisher = strconv.FormatInt(claims.UserID, 10)
 	}
 
 	report, err := h.service.PublishWeeklyReport(ctx, tenantID, req.ReportDate, req.ManagerComment, publisher)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) AddFrontdeskWeeklyReportEvidence(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tenantID, status := getFrontdeskTenantID(h, r)
+	if status != 0 {
+		respondError(w, status, "tenant_id required")
+		return
+	}
+
+	var req struct {
+		ReportDate  string `json:"report_date"`
+		RecordingID int64  `json:"recording_id"`
+		ShiftDate   string `json:"shift_date"`
+		Summary     string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.RecordingID <= 0 {
+		respondError(w, http.StatusBadRequest, "recording_id required")
+		return
+	}
+
+	report, err := h.service.AddWeeklyReportEvidence(ctx, tenantID, req.ReportDate, req.RecordingID, req.ShiftDate, req.Summary)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return

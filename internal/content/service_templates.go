@@ -14,6 +14,9 @@ type runtimeTemplateEntry struct {
 }
 
 func (s *Service) ListPromptTemplates(ctx context.Context, req TemplateListRequest, contentOnly bool) ([]TemplateResponse, int, error) {
+	if contentOnly {
+		return s.store.ListContentPromptTemplates(ctx, req)
+	}
 	_ = ctx
 	if req.Page <= 0 {
 		req.Page = 1
@@ -37,16 +40,22 @@ func (s *Service) ListPromptTemplates(ctx context.Context, req TemplateListReque
 	for _, entry := range source {
 		t := entry.Template
 		if len(req.TenantIDs) > 0 {
-			if t.TenantID == nil || !tenantIDInList(*t.TenantID, req.TenantIDs) {
+			if t.TenantID != nil && !tenantIDInList(*t.TenantID, req.TenantIDs) {
 				continue
 			}
 		} else if req.TenantID != nil {
-			if t.TenantID == nil || *t.TenantID != *req.TenantID {
+			// Include tenant-owned templates and global templates.
+			if t.TenantID != nil && *t.TenantID != *req.TenantID {
 				continue
 			}
 		}
 		if req.Category != nil {
 			if t.Category == nil || *t.Category != *req.Category {
+				continue
+			}
+		}
+		if req.FunctionType != nil {
+			if t.FunctionType == nil || *t.FunctionType != *req.FunctionType {
 				continue
 			}
 		}
@@ -82,11 +91,18 @@ func tenantIDInList(tenantID int64, tenantIDs []int64) bool {
 }
 
 func (s *Service) CreatePromptTemplate(ctx context.Context, tenantID *int64, createdBy int64, req CreateTemplateRequest, contentOnly bool) (*TemplateResponse, error) {
+	if contentOnly {
+		return s.store.CreateContentPromptTemplate(ctx, tenantID, createdBy, req)
+	}
 	_ = ctx
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if strings.TrimSpace(req.Template) == "" {
+	templateText := strings.TrimSpace(req.Template)
+	if templateText == "" && req.PromptTemplate != nil {
+		templateText = strings.TrimSpace(*req.PromptTemplate)
+	}
+	if templateText == "" {
 		return nil, fmt.Errorf("template is required")
 	}
 
@@ -110,7 +126,9 @@ func (s *Service) CreatePromptTemplate(ctx context.Context, tenantID *int64, cre
 		Name:             req.Name,
 		Description:      req.Description,
 		Category:         req.Category,
-		Template:         req.Template,
+		FunctionType:     req.FunctionType,
+		Template:         templateText,
+		PromptTemplate:   templateText,
 		Variables:        req.Variables,
 		CurrentVersion:   &currentVersion,
 		PublishedVersion: &publishedVersion,
@@ -124,7 +142,7 @@ func (s *Service) CreatePromptTemplate(ctx context.Context, tenantID *int64, cre
 		ID:          s.nextVersionID,
 		TemplateID:  id,
 		Version:     1,
-		Template:    req.Template,
+		Template:    templateText,
 		Variables:   req.Variables,
 		ChangeLog:   strPtr("initial version"),
 		IsPublished: true,
@@ -149,6 +167,9 @@ func (s *Service) CreatePromptTemplate(ctx context.Context, tenantID *int64, cre
 }
 
 func (s *Service) GetPromptTemplateByID(ctx context.Context, id int64, contentOnly bool) (*TemplateResponse, error) {
+	if contentOnly {
+		return s.store.GetContentPromptTemplateByID(ctx, id)
+	}
 	_ = ctx
 	s.templateMu.RLock()
 	defer s.templateMu.RUnlock()
@@ -162,6 +183,9 @@ func (s *Service) GetPromptTemplateByID(ctx context.Context, id int64, contentOn
 }
 
 func (s *Service) UpdatePromptTemplate(ctx context.Context, id int64, req UpdateTemplateRequest, contentOnly bool) (*TemplateResponse, error) {
+	if contentOnly {
+		return s.store.UpdateContentPromptTemplate(ctx, id, req)
+	}
 	_ = ctx
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
@@ -179,8 +203,22 @@ func (s *Service) UpdatePromptTemplate(ctx context.Context, id int64, req Update
 	if req.Category != nil {
 		entry.Template.Category = req.Category
 	}
+	if req.FunctionType != nil {
+		entry.Template.FunctionType = req.FunctionType
+	}
+	if req.PromptTemplate != nil {
+		text := strings.TrimSpace(*req.PromptTemplate)
+		if text != "" {
+			entry.Template.Template = text
+			entry.Template.PromptTemplate = text
+		}
+	}
 	if req.Template != nil {
-		entry.Template.Template = *req.Template
+		text := strings.TrimSpace(*req.Template)
+		if text != "" {
+			entry.Template.Template = text
+			entry.Template.PromptTemplate = text
+		}
 	}
 	if req.Variables != nil {
 		entry.Template.Variables = req.Variables
@@ -197,6 +235,9 @@ func (s *Service) UpdatePromptTemplate(ctx context.Context, id int64, req Update
 }
 
 func (s *Service) DeletePromptTemplate(ctx context.Context, id int64, contentOnly bool) error {
+	if contentOnly {
+		return s.store.DeleteContentPromptTemplate(ctx, id)
+	}
 	_ = ctx
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
@@ -209,6 +250,9 @@ func (s *Service) DeletePromptTemplate(ctx context.Context, id int64, contentOnl
 }
 
 func (s *Service) ClonePromptTemplate(ctx context.Context, id int64, createdBy int64, contentOnly bool) (*TemplateResponse, error) {
+	if contentOnly {
+		return s.store.CloneContentPromptTemplate(ctx, id, createdBy)
+	}
 	_ = ctx
 	s.templateMu.Lock()
 	defer s.templateMu.Unlock()
@@ -283,6 +327,7 @@ func (s *Service) CreatePromptTemplateVersion(ctx context.Context, templateID in
 
 	entry.Versions = append(entry.Versions, version)
 	entry.Template.Template = req.Template
+	entry.Template.PromptTemplate = req.Template
 	entry.Template.Variables = req.Variables
 	entry.Template.CurrentVersion = &nextVersion
 	entry.Template.UpdatedAt = now
@@ -325,6 +370,7 @@ func (s *Service) PublishPromptTemplate(ctx context.Context, templateID int64) e
 		}
 	}
 	entry.Template.Template = last.Template
+	entry.Template.PromptTemplate = last.Template
 	entry.Template.Variables = last.Variables
 	entry.Template.PublishedVersion = &last.Version
 	entry.Template.CurrentVersion = &last.Version
@@ -354,6 +400,7 @@ func (s *Service) RollbackPromptTemplate(ctx context.Context, templateID int64, 
 
 	now := time.Now().Format(time.RFC3339)
 	entry.Template.Template = target.Template
+	entry.Template.PromptTemplate = target.Template
 	entry.Template.Variables = target.Variables
 	entry.Template.CurrentVersion = &target.Version
 	entry.Template.PublishedVersion = &target.Version
@@ -369,7 +416,6 @@ func (s *Service) RollbackPromptTemplate(ctx context.Context, templateID int64, 
 }
 
 func (s *Service) TestPromptTemplate(ctx context.Context, templateID int64, contentOnly bool) (string, error) {
-	_ = ctx
 	tpl, err := s.GetPromptTemplateByID(ctx, templateID, contentOnly)
 	if err != nil {
 		return "", err
@@ -385,6 +431,24 @@ func (s *Service) TestPromptTemplate(ctx context.Context, templateID int64, cont
 }
 
 func (s *Service) PromptTemplateStats(ctx context.Context, templateID int64, contentOnly bool) (map[string]interface{}, error) {
+	if contentOnly {
+		tpl, err := s.GetPromptTemplateByID(ctx, templateID, true)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"template_id":     tpl.ID,
+			"is_active":       tpl.IsActive,
+			"is_system":       tpl.IsSystem,
+			"version":         tpl.Version,
+			"usage_count":     tpl.UsageCount,
+			"last_updated_at": tpl.UpdatedAt,
+			"variable_count":  len(tpl.Variables),
+			"business_type":   tpl.BusinessType,
+			"source_table":    tpl.SourceTable,
+			"function_type":   tpl.FunctionType,
+		}, nil
+	}
 	_ = ctx
 	s.templateMu.RLock()
 	defer s.templateMu.RUnlock()
@@ -408,18 +472,28 @@ func (s *Service) InitializeDefaultContentTemplates(ctx context.Context, tenantI
 	_ = ctx
 	defaults := []CreateTemplateRequest{
 		{
-			Code:      "content_generation_default",
-			Name:      "内容生成默认模板",
-			Category:  strPtr("content_generation"),
-			Template:  "请根据主题{{topic}}生成一篇结构化内容，目标用户是{{audience}}。",
-			Variables: []string{"topic", "audience"},
+			Code:         "content_article_default",
+			Name:         "文章生成默认模板",
+			Category:     strPtr("content_generation"),
+			FunctionType: strPtr("content_article"),
+			Template:     "请根据主题{{topic}}生成一篇结构化科普文章，目标读者是{{audience}}。",
+			Variables:    []string{"topic", "audience"},
 		},
 		{
-			Code:      "geo_optimization_default",
-			Name:      "GEO优化模板",
-			Category:  strPtr("geo_optimization"),
-			Template:  "请对以下内容进行GEO优化：{{content}}，目标关键词：{{keywords}}。",
-			Variables: []string{"content", "keywords"},
+			Code:         "content_script_default",
+			Name:         "脚本生成默认模板",
+			Category:     strPtr("content_generation"),
+			FunctionType: strPtr("content_script"),
+			Template:     "请根据主题{{topic}}生成短视频口播脚本，包含开场、核心观点、结尾行动建议。",
+			Variables:    []string{"topic"},
+		},
+		{
+			Code:         "content_graphic_note_default",
+			Name:         "图文生成默认模板",
+			Category:     strPtr("content_generation"),
+			FunctionType: strPtr("content_graphic_note"),
+			Template:     "请根据主题{{topic}}生成小红书图文笔记提纲，包含封面标题、正文分段和结尾互动。",
+			Variables:    []string{"topic"},
 		},
 	}
 

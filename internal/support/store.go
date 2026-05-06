@@ -536,6 +536,18 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 
 	conditions = append(conditions, "deleted_at IS NULL")
 
+	if req.TenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *req.TenantID)
+		argIndex++
+	}
+
+	if req.FunctionType != nil {
+		conditions = append(conditions, fmt.Sprintf("function_type = $%d", argIndex))
+		args = append(args, *req.FunctionType)
+		argIndex++
+	}
+
 	if req.Provider != nil {
 		conditions = append(conditions, fmt.Sprintf("provider = $%d", argIndex))
 		args = append(args, *req.Provider)
@@ -566,9 +578,15 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 		       COALESCE(function_type, 'general'),
 		       COALESCE(model_name, ''),
 		       COALESCE(provider, ''),
-		       COALESCE(api_endpoint, ''),
+		       COALESCE(NULLIF(api_endpoint, ''), COALESCE(api_base_url, '')),
+		       api_base_url,
 		       COALESCE(api_key, ''),
-		       COALESCE(model_params, '{}'::json),
+		       COALESCE(model_params, extra_params, '{}'::json),
+		       COALESCE(extra_params, model_params, '{}'::json),
+		       input_token_price,
+		       output_token_price,
+		       daily_limit,
+		       monthly_limit,
 		       COALESCE(is_default, false),
 		       COALESCE(is_active, true),
 		       description,
@@ -592,8 +610,8 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 	var configs []*LLMModelConfig
 	for rows.Next() {
 		var c LLMModelConfig
-		if err := rows.Scan(&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
-			&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
+			&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan LLM model config: %w", err)
 		}
 		configs = append(configs, &c)
@@ -611,9 +629,15 @@ func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelC
 		       COALESCE(function_type, 'general'),
 		       COALESCE(model_name, ''),
 		       COALESCE(provider, ''),
-		       COALESCE(api_endpoint, ''),
+		       COALESCE(NULLIF(api_endpoint, ''), COALESCE(api_base_url, '')),
+		       api_base_url,
 		       COALESCE(api_key, ''),
-		       COALESCE(model_params, '{}'::json),
+		       COALESCE(model_params, extra_params, '{}'::json),
+		       COALESCE(extra_params, model_params, '{}'::json),
+		       input_token_price,
+		       output_token_price,
+		       daily_limit,
+		       monthly_limit,
 		       COALESCE(is_default, false),
 		       COALESCE(is_active, true),
 		       description,
@@ -626,8 +650,8 @@ func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelC
 
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
-		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -642,26 +666,49 @@ func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelC
 
 // CreateLLMModelConfig creates a new LLM model config
 func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req CreateLLMModelConfigRequest) (*LLMModelConfig, error) {
+	tenantID := int64(0)
+	if req.TenantID != nil {
+		tenantID = *req.TenantID
+	}
+
 	// If this is set as default, unset other defaults
 	if req.IsDefault {
-		_, err := s.pool.Exec(ctx, "UPDATE llm_model_configs SET is_default = false WHERE is_default = true")
+		_, err := s.pool.Exec(ctx, `
+			UPDATE llm_model_configs
+			SET is_default = false
+			WHERE deleted_at IS NULL
+			  AND tenant_id = $1
+			  AND function_type = $2
+			  AND is_default = true
+		`, tenantID, req.FunctionType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unset default configs: %w", err)
 		}
 	}
 
 	query := `
-		INSERT INTO llm_model_configs (model_name, provider, api_endpoint, api_key, model_params, is_default, is_active, description, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+		INSERT INTO llm_model_configs (
+			tenant_id, model_code, function_type, model_name, provider,
+			api_endpoint, api_base_url, api_key, model_params, extra_params,
+			input_token_price, output_token_price, daily_limit, monthly_limit,
+			is_default, is_active, description, created_by, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())
 		RETURNING id,
 		          COALESCE(tenant_id, 0),
 		          COALESCE(model_code, ''),
 		          COALESCE(function_type, 'general'),
 		          COALESCE(model_name, ''),
 		          COALESCE(provider, ''),
-		          COALESCE(api_endpoint, ''),
+		          COALESCE(NULLIF(api_endpoint, ''), COALESCE(api_base_url, '')),
+		          api_base_url,
 		          COALESCE(api_key, ''),
 		          COALESCE(model_params, '{}'::json),
+		          COALESCE(extra_params, '{}'::json),
+		          input_token_price,
+		          output_token_price,
+		          daily_limit,
+		          monthly_limit,
 		          COALESCE(is_default, false),
 		          COALESCE(is_active, true),
 		          description,
@@ -670,11 +717,17 @@ func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req C
 		          updated_at
 	`
 
+	apiBaseURL := req.APIEndpoint
+	if req.APIBaseURL != nil {
+		apiBaseURL = strings.TrimSpace(*req.APIBaseURL)
+	}
+
 	var c LLMModelConfig
-	err := s.pool.QueryRow(ctx, query, req.ModelName, req.Provider, req.APIEndpoint, req.APIKey, req.ModelParams,
+	err := s.pool.QueryRow(ctx, query, tenantID, req.ModelCode, req.FunctionType, req.ModelName, req.Provider, req.APIEndpoint, apiBaseURL, req.APIKey, req.ModelParams, req.ExtraParams,
+		req.InputTokenPrice, req.OutputTokenPrice, req.DailyLimit, req.MonthlyLimit,
 		req.IsDefault, req.IsActive, req.Description, createdBy).Scan(
-		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
-		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err != nil {
@@ -690,9 +743,33 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 	var args []interface{}
 	argIndex := 1
 
+	if req.TenantID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *req.TenantID)
+		argIndex++
+	}
+
+	if req.ModelCode != nil {
+		setClauses = append(setClauses, fmt.Sprintf("model_code = $%d", argIndex))
+		args = append(args, *req.ModelCode)
+		argIndex++
+	}
+
+	if req.FunctionType != nil {
+		setClauses = append(setClauses, fmt.Sprintf("function_type = $%d", argIndex))
+		args = append(args, *req.FunctionType)
+		argIndex++
+	}
+
 	if req.ModelName != nil {
 		setClauses = append(setClauses, fmt.Sprintf("model_name = $%d", argIndex))
 		args = append(args, *req.ModelName)
+		argIndex++
+	}
+
+	if req.Provider != nil {
+		setClauses = append(setClauses, fmt.Sprintf("provider = $%d", argIndex))
+		args = append(args, *req.Provider)
 		argIndex++
 	}
 
@@ -700,6 +777,20 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		setClauses = append(setClauses, fmt.Sprintf("api_endpoint = $%d", argIndex))
 		args = append(args, *req.APIEndpoint)
 		argIndex++
+		setClauses = append(setClauses, fmt.Sprintf("api_base_url = $%d", argIndex))
+		args = append(args, *req.APIEndpoint)
+		argIndex++
+	}
+
+	if req.APIBaseURL != nil {
+		setClauses = append(setClauses, fmt.Sprintf("api_base_url = $%d", argIndex))
+		args = append(args, *req.APIBaseURL)
+		argIndex++
+		if req.APIEndpoint == nil {
+			setClauses = append(setClauses, fmt.Sprintf("api_endpoint = $%d", argIndex))
+			args = append(args, *req.APIBaseURL)
+			argIndex++
+		}
 	}
 
 	if req.APIKey != nil {
@@ -711,6 +802,50 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 	if req.ModelParams != nil {
 		setClauses = append(setClauses, fmt.Sprintf("model_params = $%d", argIndex))
 		args = append(args, req.ModelParams)
+		argIndex++
+		setClauses = append(setClauses, fmt.Sprintf("extra_params = $%d", argIndex))
+		args = append(args, req.ModelParams)
+		argIndex++
+	}
+
+	if req.ExtraParams != nil {
+		setClauses = append(setClauses, fmt.Sprintf("extra_params = $%d", argIndex))
+		args = append(args, req.ExtraParams)
+		argIndex++
+		if req.ModelParams == nil {
+			setClauses = append(setClauses, fmt.Sprintf("model_params = $%d", argIndex))
+			args = append(args, req.ExtraParams)
+			argIndex++
+		}
+	}
+
+	if req.InputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("input_token_price = $%d", argIndex))
+		args = append(args, *req.InputTokenPrice)
+		argIndex++
+	}
+
+	if req.OutputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("output_token_price = $%d", argIndex))
+		args = append(args, *req.OutputTokenPrice)
+		argIndex++
+	}
+
+	if req.DailyLimit != nil {
+		setClauses = append(setClauses, fmt.Sprintf("daily_limit = $%d", argIndex))
+		args = append(args, *req.DailyLimit)
+		argIndex++
+	}
+
+	if req.MonthlyLimit != nil {
+		setClauses = append(setClauses, fmt.Sprintf("monthly_limit = $%d", argIndex))
+		args = append(args, *req.MonthlyLimit)
+		argIndex++
+	}
+
+	if req.IsDefault != nil {
+		setClauses = append(setClauses, fmt.Sprintf("is_default = $%d", argIndex))
+		args = append(args, *req.IsDefault)
 		argIndex++
 	}
 
@@ -730,6 +865,38 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		return s.GetLLMModelConfigByID(ctx, id)
 	}
 
+	if req.IsDefault != nil && *req.IsDefault {
+		targetTenantID := int64(0)
+		targetFunctionType := "general"
+		if err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(tenant_id, 0), COALESCE(function_type, 'general')
+			FROM llm_model_configs
+			WHERE id = $1 AND deleted_at IS NULL
+		`, id).Scan(&targetTenantID, &targetFunctionType); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, fmt.Errorf("LLM model config not found")
+			}
+			return nil, fmt.Errorf("failed to load target config scope: %w", err)
+		}
+		if req.TenantID != nil {
+			targetTenantID = *req.TenantID
+		}
+		if req.FunctionType != nil && strings.TrimSpace(*req.FunctionType) != "" {
+			targetFunctionType = strings.TrimSpace(*req.FunctionType)
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE llm_model_configs
+			SET is_default = false
+			WHERE deleted_at IS NULL
+			  AND tenant_id = $1
+			  AND function_type = $2
+			  AND id <> $3
+			  AND is_default = true
+		`, targetTenantID, targetFunctionType, id); err != nil {
+			return nil, fmt.Errorf("failed to unset scoped default configs: %w", err)
+		}
+	}
+
 	setClauses = append(setClauses, "updated_at = NOW()")
 	args = append(args, id)
 
@@ -743,9 +910,15 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		          COALESCE(function_type, 'general'),
 		          COALESCE(model_name, ''),
 		          COALESCE(provider, ''),
-		          COALESCE(api_endpoint, ''),
+		          COALESCE(NULLIF(api_endpoint, ''), COALESCE(api_base_url, '')),
+		          api_base_url,
 		          COALESCE(api_key, ''),
-		          COALESCE(model_params, '{}'::json),
+		          COALESCE(model_params, extra_params, '{}'::json),
+		          COALESCE(extra_params, model_params, '{}'::json),
+		          input_token_price,
+		          output_token_price,
+		          daily_limit,
+		          monthly_limit,
 		          COALESCE(is_default, false),
 		          COALESCE(is_active, true),
 		          description,
@@ -756,8 +929,8 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIKey, &c.ModelParams,
-		&c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -799,10 +972,30 @@ func (s *Store) SetDefaultLLMModelConfig(ctx context.Context, id int64) error {
 	}
 	defer tx.Rollback(ctx)
 
-	// Unset all defaults
-	_, err = tx.Exec(ctx, "UPDATE llm_model_configs SET is_default = false WHERE is_default = true")
+	var tenantID int64
+	var functionType string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(tenant_id, 0), COALESCE(function_type, 'general')
+		FROM llm_model_configs
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id).Scan(&tenantID, &functionType); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("LLM model config not found")
+		}
+		return fmt.Errorf("failed to load target config scope: %w", err)
+	}
+
+	// Unset defaults in the same scope only (tenant + function_type).
+	_, err = tx.Exec(ctx, `
+		UPDATE llm_model_configs
+		SET is_default = false
+		WHERE deleted_at IS NULL
+		  AND tenant_id = $1
+		  AND function_type = $2
+		  AND is_default = true
+	`, tenantID, functionType)
 	if err != nil {
-		return fmt.Errorf("failed to unset default configs: %w", err)
+		return fmt.Errorf("failed to unset scoped default configs: %w", err)
 	}
 
 	// Set new default

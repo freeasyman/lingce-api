@@ -1,9 +1,16 @@
 package badge
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
 )
@@ -12,6 +19,10 @@ type Service struct {
 	store            *Store
 	employeeStore    *employee.Store
 	middlewareClient *MiddlewareClient
+	workerURL        string
+	workerToken      string
+	httpClient       *http.Client
+	notifier         *TicketEmailNotifier
 }
 
 func NewService(store *Store, employeeStore *employee.Store) *Service {
@@ -19,14 +30,27 @@ func NewService(store *Store, employeeStore *employee.Store) *Service {
 		store:            store,
 		employeeStore:    employeeStore,
 		middlewareClient: NewMiddlewareClient("", ""),
+		httpClient:       &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-func NewServiceWithMiddleware(store *Store, employeeStore *employee.Store, middlewareURL, middlewareToken string) *Service {
+func NewServiceWithMiddleware(
+	store *Store,
+	employeeStore *employee.Store,
+	middlewareURL,
+	middlewareToken,
+	workerURL,
+	workerToken string,
+	notifier *TicketEmailNotifier,
+) *Service {
 	return &Service{
 		store:            store,
 		employeeStore:    employeeStore,
 		middlewareClient: NewMiddlewareClient(middlewareURL, middlewareToken),
+		workerURL:        strings.TrimRight(strings.TrimSpace(workerURL), "/"),
+		workerToken:      strings.TrimSpace(workerToken),
+		httpClient:       &http.Client{Timeout: 15 * time.Second},
+		notifier:         notifier,
 	}
 }
 
@@ -160,7 +184,13 @@ func (s *Service) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, oper
 // Ticket Services
 
 // CreateTicket creates a ticket
-func (s *Service) CreateTicket(ctx context.Context, submitterID int64, req TicketSubmitRequest) (*TicketResponse, error) {
+func (s *Service) CreateTicket(
+	ctx context.Context,
+	submitterID int64,
+	requesterTenantID *int64,
+	enforceTenantMatch bool,
+	req TicketSubmitRequest,
+) (*TicketResponse, error) {
 	// Validate request
 	if req.Type == "" {
 		return nil, fmt.Errorf("type is required")
@@ -171,11 +201,35 @@ func (s *Service) CreateTicket(ctx context.Context, submitterID int64, req Ticke
 	if req.Description == "" {
 		return nil, fmt.Errorf("description is required")
 	}
+	if enforceTenantMatch {
+		if requesterTenantID == nil || *requesterTenantID <= 0 {
+			return nil, fmt.Errorf("tenant_id is required")
+		}
+		if req.DeviceID != nil {
+			device, err := s.store.GetDeviceByID(ctx, *req.DeviceID)
+			if err != nil {
+				return nil, err
+			}
+			if device.TenantID == nil || *device.TenantID != *requesterTenantID {
+				return nil, fmt.Errorf("device does not belong to current tenant")
+			}
+		} else if req.DeviceNo != nil && strings.TrimSpace(*req.DeviceNo) != "" {
+			device, err := s.store.GetDeviceByDeviceNo(ctx, strings.TrimSpace(*req.DeviceNo))
+			if err != nil {
+				return nil, err
+			}
+			if device.TenantID == nil || *device.TenantID != *requesterTenantID {
+				return nil, fmt.Errorf("device does not belong to current tenant")
+			}
+		}
+		req.TenantID = requesterTenantID
+	}
 
 	ticket, err := s.store.CreateTicket(ctx, submitterID, req)
 	if err != nil {
 		return nil, err
 	}
+	s.notifyTicketCreated(ticket)
 
 	return toTicketResponse(ticket), nil
 }
@@ -222,8 +276,23 @@ func (s *Service) ReviewTicket(ctx context.Context, id, reviewerID int64, approv
 }
 
 // ExecuteTicket executes a ticket
-func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, notes *string) error {
-	return s.store.ExecuteTicket(ctx, id, executorID, notes)
+func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, success bool, notes *string) error {
+	return s.store.ExecuteTicket(ctx, id, executorID, success, notes)
+}
+
+func (s *Service) notifyTicketCreated(ticket *BadgeTicket) {
+	if s.notifier == nil || ticket == nil {
+		return
+	}
+	go func(t BadgeTicket) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.notifier.SendTicketCreated(ctx, &t); err != nil {
+			slog.Warn("failed to send badge ticket notification email", "ticket_id", t.ID, "ticket_no", t.TicketNo, "error", err)
+			return
+		}
+		slog.Info("badge ticket notification email sent", "ticket_id", t.ID, "ticket_no", t.TicketNo)
+	}(*ticket)
 }
 
 // GetDashboardSummary retrieves dashboard summary
@@ -248,7 +317,17 @@ func (s *Service) controlRecording(ctx context.Context, action, deviceNo string,
 		return fmt.Errorf("device_no is required")
 	}
 
-	if err := s.middlewareClient.ControlRecording(ctx, action, deviceNo, operatorID, extraData); err != nil {
+	err := s.middlewareClient.ControlRecording(ctx, action, deviceNo, operatorID, extraData)
+	if err != nil && shouldRetryRecordingControl(err) {
+		// Start/stop may hit transient upstream timeout from vendor API; retry with short backoff.
+		time.Sleep(800 * time.Millisecond)
+		err = s.middlewareClient.ControlRecording(ctx, action, deviceNo, operatorID, extraData)
+		if err != nil && shouldRetryRecordingControl(err) {
+			time.Sleep(1500 * time.Millisecond)
+			err = s.middlewareClient.ControlRecording(ctx, action, deviceNo, operatorID, extraData)
+		}
+	}
+	if err != nil {
 		msg := err.Error()
 		if logErr := s.store.CreateRecordingControlLog(ctx, deviceNo, action, "failed", operatorID, &msg, extraData); logErr != nil {
 			return fmt.Errorf("badge-middleware call failed: %v; failed to create recording control log: %w", err, logErr)
@@ -257,6 +336,20 @@ func (s *Service) controlRecording(ctx context.Context, action, deviceNo string,
 	}
 
 	return s.store.CreateRecordingControlLog(ctx, deviceNo, action, "success", operatorID, nil, extraData)
+}
+
+func shouldRetryRecordingControl(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "client.timeout exceeded") ||
+		strings.Contains(msg, "timeout")
 }
 
 // ListRecordingControlLogs retrieves a paginated list of recording control logs
@@ -285,6 +378,14 @@ func (s *Service) ListRecordingControlLogs(ctx context.Context, req RecordingCon
 	return responses, total, nil
 }
 
+func (s *Service) GetLatestAudioEventStatus(ctx context.Context, deviceNo string) (bool, bool, error) {
+	deviceNo = strings.TrimSpace(deviceNo)
+	if deviceNo == "" {
+		return false, false, fmt.Errorf("device_no is required")
+	}
+	return s.store.GetLatestAudioEventStatus(ctx, deviceNo)
+}
+
 // CreateCallbackLog stores callback event as a recording-control log record.
 func (s *Service) CreateCallbackLog(ctx context.Context, payload CallbackPayload, source string) error {
 	extra := payload.Data
@@ -300,7 +401,66 @@ func (s *Service) CreateCallbackLog(ctx context.Context, payload CallbackPayload
 		extra["device_id"] = device.ID
 	}
 
-	return s.store.CreateRecordingControlLog(ctx, payload.DeviceNo, "callback", "success", nil, nil, extra)
+	if err := s.store.CreateRecordingControlLog(ctx, payload.DeviceNo, "callback", "success", nil, nil, extra); err != nil {
+		return err
+	}
+
+	// Callback-main flow: AUDIO callback enters recording pipeline immediately.
+	if !isAudioCallback(payload) {
+		return nil
+	}
+	ingestResult, err := s.store.UpsertRecordingFromAudioCallback(ctx, payload)
+	if err != nil {
+		return err
+	}
+	if ingestResult == nil {
+		return nil
+	}
+	if err := s.enqueueTranscribeJob(ctx, ingestResult.RecordingID, ingestResult.TenantID); err != nil {
+		// Non-blocking: keep callback success and let scanner fallback pick queued jobs.
+		slog.Warn("failed to enqueue worker transcribe job from audio callback",
+			"recording_id", ingestResult.RecordingID,
+			"tenant_id", ingestResult.TenantID,
+			"error", err,
+		)
+	}
+	return nil
+}
+
+func (s *Service) enqueueTranscribeJob(ctx context.Context, recordingID, tenantID int64) error {
+	if recordingID <= 0 || tenantID <= 0 {
+		return nil
+	}
+	if s.workerURL == "" {
+		return fmt.Errorf("recording worker url is not configured")
+	}
+
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"recording_id": recordingID,
+		"tenant_id":    tenantID,
+		"job_type":     "transcribe",
+	})
+	if err != nil {
+		return fmt.Errorf("marshal worker job request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.workerURL+"/v1/jobs", bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("create worker request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.workerToken != "" {
+		req.Header.Set("X-Internal-Token", s.workerToken)
+		req.Header.Set("Authorization", "Bearer "+s.workerToken)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("call recording worker: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("recording worker status=%d", resp.StatusCode)
+	}
+	return nil
 }
 
 // Manufacturer Services
@@ -398,6 +558,10 @@ func toDeviceResponse(d *BadgeDevice) *DeviceResponse {
 
 // toTicketResponse converts a BadgeTicket to TicketResponse
 func toTicketResponse(t *BadgeTicket) *TicketResponse {
+	submitterName := ""
+	if t.SubmitterName != nil {
+		submitterName = *t.SubmitterName
+	}
 	resp := &TicketResponse{
 		ID:            t.ID,
 		TicketNo:      t.TicketNo,
@@ -406,15 +570,15 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		DeviceID:      t.DeviceID,
 		DeviceNo:      t.DeviceNo,
 		TenantID:      t.TenantID,
-		TenantName:    nil, // TODO: Join with tenants table
+		TenantName:    t.TenantName,
 		EmployeeID:    t.EmployeeID,
-		EmployeeName:  nil, // TODO: Join with employees table
+		EmployeeName:  t.EmployeeName,
 		SubmitterID:   t.SubmitterID,
-		SubmitterName: "", // TODO: Join with users table
+		SubmitterName: submitterName,
 		ReviewerID:    t.ReviewerID,
-		ReviewerName:  nil, // TODO: Join with users table
+		ReviewerName:  t.ReviewerName,
 		ExecutorID:    t.ExecutorID,
-		ExecutorName:  nil, // TODO: Join with users table
+		ExecutorName:  t.ExecutorName,
 		Title:         t.Title,
 		Description:   t.Description,
 		ReviewNotes:   t.ReviewNotes,

@@ -77,13 +77,11 @@ make run
 ### 生产部署
 
 ```bash
-# 交叉编译
-make build-linux
+# 一键部署（编译 + 上传 + 重启 + 健康检查 + 失败回滚）
+bash scripts/deploy.sh
 
-# 部署为 systemd 服务
-scp bin/lingce-api server:/opt/lingce-api/
-scp deploy/lingce-api.service server:/etc/systemd/system/
-systemctl enable --now lingce-api
+# 指定目标机器（可选）
+DEPLOY_HOST=root@8.140.246.26 bash scripts/deploy.sh
 ```
 
 ## 项目结构

@@ -636,6 +636,23 @@ func (s *Service) V2SyncManufacturer(ctx context.Context, code string) (JSONObje
 	if manufacturerID == 0 {
 		return nil, fmt.Errorf("manufacturer not found: %s", code)
 	}
+	manufacturerAppID, err := s.store.resolveManufacturerAppID(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.pool.Exec(ctx, `
+		UPDATE badge_devices
+		SET app_id = $2, updated_at = NOW()
+		WHERE manufacturer_code = $1
+		  AND deleted_at IS NULL
+		  AND (
+		    app_id IS NULL OR
+		    TRIM(app_id) = '' OR
+		    LOWER(TRIM(app_id)) = LOWER($1)
+		  )
+	`, code, manufacturerAppID); err != nil {
+		return nil, fmt.Errorf("failed to repair manufacturer app_id mapping: %w", err)
+	}
 
 	type existingDevice struct {
 		ID           int64
@@ -730,14 +747,15 @@ func (s *Service) V2SyncManufacturer(ctx context.Context, code string) (JSONObje
 			_, err = s.store.pool.Exec(ctx, `
 				UPDATE badge_devices
 				SET manufacturer_id = $2,
-				    manufacturer_name = $3,
-				    hardware_model = NULLIF($4, ''),
-				    battery_level = $5,
-				    last_online_at = $6,
-				    health_status = $7,
+				    app_id = $3,
+				    manufacturer_name = $4,
+				    hardware_model = NULLIF($5, ''),
+				    battery_level = $6,
+				    last_online_at = $7,
+				    health_status = $8,
 				    updated_at = NOW()
 				WHERE id = $1
-			`, existing.ID, manufacturerID, manufacturerName, targetHardware, item.BatteryLevel, item.LastOnlineAt, normalizeHealthStatus(healthStatus))
+			`, existing.ID, manufacturerID, manufacturerAppID, manufacturerName, targetHardware, item.BatteryLevel, item.LastOnlineAt, normalizeHealthStatus(healthStatus))
 			if err != nil {
 				failedCount++
 				failedItems = append(failedItems, JSONObject{
@@ -755,7 +773,7 @@ func (s *Service) V2SyncManufacturer(ctx context.Context, code string) (JSONObje
 		}
 
 		deviceUID := fmt.Sprintf("%s:%d:%s", code, manufacturerID, deviceNo)
-		err = tryInsertVendorDevice(ctx, s, manufacturerID, code, deviceNo, deviceUID, manufacturerName, item.HardwareModel, normalizeHealthStatus(healthStatus), item.BatteryLevel, item.LastOnlineAt)
+		err = tryInsertVendorDevice(ctx, s, manufacturerID, code, manufacturerAppID, deviceNo, deviceUID, manufacturerName, item.HardwareModel, normalizeHealthStatus(healthStatus), item.BatteryLevel, item.LastOnlineAt)
 		if err != nil {
 			failedCount++
 			failedItems = append(failedItems, JSONObject{
@@ -854,6 +872,7 @@ func tryInsertVendorDevice(
 	s *Service,
 	manufacturerID int64,
 	code string,
+	appID string,
 	deviceNo string,
 	deviceUID string,
 	manufacturerName string,
@@ -877,7 +896,7 @@ func tryInsertVendorDevice(
 				$8, $9, $10,
 				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
-		`, manufacturerID, code, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
+		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
 		return err
 	}
 
@@ -896,7 +915,7 @@ func tryInsertVendorDevice(
 				$9, $10, $11, $12,
 				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
-		`, manufacturerID, code, deviceNo, deviceUID, currentStatus, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
+		`, manufacturerID, appID, deviceNo, deviceUID, currentStatus, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
 		return err
 	}
 

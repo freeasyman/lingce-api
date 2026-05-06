@@ -17,6 +17,18 @@ type Store struct {
 
 const defaultTenantAdminPassword = "123456"
 
+var defaultTenantDepartments = []struct {
+	Name        string
+	Code        string
+	DefaultRole string
+}{
+	{Name: "医疗部", Code: "medical_department", DefaultRole: "doctor"},
+	{Name: "运营部", Code: "operations_department", DefaultRole: "operating_manager"},
+	{Name: "市场部", Code: "marketing_department", DefaultRole: "marketing_manager"},
+	{Name: "咨询部", Code: "consulting_department", DefaultRole: "consultant"},
+	{Name: "客服部", Code: "service_department", DefaultRole: "customer_service"},
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -286,6 +298,8 @@ func (s *Store) ensureInstitutionRolesForTenantTx(ctx context.Context, tx pgx.Tx
 		       COALESCE(r.created_at, NOW()),
 		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
 		FROM inst_roles r
+		WHERE lower(COALESCE(r.code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+		  AND COALESCE(r.name_cn, '') <> '联调角色225052已编辑'
 		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
 		DO UPDATE SET
 		    name = EXCLUDED.name,
@@ -310,25 +324,46 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 	}
 	phone := strings.TrimSpace(derefString(req.ContactPhone))
 	email := strings.TrimSpace(derefString(req.ContactEmail))
-	username, phoneValue, err := s.resolveUniqueEmployeeIdentityTx(ctx, tx, tenantID, baseUsername, phone)
-	if err != nil {
-		return err
+	if phone == "" {
+		return fmt.Errorf("contact_phone is required for default tenant admin")
+	}
+	username := baseUsername
+
+	var dupPhoneCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM employees
+		WHERE phone = $1 AND deleted_at IS NULL
+	`, phone).Scan(&dupPhoneCount); err != nil {
+		return fmt.Errorf("failed to check duplicate admin phone: %w", err)
+	}
+	if dupPhoneCount > 0 {
+		return fmt.Errorf("contact phone '%s' already exists", phone)
+	}
+
+	var dupUsernameCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM employees
+		WHERE username = $1 AND deleted_at IS NULL
+	`, username).Scan(&dupUsernameCount); err != nil {
+		return fmt.Errorf("failed to check duplicate admin username: %w", err)
+	}
+	if dupUsernameCount > 0 {
+		return fmt.Errorf("default admin username '%s' already exists", username)
 	}
 
 	passwordHashBytes, err := bcrypt.GenerateFromPassword([]byte(defaultTenantAdminPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash default tenant admin password: %w", err)
 	}
-	departmentName := "默认部门"
-	departmentCode := "default_department"
-	var departmentID int64
-	err = tx.QueryRow(ctx, `
-		INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
-		RETURNING id
-	`, tenantID, departmentName, departmentCode).Scan(&departmentID)
+	departmentIDs, err := s.ensureDefaultDepartmentsTx(ctx, tx, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to create default department: %w", err)
+		return err
+	}
+	adminDepartmentID, ok := departmentIDs["运营部"]
+	if !ok {
+		return fmt.Errorf("failed to resolve default operations department")
 	}
 
 	var employeeID int64
@@ -336,7 +371,7 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4::varchar, $5::text, $6, $7, $8, 1, NOW(), NOW())
 		RETURNING id
-	`, tenantID, username, string(passwordHashBytes), fullName, fullName, phoneValue, email, departmentID).Scan(&employeeID)
+	`, tenantID, username, string(passwordHashBytes), fullName, fullName, phone, email, adminDepartmentID).Scan(&employeeID)
 	if err != nil {
 		return fmt.Errorf("failed to create default tenant admin employee: %w", err)
 	}
@@ -368,16 +403,87 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 	if err != nil {
 		return fmt.Errorf("failed to assign tenant admin role: %w", err)
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
-		VALUES ($1, $2, true, NOW())
-		ON CONFLICT (department_id) DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default
-	`, departmentID, adminRoleID)
-	if err != nil {
-		return fmt.Errorf("failed to assign default department role: %w", err)
+	roleIDByCode := map[string]int64{
+		"admin": adminRoleID,
+	}
+	for _, item := range defaultTenantDepartments {
+		roleCode := strings.TrimSpace(item.DefaultRole)
+		if roleCode == "" {
+			continue
+		}
+		if _, exists := roleIDByCode[roleCode]; exists {
+			continue
+		}
+		var roleID int64
+		roleErr := tx.QueryRow(ctx, `
+			SELECT id
+			FROM institution_roles
+			WHERE tenant_id = $1 AND lower(code) = lower($2) AND deleted_at IS NULL
+			ORDER BY id DESC
+			LIMIT 1
+		`, tenantID, roleCode).Scan(&roleID)
+		if roleErr == nil {
+			roleIDByCode[roleCode] = roleID
+		}
+	}
+	for _, item := range defaultTenantDepartments {
+		departmentID, exists := departmentIDs[item.Name]
+		if !exists {
+			continue
+		}
+		roleID, roleExists := roleIDByCode[item.DefaultRole]
+		if !roleExists {
+			roleID = adminRoleID
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
+			VALUES ($1, $2, true, NOW())
+			ON CONFLICT (department_id) DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default
+		`, departmentID, roleID)
+		if err != nil {
+			return fmt.Errorf("failed to assign default role for department %s: %w", item.Name, err)
+		}
 	}
 
 	return nil
+}
+
+func (s *Store) ensureDefaultDepartmentsTx(ctx context.Context, tx pgx.Tx, tenantID int64) (map[string]int64, error) {
+	result := make(map[string]int64, len(defaultTenantDepartments))
+	for _, item := range defaultTenantDepartments {
+		var departmentID int64
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM departments
+			WHERE tenant_id = $1
+			  AND deleted_at IS NULL
+			  AND (code = $2 OR name = $3)
+			ORDER BY id ASC
+			LIMIT 1
+		`, tenantID, item.Code, item.Name).Scan(&departmentID)
+		if err == pgx.ErrNoRows {
+			err = tx.QueryRow(ctx, `
+				INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
+				VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
+				RETURNING id
+			`, tenantID, item.Name, item.Code).Scan(&departmentID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create default department %s: %w", item.Name, err)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to query default department %s: %w", item.Name, err)
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE departments
+				SET name = $1, code = $2, is_active = true, updated_at = NOW()
+				WHERE id = $3
+			`, item.Name, item.Code, departmentID); err != nil {
+				return nil, fmt.Errorf("failed to refresh default department %s: %w", item.Name, err)
+			}
+		}
+		result[item.Name] = departmentID
+	}
+	return result, nil
 }
 
 func (s *Store) resolveUniqueEmployeeIdentityTx(ctx context.Context, tx pgx.Tx, tenantID int64, baseUsername, phone string) (string, string, error) {

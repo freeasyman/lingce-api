@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -213,9 +214,26 @@ func (s *Service) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigLis
 		return nil, 0, err
 	}
 
+	tenantIDs := make([]int64, 0, len(configs))
+	seenTenant := make(map[int64]struct{}, len(configs))
+	for _, c := range configs {
+		if c == nil {
+			continue
+		}
+		if _, ok := seenTenant[c.TenantID]; ok {
+			continue
+		}
+		seenTenant[c.TenantID] = struct{}{}
+		tenantIDs = append(tenantIDs, c.TenantID)
+	}
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, tenantIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	responses := make([]*LLMModelConfigResponse, len(configs))
 	for i, c := range configs {
-		responses[i] = toLLMModelConfigResponse(c)
+		responses[i] = toLLMModelConfigResponse(c, tenantNameMap)
 	}
 
 	return responses, total, nil
@@ -228,19 +246,28 @@ func (s *Service) GetLLMModelConfig(ctx context.Context, id int64) (*LLMModelCon
 		return nil, err
 	}
 
-	return toLLMModelConfigResponse(config), nil
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, []int64{config.TenantID})
+	if err != nil {
+		return nil, err
+	}
+	return toLLMModelConfigResponse(config, tenantNameMap), nil
 }
 
 // CreateLLMModelConfig creates a new LLM model config
 func (s *Service) CreateLLMModelConfig(ctx context.Context, createdBy int64, req CreateLLMModelConfigRequest) (*LLMModelConfigResponse, error) {
+	normalizeCreateLLMModelConfigRequest(&req)
+
 	// Validate request
-	if req.ModelName == "" {
-		return nil, fmt.Errorf("model_name is required")
+	if strings.TrimSpace(req.ModelCode) == "" {
+		return nil, fmt.Errorf("model_code is required")
 	}
 	if req.Provider == "" {
 		return nil, fmt.Errorf("provider is required")
 	}
-	if req.APIEndpoint == "" {
+	if strings.TrimSpace(req.FunctionType) == "" {
+		return nil, fmt.Errorf("function_type is required")
+	}
+	if strings.TrimSpace(req.APIEndpoint) == "" {
 		return nil, fmt.Errorf("api_endpoint is required")
 	}
 	if req.APIKey == "" {
@@ -252,17 +279,27 @@ func (s *Service) CreateLLMModelConfig(ctx context.Context, createdBy int64, req
 		return nil, err
 	}
 
-	return toLLMModelConfigResponse(config), nil
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, []int64{config.TenantID})
+	if err != nil {
+		return nil, err
+	}
+	return toLLMModelConfigResponse(config, tenantNameMap), nil
 }
 
 // UpdateLLMModelConfig updates an LLM model config
 func (s *Service) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLLMModelConfigRequest) (*LLMModelConfigResponse, error) {
+	normalizeUpdateLLMModelConfigRequest(&req)
+
 	config, err := s.store.UpdateLLMModelConfig(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
 
-	return toLLMModelConfigResponse(config), nil
+	tenantNameMap, err := s.store.GetTenantNameMap(ctx, []int64{config.TenantID})
+	if err != nil {
+		return nil, err
+	}
+	return toLLMModelConfigResponse(config, tenantNameMap), nil
 }
 
 // DeleteLLMModelConfig deletes an LLM model config
@@ -737,21 +774,99 @@ func toOperationLogResponse(l *OperationLog) *OperationLogResponse {
 }
 
 // toLLMModelConfigResponse converts an LLMModelConfig to LLMModelConfigResponse
-func toLLMModelConfigResponse(c *LLMModelConfig) *LLMModelConfigResponse {
+func toLLMModelConfigResponse(c *LLMModelConfig, tenantNameMap map[int64]string) *LLMModelConfigResponse {
+	tenantName := tenantNameMap[c.TenantID]
+	if tenantName == "" {
+		if c.TenantID == 0 {
+			tenantName = "全局配置"
+		} else {
+			tenantName = "租户#" + strconv.FormatInt(c.TenantID, 10)
+		}
+	}
 	return &LLMModelConfigResponse{
-		ID:           c.ID,
-		TenantID:     c.TenantID,
-		ModelCode:    c.ModelCode,
-		FunctionType: c.FunctionType,
-		ModelName:    c.ModelName,
-		Provider:     c.Provider,
-		APIEndpoint:  c.APIEndpoint,
-		ModelParams:  c.ModelParams,
-		IsDefault:    c.IsDefault,
-		IsActive:     c.IsActive,
-		Description:  c.Description,
-		CreatedAt:    c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:    c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:               c.ID,
+		TenantID:         c.TenantID,
+		TenantName:       &tenantName,
+		ModelCode:        c.ModelCode,
+		FunctionType:     c.FunctionType,
+		ModelName:        c.ModelName,
+		Provider:         c.Provider,
+		APIEndpoint:      c.APIEndpoint,
+		APIBaseURL:       c.APIBaseURL,
+		ModelParams:      c.ModelParams,
+		ExtraParams:      c.ExtraParams,
+		InputTokenPrice:  c.InputTokenPrice,
+		OutputTokenPrice: c.OutputTokenPrice,
+		DailyLimit:       c.DailyLimit,
+		MonthlyLimit:     c.MonthlyLimit,
+		IsDefault:        c.IsDefault,
+		IsActive:         c.IsActive,
+		Description:      c.Description,
+		CreatedAt:        c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:        c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+func normalizeCreateLLMModelConfigRequest(req *CreateLLMModelConfigRequest) {
+	if req == nil {
+		return
+	}
+	if req.TenantID == nil {
+		tid := int64(0)
+		req.TenantID = &tid
+	}
+	req.ModelCode = strings.TrimSpace(req.ModelCode)
+	req.FunctionType = strings.TrimSpace(req.FunctionType)
+	if req.FunctionType == "" {
+		req.FunctionType = "general"
+	}
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.ModelName = strings.TrimSpace(req.ModelName)
+	req.APIEndpoint = strings.TrimSpace(req.APIEndpoint)
+	if req.APIEndpoint == "" && req.APIBaseURL != nil {
+		req.APIEndpoint = strings.TrimSpace(*req.APIBaseURL)
+	}
+	if len(req.ModelParams) == 0 && len(req.ExtraParams) > 0 {
+		req.ModelParams = req.ExtraParams
+	}
+	if req.ModelCode == "" {
+		req.ModelCode = strings.TrimSpace(req.ModelName)
+	}
+}
+
+func normalizeUpdateLLMModelConfigRequest(req *UpdateLLMModelConfigRequest) {
+	if req == nil {
+		return
+	}
+	if req.ModelCode != nil {
+		trimmed := strings.TrimSpace(*req.ModelCode)
+		req.ModelCode = &trimmed
+	}
+	if req.FunctionType != nil {
+		trimmed := strings.TrimSpace(*req.FunctionType)
+		req.FunctionType = &trimmed
+	}
+	if req.Provider != nil {
+		trimmed := strings.TrimSpace(*req.Provider)
+		req.Provider = &trimmed
+	}
+	if req.ModelName != nil {
+		trimmed := strings.TrimSpace(*req.ModelName)
+		req.ModelName = &trimmed
+	}
+	if req.APIEndpoint != nil {
+		trimmed := strings.TrimSpace(*req.APIEndpoint)
+		req.APIEndpoint = &trimmed
+	}
+	if req.APIBaseURL != nil {
+		trimmed := strings.TrimSpace(*req.APIBaseURL)
+		req.APIBaseURL = &trimmed
+		if (req.APIEndpoint == nil || strings.TrimSpace(*req.APIEndpoint) == "") && trimmed != "" {
+			req.APIEndpoint = &trimmed
+		}
+	}
+	if len(req.ModelParams) == 0 && len(req.ExtraParams) > 0 {
+		req.ModelParams = req.ExtraParams
 	}
 }
 

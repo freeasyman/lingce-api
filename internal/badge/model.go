@@ -15,7 +15,7 @@ type BadgeDevice struct {
 	ManufacturerName   *string    `json:"manufacturer_name,omitempty"`
 	Model              *string    `json:"model,omitempty"`
 	HardwareModel      *string    `json:"hardware_model,omitempty"`
-	Status             string     `json:"status"` // "pending_acceptance", "pending_assignment", "in_use", "maintenance", "retired"
+	Status             string     `json:"status"` // "pending", "ready", "in_use", "blocked", "retired"
 	HealthStatus       string     `json:"health_status"`
 	HealthCheckResult  JSONObject `json:"health_check_result,omitempty"`
 	TenantID           *int64     `json:"tenant_id,omitempty"`
@@ -23,6 +23,8 @@ type BadgeDevice struct {
 	EmployeeID         *int64     `json:"employee_id,omitempty"`
 	EmployeeName       *string    `json:"employee_name,omitempty"`
 	EmployeePhone      *string    `json:"employee_phone,omitempty"`
+	DepartmentID       *int64     `json:"department_id,omitempty"`
+	DepartmentName     *string    `json:"department_name,omitempty"`
 	AssignedAt         *time.Time `json:"assigned_at,omitempty"`
 	AcceptedAt         *time.Time `json:"accepted_at,omitempty"`
 	AssignedToTenantAt *time.Time `json:"assigned_to_tenant_at,omitempty"`
@@ -71,28 +73,33 @@ type BadgeDeviceLifecycleLog struct {
 
 // BadgeTicket represents a badge ticket
 type BadgeTicket struct {
-	ID           int64      `json:"id"`
-	TicketNo     string     `json:"ticket_no"`
-	Type         string     `json:"type"`   // "maintenance", "replacement", "reclaim", "exception"
-	Status       string     `json:"status"` // "pending", "approved", "rejected", "executing", "completed", "cancelled"
-	DeviceID     *int64     `json:"device_id,omitempty"`
-	DeviceNo     *string    `json:"device_no,omitempty"`
-	TenantID     *int64     `json:"tenant_id,omitempty"`
-	EmployeeID   *int64     `json:"employee_id,omitempty"`
-	SubmitterID  int64      `json:"submitter_id"`
-	ReviewerID   *int64     `json:"reviewer_id,omitempty"`
-	ExecutorID   *int64     `json:"executor_id,omitempty"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	ReviewNotes  *string    `json:"review_notes,omitempty"`
-	ExecuteNotes *string    `json:"execute_notes,omitempty"`
-	SubmittedAt  time.Time  `json:"submitted_at"`
-	ReviewedAt   *time.Time `json:"reviewed_at,omitempty"`
-	ExecutedAt   *time.Time `json:"executed_at,omitempty"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	ExtraData    JSONObject `json:"extra_data,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID            int64      `json:"id"`
+	TicketNo      string     `json:"ticket_no"`
+	Type          string     `json:"type"`   // "maintenance", "replacement", "reclaim", "exception"
+	Status        string     `json:"status"` // "pending", "approved", "rejected", "executing", "completed", "cancelled"
+	DeviceID      *int64     `json:"device_id,omitempty"`
+	DeviceNo      *string    `json:"device_no,omitempty"`
+	TenantID      *int64     `json:"tenant_id,omitempty"`
+	TenantName    *string    `json:"tenant_name,omitempty"`
+	EmployeeID    *int64     `json:"employee_id,omitempty"`
+	EmployeeName  *string    `json:"employee_name,omitempty"`
+	SubmitterID   int64      `json:"submitter_id"`
+	SubmitterName *string    `json:"submitter_name,omitempty"`
+	ReviewerID    *int64     `json:"reviewer_id,omitempty"`
+	ReviewerName  *string    `json:"reviewer_name,omitempty"`
+	ExecutorID    *int64     `json:"executor_id,omitempty"`
+	ExecutorName  *string    `json:"executor_name,omitempty"`
+	Title         string     `json:"title"`
+	Description   string     `json:"description"`
+	ReviewNotes   *string    `json:"review_notes,omitempty"`
+	ExecuteNotes  *string    `json:"execute_notes,omitempty"`
+	SubmittedAt   time.Time  `json:"submitted_at"`
+	ReviewedAt    *time.Time `json:"reviewed_at,omitempty"`
+	ExecutedAt    *time.Time `json:"executed_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	ExtraData     JSONObject `json:"extra_data,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // BadgeManufacturer represents a badge manufacturer
@@ -145,7 +152,7 @@ type BadgeVendorPoolDevice struct {
 	ID               int64      `json:"id"`
 	DeviceNo         string     `json:"device_no"`
 	ManufacturerCode string     `json:"manufacturer_code"`
-	Status           string     `json:"status"` // "in_pool", "accepted", "exception"
+	Status           string     `json:"status"` // "in_pool", "active", "exception"
 	Model            *string    `json:"model,omitempty"`
 	FirmwareVersion  *string    `json:"firmware_version,omitempty"`
 	LastSyncAt       *time.Time `json:"last_sync_at,omitempty"`

@@ -3,6 +3,7 @@ package badge
 import "time"
 
 type V2DeviceListRequest struct {
+	TenantID         *int64
 	Status           *string
 	HealthStatus     *string
 	ManufacturerCode *string

@@ -30,6 +30,9 @@ type ContentItem struct {
 	ID            int64      `json:"id"`
 	TenantID      int64      `json:"tenant_id"`
 	TopicID       *int64     `json:"topic_id,omitempty"`
+	ContentType   *string    `json:"content_type,omitempty"`
+	Platform      *string    `json:"platform,omitempty"`
+	CreatorName   *string    `json:"creator_name,omitempty"`
 	Title         string     `json:"title"`
 	Content       string     `json:"content"`
 	Summary       *string    `json:"summary,omitempty"`
@@ -55,7 +58,7 @@ type ContentPublishTask struct {
 	TenantID    int64      `json:"tenant_id"`
 	ContentID   int64      `json:"content_id"`
 	Platform    string     `json:"platform"` // "wechat", "douyin", "xiaohongshu", etc.
-	Status      string     `json:"status"` // "pending", "processing", "completed", "failed", "cancelled"
+	Status      string     `json:"status"`   // "pending", "processing", "completed", "failed", "cancelled"
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 	PublishedAt *time.Time `json:"published_at,omitempty"`
 	ErrorMsg    *string    `json:"error_msg,omitempty"`
@@ -87,22 +90,22 @@ type ContentSeed struct {
 
 // PromptTemplate represents a prompt template
 type PromptTemplate struct {
-	ID              int64      `json:"id"`
-	TenantID        *int64     `json:"tenant_id,omitempty"` // NULL for global templates
-	Code            string     `json:"code"`
-	Name            string     `json:"name"`
-	Description     *string    `json:"description,omitempty"`
-	Category        *string    `json:"category,omitempty"`
-	Template        string     `json:"template"`
-	Variables       []string   `json:"variables,omitempty"`
-	CurrentVersion  *int       `json:"current_version,omitempty"`
-	PublishedVersion *int      `json:"published_version,omitempty"`
-	IsActive        bool       `json:"is_active"`
-	ExtraData       JSONObject `json:"extra_data,omitempty"`
-	CreatedBy       int64      `json:"created_by"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
+	ID               int64      `json:"id"`
+	TenantID         *int64     `json:"tenant_id,omitempty"` // NULL for global templates
+	Code             string     `json:"code"`
+	Name             string     `json:"name"`
+	Description      *string    `json:"description,omitempty"`
+	Category         *string    `json:"category,omitempty"`
+	Template         string     `json:"template"`
+	Variables        []string   `json:"variables,omitempty"`
+	CurrentVersion   *int       `json:"current_version,omitempty"`
+	PublishedVersion *int       `json:"published_version,omitempty"`
+	IsActive         bool       `json:"is_active"`
+	ExtraData        JSONObject `json:"extra_data,omitempty"`
+	CreatedBy        int64      `json:"created_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
 }
 
 // PromptTemplateVersion represents a prompt template version

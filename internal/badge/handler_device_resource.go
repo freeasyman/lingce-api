@@ -5,13 +5,34 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
+var shanghaiLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
+}()
+
+func parseDate(dateStr string) (time.Time, error) {
+	return time.ParseInLocation("2006-01-02", dateStr, shanghaiLocation)
+}
+
 func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
 	req := V2DeviceListRequest{Realtime: true}
+
+	// For institution users, filter by their tenant_id
+	// For admin/operation users, allow viewing all devices
+	if claims != nil && claims.TenantID != nil && *claims.TenantID > 0 {
+		req.TenantID = claims.TenantID
+	}
+
 	if v := r.URL.Query().Get("status"); v != "" {
 		req.Status = &v
 	}
@@ -299,4 +320,54 @@ func (h *Handler) V2SyncManufacturer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetRecordingStats(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	// Parse date parameters
+	startDateStr := r.URL.Query().Get("start_date")
+	endDateStr := r.URL.Query().Get("end_date")
+	if startDateStr == "" || endDateStr == "" {
+		httputil.WriteBadRequest(w, "start_date and end_date are required")
+		return
+	}
+
+	startDate, err := parseDate(startDateStr)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid start_date format, expected YYYY-MM-DD")
+		return
+	}
+
+	endDate, err := parseDate(endDateStr)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid end_date format, expected YYYY-MM-DD")
+		return
+	}
+	if endDate.Before(startDate) {
+		httputil.WriteBadRequest(w, "end_date must be on or after start_date")
+		return
+	}
+	// Treat end_date as inclusive day boundary for frontend date filters.
+	endDateExclusive := endDate.AddDate(0, 0, 1)
+
+	// Get tenant ID from claims
+	if claims.TenantID == nil || *claims.TenantID == 0 {
+		httputil.WriteBadRequest(w, "tenant_id not found in token")
+		return
+	}
+	tenantID := *claims.TenantID
+
+	// Get recording stats
+	stats, err := h.service.store.GetRecordingStats(r.Context(), tenantID, startDate, endDateExclusive)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, stats)
 }

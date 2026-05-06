@@ -96,13 +96,15 @@ func (s *Service) GetDepartmentPerformance(ctx context.Context, departmentID int
 // toDepartmentResponse converts a Department to DepartmentResponse
 func toDepartmentResponse(d *Department) *DepartmentResponse {
 	return &DepartmentResponse{
-		ID:        d.ID,
-		TenantID:  d.TenantID,
-		Name:      d.Name,
-		Code:      d.Code,
-		ParentID:  d.ParentID,
-		IsActive:  d.IsActive,
-		CreatedAt: d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: d.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:              d.ID,
+		TenantID:        d.TenantID,
+		Name:            d.Name,
+		Code:            d.Code,
+		ParentID:        d.ParentID,
+		IsActive:        d.IsActive,
+		DefaultRoleCode: d.DefaultRoleCode,
+		DefaultRoleName: d.DefaultRoleName,
+		CreatedAt:       d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:       d.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -92,6 +93,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	mux.Handle("GET /api/v1/badge-devices/export", authMw(http.HandlerFunc(h.V2ExportDevices)))
 	mux.Handle("GET /api/v1/badge-devices/dashboard", authMw(http.HandlerFunc(h.V2Dashboard)))
+	mux.Handle("GET /api/v1/badge-devices/recording-stats", authMw(http.HandlerFunc(h.GetRecordingStats)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-overview", authMw(http.HandlerFunc(h.GetTenantDeviceOverview)))
 	mux.Handle("GET /api/v1/badge-devices/tenant-employees", authMw(http.HandlerFunc(h.ListTenantEmployees)))
 
@@ -386,7 +388,13 @@ func (h *Handler) SubmitTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticket, err := h.service.CreateTicket(r.Context(), claims.UserID, req)
+	ticket, err := h.service.CreateTicket(
+		r.Context(),
+		claims.UserID,
+		claims.TenantID,
+		claims.UserType != auth.UserTypeAdmin,
+		req,
+	)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -432,9 +440,19 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 
 	if typeStr := r.URL.Query().Get("type"); typeStr != "" {
 		req.Type = &typeStr
+	} else if ticketType := r.URL.Query().Get("ticket_type"); ticketType != "" {
+		req.Type = &ticketType
 	}
 
 	if status := r.URL.Query().Get("status"); status != "" {
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "submitted", "reviewing":
+			status = "pending"
+		case "processing":
+			status = "approved"
+		case "done":
+			status = "completed"
+		}
 		req.Status = &status
 	}
 
@@ -445,7 +463,12 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 
 	// Admin can view all tickets, employees can only view their tenant's tickets
 	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
+		if claims.TenantID != nil && *claims.TenantID > 0 {
+			req.TenantID = claims.TenantID
+		} else {
+			// Fallback for tokens without effective tenant_id.
+			req.SubmitterID = &claims.UserID
+		}
 	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
 		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
 		req.TenantID = &tenantID
@@ -453,6 +476,11 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize <= 0 {
+		if limit, _ := strconv.Atoi(r.URL.Query().Get("limit")); limit > 0 {
+			pageSize = limit
+		}
+	}
 	req.Page = page
 	req.PageSize = pageSize
 
@@ -520,7 +548,16 @@ func (h *Handler) ReviewTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.ReviewTicket(r.Context(), id, claims.UserID, req.Approved, req.Notes); err != nil {
+	approved := req.Approved
+	if req.Approve != nil {
+		approved = *req.Approve
+	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.ReviewNote
+	}
+
+	if err := h.service.ReviewTicket(r.Context(), id, claims.UserID, approved, notes); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -554,7 +591,16 @@ func (h *Handler) ExecuteTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, req.Notes); err != nil {
+	success := true
+	if req.Success != nil {
+		success = *req.Success
+	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.ResultMessage
+	}
+
+	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, success, notes); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}

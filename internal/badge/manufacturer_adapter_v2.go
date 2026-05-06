@@ -84,6 +84,44 @@ func (a *middlewareManufacturerAdapter) GetBatteryLevel(ctx context.Context, dev
 	return nil, nil
 }
 
+func (a *middlewareManufacturerAdapter) GetDeviceRealtimeInfo(ctx context.Context, deviceNo string) (*DeviceRealtimeInfo, error) {
+	path := fmt.Sprintf("/v1/devices/%s?vendor_code=%s", url.PathEscape(deviceNo), url.QueryEscape(a.vendorCode))
+	status, data, err := a.requestJSON(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		if status == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	info := &DeviceRealtimeInfo{}
+
+	// Parse online status
+	if v, ok := readBoolField(data, "online", "is_online"); ok {
+		info.Online = v
+	} else if v, ok := readIntField(data, "online_status", "onlineStatus"); ok {
+		info.Online = v == 1
+	} else if v, ok := readStringField(data, "status", "online_status"); ok {
+		info.Online = strings.EqualFold(v, "online")
+	}
+
+	// Parse last online time
+	info.LastOnlineAt = readTimeField(data, "last_seen_at", "last_online_at", "online_at", "updated_at")
+
+	// Parse battery level
+	if level, ok := readIntField(data, "remain_power", "battery_level", "battery", "power"); ok {
+		info.BatteryLevel = &level
+	}
+
+	// Parse hardware model
+	if model, ok := readStringField(data, "hardware_model", "model", "device_model"); ok {
+		info.HardwareModel = model
+	}
+
+	return info, nil
+}
+
+
 func (a *middlewareManufacturerAdapter) StartRecording(ctx context.Context, deviceNo string) error {
 	return a.client.ControlRecording(ctx, recordingActionStart, deviceNo, nil, JSONObject{
 		"vendor_code": a.vendorCode,

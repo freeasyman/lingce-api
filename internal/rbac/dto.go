@@ -239,3 +239,16 @@ type EmployeeRoleResponse struct {
 type SetEmployeeRoleRequest struct {
 	RoleID int64 `json:"role_id"`
 }
+
+// DepartmentRoleResponse represents a department default role response.
+type DepartmentRoleResponse struct {
+	DepartmentID int64                     `json:"department_id"`
+	Roles        []InstitutionRoleResponse `json:"roles"`
+}
+
+// SetDepartmentRoleRequest represents a request to set department default role.
+type SetDepartmentRoleRequest struct {
+	RoleID         *int64  `json:"role_id,omitempty"`
+	RoleCode       *string `json:"role_code,omitempty"`
+	UpdateExisting bool    `json:"update_existing"`
+}

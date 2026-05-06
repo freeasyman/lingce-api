@@ -122,49 +122,78 @@ type UserActivityCount struct {
 
 // LLMModelConfigListRequest represents the request for listing LLM model configs
 type LLMModelConfigListRequest struct {
-	Provider *string `json:"provider,omitempty"`
-	IsActive *bool   `json:"is_active,omitempty"`
-	Page     int     `json:"page"`
-	PageSize int     `json:"page_size"`
+	TenantID     *int64  `json:"tenant_id,omitempty"`
+	FunctionType *string `json:"function_type,omitempty"`
+	Provider     *string `json:"provider,omitempty"`
+	IsActive     *bool   `json:"is_active,omitempty"`
+	Page         int     `json:"page"`
+	PageSize     int     `json:"page_size"`
 }
 
 // CreateLLMModelConfigRequest represents the request for creating LLM model config
 type CreateLLMModelConfigRequest struct {
-	ModelName   string     `json:"model_name"`
-	Provider    string     `json:"provider"`
-	APIEndpoint string     `json:"api_endpoint"`
-	APIKey      string     `json:"api_key"`
-	ModelParams JSONObject `json:"model_params,omitempty"`
-	IsDefault   bool       `json:"is_default"`
-	IsActive    bool       `json:"is_active"`
-	Description *string    `json:"description,omitempty"`
+	TenantID         *int64     `json:"tenant_id,omitempty"`
+	ModelCode        string     `json:"model_code,omitempty"`
+	FunctionType     string     `json:"function_type,omitempty"`
+	ModelName        string     `json:"model_name"`
+	Provider         string     `json:"provider"`
+	APIEndpoint      string     `json:"api_endpoint"`
+	APIBaseURL       *string    `json:"api_base_url,omitempty"`
+	APIKey           string     `json:"api_key"`
+	ModelParams      JSONObject `json:"model_params,omitempty"`
+	ExtraParams      JSONObject `json:"extra_params,omitempty"`
+	InputTokenPrice  *float64   `json:"input_token_price,omitempty"`
+	OutputTokenPrice *float64   `json:"output_token_price,omitempty"`
+	DailyLimit       *int       `json:"daily_limit,omitempty"`
+	MonthlyLimit     *int       `json:"monthly_limit,omitempty"`
+	IsDefault        bool       `json:"is_default"`
+	IsActive         bool       `json:"is_active"`
+	Description      *string    `json:"description,omitempty"`
 }
 
 // UpdateLLMModelConfigRequest represents the request for updating LLM model config
 type UpdateLLMModelConfigRequest struct {
-	ModelName   *string    `json:"model_name,omitempty"`
-	APIEndpoint *string    `json:"api_endpoint,omitempty"`
-	APIKey      *string    `json:"api_key,omitempty"`
-	ModelParams JSONObject `json:"model_params,omitempty"`
-	IsActive    *bool      `json:"is_active,omitempty"`
-	Description *string    `json:"description,omitempty"`
+	TenantID         *int64     `json:"tenant_id,omitempty"`
+	ModelCode        *string    `json:"model_code,omitempty"`
+	FunctionType     *string    `json:"function_type,omitempty"`
+	ModelName        *string    `json:"model_name,omitempty"`
+	Provider         *string    `json:"provider,omitempty"`
+	APIEndpoint      *string    `json:"api_endpoint,omitempty"`
+	APIBaseURL       *string    `json:"api_base_url,omitempty"`
+	APIKey           *string    `json:"api_key,omitempty"`
+	ModelParams      JSONObject `json:"model_params,omitempty"`
+	ExtraParams      JSONObject `json:"extra_params,omitempty"`
+	InputTokenPrice  *float64   `json:"input_token_price,omitempty"`
+	OutputTokenPrice *float64   `json:"output_token_price,omitempty"`
+	DailyLimit       *int       `json:"daily_limit,omitempty"`
+	MonthlyLimit     *int       `json:"monthly_limit,omitempty"`
+	IsDefault        *bool      `json:"is_default,omitempty"`
+	IsActive         *bool      `json:"is_active,omitempty"`
+	Description      *string    `json:"description,omitempty"`
 }
 
 // LLMModelConfigResponse represents an LLM model config response
 type LLMModelConfigResponse struct {
-	ID           int64      `json:"id"`
-	TenantID     int64      `json:"tenant_id"`
-	ModelCode    string     `json:"model_code"`
-	FunctionType string     `json:"function_type"`
-	ModelName    string     `json:"model_name"`
-	Provider     string     `json:"provider"`
-	APIEndpoint  string     `json:"api_endpoint"`
-	ModelParams  JSONObject `json:"model_params,omitempty"`
-	IsDefault    bool       `json:"is_default"`
-	IsActive     bool       `json:"is_active"`
-	Description  *string    `json:"description,omitempty"`
-	CreatedAt    string     `json:"created_at"`
-	UpdatedAt    string     `json:"updated_at"`
+	ID               int64      `json:"id"`
+	TenantID         int64      `json:"tenant_id"`
+	TenantName       *string    `json:"tenant_name,omitempty"`
+	ModelCode        string     `json:"model_code"`
+	FunctionType     string     `json:"function_type"`
+	ModelName        string     `json:"model_name"`
+	Provider         string     `json:"provider"`
+	APIEndpoint      string     `json:"api_endpoint"`
+	APIBaseURL       *string    `json:"api_base_url,omitempty"`
+	ModelParams      JSONObject `json:"model_params,omitempty"`
+	ExtraParams      JSONObject `json:"extra_params,omitempty"`
+	InputTokenPrice  *float64   `json:"input_token_price,omitempty"`
+	OutputTokenPrice *float64   `json:"output_token_price,omitempty"`
+	DailyLimit       *int       `json:"daily_limit,omitempty"`
+	MonthlyLimit     *int       `json:"monthly_limit,omitempty"`
+	IsDefault        bool       `json:"is_default"`
+	IsActive         bool       `json:"is_active"`
+	Description      *string    `json:"description,omitempty"`
+	CreatedAt        string     `json:"created_at"`
+	UpdatedAt        string     `json:"updated_at"`
 }
 
 // LLM Call Record DTOs

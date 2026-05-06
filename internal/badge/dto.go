@@ -78,6 +78,7 @@ type TicketSubmitRequest struct {
 	Type        string     `json:"type"`
 	DeviceID    *int64     `json:"device_id,omitempty"`
 	DeviceNo    *string    `json:"device_no,omitempty"`
+	TenantID    *int64     `json:"-"`
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	ExtraData   JSONObject `json:"extra_data,omitempty"`
@@ -126,13 +127,17 @@ type TicketResponse struct {
 
 // TicketReviewRequest represents ticket review request
 type TicketReviewRequest struct {
-	Approved bool    `json:"approved"`
-	Notes    *string `json:"notes,omitempty"`
+	Approved   bool    `json:"approved"`
+	Notes      *string `json:"notes,omitempty"`
+	Approve    *bool   `json:"approve,omitempty"`     // backward-compatible field
+	ReviewNote *string `json:"review_note,omitempty"` // backward-compatible field
 }
 
 // TicketExecuteRequest represents ticket execute request
 type TicketExecuteRequest struct {
-	Notes *string `json:"notes,omitempty"`
+	Notes         *string `json:"notes,omitempty"`
+	Success       *bool   `json:"success,omitempty"`        // backward-compatible field
+	ResultMessage *string `json:"result_message,omitempty"` // backward-compatible field
 }
 
 // DashboardSummaryResponse represents dashboard summary
@@ -280,4 +285,57 @@ type LifecycleLogResponse struct {
 	Notes        *string    `json:"notes,omitempty"`
 	ExtraData    JSONObject `json:"extra_data,omitempty"`
 	CreatedAt    string     `json:"created_at"`
+}
+
+// Recording Stats DTOs
+
+// RecordingStatsResponse represents the complete recording statistics response
+type RecordingStatsResponse struct {
+	Summary     RecordingStatsSummary `json:"summary"`
+	DailyTrends []DailyTrend          `json:"daily_trends"`
+	ByDevice    []DeviceStats         `json:"by_device"`
+	ByEmployee  []EmployeeStats       `json:"by_employee"`
+}
+
+// RecordingStatsSummary represents summary statistics
+type RecordingStatsSummary struct {
+	TotalRecordings              int `json:"total_recordings"`
+	ActiveDeviceCount            int `json:"active_device_count"`
+	TotalDeviceCount             int `json:"total_device_count"`
+	ActiveEmployeeCount          int `json:"active_employee_count"`
+	TotalEmployeeCount           int `json:"total_employee_count"`
+	AvgDurationSeconds           int `json:"avg_duration_seconds"`
+	PrevPeriodAvgDurationSeconds int `json:"prev_period_avg_duration_seconds"`
+}
+
+// DailyTrend represents daily recording trend
+type DailyTrend struct {
+	Date                 string `json:"date"`
+	RecordingCount       int    `json:"recording_count"`
+	ActiveDeviceCount    int    `json:"active_device_count"`
+	TotalDurationSeconds int    `json:"total_duration_seconds"`
+}
+
+// DeviceStats represents per-device statistics
+type DeviceStats struct {
+	DeviceID             int64   `json:"device_id"`
+	DeviceNo             string  `json:"device_no"`
+	EmployeeID           *int64  `json:"employee_id,omitempty"`
+	EmployeeName         *string `json:"employee_name,omitempty"`
+	RecordingCount       int     `json:"recording_count"`
+	TotalDurationSeconds int     `json:"total_duration_seconds"`
+	LastRecordingAt      *string `json:"last_recording_at,omitempty"`
+	IsOnline             bool    `json:"is_online"`
+}
+
+// EmployeeStats represents per-employee statistics
+type EmployeeStats struct {
+	EmployeeID      int64   `json:"employee_id"`
+	EmployeeName    string  `json:"employee_name"`
+	Department      *string `json:"department,omitempty"`
+	DeviceID        *int64  `json:"device_id,omitempty"`
+	DeviceNo        *string `json:"device_no,omitempty"`
+	RecordingCount  int     `json:"recording_count"`
+	RecordingDays   int     `json:"recording_days"`
+	LastRecordingAt *string `json:"last_recording_at,omitempty"`
 }

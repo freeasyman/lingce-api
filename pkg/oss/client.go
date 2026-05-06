@@ -95,3 +95,20 @@ func (c *Client) GetSignedURL(objectKey string, expireSeconds int64) (string, er
 	}
 	return url, nil
 }
+
+// ObjectURL builds public object URL for the configured bucket.
+func (c *Client) ObjectURL(objectKey string) string {
+	return fmt.Sprintf("https://%s.%s/%s", c.bucket.BucketName, c.bucket.Client.Config.Endpoint, objectKey)
+}
+
+// CopyObject copies an object inside the same bucket and returns target URL.
+func (c *Client) CopyObject(ctx context.Context, sourceObjectKey, targetObjectKey string) (string, error) {
+	_ = ctx
+	if sourceObjectKey == "" || targetObjectKey == "" {
+		return "", fmt.Errorf("sourceObjectKey and targetObjectKey are required")
+	}
+	if _, err := c.bucket.CopyObject(sourceObjectKey, targetObjectKey); err != nil {
+		return "", fmt.Errorf("failed to copy object: %w", err)
+	}
+	return c.ObjectURL(targetObjectKey), nil
+}

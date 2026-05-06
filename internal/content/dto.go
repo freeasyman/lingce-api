@@ -139,6 +139,9 @@ type ContentResponse struct {
 	ID            int64      `json:"id"`
 	TenantID      int64      `json:"tenant_id"`
 	TopicID       *int64     `json:"topic_id,omitempty"`
+	ContentType   *string    `json:"content_type,omitempty"`
+	Platform      *string    `json:"platform,omitempty"`
+	CreatorName   *string    `json:"creator_name,omitempty"`
 	Title         string     `json:"title"`
 	Content       string     `json:"content"`
 	Summary       *string    `json:"summary,omitempty"`
@@ -159,36 +162,61 @@ type ContentResponse struct {
 
 // CreateContentRequest represents create content request
 type CreateContentRequest struct {
-	TopicID   *int64     `json:"topic_id,omitempty"`
-	Title     string     `json:"title"`
-	Content   string     `json:"content"`
-	Summary   *string    `json:"summary,omitempty"`
-	Category  *string    `json:"category,omitempty"`
-	Tags      []string   `json:"tags,omitempty"`
-	Images    []string   `json:"images,omitempty"`
-	ExtraData JSONObject `json:"extra_data,omitempty"`
+	TopicID         *int64     `json:"topic_id,omitempty"`
+	ContentType     *string    `json:"content_type,omitempty"`
+	Platform        *string    `json:"platform,omitempty"`
+	Title           string     `json:"title"`
+	Content         string     `json:"content"`
+	Summary         *string    `json:"summary,omitempty"`
+	Subtitle        *string    `json:"subtitle,omitempty"`
+	ScriptStructure JSONObject `json:"script_structure,omitempty"`
+	NoteStructure   JSONObject `json:"note_structure,omitempty"`
+	Category        *string    `json:"category,omitempty"`
+	Tags            []string   `json:"tags,omitempty"`
+	Images          []string   `json:"images,omitempty"`
+	ExtraData       JSONObject `json:"extra_data,omitempty"`
 }
 
 // UpdateContentRequest represents update content request
 type UpdateContentRequest struct {
-	Title     *string    `json:"title,omitempty"`
-	Content   *string    `json:"content,omitempty"`
-	Summary   *string    `json:"summary,omitempty"`
-	Category  *string    `json:"category,omitempty"`
-	Tags      []string   `json:"tags,omitempty"`
-	Status    *string    `json:"status,omitempty"`
-	Images    []string   `json:"images,omitempty"`
-	ExtraData JSONObject `json:"extra_data,omitempty"`
+	Title           *string    `json:"title,omitempty"`
+	Content         *string    `json:"content,omitempty"`
+	Summary         *string    `json:"summary,omitempty"`
+	Subtitle        *string    `json:"subtitle,omitempty"`
+	ContentType     *string    `json:"content_type,omitempty"`
+	Platform        *string    `json:"platform,omitempty"`
+	ScriptStructure JSONObject `json:"script_structure,omitempty"`
+	NoteStructure   JSONObject `json:"note_structure,omitempty"`
+	Category        *string    `json:"category,omitempty"`
+	Tags            []string   `json:"tags,omitempty"`
+	Status          *string    `json:"status,omitempty"`
+	Images          []string   `json:"images,omitempty"`
+	ExtraData       JSONObject `json:"extra_data,omitempty"`
 }
 
 // GenerateContentRequest represents AI content generation request
 type GenerateContentRequest struct {
-	TopicID   *int64     `json:"topic_id,omitempty"`
-	Title     string     `json:"title"`
-	Context   *string    `json:"context,omitempty"`
-	Style     *string    `json:"style,omitempty"`
-	Length    *int       `json:"length,omitempty"`
-	ExtraData JSONObject `json:"extra_data,omitempty"`
+	TopicID       *int64     `json:"topic_id,omitempty"`
+	SeedID        *int64     `json:"seed_id,omitempty"`
+	Title         string     `json:"title"`
+	ContentType   *string    `json:"content_type,omitempty"`
+	Platform      *string    `json:"platform,omitempty"`
+	Context       *string    `json:"context,omitempty"`
+	Style         *string    `json:"style,omitempty"`
+	Length        *int       `json:"length,omitempty"`
+	WordCount     *int       `json:"word_count,omitempty"`
+	Duration      *int       `json:"duration,omitempty"`
+	Subtitle      *string    `json:"subtitle,omitempty"`
+	ScriptType    *string    `json:"script_type,omitempty"`
+	SlideCount    *int       `json:"slide_count,omitempty"`
+	NoteStyle     *string    `json:"note_style,omitempty"`
+	IncludeExpert *bool      `json:"include_expert,omitempty"`
+	IncludeKnowledge *bool   `json:"include_knowledge,omitempty"`
+	AdditionalRequirements *string `json:"additional_requirements,omitempty"`
+	StrategyText  *string    `json:"strategy_text,omitempty"`
+	SelectedTitle *string    `json:"selected_headline,omitempty"`
+	PromptTemplateID *int64  `json:"prompt_template_id,omitempty"`
+	ExtraData     JSONObject `json:"extra_data,omitempty"`
 }
 
 // Publish Task DTOs
@@ -305,12 +333,14 @@ type SeedStatsResponse struct {
 
 // TemplateListRequest represents the request for listing templates
 type TemplateListRequest struct {
-	TenantID  *int64  `json:"tenant_id,omitempty"`
-	TenantIDs []int64 `json:"tenant_ids,omitempty"`
-	Category  *string `json:"category,omitempty"`
-	IsActive  *bool   `json:"is_active,omitempty"`
-	Page      int     `json:"page"`
-	PageSize  int     `json:"page_size"`
+	TenantID     *int64  `json:"tenant_id,omitempty"`
+	TenantIDs    []int64 `json:"tenant_ids,omitempty"`
+	Search       *string `json:"search,omitempty"`
+	Category     *string `json:"category,omitempty"`
+	FunctionType *string `json:"function_type,omitempty"`
+	IsActive     *bool   `json:"is_active,omitempty"`
+	Page         int     `json:"page"`
+	PageSize     int     `json:"page_size"`
 }
 
 // TemplateResponse represents template response
@@ -321,11 +351,18 @@ type TemplateResponse struct {
 	Name             string     `json:"name"`
 	Description      *string    `json:"description,omitempty"`
 	Category         *string    `json:"category,omitempty"`
+	FunctionType     *string    `json:"function_type,omitempty"`
 	Template         string     `json:"template"`
+	PromptTemplate   string     `json:"prompt_template"`
 	Variables        []string   `json:"variables,omitempty"`
 	CurrentVersion   *int       `json:"current_version,omitempty"`
 	PublishedVersion *int       `json:"published_version,omitempty"`
 	IsActive         bool       `json:"is_active"`
+	IsSystem         bool       `json:"is_system"`
+	UsageCount       int        `json:"usage_count"`
+	Version          *string    `json:"version,omitempty"`
+	BusinessType     *string    `json:"business_type,omitempty"`
+	SourceTable      *string    `json:"source_table,omitempty"`
 	ExtraData        JSONObject `json:"extra_data,omitempty"`
 	CreatedBy        int64      `json:"created_by"`
 	CreatedAt        string     `json:"created_at"`
@@ -334,24 +371,30 @@ type TemplateResponse struct {
 
 // CreateTemplateRequest represents create template request
 type CreateTemplateRequest struct {
-	Code        string     `json:"code"`
-	Name        string     `json:"name"`
-	Description *string    `json:"description,omitempty"`
-	Category    *string    `json:"category,omitempty"`
-	Template    string     `json:"template"`
-	Variables   []string   `json:"variables,omitempty"`
-	ExtraData   JSONObject `json:"extra_data,omitempty"`
+	Code           string     `json:"code"`
+	Name           string     `json:"name"`
+	Description    *string    `json:"description,omitempty"`
+	Category       *string    `json:"category,omitempty"`
+	FunctionType   *string    `json:"function_type,omitempty"`
+	Version        *string    `json:"version,omitempty"`
+	Template       string     `json:"template"`
+	PromptTemplate *string    `json:"prompt_template,omitempty"`
+	Variables      []string   `json:"variables,omitempty"`
+	ExtraData      JSONObject `json:"extra_data,omitempty"`
 }
 
 // UpdateTemplateRequest represents update template request
 type UpdateTemplateRequest struct {
-	Name        *string    `json:"name,omitempty"`
-	Description *string    `json:"description,omitempty"`
-	Category    *string    `json:"category,omitempty"`
-	Template    *string    `json:"template,omitempty"`
-	Variables   []string   `json:"variables,omitempty"`
-	IsActive    *bool      `json:"is_active,omitempty"`
-	ExtraData   JSONObject `json:"extra_data,omitempty"`
+	Name           *string    `json:"name,omitempty"`
+	Description    *string    `json:"description,omitempty"`
+	Category       *string    `json:"category,omitempty"`
+	FunctionType   *string    `json:"function_type,omitempty"`
+	Version        *string    `json:"version,omitempty"`
+	Template       *string    `json:"template,omitempty"`
+	PromptTemplate *string    `json:"prompt_template,omitempty"`
+	Variables      []string   `json:"variables,omitempty"`
+	IsActive       *bool      `json:"is_active,omitempty"`
+	ExtraData      JSONObject `json:"extra_data,omitempty"`
 }
 
 // CreateVersionRequest represents create version request

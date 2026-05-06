@@ -93,7 +93,7 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 // GetEmployeeByUsername retrieves an employee by username and tenant
 func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tenantID int64) (*Employee, error) {
 	query := `
-		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
 		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
@@ -113,6 +113,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 		&emp.ID,
 		&emp.TenantID,
 		&emp.Username,
+		&emp.Name,
 		&emp.PasswordHash,
 		&emp.FullName,
 		&emp.Phone,
@@ -138,7 +139,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 // GetEmployeeByLoginAnyTenant retrieves an employee by login id without tenant restriction.
 func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string) (*Employee, error) {
 	query := `
-		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
 		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
@@ -159,6 +160,7 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 		&emp.ID,
 		&emp.TenantID,
 		&emp.Username,
+		&emp.Name,
 		&emp.PasswordHash,
 		&emp.FullName,
 		&emp.Phone,
@@ -217,7 +219,7 @@ func (s *Store) ListEmployeeTenantOptionsByLoginID(ctx context.Context, loginID 
 // GetEmployeeByPhone retrieves an employee by phone
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `
-		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
 		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
@@ -237,6 +239,7 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 		&emp.ID,
 		&emp.TenantID,
 		&emp.Username,
+		&emp.Name,
 		&emp.PasswordHash,
 		&emp.FullName,
 		&emp.Phone,
@@ -262,7 +265,7 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 // GetEmployeeByID retrieves an employee by ID
 func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employee, error) {
 	query := `
-		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, e.password_hash,
+		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
 		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
@@ -281,6 +284,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 		&emp.ID,
 		&emp.TenantID,
 		&emp.Username,
+		&emp.Name,
 		&emp.PasswordHash,
 		&emp.FullName,
 		&emp.Phone,

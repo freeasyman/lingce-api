@@ -87,20 +87,46 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 
 // LoginEmployee authenticates an institution employee
 func (s *Service) LoginEmployee(ctx context.Context, username, password string, tenantID int64) (*LoginResponse, error) {
+	if tenantID == 0 {
+		options, optErr := s.store.ListEmployeeTenantOptionsByLoginID(ctx, username)
+		if optErr != nil {
+			return nil, fmt.Errorf("invalid credentials")
+		}
+		if len(options) == 0 {
+			return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
+		}
+
+		activeOptions := make([]TenantOption, 0, len(options))
+		for _, option := range options {
+			if option.IsActive {
+				activeOptions = append(activeOptions, option)
+			}
+		}
+
+		if len(activeOptions) == 0 {
+			return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
+		}
+		if len(activeOptions) > 1 {
+			return nil, newTenantSelectionRequiredError(activeOptions)
+		}
+
+		tenantID = activeOptions[0].TenantID
+	}
+
 	// Verify tenant is active
 	tenant, err := s.store.GetTenantByID(ctx, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid tenant")
+		return nil, newUnauthorizedError("INVALID_TENANT", "invalid tenant")
 	}
 
 	if !tenant.IsActive {
-		return nil, fmt.Errorf("tenant is inactive")
+		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
 	}
 
 	// Check tenant validity period
 	now := time.Now()
 	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
-		return nil, fmt.Errorf("tenant subscription expired")
+		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
 	}
 
 	// Get employee
@@ -109,18 +135,18 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 		// Distinguish tenant mismatch from credential errors for better troubleshooting.
 		anyTenantEmployee, anyErr := s.store.GetEmployeeByLoginAnyTenant(ctx, username)
 		if anyErr == nil && anyTenantEmployee != nil && anyTenantEmployee.TenantID != tenantID {
-			return nil, fmt.Errorf("tenant mismatch")
+			return nil, newUnauthorizedError("TENANT_MISMATCH", "tenant mismatch")
 		}
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
 	}
 
 	if !employee.IsActive {
-		return nil, fmt.Errorf("account is inactive")
+		return nil, newUnauthorizedError("ACCOUNT_INACTIVE", "account is inactive")
 	}
 
 	// Verify password
 	if !s.verifyPassword(password, employee.PasswordHash) {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
 	}
 
 	// Generate JWT token
@@ -147,13 +173,15 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 		ExpiresAt:   expiresAt,
 		User: &LoginUser{
 			ID:         employee.ID,
-			Name:       employee.Username,
+			Name:       firstNonEmpty(employee.Name, employee.Username, employee.Phone),
 			Phone:      employee.Phone,
 			Role:       string(auth.UserTypeEmployee),
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
+			"name":          employee.Name,
+			"real_name":     employee.FullName,
 			"full_name":     employee.FullName,
 			"phone":         employee.Phone,
 			"email":         employee.Email,
@@ -216,17 +244,28 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 		ExpiresAt:   expiresAt,
 		User: &LoginUser{
 			ID:         employee.ID,
-			Name:       employee.Username,
+			Name:       firstNonEmpty(employee.Name, employee.Username, employee.Phone),
 			Phone:      employee.Phone,
 			Role:       string(auth.UserTypeMobile),
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
+			"name":      employee.Name,
+			"real_name": employee.FullName,
 			"full_name": employee.FullName,
 			"phone":     employee.Phone,
 		},
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // verifyPassword checks password against hash (bcrypt or legacy SHA256)
@@ -279,6 +318,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 			Username: employee.Username,
 			TenantID: &employee.TenantID,
 			UserInfo: map[string]interface{}{
+				"name":          employee.Name,
 				"full_name":     employee.FullName,
 				"phone":         employee.Phone,
 				"email":         employee.Email,

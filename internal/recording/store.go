@@ -213,13 +213,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				(
 				%s = ANY($%d)
 				OR
-				EXISTS (
-					SELECT 1
-					FROM frontdesk_shift_analyses fsa
-					WHERE fsa.tenant_id = r.tenant_id
-					  AND fsa.recording_id = r.id
-				)
-				OR
 				(
 				EXISTS (
 					SELECT 1
@@ -1906,7 +1899,8 @@ func (s *Store) ListKnowledgeBases(ctx context.Context, tenantID int64, kbType s
 	var bases []map[string]interface{}
 	for rows.Next() {
 		var id, tenantID int64
-		var kbType, status, updatedAt, createdAt string
+		var kbType, status string
+		var updatedAt, createdAt time.Time
 		var content map[string]interface{}
 		var version int
 
@@ -1921,8 +1915,8 @@ func (s *Store) ListKnowledgeBases(ctx context.Context, tenantID int64, kbType s
 			"content":    content,
 			"version":    version,
 			"status":     status,
-			"updated_at": updatedAt,
-			"created_at": createdAt,
+			"updated_at": updatedAt.Format("2006-01-02 15:04:05"),
+			"created_at": createdAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -1942,7 +1936,8 @@ func (s *Store) GetKnowledgeBase(ctx context.Context, tenantID int64, kbType str
 	var id int64
 	var content map[string]interface{}
 	var version int
-	var status, updatedAt, createdAt string
+	var status string
+	var updatedAt, createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, kbType).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
 		if err == pgx.ErrNoRows {
@@ -1958,8 +1953,8 @@ func (s *Store) GetKnowledgeBase(ctx context.Context, tenantID int64, kbType str
 		"content":    content,
 		"version":    version,
 		"status":     status,
-		"updated_at": updatedAt,
-		"created_at": createdAt,
+		"updated_at": updatedAt.Format("2006-01-02 15:04:05"),
+		"created_at": createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
 
@@ -1967,13 +1962,14 @@ func (s *Store) GetKnowledgeBase(ctx context.Context, tenantID int64, kbType str
 func (s *Store) CreateKnowledgeBase(ctx context.Context, tenantID int64, kbType string, content map[string]interface{}) (map[string]interface{}, error) {
 	query := `
 		INSERT INTO frontdesk_knowledge_bases (tenant_id, kb_type, content, version, status, created_at, updated_at)
-		VALUES ($1, $2, $3, 1, 'active', NOW(), NOW())
+		VALUES ($1, $2, $3, COALESCE((SELECT MAX(version)+1 FROM frontdesk_knowledge_bases WHERE tenant_id=$1 AND kb_type=$2), 1), 'active', NOW(), NOW())
 		RETURNING id, tenant_id, kb_type, content, version, status, updated_at, created_at
 	`
 
 	var id int64
 	var version int
-	var status, updatedAt, createdAt string
+	var status string
+	var updatedAt, createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, kbType, content).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
 		return nil, fmt.Errorf("insert knowledge base: %w", err)
@@ -1986,8 +1982,8 @@ func (s *Store) CreateKnowledgeBase(ctx context.Context, tenantID int64, kbType 
 		"content":    content,
 		"version":    version,
 		"status":     status,
-		"updated_at": updatedAt,
-		"created_at": createdAt,
+		"updated_at": updatedAt.Format("2006-01-02 15:04:05"),
+		"created_at": createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
 
@@ -2013,7 +2009,8 @@ func (s *Store) UpdateKnowledgeBase(ctx context.Context, tenantID int64, kbType 
 
 	var id int64
 	var version int
-	var status, updatedAt, createdAt string
+	var status string
+	var updatedAt, createdAt time.Time
 
 	if err := s.pool.QueryRow(ctx, query, tenantID, kbType, content, newVersion).Scan(&id, &tenantID, &kbType, &content, &version, &status, &updatedAt, &createdAt); err != nil {
 		return nil, fmt.Errorf("insert knowledge base version: %w", err)
@@ -2026,8 +2023,8 @@ func (s *Store) UpdateKnowledgeBase(ctx context.Context, tenantID int64, kbType 
 		"content":    content,
 		"version":    version,
 		"status":     status,
-		"updated_at": updatedAt,
-		"created_at": createdAt,
+		"updated_at": updatedAt.Format("2006-01-02 15:04:05"),
+		"created_at": createdAt.Format("2006-01-02 15:04:05"),
 	}, nil
 }
 

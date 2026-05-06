@@ -99,7 +99,8 @@ func (h *Handler) GetDoctorAbilityRanking(w http.ResponseWriter, r *http.Request
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetDoctorAbilityRanking(r.Context(), tenantID)
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+	resp, err := h.service.GetDoctorAbilityRanking(r.Context(), tenantID, period)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -298,7 +299,13 @@ func (h *Handler) GetWeeklySummary(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetWeeklySummary(r.Context(), tenantID)
+	weekOffset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("week_offset")); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil {
+			weekOffset = parsed
+		}
+	}
+	resp, err := h.service.GetWeeklySummary(r.Context(), tenantID, weekOffset)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -319,8 +326,10 @@ func (h *Handler) GetTeamTrends(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	period := r.URL.Query().Get("period")
-	resp, err := h.service.GetTeamTrends(r.Context(), tenantID, period)
+	dateFrom := strings.TrimSpace(r.URL.Query().Get("date_from"))
+	dateTo := strings.TrimSpace(r.URL.Query().Get("date_to"))
+	specialtyGroup := strings.TrimSpace(r.URL.Query().Get("specialty_group"))
+	resp, err := h.service.GetTeamTrends(r.Context(), tenantID, dateFrom, dateTo, specialtyGroup)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -728,7 +737,16 @@ func (h *Handler) SearchRecordingPatients(w http.ResponseWriter, r *http.Request
 		WHERE tenant_id = $1
 		  AND deleted_at IS NULL
 		  AND ($2 = '' OR COALESCE(name, '') ILIKE $3 OR COALESCE(phone, '') ILIKE $3)
-		ORDER BY COALESCE(updated_at, created_at, NOW()) DESC
+		ORDER BY
+		  CASE
+			WHEN $2 = '' THEN 99
+			WHEN COALESCE(phone, '') = $2 THEN 0
+			WHEN COALESCE(name, '') = $2 THEN 1
+			WHEN COALESCE(phone, '') ILIKE $2 || '%' THEN 2
+			WHEN COALESCE(name, '') ILIKE $2 || '%' THEN 3
+			ELSE 4
+		  END,
+		  COALESCE(updated_at, created_at, NOW()) DESC
 		LIMIT $4
 	`, tenantID, q, like, limit)
 	if err != nil {
@@ -786,30 +804,116 @@ func (h *Handler) GetRecordingEMR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var analysisDisplay map[string]interface{}
-	if queryErr := h.service.store.pool.QueryRow(r.Context(), `
-		SELECT COALESCE(analysis_display, '{}'::json)
-		FROM recordings
-		WHERE id = $1
-	`, id).Scan(&analysisDisplay); queryErr != nil {
+	var (
+		patientID            *int64
+		patientNameExtracted *string
+		patientMatchSource   *string
+		emrContent           map[string]interface{}
+		confidence           *string
+		missingFields        interface{}
+		isConfirmed          *bool
+		confirmedAt          interface{}
+	)
+	queryErr := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT
+			patient_id,
+			NULLIF(patient_name_extracted, ''),
+			NULLIF(patient_match_source, ''),
+			COALESCE(emr_content::jsonb, '{}'::jsonb),
+			NULLIF(confidence, ''),
+			COALESCE(missing_fields::jsonb, '[]'::jsonb),
+			is_confirmed,
+			confirmed_at
+		FROM recording_emr_drafts
+		WHERE recording_id = $1
+		ORDER BY generated_at DESC NULLS LAST, id DESC
+		LIMIT 1
+	`, id).Scan(
+		&patientID,
+		&patientNameExtracted,
+		&patientMatchSource,
+		&emrContent,
+		&confidence,
+		&missingFields,
+		&isConfirmed,
+		&confirmedAt,
+	)
+
+	status := "draft"
+	emrDraft := map[string]interface{}{}
+	if queryErr == nil {
+		emrDraft["emr_content"] = emrContent
+		if patientID != nil {
+			emrDraft["patient_id"] = *patientID
+		}
+		if patientNameExtracted != nil {
+			emrDraft["patient_name_extracted"] = *patientNameExtracted
+		}
+		if patientMatchSource != nil {
+			emrDraft["patient_match_source"] = *patientMatchSource
+		}
+		if confidence != nil {
+			emrDraft["confidence"] = *confidence
+		}
+		if missingFields != nil {
+			emrDraft["missing_fields"] = missingFields
+		}
+		if isConfirmed != nil {
+			emrDraft["is_confirmed"] = *isConfirmed
+			if *isConfirmed {
+				status = "confirmed"
+			}
+		}
+		if confirmedAt != nil {
+			emrDraft["confirmed_at"] = confirmedAt
+		}
+	} else if queryErr == pgx.ErrNoRows {
+		var analysisDisplay map[string]interface{}
+		if adErr := h.service.store.pool.QueryRow(r.Context(), `
+			SELECT COALESCE(analysis_display, '{}'::jsonb)
+			FROM recordings
+			WHERE id = $1
+		`, id).Scan(&analysisDisplay); adErr != nil {
+			httputil.WriteInternalError(w, adErr.Error())
+			return
+		}
+		if raw, ok := analysisDisplay["emr_draft"].(map[string]interface{}); ok {
+			emrDraft = raw
+		}
+		// Backward compatibility: historical writes may store flattened EMR fields
+		// directly under emr_draft instead of nested emr_content.
+		if emrDraft != nil {
+			if _, hasContent := emrDraft["emr_content"]; !hasContent {
+				flattened := map[string]interface{}{}
+				for k, v := range emrDraft {
+					switch k {
+					case "patient_id", "patient_name_extracted", "patient_match_source", "confidence", "missing_fields", "is_confirmed", "confirmed_at":
+						// keep metadata on emrDraft root
+					default:
+						flattened[k] = v
+					}
+				}
+				if len(flattened) > 0 {
+					emrDraft["emr_content"] = flattened
+				}
+			}
+		}
+		if emrDraft == nil || len(emrDraft) == 0 {
+			emrDraft = map[string]interface{}{
+				"emr_content": map[string]interface{}{
+					"chief_complaint": recording.PatientName,
+					"present_illness": firstNonEmpty(recording.DoctorSummary, recording.TranscriptText),
+				},
+			}
+		}
+		if s, ok := analysisDisplay["emr_status"].(string); ok && s != "" {
+			status = s
+		}
+	} else {
 		httputil.WriteInternalError(w, queryErr.Error())
 		return
 	}
 
-	var emrDraft map[string]interface{}
-	if raw, ok := analysisDisplay["emr_draft"].(map[string]interface{}); ok {
-		emrDraft = raw
-	}
-	if emrDraft == nil {
-		emrDraft = map[string]interface{}{
-			"chief_complaint": recording.PatientName,
-			"present_illness": firstNonEmpty(recording.DoctorSummary, recording.TranscriptText),
-		}
-	}
-	status := "draft"
-	if s, ok := analysisDisplay["emr_status"].(string); ok && s != "" {
-		status = s
-	}
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"status":    status,
 		"emr_draft": emrDraft,
@@ -824,12 +928,17 @@ func (h *Handler) ConfirmRecordingEMR(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
 		return
 	}
-	if _, accessErr := h.assertRecordingAccess(r, id); accessErr != nil {
+	recording, accessErr := h.assertRecordingAccess(r, id)
+	if accessErr != nil {
 		if accessErr.Error() == "access denied" {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
 		httputil.WriteNotFound(w, accessErr.Error())
+		return
+	}
+	if recording.CustomerID == nil || *recording.CustomerID <= 0 {
+		httputil.WriteBadRequest(w, "请先关联客户或快速建档后再提交EMR")
 		return
 	}
 
@@ -841,12 +950,63 @@ func (h *Handler) ConfirmRecordingEMR(w http.ResponseWriter, r *http.Request) {
 	if req.EMRContent == nil {
 		req.EMRContent = map[string]interface{}{}
 	}
+
+	// Defensive merge: preserve existing EMR fields when client submits partial/empty payload.
+	var existingEMRContent map[string]interface{}
+	queryErr := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT COALESCE(emr_content::jsonb, '{}'::jsonb)
+		FROM recording_emr_drafts
+		WHERE recording_id = $1
+	`, id).Scan(&existingEMRContent)
+	if queryErr != nil && queryErr != pgx.ErrNoRows {
+		httputil.WriteInternalError(w, queryErr.Error())
+		return
+	}
+	mergedEMRContent := map[string]interface{}{}
+	for k, v := range existingEMRContent {
+		mergedEMRContent[k] = v
+	}
+	for k, v := range req.EMRContent {
+		mergedEMRContent[k] = v
+	}
+	req.EMRContent = mergedEMRContent
+
 	status := "confirmed"
 	if req.Confirmed != nil && !*req.Confirmed {
 		status = "draft"
 	}
+	isConfirmed := status == "confirmed"
+	var confirmedAt interface{}
+	if isConfirmed {
+		confirmedAt = time.Now().UTC()
+	}
+
+	emrDraftPayload := map[string]interface{}{
+		"emr_content":  req.EMRContent,
+		"is_confirmed": isConfirmed,
+	}
+	if confirmedAt != nil {
+		emrDraftPayload["confirmed_at"] = confirmedAt
+	}
 
 	emrJSON, _ := json.Marshal(req.EMRContent)
+	emrDraftJSON, _ := json.Marshal(emrDraftPayload)
+	if _, execErr := h.service.store.pool.Exec(r.Context(), `
+		INSERT INTO recording_emr_drafts (
+			recording_id, tenant_id, customer_id, emr_content, is_confirmed, confirmed_at, generated_at
+		)
+		VALUES ($1, $2, $3, COALESCE($4::jsonb, '{}'::jsonb), $5, $6, NOW())
+		ON CONFLICT (recording_id)
+		DO UPDATE SET
+			emr_content = EXCLUDED.emr_content,
+			is_confirmed = EXCLUDED.is_confirmed,
+			confirmed_at = EXCLUDED.confirmed_at,
+			generated_at = NOW()
+	`, id, recording.TenantID, recording.CustomerID, string(emrJSON), isConfirmed, confirmedAt); execErr != nil {
+		httputil.WriteInternalError(w, execErr.Error())
+		return
+	}
+
 	if _, execErr := h.service.store.pool.Exec(r.Context(), `
 		UPDATE recordings
 		SET analysis_display = jsonb_set(
@@ -857,7 +1017,7 @@ func (h *Handler) ConfirmRecordingEMR(w http.ResponseWriter, r *http.Request) {
 		),
 		updated_at = NOW()
 		WHERE id = $3
-	`, string(emrJSON), status, id); execErr != nil {
+	`, string(emrDraftJSON), status, id); execErr != nil {
 		httputil.WriteInternalError(w, execErr.Error())
 		return
 	}
@@ -973,7 +1133,8 @@ func (h *Handler) GetDoctorAbilitySegue(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	list, svcErr := h.service.GetDoctorAbilityRanking(r.Context(), tenantID)
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+	list, svcErr := h.service.GetDoctorAbilityRanking(r.Context(), tenantID, period)
 	if svcErr != nil {
 		httputil.WriteInternalError(w, svcErr.Error())
 		return
@@ -991,7 +1152,7 @@ func (h *Handler) GetDoctorAbilitySegue(w http.ResponseWriter, r *http.Request) 
 	}
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"items":  items,
-		"period": strings.TrimSpace(r.URL.Query().Get("period")),
+		"period": period,
 	})
 }
 

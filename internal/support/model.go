@@ -62,22 +62,28 @@ type OperationLog struct {
 
 // LLMModelConfig represents an LLM model configuration
 type LLMModelConfig struct {
-	ID           int64      `json:"id"`
-	TenantID     int64      `json:"tenant_id"`
-	ModelCode    string     `json:"model_code"`
-	FunctionType string     `json:"function_type"`
-	ModelName    string     `json:"model_name"`
-	Provider     string     `json:"provider"` // "openai", "anthropic", "azure", etc.
-	APIEndpoint  string     `json:"api_endpoint"`
-	APIKey       string     `json:"api_key"`
-	ModelParams  JSONObject `json:"model_params,omitempty"`
-	IsDefault    bool       `json:"is_default"`
-	IsActive     bool       `json:"is_active"`
-	Description  *string    `json:"description,omitempty"`
-	CreatedBy    int64      `json:"created_by"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+	ID               int64      `json:"id"`
+	TenantID         int64      `json:"tenant_id"`
+	ModelCode        string     `json:"model_code"`
+	FunctionType     string     `json:"function_type"`
+	ModelName        string     `json:"model_name"`
+	Provider         string     `json:"provider"` // "openai", "anthropic", "azure", etc.
+	APIEndpoint      string     `json:"api_endpoint"`
+	APIBaseURL       *string    `json:"api_base_url,omitempty"`
+	APIKey           string     `json:"api_key"`
+	ModelParams      JSONObject `json:"model_params,omitempty"`
+	ExtraParams      JSONObject `json:"extra_params,omitempty"`
+	InputTokenPrice  *float64   `json:"input_token_price,omitempty"`
+	OutputTokenPrice *float64   `json:"output_token_price,omitempty"`
+	DailyLimit       *int       `json:"daily_limit,omitempty"`
+	MonthlyLimit     *int       `json:"monthly_limit,omitempty"`
+	IsDefault        bool       `json:"is_default"`
+	IsActive         bool       `json:"is_active"`
+	Description      *string    `json:"description,omitempty"`
+	CreatedBy        int64      `json:"created_by"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
 }
 
 // LLMCallRecord represents an LLM API call record

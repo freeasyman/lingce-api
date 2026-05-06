@@ -22,6 +22,7 @@ type Employee struct {
 	ID             int64
 	TenantID       int64
 	Username       string
+	Name           string
 	PasswordHash   string
 	FullName       string
 	Phone          string
@@ -55,4 +56,11 @@ type SMSLoginCode struct {
 	ExpiresAt time.Time
 	Used      bool
 	CreatedAt time.Time
+}
+
+// TenantOption is used when login requires tenant selection for a shared account.
+type TenantOption struct {
+	TenantID   int64  `json:"tenant_id"`
+	TenantName string `json:"tenant_name"`
+	IsActive   bool   `json:"is_active"`
 }

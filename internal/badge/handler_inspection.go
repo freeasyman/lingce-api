@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -214,9 +215,16 @@ func (h *Handler) ListInspectionDevices(w http.ResponseWriter, r *http.Request) 
 		pageSize = 20
 	}
 
-	status := "accepted"
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if strings.EqualFold(status, "all") {
+		status = ""
+	}
+	var statusFilter *string
+	if status != "" {
+		statusFilter = &status
+	}
 	devices, total, err := h.service.ListDevices(r.Context(), DeviceListRequest{
-		Status:   &status,
+		Status:   statusFilter,
 		Page:     page,
 		PageSize: pageSize,
 	})
@@ -252,19 +260,13 @@ func (h *Handler) GetDeviceLiveStatus(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid device ID")
 		return
 	}
-	device, err := h.service.GetDeviceByID(r.Context(), deviceID)
+
+	resp, err := h.service.V2GetLiveStatus(r.Context(), deviceID)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"device_id": deviceID,
-		"online":    device.Status != "reclaimed",
-		"battery":   device.BatteryLevel,
-		"signal":    4,
-		"checked_at": time.Now().Format(time.RFC3339),
-	})
+	httputil.WriteSuccess(w, resp)
 }
 
 // TestDeviceRecording handles testing device recording
@@ -297,18 +299,95 @@ func (h *Handler) TestDeviceRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.StartRecording(r.Context(), device.DeviceNo, &claims.UserID, JSONObject{
+	var req struct {
+		Action string `json:"action"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action == "" {
+		action = "start"
+	}
+	if action != "start" && action != "stop" {
+		httputil.WriteBadRequest(w, "action must be start or stop")
+		return
+	}
+
+	extra := JSONObject{
 		"source": "inspection_test",
-	}); err != nil {
+	}
+
+	if action == "start" {
+		if err := h.service.StartRecording(r.Context(), device.DeviceNo, &claims.UserID, extra); err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+
+		httputil.WriteSuccess(w, map[string]interface{}{
+			"device_id": deviceID,
+			"test_id":   "rec_test_" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			"status":    "started",
+			"started":   true,
+			"ok":        true,
+		})
+		return
+	}
+
+	if err := h.service.StopRecording(r.Context(), device.DeviceNo, &claims.UserID, extra); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 
+	// 停止录音后短暂轮询回调/分析链路状态，供验收流程显示逐步进展。
+	callbackOK, analysisOK := h.waitRecordingChainStatus(r, device.DeviceNo, 75*time.Second)
+
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"device_id": deviceID,
-		"test_id":   "rec_test_" + strconv.FormatInt(time.Now().UnixNano(), 10),
-		"status":    "started",
+		"device_id":    deviceID,
+		"test_id":      "rec_test_" + strconv.FormatInt(time.Now().UnixNano(), 10),
+		"status":       "stopped",
+		"stopped":      true,
+		"ok":           true,
+		"callback_ok":  callbackOK,
+		"analysis_ok":  analysisOK,
+		"chain_status": map[string]bool{"stop": true, "callback": callbackOK, "analysis": analysisOK},
 	})
+}
+
+func (h *Handler) waitRecordingChainStatus(r *http.Request, deviceNo string, timeout time.Duration) (bool, bool) {
+	deadline := time.Now().Add(timeout)
+	action := "callback"
+	for time.Now().Before(deadline) {
+		// First preference: callback control logs (Go callback path).
+		logs, _, err := h.service.ListRecordingControlLogs(r.Context(), RecordingControlLogListRequest{
+			DeviceNo: &deviceNo,
+			Action:   &action,
+			Page:     1,
+			PageSize: 50,
+		})
+		if err == nil {
+			callbackOK := false
+			analysisOK := false
+			for _, log := range logs {
+				source := strings.ToLower(strings.TrimSpace(toString(log.ExtraData["source"])))
+				eventType := strings.ToLower(strings.TrimSpace(toString(log.ExtraData["event_type"])))
+				if source == "audio" || strings.Contains(eventType, "audio") {
+					callbackOK = true
+				}
+				if source == "analysis" || strings.Contains(eventType, "analysis") {
+					analysisOK = true
+				}
+			}
+			if callbackOK || analysisOK {
+				return callbackOK, analysisOK
+			}
+		}
+		// Fallback: audio callback events table (legacy/other callback ingress path).
+		audioCallbackOK, ingestOK, audioErr := h.service.GetLatestAudioEventStatus(r.Context(), deviceNo)
+		if audioErr == nil && (audioCallbackOK || ingestOK) {
+			return audioCallbackOK, ingestOK
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return false, false
 }
 
 // SubmitTicketByDevice handles submitting ticket by device
@@ -325,7 +404,13 @@ func (h *Handler) SubmitTicketByDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticket, err := h.service.CreateTicket(r.Context(), claims.UserID, req)
+	ticket, err := h.service.CreateTicket(
+		r.Context(),
+		claims.UserID,
+		claims.TenantID,
+		claims.UserType != auth.UserTypeAdmin,
+		req,
+	)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

@@ -43,6 +43,16 @@ func (h *Handler) ListContentTemplates(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
+	if search := r.URL.Query().Get("search"); search != "" {
+		req.Search = &search
+	}
+	if functionType := r.URL.Query().Get("function_type"); functionType != "" {
+		req.FunctionType = &functionType
+	}
+	if isActive := r.URL.Query().Get("is_active"); isActive != "" {
+		v := isActive == "1" || isActive == "true" || isActive == "TRUE"
+		req.IsActive = &v
+	}
 
 	templates, total, err := h.service.ListPromptTemplates(r.Context(), req, true)
 	if err != nil {

@@ -39,7 +39,7 @@ func NewMiddlewareClient(baseURL, token string) *MiddlewareClient {
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		token:   strings.TrimSpace(token),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 	}
 }

@@ -42,15 +42,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.UpdateLLMModelConfig)))
 	mux.Handle("DELETE /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.DeleteLLMModelConfig)))
 	mux.Handle("POST /api/v1/llm/models/{id}/actions/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
+	mux.Handle("POST /api/v1/llm/models/{id}/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
 
 	// LLM call record endpoints
 	mux.Handle("GET /api/v1/llm/records", authMw(http.HandlerFunc(h.ListLLMCallRecords)))
 	mux.Handle("GET /api/v1/llm/records/stats", authMw(http.HandlerFunc(h.GetLLMCallRecordStats)))
-	mux.Handle("GET /api/v1/llm/records/{id}", authMw(http.HandlerFunc(h.GetLLMCallRecordByID)))
+	mux.Handle("GET /api/v1/llm/records/{request_id}", authMw(http.HandlerFunc(h.GetLLMCallRecordByRequestID)))
 
 	// LLM cost endpoints
 	mux.Handle("GET /api/v1/llm/costs/by-tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
 	mux.Handle("GET /api/v1/llm/costs/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
+	mux.Handle("GET /api/v1/llm/cost/tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
+	mux.Handle("GET /api/v1/llm/cost/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
 
 	// Data browser endpoints
 	mux.Handle("GET /api/v1/operation-logs/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
@@ -438,6 +441,15 @@ func (h *Handler) ListLLMModelConfigs(w http.ResponseWriter, r *http.Request) {
 
 	var req LLMModelConfigListRequest
 
+	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		req.TenantID = &tenantID
+	}
+
+	if functionType := r.URL.Query().Get("function_type"); functionType != "" {
+		req.FunctionType = &functionType
+	}
+
 	if provider := r.URL.Query().Get("provider"); provider != "" {
 		req.Provider = &provider
 	}
@@ -647,6 +659,27 @@ func (h *Handler) ListLLMCallRecords(w http.ResponseWriter, r *http.Request) {
 		req.Provider = &provider
 	}
 
+	if functionType := r.URL.Query().Get("function_type"); functionType != "" {
+		req.FunctionType = &functionType
+	}
+
+	if module := r.URL.Query().Get("module"); module != "" {
+		req.Module = &module
+	}
+
+	if modelCode := r.URL.Query().Get("model_code"); modelCode != "" {
+		req.ModelCode = &modelCode
+	}
+
+	if successStr := r.URL.Query().Get("success"); successStr != "" {
+		success := successStr == "true" || successStr == "1"
+		req.Success = &success
+	}
+
+	if traceID := r.URL.Query().Get("trace_id"); traceID != "" {
+		req.TraceID = &traceID
+	}
+
 	if status := r.URL.Query().Get("status"); status != "" {
 		req.Status = &status
 	}
@@ -665,8 +698,10 @@ func (h *Handler) ListLLMCallRecords(w http.ResponseWriter, r *http.Request) {
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
 	req.Page = page
 	req.PageSize = pageSize
+	req.Size = size
 
 	records, total, err := h.service.ListLLMCallRecords(r.Context(), req)
 	if err != nil {
@@ -674,7 +709,26 @@ func (h *Handler) ListLLMCallRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WritePaginated(w, records, int64(total), req.Page, req.PageSize)
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.Size <= 0 {
+		req.Size = req.PageSize
+	}
+	if req.Size <= 0 {
+		req.Size = 50
+	}
+	pages := 0
+	if req.Size > 0 {
+		pages = int((int64(total) + int64(req.Size) - 1) / int64(req.Size))
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"items": records,
+		"total": total,
+		"page":  req.Page,
+		"size":  req.Size,
+		"pages": pages,
+	})
 }
 
 // GetLLMCallRecordStats handles getting LLM call record statistics
@@ -714,8 +768,8 @@ func (h *Handler) GetLLMCallRecordStats(w http.ResponseWriter, r *http.Request) 
 	httputil.WriteSuccess(w, stats)
 }
 
-// GetLLMCallRecordByID handles getting LLM call record by ID
-func (h *Handler) GetLLMCallRecordByID(w http.ResponseWriter, r *http.Request) {
+// GetLLMCallRecordByRequestID handles getting LLM call record by request ID.
+func (h *Handler) GetLLMCallRecordByRequestID(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
@@ -728,13 +782,13 @@ func (h *Handler) GetLLMCallRecordByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid record ID")
+	requestID := r.PathValue("request_id")
+	if requestID == "" {
+		httputil.WriteBadRequest(w, "Invalid request_id")
 		return
 	}
 
-	record, err := h.service.GetLLMCallRecordByID(r.Context(), id)
+	record, err := h.service.GetLLMCallRecordByRequestID(r.Context(), requestID)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return

@@ -22,6 +22,8 @@ import (
 	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
+	"github.com/freeasyman/lingce-api/internal/knowledge"
+	"github.com/freeasyman/lingce-api/internal/sandbox"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
@@ -33,7 +35,7 @@ import (
 )
 
 var (
-	version   = "1.0.0"
+	version   = "1.0.2"
 	gitSHA    = "unknown"
 	buildTime = "unknown"
 )
@@ -59,6 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	middleware.SetAuthValidationPool(pool)
 
 	if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
 		slog.Error("failed to apply compatibility migrations", "error", err)
@@ -69,22 +72,26 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Health check endpoint
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	healthHandler := func(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteSuccess(w, map[string]string{
 			"status":  "ok",
 			"version": version,
 		})
-	})
+	}
+	mux.HandleFunc("GET /healthz", healthHandler)
+	mux.HandleFunc("GET /api/v1/healthz", healthHandler)
 
 	// Version endpoint
-	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+	versionHandler := func(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteSuccess(w, map[string]string{
 			"service":    "lingce-api",
 			"version":    version,
 			"git_sha":    gitSHA,
 			"build_time": buildTime,
 		})
-	})
+	}
+	mux.HandleFunc("GET /version", versionHandler)
+	mux.HandleFunc("GET /api/v1/version", versionHandler)
 
 	// Register module routes
 	authStore := auth.NewStore(pool)
@@ -118,6 +125,12 @@ func main() {
 	deptService := department.NewService(deptStore)
 	deptHandler := department.NewHandler(deptService)
 	deptHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// Register knowledge module
+	kbStore := knowledge.NewStore(pool)
+	kbService := knowledge.NewService(kbStore)
+	kbHandler := knowledge.NewHandler(kbService)
+	kbHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register employee module
 	empStore := employee.NewStore(pool)
@@ -158,6 +171,30 @@ func main() {
 
 	// Register badge module
 	badgeStore := badge.NewStore(pool)
+	ticketNotifier := badge.NewTicketEmailNotifier(
+		cfg.External.TicketNotifySMTPHost,
+		cfg.External.TicketNotifySMTPPort,
+		cfg.External.TicketNotifySMTPUser,
+		cfg.External.TicketNotifySMTPPass,
+		cfg.External.TicketNotifyFrom,
+		cfg.External.TicketNotifyTo,
+	)
+	if ticketNotifier == nil {
+		slog.Warn("badge ticket email notifier disabled", "missing", badge.MissingTicketEmailNotifierFields(
+			cfg.External.TicketNotifySMTPHost,
+			cfg.External.TicketNotifySMTPPort,
+			cfg.External.TicketNotifySMTPUser,
+			cfg.External.TicketNotifySMTPPass,
+			cfg.External.TicketNotifyFrom,
+			cfg.External.TicketNotifyTo,
+		))
+	} else {
+		slog.Info("badge ticket email notifier enabled",
+			"smtp_host", cfg.External.TicketNotifySMTPHost,
+			"smtp_port", cfg.External.TicketNotifySMTPPort,
+			"from", cfg.External.TicketNotifyFrom,
+			"to", cfg.External.TicketNotifyTo)
+	}
 	badgeService := badge.NewServiceWithMiddleware(
 		badgeStore,
 		empStore,
@@ -165,6 +202,7 @@ func main() {
 		cfg.External.BadgeMiddlewareToken,
 		cfg.External.RecordingWorkerURL,
 		cfg.External.RecordingWorkerToken,
+		ticketNotifier,
 	)
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.SetCallbackGatewayToken(cfg.External.BadgeCallbackGatewayToken)
@@ -191,9 +229,14 @@ func main() {
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Register sandbox transfer module
+	sandboxService := sandbox.NewService(pool, ossClient, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken)
+	sandboxHandler := sandbox.NewHandler(sandboxService)
+	sandboxHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)
-	dashboardService := dashboard.NewService(dashboardStore)
+	dashboardService := dashboard.NewService(dashboardStore, recService)
 	dashboardHandler := dashboard.NewHandler(dashboardService)
 	dashboardHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 

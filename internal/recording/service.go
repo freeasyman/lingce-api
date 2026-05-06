@@ -164,6 +164,12 @@ func compactRecordingListItem(resp *RecordingResponse) {
 	if resp == nil {
 		return
 	}
+	// Preserve summary from analysis_result before clearing it.
+	if resp.AnalysisResult != nil {
+		if s, ok := resp.AnalysisResult["summary"].(string); ok && s != "" && resp.ConversationSummary == nil {
+			resp.ConversationSummary = &s
+		}
+	}
 	resp.TranscriptText = nil
 	resp.DoctorSummary = nil
 	resp.TherapistSummary = nil

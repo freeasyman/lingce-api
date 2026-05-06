@@ -68,7 +68,12 @@ func (s *Store) hasInstitutionDepartmentRolesTable(ctx context.Context) (bool, e
 }
 
 func (s *Store) findLegacyRoleCodeByID(ctx context.Context, roleID int64) (string, error) {
-	rows, err := s.pool.Query(ctx, "SELECT code FROM inst_roles")
+	rows, err := s.pool.Query(ctx, `
+		SELECT code
+		FROM inst_roles
+		WHERE lower(COALESCE(code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+		  AND COALESCE(name_cn, '') <> '联调角色225052已编辑'
+	`)
 	if err != nil {
 		return "", fmt.Errorf("failed to query legacy roles: %w", err)
 	}
@@ -96,7 +101,8 @@ func (s *Store) ListInstitutionRoles(ctx context.Context, tenantID int64, req In
 		query := `
 			SELECT code, name_cn, description, COALESCE(is_active, true), COALESCE(created_at, NOW()), COALESCE(updated_at, created_at, NOW())
 			FROM inst_roles
-			WHERE 1 = 1
+			WHERE lower(COALESCE(code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+			  AND COALESCE(name_cn, '') <> '联调角色225052已编辑'
 		`
 		args := []interface{}{}
 		argPos := 1
@@ -170,6 +176,8 @@ func (s *Store) ListInstitutionRoles(ctx context.Context, tenantID int64, req In
 		       COALESCE(r.created_at, NOW()),
 		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
 		FROM inst_roles r
+		WHERE lower(COALESCE(r.code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+		  AND COALESCE(r.name_cn, '') <> '联调角色225052已编辑'
 		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
 		DO UPDATE SET
 		    name = EXCLUDED.name,
@@ -254,6 +262,8 @@ func (s *Store) GetInstitutionRoleByID(ctx context.Context, tenantID, id int64) 
 			SELECT code, name_cn, description, COALESCE(is_active, true), COALESCE(created_at, NOW()), COALESCE(updated_at, created_at, NOW())
 			FROM inst_roles
 			WHERE code = $1
+			  AND lower(COALESCE(code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+			  AND COALESCE(name_cn, '') <> '联调角色225052已编辑'
 		`
 		var roleCode, name string
 		var desc *string
@@ -908,26 +918,19 @@ func (s *Store) AssignPermissionsToInstitutionRole(ctx context.Context, tenantID
 	if err != nil {
 		return err
 	}
-	if !hasNewTable {
-		roleCode, err := s.findLegacyRoleCodeByID(ctx, roleID)
+	var roleCode string
+	if hasNewTable {
+		if err := s.pool.QueryRow(ctx, `
+			SELECT code FROM institution_roles
+			WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		`, roleID, tenantID).Scan(&roleCode); err != nil {
+			return fmt.Errorf("role not found: %w", err)
+		}
+	} else {
+		roleCode, err = s.findLegacyRoleCodeByID(ctx, roleID)
 		if err != nil {
 			return fmt.Errorf("legacy role not found: %w", err)
 		}
-		tx, err := s.pool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to begin transaction: %w", err)
-		}
-		defer tx.Rollback(ctx)
-
-		if _, err := tx.Exec(ctx, "DELETE FROM inst_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, roleCode); err != nil {
-			return fmt.Errorf("failed to delete legacy role menus: %w", err)
-		}
-		for _, menuID := range permissionIDs {
-			if _, err := tx.Exec(ctx, "INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at) VALUES ($1, $2, $3, NOW())", tenantID, roleCode, menuID); err != nil {
-				return fmt.Errorf("failed to assign legacy role menu: %w", err)
-			}
-		}
-		return tx.Commit(ctx)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -936,21 +939,19 @@ func (s *Store) AssignPermissionsToInstitutionRole(ctx context.Context, tenantID
 	}
 	defer tx.Rollback(ctx)
 
-	// Delete existing permissions
-	_, err = tx.Exec(ctx, "DELETE FROM institution_role_permissions WHERE role_id = $1", roleID)
+	// Use inst_role_menus as the canonical institution role authorization store.
+	_, err = tx.Exec(ctx, "DELETE FROM inst_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, roleCode)
 	if err != nil {
-		return fmt.Errorf("failed to delete existing permissions: %w", err)
+		return fmt.Errorf("failed to delete existing role menus: %w", err)
 	}
 
-	// Insert new permissions
-	for _, permID := range permissionIDs {
-		query := `
-			INSERT INTO institution_role_permissions (role_id, permission_id, created_at)
-			VALUES ($1, $2, NOW())
-		`
-		_, err = tx.Exec(ctx, query, roleID, permID)
+	for _, menuID := range permissionIDs {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, tenantID, roleCode, menuID)
 		if err != nil {
-			return fmt.Errorf("failed to assign permission: %w", err)
+			return fmt.Errorf("failed to assign role menu: %w", err)
 		}
 	}
 
@@ -963,30 +964,29 @@ func (s *Store) RemovePermissionsFromInstitutionRole(ctx context.Context, tenant
 	if err != nil {
 		return err
 	}
-	if !hasNewTable {
-		roleCode, err := s.findLegacyRoleCodeByID(ctx, roleID)
+	var roleCode string
+	if hasNewTable {
+		if err := s.pool.QueryRow(ctx, `
+			SELECT code FROM institution_roles
+			WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		`, roleID, tenantID).Scan(&roleCode); err != nil {
+			return fmt.Errorf("role not found: %w", err)
+		}
+	} else {
+		roleCode, err = s.findLegacyRoleCodeByID(ctx, roleID)
 		if err != nil {
 			return fmt.Errorf("legacy role not found: %w", err)
 		}
-		query := `
-			DELETE FROM inst_role_menus
-			WHERE tenant_id = $1 AND role_code = $2 AND menu_id = ANY($3)
-		`
-		_, err = s.pool.Exec(ctx, query, tenantID, roleCode, permissionIDs)
-		if err != nil {
-			return fmt.Errorf("failed to remove legacy role menus: %w", err)
-		}
-		return nil
 	}
 
 	query := `
-		DELETE FROM institution_role_permissions
-		WHERE role_id = $1 AND permission_id = ANY($2)
+		DELETE FROM inst_role_menus
+		WHERE tenant_id = $1 AND role_code = $2 AND menu_id = ANY($3)
 	`
 
-	_, err = s.pool.Exec(ctx, query, roleID, permissionIDs)
+	_, err = s.pool.Exec(ctx, query, tenantID, roleCode, permissionIDs)
 	if err != nil {
-		return fmt.Errorf("failed to remove permissions: %w", err)
+		return fmt.Errorf("failed to remove role menus: %w", err)
 	}
 
 	return nil
@@ -998,53 +998,39 @@ func (s *Store) GetInstitutionRolePermissions(ctx context.Context, tenantID, rol
 	if err != nil {
 		return nil, err
 	}
-	if !hasNewTable {
-		roleCode, err := s.findLegacyRoleCodeByID(ctx, roleID)
+	var roleCode string
+	if hasNewTable {
+		if err := s.pool.QueryRow(ctx, `
+			SELECT code FROM institution_roles
+			WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		`, roleID, tenantID).Scan(&roleCode); err != nil {
+			return nil, fmt.Errorf("role not found: %w", err)
+		}
+	} else {
+		roleCode, err = s.findLegacyRoleCodeByID(ctx, roleID)
 		if err != nil {
 			return nil, fmt.Errorf("legacy role not found: %w", err)
 		}
-		query := `
-			SELECT m.id,
-			       m.name,
-			       m.code,
-			       'menu'::varchar AS resource,
-			       'view'::varchar AS action,
-			       m.path::varchar AS description,
-			       COALESCE(m.created_at, NOW()) AS created_at,
-			       COALESCE(m.created_at, NOW()) AS updated_at
-			FROM inst_menus m
-			JOIN inst_role_menus rm ON rm.menu_id = m.id
-			WHERE rm.tenant_id = $1 AND rm.role_code = $2
-			ORDER BY COALESCE(m.order_index, 0), m.id
-		`
-		rows, err := s.pool.Query(ctx, query, tenantID, roleCode)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query legacy role menus: %w", err)
-		}
-		defer rows.Close()
-
-		permissions := make([]*InstitutionPermission, 0)
-		for rows.Next() {
-			var p InstitutionPermission
-			if err := rows.Scan(&p.ID, &p.Name, &p.Code, &p.Resource, &p.Action, &p.Description, &p.CreatedAt, &p.UpdatedAt); err != nil {
-				return nil, fmt.Errorf("failed to scan legacy role menu: %w", err)
-			}
-			permissions = append(permissions, &p)
-		}
-		return permissions, nil
 	}
 
 	query := `
-		SELECT p.id, p.name, p.code, p.resource, p.action, p.description, p.created_at, p.updated_at
-		FROM institution_permissions p
-		JOIN institution_role_permissions rp ON p.id = rp.permission_id
-		WHERE rp.role_id = $1
-		ORDER BY p.resource, p.action
+		SELECT m.id,
+		       m.name,
+		       m.code,
+		       'menu'::varchar AS resource,
+		       'view'::varchar AS action,
+		       m.path::varchar AS description,
+		       COALESCE(m.created_at, NOW()) AS created_at,
+		       COALESCE(m.created_at, NOW()) AS updated_at
+		FROM inst_menus m
+		JOIN inst_role_menus rm ON rm.menu_id = m.id
+		WHERE rm.tenant_id = $1 AND rm.role_code = $2
+		ORDER BY COALESCE(m.order_index, 0), m.id
 	`
 
-	rows, err := s.pool.Query(ctx, query, roleID)
+	rows, err := s.pool.Query(ctx, query, tenantID, roleCode)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query permissions: %w", err)
+		return nil, fmt.Errorf("failed to query role menus: %w", err)
 	}
 	defer rows.Close()
 
