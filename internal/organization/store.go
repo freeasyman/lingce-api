@@ -205,7 +205,7 @@ func (s *Store) ListDoctors(ctx context.Context, tenantID *int64, name *string, 
 	offset := (page - 1) * pageSize
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, department_id,
-		       COALESCE(NULLIF(full_name, ''), username, 'unknown') AS full_name,
+		       COALESCE(NULLIF(NULLIF(full_name, 'unknown'), ''), NULLIF(NULLIF(name, 'unknown'), ''), NULLIF(username, ''), NULLIF(phone, ''), '未知医生') AS full_name,
 		       COALESCE(phone, '') AS phone,
 		       COALESCE(email, '') AS email,
 		       CASE
@@ -241,7 +241,7 @@ func (s *Store) ListDoctors(ctx context.Context, tenantID *int64, name *string, 
 func (s *Store) GetDoctorByID(ctx context.Context, id int64) (*Doctor, error) {
 	query := `
 		SELECT id, tenant_id, department_id,
-		       COALESCE(NULLIF(full_name, ''), username, 'unknown') AS full_name,
+		       COALESCE(NULLIF(NULLIF(full_name, 'unknown'), ''), NULLIF(NULLIF(name, 'unknown'), ''), NULLIF(username, ''), NULLIF(phone, ''), '未知医生') AS full_name,
 		       COALESCE(phone, '') AS phone,
 		       COALESCE(email, '') AS email,
 		       CASE
@@ -265,9 +265,11 @@ func (s *Store) GetDoctorByID(ctx context.Context, id int64) (*Doctor, error) {
 
 func (s *Store) CreateDoctor(ctx context.Context, tenantID int64, fullName, phone, email string, departmentID *int64) (*Doctor, error) {
 	query := `
-		INSERT INTO employees (tenant_id, username, password_hash, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 0, true, NOW(), NOW())
-		RETURNING id, tenant_id, department_id, full_name, phone, email, is_active, created_at, updated_at
+		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4, $5, $6, $7, 0, true, NOW(), NOW())
+		RETURNING id, tenant_id, department_id,
+		       COALESCE(NULLIF(NULLIF(full_name, 'unknown'), ''), NULLIF(NULLIF(name, 'unknown'), ''), NULLIF(username, ''), NULLIF(phone, ''), '未知医生') AS full_name,
+		       phone, email, is_active, created_at, updated_at
 	`
 	username := fmt.Sprintf("doctor_%d_%s", tenantID, strings.ToLower(strings.ReplaceAll(fullName, " ", "")))
 	passwordHash := "placeholder_hash"
@@ -286,6 +288,9 @@ func (s *Store) UpdateDoctor(ctx context.Context, id int64, fullName, phone, ema
 	args := []interface{}{}
 	argIndex := 1
 	if fullName != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIndex))
+		args = append(args, *fullName)
+		argIndex++
 		setClauses = append(setClauses, fmt.Sprintf("full_name = $%d", argIndex))
 		args = append(args, *fullName)
 		argIndex++
@@ -319,7 +324,9 @@ func (s *Store) UpdateDoctor(ctx context.Context, id int64, fullName, phone, ema
 		UPDATE employees
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, tenant_id, department_id, full_name, phone, email, is_active, created_at, updated_at
+		RETURNING id, tenant_id, department_id,
+		       COALESCE(NULLIF(NULLIF(full_name, 'unknown'), ''), NULLIF(NULLIF(name, 'unknown'), ''), NULLIF(username, ''), NULLIF(phone, ''), '未知医生') AS full_name,
+		       phone, email, is_active, created_at, updated_at
 	`, strings.Join(setClauses, ", "), argIndex)
 	var d Doctor
 	if err := s.pool.QueryRow(ctx, query, args...).Scan(&d.ID, &d.TenantID, &d.DepartmentID, &d.Name, &d.Phone, &d.Email, &d.IsActive, &d.CreatedAt, &d.UpdatedAt); err != nil {

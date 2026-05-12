@@ -193,7 +193,7 @@ func (h *Handler) DeleteMenu(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetMenuTreeByScope(w http.ResponseWriter, r *http.Request) {
 	if h.roleScope(r) == "institution" {
-		httputil.WriteBadRequest(w, "institution scope tree is not supported")
+		h.GetInstitutionMenuTree(w, r)
 		return
 	}
 	h.GetOperationsMenuTree(w, r)

@@ -131,7 +131,16 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE employees SET full_name = COALESCE(NULLIF(full_name, ''), username, 'unknown')`,
+		`UPDATE employees SET full_name = COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), username, 'unknown')`,
+		`UPDATE employees
+		 SET full_name = phone
+		 WHERE NULLIF(phone, '') IS NOT NULL
+		   AND lower(trim(COALESCE(full_name, ''))) = 'unknown'
+		   AND lower(trim(COALESCE(name, ''))) = 'unknown'`,
+		`UPDATE employees
+		 SET name = full_name
+		 WHERE COALESCE(NULLIF(full_name, ''), '') <> ''
+		   AND COALESCE(NULLIF(full_name, ''), '') <> COALESCE(NULLIF(name, ''), '')`,
 		`UPDATE employees SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`CREATE TABLE IF NOT EXISTS institution_roles (
 			id BIGSERIAL PRIMARY KEY,
@@ -146,14 +155,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_roles_tenant_code ON institution_roles(tenant_id, code) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_institution_roles_tenant_id ON institution_roles(tenant_id)`,
-		`CREATE TABLE IF NOT EXISTS institution_employee_roles (
-			id BIGSERIAL PRIMARY KEY,
-			employee_id BIGINT NOT NULL,
-			role_id BIGINT NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_employee_roles_employee_id ON institution_employee_roles(employee_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_institution_employee_roles_role_id ON institution_employee_roles(role_id)`,
 		`CREATE TABLE IF NOT EXISTS institution_department_roles (
 			id BIGSERIAL PRIMARY KEY,
 			department_id BIGINT NOT NULL,
@@ -179,23 +180,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		   description = EXCLUDED.description,
 		   is_active = EXCLUDED.is_active,
 		   updated_at = NOW()`,
-		`WITH dedup AS (
-		     SELECT DISTINCT ON (er.employee_id)
-		            er.employee_id,
-		            ir.id AS role_id,
-		            COALESCE(er.created_at, NOW()) AS created_at
-		     FROM inst_employee_roles er
-		     JOIN institution_roles ir ON ir.tenant_id = er.tenant_id AND ir.code = er.role_code AND ir.deleted_at IS NULL
-		     JOIN employees e ON e.id = er.employee_id AND e.deleted_at IS NULL
-		     ORDER BY er.employee_id, COALESCE(er.created_at, NOW()) DESC, ir.id DESC
-		 )
-		 INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
-		 SELECT employee_id, role_id, created_at
-		 FROM dedup
-		 ON CONFLICT (employee_id)
-		 DO UPDATE SET
-		   role_id = EXCLUDED.role_id,
-		   created_at = EXCLUDED.created_at`,
 		`INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
 		 SELECT dr.department_id, ir.id, COALESCE(dr.is_default, true), COALESCE(dr.created_at, NOW())
 		 FROM inst_department_roles dr
@@ -824,6 +808,153 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			UNIQUE(prompt_id, kb_type)
 		)`,
 
+		// Analysis routing and audit compatibility
+		`CREATE TABLE IF NOT EXISTS callback_inbox (
+			id BIGSERIAL PRIMARY KEY,
+			vendor VARCHAR(64) NOT NULL,
+			source VARCHAR(64) NOT NULL,
+			event_type VARCHAR(128) NOT NULL,
+			device_no VARCHAR(128),
+			event_id VARCHAR(128),
+			order_no VARCHAR(128),
+			signature_ok BOOLEAN NOT NULL DEFAULT TRUE,
+			idempotency_key VARCHAR(256) NOT NULL,
+			payload_raw JSONB NOT NULL,
+			processed_status VARCHAR(32) NOT NULL DEFAULT 'received',
+			error_code VARCHAR(64),
+			error_message TEXT,
+			trace_id VARCHAR(128),
+			recording_id BIGINT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_callback_inbox_idempotency_key ON callback_inbox (idempotency_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_callback_inbox_vendor_created_at ON callback_inbox (vendor, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_callback_inbox_order_no ON callback_inbox (order_no)`,
+		`CREATE INDEX IF NOT EXISTS idx_callback_inbox_recording_id ON callback_inbox (recording_id)`,
+		`CREATE TABLE IF NOT EXISTS analysis_pipelines (
+			id BIGSERIAL PRIMARY KEY,
+			pipeline_code VARCHAR(128) NOT NULL,
+			pipeline_version VARCHAR(64) NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			scene_scope VARCHAR(64) NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'draft',
+			description TEXT,
+			release_note TEXT,
+			is_default_candidate BOOLEAN NOT NULL DEFAULT FALSE,
+			created_by BIGINT,
+			updated_by BIGINT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			deleted_at TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_pipelines_code_version ON analysis_pipelines (pipeline_code, pipeline_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_pipelines_status_scope ON analysis_pipelines (status, scene_scope, updated_at DESC)`,
+		`ALTER TABLE IF EXISTS analysis_pipelines ADD COLUMN IF NOT EXISTS release_note TEXT`,
+		`ALTER TABLE IF EXISTS analysis_pipelines ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
+		`CREATE TABLE IF NOT EXISTS analysis_role_routes (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			role_id BIGINT NOT NULL,
+			role_code_snapshot VARCHAR(128),
+			scene_scope VARCHAR(64) NOT NULL,
+			pipeline_code VARCHAR(128) NOT NULL,
+			pipeline_version VARCHAR(64) NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			status VARCHAR(32) NOT NULL DEFAULT 'draft',
+			effective_at TIMESTAMP NOT NULL,
+			published_at TIMESTAMP,
+			published_by BIGINT,
+			rolled_back_from_route_id BIGINT,
+			notes TEXT,
+			created_by BIGINT,
+			updated_by BIGINT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_role_routes_unique_version ON analysis_role_routes (tenant_id, role_id, scene_scope, effective_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_role_routes_lookup ON analysis_role_routes (tenant_id, role_id, scene_scope, enabled, effective_at DESC)`,
+		`ALTER TABLE IF EXISTS analysis_role_routes ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'draft'`,
+		`ALTER TABLE IF EXISTS analysis_role_routes ADD COLUMN IF NOT EXISTS published_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS analysis_role_routes ADD COLUMN IF NOT EXISTS published_by BIGINT`,
+		`ALTER TABLE IF EXISTS analysis_role_routes ADD COLUMN IF NOT EXISTS rolled_back_from_route_id BIGINT`,
+		`ALTER TABLE IF EXISTS analysis_role_routes ADD COLUMN IF NOT EXISTS notes TEXT`,
+		`CREATE TABLE IF NOT EXISTS analysis_runs (
+			id BIGSERIAL PRIMARY KEY,
+			recording_id BIGINT NOT NULL,
+			tenant_id BIGINT NOT NULL,
+			employee_id BIGINT,
+			resolved_role_id BIGINT,
+			resolved_role_code VARCHAR(128),
+			scene_scope VARCHAR(64),
+			pipeline_code VARCHAR(128) NOT NULL,
+			pipeline_version VARCHAR(64) NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'queued',
+			trigger_source VARCHAR(64) NOT NULL,
+			trace_id VARCHAR(128),
+			route_id BIGINT,
+			snapshot_version VARCHAR(128),
+			vendor_recording_id VARCHAR(128),
+			route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+			error_code VARCHAR(64),
+			error_message TEXT,
+			started_at TIMESTAMP,
+			ended_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_runs_recording_id ON analysis_runs (recording_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_runs_trace_id ON analysis_runs (trace_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_runs_status ON analysis_runs (status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_runs_pipeline ON analysis_runs (pipeline_code, pipeline_version, created_at DESC)`,
+		`ALTER TABLE IF EXISTS analysis_runs ADD COLUMN IF NOT EXISTS route_id BIGINT`,
+		`ALTER TABLE IF EXISTS analysis_runs ADD COLUMN IF NOT EXISTS snapshot_version VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS analysis_runs ADD COLUMN IF NOT EXISTS vendor_recording_id VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS analysis_runs ADD COLUMN IF NOT EXISTS route_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`CREATE TABLE IF NOT EXISTS analysis_step_runs (
+			id BIGSERIAL PRIMARY KEY,
+			run_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			step_code VARCHAR(128) NOT NULL,
+			step_name VARCHAR(255),
+			step_type VARCHAR(64) NOT NULL,
+			prompt_code VARCHAR(128),
+			prompt_version VARCHAR(64),
+			status VARCHAR(32) NOT NULL,
+			attempt INTEGER NOT NULL DEFAULT 1,
+			input_digest TEXT,
+			output_digest TEXT,
+			tokens_used INTEGER,
+			cost NUMERIC(18, 6),
+			execution_time_ms INTEGER,
+			started_at TIMESTAMP,
+			ended_at TIMESTAMP,
+			error_code VARCHAR(64),
+			error_message TEXT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_step_runs_run_id ON analysis_step_runs (run_id, created_at ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_step_runs_recording_id ON analysis_step_runs (recording_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analysis_step_runs_prompt_code ON analysis_step_runs (prompt_code, created_at DESC)`,
+		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS step_name VARCHAR(255)`,
+		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_role_id BIGINT`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_role_code VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_scene_scope VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_pipeline_code VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_pipeline_version VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS analysis_trace_id VARCHAR(128)`,
+		`CREATE INDEX IF NOT EXISTS idx_recordings_resolved_pipeline ON recordings (resolved_pipeline_code, resolved_pipeline_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_recordings_analysis_trace_id ON recordings (analysis_trace_id)`,
+		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS run_id BIGINT`,
+		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS step_run_id BIGINT`,
+		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS pipeline_code VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS pipeline_version VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE`,
+		`CREATE INDEX IF NOT EXISTS idx_recording_analysis_results_run_id ON recording_analysis_results (run_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_recording_analysis_results_active ON recording_analysis_results (recording_id, is_active, created_at DESC)`,
 	}
 
 	for i, stmt := range stmts {
@@ -832,6 +963,162 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
+	if err := seedBuiltinAnalysisPipelines(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed builtin analysis pipelines: %w", err)
+	}
+	if err := seedDefaultAnalysisRoutes(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed default analysis routes: %w", err)
+	}
+
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
+	return nil
+}
+
+type builtinAnalysisPipelineSeed struct {
+	Code        string
+	Version     string
+	Name        string
+	SceneScope  string
+	Description string
+	ReleaseNote string
+}
+
+func seedBuiltinAnalysisPipelines(ctx context.Context, pool *pgxpool.Pool) error {
+	seeds := []builtinAnalysisPipelineSeed{
+		{Code: "doctor", Version: "v1", Name: "医生录音分析 v1", SceneScope: "post_call_analysis", Description: "default doctor pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "therapist", Version: "v1", Name: "治疗师录音分析 v1", SceneScope: "post_call_analysis", Description: "default therapist pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "frontdesk", Version: "v1", Name: "前台录音分析 v1", SceneScope: "frontdesk_reception", Description: "default frontdesk pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "consultant", Version: "v1", Name: "咨询录音分析 v1", SceneScope: "admission_consult", Description: "default consultant pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "lingce_sales", Version: "v1", Name: "销售录音分析 v1", SceneScope: "admission_consult", Description: "default lingce sales pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "customer", Version: "v1", Name: "客户录音分析 v1", SceneScope: "followup_quality", Description: "default customer pipeline", ReleaseNote: "builtin pipeline"},
+	}
+	for _, seed := range seeds {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO analysis_pipelines (
+				pipeline_code, pipeline_version, name, scene_scope, status,
+				description, release_note, is_default_candidate,
+				created_at, updated_at, deleted_at
+			)
+			VALUES ($1, $2, $3, $4, 'published', $5, $6, TRUE, NOW(), NOW(), NULL)
+			ON CONFLICT (pipeline_code, pipeline_version) DO UPDATE
+			SET name = EXCLUDED.name,
+			    scene_scope = EXCLUDED.scene_scope,
+			    status = 'published',
+			    description = COALESCE(NULLIF(EXCLUDED.description, ''), analysis_pipelines.description),
+			    release_note = COALESCE(NULLIF(EXCLUDED.release_note, ''), analysis_pipelines.release_note),
+			    is_default_candidate = TRUE,
+			    deleted_at = NULL,
+			    updated_at = NOW()
+		`, seed.Code, seed.Version, seed.Name, seed.SceneScope, seed.Description, seed.ReleaseNote); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedDefaultAnalysisRoutes(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		WITH role_candidates AS (
+			SELECT tenant_id, id, lower(code) AS role_code
+			FROM institution_roles
+			WHERE deleted_at IS NULL
+			  AND lower(code) IN (
+			    'doctor',
+			    'doctor_assistant',
+			    'therapist',
+			    'frontdesk',
+			    'reception',
+			    'receptionist',
+			    'consultant',
+			    'lingce_sales',
+			    'customer',
+			    'customer_service',
+			    'nurse'
+			  )
+		),
+		route_seed AS (
+			SELECT
+				tenant_id,
+				id AS role_id,
+				role_code AS role_code_snapshot,
+				CASE
+					WHEN role_code IN ('doctor', 'doctor_assistant', 'therapist') THEN 'post_call_analysis'
+					WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk_reception'
+					WHEN role_code IN ('consultant', 'lingce_sales') THEN 'admission_consult'
+					WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'followup_quality'
+					ELSE 'post_call_analysis'
+				END AS scene_scope,
+				CASE
+					WHEN role_code IN ('doctor', 'doctor_assistant') THEN 'doctor'
+					WHEN role_code = 'therapist' THEN 'therapist'
+					WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk'
+					WHEN role_code = 'consultant' THEN 'consultant'
+					WHEN role_code = 'lingce_sales' THEN 'lingce_sales'
+					WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'customer'
+					ELSE 'doctor'
+				END AS pipeline_code,
+				'v1'::VARCHAR(64) AS pipeline_version
+			FROM role_candidates
+		),
+		seed_clock AS (
+			SELECT NOW() AS ts
+		)
+		INSERT INTO analysis_role_routes (
+			tenant_id,
+			role_id,
+			role_code_snapshot,
+			scene_scope,
+			pipeline_code,
+			pipeline_version,
+			enabled,
+			status,
+			effective_at,
+			published_at,
+			created_at,
+			updated_at
+		)
+		SELECT
+			rs.tenant_id,
+			rs.role_id,
+			rs.role_code_snapshot,
+			rs.scene_scope,
+			rs.pipeline_code,
+			rs.pipeline_version,
+			TRUE AS enabled,
+			'published' AS status,
+			sc.ts AS effective_at,
+			sc.ts AS published_at,
+			sc.ts AS created_at,
+			sc.ts AS updated_at
+		FROM route_seed rs
+		CROSS JOIN seed_clock sc
+		WHERE EXISTS (
+			SELECT 1
+			FROM analysis_pipelines ap
+			WHERE ap.pipeline_code = rs.pipeline_code
+			  AND ap.pipeline_version = rs.pipeline_version
+			  AND ap.deleted_at IS NULL
+		)
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM analysis_role_routes arr
+			WHERE arr.tenant_id = rs.tenant_id
+			  AND arr.role_id = rs.role_id
+			  AND arr.scene_scope = rs.scene_scope
+			  AND arr.pipeline_code = rs.pipeline_code
+			  AND arr.pipeline_version = rs.pipeline_version
+			  AND COALESCE(NULLIF(lower(arr.status), ''), 'draft') = 'published'
+			  AND arr.enabled = TRUE
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	var seededCount int64
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM analysis_role_routes WHERE status = 'published' AND enabled = TRUE`).Scan(&seededCount); err != nil {
+		return err
+	}
+	slog.Info("analysis route defaults ensured", "published_routes", seededCount)
 	return nil
 }

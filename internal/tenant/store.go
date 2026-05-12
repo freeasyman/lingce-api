@@ -396,12 +396,30 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO institution_employee_roles (employee_id, role_id, created_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (employee_id) DO UPDATE SET role_id = EXCLUDED.role_id
-	`, employeeID, adminRoleID)
+		DELETE FROM inst_employee_roles
+		WHERE tenant_id = $1 AND employee_id = $2
+	`, tenantID, employeeID)
+	if err != nil {
+		return fmt.Errorf("failed to clear existing tenant admin role: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at)
+		VALUES ($1, $2, 'admin', 'tenant_init', NOW())
+	`, tenantID, employeeID)
 	if err != nil {
 		return fmt.Errorf("failed to assign tenant admin role: %w", err)
+	}
+
+	// Tenant admins should start with access to the full institution menu set.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
+		SELECT $1, 'admin', m.id, NOW()
+		FROM inst_menus m
+		ON CONFLICT DO NOTHING
+	`, tenantID)
+	if err != nil {
+		return fmt.Errorf("failed to assign tenant admin menus: %w", err)
 	}
 	roleIDByCode := map[string]int64{
 		"admin": adminRoleID,

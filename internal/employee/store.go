@@ -52,10 +52,10 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		conditions = append(conditions, fmt.Sprintf(`
 			EXISTS (
 				SELECT 1
-				FROM institution_employee_roles er
-				JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
-				WHERE er.employee_id = employees.id
-				  AND lower(ir.code) = lower($%d)
+				FROM inst_employee_roles er
+				WHERE er.tenant_id = employees.tenant_id
+				  AND er.employee_id = employees.id
+				  AND lower(er.role_code) = lower($%d)
 			)
 		`, argIndex))
 		args = append(args, req.Role)
@@ -93,24 +93,45 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
-		       CASE
-		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
-		           ELSE full_name
-		       END AS full_name,
+		       COALESCE(
+		           NULLIF(NULLIF(full_name, 'unknown'), ''),
+		           NULLIF(NULLIF(name, 'unknown'), ''),
+		           NULLIF(username, ''),
+		           NULLIF(phone, ''),
+		           '未知员工'
+		       ) AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT ir.code
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT lower(er.role_code)
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT ir.name
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT COALESCE(
+		               (
+		                   SELECT ir.name
+		                   FROM institution_roles ir
+		                   WHERE ir.tenant_id = employees.tenant_id
+		                     AND lower(ir.code) = lower(er.role_code)
+		                     AND ir.deleted_at IS NULL
+		                   ORDER BY ir.id DESC
+		                   LIMIT 1
+		               ),
+		               (
+		                   SELECT NULLIF(r.name_cn, '')
+		                   FROM inst_roles r
+		                   WHERE lower(r.code) = lower(er.role_code)
+		                   ORDER BY r.code
+		                   LIMIT 1
+		               ),
+		               er.role_code
+		           )
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,
@@ -166,24 +187,45 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error) {
 	query := `
 		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
-		       CASE
-		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
-		           ELSE full_name
-		       END AS full_name,
+		       COALESCE(
+		           NULLIF(NULLIF(full_name, 'unknown'), ''),
+		           NULLIF(NULLIF(name, 'unknown'), ''),
+		           NULLIF(username, ''),
+		           NULLIF(phone, ''),
+		           '未知员工'
+		       ) AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT ir.code
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT lower(er.role_code)
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT ir.name
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT COALESCE(
+		               (
+		                   SELECT ir.name
+		                   FROM institution_roles ir
+		                   WHERE ir.tenant_id = employees.tenant_id
+		                     AND lower(ir.code) = lower(er.role_code)
+		                     AND ir.deleted_at IS NULL
+		                   ORDER BY ir.id DESC
+		                   LIMIT 1
+		               ),
+		               (
+		                   SELECT NULLIF(r.name_cn, '')
+		                   FROM inst_roles r
+		                   WHERE lower(r.code) = lower(er.role_code)
+		                   ORDER BY r.code
+		                   LIMIT 1
+		               ),
+		               er.role_code
+		           )
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,
@@ -271,6 +313,10 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 
 	if req.FullName != nil {
 		setClauses = append(setClauses, fmt.Sprintf("full_name = $%d", argIndex))
+		args = append(args, *req.FullName)
+		argIndex++
+
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIndex))
 		args = append(args, *req.FullName)
 		argIndex++
 	}
@@ -397,24 +443,45 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 
 	query := `
 		SELECT id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''),
-		       CASE
-		           WHEN full_name IS NULL OR full_name = '' OR full_name = 'unknown' THEN name
-		           ELSE full_name
-		       END AS full_name,
+		       COALESCE(
+		           NULLIF(NULLIF(full_name, 'unknown'), ''),
+		           NULLIF(NULLIF(name, 'unknown'), ''),
+		           NULLIF(username, ''),
+		           NULLIF(phone, ''),
+		           '未知员工'
+		       ) AS full_name,
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
-		           SELECT ir.code
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT lower(er.role_code)
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
-		           SELECT ir.name
-		           FROM institution_employee_roles er
-		           JOIN institution_roles ir ON ir.id = er.role_id AND ir.deleted_at IS NULL
+		           SELECT COALESCE(
+		               (
+		                   SELECT ir.name
+		                   FROM institution_roles ir
+		                   WHERE ir.tenant_id = employees.tenant_id
+		                     AND lower(ir.code) = lower(er.role_code)
+		                     AND ir.deleted_at IS NULL
+		                   ORDER BY ir.id DESC
+		                   LIMIT 1
+		               ),
+		               (
+		                   SELECT NULLIF(r.name_cn, '')
+		                   FROM inst_roles r
+		                   WHERE lower(r.code) = lower(er.role_code)
+		                   ORDER BY r.code
+		                   LIMIT 1
+		               ),
+		               er.role_code
+		           )
+		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
+		             AND er.tenant_id = employees.tenant_id
 		           ORDER BY er.created_at DESC
 		           LIMIT 1
 		       ), '') AS role_name,
@@ -487,7 +554,7 @@ func (s *Store) GetAbilityRanking(ctx context.Context, tenantID int64, limit int
 	query := `
 		SELECT
 			e.id,
-			COALESCE(NULLIF(e.name, ''), '未知员工') AS employee_name,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS employee_name,
 			COUNT(mr.id) AS recording_count,
 			COUNT(CASE WHEN mr.analysis_status = 'completed' THEN 1 END) AS completed_count
 		FROM employees e
@@ -520,7 +587,7 @@ func (s *Store) GetAbilityRanking(ctx context.Context, tenantID int64, limit int
 // GetEmployeeNameByID retrieves employee name by ID
 func (s *Store) GetEmployeeNameByID(ctx context.Context, employeeID, tenantID int64) (string, error) {
 	query := `
-		SELECT COALESCE(NULLIF(name, ''), '未知员工')
+		SELECT COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), NULLIF(username, ''), NULLIF(phone, ''), '未知员工')
 		FROM employees
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
 	`
@@ -543,7 +610,7 @@ func (s *Store) ListTenantEmployeesByTenantIDs(ctx context.Context, tenantIDs []
 	}
 
 	query := `
-		SELECT DISTINCT e.id, e.tenant_id, COALESCE(NULLIF(e.name, ''), e.phone, '未知员工')
+		SELECT DISTINCT e.id, e.tenant_id, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '未知员工')
 		FROM employees e
 		WHERE e.tenant_id = ANY($1) AND e.deleted_at IS NULL
 		ORDER BY e.id DESC

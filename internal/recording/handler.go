@@ -127,6 +127,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
 	mux.Handle("DELETE /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
 
+	// Analysis routing + audit endpoints
+	h.RegisterAnalysisRoutes(mux, jwtSecret)
+
 	// Front-desk Analysis endpoints
 	h.RegisterFrontdeskAnalysisRoutes(mux, jwtSecret)
 

@@ -167,6 +167,48 @@ func filterMenusByAllowedCodes(menus []*InstitutionMenu, allowed map[string]stru
 	return out
 }
 
+func buildInstitutionMenuTree(menus []*InstitutionMenu) []*InstitutionMenuResponse {
+	menuMap := make(map[int64]*InstitutionMenuResponse, len(menus))
+	roots := make([]*InstitutionMenuResponse, 0)
+
+	for _, m := range menus {
+		node := toInstitutionMenuResponse(m)
+		node.Children = []*InstitutionMenuResponse{}
+		menuMap[m.ID] = node
+	}
+
+	for _, m := range menus {
+		node := menuMap[m.ID]
+		if m.ParentID == nil {
+			roots = append(roots, node)
+			continue
+		}
+		if parent, ok := menuMap[*m.ParentID]; ok {
+			parent.Children = append(parent.Children, node)
+		}
+	}
+
+	return roots
+}
+
+// GetInstitutionMenuTree retrieves institution menus as a tree.
+func (s *Service) GetInstitutionMenuTree(ctx context.Context, tenantID *int64) ([]*InstitutionMenuResponse, error) {
+	menus, err := s.store.ListInstitutionMenus(ctx, tenantID, InstitutionMenuListRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if tenantID != nil {
+		unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, *tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted {
+			menus = filterMenusByAllowedCodes(menus, allowedCodes)
+		}
+	}
+	return buildInstitutionMenuTree(menus), nil
+}
+
 // GetInstitutionMenu retrieves an institution menu by ID
 func (s *Service) GetInstitutionMenu(ctx context.Context, tenantID *int64, id int64) (*InstitutionMenuResponse, error) {
 	menu, err := s.store.GetInstitutionMenuByID(ctx, tenantID, id)

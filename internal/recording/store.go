@@ -108,7 +108,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				(
 				%s = ANY($%d)
 				OR
-				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -116,17 +115,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				OR EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-				)
-			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
 			args = append(args, doctorScopeSceneCodes, doctorScopeRoleCodes)
 			argIndex += 2
 		case RecordingScopeConsultant:
@@ -136,7 +126,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				(
 				%s = ANY($%d)
 				OR
-				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -144,17 +133,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				OR EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-				)
-			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
 			args = append(args, consultantScopeSceneCodes, consultantScopeRoleCodes)
 			argIndex += 2
 
@@ -170,16 +150,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-			)`, businessScopeExpr, argIndex, argIndex))
+				)`, businessScopeExpr, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 
@@ -194,16 +166,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-			)`, businessScopeExpr, argIndex, argIndex))
+				)`, businessScopeExpr, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 		case RecordingScopeFrontdesk:
@@ -213,7 +177,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				(
 				%s = ANY($%d)
 				OR
-				(
 				EXISTS (
 					SELECT 1
 					FROM inst_employee_roles ier
@@ -221,17 +184,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				OR EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-				)
-			)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1, argIndex+1))
+				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
 			args = append(args, frontdeskScopeSceneCodes, frontdeskScopeRoleCodes)
 			argIndex += 2
 
@@ -247,16 +201,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 					  AND ier.employee_id = r.employee_id
 					  AND lower(ier.role_code) = ANY($%d)
 				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM institution_employee_roles ier2
-					JOIN institution_roles ir ON ir.id = ier2.role_id AND ir.deleted_at IS NULL
-					WHERE ir.tenant_id = r.tenant_id
-					  AND ier2.employee_id = r.employee_id
-					  AND lower(ir.code) = ANY($%d)
 				)
-				)
-			)`, businessScopeExpr, argIndex, argIndex))
+				)`, businessScopeExpr, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		}
@@ -399,8 +345,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			COALESCE(NULLIF(t.name, ''), CONCAT('租户#', r.tenant_id::text)) AS tenant_name,
 			r.employee_id,
 			COALESCE(
-				NULLIF(e.name, ''),
-				NULLIF(e.full_name, ''),
+				NULLIF(NULLIF(e.full_name, 'unknown'), ''),
+				NULLIF(NULLIF(e.name, 'unknown'), ''),
 				NULLIF(e.phone, ''),
 				NULLIF(oa.username, ''),
 				NULLIF(oa.email, ''),
@@ -516,8 +462,8 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			COALESCE(NULLIF(t.name, ''), CONCAT('租户#', r.tenant_id::text)) AS tenant_name,
 			r.employee_id,
 			COALESCE(
-				NULLIF(e.name, ''),
-				NULLIF(e.full_name, ''),
+				NULLIF(NULLIF(e.full_name, 'unknown'), ''),
+				NULLIF(NULLIF(e.name, 'unknown'), ''),
 				NULLIF(e.phone, ''),
 				NULLIF(oa.username, ''),
 				NULLIF(oa.email, ''),

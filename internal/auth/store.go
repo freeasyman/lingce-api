@@ -94,7 +94,11 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tenantID int64) (*Employee, error) {
 	query := `
 		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
-		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       CASE
+		           WHEN e.full_name IS NULL OR e.full_name = '' OR e.full_name = 'unknown'
+		               THEN COALESCE(NULLIF(e.name, ''), COALESCE(NULLIF(e.username, ''), e.phone))
+		           ELSE e.full_name
+		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
 		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
@@ -140,7 +144,11 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string) (*Employee, error) {
 	query := `
 		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
-		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       CASE
+		           WHEN e.full_name IS NULL OR e.full_name = '' OR e.full_name = 'unknown'
+		               THEN COALESCE(NULLIF(e.name, ''), COALESCE(NULLIF(e.username, ''), e.phone))
+		           ELSE e.full_name
+		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
 		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
@@ -220,7 +228,11 @@ func (s *Store) ListEmployeeTenantOptionsByLoginID(ctx context.Context, loginID 
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `
 		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
-		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       CASE
+		           WHEN e.full_name IS NULL OR e.full_name = '' OR e.full_name = 'unknown'
+		               THEN COALESCE(NULLIF(e.name, ''), COALESCE(NULLIF(e.username, ''), e.phone))
+		           ELSE e.full_name
+		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
 		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
@@ -266,7 +278,11 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employee, error) {
 	query := `
 		SELECT e.id, e.tenant_id, COALESCE(NULLIF(e.username, ''), e.name, e.phone) AS username, COALESCE(e.name, '') AS name, e.password_hash,
-		       COALESCE(NULLIF(e.full_name, ''), e.name, COALESCE(NULLIF(e.username, ''), e.phone)) AS full_name,
+		       CASE
+		           WHEN e.full_name IS NULL OR e.full_name = '' OR e.full_name = 'unknown'
+		               THEN COALESCE(NULLIF(e.name, ''), COALESCE(NULLIF(e.username, ''), e.phone))
+		           ELSE e.full_name
+		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
 		       (COALESCE(e.is_active, 1) <> 0) AS is_active,

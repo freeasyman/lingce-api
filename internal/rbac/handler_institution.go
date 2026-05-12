@@ -314,6 +314,23 @@ func (h *Handler) ListInstitutionMenus(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, menus)
 }
 
+// GetInstitutionMenuTree handles getting institution menus as a tree.
+func (h *Handler) GetInstitutionMenuTree(w http.ResponseWriter, r *http.Request) {
+	tenantID := h.getTenantID(r)
+	if tenantID == nil {
+		httputil.WriteForbidden(w, "Tenant access required")
+		return
+	}
+
+	menus, err := h.service.GetInstitutionMenuTree(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, menus)
+}
+
 // CreateInstitutionMenu handles creating an institution menu
 func (h *Handler) CreateInstitutionMenu(w http.ResponseWriter, r *http.Request) {
 	tenantID := h.getTenantID(r)

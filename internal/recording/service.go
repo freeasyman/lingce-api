@@ -20,11 +20,13 @@ import (
 )
 
 type Service struct {
-	store         *Store
-	employeeStore *employee.Store
-	workerURL     string
-	workerToken   string
-	httpClient    *http.Client
+	store             *Store
+	employeeStore     *employee.Store
+	workerURL         string
+	workerToken       string
+	lingceWorkerURL   string
+	lingceWorkerToken string
+	httpClient        *http.Client
 }
 
 type workerUnavailableError struct {
@@ -45,18 +47,44 @@ func (e *workerUnavailableError) Unwrap() error {
 	return e.cause
 }
 
+type recordingValidationError struct {
+	code    string
+	message string
+}
+
+func (e *recordingValidationError) Error() string {
+	if e == nil {
+		return "recording validation failed"
+	}
+	return e.message
+}
+
+func (e *recordingValidationError) Code() string {
+	if e == nil || strings.TrimSpace(e.code) == "" {
+		return "BAD_REQUEST"
+	}
+	return e.code
+}
+
+func IsRecordingValidationError(err error) bool {
+	var validationErr *recordingValidationError
+	return errors.As(err, &validationErr)
+}
+
 // IsWorkerUnavailable indicates whether an error is caused by recording-worker unavailability.
 func IsWorkerUnavailable(err error) bool {
 	var unavailable *workerUnavailableError
 	return errors.As(err, &unavailable)
 }
 
-func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken string) *Service {
+func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken string) *Service {
 	return &Service{
-		store:         store,
-		employeeStore: employeeStore,
-		workerURL:     strings.TrimRight(workerURL, "/"),
-		workerToken:   workerToken,
+		store:             store,
+		employeeStore:     employeeStore,
+		workerURL:         strings.TrimRight(workerURL, "/"),
+		workerToken:       workerToken,
+		lingceWorkerURL:   strings.TrimRight(lingceWorkerURL, "/"),
+		lingceWorkerToken: lingceWorkerToken,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -2070,14 +2098,73 @@ func (s *Service) DeleteBestPractice(ctx context.Context, recordingID int64) err
 // Placeholder methods for remaining endpoints (to be implemented)
 
 type workerJobRequest struct {
-	RecordingID int64  `json:"recording_id"`
-	TenantID    int64  `json:"tenant_id"`
-	JobType     string `json:"job_type"`
-	Force       bool   `json:"force,omitempty"`
+	RecordingID       int64  `json:"recording_id"`
+	TenantID          int64  `json:"tenant_id"`
+	JobType           string `json:"job_type"`
+	Force             bool   `json:"force,omitempty"`
+	TraceID           string `json:"trace_id,omitempty"`
+	TriggerSource     string `json:"trigger_source,omitempty"`
+	VendorRecordingID string `json:"vendor_recording_id,omitempty"`
 }
 
 type workerJobResponse struct {
 	JobID string `json:"job_id"`
+}
+
+func (s *Service) submitLingceWorkerJob(ctx context.Context, recordingID int64, jobType, triggerSource string) (string, error) {
+	if s.lingceWorkerURL == "" {
+		return "", &recordingValidationError{code: "LINGCE_WORKER_NOT_CONFIGURED", message: "lingce-worker url is not configured"}
+	}
+	if strings.TrimSpace(triggerSource) == "" {
+		triggerSource = "manual_replay"
+	}
+	url := fmt.Sprintf("%s/internal/jobs/enqueue?recording_id=%d&job_type=%s&trigger_source=%s", s.lingceWorkerURL, recordingID, jobType, triggerSource)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create lingce-worker request: %w", err)
+	}
+	if s.lingceWorkerToken != "" {
+		httpReq.Header.Set("X-Internal-Token", s.lingceWorkerToken)
+	}
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+			return "", &workerUnavailableError{cause: err}
+		}
+		return "", &workerUnavailableError{cause: err}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		message := strings.TrimSpace(errResp.Error)
+		if message == "" {
+			message = fmt.Sprintf("lingce-worker returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusBadRequest {
+			return "", &recordingValidationError{code: "JOB_REJECTED", message: message}
+		}
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			return "", &workerUnavailableError{cause: fmt.Errorf("lingce-worker returned status %d", resp.StatusCode)}
+		}
+		return "", errors.New(message)
+	}
+
+	var result struct {
+		Action string         `json:"action"`
+		Status string         `json:"status"`
+		Data   map[string]any `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode lingce-worker response: %w", err)
+	}
+	if status, ok := result.Data["status"].(string); ok && strings.TrimSpace(status) != "" {
+		return strings.TrimSpace(status), nil
+	}
+	return "queued", nil
 }
 
 func (s *Service) submitWorkerJob(ctx context.Context, req workerJobRequest) (string, error) {
@@ -2125,17 +2212,93 @@ func (s *Service) submitWorkerJob(ctx context.Context, req workerJobRequest) (st
 	return result.JobID, nil
 }
 
+func (s *Service) submitLingceWorkerReplay(ctx context.Context, recordingID int64) (string, error) {
+	if s.lingceWorkerURL == "" {
+		return "", &recordingValidationError{code: "LINGCE_WORKER_NOT_CONFIGURED", message: "lingce-worker url is not configured"}
+	}
+	url := fmt.Sprintf("%s/internal/analysis/replay?recording_id=%d&trigger_source=%s", s.lingceWorkerURL, recordingID, "manual_replay")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create lingce-worker request: %w", err)
+	}
+	if s.lingceWorkerToken != "" {
+		httpReq.Header.Set("X-Internal-Token", s.lingceWorkerToken)
+	}
+	resp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+			return "", &workerUnavailableError{cause: err}
+		}
+		return "", &workerUnavailableError{cause: err}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		message := strings.TrimSpace(errResp.Error)
+		if message == "" {
+			message = fmt.Sprintf("lingce-worker returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusBadRequest {
+			return "", &recordingValidationError{code: "REPLAY_REJECTED", message: message}
+		}
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			return "", &workerUnavailableError{cause: fmt.Errorf("lingce-worker returned status %d", resp.StatusCode)}
+		}
+		return "", errors.New(message)
+	}
+
+	var result struct {
+		Action string         `json:"action"`
+		Status string         `json:"status"`
+		Data   map[string]any `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode lingce-worker response: %w", err)
+	}
+	if runID, ok := result.Data["run_id"].(string); ok && strings.TrimSpace(runID) != "" {
+		return strings.TrimSpace(runID), nil
+	}
+	return "", fmt.Errorf("lingce-worker response missing run_id")
+}
+
+func (s *Service) ReanalyzeRecording(ctx context.Context, id int64) (string, error) {
+	if s.lingceWorkerURL == "" {
+		return s.TriggerAnalyze(ctx, id, TriggerAnalyzeRequest{Force: true})
+	}
+	if _, err := s.store.GetRecordingByID(ctx, id); err != nil {
+		return "", err
+	}
+	return s.submitLingceWorkerReplay(ctx, id)
+}
+
 func (s *Service) triggerWorkerJob(ctx context.Context, id int64, jobType string, force bool) (string, error) {
 	recording, err := s.store.GetRecordingByID(ctx, id)
 	if err != nil {
 		return "", err
 	}
 
+	if s.lingceWorkerURL != "" {
+		return s.submitLingceWorkerJob(ctx, id, jobType, "manual_replay")
+	}
+
+	traceID := fmt.Sprintf("trace-manual-%d-%d", id, time.Now().UnixNano())
+	vendorRecordingID := ""
+	if recording.DeviceNo != "" {
+		vendorRecordingID = recording.DeviceNo
+	}
 	jobID, err := s.submitWorkerJob(ctx, workerJobRequest{
-		RecordingID: id,
-		TenantID:    recording.TenantID,
-		JobType:     jobType,
-		Force:       force,
+		RecordingID:       id,
+		TenantID:          recording.TenantID,
+		JobType:           jobType,
+		Force:             force,
+		TraceID:           traceID,
+		TriggerSource:     "manual_replay",
+		VendorRecordingID: vendorRecordingID,
 	})
 	if err != nil {
 		return "", err
@@ -2248,7 +2411,7 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 	}
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT r.employee_id,
-		       COALESCE(NULLIF(e.name, ''), '未知医生') AS employee_name,
+		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知医生') AS employee_name,
 		       COALESCE(r.recorded_at, r.created_at) AS ts,
 		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result
 		FROM recordings r
@@ -2591,12 +2754,13 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT r.id,
 		       r.employee_id,
-		       COALESCE(NULLIF(e.name, ''), '未知医生') AS employee_name,
-		       COALESCE(r.patient_name, '') AS patient_name,
+		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知医生') AS employee_name,
+		       COALESCE(c.name, '') AS patient_name,
 		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 		       COALESCE(r.recorded_at, r.created_at) AS ts
 		FROM recordings r
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN customers c ON c.id = r.customer_id
 		WHERE r.tenant_id = $1
 		  AND r.analysis_status = 'completed'
 		  AND r.analysis_result IS NOT NULL
@@ -2978,11 +3142,12 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 		SELECT r.id,
 		       COALESCE(r.recorded_at, r.created_at) AS ts,
 		       r.employee_id,
-		       COALESCE(NULLIF(e.name, ''), '-') AS employee_name,
-		       COALESCE(r.patient_name, '') AS patient_name,
+		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '-') AS employee_name,
+		       COALESCE(c.name, '') AS patient_name,
 		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result
 		FROM recordings r
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN customers c ON c.id = r.customer_id
 		WHERE r.tenant_id = $1
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
@@ -3369,7 +3534,7 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT r.employee_id,
-		       COALESCE(NULLIF(e.name, ''), '未知员工') AS employee_name,
+		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工') AS employee_name,
 		       r.analysis_result,
 		       COALESCE(r.recorded_at, r.created_at) AS ts
 		FROM recordings r
@@ -3823,7 +3988,7 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 		)
 		SELECT
 			e.id AS eid,
-			COALESCE(NULLIF(e.name, ''), '未知员工') AS name,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS name,
 			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status IS NOT NULL) AS consultations,
 			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status = '成交了') AS deals,
 			COALESCE(SUM(r.converted_amount) FILTER (WHERE r.confirmed_deal_status = '成交了'), 0)::float8 AS amount,
@@ -3836,7 +4001,7 @@ func (s *Service) GetDailyReport(ctx context.Context, tenantID int64, dateFrom, 
 		JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN task_latest tl ON tl.recording_id = r.id
 		WHERE r.tenant_id = $1 %s
-		GROUP BY e.id, e.name
+		GROUP BY e.id, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工')
 		ORDER BY amount DESC
 		LIMIT 20
 	`, rangeClauseR)
@@ -4147,7 +4312,7 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 		)
 		SELECT
 			e.id AS eid,
-			COALESCE(NULLIF(e.name, ''), '未知员工') AS name,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS name,
 			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status IS NOT NULL) AS consultations,
 			COUNT(r.id) FILTER (WHERE r.confirmed_deal_status = '成交了') AS deal_count,
 			COALESCE(SUM(r.converted_amount) FILTER (WHERE r.confirmed_deal_status = '成交了'), 0)::float8 AS deal_amount,
@@ -4160,7 +4325,7 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, dateFrom, da
 		JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN task_latest tl ON tl.recording_id = r.id
 		WHERE r.tenant_id = $1 %s
-		GROUP BY e.id, e.name
+		GROUP BY e.id, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工')
 		ORDER BY deal_amount DESC
 		LIMIT 20
 	`, rangeClauseR)
@@ -4297,12 +4462,12 @@ func (s *Service) GetDashboardFunnelDetail(ctx context.Context, tenantID int64, 
 
 	rangeClauseR, rangeArgsR := buildDashboardDateRangeSQL(dateFrom, dateTo, 2, "r")
 	query := fmt.Sprintf(`
-		SELECT e.id AS eid, COALESCE(NULLIF(e.name,''), '未知员工') AS name, COUNT(DISTINCT r.id) AS cnt
+		SELECT e.id AS eid, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name,''), '未知员工') AS name, COUNT(DISTINCT r.id) AS cnt
 		FROM recordings r
 		JOIN employees e ON e.id = r.employee_id
 		WHERE r.tenant_id = $1
 		  AND %s %s
-		GROUP BY e.id, e.name
+		GROUP BY e.id, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name,''), '未知员工')
 		ORDER BY cnt DESC
 	`, cond, rangeClauseR)
 	rows, err := s.store.pool.Query(ctx, query, append([]interface{}{tenantID}, rangeArgsR...)...)
@@ -4685,7 +4850,7 @@ func (s *Service) enrichTaskListResponse(ctx context.Context, items []*TaskRespo
 		rows, err := s.store.pool.Query(ctx, `
 			SELECT
 				r.id AS recording_id,
-				COALESCE(e.name, '') AS owner_name,
+				COALESCE(NULLIF(e.full_name, ''), COALESCE(e.name, '')) AS owner_name,
 				CASE
 					WHEN EXISTS (
 						SELECT 1 FROM inst_employee_roles ier
