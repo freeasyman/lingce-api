@@ -195,38 +195,50 @@ type InstitutionMenuListRequest struct {
 
 // CreateInstitutionMenuRequest represents a request to create an institution menu
 type CreateInstitutionMenuRequest struct {
-	Name      string  `json:"name"`
-	Code      string  `json:"code"`
-	Path      *string `json:"path,omitempty"`
-	Icon      *string `json:"icon,omitempty"`
-	ParentID  *int64  `json:"parent_id,omitempty"`
-	SortOrder int     `json:"sort_order"`
+	Name                string  `json:"name"`
+	Code                string  `json:"code"`
+	Path                *string `json:"path,omitempty"`
+	Icon                *string `json:"icon,omitempty"`
+	ParentID            *int64  `json:"parent_id,omitempty"`
+	SortOrder           int     `json:"sort_order"`
+	IsFeatureAssignable bool    `json:"is_feature_assignable,omitempty"`
+	IsDefaultForAdmin   bool    `json:"is_default_for_admin,omitempty"`
+	FeatureCode         *string `json:"feature_code,omitempty"`
+	FeatureName         *string `json:"feature_name,omitempty"`
 }
 
 // UpdateInstitutionMenuRequest represents a request to update an institution menu
 type UpdateInstitutionMenuRequest struct {
-	Name      *string `json:"name,omitempty"`
-	Path      *string `json:"path,omitempty"`
-	Icon      *string `json:"icon,omitempty"`
-	ParentID  *int64  `json:"parent_id,omitempty"`
-	SortOrder *int    `json:"sort_order,omitempty"`
-	IsActive  *bool   `json:"is_active,omitempty"`
+	Name                *string `json:"name,omitempty"`
+	Path                *string `json:"path,omitempty"`
+	Icon                *string `json:"icon,omitempty"`
+	ParentID            *int64  `json:"parent_id,omitempty"`
+	SortOrder           *int    `json:"sort_order,omitempty"`
+	IsActive            *bool   `json:"is_active,omitempty"`
+	IsFeatureAssignable *bool   `json:"is_feature_assignable,omitempty"`
+	IsDefaultForAdmin   *bool   `json:"is_default_for_admin,omitempty"`
+	FeatureCode         *string `json:"feature_code,omitempty"`
+	FeatureName         *string `json:"feature_name,omitempty"`
 }
 
 // InstitutionMenuResponse represents an institution menu response
 type InstitutionMenuResponse struct {
-	ID        int64                      `json:"id"`
-	TenantID  *int64                     `json:"tenant_id,omitempty"`
-	Name      string                     `json:"name"`
-	Code      string                     `json:"code"`
-	Path      *string                    `json:"path,omitempty"`
-	Icon      *string                    `json:"icon,omitempty"`
-	ParentID  *int64                     `json:"parent_id,omitempty"`
-	SortOrder int                        `json:"sort_order"`
-	IsActive  bool                       `json:"is_active"`
-	Children  []*InstitutionMenuResponse `json:"children,omitempty"`
-	CreatedAt time.Time                  `json:"created_at"`
-	UpdatedAt time.Time                  `json:"updated_at"`
+	ID                  int64                      `json:"id"`
+	TenantID            *int64                     `json:"tenant_id,omitempty"`
+	Name                string                     `json:"name"`
+	Code                string                     `json:"code"`
+	Path                *string                    `json:"path,omitempty"`
+	Icon                *string                    `json:"icon,omitempty"`
+	ParentID            *int64                     `json:"parent_id,omitempty"`
+	SortOrder           int                        `json:"sort_order"`
+	IsActive            bool                       `json:"is_active"`
+	IsFeatureAssignable bool                       `json:"is_feature_assignable"`
+	IsDefaultForAdmin   bool                       `json:"is_default_for_admin"`
+	FeatureCode         *string                    `json:"feature_code,omitempty"`
+	FeatureName         *string                    `json:"feature_name,omitempty"`
+	Children            []*InstitutionMenuResponse `json:"children,omitempty"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	UpdatedAt           time.Time                  `json:"updated_at"`
 }
 
 // EmployeeRoleResponse represents an employee role response

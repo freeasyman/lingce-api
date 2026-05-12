@@ -411,11 +411,13 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		return fmt.Errorf("failed to assign tenant admin role: %w", err)
 	}
 
-	// Tenant admins should start with access to the full institution menu set.
+	// Tenant admins should start with access to menus explicitly marked as default admin menus.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
 		SELECT $1, 'admin', m.id, NOW()
 		FROM inst_menus m
+		WHERE COALESCE(m.is_active, true) = true
+		  AND COALESCE(m.is_default_for_admin, false) = true
 		ON CONFLICT DO NOTHING
 	`, tenantID)
 	if err != nil {

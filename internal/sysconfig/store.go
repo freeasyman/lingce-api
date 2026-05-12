@@ -16,23 +16,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-type featureOptionDomain struct {
-	RootMenuCode string
-	FeatureCode  string
-	FeatureName  string
-}
-
-var featureOptionDomains = []featureOptionDomain{
-	{RootMenuCode: "system", FeatureCode: "system_management", FeatureName: "系统管理"},
-	{RootMenuCode: "medical_recording_center", FeatureCode: "medical_recording_center", FeatureName: "医疗录音"},
-	{RootMenuCode: "recording_center", FeatureCode: "recording_center", FeatureName: "咨询录音"},
-	{RootMenuCode: "tasks_recording", FeatureCode: "tasks_recording", FeatureName: "录音任务"},
-	{RootMenuCode: "content-center", FeatureCode: "content_center", FeatureName: "内容中心"},
-	{RootMenuCode: "customers", FeatureCode: "customer_center", FeatureName: "客户中心"},
-	{RootMenuCode: "notifications", FeatureCode: "message_center", FeatureName: "消息中心"},
-	{RootMenuCode: "recording_badge_management", FeatureCode: "smart_badge", FeatureName: "工牌管理"},
-}
-
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -1055,11 +1038,17 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 	items := make([]MenuFeatureOptionItemResponse, 0)
 	if institutionExists {
 		rows, err := s.pool.Query(ctx, `
-			SELECT m.id, m.code, m.name, p.code AS parent_code, p.name AS parent_name, m.path
+			SELECT m.id,
+			       m.code,
+			       m.name,
+			       NULLIF(m.feature_code, '') AS parent_code,
+			       NULLIF(m.feature_name, '') AS parent_name,
+			       m.path
 			FROM institution_menus m
-			LEFT JOIN institution_menus p ON p.id = m.parent_id
-			WHERE m.deleted_at IS NULL AND m.is_active = true
-			ORDER BY m.sort_order, m.id
+			WHERE m.deleted_at IS NULL
+			  AND m.is_active = true
+			  AND COALESCE(m.is_feature_assignable, false) = true
+			ORDER BY COALESCE(m.feature_name, ''), m.sort_order, m.id
 		`)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query institution menu options: %w", err)
@@ -1072,15 +1061,20 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 			}
 			items = append(items, item)
 		}
-		return filterFeatureGroupMenuOptions(items), nil
+		return items, nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.code, m.name, p.code AS parent_code, p.name AS parent_name, m.path
+		SELECT m.id,
+		       m.code,
+		       m.name,
+		       NULLIF(m.feature_code, '') AS parent_code,
+		       NULLIF(m.feature_name, '') AS parent_name,
+		       m.path
 		FROM inst_menus m
-		LEFT JOIN inst_menus p ON p.id = m.parent_id
 		WHERE COALESCE(m.is_active, true) = true
-		ORDER BY COALESCE(m.order_index, 0), m.id
+		  AND COALESCE(m.is_feature_assignable, false) = true
+		ORDER BY COALESCE(m.feature_name, ''), COALESCE(m.order_index, 0), m.id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query inst menu options: %w", err)
@@ -1093,65 +1087,7 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 		}
 		items = append(items, item)
 	}
-	return filterFeatureGroupMenuOptions(items), nil
-}
-
-// filterFeatureGroupMenuOptions limits feature-group menu options to the
-// current institution menu domains and excludes legacy modules (knowledge/qa/reports, etc).
-func filterFeatureGroupMenuOptions(items []MenuFeatureOptionItemResponse) []MenuFeatureOptionItemResponse {
-	if len(items) == 0 {
-		return items
-	}
-
-	// Current institution domains used for tenant feature-group configuration.
-	allowedRoots := make(map[string]struct{}, len(featureOptionDomains))
-	for _, domain := range featureOptionDomains {
-		allowedRoots[domain.RootMenuCode] = struct{}{}
-	}
-
-	byCode := make(map[string]MenuFeatureOptionItemResponse, len(items))
-	for _, item := range items {
-		if strings.TrimSpace(item.Code) == "" {
-			continue
-		}
-		byCode[item.Code] = item
-	}
-
-	allowedCodes := make(map[string]struct{}, len(allowedRoots)*4)
-	for code := range allowedRoots {
-		if _, ok := byCode[code]; ok {
-			allowedCodes[code] = struct{}{}
-		}
-	}
-
-	changed := true
-	for changed {
-		changed = false
-		for _, item := range items {
-			if item.ParentCode == nil {
-				continue
-			}
-			parentCode := strings.TrimSpace(*item.ParentCode)
-			if parentCode == "" {
-				continue
-			}
-			if _, ok := allowedCodes[parentCode]; !ok {
-				continue
-			}
-			if _, exists := allowedCodes[item.Code]; !exists {
-				allowedCodes[item.Code] = struct{}{}
-				changed = true
-			}
-		}
-	}
-
-	filtered := make([]MenuFeatureOptionItemResponse, 0, len(allowedCodes))
-	for _, item := range items {
-		if _, ok := allowedCodes[item.Code]; ok {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
+	return items, nil
 }
 
 func buildFeatureOptionItems(menuItems []MenuFeatureOptionItemResponse) []FeatureOptionItemResponse {
@@ -1159,24 +1095,32 @@ func buildFeatureOptionItems(menuItems []MenuFeatureOptionItemResponse) []Featur
 		return []FeatureOptionItemResponse{}
 	}
 
-	menuCodes := make(map[string]struct{}, len(menuItems))
+	seenFeatures := make(map[string]struct{}, len(menuItems))
+	features := make([]FeatureOptionItemResponse, 0, len(menuItems))
 	for _, item := range menuItems {
-		if strings.TrimSpace(item.Code) == "" {
+		if item.ParentCode == nil || item.ParentName == nil {
 			continue
 		}
-		menuCodes[item.Code] = struct{}{}
-	}
-
-	features := make([]FeatureOptionItemResponse, 0, len(featureOptionDomains))
-	for _, domain := range featureOptionDomains {
-		if _, ok := menuCodes[domain.RootMenuCode]; !ok {
+		code := strings.TrimSpace(*item.ParentCode)
+		name := strings.TrimSpace(*item.ParentName)
+		if code == "" || name == "" {
 			continue
 		}
+		if _, exists := seenFeatures[code]; exists {
+			continue
+		}
+		seenFeatures[code] = struct{}{}
 		features = append(features, FeatureOptionItemResponse{
-			Code: domain.FeatureCode,
-			Name: domain.FeatureName,
+			Code: code,
+			Name: name,
 		})
 	}
+	sort.Slice(features, func(i, j int) bool {
+		if features[i].Name == features[j].Name {
+			return features[i].Code < features[j].Code
+		}
+		return features[i].Name < features[j].Name
+	})
 	return features
 }
 

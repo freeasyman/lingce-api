@@ -255,17 +255,21 @@ func (s *Service) DeleteInstitutionMenu(ctx context.Context, tenantID *int64, id
 // toInstitutionMenuResponse converts an InstitutionMenu to InstitutionMenuResponse
 func toInstitutionMenuResponse(m *InstitutionMenu) *InstitutionMenuResponse {
 	return &InstitutionMenuResponse{
-		ID:        m.ID,
-		TenantID:  m.TenantID,
-		Name:      m.Name,
-		Code:      m.Code,
-		Path:      m.Path,
-		Icon:      m.Icon,
-		ParentID:  m.ParentID,
-		SortOrder: m.SortOrder,
-		IsActive:  m.IsActive,
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
+		ID:                  m.ID,
+		TenantID:            m.TenantID,
+		Name:                m.Name,
+		Code:                m.Code,
+		Path:                m.Path,
+		Icon:                m.Icon,
+		ParentID:            m.ParentID,
+		SortOrder:           m.SortOrder,
+		IsActive:            m.IsActive,
+		IsFeatureAssignable: m.IsFeatureAssignable,
+		IsDefaultForAdmin:   m.IsDefaultForAdmin,
+		FeatureCode:         m.FeatureCode,
+		FeatureName:         m.FeatureName,
+		CreatedAt:           m.CreatedAt,
+		UpdatedAt:           m.UpdatedAt,
 	}
 }
 

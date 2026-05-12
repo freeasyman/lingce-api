@@ -502,6 +502,10 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 			SELECT id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id,
 			       COALESCE(order_index, 0) AS sort_order,
 			       COALESCE(is_active, true) AS is_active,
+			       COALESCE(is_feature_assignable, false) AS is_feature_assignable,
+			       COALESCE(is_default_for_admin, false) AS is_default_for_admin,
+			       NULLIF(feature_code, '') AS feature_code,
+			       NULLIF(feature_name, '') AS feature_name,
 			       created_at,
 			       COALESCE(created_at, NOW()) AS updated_at
 			FROM inst_menus
@@ -531,7 +535,7 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 		var menus []*InstitutionMenu
 		for rows.Next() {
 			var m InstitutionMenu
-			if err := rows.Scan(&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			if err := rows.Scan(&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt); err != nil {
 				return nil, fmt.Errorf("failed to scan inst menu: %w", err)
 			}
 			menus = append(menus, &m)
@@ -540,7 +544,12 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 	}
 
 	query := `
-		SELECT id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at
+		SELECT id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+		       COALESCE(is_feature_assignable, false) AS is_feature_assignable,
+		       COALESCE(is_default_for_admin, false) AS is_default_for_admin,
+		       NULLIF(feature_code, '') AS feature_code,
+		       NULLIF(feature_name, '') AS feature_name,
+		       created_at, updated_at
 		FROM institution_menus
 		WHERE deleted_at IS NULL
 	`
@@ -578,7 +587,7 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 	var menus []*InstitutionMenu
 	for rows.Next() {
 		var m InstitutionMenu
-		err := rows.Scan(&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt)
+		err := rows.Scan(&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan menu: %w", err)
 		}
@@ -672,6 +681,10 @@ func (s *Store) GetInstitutionMenuByID(ctx context.Context, tenantID *int64, id 
 			SELECT id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id,
 			       COALESCE(order_index, 0) AS sort_order,
 			       COALESCE(is_active, true) AS is_active,
+			       COALESCE(is_feature_assignable, false) AS is_feature_assignable,
+			       COALESCE(is_default_for_admin, false) AS is_default_for_admin,
+			       NULLIF(feature_code, '') AS feature_code,
+			       NULLIF(feature_name, '') AS feature_name,
 			       COALESCE(created_at, NOW()) AS created_at,
 			       COALESCE(created_at, NOW()) AS updated_at
 			FROM inst_menus
@@ -679,7 +692,7 @@ func (s *Store) GetInstitutionMenuByID(ctx context.Context, tenantID *int64, id 
 		`
 		var m InstitutionMenu
 		if err := s.pool.QueryRow(ctx, query, id).Scan(
-			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("legacy menu not found: %w", err)
 		}
@@ -687,7 +700,12 @@ func (s *Store) GetInstitutionMenuByID(ctx context.Context, tenantID *int64, id 
 	}
 
 	query := `
-		SELECT id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at
+		SELECT id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+		       COALESCE(is_feature_assignable, false) AS is_feature_assignable,
+		       COALESCE(is_default_for_admin, false) AS is_default_for_admin,
+		       NULLIF(feature_code, '') AS feature_code,
+		       NULLIF(feature_name, '') AS feature_name,
+		       created_at, updated_at
 		FROM institution_menus
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -702,7 +720,7 @@ func (s *Store) GetInstitutionMenuByID(ctx context.Context, tenantID *int64, id 
 
 	var m InstitutionMenu
 	err = s.pool.QueryRow(ctx, query, args...).Scan(
-		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("menu not found: %w", err)
@@ -719,17 +737,21 @@ func (s *Store) CreateInstitutionMenu(ctx context.Context, tenantID *int64, req 
 	}
 	if !institutionMenusExists {
 		query := `
-			INSERT INTO inst_menus (code, name, path, icon, parent_id, order_index, is_active, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, true, NOW())
+			INSERT INTO inst_menus (code, name, path, icon, parent_id, order_index, is_active, is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, NULLIF($9, ''), NULLIF($10, ''), NOW())
 			RETURNING id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id,
 			          COALESCE(order_index, 0) AS sort_order,
 			          COALESCE(is_active, true) AS is_active,
+			          COALESCE(is_feature_assignable, false) AS is_feature_assignable,
+			          COALESCE(is_default_for_admin, false) AS is_default_for_admin,
+			          NULLIF(feature_code, '') AS feature_code,
+			          NULLIF(feature_name, '') AS feature_name,
 			          COALESCE(created_at, NOW()) AS created_at,
 			          COALESCE(created_at, NOW()) AS updated_at
 		`
 		var m InstitutionMenu
-		if err := s.pool.QueryRow(ctx, query, req.Code, req.Name, req.Path, req.Icon, req.ParentID, req.SortOrder).Scan(
-			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		if err := s.pool.QueryRow(ctx, query, req.Code, req.Name, req.Path, req.Icon, req.ParentID, req.SortOrder, req.IsFeatureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
+			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to create legacy menu: %w", err)
 		}
@@ -737,14 +759,15 @@ func (s *Store) CreateInstitutionMenu(ctx context.Context, tenantID *int64, req 
 	}
 
 	query := `
-		INSERT INTO institution_menus (tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())
-		RETURNING id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at
+		INSERT INTO institution_menus (tenant_id, name, code, path, icon, parent_id, sort_order, is_active, is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NOW(), NOW())
+		RETURNING id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+		          COALESCE(is_feature_assignable, false), COALESCE(is_default_for_admin, false), NULLIF(feature_code, ''), NULLIF(feature_name, ''), created_at, updated_at
 	`
 
 	var m InstitutionMenu
-	err = s.pool.QueryRow(ctx, query, tenantID, req.Name, req.Code, req.Path, req.Icon, req.ParentID, req.SortOrder).Scan(
-		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+	err = s.pool.QueryRow(ctx, query, tenantID, req.Name, req.Code, req.Path, req.Icon, req.ParentID, req.SortOrder, req.IsFeatureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
+		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create menu: %w", err)
@@ -761,7 +784,7 @@ func (s *Store) UpdateInstitutionMenu(ctx context.Context, tenantID *int64, id i
 	}
 	if !institutionMenusExists {
 		query := "UPDATE inst_menus SET"
-		updates := make([]string, 0, 6)
+		updates := make([]string, 0, 10)
 		args := []interface{}{}
 		argPos := 1
 
@@ -795,16 +818,36 @@ func (s *Store) UpdateInstitutionMenu(ctx context.Context, tenantID *int64, id i
 			args = append(args, *req.IsActive)
 			argPos++
 		}
+		if req.IsFeatureAssignable != nil {
+			updates = append(updates, fmt.Sprintf(" is_feature_assignable = $%d", argPos))
+			args = append(args, *req.IsFeatureAssignable)
+			argPos++
+		}
+		if req.IsDefaultForAdmin != nil {
+			updates = append(updates, fmt.Sprintf(" is_default_for_admin = $%d", argPos))
+			args = append(args, *req.IsDefaultForAdmin)
+			argPos++
+		}
+		if req.FeatureCode != nil {
+			updates = append(updates, fmt.Sprintf(" feature_code = NULLIF($%d, '')", argPos))
+			args = append(args, *req.FeatureCode)
+			argPos++
+		}
+		if req.FeatureName != nil {
+			updates = append(updates, fmt.Sprintf(" feature_name = NULLIF($%d, '')", argPos))
+			args = append(args, *req.FeatureName)
+			argPos++
+		}
 		if len(updates) == 0 {
 			return s.GetInstitutionMenuByID(ctx, tenantID, id)
 		}
 
-		query += fmt.Sprintf("%s WHERE id = $%d RETURNING id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id, COALESCE(order_index, 0), COALESCE(is_active, true), COALESCE(created_at, NOW()), COALESCE(created_at, NOW())", strings.Join(updates, ","), argPos)
+		query += fmt.Sprintf("%s WHERE id = $%d RETURNING id, NULL::bigint AS tenant_id, name, code, path, icon, parent_id, COALESCE(order_index, 0), COALESCE(is_active, true), COALESCE(is_feature_assignable, false), COALESCE(is_default_for_admin, false), NULLIF(feature_code, ''), NULLIF(feature_name, ''), COALESCE(created_at, NOW()), COALESCE(created_at, NOW())", strings.Join(updates, ","), argPos)
 		args = append(args, id)
 
 		var m InstitutionMenu
 		if err := s.pool.QueryRow(ctx, query, args...).Scan(
-			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to update legacy menu: %w", err)
 		}
@@ -850,6 +893,26 @@ func (s *Store) UpdateInstitutionMenu(ctx context.Context, tenantID *int64, id i
 		args = append(args, *req.IsActive)
 		argPos++
 	}
+	if req.IsFeatureAssignable != nil {
+		query += fmt.Sprintf(", is_feature_assignable = $%d", argPos)
+		args = append(args, *req.IsFeatureAssignable)
+		argPos++
+	}
+	if req.IsDefaultForAdmin != nil {
+		query += fmt.Sprintf(", is_default_for_admin = $%d", argPos)
+		args = append(args, *req.IsDefaultForAdmin)
+		argPos++
+	}
+	if req.FeatureCode != nil {
+		query += fmt.Sprintf(", feature_code = NULLIF($%d, '')", argPos)
+		args = append(args, *req.FeatureCode)
+		argPos++
+	}
+	if req.FeatureName != nil {
+		query += fmt.Sprintf(", feature_name = NULLIF($%d, '')", argPos)
+		args = append(args, *req.FeatureName)
+		argPos++
+	}
 
 	query += fmt.Sprintf(" WHERE id = $%d AND deleted_at IS NULL", argPos)
 	args = append(args, id)
@@ -861,11 +924,11 @@ func (s *Store) UpdateInstitutionMenu(ctx context.Context, tenantID *int64, id i
 		query += " AND tenant_id IS NULL"
 	}
 
-	query += " RETURNING id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at"
+	query += " RETURNING id, tenant_id, name, code, path, icon, parent_id, sort_order, is_active, COALESCE(is_feature_assignable, false), COALESCE(is_default_for_admin, false), NULLIF(feature_code, ''), NULLIF(feature_name, ''), created_at, updated_at"
 
 	var m InstitutionMenu
 	err = s.pool.QueryRow(ctx, query, args...).Scan(
-		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.CreatedAt, &m.UpdatedAt,
+		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update menu: %w", err)
@@ -1421,4 +1484,11 @@ func (s *Store) RemoveDepartmentRole(ctx context.Context, departmentID int64) er
 		return fmt.Errorf("failed to remove department role: %w", err)
 	}
 	return nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

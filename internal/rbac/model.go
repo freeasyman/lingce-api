@@ -80,18 +80,22 @@ type InstitutionRole struct {
 
 // InstitutionMenu represents an institution menu item
 type InstitutionMenu struct {
-	ID        int64      `json:"id"`
-	TenantID  *int64     `json:"tenant_id,omitempty"` // NULL means global menu
-	Name      string     `json:"name"`
-	Code      string     `json:"code"`
-	Path      *string    `json:"path,omitempty"`
-	Icon      *string    `json:"icon,omitempty"`
-	ParentID  *int64     `json:"parent_id,omitempty"`
-	SortOrder int        `json:"sort_order"`
-	IsActive  bool       `json:"is_active"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	ID                  int64      `json:"id"`
+	TenantID            *int64     `json:"tenant_id,omitempty"` // NULL means global menu
+	Name                string     `json:"name"`
+	Code                string     `json:"code"`
+	Path                *string    `json:"path,omitempty"`
+	Icon                *string    `json:"icon,omitempty"`
+	ParentID            *int64     `json:"parent_id,omitempty"`
+	SortOrder           int        `json:"sort_order"`
+	IsActive            bool       `json:"is_active"`
+	IsFeatureAssignable bool       `json:"is_feature_assignable"`
+	IsDefaultForAdmin   bool       `json:"is_default_for_admin"`
+	FeatureCode         *string    `json:"feature_code,omitempty"`
+	FeatureName         *string    `json:"feature_name,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	DeletedAt           *time.Time `json:"deleted_at,omitempty"`
 }
 
 // InstitutionPermission represents an institution permission
