@@ -848,7 +848,11 @@ func renderContentPromptTemplate(tpl string, req GenerateContentRequest, context
 		"style":                   styleText,
 		"length":                  fmt.Sprintf("%d", length),
 		"word_count":              fmt.Sprintf("%d", length),
+		"slide_count":             intPtrToString(req.SlideCount),
 		"content_type":            valueOrDefaultStringPtr(req.ContentType, "article"),
+		"note_style":              valueOrDefaultStringPtr(req.NoteStyle, ""),
+		"script_type":             valueOrDefaultStringPtr(req.ScriptType, ""),
+		"platform":                valueOrDefaultStringPtr(req.Platform, ""),
 		"selected_headline":       valueOrDefaultStringPtr(req.SelectedTitle, req.Title),
 		"strategy_text":           valueOrDefaultStringPtr(req.StrategyText, ""),
 		"additional_requirements": valueOrDefaultStringPtr(req.AdditionalRequirements, ""),
@@ -857,6 +861,13 @@ func renderContentPromptTemplate(tpl string, req GenerateContentRequest, context
 		prompt = strings.ReplaceAll(prompt, "{{"+key+"}}", value)
 	}
 	return prompt
+}
+
+func intPtrToString(v *int) string {
+	if v == nil || *v <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", *v)
 }
 
 func valueOrDefaultStringPtr(v *string, fallback string) string {
