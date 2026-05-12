@@ -30,6 +30,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
 	mux.Handle("POST /api/v1/tenants", authMw(http.HandlerFunc(h.CreateTenant)))
 	mux.Handle("PUT /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
+	mux.Handle("PATCH /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
 	mux.Handle("DELETE /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.DeleteTenant)))
 
 	// Tenant subscription actions (admin only)
@@ -42,10 +43,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/tenants/{id}/feature-group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
 	mux.Handle("GET /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.GetFeatureOverrides)))
 	mux.Handle("PUT /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
+	mux.Handle("PATCH /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
 
 	// Tenant profile (tenant-scoped)
 	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
 	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
+	mux.Handle("PATCH /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("GET /api/v1/tenants/{id}/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
 	mux.Handle("GET /api/v1/tenants/{id}/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
 
