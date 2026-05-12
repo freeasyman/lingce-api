@@ -187,6 +187,46 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		 JOIN departments d ON d.id = dr.department_id AND d.deleted_at IS NULL
 		 ON CONFLICT (department_id)
 		 DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default`,
+		`UPDATE inst_roles
+		 SET description = CASE lower(code)
+		     WHEN 'consultant' THEN '负责患者咨询与跟进'
+		     WHEN 'customer_service' THEN '负责电话与在线接待，处理客户咨询'
+		     WHEN 'doctor_assistant' THEN '协助医生完成接诊记录与患者沟通'
+		     WHEN 'employee' THEN '普通员工角色'
+		     WHEN 'marketing_manager' THEN '负责内容运营、客资管理、客户档案与知识库'
+		     WHEN 'operating_manager' THEN '负责运营数据、任务与报表管理'
+		     WHEN 'therapist' THEN '负责康复治疗与治疗记录'
+		     ELSE description
+		 END
+		 WHERE lower(code) IN (
+		     'consultant',
+		     'customer_service',
+		     'doctor_assistant',
+		     'employee',
+		     'marketing_manager',
+		     'operating_manager',
+		     'therapist'
+		 )`,
+		`UPDATE institution_roles
+		 SET description = CASE lower(code)
+		     WHEN 'consultant' THEN '负责患者咨询与跟进'
+		     WHEN 'customer_service' THEN '负责电话与在线接待，处理客户咨询'
+		     WHEN 'doctor_assistant' THEN '协助医生完成接诊记录与患者沟通'
+		     WHEN 'employee' THEN '普通员工角色'
+		     WHEN 'marketing_manager' THEN '负责内容运营、客资管理、客户档案与知识库'
+		     WHEN 'operating_manager' THEN '负责运营数据、任务与报表管理'
+		     WHEN 'therapist' THEN '负责康复治疗与治疗记录'
+		     ELSE description
+		 END
+		 WHERE lower(code) IN (
+		     'consultant',
+		     'customer_service',
+		     'doctor_assistant',
+		     'employee',
+		     'marketing_manager',
+		     'operating_manager',
+		     'therapist'
+		 )`,
 
 		// Content module compatibility (deleted_at + missing content_items table)
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
