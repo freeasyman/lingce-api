@@ -196,27 +196,28 @@ type UpdateContentRequest struct {
 
 // GenerateContentRequest represents AI content generation request
 type GenerateContentRequest struct {
-	TopicID       *int64     `json:"topic_id,omitempty"`
-	SeedID        *int64     `json:"seed_id,omitempty"`
-	Title         string     `json:"title"`
-	ContentType   *string    `json:"content_type,omitempty"`
-	Platform      *string    `json:"platform,omitempty"`
-	Context       *string    `json:"context,omitempty"`
-	Style         *string    `json:"style,omitempty"`
-	Length        *int       `json:"length,omitempty"`
-	WordCount     *int       `json:"word_count,omitempty"`
-	Duration      *int       `json:"duration,omitempty"`
-	Subtitle      *string    `json:"subtitle,omitempty"`
-	ScriptType    *string    `json:"script_type,omitempty"`
-	SlideCount    *int       `json:"slide_count,omitempty"`
-	NoteStyle     *string    `json:"note_style,omitempty"`
-	IncludeExpert *bool      `json:"include_expert,omitempty"`
-	IncludeKnowledge *bool   `json:"include_knowledge,omitempty"`
-	AdditionalRequirements *string `json:"additional_requirements,omitempty"`
-	StrategyText  *string    `json:"strategy_text,omitempty"`
-	SelectedTitle *string    `json:"selected_headline,omitempty"`
-	PromptTemplateID *int64  `json:"prompt_template_id,omitempty"`
-	ExtraData     JSONObject `json:"extra_data,omitempty"`
+	ContentID              *int64     `json:"content_id,omitempty"`
+	TopicID                *int64     `json:"topic_id,omitempty"`
+	SeedID                 *int64     `json:"seed_id,omitempty"`
+	Title                  string     `json:"title"`
+	ContentType            *string    `json:"content_type,omitempty"`
+	Platform               *string    `json:"platform,omitempty"`
+	Context                *string    `json:"context,omitempty"`
+	Style                  *string    `json:"style,omitempty"`
+	Length                 *int       `json:"length,omitempty"`
+	WordCount              *int       `json:"word_count,omitempty"`
+	Duration               *int       `json:"duration,omitempty"`
+	Subtitle               *string    `json:"subtitle,omitempty"`
+	ScriptType             *string    `json:"script_type,omitempty"`
+	SlideCount             *int       `json:"slide_count,omitempty"`
+	NoteStyle              *string    `json:"note_style,omitempty"`
+	IncludeExpert          *bool      `json:"include_expert,omitempty"`
+	IncludeKnowledge       *bool      `json:"include_knowledge,omitempty"`
+	AdditionalRequirements *string    `json:"additional_requirements,omitempty"`
+	StrategyText           *string    `json:"strategy_text,omitempty"`
+	SelectedTitle          *string    `json:"selected_headline,omitempty"`
+	PromptTemplateID       *int64     `json:"prompt_template_id,omitempty"`
+	ExtraData              JSONObject `json:"extra_data,omitempty"`
 }
 
 // Publish Task DTOs

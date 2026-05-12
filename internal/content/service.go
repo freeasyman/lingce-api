@@ -590,6 +590,35 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		ExtraData:       req.ExtraData,
 	}
 	enrichContentRequestExtraData(&createReq)
+
+	if req.ContentID != nil && *req.ContentID > 0 {
+		existing, err := s.store.GetContentByID(ctx, *req.ContentID)
+		if err != nil {
+			return nil, err
+		}
+		if existing.TenantID != tenantID {
+			return nil, fmt.Errorf("content does not belong to tenant %d", tenantID)
+		}
+
+		updateReq := UpdateContentRequest{
+			Title:           &req.Title,
+			Content:         &generatedText,
+			Subtitle:        req.Subtitle,
+			ContentType:     req.ContentType,
+			Platform:        req.Platform,
+			ScriptStructure: generatedNoteStructure,
+			NoteStructure:   generatedNoteStructure,
+			ExtraData:       req.ExtraData,
+		}
+		enrichUpdateContentExtraData(&updateReq)
+
+		item, err := s.store.UpdateContent(ctx, *req.ContentID, updateReq)
+		if err != nil {
+			return nil, err
+		}
+		return toContentResponse(item), nil
+	}
+
 	item, err := s.store.CreateContent(ctx, tenantID, createdBy, createReq)
 	if err != nil {
 		return nil, err
