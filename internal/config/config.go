@@ -39,6 +39,8 @@ type ExternalConfig struct {
 	BadgeCallbackGatewayToken string
 	RecordingWorkerURL        string
 	RecordingWorkerToken      string
+	LingceWorkerURL           string
+	LingceWorkerToken         string
 	TicketNotifySMTPHost      string
 	TicketNotifySMTPPort      int
 	TicketNotifySMTPUser      string
@@ -86,6 +88,8 @@ func Load() (*Config, error) {
 			BadgeCallbackGatewayToken: getEnv("BADGE_CALLBACK_GATEWAY_TOKEN", ""),
 			RecordingWorkerURL:        getEnv("RECORDING_WORKER_URL", "http://localhost:18090"),
 			RecordingWorkerToken:      getEnv("RECORDING_WORKER_TOKEN", ""),
+			LingceWorkerURL:           getEnv("LINGCE_WORKER_URL", ""),
+			LingceWorkerToken:         getEnv("LINGCE_WORKER_TOKEN", ""),
 			TicketNotifySMTPHost:      getEnv("TICKET_NOTIFY_SMTP_HOST", ""),
 			TicketNotifySMTPPort:      getEnvInt("TICKET_NOTIFY_SMTP_PORT", 25),
 			TicketNotifySMTPUser:      getEnv("TICKET_NOTIFY_SMTP_USER", ""),

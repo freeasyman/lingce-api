@@ -2,7 +2,7 @@ package recording
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -261,8 +261,17 @@ func (h *Handler) ReanalyzeRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.service.TriggerAnalyze(r.Context(), id, TriggerAnalyzeRequest{Force: true})
+	jobID, err := h.service.ReanalyzeRecording(r.Context(), id)
 	if err != nil {
+		if IsRecordingValidationError(err) {
+			code := "BAD_REQUEST"
+			var validationErr interface{ Code() string }
+			if errors.As(err, &validationErr) {
+				code = validationErr.Code()
+			}
+			httputil.WriteError(w, http.StatusBadRequest, code, err.Error(), map[string]any{"recording_id": id})
+			return
+		}
 		if IsWorkerUnavailable(err) {
 			httputil.WriteError(w, http.StatusServiceUnavailable, "WORKER_UNAVAILABLE", "recording worker unavailable, please retry", nil)
 			return
@@ -696,24 +705,7 @@ func (h *Handler) GenerateOperationsPlan(w http.ResponseWriter, r *http.Request)
 		"tenant_id":    rec.TenantID,
 		"context":      req.Context,
 	}
-	resultPayload := map[string]interface{}{
-		"summary":  fmt.Sprintf("针对录音 %d 生成运营计划", rec.ID),
-		"priority": "medium",
-		"actions": []map[string]interface{}{
-			{
-				"title":    "24小时内完成首轮触达",
-				"owner_id": rec.EmployeeID,
-				"due_in":   "24h",
-			},
-			{
-				"title":    "48小时内复盘转化障碍",
-				"owner_id": rec.EmployeeID,
-				"due_in":   "48h",
-			},
-		},
-	}
 	requestPayloadJSON, _ := json.Marshal(requestPayload)
-	resultPayloadJSON, _ := json.Marshal(resultPayload)
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 
 	var jobID int64
@@ -722,9 +714,26 @@ func (h *Handler) GenerateOperationsPlan(w http.ResponseWriter, r *http.Request)
 			recording_id, tenant_id, requested_by, status, request_payload, result_payload,
 			idempotency_key, started_at, completed_at, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, 'completed', $4::jsonb, $5::jsonb, NULLIF($6, ''), NOW(), NOW(), NOW(), NOW())
+		VALUES ($1, $2, $3, 'pending', $4::jsonb, NULL, NULLIF($5, ''), NULL, NULL, NOW(), NOW())
 		RETURNING id
-	`, rec.ID, rec.TenantID, claims.UserID, string(requestPayloadJSON), string(resultPayloadJSON), idempotencyKey).Scan(&jobID); err != nil {
+	`, rec.ID, rec.TenantID, claims.UserID, string(requestPayloadJSON), idempotencyKey).Scan(&jobID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if _, err := h.service.submitLingceWorkerJob(r.Context(), rec.ID, "ops_plan", "manual_ops_plan"); err != nil {
+		_, _ = h.service.store.pool.Exec(r.Context(), `
+			UPDATE recording_operations_plan_jobs
+			SET status = 'failed', error_message = $2, updated_at = NOW()
+			WHERE id = $1
+		`, jobID, err.Error())
+		if IsWorkerUnavailable(err) {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "WORKER_UNAVAILABLE", "recording worker unavailable, please retry", nil)
+			return
+		}
+		if IsRecordingValidationError(err) {
+			httputil.WriteError(w, http.StatusBadRequest, "OPS_PLAN_REJECTED", err.Error(), nil)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -784,6 +793,31 @@ func (h *Handler) GetOperationsPlanJobStatus(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		httputil.WriteNotFound(w, "Operations plan job not found")
 		return
+	}
+
+	if status != "completed" {
+		var operationsPlanJSON []byte
+		checkErr := h.service.store.pool.QueryRow(r.Context(), `
+			SELECT COALESCE(analysis_result->'operations_plan', '{}'::jsonb)::text::jsonb
+			FROM recordings
+			WHERE id = $1
+			  AND analysis_result IS NOT NULL
+			  AND analysis_result ? 'operations_plan'
+		`, id).Scan(&operationsPlanJSON)
+		if checkErr == nil && len(operationsPlanJSON) > 0 {
+			_, _ = h.service.store.pool.Exec(r.Context(), `
+				UPDATE recording_operations_plan_jobs
+				SET status = 'completed',
+				    result_payload = $2::jsonb,
+				    completed_at = NOW(),
+				    updated_at = NOW()
+				WHERE id = $1
+			`, jobIDInt, string(operationsPlanJSON))
+			status = "completed"
+			resultJSON = operationsPlanJSON
+			errorMessage = nil
+			updatedAt = time.Now()
+		}
 	}
 
 	var result interface{}

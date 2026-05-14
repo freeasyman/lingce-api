@@ -1,9 +1,7 @@
 package badge
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -432,33 +430,22 @@ func (s *Service) enqueueTranscribeJob(ctx context.Context, recordingID, tenantI
 		return nil
 	}
 	if s.workerURL == "" {
-		return fmt.Errorf("recording worker url is not configured")
+		return fmt.Errorf("lingce-worker url is not configured")
 	}
-
-	reqBody, err := json.Marshal(map[string]interface{}{
-		"recording_id": recordingID,
-		"tenant_id":    tenantID,
-		"job_type":     "transcribe",
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/internal/jobs/enqueue?recording_id=%d&job_type=transcribe&trigger_source=badge_callback", s.workerURL, recordingID), nil)
 	if err != nil {
-		return fmt.Errorf("marshal worker job request: %w", err)
+		return fmt.Errorf("create lingce-worker request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.workerURL+"/v1/jobs", bytes.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("create worker request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 	if s.workerToken != "" {
 		req.Header.Set("X-Internal-Token", s.workerToken)
-		req.Header.Set("Authorization", "Bearer "+s.workerToken)
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("call recording worker: %w", err)
+		return fmt.Errorf("call lingce-worker: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("recording worker status=%d", resp.StatusCode)
+		return fmt.Errorf("lingce-worker status=%d", resp.StatusCode)
 	}
 	return nil
 }

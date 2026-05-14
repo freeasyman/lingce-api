@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,11 +19,11 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
-	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/sandbox"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/internal/support"
@@ -140,7 +141,7 @@ func main() {
 
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
-	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken)
+	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken)
 	recHandler := recording.NewHandler(recService)
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -200,10 +201,17 @@ func main() {
 		empStore,
 		cfg.External.BadgeMiddlewareURL,
 		cfg.External.BadgeMiddlewareToken,
-		cfg.External.RecordingWorkerURL,
-		cfg.External.RecordingWorkerToken,
+		cfg.External.LingceWorkerURL,
+		cfg.External.LingceWorkerToken,
 		ticketNotifier,
 	)
+	if cfg.External.LingceWorkerURL == "" {
+		slog.Warn("badge callback worker target is not configured; audio callback enqueue will be disabled", "expected_env", "LINGCE_WORKER_URL")
+	} else {
+		slog.Info("badge callback worker target configured",
+			"worker_url", cfg.External.LingceWorkerURL,
+			"token_configured", strings.TrimSpace(cfg.External.LingceWorkerToken) != "")
+	}
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.SetCallbackGatewayToken(cfg.External.BadgeCallbackGatewayToken)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
@@ -230,7 +238,7 @@ func main() {
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register sandbox transfer module
-	sandboxService := sandbox.NewService(pool, ossClient, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken)
+	sandboxService := sandbox.NewService(pool, ossClient, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken)
 	sandboxHandler := sandbox.NewHandler(sandboxService)
 	sandboxHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -255,7 +263,7 @@ func main() {
 		Addr:         addr,
 		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
 

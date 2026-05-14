@@ -211,6 +211,7 @@ type GenerateContentRequest struct {
 	ScriptType             *string    `json:"script_type,omitempty"`
 	SlideCount             *int       `json:"slide_count,omitempty"`
 	NoteStyle              *string    `json:"note_style,omitempty"`
+	ContentGoal            *string    `json:"content_goal,omitempty"`
 	IncludeExpert          *bool      `json:"include_expert,omitempty"`
 	IncludeKnowledge       *bool      `json:"include_knowledge,omitempty"`
 	AdditionalRequirements *string    `json:"additional_requirements,omitempty"`

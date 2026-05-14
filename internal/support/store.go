@@ -803,20 +803,16 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		setClauses = append(setClauses, fmt.Sprintf("model_params = $%d", argIndex))
 		args = append(args, req.ModelParams)
 		argIndex++
-		setClauses = append(setClauses, fmt.Sprintf("extra_params = $%d", argIndex))
-		args = append(args, req.ModelParams)
-		argIndex++
 	}
 
 	if req.ExtraParams != nil {
 		setClauses = append(setClauses, fmt.Sprintf("extra_params = $%d", argIndex))
 		args = append(args, req.ExtraParams)
 		argIndex++
-		if req.ModelParams == nil {
-			setClauses = append(setClauses, fmt.Sprintf("model_params = $%d", argIndex))
-			args = append(args, req.ExtraParams)
-			argIndex++
-		}
+	} else if req.ModelParams != nil {
+		setClauses = append(setClauses, fmt.Sprintf("extra_params = $%d", argIndex))
+		args = append(args, req.ModelParams)
+		argIndex++
 	}
 
 	if req.InputTokenPrice != nil {

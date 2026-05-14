@@ -535,6 +535,9 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		}
 		userPrompt = renderContentPromptTemplate(tpl.PromptTemplate, req, contextText, styleText, length)
 	}
+	if isGraphicContentType(req.ContentType) {
+		userPrompt = normalizeGraphicNotePrompt(userPrompt, req)
+	}
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, contentGenerationFunctionTypeCandidates(req.ContentType))
 	if err != nil {
@@ -572,6 +575,14 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 	if isGraphicContentType(req.ContentType) {
 		if obj, ok := parseJSONObjectFromLLMText(generatedText); ok {
 			generatedNoteStructure = obj
+		}
+		if generatedNoteStructure != nil {
+			if repaired, repairedText, err := s.ensureGraphicNoteSlideCount(ctx, tenantID, selectedModel, systemPrompt, req, generatedText, generatedNoteStructure); err != nil {
+				return nil, err
+			} else if repaired != nil {
+				generatedNoteStructure = repaired
+				generatedText = repairedText
+			}
 		}
 	}
 
@@ -841,26 +852,185 @@ func parseJSONObjectFromLLMText(text string) (JSONObject, bool) {
 
 func renderContentPromptTemplate(tpl string, req GenerateContentRequest, contextText, styleText string, length int) string {
 	prompt := tpl
+	noteStyleDesc := buildGraphicNoteStyleDesc(req)
+	strategyText := buildGraphicNoteStrategyText(req)
+	topicInfo := buildGraphicNoteTopicInfo(req, contextText, noteStyleDesc)
+	knowledgeSection := buildGraphicNoteKnowledgeSection(strategyText)
 	replacements := map[string]string{
 		"topic":                   req.Title,
 		"title":                   req.Title,
 		"context":                 contextText,
 		"style":                   styleText,
+		"style_desc":              noteStyleDesc,
 		"length":                  fmt.Sprintf("%d", length),
 		"word_count":              fmt.Sprintf("%d", length),
 		"slide_count":             intPtrToString(req.SlideCount),
 		"content_type":            valueOrDefaultStringPtr(req.ContentType, "article"),
-		"note_style":              valueOrDefaultStringPtr(req.NoteStyle, ""),
+		"note_style":              effectiveGraphicNoteStyle(req),
 		"script_type":             valueOrDefaultStringPtr(req.ScriptType, ""),
 		"platform":                valueOrDefaultStringPtr(req.Platform, ""),
 		"selected_headline":       valueOrDefaultStringPtr(req.SelectedTitle, req.Title),
-		"strategy_text":           valueOrDefaultStringPtr(req.StrategyText, ""),
+		"strategy_text":           strategyText,
+		"topic_info":              topicInfo,
+		"knowledge_section":       knowledgeSection,
 		"additional_requirements": valueOrDefaultStringPtr(req.AdditionalRequirements, ""),
 	}
 	for key, value := range replacements {
 		prompt = strings.ReplaceAll(prompt, "{{"+key+"}}", value)
 	}
 	return prompt
+}
+
+func buildGraphicNoteStyleDesc(req GenerateContentRequest) string {
+	switch effectiveGraphicNoteStyle(req) {
+	case "knowledge":
+		return "知识科普风：清晰拆解、重点明确、先讲结论再讲原因。"
+	case "story":
+		return "案例故事风：增强代入感，用真实场景推进，但不要虚构具体诊疗细节。"
+	case "qa":
+		return "问答拆解风：围绕常见疑问逐条回答，读起来要像在替用户答疑。"
+	default:
+		return ""
+	}
+}
+
+func effectiveGraphicNoteStyle(req GenerateContentRequest) string {
+	if noteStyle := strings.ToLower(strings.TrimSpace(valueOrDefaultStringPtr(req.NoteStyle, ""))); noteStyle != "" {
+		return noteStyle
+	}
+	if goalStrategy, ok := getContentGoalStrategy(req.ContentGoal); ok {
+		return goalStrategy.NoteStyle
+	}
+	return ""
+}
+
+func buildGraphicNoteStrategyText(req GenerateContentRequest) string {
+	parts := make([]string, 0, 2)
+	if goalStrategy, ok := getContentGoalStrategy(req.ContentGoal); ok && goalStrategy.StrategyText != "" {
+		parts = append(parts, goalStrategy.StrategyText)
+	}
+	if manual := strings.TrimSpace(valueOrDefaultStringPtr(req.StrategyText, "")); manual != "" {
+		parts = append(parts, manual)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func buildGraphicNoteTopicInfo(req GenerateContentRequest, contextText, noteStyleDesc string) string {
+	lines := make([]string, 0, 4)
+	if contextText = strings.TrimSpace(contextText); contextText != "" {
+		lines = append(lines, "- 题材背景："+contextText)
+	}
+	if noteStyleDesc != "" {
+		lines = append(lines, "- 本次表达风格："+noteStyleDesc)
+	}
+	if goalStrategy, ok := getContentGoalStrategy(req.ContentGoal); ok && goalStrategy.Label != "" {
+		lines = append(lines, "- 本次内容目标："+goalStrategy.Label)
+	}
+	if headline := valueOrDefaultStringPtr(req.SelectedTitle, ""); headline != "" && headline != req.Title {
+		lines = append(lines, "- 优先参考标题方向："+headline)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildGraphicNoteKnowledgeSection(strategyText string) string {
+	strategyText = strings.TrimSpace(strategyText)
+	if strategyText == "" {
+		return ""
+	}
+	return "## 创作约束与素材要点\n" + strategyText
+}
+
+func normalizeGraphicNotePrompt(prompt string, req GenerateContentRequest) string {
+	slideCount := intPtrToString(req.SlideCount)
+	if slideCount != "" {
+		re := regexp.MustCompile(`(?m)^- 目标页数：.*$`)
+		prompt = re.ReplaceAllString(prompt, fmt.Sprintf("- 正文卡片数：%s张（不含封面，封面单独生成）", slideCount))
+	}
+	if strategyText := strings.TrimSpace(buildGraphicNoteStrategyText(req)); strategyText != "" && !strings.Contains(prompt, strategyText) {
+		prompt = strings.TrimSpace(prompt) + "\n\n## 创作约束与素材要点\n" + strategyText
+	}
+	if noteStyleDesc := buildGraphicNoteStyleDesc(req); noteStyleDesc != "" && !strings.Contains(prompt, noteStyleDesc) {
+		prompt = strings.TrimSpace(prompt) + "\n\n## 风格提醒\n" + noteStyleDesc
+	}
+	return prompt
+}
+
+func countGraphicNoteSlides(note JSONObject) int {
+	if note == nil {
+		return 0
+	}
+	raw, ok := note["slides"]
+	if !ok {
+		return 0
+	}
+	rows, ok := raw.([]interface{})
+	if !ok {
+		return 0
+	}
+	return len(rows)
+}
+
+func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int64, selectedModel *llmModelSelection, systemPrompt string, req GenerateContentRequest, generatedText string, generatedNoteStructure JSONObject) (JSONObject, string, error) {
+	targetCount := 0
+	if req.SlideCount != nil {
+		targetCount = *req.SlideCount
+	}
+	if targetCount <= 0 {
+		return generatedNoteStructure, generatedText, nil
+	}
+	actualCount := countGraphicNoteSlides(generatedNoteStructure)
+	if actualCount == targetCount {
+		return generatedNoteStructure, generatedText, nil
+	}
+
+	rewritePrompt := fmt.Sprintf(`你上一版输出的正文卡片数不符合要求。
+
+要求：
+1. 保留原主题、封面方向、发布文案、标签、置顶评论、互动引导的整体方向
+2. 将 slides 数组严格改为 %d 张正文卡片
+3. 这里的 %d 张只计算正文卡片，不含封面
+4. 不要输出解释，不要输出 markdown，只返回修正后的完整 JSON
+
+原始 JSON：
+%s`, targetCount, targetCount, generatedText)
+
+	llmReq := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "content",
+		FunctionType:  selectedModel.FunctionType,
+		Provider:      selectedModel.Provider,
+		ModelCode:     selectedModel.ModelCode,
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: rewritePrompt},
+		},
+		Params: &llmgateway.Params{
+			Temperature:    0.2,
+			MaxTokens:      3000,
+			ResponseFormat: "json",
+		},
+	}
+	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	llmReq.Params.Temperature = 0.2
+	llmReq.Params.ResponseFormat = "json"
+
+	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("graphic note slide count repair failed: %w", err)
+	}
+	repairedText := strings.TrimSpace(llmResp.Content)
+	repaired, ok := parseJSONObjectFromLLMText(repairedText)
+	if !ok {
+		return nil, "", fmt.Errorf("graphic note slide count repair returned invalid json")
+	}
+	if countGraphicNoteSlides(repaired) != targetCount {
+		return nil, "", fmt.Errorf("graphic note slide count mismatch: expected %d body slides, got %d", targetCount, countGraphicNoteSlides(repaired))
+	}
+	return repaired, repairedText, nil
 }
 
 func intPtrToString(v *int) string {

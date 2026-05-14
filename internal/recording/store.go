@@ -17,12 +17,9 @@ type Store struct {
 }
 
 var (
-	doctorScopeRoleCodes      = []string{"doctor", "therapist", "doctor_assistant"}
-	consultantScopeRoleCodes  = []string{"consultant"}
-	frontdeskScopeRoleCodes   = []string{"frontdesk", "receptionist", "reception"}
-	doctorScopeSceneCodes     = []string{"doctor", "diagnosis", "treatment", "medical"}
-	consultantScopeSceneCodes = []string{"consultant", "consultation", "sales"}
-	frontdeskScopeSceneCodes  = []string{"frontdesk", "reception", "receptionist", "customer_service", "service"}
+	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
+	consultantScopeRoleCodes = []string{"consultant"}
+	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
 )
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -98,111 +95,67 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	if req.Scope != nil {
-		sceneScopeExpr := `lower(COALESCE(NULLIF(r.analysis_display->>'scene_type', ''), NULLIF(r.analysis_display->>'scene', ''), COALESCE(r.scene, '')))`
-		businessScopeExpr := `lower(COALESCE(NULLIF(r.business_scope, ''), 'unknown'))`
 		switch *req.Scope {
 		case RecordingScopeDoctor:
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'doctor'
-				OR
-				(
-				%s = ANY($%d)
-				OR
-				EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
-			args = append(args, doctorScopeSceneCodes, doctorScopeRoleCodes)
-			argIndex += 2
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, doctorScopeRoleCodes)
+			argIndex++
 		case RecordingScopeConsultant:
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'consultant'
-				OR
-				(
-				%s = ANY($%d)
-				OR
-				EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
-			args = append(args, consultantScopeSceneCodes, consultantScopeRoleCodes)
-			argIndex += 2
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, consultantScopeRoleCodes)
+			argIndex++
 
 			// Doctor/frontdesk scope wins on dual-role employees, so consultant scope excludes them.
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'consultant'
-				OR
-				(
-				NOT EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'consultant'
-				OR
-				(
-				NOT EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 		case RecordingScopeFrontdesk:
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'frontdesk'
-				OR
-				(
-				%s = ANY($%d)
-				OR
-				EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, sceneScopeExpr, argIndex, argIndex+1))
-			args = append(args, frontdeskScopeSceneCodes, frontdeskScopeRoleCodes)
-			argIndex += 2
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, frontdeskScopeRoleCodes)
+			argIndex++
 
 			// Doctor scope wins on dual-role employees.
-			conditions = append(conditions, fmt.Sprintf(`(
-				%s = 'frontdesk'
-				OR
-				(
-				NOT EXISTS (
-					SELECT 1
-					FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id
-					  AND ier.employee_id = r.employee_id
-					  AND lower(ier.role_code) = ANY($%d)
-				)
-				)
-				)`, businessScopeExpr, argIndex))
+			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		}

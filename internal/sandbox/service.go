@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -533,22 +532,14 @@ func (s *Service) insertTaskItem(ctx context.Context, tx pgx.Tx, taskID, srcReco
 
 func (s *Service) submitWorkerJob(ctx context.Context, recordingID, tenantID int64, jobType string) error {
 	if s.workerURL == "" {
-		return fmt.Errorf("recording worker url is not configured")
+		return fmt.Errorf("lingce-worker url is not configured")
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
-		"recording_id": recordingID,
-		"tenant_id":    tenantID,
-		"job_type":     jobType,
-		"force":        true,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.workerURL+"/v1/jobs", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/internal/jobs/enqueue?recording_id=%d&job_type=%s&trigger_source=sandbox_transfer", s.workerURL, recordingID, url.QueryEscape(jobType)), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	if s.workerToken != "" {
 		req.Header.Set("X-Internal-Token", s.workerToken)
-		req.Header.Set("Authorization", "Bearer "+s.workerToken)
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

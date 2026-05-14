@@ -104,6 +104,10 @@ func (s *Store) CreateSubscriptionPlan(ctx context.Context, req CreateSubscripti
 	if usesInteger {
 		isActiveValue = 1
 	}
+	priceValue := 0.0
+	if req.Price != nil {
+		priceValue = *req.Price
+	}
 
 	query := `
 		INSERT INTO tenant_subscription_plans (name, code, description, duration_days, grace_days_default, feature_group_id, price, is_active, created_at, updated_at)
@@ -117,7 +121,7 @@ func (s *Store) CreateSubscriptionPlan(ctx context.Context, req CreateSubscripti
 	`
 
 	var p TenantSubscriptionPlan
-	err = s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.GraceDaysDefault, req.FeatureGroupID, req.Price, isActiveValue).Scan(
+	err = s.pool.QueryRow(ctx, query, req.Name, req.Code, req.Description, req.DurationDays, req.GraceDaysDefault, req.FeatureGroupID, priceValue, isActiveValue).Scan(
 		&p.ID, &p.Name, &p.Code, &p.Description, &p.DurationDays, &p.GraceDaysDefault, &p.FeatureGroupID, &p.Price, &p.IsActive, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
@@ -373,6 +377,9 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 	if err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
+	if err := s.syncTenantValidityWithSubscriptionTx(ctx, tx, tenantID, &currentSub.StartDate, &newEndDate); err != nil {
+		return err
+	}
 
 	// Log event
 	requestID := fmt.Sprintf("sub_%d_%d", tenantID, time.Now().Unix())
@@ -500,6 +507,41 @@ func (s *Store) ensureDefaultSubscriptionTx(ctx context.Context, tx pgx.Tx, tena
 	_, err = tx.Exec(ctx, insertQuery, args...)
 	if err != nil {
 		return fmt.Errorf("failed to initialize tenant subscription: %w", err)
+	}
+	if err := s.syncTenantValidityWithSubscriptionTx(ctx, tx, tenantID, &startDate, &endDate); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) syncTenantValidityWithSubscriptionTx(ctx context.Context, tx pgx.Tx, tenantID int64, validFrom, validTo *time.Time) error {
+	hasServiceStartedOn, err := hasColumn(ctx, tx, "tenants", "service_started_on")
+	if err != nil {
+		return err
+	}
+	hasServiceExpiredOn, err := hasColumn(ctx, tx, "tenants", "service_expired_on")
+	if err != nil {
+		return err
+	}
+
+	setClauses := []string{"valid_from = $2", "valid_to = $3", "updated_at = NOW()"}
+	args := []interface{}{tenantID, validFrom, validTo}
+	if hasServiceStartedOn {
+		setClauses = append(setClauses, fmt.Sprintf("service_started_on = $%d::date", len(args)))
+		args = append(args, validFrom)
+	}
+	if hasServiceExpiredOn {
+		setClauses = append(setClauses, fmt.Sprintf("service_expired_on = $%d::date", len(args)))
+		args = append(args, validTo)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE tenants
+		SET %s
+		WHERE id = $1
+	`, strings.Join(setClauses, ", "))
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("failed to sync tenant validity from subscription: %w", err)
 	}
 	return nil
 }
@@ -707,6 +749,14 @@ func (s *Store) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroupRe
 	return &g, nil
 }
 
+var autoRoleCodesByMenuCode = map[string][]string{
+	"frontdesk_recordings": {"admin", "frontdesk", "reception", "receptionist"},
+}
+
+var autoRoleCodesByFeatureCode = map[string][]string{
+	"frontdesk_recording_center": {"admin", "frontdesk", "reception", "receptionist"},
+}
+
 // UpdateFeatureGroup updates a feature group
 func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeatureGroupRequest, items []FeaturePolicyItem, replaceItems bool) (*TenantFeatureGroup, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -758,6 +808,11 @@ func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeat
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to commit feature group update: %w", err)
 	}
+	if replaceItems {
+		if err := s.syncInstitutionRoleMenusForFeatureGroup(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	return &g, nil
 }
 
@@ -805,6 +860,10 @@ func (s *Store) AssignFeatureGroupToTenant(ctx context.Context, tenantID int64, 
 	_, err := s.pool.Exec(ctx, query, tenantID, *groupID)
 	if err != nil {
 		return fmt.Errorf("failed to assign feature group: %w", err)
+	}
+
+	if err := s.syncInstitutionRoleMenusForTenantFeatureGroup(ctx, tenantID, *groupID); err != nil {
+		return err
 	}
 
 	return nil
@@ -1018,6 +1077,192 @@ func (s *Store) replaceFeatureGroupItems(ctx context.Context, tx pgx.Tx, groupID
 		}
 	}
 	return nil
+}
+
+func (s *Store) syncInstitutionRoleMenusForFeatureGroup(ctx context.Context, groupID int64) error {
+	tenantIDs, err := s.listTenantIDsByFeatureGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	for _, tenantID := range tenantIDs {
+		if err := s.syncInstitutionRoleMenusForTenantFeatureGroup(ctx, tenantID, groupID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) listTenantIDsByFeatureGroup(ctx context.Context, groupID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT tenant_id
+		FROM tenant_feature_assignments
+		WHERE group_id = $1
+		ORDER BY tenant_id
+	`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tenants for feature group %d: %w", groupID, err)
+	}
+	defer rows.Close()
+
+	tenantIDs := make([]int64, 0)
+	for rows.Next() {
+		var tenantID int64
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, fmt.Errorf("failed to scan tenant feature assignment: %w", err)
+		}
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	return tenantIDs, rows.Err()
+}
+
+func (s *Store) syncInstitutionRoleMenusForTenantFeatureGroup(ctx context.Context, tenantID, groupID int64) error {
+	assignments, err := s.listAutoAssignableRoleMenusForFeatureGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	roleCodes, err := s.listTenantInstitutionRoleCodes(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if len(roleCodes) == 0 {
+		return nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin role menu sync transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for roleCode := range roleCodes {
+		menuIDs := assignments[roleCode]
+		for _, menuID := range menuIDs {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
+				VALUES ($1, $2, $3, NOW())
+				ON CONFLICT DO NOTHING
+			`, tenantID, roleCode, menuID); err != nil {
+				return fmt.Errorf("failed to sync tenant %d role %s menu %d: %w", tenantID, roleCode, menuID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit role menu sync: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) listAutoAssignableRoleMenusForFeatureGroup(ctx context.Context, groupID int64) (map[string][]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.id,
+		       lower(trim(COALESCE(m.code, ''))) AS menu_code,
+		       lower(trim(COALESCE(m.feature_code, ''))) AS feature_code
+		FROM tenant_feature_group_items gi
+		JOIN inst_menus m ON lower(trim(m.code)) = lower(trim(gi.item_code))
+		WHERE gi.group_id = $1
+		  AND COALESCE(NULLIF(gi.item_type, ''), 'feature') = 'menu'
+		  AND COALESCE(gi.is_enabled, true) = true
+		  AND COALESCE(m.is_active, true) = true
+	`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query auto-assignable menus for feature group %d: %w", groupID, err)
+	}
+	defer rows.Close()
+
+	assignments := make(map[string][]int64)
+	for rows.Next() {
+		var menuID int64
+		var menuCode, featureCode string
+		if err := rows.Scan(&menuID, &menuCode, &featureCode); err != nil {
+			return nil, fmt.Errorf("failed to scan auto-assignable menu: %w", err)
+		}
+		for _, roleCode := range resolveAutoRoleCodesForMenu(menuCode, featureCode) {
+			assignments[roleCode] = append(assignments[roleCode], menuID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return assignments, nil
+}
+
+func (s *Store) listTenantInstitutionRoleCodes(ctx context.Context, tenantID int64) (map[string]struct{}, error) {
+	roleCodes := map[string]struct{}{}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT lower(trim(code)) AS code
+		FROM institution_roles
+		WHERE tenant_id = $1
+		  AND deleted_at IS NULL
+		  AND COALESCE(is_active, true) = true
+		  AND trim(COALESCE(code, '')) <> ''
+	`, tenantID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var code string
+			if err := rows.Scan(&code); err != nil {
+				return nil, fmt.Errorf("failed to scan institution role code: %w", err)
+			}
+			roleCodes[code] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	legacyRows, legacyErr := s.pool.Query(ctx, `
+		SELECT lower(trim(code)) AS code
+		FROM inst_roles
+		WHERE COALESCE(is_active, true) = true
+		  AND trim(COALESCE(code, '')) <> ''
+	`)
+	if legacyErr != nil {
+		return nil, fmt.Errorf("failed to query legacy institution role codes: %w", legacyErr)
+	}
+	defer legacyRows.Close()
+	for legacyRows.Next() {
+		var code string
+		if err := legacyRows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("failed to scan legacy institution role code: %w", err)
+		}
+		roleCodes[code] = struct{}{}
+	}
+	if err := legacyRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return roleCodes, nil
+}
+
+func resolveAutoRoleCodesForMenu(menuCode, featureCode string) []string {
+	roleCodes := autoRoleCodesByMenuCode[menuCode]
+	if len(roleCodes) == 0 {
+		roleCodes = autoRoleCodesByFeatureCode[featureCode]
+	}
+	if len(roleCodes) == 0 {
+		return nil
+	}
+
+	unique := make([]string, 0, len(roleCodes))
+	seen := make(map[string]struct{}, len(roleCodes))
+	for _, roleCode := range roleCodes {
+		normalized := strings.ToLower(strings.TrimSpace(roleCode))
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		unique = append(unique, normalized)
+	}
+	return unique
 }
 
 func mapKeys(m map[string]struct{}) []string {

@@ -241,7 +241,7 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.service.store.pool.Query(r.Context(), `
 		SELECT
 			e.id,
-			COALESCE(NULLIF(e.name, ''), e.phone, '未知员工') AS name,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '未知员工') AS name,
 			NULLIF(e.phone, '') AS phone,
 			NULLIF(e.role, '') AS role
 		FROM employees e

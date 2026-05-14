@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -143,19 +144,130 @@ func (h *Handler) GetMedicalRecordingRoute(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	recording, err := h.service.GetRecording(r.Context(), id)
-	if err != nil {
-		httputil.WriteNotFound(w, err.Error())
+	recording, accessErr := h.assertRecordingAccess(r, id)
+	if accessErr != nil {
+		if accessErr.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		httputil.WriteNotFound(w, accessErr.Error())
 		return
 	}
 
-	resp := map[string]any{
-		"route": recording.Status,
-		"analysis_summary": map[string]any{
-			"scene":  recording.Status,
-			"status": recording.Status,
-		},
+	var (
+		specialtyGroup sql.NullString
+		sceneType      sql.NullString
+		careGoalType   sql.NullString
+		routeSource    sql.NullString
+		routeTraceRaw  []byte
+		routedAt       sql.NullTime
+		routedBy       sql.NullString
+		analysisRaw    []byte
+	)
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT
+			COALESCE(rr.specialty_group, ''),
+			COALESCE(rr.scene_type, ''),
+			COALESCE(rr.care_goal_type, ''),
+			COALESCE(rr.route_source, ''),
+			COALESCE(rr.route_trace, '{}'::jsonb),
+			rr.routed_at,
+			COALESCE(rr.routed_by, ''),
+			COALESCE(rec.analysis_display, '{}'::jsonb)
+		FROM recordings rec
+		LEFT JOIN recording_route_results rr ON rr.recording_id = rec.id
+		WHERE rec.id = $1
+	`, id).Scan(&specialtyGroup, &sceneType, &careGoalType, &routeSource, &routeTraceRaw, &routedAt, &routedBy, &analysisRaw); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
 	}
+
+	analysisSummary := map[string]any{
+		"scene":  recording.Status,
+		"status": recording.Status,
+	}
+	if scene := strings.TrimSpace(sceneType.String); scene != "" {
+		analysisSummary["scene"] = scene
+		analysisSummary["scene_type"] = scene
+	}
+	if specialty := strings.TrimSpace(specialtyGroup.String); specialty != "" {
+		analysisSummary["specialty_group"] = specialty
+	}
+	if careGoal := strings.TrimSpace(careGoalType.String); careGoal != "" {
+		analysisSummary["care_goal_type"] = careGoal
+	}
+	if source := strings.TrimSpace(routeSource.String); source != "" {
+		analysisSummary["route_source"] = source
+	}
+
+	var routeTrace map[string]any
+	if len(routeTraceRaw) > 0 {
+		_ = json.Unmarshal(routeTraceRaw, &routeTrace)
+	}
+	if routeTrace == nil {
+		routeTrace = map[string]any{}
+	}
+	if raw, ok := routeTrace["raw"].(map[string]any); ok {
+		for k, v := range raw {
+			analysisSummary[k] = v
+		}
+	}
+	for _, key := range []string{"reasoning", "confidence", "is_medical_consultation", "route_auto_decision", "route_review_required", "route_review_reason", "detected_medical_specialty_code", "non_medical_reason"} {
+		if value, ok := routeTrace[key]; ok {
+			analysisSummary[key] = value
+		}
+	}
+
+	var analysisDisplay map[string]any
+	if len(analysisRaw) > 0 {
+		_ = json.Unmarshal(analysisRaw, &analysisDisplay)
+	}
+	if analysisDisplay == nil {
+		analysisDisplay = map[string]any{}
+	}
+	routeReview := map[string]any{}
+	if raw, ok := analysisDisplay["route_review"].(map[string]any); ok {
+		routeReview = raw
+		analysisSummary["route_review"] = raw
+		if action := strings.TrimSpace(pickStringAny(raw, "action")); action != "" {
+			analysisSummary["route_review_status"] = action
+		}
+	}
+
+	var routedAtValue any = nil
+	if routedAt.Valid {
+		routedAtValue = routedAt.Time.UTC().Format(time.RFC3339)
+	}
+	resp := map[string]any{
+		"route":            strings.TrimSpace(sceneType.String),
+		"scene_type":       strings.TrimSpace(sceneType.String),
+		"specialty_group":  strings.TrimSpace(specialtyGroup.String),
+		"care_goal_type":   strings.TrimSpace(careGoalType.String),
+		"route_source":     strings.TrimSpace(routeSource.String),
+		"routed_at":        routedAtValue,
+		"routed_by":        strings.TrimSpace(routedBy.String),
+		"analysis_summary": analysisSummary,
+		"route_review":     routeReview,
+	}
+	if resp["route"] == "" {
+		resp["route"] = recording.Status
+	}
+	if resp["scene_type"] == "" {
+		resp["scene_type"] = nil
+	}
+	if resp["specialty_group"] == "" {
+		resp["specialty_group"] = nil
+	}
+	if resp["care_goal_type"] == "" {
+		resp["care_goal_type"] = nil
+	}
+	if resp["route_source"] == "" {
+		resp["route_source"] = nil
+	}
+	if resp["routed_by"] == "" {
+		resp["routed_by"] = nil
+	}
+
 	httputil.WriteSuccess(w, resp)
 }
 

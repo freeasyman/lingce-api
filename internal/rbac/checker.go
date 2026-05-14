@@ -69,10 +69,19 @@ func (c *PermissionChecker) GetAdminPermissions(ctx context.Context, adminID int
 func (c *PermissionChecker) GetEmployeePermissions(ctx context.Context, employeeID int64) ([]Permission, error) {
 	query := `
 		SELECT DISTINCT p.resource, p.action
-		FROM institution_permissions p
-		JOIN institution_role_permissions rp ON p.id = rp.permission_id
-		JOIN institution_employee_roles er ON rp.role_id = er.role_id
-		WHERE er.employee_id = $1
+		FROM employees e
+		JOIN inst_employee_roles er
+		  ON er.tenant_id = e.tenant_id
+		 AND er.employee_id = e.id
+		JOIN institution_roles r
+		  ON r.tenant_id = e.tenant_id
+		 AND lower(r.code) = lower(er.role_code)
+		 AND r.deleted_at IS NULL
+		JOIN institution_role_permissions rp ON r.id = rp.role_id
+		JOIN institution_permissions p ON p.id = rp.permission_id
+		WHERE p.id = rp.permission_id
+		  AND e.id = $1
+		  AND e.deleted_at IS NULL
 		ORDER BY p.resource, p.action
 	`
 
@@ -121,10 +130,19 @@ func (c *PermissionChecker) HasPermission(ctx context.Context, userID int64, use
 		query = `
 			SELECT EXISTS (
 				SELECT 1
-				FROM institution_permissions p
-				JOIN institution_role_permissions rp ON p.id = rp.permission_id
-				JOIN institution_employee_roles er ON rp.role_id = er.role_id
-				WHERE er.employee_id = $1
+				FROM employees e
+				JOIN inst_employee_roles er
+				  ON er.tenant_id = e.tenant_id
+				 AND er.employee_id = e.id
+				JOIN institution_roles r
+				  ON r.tenant_id = e.tenant_id
+				 AND lower(r.code) = lower(er.role_code)
+				 AND r.deleted_at IS NULL
+				JOIN institution_role_permissions rp ON r.id = rp.role_id
+				JOIN institution_permissions p ON p.id = rp.permission_id
+				WHERE p.id = rp.permission_id
+				  AND e.id = $1
+				  AND e.deleted_at IS NULL
 				  AND p.resource = $2
 				  AND p.action = $3
 			)
