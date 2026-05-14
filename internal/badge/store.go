@@ -216,7 +216,7 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET tenant_id = $1, status = 'in_use', current_status = 'in_use', lifecycle_status = 'active',
+			SET tenant_id = $1, status = 'in_use', current_status = 'assigned_tenant', lifecycle_status = 'active',
 			    assignment_status = 'tenant', assigned_to_tenant_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
@@ -257,7 +257,7 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 		// Update device
 		query := `
 			UPDATE badge_devices
-			SET employee_id = $1, status = 'in_use', current_status = 'in_use', lifecycle_status = 'active',
+			SET employee_id = $1, status = 'in_use', current_status = 'assigned_employee', lifecycle_status = 'active',
 			    assignment_status = 'employee', assigned_to_emp_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
@@ -299,7 +299,7 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 		query := `
 			UPDATE badge_devices
 			SET status = 'ready',
-			    current_status = 'ready',
+			    current_status = 'in_stock',
 			    lifecycle_status = 'active',
 			    assignment_status = CASE WHEN tenant_id IS NULL THEN 'unassigned' ELSE 'tenant' END,
 			    inspection_result = COALESCE(inspection_result, 'pass'),
@@ -348,7 +348,7 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 		query := `
 			UPDATE badge_devices
 			SET status = 'ready',
-			    current_status = 'ready',
+			    current_status = 'in_stock',
 			    lifecycle_status = 'active',
 			    assignment_status = 'unassigned',
 			    inspection_result = COALESCE(inspection_result, 'pass'),
