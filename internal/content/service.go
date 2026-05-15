@@ -1434,16 +1434,16 @@ func toContentResponse(item *ContentItem) *ContentResponse {
 		Category:      item.Category,
 		Tags:          item.Tags,
 		Status:        item.Status,
-		PublishedAt:   formatTimePtr(item.PublishedAt),
-		UnpublishedAt: formatTimePtr(item.UnpublishedAt),
+		PublishedAt:   formatDBLocalTimePtr(item.PublishedAt),
+		UnpublishedAt: formatDBLocalTimePtr(item.UnpublishedAt),
 		ViewCount:     item.ViewCount,
 		LikeCount:     item.LikeCount,
 		ShareCount:    item.ShareCount,
 		Images:        item.Images,
 		ExtraData:     item.ExtraData,
 		CreatedBy:     item.CreatedBy,
-		CreatedAt:     item.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:     item.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:     formatDBLocalTime(item.CreatedAt),
+		UpdatedAt:     formatDBLocalTime(item.UpdatedAt),
 	}
 }
 
@@ -1579,22 +1579,32 @@ func toPublishTaskResponse(task *ContentPublishTask, contentTitle string) *Publi
 		ContentTitle: contentTitle,
 		Platform:     task.Platform,
 		Status:       task.Status,
-		ScheduledAt:  formatTimePtr(task.ScheduledAt),
-		PublishedAt:  formatTimePtr(task.PublishedAt),
+		ScheduledAt:  formatDBLocalTimePtr(task.ScheduledAt),
+		PublishedAt:  formatDBLocalTimePtr(task.PublishedAt),
 		ErrorMsg:     task.ErrorMsg,
 		ExtraData:    task.ExtraData,
 		CreatedBy:    task.CreatedBy,
-		CreatedAt:    task.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    task.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:    formatDBLocalTime(task.CreatedAt),
+		UpdatedAt:    formatDBLocalTime(task.UpdatedAt),
 	}
 }
 
-func formatTimePtr(t *time.Time) *string {
+func formatDBLocalTimePtr(t *time.Time) *string {
 	if t == nil {
 		return nil
 	}
-	formatted := t.Format(time.RFC3339)
+	formatted := formatDBLocalTime(*t)
 	return &formatted
+}
+
+func formatDBLocalTime(t time.Time) string {
+	// content tables use timestamp without timezone; preserve DB wall-clock semantics in API output.
+	localWallClock := time.Date(
+		t.Year(), t.Month(), t.Day(),
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(),
+		time.Local,
+	)
+	return localWallClock.Format("2006-01-02T15:04:05Z07:00")
 }
 
 func fallbackGeneratedContent(title string, context *string) string {
