@@ -14,17 +14,17 @@ import (
 func v2CurrentStatusFromStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "pending":
-		return "pending_acceptance"
+		return "pending"
 	case "ready":
-		return "in_stock"
+		return "ready"
 	case "in_use":
-		return "assigned_employee"
+		return "in_use"
 	case "blocked":
-		return "acceptance_failed"
+		return "blocked"
 	case "retired":
-		return "scrapped"
+		return "retired"
 	default:
-		return "pending_acceptance"
+		return "pending"
 	}
 }
 
@@ -254,7 +254,7 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 				status, health_status, import_batch_no, metadata, ext_json, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
-				'pending_acceptance', 'pending_acceptance', 'unassigned', 'unknown',
+				'pending', 'pending_acceptance', 'unassigned', 'unknown',
 				$5, $6, NULLIF($7, ''),
 				'pending', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
@@ -390,7 +390,7 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='in_use', current_status='assigned_employee', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
+			SET status='in_use', current_status='in_use', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
 			    assigned_at=NOW(), updated_at=NOW()
 			WHERE id=$1
 		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
@@ -449,7 +449,7 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='ready', current_status='in_stock', lifecycle_status='active', assignment_status='unassigned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
+			SET status='ready', current_status='ready', lifecycle_status='active', assignment_status='unassigned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)

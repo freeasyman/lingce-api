@@ -920,26 +920,21 @@ func tryInsertVendorDevice(
 	}
 
 	// Retry matrix for status-constraint compatibility across mixed schemas:
-	// 1) workflow current_status (prod), 2) new/new, 3) old/new, 4) old/old, 5) DB defaults.
-	if err := insertWithStatus("pending_acceptance", "pending"); err != nil {
+	// 1) new/new, 2) old/new, 3) old/old, 4) DB defaults.
+	if err := insertWithStatus("pending", "pending"); err != nil {
 		if !isBadgeStatusConstraintViolation(err) {
 			return err
 		}
-		if err2 := insertWithStatus("pending", "pending"); err2 != nil {
+		if err2 := insertWithStatus("draft", "pending"); err2 != nil {
 			if !isBadgeStatusConstraintViolation(err2) {
 				return err2
 			}
-			if err3 := insertWithStatus("draft", "pending"); err3 != nil {
+			if err3 := insertWithStatus("draft", "draft"); err3 != nil {
 				if !isBadgeStatusConstraintViolation(err3) {
 					return err3
 				}
-				if err4 := insertWithStatus("draft", "draft"); err4 != nil {
-					if !isBadgeStatusConstraintViolation(err4) {
-						return err4
-					}
-					if err5 := insertWithDBDefaults(); err5 != nil {
-						return err5
-					}
+				if err4 := insertWithDBDefaults(); err4 != nil {
+					return err4
 				}
 			}
 		}
