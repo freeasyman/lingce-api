@@ -660,12 +660,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		 WHERE NOT EXISTS (
 		 	SELECT 1 FROM inst_menus WHERE code = 'frontdesk_recordings'
 		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'therapist_recordings', '录音列表', '/therapist-recordings', 1152, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'therapist_recordings'
+		 )`,
 		`UPDATE inst_menus
 		    SET name = '录音列表',
 		        path = '/frontdesk-recordings',
 		        order_index = COALESCE(order_index, 1151),
 		        is_active = true
 		  WHERE code = 'frontdesk_recordings'`,
+		`UPDATE inst_menus
+		    SET name = '录音列表',
+		        path = '/therapist-recordings',
+		        order_index = COALESCE(order_index, 1152),
+		        is_active = true
+		  WHERE code = 'therapist_recordings'`,
 		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
 		 SELECT 'knowledge', '知识条目', '/knowledge', 1450, true, NOW()
 		 WHERE NOT EXISTS (
@@ -700,6 +711,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		        feature_code = 'frontdesk_recording_center',
 		        feature_name = '前台录音'
 		  WHERE code = 'frontdesk_recordings'`,
+		`UPDATE inst_menus
+		    SET is_feature_assignable = true,
+		        is_default_for_admin = true,
+		        feature_code = 'therapist_recording_center',
+		        feature_name = '治疗师录音'
+		  WHERE code = 'therapist_recordings'`,
 		`UPDATE inst_menus
 		    SET is_feature_assignable = true,
 		        is_default_for_admin = true,
