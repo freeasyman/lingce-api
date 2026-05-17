@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/configs/.env"
 
+unset INTERNAL_WORKER_TOKEN
 unset LINGCE_WORKER_URL
 unset LINGCE_WORKER_TOKEN
 unset RECORDING_WORKER_URL

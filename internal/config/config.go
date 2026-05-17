@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -68,6 +70,17 @@ func Load() (*Config, error) {
 	_ = godotenv.Load("configs/.env")
 	_ = godotenv.Load(".env")
 
+	recordingWorkerToken, recordingWorkerTokenSource := resolveWorkerToken(
+		"INTERNAL_WORKER_TOKEN",
+		"RECORDING_WORKER_TOKEN",
+		"LINGCE_WORKER_TOKEN",
+	)
+	lingceWorkerToken, lingceWorkerTokenSource := resolveWorkerToken(
+		"INTERNAL_WORKER_TOKEN",
+		"LINGCE_WORKER_TOKEN",
+		"RECORDING_WORKER_TOKEN",
+	)
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "18080"),
@@ -87,9 +100,9 @@ func Load() (*Config, error) {
 			BadgeMiddlewareToken:      getEnv("BADGE_MIDDLEWARE_TOKEN", ""),
 			BadgeCallbackGatewayToken: getEnv("BADGE_CALLBACK_GATEWAY_TOKEN", ""),
 			RecordingWorkerURL:        getEnv("RECORDING_WORKER_URL", "http://localhost:18090"),
-			RecordingWorkerToken:      getEnv("RECORDING_WORKER_TOKEN", ""),
+			RecordingWorkerToken:      recordingWorkerToken,
 			LingceWorkerURL:           getEnv("LINGCE_WORKER_URL", ""),
-			LingceWorkerToken:         getEnv("LINGCE_WORKER_TOKEN", ""),
+			LingceWorkerToken:         lingceWorkerToken,
 			TicketNotifySMTPHost:      getEnv("TICKET_NOTIFY_SMTP_HOST", ""),
 			TicketNotifySMTPPort:      getEnvInt("TICKET_NOTIFY_SMTP_PORT", 25),
 			TicketNotifySMTPUser:      getEnv("TICKET_NOTIFY_SMTP_USER", ""),
@@ -110,6 +123,8 @@ func Load() (*Config, error) {
 		},
 	}
 
+	logWorkerTokenResolution(recordingWorkerTokenSource, lingceWorkerTokenSource)
+
 	// Validate required fields
 	if cfg.Database.URL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
@@ -119,6 +134,38 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func resolveWorkerToken(keys ...string) (string, string) {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value, key
+		}
+	}
+	return "", ""
+}
+
+func logWorkerTokenResolution(recordingSource, lingceSource string) {
+	internal := strings.TrimSpace(os.Getenv("INTERNAL_WORKER_TOKEN"))
+	recording := strings.TrimSpace(os.Getenv("RECORDING_WORKER_TOKEN"))
+	lingce := strings.TrimSpace(os.Getenv("LINGCE_WORKER_TOKEN"))
+
+	if internal != "" {
+		if recording != "" && recording != internal {
+			slog.Warn("worker token mismatch detected: RECORDING_WORKER_TOKEN differs from INTERNAL_WORKER_TOKEN")
+		}
+		if lingce != "" && lingce != internal {
+			slog.Warn("worker token mismatch detected: LINGCE_WORKER_TOKEN differs from INTERNAL_WORKER_TOKEN")
+		}
+	}
+	if recording != "" && lingce != "" && recording != lingce {
+		slog.Warn("worker token mismatch detected: RECORDING_WORKER_TOKEN differs from LINGCE_WORKER_TOKEN")
+	}
+
+	slog.Info("worker token sources resolved",
+		"recording_worker_token_source", recordingSource,
+		"lingce_worker_token_source", lingceSource,
+	)
 }
 
 func getEnv(key, defaultValue string) string {
