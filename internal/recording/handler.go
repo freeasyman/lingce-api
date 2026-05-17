@@ -64,6 +64,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings/actions/batch-transcribe", authMw(http.HandlerFunc(h.BatchTranscribe)))
 	mux.Handle("POST /api/v1/recordings/actions/batch-delete", authMw(http.HandlerFunc(h.BatchDelete)))
 	mux.Handle("GET /api/v1/recordings/{id}/analysis", authMw(http.HandlerFunc(h.GetAnalysisResult)))
+	mux.Handle("GET /api/v1/recordings/{id}/therapist-reset", authMw(http.HandlerFunc(h.GetTherapistReset)))
 	mux.Handle("POST /api/v1/recordings/{id}/analysis/feedback", authMw(http.HandlerFunc(h.SubmitAnalysisFeedback)))
 	mux.Handle("GET /api/v1/recordings/{id}/learning-recommendation", authMw(http.HandlerFunc(h.GetLearningRecommendation)))
 	mux.Handle("GET /api/v1/recordings/{id}/ops-plan-jobs/{job_id}", authMw(http.HandlerFunc(h.GetOperationsPlanJobStatus)))
@@ -182,7 +183,7 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	if scopeStr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("recording_scope"))); scopeStr != "" {
 		scope := RecordingScope(scopeStr)
 		switch scope {
-		case RecordingScopeDoctor, RecordingScopeConsultant, RecordingScopeFrontdesk:
+		case RecordingScopeDoctor, RecordingScopeConsultant, RecordingScopeFrontdesk, RecordingScopeTherapist:
 			req.Scope = &scope
 		default:
 			httputil.WriteBadRequest(w, "Invalid recording scope")
@@ -355,6 +356,36 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, recording)
+}
+
+func (h *Handler) GetTherapistReset(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	resetData, err := h.service.GetTherapistReset(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		recording, recErr := h.service.GetRecording(r.Context(), id)
+		if recErr != nil {
+			httputil.WriteNotFound(w, recErr.Error())
+			return
+		}
+		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+	}
+	httputil.WriteSuccess(w, resetData)
 }
 
 // CreateRecording handles creating a new medical recording

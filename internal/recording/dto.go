@@ -62,6 +62,7 @@ type RecordingResponse struct {
 	SegueScore            *float64                 `json:"segue_score,omitempty"`
 	CriticalGap           *bool                    `json:"critical_gap,omitempty"`
 	AnalysisResult        map[string]interface{}   `json:"analysis_result,omitempty"`
+	AnalysisResults       []map[string]interface{} `json:"analysis_results,omitempty"`
 	AnalysisSummary       map[string]interface{}   `json:"analysis_summary,omitempty"`
 	AnalysisDisplay       map[string]interface{}   `json:"analysis_display,omitempty"`
 	AnalysisStatus        *string                  `json:"analysis_status"`
@@ -87,6 +88,8 @@ type RecordingResponse struct {
 	SuggestedTask         map[string]interface{}   `json:"suggested_task,omitempty"`
 	ConsultationRecord    map[string]interface{}   `json:"consultation_record,omitempty"`
 	Report                *string                  `json:"report,omitempty"`
+	CleanedTranscription  []map[string]interface{} `json:"cleaned_transcription,omitempty"`
+	TranscriptionSegments []map[string]interface{} `json:"transcription_segments,omitempty"`
 	StructuredTranscript  []map[string]interface{} `json:"structured_transcript,omitempty"`
 	TimelineTranscript    []map[string]interface{} `json:"timeline_transcript,omitempty"`
 	ContentSeeds          []map[string]interface{} `json:"content_seeds,omitempty"`
@@ -99,6 +102,18 @@ type RecordingResponse struct {
 	ProcessedAt           *string                  `json:"processed_at,omitempty"`
 	CreatedAt             string                   `json:"created_at"`
 	UpdatedAt             string                   `json:"updated_at"`
+}
+
+type TherapistResetResponse struct {
+	RecordingID           int64              `json:"recording_id"`
+	DimensionScores       map[string]float64 `json:"dimension_scores"`
+	ResetPercent          float64            `json:"reset_percent"`
+	CriticalGap           bool               `json:"critical_gap"`
+	CriticalMissingItems  []string           `json:"critical_missing_items"`
+	Highlights            []string           `json:"highlights"`
+	ImprovementPriorities []string           `json:"improvement_priorities"`
+	RecommendedActions    []string           `json:"recommended_actions"`
+	Items                 []map[string]any   `json:"items"`
 }
 
 // RecordingListRequest represents a request to list medical recordings

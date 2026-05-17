@@ -226,7 +226,54 @@ func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingRespons
 	if err := s.enrichRecordingResponse(ctx, id, resp); err != nil {
 		return nil, err
 	}
+	if err := s.rebuildRecordingAnalysisPayload(ctx, id, resp); err != nil {
+		return nil, err
+	}
 	return resp, nil
+}
+
+func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistResetResponse, error) {
+	resp, err := s.GetRecording(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	analysis := resp.AnalysisResult
+	if analysis == nil {
+		analysis = map[string]interface{}{}
+	}
+	raw := pickMap(analysis, "raw")
+	tra := pickMap(raw, "therapist_reset_analysis")
+	resetNode := pickMap(tra, "reset")
+	items := toMapSlice(firstNonEmptyArray(
+		pickArray(resetNode, "items"),
+		pickArray(analysis, "reset_items"),
+		pickArray(pickMap(analysis, "reset"), "items"),
+	))
+	return &TherapistResetResponse{
+		RecordingID:           id,
+		DimensionScores:       toScoreMap(firstNonEmptyMap(pickMap(analysis, "dimension_scores"), pickMap(tra, "dimension_scores"))),
+		ResetPercent:          valueOrZeroFloat(pickFloat(analysis, "reset_percent")),
+		CriticalGap:           valueOrFalseBool(pickBool(analysis, "critical_gap")),
+		CriticalMissingItems:  pickStringSlice(firstNonEmptyArray(pickArray(analysis, "critical_missing_items"), pickArray(tra, "critical_missing_items"))),
+		Highlights:            pickStringSlice(firstNonEmptyArray(pickArray(analysis, "highlights"), pickArray(tra, "highlights"))),
+		ImprovementPriorities: pickStringSlice(firstNonEmptyArray(pickArray(analysis, "improvement_priorities"), pickArray(tra, "improvement_priorities"))),
+		RecommendedActions:    pickStringSlice(firstNonEmptyArray(pickArray(analysis, "recommended_actions"), pickArray(tra, "recommended_actions"))),
+		Items:                 items,
+	}, nil
+}
+
+func valueOrZeroFloat(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueOrFalseBool(v *bool) bool {
+	if v == nil {
+		return false
+	}
+	return *v
 }
 
 // CreateRecording creates a new medical recording
@@ -663,7 +710,13 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 	if len(r.AnalysisDisplay) > 0 {
 		analysisDisplay := map[string]interface{}(r.AnalysisDisplay)
 		if nested := pickMap(analysisDisplay, "analysis_result"); nested != nil {
-			resp.AnalysisResult = nested
+			if resp.AnalysisResult == nil {
+				resp.AnalysisResult = nested
+			} else {
+				// Keep fields already persisted in recordings.analysis_result
+				// (e.g. therapist RESET aggregate), and only fill missing keys from display payload.
+				mergeMap(resp.AnalysisResult, nested)
+			}
 		}
 		if resp.AnalysisResult == nil && looksLikeAnalysisResult(analysisDisplay) {
 			resp.AnalysisResult = analysisDisplay
@@ -756,6 +809,15 @@ func formatDBLocalTime(t time.Time) string {
 func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64, resp *RecordingResponse) error {
 	if resp == nil {
 		return nil
+	}
+
+	// Expose raw source payloads as-is for all roles so every page reads the same
+	// authoritative transcript inputs and avoids per-page reconstruction drift.
+	if cleaned, err := s.loadCleanedTranscriptionSegments(ctx, recordingID); err == nil && len(cleaned) > 0 {
+		resp.CleanedTranscription = cleaned
+	}
+	if segments, err := s.loadRawTranscriptionSegments(ctx, recordingID); err == nil && len(segments) > 0 {
+		resp.TranscriptionSegments = segments
 	}
 
 	// Frontdesk recordings: the worker pipeline saves a complete aggregate
@@ -899,7 +961,12 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 	}
 
 	if analysisResult != nil {
-		resp.AnalysisResult = analysisResult
+		if resp.AnalysisResult == nil {
+			resp.AnalysisResult = analysisResult
+		} else {
+			// Do not overwrite already persisted aggregate fields with step-level rows.
+			mergeMap(resp.AnalysisResult, analysisResult)
+		}
 	}
 	if analysisSummary != nil {
 		resp.AnalysisSummary = analysisSummary
@@ -1029,7 +1096,7 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		)
 	}
 	if len(resp.StructuredTranscript) == 0 || len(resp.TimelineTranscript) == 0 {
-		if cleaned, err := s.loadCleanedTranscriptionSegments(ctx, recordingID); err == nil && len(cleaned) > 0 {
+		if cleaned := resp.CleanedTranscription; len(cleaned) > 0 {
 			structured, timeline := buildTranscriptFromSegments(cleaned)
 			if len(resp.StructuredTranscript) == 0 {
 				resp.StructuredTranscript = structured
@@ -1040,7 +1107,7 @@ func (s *Service) enrichRecordingResponse(ctx context.Context, recordingID int64
 		}
 	}
 	if len(resp.StructuredTranscript) == 0 || len(resp.TimelineTranscript) == 0 {
-		if segments, err := s.loadRawTranscriptionSegments(ctx, recordingID); err == nil && len(segments) > 0 {
+		if segments := resp.TranscriptionSegments; len(segments) > 0 {
 			structured, timeline := buildTranscriptFromSegments(segments)
 			if len(resp.StructuredTranscript) == 0 {
 				resp.StructuredTranscript = structured
@@ -1176,6 +1243,172 @@ func mergeMap(dst map[string]interface{}, src map[string]interface{}) {
 	for k, v := range src {
 		if _, exists := dst[k]; !exists {
 			dst[k] = v
+		}
+	}
+}
+
+func cloneMap(src map[string]interface{}) map[string]interface{} {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func (s *Service) rebuildRecordingAnalysisPayload(ctx context.Context, recordingID int64, resp *RecordingResponse) error {
+	if resp == nil {
+		return nil
+	}
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT prompt_code, COALESCE(result_data, '{}'::json), COALESCE(is_active, false), created_at, id
+		FROM recording_analysis_results
+		WHERE recording_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 32
+	`, recordingID)
+	if err != nil {
+		return fmt.Errorf("failed to query analysis rows: %w", err)
+	}
+	defer rows.Close()
+
+	type analysisRow struct {
+		promptCode string
+		resultData map[string]interface{}
+		isActive   bool
+		createdAt  time.Time
+		id         int64
+	}
+	collected := make([]analysisRow, 0, 32)
+	for rows.Next() {
+		var row analysisRow
+		if scanErr := rows.Scan(&row.promptCode, &row.resultData, &row.isActive, &row.createdAt, &row.id); scanErr != nil {
+			return fmt.Errorf("failed to scan analysis row: %w", scanErr)
+		}
+		collected = append(collected, row)
+	}
+	if rows.Err() != nil {
+		return fmt.Errorf("failed to iterate analysis rows: %w", rows.Err())
+	}
+
+	analysisResults := make([]map[string]interface{}, 0, len(collected))
+	rebuilt := cloneMap(resp.AnalysisResult)
+	for _, row := range collected {
+		item := map[string]interface{}{
+			"prompt_code":   row.promptCode,
+			"is_active":     row.isActive,
+			"created_at":    row.createdAt.Format(time.RFC3339),
+			"id":            row.id,
+			"analysis_json": row.resultData,
+		}
+		analysisResults = append(analysisResults, item)
+		if rebuilt == nil {
+			rebuilt = cloneMap(row.resultData)
+			continue
+		}
+		mergeMap(rebuilt, row.resultData)
+	}
+	if rebuilt != nil {
+		hydrateTherapistResetFields(rebuilt, analysisResults)
+	}
+
+	if rebuilt != nil {
+		resp.AnalysisResult = rebuilt
+		if resp.AnalysisDisplay == nil {
+			resp.AnalysisDisplay = map[string]interface{}{}
+		}
+		resp.AnalysisDisplay["analysis_result"] = rebuilt
+	}
+	if len(analysisResults) > 0 {
+		resp.AnalysisResults = analysisResults
+		if resp.AnalysisDisplay == nil {
+			resp.AnalysisDisplay = map[string]interface{}{}
+		}
+		resp.AnalysisDisplay["analysis_results"] = analysisResults
+	}
+	return nil
+}
+
+func hydrateTherapistResetFields(rebuilt map[string]interface{}, analysisResults []map[string]interface{}) {
+	if rebuilt == nil {
+		return
+	}
+	ensureRaw := func() map[string]interface{} {
+		raw := pickMap(rebuilt, "raw")
+		if raw == nil {
+			raw = map[string]interface{}{}
+			rebuilt["raw"] = raw
+		}
+		return raw
+	}
+	ensureTherapistReset := func(raw map[string]interface{}) map[string]interface{} {
+		tra := pickMap(raw, "therapist_reset_analysis")
+		if tra == nil {
+			tra = map[string]interface{}{}
+			raw["therapist_reset_analysis"] = tra
+		}
+		return tra
+	}
+	setIfMissing := func(key string, value interface{}) {
+		if value == nil {
+			return
+		}
+		if _, ok := rebuilt[key]; !ok {
+			rebuilt[key] = value
+		}
+	}
+
+	for _, row := range analysisResults {
+		code := strings.ToLower(strings.TrimSpace(pickString(row, "prompt_code")))
+		if !strings.Contains(code, "therapist_reset") && !strings.Contains(code, "reset_analysis") {
+			continue
+		}
+		payload := pickMap(row, "analysis_json")
+		if payload == nil {
+			continue
+		}
+		normalized := payload
+		if nested := pickMap(payload, "analysis_result"); nested != nil {
+			normalized = nested
+		}
+		if nested := pickMap(payload, "data"); nested != nil && len(normalized) == 0 {
+			normalized = nested
+		}
+
+		raw := ensureRaw()
+		tra := ensureTherapistReset(raw)
+		mergeMap(tra, normalized)
+
+		setIfMissing("dimension_scores", pickMap(tra, "dimension_scores"))
+		if rp, ok := tra["reset_percent"]; ok {
+			setIfMissing("reset_percent", rp)
+		}
+		if cg, ok := tra["critical_gap"]; ok {
+			setIfMissing("critical_gap", cg)
+		}
+		if cmi, ok := tra["critical_missing_items"]; ok {
+			setIfMissing("critical_missing_items", cmi)
+		}
+		if hl, ok := tra["highlights"]; ok {
+			setIfMissing("highlights", hl)
+		}
+		if ip, ok := tra["improvement_priorities"]; ok {
+			setIfMissing("improvement_priorities", ip)
+		}
+		if ra, ok := tra["recommended_actions"]; ok {
+			setIfMissing("recommended_actions", ra)
+		}
+
+		resetNode := pickMap(tra, "reset")
+		if resetNode != nil {
+			if items, ok := resetNode["items"]; ok {
+				setIfMissing("reset_items", items)
+			}
+			if _, ok := rebuilt["reset"]; !ok {
+				rebuilt["reset"] = resetNode
+			}
 		}
 	}
 }
@@ -1565,6 +1798,43 @@ func firstNonEmptyArray(candidates ...[]interface{}) []interface{} {
 		}
 	}
 	return nil
+}
+
+func firstNonEmptyMap(candidates ...map[string]interface{}) map[string]interface{} {
+	for _, candidate := range candidates {
+		if len(candidate) > 0 {
+			return candidate
+		}
+	}
+	return nil
+}
+
+func toScoreMap(source map[string]interface{}) map[string]float64 {
+	if len(source) == 0 {
+		return map[string]float64{}
+	}
+	out := map[string]float64{}
+	for k, v := range source {
+		switch n := v.(type) {
+		case float64:
+			out[k] = n
+		case float32:
+			out[k] = float64(n)
+		case int:
+			out[k] = float64(n)
+		case int64:
+			out[k] = float64(n)
+		case json.Number:
+			if f, err := n.Float64(); err == nil {
+				out[k] = f
+			}
+		case string:
+			if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+				out[k] = f
+			}
+		}
+	}
+	return out
 }
 
 func buildTranscriptFallback(text string) ([]map[string]interface{}, []map[string]interface{}) {
