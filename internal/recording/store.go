@@ -16,10 +16,17 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type RecordingMediaRef struct {
+	RecordingID int64
+	FileURL     string
+	OSSKey      string
+}
+
 var (
 	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
 	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
+	therapistScopeRoleCodes  = []string{"therapist"}
 )
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -157,6 +164,16 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
+			argIndex++
+		case RecordingScopeTherapist:
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM inst_employee_roles ier
+				WHERE ier.tenant_id = r.tenant_id
+				  AND ier.employee_id = r.employee_id
+				  AND lower(ier.role_code) = ANY($%d)
+			)`, argIndex))
+			args = append(args, therapistScopeRoleCodes)
 			argIndex++
 		}
 	}
@@ -500,6 +517,23 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 	}
 
 	return &r, nil
+}
+
+func (s *Store) GetRecordingMediaRef(ctx context.Context, id int64) (*RecordingMediaRef, error) {
+	const query = `
+		SELECT id, COALESCE(file_url, ''), COALESCE(oss_key, '')
+		FROM recordings
+		WHERE id = $1
+		LIMIT 1
+	`
+	var ref RecordingMediaRef
+	if err := s.pool.QueryRow(ctx, query, id).Scan(&ref.RecordingID, &ref.FileURL, &ref.OSSKey); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("recording not found")
+		}
+		return nil, fmt.Errorf("failed to query recording media ref: %w", err)
+	}
+	return &ref, nil
 }
 
 // CreateRecording creates a new medical recording

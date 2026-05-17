@@ -3,11 +3,16 @@ package badge
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -450,6 +455,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	if fileURL == "" {
 		return nil, fmt.Errorf("missing file_url")
 	}
+	originalFileURL := fileURL
 	fileName := firstNonEmptyCallback(pickString(data, "file_name"), pickString(data, "fileName"))
 	if fileName == "" {
 		base := path.Base(fileURL)
@@ -483,6 +489,11 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	`, deviceNo).Scan(&tenantID, &employeeID); err != nil {
 		return nil, fmt.Errorf("device mapping not ready for %s: %w", deviceNo, err)
 	}
+	normalizedURL, ossKey, err := normalizeAudioToOwnedOSS(ctx, tenantID, orderNo, fileName, originalFileURL)
+	if err != nil {
+		return nil, fmt.Errorf("normalize callback audio to owned oss: %w", err)
+	}
+	fileURL = normalizedURL
 
 	var recordingID int64
 	var created bool
@@ -491,7 +502,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 			INSERT INTO recordings (
 				tenant_id, employee_id, file_url, file_name, duration, mime_type,
 				source, business_scope, status, transcription_status, cleaned_transcription_status, analysis_status,
-				recorded_at, order_no, created_at, updated_at
+				recorded_at, order_no, oss_key, created_at, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, 'audio/mpeg',
@@ -530,7 +541,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 					ELSE 'unknown'
 				END,
 				'uploaded', 'queued', 'pending', 'pending',
-				$6::timestamp, $7::text, NOW(), NOW()
+				$6::timestamp, $7::text, NULLIF($8::text, ''), NOW(), NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM recordings WHERE order_no = $7::text
 			)
@@ -541,7 +552,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		SELECT id, false FROM recordings
 		WHERE order_no = $7::text AND NOT EXISTS (SELECT 1 FROM ins)
 		LIMIT 1
-	`, tenantID, employeeID, fileURL, fileName, seconds, startTime, orderNo).Scan(&recordingID, &created); err != nil {
+	`, tenantID, employeeID, fileURL, fileName, seconds, startTime, orderNo, ossKey).Scan(&recordingID, &created); err != nil {
 		return nil, fmt.Errorf("upsert recording from callback: %w", err)
 	}
 
@@ -564,13 +575,79 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 			raw_payload = EXCLUDED.raw_payload,
 			recording_id = COALESCE(smart_badge_audio_events.recording_id, EXCLUDED.recording_id),
 			updated_at = NOW()
-	`, appID, eventID, deviceNo, orderNo, fileURL, startTime, endTime, seconds, data, recordingID)
+	`, appID, eventID, deviceNo, orderNo, originalFileURL, startTime, endTime, seconds, data, recordingID)
 
 	return &AudioCallbackIngestResult{
 		RecordingID: recordingID,
 		TenantID:    tenantID,
 		Created:     created,
 	}, nil
+}
+
+func normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, fileName, sourceURL string) (string, string, error) {
+	endpoint := firstNonEmptyEnv("OSS_ENDPOINT", "ALIYUN_OSS_ENDPOINT")
+	bucket := firstNonEmptyEnv("OSS_BUCKET", "ALIYUN_OSS_BUCKET")
+	accessKeyID := firstNonEmptyEnv("OSS_ACCESS_KEY_ID", "ALIYUN_OSS_ACCESS_KEY_ID")
+	accessKeySecret := firstNonEmptyEnv("OSS_ACCESS_KEY_SECRET", "ALIYUN_OSS_ACCESS_KEY_SECRET")
+	if endpoint == "" || bucket == "" || accessKeyID == "" || accessKeySecret == "" {
+		return "", "", fmt.Errorf("OSS env is not configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("build source request: %w", err)
+	}
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("download source audio: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("download source audio status=%d", resp.StatusCode)
+	}
+
+	maxBytes := int64(150 * 1024 * 1024)
+	if resp.ContentLength > maxBytes {
+		return "", "", fmt.Errorf("source audio too large: %d", resp.ContentLength)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return "", "", fmt.Errorf("read source audio: %w", err)
+	}
+	if int64(len(body)) > maxBytes {
+		return "", "", fmt.Errorf("source audio exceeds max bytes")
+	}
+
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext == "" {
+		ext = ".mp3"
+	}
+	ossKey := ossutil.GenerateObjectKey(fmt.Sprintf("recordings/%d/%s", tenantID, time.Now().UTC().Format("2006/01/02")), ext)
+	clientOSS, err := ossutil.NewClient(endpoint, accessKeyID, accessKeySecret, bucket)
+	if err != nil {
+		return "", "", fmt.Errorf("init oss client: %w", err)
+	}
+	ownedURL, err := clientOSS.UploadBytes(ctx, ossKey, body, &ossutil.UploadOptions{
+		ContentType: "audio/mpeg",
+		Metadata: map[string]string{
+			"source-order-no": strings.TrimSpace(orderNo),
+			"source-url":      sourceURL,
+		},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("upload source audio to oss: %w", err)
+	}
+	return ownedURL, ossKey, nil
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func firstNonEmptyCallback(values ...string) string {
