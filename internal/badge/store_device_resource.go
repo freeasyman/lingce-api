@@ -390,7 +390,7 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='in_use', current_status='in_use', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
+			SET status='in_use', current_status='assigned_employee', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
 			    assigned_at=NOW(), updated_at=NOW()
 			WHERE id=$1
 		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
@@ -490,7 +490,7 @@ func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRe
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE badge_devices
-		SET status='in_use', current_status='in_use', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
+		SET status='in_use', current_status='assigned_employee', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
 		WHERE id=$1
 	`, deviceID, req.ToTenantID, req.ToTenantName, req.ToEmployeeID, req.ToEmployeeName); err != nil {
 		return err
