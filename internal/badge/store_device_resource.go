@@ -449,7 +449,7 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='ready', current_status='ready', lifecycle_status='active', assignment_status='unassigned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
+			SET status='ready', current_status='reclaimed', lifecycle_status='active', assignment_status='unassigned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
