@@ -129,6 +129,7 @@ func (h *Handler) CreatePatient(w http.ResponseWriter, r *http.Request) {
 		Email    *string `json:"email,omitempty"`
 		Gender   *string `json:"gender,omitempty"`
 		Age      *int    `json:"age,omitempty"`
+		Notes    *string `json:"notes,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -147,7 +148,7 @@ func (h *Handler) CreatePatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	patient, err := h.service.CreatePatient(r.Context(), tenantID, req.Name, req.Phone, req.Email, req.Gender, req.Age, claims.UserID)
+	patient, err := h.service.CreatePatient(r.Context(), tenantID, req.Name, req.Phone, req.Email, req.Gender, req.Age, req.Notes, claims.UserID)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

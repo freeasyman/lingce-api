@@ -3,6 +3,7 @@ package organization
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/tenant"
 )
@@ -266,11 +267,14 @@ func (s *Service) GetPatientByID(ctx context.Context, id int64) (*Patient, error
 	return s.store.GetPatientByID(ctx, id)
 }
 
-func (s *Service) CreatePatient(ctx context.Context, tenantID int64, name string, phone, email, gender *string, age *int, createdBy int64) (*Patient, error) {
+func (s *Service) CreatePatient(ctx context.Context, tenantID int64, name string, phone, email, gender *string, age *int, notes *string, createdBy int64) (*Patient, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	return s.store.CreatePatient(ctx, tenantID, name, phone, email, gender, age, createdBy)
+	if notes == nil || len([]rune(strings.TrimSpace(*notes))) < 10 {
+		return nil, fmt.Errorf("建档备注为必填，且至少 10 个字符")
+	}
+	return s.store.CreatePatient(ctx, tenantID, name, phone, email, gender, age, notes, createdBy)
 }
 
 func (s *Service) UpdatePatient(ctx context.Context, id int64, name, phone, email, gender, status *string, age *int) (*Patient, error) {

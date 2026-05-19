@@ -426,14 +426,14 @@ func (s *Store) GetPatientByID(ctx context.Context, id int64) (*Patient, error) 
 	return &p, nil
 }
 
-func (s *Store) CreatePatient(ctx context.Context, tenantID int64, name string, phone, email, gender *string, age *int, createdBy int64) (*Patient, error) {
+func (s *Store) CreatePatient(ctx context.Context, tenantID int64, name string, phone, email, gender *string, age *int, notes *string, createdBy int64) (*Patient, error) {
 	query := `
-		INSERT INTO customers (tenant_id, name, phone, email, gender, age, status, momentum, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'lead', 50, $7, NOW(), NOW())
+		INSERT INTO customers (tenant_id, name, phone, email, gender, age, status, momentum, notes, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'lead', 50, $7, $8, NOW(), NOW())
 		RETURNING id, tenant_id, name, phone, email, gender, age, status, momentum, assigned_to, created_at, updated_at
 	`
 	var p Patient
-	if err := s.pool.QueryRow(ctx, query, tenantID, name, phone, email, gender, age, createdBy).Scan(
+	if err := s.pool.QueryRow(ctx, query, tenantID, name, phone, email, gender, age, notes, createdBy).Scan(
 		&p.ID, &p.TenantID, &p.Name, &p.Phone, &p.Email, &p.Gender, &p.Age, &p.Status, &p.Momentum, &p.AssignedTo, &p.CreatedAt, &p.UpdatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("failed to create patient: %w", err)

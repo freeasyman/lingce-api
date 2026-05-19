@@ -3,6 +3,7 @@ package customer
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type Service struct {
@@ -61,6 +62,9 @@ func (s *Service) CreateCustomer(ctx context.Context, tenantID, createdBy int64,
 	// Validate request
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")
+	}
+	if req.Notes == nil || len([]rune(strings.TrimSpace(*req.Notes))) < 10 {
+		return nil, fmt.Errorf("建档备注为必填，且至少 10 个字符")
 	}
 
 	customer, err := s.store.CreateCustomer(ctx, tenantID, createdBy, req)
