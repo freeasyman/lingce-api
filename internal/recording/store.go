@@ -324,7 +324,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			) AS employee_name,
 			COALESCE(NULLIF(d.name, ''), '-') AS department_name,
 			COALESCE(
-				NULLIF(r.device_no, ''),
 				NULLIF(sbe.device_no, ''),
 				NULLIF((regexp_match(COALESCE(r.file_url, ''), '(SSYX[0-9]+)'))[1], ''),
 				''
@@ -445,7 +444,6 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 				'未知员工'
 			) AS employee_name,
 			COALESCE(
-				NULLIF(r.device_no, ''),
 				NULLIF(sbe.device_no, ''),
 				NULLIF((regexp_match(COALESCE(r.file_url, ''), '(SSYX[0-9]+)'))[1], ''),
 				''
