@@ -2,6 +2,7 @@ package organization
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -437,6 +438,50 @@ func (s *Store) CreatePatient(ctx context.Context, tenantID int64, name string, 
 		&p.ID, &p.TenantID, &p.Name, &p.Phone, &p.Email, &p.Gender, &p.Age, &p.Status, &p.Momentum, &p.AssignedTo, &p.CreatedAt, &p.UpdatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("failed to create patient: %w", err)
+	}
+	return &p, nil
+}
+
+func (s *Store) FindExistingPatientByContact(ctx context.Context, tenantID int64, phone, email *string) (*Patient, error) {
+	if phone == nil && email == nil {
+		return nil, nil
+	}
+
+	conditions := []string{"tenant_id = $1", "deleted_at IS NULL"}
+	args := []interface{}{tenantID}
+	argIndex := 2
+	contactParts := make([]string, 0, 2)
+	if phone != nil && *phone != "" {
+		contactParts = append(contactParts, fmt.Sprintf("phone = $%d", argIndex))
+		args = append(args, *phone)
+		argIndex++
+	}
+	if email != nil && *email != "" {
+		contactParts = append(contactParts, fmt.Sprintf("LOWER(email) = LOWER($%d)", argIndex))
+		args = append(args, *email)
+		argIndex++
+	}
+	if len(contactParts) == 0 {
+		return nil, nil
+	}
+	conditions = append(conditions, "("+strings.Join(contactParts, " OR ")+")")
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, name, phone, email, gender, age, status, momentum, assigned_to, created_at, updated_at
+		FROM customers
+		WHERE %s
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, strings.Join(conditions, " AND "))
+
+	var p Patient
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(
+		&p.ID, &p.TenantID, &p.Name, &p.Phone, &p.Email, &p.Gender, &p.Age, &p.Status, &p.Momentum, &p.AssignedTo, &p.CreatedAt, &p.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query existing patient by contact: %w", err)
 	}
 	return &p, nil
 }

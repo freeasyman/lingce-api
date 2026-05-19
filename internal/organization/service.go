@@ -274,6 +274,31 @@ func (s *Service) CreatePatient(ctx context.Context, tenantID int64, name string
 	if notes == nil || len([]rune(strings.TrimSpace(*notes))) < 10 {
 		return nil, fmt.Errorf("建档备注为必填，且至少 10 个字符")
 	}
+	if phone != nil {
+		trimmed := strings.TrimSpace(*phone)
+		if trimmed == "" {
+			phone = nil
+		} else {
+			phone = &trimmed
+		}
+	}
+	if email != nil {
+		trimmed := strings.ToLower(strings.TrimSpace(*email))
+		if trimmed == "" {
+			email = nil
+		} else {
+			email = &trimmed
+		}
+	}
+	if phone != nil || email != nil {
+		existing, err := s.store.FindExistingPatientByContact(ctx, tenantID, phone, email)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, nil
+		}
+	}
 	return s.store.CreatePatient(ctx, tenantID, name, phone, email, gender, age, notes, createdBy)
 }
 

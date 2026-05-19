@@ -66,6 +66,31 @@ func (s *Service) CreateCustomer(ctx context.Context, tenantID, createdBy int64,
 	if req.Notes == nil || len([]rune(strings.TrimSpace(*req.Notes))) < 10 {
 		return nil, fmt.Errorf("建档备注为必填，且至少 10 个字符")
 	}
+	if req.Phone != nil {
+		trimmed := strings.TrimSpace(*req.Phone)
+		if trimmed == "" {
+			req.Phone = nil
+		} else {
+			req.Phone = &trimmed
+		}
+	}
+	if req.Email != nil {
+		trimmed := strings.ToLower(strings.TrimSpace(*req.Email))
+		if trimmed == "" {
+			req.Email = nil
+		} else {
+			req.Email = &trimmed
+		}
+	}
+	if req.Phone != nil || req.Email != nil {
+		existing, err := s.store.FindDuplicateCustomers(ctx, &tenantID, req.Phone, req.Email)
+		if err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			return toCustomerResponse(existing[0]), nil
+		}
+	}
 
 	customer, err := s.store.CreateCustomer(ctx, tenantID, createdBy, req)
 	if err != nil {
