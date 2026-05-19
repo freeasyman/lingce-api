@@ -457,6 +457,7 @@ func (s *Service) UpdateRecording(ctx context.Context, id int64, req UpdateRecor
 		_ = s.backfillEMRDraftCustomerID(ctx, id, *recording.CustomerID)
 		_ = s.rebindOpenTasksCustomer(ctx, id, *recording.CustomerID)
 		_ = s.dispatchMedicalFollowUpTasksIfPossible(ctx, id, "manual_link")
+		_ = s.appendCustomerInteraction(ctx, recording.TenantID, *recording.CustomerID, recording.EmployeeID, "recording_linked", "system", id, "录音关联客户")
 		if refreshed, refreshErr := s.store.GetRecordingByID(ctx, id); refreshErr == nil {
 			recording = refreshed
 		}
@@ -2411,7 +2412,15 @@ func (s *Service) GetTask(ctx context.Context, id int64) (*TaskResponse, error) 
 
 // CompleteTask marks a task as completed
 func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64, req CompleteTaskRequest) error {
-	return s.store.CompleteTask(ctx, id, completedBy)
+	task, err := s.store.GetTaskByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.store.CompleteTask(ctx, id, completedBy); err != nil {
+		return err
+	}
+	_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")
+	return nil
 }
 
 // CancelTask marks a task as cancelled
@@ -2419,7 +2428,56 @@ func (s *Service) CancelTask(ctx context.Context, id int64, req CancelTaskReques
 	if req.Reason == "" {
 		return fmt.Errorf("cancel reason is required")
 	}
-	return s.store.CancelTask(ctx, id, req.Reason)
+	task, err := s.store.GetTaskByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.store.CancelTask(ctx, id, req.Reason); err != nil {
+		return err
+	}
+	_ = s.appendTaskInteraction(ctx, task, 0, "task_cancelled", "任务已忽略: "+strings.TrimSpace(req.Reason))
+	return nil
+}
+
+func (s *Service) appendTaskInteraction(ctx context.Context, task *RecordingTask, employeeID int64, typ, content string) error {
+	if task == nil || task.RecordingID <= 0 {
+		return nil
+	}
+	var customerID *int64
+	var tenantID int64
+	var recordingEmployeeID int64
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT customer_id, tenant_id, employee_id
+		FROM recordings
+		WHERE id = $1
+	`, task.RecordingID).Scan(&customerID, &tenantID, &recordingEmployeeID); err != nil {
+		return err
+	}
+	if customerID == nil || *customerID <= 0 {
+		return nil
+	}
+	if employeeID <= 0 {
+		employeeID = recordingEmployeeID
+	}
+	return s.appendCustomerInteraction(ctx, tenantID, *customerID, employeeID, typ, "system", task.RecordingID, content)
+}
+
+func (s *Service) appendCustomerInteraction(ctx context.Context, tenantID, customerID, employeeID int64, typ, direction string, recordingID int64, content string) error {
+	if tenantID <= 0 || customerID <= 0 || employeeID <= 0 || strings.TrimSpace(typ) == "" {
+		return nil
+	}
+	_, err := s.store.pool.Exec(ctx, `
+		INSERT INTO customer_interactions (
+			customer_id, tenant_id, type, direction, content, duration, recording_id, employee_id, interacted_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, NULLIF($5, ''), NULL, $6, $7, NOW(), NOW(), NOW()
+		)
+	`, customerID, tenantID, typ, direction, strings.TrimSpace(content), recordingID, employeeID)
+	if err != nil {
+		return err
+	}
+	_, _ = s.store.pool.Exec(ctx, `UPDATE customers SET last_contacted_at = NOW(), updated_at = NOW() WHERE id = $1`, customerID)
+	return nil
 }
 
 // GetTaskStats retrieves task statistics

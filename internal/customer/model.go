@@ -23,6 +23,12 @@ type Customer struct {
 	ConvertedAt       *time.Time `json:"converted_at,omitempty"`
 	LastContactedAt   *time.Time `json:"last_contacted_at,omitempty"`
 	NextFollowUpAt    *time.Time `json:"next_follow_up_at,omitempty"`
+	LifecycleStage    string     `json:"lifecycle_stage,omitempty"`
+	ValueScore        int        `json:"value_score,omitempty"`
+	FirstChannel      *string    `json:"first_channel,omitempty"`
+	IdentityCount     int        `json:"identity_count,omitempty"`
+	TotalInteractions int        `json:"total_interactions,omitempty"`
+	LastInteractionAt *time.Time `json:"last_interaction_at,omitempty"`
 	Tags              []string   `json:"tags,omitempty"`
 	Notes             *string    `json:"notes,omitempty"`
 	ExtraData         JSONObject `json:"extra_data,omitempty"`
@@ -34,46 +40,46 @@ type Customer struct {
 
 // CustomerIdentity represents a customer identity on different channels
 type CustomerIdentity struct {
-	ID         int64     `json:"id"`
-	CustomerID int64     `json:"customer_id"`
-	Channel    string    `json:"channel"` // "wechat", "phone", "email", "qq"
-	ChannelID  string    `json:"channel_id"`
-	Nickname   *string   `json:"nickname,omitempty"`
-	Avatar     *string   `json:"avatar,omitempty"`
+	ID         int64      `json:"id"`
+	CustomerID int64      `json:"customer_id"`
+	Channel    string     `json:"channel"` // "wechat", "phone", "email", "qq"
+	ChannelID  string     `json:"channel_id"`
+	Nickname   *string    `json:"nickname,omitempty"`
+	Avatar     *string    `json:"avatar,omitempty"`
 	ExtraData  JSONObject `json:"extra_data,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // CustomerInteraction represents a customer interaction
 type CustomerInteraction struct {
-	ID             int64      `json:"id"`
-	CustomerID     int64      `json:"customer_id"`
-	TenantID       int64      `json:"tenant_id"`
-	Type           string     `json:"type"` // "call", "message", "meeting", "email"
-	Direction      string     `json:"direction"` // "inbound", "outbound"
-	Content        *string    `json:"content,omitempty"`
-	Duration       *int       `json:"duration,omitempty"` // seconds
-	RecordingID    *int64     `json:"recording_id,omitempty"`
-	EmployeeID     int64      `json:"employee_id"`
-	InteractedAt   time.Time  `json:"interacted_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID           int64     `json:"id"`
+	CustomerID   int64     `json:"customer_id"`
+	TenantID     int64     `json:"tenant_id"`
+	Type         string    `json:"type"`      // "call", "message", "meeting", "email"
+	Direction    string    `json:"direction"` // "inbound", "outbound"
+	Content      *string   `json:"content,omitempty"`
+	Duration     *int      `json:"duration,omitempty"` // seconds
+	RecordingID  *int64    `json:"recording_id,omitempty"`
+	EmployeeID   int64     `json:"employee_id"`
+	InteractedAt time.Time `json:"interacted_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // CustomerFollowUp represents a customer follow-up record
 type CustomerFollowUp struct {
-	ID             int64      `json:"id"`
-	CustomerID     int64      `json:"customer_id"`
-	TenantID       int64      `json:"tenant_id"`
-	Type           string     `json:"type"` // "call", "visit", "email", "other"
-	Status         string     `json:"status"` // "planned", "completed", "cancelled"
-	Content        string     `json:"content"`
-	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
-	EmployeeID     int64      `json:"employee_id"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID          int64      `json:"id"`
+	CustomerID  int64      `json:"customer_id"`
+	TenantID    int64      `json:"tenant_id"`
+	Type        string     `json:"type"`   // "call", "visit", "email", "other"
+	Status      string     `json:"status"` // "planned", "completed", "cancelled"
+	Content     string     `json:"content"`
+	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	EmployeeID  int64      `json:"employee_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // CustomerTag represents a customer tag
@@ -106,22 +112,22 @@ type CustomerGroup struct {
 
 // CustomerMembership represents customer membership information
 type CustomerMembership struct {
-	ID           int64      `json:"id"`
-	CustomerID   int64      `json:"customer_id"`
-	TenantID     int64      `json:"tenant_id"`
-	Level        string     `json:"level"` // "bronze", "silver", "gold", "platinum"
-	Points       int        `json:"points"`
-	StartDate    time.Time  `json:"start_date"`
-	EndDate      *time.Time `json:"end_date,omitempty"`
-	IsActive     bool       `json:"is_active"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID         int64      `json:"id"`
+	CustomerID int64      `json:"customer_id"`
+	TenantID   int64      `json:"tenant_id"`
+	Level      string     `json:"level"` // "bronze", "silver", "gold", "platinum"
+	Points     int        `json:"points"`
+	StartDate  time.Time  `json:"start_date"`
+	EndDate    *time.Time `json:"end_date,omitempty"`
+	IsActive   bool       `json:"is_active"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // MomentumHistory represents customer momentum history
 type MomentumHistory struct {
-	Date      string `json:"date"`
-	Momentum  int    `json:"momentum"`
+	Date     string `json:"date"`
+	Momentum int    `json:"momentum"`
 }
 
 // Custom JSON type for database storage

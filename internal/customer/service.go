@@ -127,7 +127,7 @@ func (s *Service) AddCustomerIdentity(ctx context.Context, customerID int64, req
 		return nil, fmt.Errorf("channel is required")
 	}
 	if req.ChannelID == "" {
-		return nil, fmt.Errorf("channel_id is required")
+		req.ChannelID = fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSpace(req.Channel)), customerID)
 	}
 
 	return s.store.AddCustomerIdentity(ctx, customerID, req)
@@ -449,21 +449,26 @@ func (s *Service) ValidateGroupRules(req RuleValidateRequest) *RuleValidateRespo
 // toCustomerResponse converts a Customer to CustomerResponse
 func toCustomerResponse(c *Customer) *CustomerResponse {
 	resp := &CustomerResponse{
-		ID:         c.ID,
-		TenantID:   c.TenantID,
-		Name:       c.Name,
-		Phone:      c.Phone,
-		Email:      c.Email,
-		Gender:     c.Gender,
-		Age:        c.Age,
-		Source:     c.Source,
-		Status:     c.Status,
-		Momentum:   c.Momentum,
-		AssignedTo: c.AssignedTo,
-		Notes:      c.Notes,
-		ExtraData:  c.ExtraData,
-		CreatedAt:  c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:  c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                c.ID,
+		TenantID:          c.TenantID,
+		Name:              c.Name,
+		Phone:             c.Phone,
+		Email:             c.Email,
+		Gender:            c.Gender,
+		Age:               c.Age,
+		Source:            c.Source,
+		Status:            c.Status,
+		Momentum:          c.Momentum,
+		AssignedTo:        c.AssignedTo,
+		LifecycleStage:    c.LifecycleStage,
+		ValueScore:        c.ValueScore,
+		FirstChannel:      c.FirstChannel,
+		IdentityCount:     c.IdentityCount,
+		TotalInteractions: c.TotalInteractions,
+		Notes:             c.Notes,
+		ExtraData:         c.ExtraData,
+		CreatedAt:         c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:         c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if c.AssignedAt != nil {
@@ -484,6 +489,10 @@ func toCustomerResponse(c *Customer) *CustomerResponse {
 	if c.NextFollowUpAt != nil {
 		formatted := c.NextFollowUpAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.NextFollowUpAt = &formatted
+	}
+	if c.LastInteractionAt != nil {
+		formatted := c.LastInteractionAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.LastInteractionAt = &formatted
 	}
 
 	return resp

@@ -116,8 +116,35 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, phone, email, gender, age, source, status, momentum,
 		       assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
+		       COALESCE(NULLIF(lifecycle_stage, ''), 'unknown') AS lifecycle_stage,
+		       COALESCE(value_score, momentum, 0) AS value_score,
+		       COALESCE(ci.first_channel, source) AS first_channel,
+		       COALESCE(ci.identity_count, 0) AS identity_count,
+		       COALESCE(it.total_interactions, 0) AS total_interactions,
+		       it.last_interaction_at,
 		       notes, extra_data, created_by, created_at, updated_at
 		FROM customers
+		LEFT JOIN (
+			SELECT customer_id,
+			       MIN(channel) AS first_channel,
+			       COUNT(*)::int AS identity_count
+			FROM customer_identities
+			GROUP BY customer_id
+		) ci ON ci.customer_id = customers.id
+		LEFT JOIN (
+			SELECT r.customer_id,
+			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id) + COUNT(DISTINCT t.id))::int AS total_interactions,
+			       GREATEST(
+			           COALESCE(MAX(i.interacted_at), '1970-01-01'::timestamp),
+			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp),
+			           COALESCE(MAX(t.updated_at), '1970-01-01'::timestamp)
+			       ) AS last_interaction_at
+			FROM recordings r
+			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
+			LEFT JOIN recording_tasks t ON t.recording_id = r.id AND t.status IN ('completed', 'cancelled')
+			WHERE r.customer_id IS NOT NULL
+			GROUP BY r.customer_id
+		) it ON it.customer_id = customers.id
 		WHERE %s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
@@ -136,7 +163,8 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		var c Customer
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
-			&c.LastContactedAt, &c.NextFollowUpAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.FirstChannel,
+			&c.IdentityCount, &c.TotalInteractions, &c.LastInteractionAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan customer: %w", err)
 		}
@@ -220,6 +248,8 @@ func (s *Store) GetCustomerByID(ctx context.Context, id int64) (*Customer, error
 	query := `
 		SELECT id, tenant_id, name, phone, email, gender, age, source, status, momentum,
 		       assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
+		       COALESCE(NULLIF(lifecycle_stage, ''), 'unknown') AS lifecycle_stage,
+		       COALESCE(value_score, momentum, 0) AS value_score,
 		       notes, extra_data, created_by, created_at, updated_at
 		FROM customers
 		WHERE id = $1 AND deleted_at IS NULL
@@ -229,7 +259,7 @@ func (s *Store) GetCustomerByID(ctx context.Context, id int64) (*Customer, error
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 		&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
-		&c.LastContactedAt, &c.NextFollowUpAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+		&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.Notes, &c.ExtraData, &c.CreatedBy,
 		&c.CreatedAt, &c.UpdatedAt,
 	)
 

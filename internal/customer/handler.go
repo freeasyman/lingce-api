@@ -477,10 +477,23 @@ func (h *Handler) AddCustomerIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req AddIdentityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var raw map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+	req := AddIdentityRequest{
+		Channel:   firstNonEmpty(raw, "channel", "channel_type"),
+		ChannelID: firstNonEmpty(raw, "channel_id", "external_id"),
+	}
+	if v := firstNonEmpty(raw, "nickname", "external_name"); v != "" {
+		req.Nickname = &v
+	}
+	if v := firstNonEmpty(raw, "avatar", "external_avatar"); v != "" {
+		req.Avatar = &v
+	}
+	if extra, ok := raw["extra_data"].(map[string]interface{}); ok {
+		req.ExtraData = extra
 	}
 
 	identity, err := h.service.AddCustomerIdentity(r.Context(), id, req)
@@ -490,6 +503,17 @@ func (h *Handler) AddCustomerIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, identity)
+}
+
+func firstNonEmpty(raw map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := raw[key]; ok {
+			if str, ok := value.(string); ok && strings.TrimSpace(str) != "" {
+				return strings.TrimSpace(str)
+			}
+		}
+	}
+	return ""
 }
 
 // ListCustomerInteractions handles listing customer interactions
