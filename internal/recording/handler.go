@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -65,6 +66,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings/actions/batch-delete", authMw(http.HandlerFunc(h.BatchDelete)))
 	mux.Handle("GET /api/v1/recordings/{id}/analysis", authMw(http.HandlerFunc(h.GetAnalysisResult)))
 	mux.Handle("GET /api/v1/recordings/{id}/therapist-reset", authMw(http.HandlerFunc(h.GetTherapistReset)))
+	mux.Handle("GET /api/v1/recordings/reset-code-dictionary", authMw(http.HandlerFunc(h.GetResetCodeDictionary)))
 	mux.Handle("POST /api/v1/recordings/{id}/analysis/feedback", authMw(http.HandlerFunc(h.SubmitAnalysisFeedback)))
 	mux.Handle("GET /api/v1/recordings/{id}/learning-recommendation", authMw(http.HandlerFunc(h.GetLearningRecommendation)))
 	mux.Handle("GET /api/v1/recordings/{id}/ops-plan-jobs/{job_id}", authMw(http.HandlerFunc(h.GetOperationsPlanJobStatus)))
@@ -388,6 +390,16 @@ func (h *Handler) GetTherapistReset(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, resetData)
 }
 
+func (h *Handler) GetResetCodeDictionary(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	items := h.service.GetResetCodeDictionary()
+	httputil.WriteSuccess(w, ResetCodeDictionaryResponse{Items: items})
+}
+
 // CreateRecording handles creating a new medical recording
 func (h *Handler) CreateRecording(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
@@ -444,23 +456,28 @@ func (h *Handler) UpdateRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req UpdateRecordingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
 	// Check tenant access for non-admin users
 	if claims.UserType != auth.UserTypeAdmin {
 		if claims.TenantID == nil || *claims.TenantID != existing.TenantID {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
-		// Employees can only update their own recordings
-		if claims.UserID != existing.EmployeeID {
-			httputil.WriteForbidden(w, "Can only update own recordings")
-			return
-		}
-	}
 
-	var req UpdateRecordingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
+		// Employees can update their own recordings.
+		if claims.UserID != existing.EmployeeID {
+			// Tenant admins can link customer for any recording in tenant.
+			canLinkCustomer := isLinkCustomerOnly(req)
+			if !canLinkCustomer || !h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID) {
+				httputil.WriteForbidden(w, "Can only update own recordings")
+				return
+			}
+		}
 	}
 
 	recording, err := h.service.UpdateRecording(r.Context(), id, req)
@@ -470,6 +487,34 @@ func (h *Handler) UpdateRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, recording)
+}
+
+func (h *Handler) isTenantRecordingAdmin(ctx context.Context, tenantID, employeeID int64) bool {
+	var found int
+	err := h.service.store.pool.QueryRow(ctx, `
+		SELECT 1
+		FROM inst_employee_roles
+		WHERE tenant_id = $1
+		  AND employee_id = $2
+		  AND lower(role_code) IN ('admin', 'institution_admin')
+		LIMIT 1
+	`, tenantID, employeeID).Scan(&found)
+	return err == nil && found == 1
+}
+
+func isLinkCustomerOnly(req UpdateRecordingRequest) bool {
+	return req.CustomerID != nil &&
+		req.PatientName == nil &&
+		req.PatientAge == nil &&
+		req.PatientGender == nil &&
+		req.PatientPhone == nil &&
+		req.TranscriptText == nil &&
+		req.DoctorSummary == nil &&
+		req.TherapistSummary == nil &&
+		req.ConsultantSummary == nil &&
+		req.Status == nil &&
+		req.ProcessingError == nil &&
+		req.ProcessedAt == nil
 }
 
 // DeleteRecording handles deleting a medical recording
