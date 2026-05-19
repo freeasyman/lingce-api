@@ -10,6 +10,8 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -249,17 +251,156 @@ func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistRe
 		pickArray(analysis, "reset_items"),
 		pickArray(pickMap(analysis, "reset"), "items"),
 	))
+	criticalMissing := pickStringSlice(firstNonEmptyArray(pickArray(analysis, "critical_missing_items"), pickArray(tra, "critical_missing_items")))
+	criticalDetail := make([]ResetCodeInfo, 0, len(criticalMissing))
+	if details := firstNonEmptyArray(
+		pickArray(analysis, "critical_missing_details"),
+		pickArray(tra, "critical_missing_details"),
+		pickArray(pickMap(analysis, "reset"), "critical_missing_details"),
+	); len(details) > 0 {
+		for _, raw := range details {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			code := strings.ToUpper(strings.TrimSpace(fmt.Sprintf("%v", item["code"])))
+			base := describeResetCode(code)
+			reason := strings.TrimSpace(fmt.Sprintf("%v", item["reason"]))
+			action := strings.TrimSpace(fmt.Sprintf("%v", item["action"]))
+			if reason == "" || reason == "<nil>" {
+				reason = base.RiskIfMissing
+			}
+			if action == "" || action == "<nil>" {
+				action = base.CoachAction
+			}
+			title := strings.TrimSpace(fmt.Sprintf("%v", item["title"]))
+			if title == "" || title == "<nil>" {
+				title = base.Title
+			}
+			criticalDetail = append(criticalDetail, ResetCodeInfo{
+				Code:          code,
+				Title:         title,
+				WhyItMatters:  base.WhyItMatters,
+				RiskIfMissing: base.RiskIfMissing,
+				CoachAction:   base.CoachAction,
+				Reason:        reason,
+				Action:        action,
+			})
+		}
+	}
+	if len(criticalDetail) == 0 {
+		for _, code := range criticalMissing {
+			criticalDetail = append(criticalDetail, describeResetCode(code))
+		}
+	}
+	for _, item := range items {
+		code := strings.TrimSpace(fmt.Sprintf("%v", item["code"]))
+		if code == "" {
+			continue
+		}
+		desc := describeResetCode(code)
+		if _, ok := item["title"]; !ok {
+			item["title"] = desc.Title
+		}
+		if _, ok := item["why_it_matters"]; !ok {
+			item["why_it_matters"] = desc.WhyItMatters
+		}
+		if _, ok := item["risk_if_missing"]; !ok {
+			item["risk_if_missing"] = desc.RiskIfMissing
+		}
+		if _, ok := item["coach_action"]; !ok {
+			item["coach_action"] = desc.CoachAction
+		}
+	}
 	return &TherapistResetResponse{
 		RecordingID:           id,
 		DimensionScores:       toScoreMap(firstNonEmptyMap(pickMap(analysis, "dimension_scores"), pickMap(tra, "dimension_scores"))),
 		ResetPercent:          valueOrZeroFloat(pickFloat(analysis, "reset_percent")),
 		CriticalGap:           valueOrFalseBool(pickBool(analysis, "critical_gap")),
-		CriticalMissingItems:  pickStringSlice(firstNonEmptyArray(pickArray(analysis, "critical_missing_items"), pickArray(tra, "critical_missing_items"))),
+		CriticalMissingItems:  criticalMissing,
+		CriticalMissingDetail: criticalDetail,
 		Highlights:            pickStringSlice(firstNonEmptyArray(pickArray(analysis, "highlights"), pickArray(tra, "highlights"))),
 		ImprovementPriorities: pickStringSlice(firstNonEmptyArray(pickArray(analysis, "improvement_priorities"), pickArray(tra, "improvement_priorities"))),
 		RecommendedActions:    pickStringSlice(firstNonEmptyArray(pickArray(analysis, "recommended_actions"), pickArray(tra, "recommended_actions"))),
 		Items:                 items,
 	}, nil
+}
+
+func describeResetCode(code string) ResetCodeInfo {
+	trimmed := strings.ToUpper(strings.TrimSpace(code))
+	dict := getResetCodeDictionaryMap()
+	if v, ok := dict[trimmed]; ok {
+		return v
+	}
+	dimTitle := "通用质检"
+	switch {
+	case strings.HasPrefix(trimmed, "D1-"):
+		dimTitle = "铺垫"
+	case strings.HasPrefix(trimmed, "D2-"):
+		dimTitle = "互动"
+	case strings.HasPrefix(trimmed, "D3-"):
+		dimTitle = "专业"
+	case strings.HasPrefix(trimmed, "D4-"):
+		dimTitle = "顾虑"
+	case strings.HasPrefix(trimmed, "D5-"):
+		dimTitle = "闭环"
+	}
+	return ResetCodeInfo{
+		Code:          trimmed,
+		Title:         fmt.Sprintf("%s检查项", dimTitle),
+		WhyItMatters:  "该项影响治疗体验与转化结果。",
+		RiskIfMissing: "缺失会降低患者信任与后续配合。",
+		CoachAction:   "请在该环节补一句目标说明和下一步安排。",
+	}
+}
+
+var defaultResetCodeDictionary = map[string]ResetCodeInfo{
+	"D1-2":  {Code: "D1-2", Title: "开场目标说明", WhyItMatters: "让患者知道本次要解决什么，建立预期和配合。", RiskIfMissing: "患者容易感觉流程混乱，信任下降。", CoachAction: "开场30秒说清：本次目标、步骤、预期感受。"},
+	"D2-10": {Code: "D2-10", Title: "治疗中风险沟通", WhyItMatters: "提前解释疼痛/不适可降低紧张和抵触。", RiskIfMissing: "患者出现疼痛时会被动中断，体验变差。", CoachAction: "操作前先提示：可能有酸痛，若超阈值立即反馈。"},
+	"D5-21": {Code: "D5-21", Title: "疗程与复诊建议", WhyItMatters: "明确后续路径，提升持续治疗与结果达成。", RiskIfMissing: "患者结束即流失，效果难以巩固。", CoachAction: "结束前给出疗程建议：频次、周期、下次目标。"},
+	"D5-24": {Code: "D5-24", Title: "家庭训练与注意事项", WhyItMatters: "院外执行决定效果保持与复发控制。", RiskIfMissing: "回家后无执行标准，改善难以延续。", CoachAction: "给3条家庭动作/禁忌，并确认患者复述。"},
+}
+
+func (s *Service) GetResetCodeDictionary() []ResetCodeInfo {
+	dict := getResetCodeDictionaryMap()
+	keys := make([]string, 0, len(dict))
+	for k := range dict {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]ResetCodeInfo, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, dict[k])
+	}
+	return out
+}
+
+func getResetCodeDictionaryMap() map[string]ResetCodeInfo {
+	merged := make(map[string]ResetCodeInfo, len(defaultResetCodeDictionary))
+	for k, v := range defaultResetCodeDictionary {
+		merged[k] = v
+	}
+	path := strings.TrimSpace(os.Getenv("RESET_CODE_DICTIONARY_PATH"))
+	if path == "" {
+		path = filepath.Join("configs", "reset_code_dictionary.json")
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil || len(bytes) == 0 {
+		return merged
+	}
+	var fileItems []ResetCodeInfo
+	if unmarshalErr := json.Unmarshal(bytes, &fileItems); unmarshalErr != nil {
+		return merged
+	}
+	for _, item := range fileItems {
+		code := strings.ToUpper(strings.TrimSpace(item.Code))
+		if code == "" {
+			continue
+		}
+		item.Code = code
+		merged[code] = item
+	}
+	return merged
 }
 
 func valueOrZeroFloat(v *float64) float64 {
@@ -2697,7 +2838,7 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 				FROM inst_employee_roles ier
 				WHERE ier.tenant_id = r.tenant_id
 				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 			)
 			OR NOT EXISTS (
 				SELECT 1
@@ -3042,7 +3183,7 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 				FROM inst_employee_roles ier
 				WHERE ier.tenant_id = r.tenant_id
 				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 			)
 			OR NOT EXISTS (
 				SELECT 1
@@ -3427,7 +3568,7 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 				FROM inst_employee_roles ier
 				WHERE ier.tenant_id = r.tenant_id
 				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 			)
 			OR NOT EXISTS (
 				SELECT 1
@@ -3530,7 +3671,7 @@ func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, d
 				FROM inst_employee_roles ier
 				WHERE ier.tenant_id = r.tenant_id
 				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'therapist', 'doctor_assistant'])
+				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 			)
 			OR NOT EXISTS (
 				SELECT 1
@@ -5139,7 +5280,7 @@ func (s *Service) enrichTaskListResponse(ctx context.Context, items []*TaskRespo
 			FROM recordings r
 			LEFT JOIN employees e ON e.id = r.employee_id
 			WHERE r.id = ANY($1)
-		`, recordingIDs, []string{"doctor", "therapist", "doctor_assistant"}, []string{"consultant"})
+		`, recordingIDs, []string{"doctor", "doctor_assistant"}, []string{"consultant"})
 		if err != nil {
 			return err
 		}

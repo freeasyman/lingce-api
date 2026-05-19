@@ -23,7 +23,7 @@ type RecordingMediaRef struct {
 }
 
 var (
-	doctorScopeRoleCodes     = []string{"doctor", "therapist", "doctor_assistant"}
+	doctorScopeRoleCodes     = []string{"doctor", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
 	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
 	therapistScopeRoleCodes  = []string{"therapist"}
