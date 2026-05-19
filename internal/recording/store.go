@@ -323,7 +323,12 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 				'未知员工'
 			) AS employee_name,
 			COALESCE(NULLIF(d.name, ''), '-') AS department_name,
-			COALESCE(NULLIF(sbe.device_no, ''), '') AS device_no,
+			COALESCE(
+				NULLIF(r.device_no, ''),
+				NULLIF(sbe.device_no, ''),
+				NULLIF((regexp_match(COALESCE(r.file_url, ''), '(SSYX[0-9]+)'))[1], ''),
+				''
+			) AS device_no,
 			r.customer_id,
 			NULLIF(c.name, '') AS customer_name,
 			COALESCE(c.name, '') AS patient_name,
@@ -439,6 +444,12 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 				NULLIF(oa.email, ''),
 				'未知员工'
 			) AS employee_name,
+			COALESCE(
+				NULLIF(r.device_no, ''),
+				NULLIF(sbe.device_no, ''),
+				NULLIF((regexp_match(COALESCE(r.file_url, ''), '(SSYX[0-9]+)'))[1], ''),
+				''
+			) AS device_no,
 			r.customer_id,
 			NULLIF(c.name, '') AS customer_name,
 			COALESCE(c.name, '') AS patient_name,
@@ -472,6 +483,13 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		LEFT JOIN LATERAL (
+			SELECT sae.device_no
+			FROM smart_badge_audio_events sae
+			WHERE sae.recording_id = r.id
+			ORDER BY sae.updated_at DESC NULLS LAST, sae.created_at DESC NULLS LAST, sae.id DESC
+			LIMIT 1
+		) sbe ON TRUE
 		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE r.id = $1
 	`
@@ -483,6 +501,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		&r.TenantName,
 		&r.EmployeeID,
 		&r.EmployeeName,
+		&r.DeviceNo,
 		&r.CustomerID,
 		&r.CustomerName,
 		&r.PatientName,
