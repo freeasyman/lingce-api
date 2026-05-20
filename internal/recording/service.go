@@ -2890,20 +2890,12 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
-		  AND (
-			EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
-			)
-			OR NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier_any
-				WHERE ier_any.tenant_id = r.tenant_id
-				  AND ier_any.employee_id = r.employee_id
-			)
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 		  )
 	`, tenantID, prevStart, now)
 	if err != nil {
@@ -2976,14 +2968,7 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 			}
 		}
 
-		statusRaw := firstNonEmptyText(
-			pickNestedStatus(row.Analysis, "visit_outcome"),
-			pickString(row.Analysis, "visit_outcome_status"),
-			pickString(row.Analysis, "visit_outcome"),
-			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-		)
+		statusRaw := resolveVisitOutcomeStatus(row.Analysis)
 		if normalized := normalizePatientStatus(statusRaw); normalized != "" {
 			agg.PatientStatusTotal++
 			if normalized == "顺利接受" {
@@ -3095,30 +3080,347 @@ func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employee
 		return nil, err
 	}
 
-	var total, completed int64
-	if err := s.store.pool.QueryRow(ctx, `
-		SELECT COUNT(*), COUNT(CASE WHEN analysis_status = 'completed' THEN 1 END)
-		FROM recordings
-		WHERE tenant_id = $1 AND employee_id = $2
-	`, tenantID, employeeID).Scan(&total, &completed); err != nil {
-		return nil, fmt.Errorf("failed to query doctor detail: %w", err)
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.employee_id,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts,
+		       COALESCE(r.duration, 0) AS duration
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= NOW() - INTERVAL '30 days'
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
+		  )
+		ORDER BY ts DESC
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query doctor ability detail rows: %w", err)
+	}
+	defer rows.Close()
+
+	type abilityRow struct {
+		EmployeeID int64
+		Analysis   map[string]interface{}
+		TS         time.Time
+		Duration   int64
+	}
+	allRows := make([]abilityRow, 0, 256)
+	for rows.Next() {
+		var (
+			item        abilityRow
+			analysisRaw interface{}
+		)
+		if scanErr := rows.Scan(&item.EmployeeID, &analysisRaw, &item.TS, &item.Duration); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan doctor ability detail row: %w", scanErr)
+		}
+		if decoded, ok := decodeNestedJSONValue(analysisRaw, 0).(map[string]interface{}); ok && decoded != nil {
+			item.Analysis = decoded
+		} else {
+			item.Analysis = map[string]interface{}{}
+		}
+		allRows = append(allRows, item)
 	}
 
-	score := 0.0
-	if total > 0 {
-		score = float64(completed) / float64(total) * 100
+	now := time.Now()
+	curStart := now.AddDate(0, 0, -14)
+	prevStart := now.AddDate(0, 0, -28)
+
+	employeeRows := make([]medicalTrendRow, 0, 64)
+	teamRows := make([]medicalTrendRow, 0, len(allRows))
+	empCurrentRows := make([]medicalTrendRow, 0, 32)
+	empPreviousRows := make([]medicalTrendRow, 0, 32)
+	employeeSegueScores := make([]float64, 0, 64)
+	teamSegueScores := make([]float64, 0, len(allRows))
+	var employeeTotalDuration int64
+	for _, row := range allRows {
+		wrapped := medicalTrendRow{
+			Analysis: row.Analysis,
+			TS:       row.TS,
+		}
+		teamRows = append(teamRows, wrapped)
+		if score := resolveWeeklyDisplayScore(row.Analysis); score > 0 {
+			teamSegueScores = append(teamSegueScores, score)
+		}
+		if row.EmployeeID == employeeID {
+			employeeRows = append(employeeRows, wrapped)
+			employeeTotalDuration += row.Duration
+			if score := resolveWeeklyDisplayScore(row.Analysis); score > 0 {
+				employeeSegueScores = append(employeeSegueScores, score)
+			}
+			if !row.TS.Before(curStart) {
+				empCurrentRows = append(empCurrentRows, wrapped)
+			} else if !row.TS.Before(prevStart) && row.TS.Before(curStart) {
+				empPreviousRows = append(empPreviousRows, wrapped)
+			}
+		}
+	}
+
+	employeeStage := collectDimensionAvg(employeeRows)
+	teamStage := collectDimensionAvg(teamRows)
+	prevOverall := calcOverall(avgStageMap(convertToTeamRows(empPreviousRows)))
+	curOverall := calcOverall(avgStageMap(convertToTeamRows(empCurrentRows)))
+
+	recentTrend := "stable"
+	if curOverall-prevOverall >= 0.2 {
+		recentTrend = "improving"
+	} else if prevOverall-curOverall >= 0.2 {
+		recentTrend = "declining"
+	}
+
+	type dimDiff struct {
+		code string
+		diff float64
+	}
+	labels := map[string]string{
+		"G1": "建立接诊环境",
+		"G2": "引出信息",
+		"G3": "给予信息",
+		"G4": "理解患者视角",
+		"G5": "结束接诊",
+		"G6": "治疗/预防计划",
+	}
+	diffs := make([]dimDiff, 0, 6)
+	for _, code := range []string{"G1", "G2", "G3", "G4", "G5", "G6"} {
+		diffs = append(diffs, dimDiff{
+			code: code,
+			diff: roundFloat(employeeStage[code]-teamStage[code], 2),
+		})
+	}
+	sort.Slice(diffs, func(i, j int) bool { return diffs[i].diff > diffs[j].diff })
+
+	strengths := []string{}
+	weaknesses := []string{}
+	const eps = 0.005
+	for i := 0; i < len(diffs) && len(strengths) < 2; i++ {
+		if diffs[i].diff > eps {
+			strengths = append(strengths, fmt.Sprintf("%s%s 高于团队均值 %.2f 分", diffs[i].code, labels[diffs[i].code], diffs[i].diff))
+		}
+	}
+	for i := len(diffs) - 1; i >= 0 && len(weaknesses) < 2; i-- {
+		if diffs[i].diff < -eps {
+			weaknesses = append(weaknesses, fmt.Sprintf("%s%s 低于团队均值 %.2f 分", diffs[i].code, labels[diffs[i].code], -diffs[i].diff))
+		}
+	}
+	if len(strengths) == 0 {
+		strengths = append(strengths, "近期样本中暂无明显优势维度")
+	}
+	if len(weaknesses) == 0 {
+		weaknesses = append(weaknesses, "近期样本中暂无明显短板维度")
+	}
+
+	communication := roundFloat((employeeStage["G1"]+employeeStage["G2"])/2, 2)
+	professionalism := roundFloat((employeeStage["G3"]+employeeStage["G6"])/2, 2)
+	empathy := roundFloat(employeeStage["G4"], 2)
+	efficiency := roundFloat(employeeStage["G5"], 2)
+	if !hasPositiveDimension(employeeStage) {
+		empSegueAvg := roundFloat(avgFloat(employeeSegueScores), 2)
+		teamSegueAvg := roundFloat(avgFloat(teamSegueScores), 2)
+		if empSegueAvg > 0 {
+			communication, professionalism, empathy, efficiency = empSegueAvg, empSegueAvg, empSegueAvg, empSegueAvg
+			gap := roundFloat(empSegueAvg-teamSegueAvg, 2)
+			if gap > eps {
+				strengths = []string{fmt.Sprintf("总体接诊得分高于团队均值 %.2f 分", gap)}
+				weaknesses = []string{"建议继续提升关键阶段稳定性"}
+			} else if gap < -eps {
+				strengths = []string{"技术解释与接诊流程具备基础稳定性"}
+				weaknesses = []string{fmt.Sprintf("总体接诊得分低于团队均值 %.2f 分", -gap)}
+			} else {
+				strengths = []string{"总体接诊得分与团队均值基本持平"}
+				weaknesses = []string{"建议加强关键阶段表现，拉开优势"}
+			}
+		}
+	}
+	if len(employeeRows) == 0 || (communication == 0 && professionalism == 0 && empathy == 0 && efficiency == 0) {
+		communication, professionalism, empathy, efficiency = 0, 0, 0, 0
+		recentTrend = "stable"
+		strengths = []string{"暂无足够样本"}
+		weaknesses = []string{"暂无足够样本"}
 	}
 
 	return &DoctorAbilityDetailResponse{
 		EmployeeID:           employeeID,
 		EmployeeName:         name,
-		CommunicationScore:   score,
-		ProfessionalismScore: score,
-		EmpathyScore:         score,
-		EfficiencyScore:      score,
-		RecentTrend:          "stable",
-		Strengths:            []string{"按计划完成录音处理"},
-		Weaknesses:           []string{"建议提升高峰期处理效率"},
+		RecordingCount:       int64(len(employeeRows)),
+		TotalDuration:        employeeTotalDuration,
+		CommunicationScore:   communication,
+		ProfessionalismScore: professionalism,
+		EmpathyScore:         empathy,
+		EfficiencyScore:      efficiency,
+		RecentTrend:          recentTrend,
+		Strengths:            strengths,
+		Weaknesses:           weaknesses,
+	}, nil
+}
+
+func convertToTeamRows(rows []medicalTrendRow) []teamAbilityRow {
+	out := make([]teamAbilityRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, teamAbilityRow{
+			Analysis: row.Analysis,
+			TS:       row.TS,
+		})
+	}
+	return out
+}
+
+// GetConsultantAbilityDetail retrieves detailed consultant ability using consultant scope rows.
+func (s *Service) GetConsultantAbilityDetail(ctx context.Context, tenantID, employeeID int64) (*DoctorAbilityDetailResponse, error) {
+	name, err := s.employeeStore.GetEmployeeNameByID(ctx, employeeID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.employee_id,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(NULLIF(r.business_scope, ''), 'unknown') = 'consultant'
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = 'consultant'
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant','frontdesk','reception','receptionist','therapist'])
+		  )
+		  AND COALESCE(r.recorded_at, r.created_at) >= NOW() - INTERVAL '30 days'
+		ORDER BY ts DESC
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query consultant ability rows: %w", err)
+	}
+	defer rows.Close()
+
+	type abilityRow struct {
+		EmployeeID int64
+		Analysis   map[string]interface{}
+		TS         time.Time
+	}
+	allRows := make([]abilityRow, 0, 256)
+	for rows.Next() {
+		var (
+			item        abilityRow
+			analysisRaw interface{}
+		)
+		if scanErr := rows.Scan(&item.EmployeeID, &analysisRaw, &item.TS); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan consultant ability row: %w", scanErr)
+		}
+		if decoded, ok := decodeNestedJSONValue(analysisRaw, 0).(map[string]interface{}); ok && decoded != nil {
+			item.Analysis = decoded
+		} else {
+			item.Analysis = map[string]interface{}{}
+		}
+		allRows = append(allRows, item)
+	}
+
+	employeeRows := make([]teamAbilityRow, 0, 64)
+	teamRows := make([]teamAbilityRow, 0, len(allRows))
+	now := time.Now()
+	curStart := now.AddDate(0, 0, -14)
+	prevStart := now.AddDate(0, 0, -28)
+	empCurrentRows := make([]teamAbilityRow, 0, 32)
+	empPreviousRows := make([]teamAbilityRow, 0, 32)
+
+	for _, row := range allRows {
+		wrapped := teamAbilityRow{
+			EmployeeID: row.EmployeeID,
+			Analysis:   row.Analysis,
+			TS:         row.TS,
+		}
+		teamRows = append(teamRows, wrapped)
+		if row.EmployeeID == employeeID {
+			employeeRows = append(employeeRows, wrapped)
+			if !row.TS.Before(curStart) {
+				empCurrentRows = append(empCurrentRows, wrapped)
+			} else if !row.TS.Before(prevStart) && row.TS.Before(curStart) {
+				empPreviousRows = append(empPreviousRows, wrapped)
+			}
+		}
+	}
+
+	employeeStage := avgStageMap(employeeRows)
+	teamStage := avgStageMap(teamRows)
+	prevOverall := calcOverall(avgStageMap(empPreviousRows))
+	curOverall := calcOverall(avgStageMap(empCurrentRows))
+
+	recentTrend := "stable"
+	if curOverall-prevOverall >= 0.2 {
+		recentTrend = "improving"
+	} else if prevOverall-curOverall >= 0.2 {
+		recentTrend = "declining"
+	}
+
+	type stageDiff struct {
+		name string
+		diff float64
+	}
+	diffs := make([]stageDiff, 0, len(stageOrder))
+	for _, stage := range stageOrder {
+		diffs = append(diffs, stageDiff{
+			name: stage,
+			diff: roundFloat(employeeStage[stage]-teamStage[stage], 2),
+		})
+	}
+	sort.Slice(diffs, func(i, j int) bool { return diffs[i].diff > diffs[j].diff })
+	strengths := []string{}
+	weaknesses := []string{}
+	for i := 0; i < len(diffs) && len(strengths) < 2; i++ {
+		if diffs[i].diff >= 0 {
+			strengths = append(strengths, fmt.Sprintf("%s 高于团队均值 %.2f 分", diffs[i].name, diffs[i].diff))
+		}
+	}
+	for i := len(diffs) - 1; i >= 0 && len(weaknesses) < 2; i-- {
+		if diffs[i].diff <= 0 {
+			weaknesses = append(weaknesses, fmt.Sprintf("%s 低于团队均值 %.2f 分", diffs[i].name, -diffs[i].diff))
+		}
+	}
+	if len(strengths) == 0 {
+		strengths = append(strengths, "近期咨询录音评分稳定")
+	}
+	if len(weaknesses) == 0 {
+		weaknesses = append(weaknesses, "暂无明显短板，建议维持当前节奏")
+	}
+
+	communication := roundFloat((employeeStage["开场建立权威"]+employeeStage["需求探索"]+employeeStage["问题放大"])/3, 2)
+	professionalism := roundFloat((employeeStage["专业呈现"]+employeeStage["方案定制"])/2, 2)
+	empathy := roundFloat(employeeStage["异议化解"], 2)
+	efficiency := roundFloat(employeeStage["促成与收尾"], 2)
+	if len(employeeRows) == 0 {
+		communication = 0
+		professionalism = 0
+		empathy = 0
+		efficiency = 0
+		recentTrend = "stable"
+		strengths = []string{"暂无足够样本"}
+		weaknesses = []string{"暂无足够样本"}
+	}
+
+	return &DoctorAbilityDetailResponse{
+		EmployeeID:           employeeID,
+		EmployeeName:         name,
+		CommunicationScore:   communication,
+		ProfessionalismScore: professionalism,
+		EmpathyScore:         empathy,
+		EfficiencyScore:      efficiency,
+		RecentTrend:          recentTrend,
+		Strengths:            strengths,
+		Weaknesses:           weaknesses,
 	}, nil
 }
 
@@ -3235,20 +3537,12 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) < $3
-		  AND (
-			EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
-			)
-			OR NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier_any
-				WHERE ier_any.tenant_id = r.tenant_id
-				  AND ier_any.employee_id = r.employee_id
-			)
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 		  )
 		ORDER BY ts DESC
 	`, tenantID, prev2Start, weekEnd)
@@ -3289,14 +3583,7 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 	for _, row := range currentRows {
 		doctorIDMap[row.Employee] = row.EmployeeID
 
-		rawStatus := firstNonEmptyText(
-			pickNestedStatus(row.Analysis, "visit_outcome"),
-			pickString(row.Analysis, "visit_outcome_status"),
-			pickString(row.Analysis, "visit_outcome"),
-			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-		)
+		rawStatus := resolveVisitOutcomeStatus(row.Analysis)
 		if normalized := normalizePatientStatus(rawStatus); normalized != "" {
 			patientStatusCounter[normalized]++
 		}
@@ -3481,6 +3768,18 @@ func normalizePatientStatus(raw string) string {
 	}
 }
 
+func resolveVisitOutcomeStatus(analysis map[string]interface{}) string {
+	return firstNonEmptyText(
+		pickNestedStatus(analysis, "visit_outcome"),
+		pickString(analysis, "visit_outcome_status"),
+		pickString(analysis, "visit_outcome"),
+		pickNestedStatus(pickMap(analysis, "analysis_summary"), "visit_outcome"),
+		pickString(pickMap(analysis, "analysis_summary"), "visit_outcome_status"),
+		pickString(pickMap(analysis, "analysis_summary"), "visit_outcome"),
+		pickString(pickMap(pickMap(analysis, "patient_mindset"), "treatment_willingness"), "status"),
+	)
+}
+
 func extractCoreBlockers(analysis map[string]interface{}) []string {
 	raw, ok := analysis["core_blockers"]
 	if !ok {
@@ -3523,6 +3822,13 @@ func extractWeeklyHighlightEntries(analysis map[string]interface{}) []weeklySumm
 		}
 		out := make([]weeklySummaryHighlightEntry, 0, len(candidates))
 		for _, candidate := range candidates {
+			if text := strings.TrimSpace(firstNonEmptyText(candidate)); text != "" {
+				out = append(out, weeklySummaryHighlightEntry{
+					Dimension: "",
+					Text:      text,
+				})
+				continue
+			}
 			m, ok := candidate.(map[string]interface{})
 			if !ok {
 				continue
@@ -3620,20 +3926,12 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 		WHERE r.tenant_id = $1
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
-		  AND (
-			EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
-			)
-			OR NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier_any
-				WHERE ier_any.tenant_id = r.tenant_id
-				  AND ier_any.employee_id = r.employee_id
-			)
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 		  )
 		  AND r.id NOT IN (
 		      SELECT recording_id
@@ -3695,8 +3993,6 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 
 // GetTeamTrends retrieves team trends for medical recordings.
 func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, dateTo, specialtyGroup string) (*TeamTrendsResponse, error) {
-	_ = specialtyGroup // 兼容保留，当前后端暂无专科分组字段，先不做过滤。
-
 	now := time.Now()
 	start := now.AddDate(0, 0, -29)
 	end := now
@@ -3714,32 +4010,31 @@ func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, d
 		start, end = end, start
 	}
 
-	rows, err := s.store.pool.Query(ctx, `
+	query := `
 		SELECT COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
 		       COALESCE(r.recorded_at, r.created_at) AS ts
 		FROM recordings r
+		LEFT JOIN recording_route_results rr ON rr.recording_id = r.id
 		WHERE r.tenant_id = $1
 		  AND r.analysis_status = 'completed'
 		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
-		  AND (
-			EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
-				  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
-			)
-			OR NOT EXISTS (
-				SELECT 1
-				FROM inst_employee_roles ier_any
-				WHERE ier_any.tenant_id = r.tenant_id
-				  AND ier_any.employee_id = r.employee_id
-			)
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
 		  )
-		ORDER BY ts ASC
-	`, tenantID, start, end)
+	`
+	args := []interface{}{tenantID, start, end}
+	if sg := strings.TrimSpace(specialtyGroup); sg != "" {
+		query += " AND lower(COALESCE(rr.specialty_group, '')) = lower($4)"
+		args = append(args, sg)
+	}
+	query += " ORDER BY ts ASC"
+	rows, err := s.store.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query medical team trends rows: %w", err)
 	}
@@ -3841,6 +4136,16 @@ func collectDimensionAvg(rows []medicalTrendRow) map[string]float64 {
 		"G1": {}, "G2": {}, "G3": {}, "G4": {}, "G5": {}, "G6": {},
 	}
 	for _, row := range rows {
+		stageByName := extractStageScores(row.Analysis)
+		for stageName, score := range stageByName {
+			if score <= 0 {
+				continue
+			}
+			if code := stageNameToDimensionCode(stageName); code != "" {
+				values[code] = append(values[code], score)
+			}
+		}
+
 		quality := pickMap(row.Analysis, "quality_score")
 		stagesAny, ok := quality["stages"]
 		if !ok {
@@ -3881,6 +4186,34 @@ func collectDimensionAvg(rows []medicalTrendRow) map[string]float64 {
 	return out
 }
 
+func hasPositiveDimension(stage map[string]float64) bool {
+	for _, code := range []string{"G1", "G2", "G3", "G4", "G5", "G6"} {
+		if stage[code] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func stageNameToDimensionCode(name string) string {
+	switch strings.TrimSpace(name) {
+	case "开场建立权威":
+		return "G1"
+	case "需求探索":
+		return "G2"
+	case "问题放大":
+		return "G3"
+	case "专业呈现":
+		return "G4"
+	case "方案定制":
+		return "G5"
+	case "异议化解", "促成与收尾":
+		return "G6"
+	default:
+		return ""
+	}
+}
+
 func toDimensionCode(raw string) string {
 	text := strings.ToUpper(strings.TrimSpace(raw))
 	switch {
@@ -3907,14 +4240,7 @@ func collectPatientTrend(rows []medicalTrendRow) (acceptanceRate float64, emotio
 	emotionTotal := 0
 	emotionImprove := 0
 	for _, row := range rows {
-		statusRaw := firstNonEmptyText(
-			pickNestedStatus(row.Analysis, "visit_outcome"),
-			pickString(row.Analysis, "visit_outcome_status"),
-			pickString(row.Analysis, "visit_outcome"),
-			pickNestedStatus(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome_status"),
-			pickString(pickMap(row.Analysis, "analysis_summary"), "visit_outcome"),
-		)
+		statusRaw := resolveVisitOutcomeStatus(row.Analysis)
 		if normalized := normalizePatientStatus(statusRaw); normalized != "" {
 			total++
 			if normalized == "顺利接受" {
@@ -3986,7 +4312,7 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int) (*TeamAbilityResponse, error) {
+func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int, scope RecordingScope) (*TeamAbilityResponse, error) {
 	if months <= 0 {
 		months = 3
 	}
@@ -4001,7 +4327,53 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 	prevPeriodStart := addMonths(currentPeriodStart, -months)
 	prevPeriodEnd := currentPeriodStart
 
-	rows, err := s.store.pool.Query(ctx, `
+	filterClause := `
+		  AND COALESCE(NULLIF(r.business_scope, ''), 'unknown') = 'consultant'`
+	switch scope {
+	case RecordingScopeDoctor:
+		filterClause = `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant'])
+		  )`
+	case RecordingScopeFrontdesk:
+		filterClause = `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['frontdesk','reception','receptionist'])
+		  )`
+	case RecordingScopeTherapist:
+		filterClause = `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = 'therapist'
+		  )`
+	case RecordingScopeConsultant:
+		filterClause = `
+		  AND COALESCE(NULLIF(r.business_scope, ''), 'unknown') = 'consultant'
+		  AND EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = 'consultant'
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant','frontdesk','reception','receptionist','therapist'])
+		  )`
+	}
+
+	rows, err := s.store.pool.Query(ctx, fmt.Sprintf(`
 		SELECT r.employee_id,
 		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工') AS employee_name,
 		       r.analysis_result,
@@ -4011,10 +4383,11 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 		WHERE r.tenant_id = $1
 		  AND r.analysis_status = 'completed'
 		  AND r.analysis_result IS NOT NULL
+		  %s
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) < $3
 		ORDER BY ts ASC
-	`, tenantID, prevPeriodStart, currentPeriodEnd)
+	`, filterClause), tenantID, prevPeriodStart, currentPeriodEnd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query team ability rows: %w", err)
 	}

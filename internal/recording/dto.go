@@ -110,10 +110,25 @@ type TherapistResetResponse struct {
 	ResetPercent          float64            `json:"reset_percent"`
 	CriticalGap           bool               `json:"critical_gap"`
 	CriticalMissingItems  []string           `json:"critical_missing_items"`
+	CriticalMissingDetail []ResetCodeInfo    `json:"critical_missing_details"`
 	Highlights            []string           `json:"highlights"`
 	ImprovementPriorities []string           `json:"improvement_priorities"`
 	RecommendedActions    []string           `json:"recommended_actions"`
 	Items                 []map[string]any   `json:"items"`
+}
+
+type ResetCodeInfo struct {
+	Code          string `json:"code"`
+	Title         string `json:"title"`
+	WhyItMatters  string `json:"why_it_matters"`
+	RiskIfMissing string `json:"risk_if_missing"`
+	CoachAction   string `json:"coach_action"`
+	Reason        string `json:"reason,omitempty"`
+	Action        string `json:"action,omitempty"`
+}
+
+type ResetCodeDictionaryResponse struct {
+	Items []ResetCodeInfo `json:"items"`
 }
 
 // RecordingListRequest represents a request to list medical recordings
@@ -294,6 +309,8 @@ type DoctorAbilityRankingResponse struct {
 type DoctorAbilityDetailResponse struct {
 	EmployeeID           int64    `json:"employee_id"`
 	EmployeeName         string   `json:"employee_name"`
+	RecordingCount       int64    `json:"recording_count"`
+	TotalDuration        int64    `json:"total_duration"` // in seconds
 	CommunicationScore   float64  `json:"communication_score"`
 	ProfessionalismScore float64  `json:"professionalism_score"`
 	EmpathyScore         float64  `json:"empathy_score"`
