@@ -104,6 +104,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	if req.Scope != nil {
 		switch *req.Scope {
 		case RecordingScopeDoctor:
+			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'doctor'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
 				FROM inst_employee_roles ier
@@ -114,6 +115,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		case RecordingScopeConsultant:
+			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'consultant'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
 				FROM inst_employee_roles ier
@@ -145,6 +147,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			args = append(args, frontdeskScopeRoleCodes)
 			argIndex++
 		case RecordingScopeFrontdesk:
+			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'frontdesk'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
 				FROM inst_employee_roles ier
@@ -166,6 +169,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			args = append(args, doctorScopeRoleCodes)
 			argIndex++
 		case RecordingScopeTherapist:
+			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'therapist'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
 				FROM inst_employee_roles ier
@@ -425,6 +429,631 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	return recordings, total, nil
+}
+
+func (s *Store) ListManagementEvents(
+	ctx context.Context,
+	tenantID int64,
+	roleType string,
+	dimensionCode string,
+	startDate *time.Time,
+	endDate *time.Time,
+) ([]ManagementEvent, error) {
+	if tenantID <= 0 {
+		return []ManagementEvent{}, nil
+	}
+	conditions := []string{"tenant_id = $1"}
+	args := []interface{}{tenantID}
+	argIndex := 2
+	if strings.TrimSpace(roleType) != "" {
+		conditions = append(conditions, fmt.Sprintf("role_type = $%d", argIndex))
+		args = append(args, strings.TrimSpace(roleType))
+		argIndex++
+	}
+	if strings.TrimSpace(dimensionCode) != "" {
+		conditions = append(conditions, fmt.Sprintf("dimension_code = $%d", argIndex))
+		args = append(args, strings.TrimSpace(dimensionCode))
+		argIndex++
+	}
+	if startDate != nil {
+		conditions = append(conditions, fmt.Sprintf("event_date >= $%d", argIndex))
+		args = append(args, *startDate)
+		argIndex++
+	}
+	if endDate != nil {
+		conditions = append(conditions, fmt.Sprintf("event_date <= $%d", argIndex))
+		args = append(args, *endDate)
+		argIndex++
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			id, tenant_id, event_date, event_type, title, COALESCE(description, ''),
+			role_type, dimension_code, status, COALESCE(meta, '{}'::jsonb),
+			COALESCE(created_by, 0), created_at, updated_at
+		FROM management_events
+		WHERE %s
+		ORDER BY event_date ASC, id ASC
+	`, strings.Join(conditions, " AND "))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ManagementEvent, 0)
+	for rows.Next() {
+		var (
+			item      ManagementEvent
+			eventDate time.Time
+			createdAt time.Time
+			updatedAt time.Time
+			metaRaw   []byte
+		)
+		if scanErr := rows.Scan(
+			&item.ID, &item.TenantID, &eventDate, &item.EventType, &item.Title, &item.Description,
+			&item.RoleType, &item.DimensionCode, &item.Status, &metaRaw, &item.CreatedBy, &createdAt, &updatedAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		item.EventDate = eventDate.Format("2006-01-02")
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		item.UpdatedAt = updatedAt.Format(time.RFC3339)
+		if len(metaRaw) > 0 {
+			var meta map[string]interface{}
+			if err := json.Unmarshal(metaRaw, &meta); err == nil {
+				item.Meta = meta
+			}
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) CreateManagementEvent(ctx context.Context, tenantID int64, createdBy int64, req CreateManagementEventRequest) (*ManagementEvent, error) {
+	var eventDate time.Time
+	parsed, err := time.Parse("2006-01-02", strings.TrimSpace(req.EventDate))
+	if err != nil {
+		return nil, fmt.Errorf("invalid event_date, expected YYYY-MM-DD")
+	}
+	eventDate = parsed
+	metaBytes, _ := json.Marshal(req.Meta)
+	if len(metaBytes) == 0 {
+		metaBytes = []byte("{}")
+	}
+	var (
+		item      ManagementEvent
+		createdAt time.Time
+		updatedAt time.Time
+		metaRaw   []byte
+	)
+	if err := s.pool.QueryRow(ctx, `
+		INSERT INTO management_events (
+			tenant_id, event_date, event_type, title, description,
+			role_type, dimension_code, status, meta, created_by, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, 'active', $8::jsonb, $9, NOW(), NOW()
+		)
+		RETURNING id, tenant_id, event_date, event_type, title, COALESCE(description, ''),
+		          role_type, dimension_code, status, COALESCE(meta, '{}'::jsonb),
+		          COALESCE(created_by, 0), created_at, updated_at
+	`, tenantID, eventDate, strings.TrimSpace(req.EventType), strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), strings.TrimSpace(req.RoleType), strings.TrimSpace(req.DimensionCode), string(metaBytes), createdBy).Scan(
+		&item.ID, &item.TenantID, &eventDate, &item.EventType, &item.Title, &item.Description,
+		&item.RoleType, &item.DimensionCode, &item.Status, &metaRaw, &item.CreatedBy, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.EventDate = eventDate.Format("2006-01-02")
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if len(metaRaw) > 0 {
+		var meta map[string]interface{}
+		if err := json.Unmarshal(metaRaw, &meta); err == nil {
+			item.Meta = meta
+		}
+	}
+	return &item, nil
+}
+
+func (s *Store) ListBenchmarkClips(
+	ctx context.Context,
+	tenantID int64,
+	status string,
+	source string,
+	roleCode string,
+	dimension string,
+	keyword string,
+	page int,
+	pageSize int,
+) ([]BenchmarkClip, int64, error) {
+	if tenantID <= 0 {
+		return []BenchmarkClip{}, 0, nil
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	offset := (page - 1) * pageSize
+
+	conditions := []string{"bc.tenant_id = $1"}
+	args := []interface{}{tenantID}
+	argIndex := 2
+	if v := strings.TrimSpace(status); v != "" {
+		conditions = append(conditions, fmt.Sprintf("bc.status = $%d", argIndex))
+		args = append(args, v)
+		argIndex++
+	}
+	if v := strings.TrimSpace(source); v != "" {
+		conditions = append(conditions, fmt.Sprintf("bc.source = $%d", argIndex))
+		args = append(args, v)
+		argIndex++
+	}
+	if v := strings.TrimSpace(roleCode); v != "" {
+		conditions = append(conditions, fmt.Sprintf("bc.role_code = $%d", argIndex))
+		args = append(args, v)
+		argIndex++
+	}
+	if v := strings.TrimSpace(dimension); v != "" {
+		conditions = append(conditions, fmt.Sprintf("bc.dimension = $%d", argIndex))
+		args = append(args, v)
+		argIndex++
+	}
+	if v := strings.TrimSpace(keyword); v != "" {
+		conditions = append(conditions, fmt.Sprintf("(bc.clip_text ILIKE $%d OR COALESCE(e.full_name,'') ILIKE $%d OR COALESCE(e.name,'') ILIKE $%d OR COALESCE(NULLIF(r.scene_name,''), NULLIF(r.scene,''), '') ILIKE $%d OR COALESCE(bc.dimension,'') ILIKE $%d OR bc.recording_id::text ILIKE $%d)", argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, "%"+v+"%")
+		argIndex++
+	}
+	whereClause := strings.Join(conditions, " AND ")
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(1)
+		FROM benchmark_clips bc
+		LEFT JOIN employees e ON e.id = bc.employee_id
+		LEFT JOIN recordings r ON r.id = bc.recording_id
+		WHERE %s
+	`, whereClause), args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			bc.id, bc.tenant_id, bc.recording_id, bc.employee_id,
+			COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), e.phone, '') AS employee_name,
+			bc.role_code, bc.dimension, COALESCE(bc.score, 0),
+			COALESCE(bc.clip_text, ''), COALESCE(bc.ai_comment, ''),
+			COALESCE(bc.learning_points, '[]'::jsonb), bc.source, bc.status, COALESCE(bc.confidence, ''),
+			r.recorded_at, COALESCE(NULLIF(r.scene_name,''), NULLIF(r.scene,''), ''),
+			bc.audio_start_seconds, bc.audio_end_seconds, COALESCE(bc.used_in_meetings, 0),
+			bc.accepted_at, bc.rejected_at, bc.created_at, bc.updated_at
+		FROM benchmark_clips bc
+		LEFT JOIN employees e ON e.id = bc.employee_id
+		LEFT JOIN recordings r ON r.id = bc.recording_id
+		WHERE %s
+		ORDER BY bc.created_at DESC, bc.id DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+	args = append(args, pageSize, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]BenchmarkClip, 0)
+	for rows.Next() {
+		var (
+			item        BenchmarkClip
+			createdAt   time.Time
+			updatedAt   time.Time
+			acceptedAt  *time.Time
+			rejectedAt  *time.Time
+			recordedAt  *time.Time
+			sceneType   string
+			learningRaw []byte
+		)
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID,
+			&item.EmployeeName, &item.RoleCode, &item.Dimension, &item.Score,
+			&item.ClipText, &item.AIComment, &learningRaw, &item.Source, &item.Status, &item.Confidence,
+			&recordedAt, &sceneType,
+			&item.AudioStartSecond, &item.AudioEndSecond, &item.UsedInMeetings,
+			&acceptedAt, &rejectedAt, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		item.UpdatedAt = updatedAt.Format(time.RFC3339)
+		if acceptedAt != nil {
+			v := acceptedAt.Format(time.RFC3339)
+			item.AcceptedAt = &v
+		}
+		if rejectedAt != nil {
+			v := rejectedAt.Format(time.RFC3339)
+			item.RejectedAt = &v
+		}
+		if recordedAt != nil {
+			item.RecordedAt = recordedAt.Format(time.RFC3339)
+		}
+		item.SceneType = sceneType
+		if len(learningRaw) > 0 {
+			_ = json.Unmarshal(learningRaw, &item.LearningPoints)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+func (s *Store) GetBenchmarkClipByID(ctx context.Context, tenantID int64, id int64) (*BenchmarkClip, error) {
+	var (
+		item        BenchmarkClip
+		createdAt   time.Time
+		updatedAt   time.Time
+		acceptedAt  *time.Time
+		rejectedAt  *time.Time
+		recordedAt  *time.Time
+		sceneType   string
+		learningRaw []byte
+	)
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			bc.id, bc.tenant_id, bc.recording_id, bc.employee_id,
+			COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), e.phone, '') AS employee_name,
+			bc.role_code, bc.dimension, COALESCE(bc.score, 0),
+			COALESCE(bc.clip_text, ''), COALESCE(bc.ai_comment, ''),
+			COALESCE(bc.learning_points, '[]'::jsonb), bc.source, bc.status, COALESCE(bc.confidence, ''),
+			r.recorded_at, COALESCE(NULLIF(r.scene_name,''), NULLIF(r.scene,''), ''),
+			bc.audio_start_seconds, bc.audio_end_seconds, COALESCE(bc.used_in_meetings, 0),
+			bc.accepted_at, bc.rejected_at, bc.created_at, bc.updated_at
+		FROM benchmark_clips bc
+		LEFT JOIN employees e ON e.id = bc.employee_id
+		LEFT JOIN recordings r ON r.id = bc.recording_id
+		WHERE bc.tenant_id = $1 AND bc.id = $2
+	`, tenantID, id).Scan(
+		&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID,
+		&item.EmployeeName, &item.RoleCode, &item.Dimension, &item.Score,
+		&item.ClipText, &item.AIComment, &learningRaw, &item.Source, &item.Status, &item.Confidence,
+		&recordedAt, &sceneType,
+		&item.AudioStartSecond, &item.AudioEndSecond, &item.UsedInMeetings,
+		&acceptedAt, &rejectedAt, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if acceptedAt != nil {
+		v := acceptedAt.Format(time.RFC3339)
+		item.AcceptedAt = &v
+	}
+	if rejectedAt != nil {
+		v := rejectedAt.Format(time.RFC3339)
+		item.RejectedAt = &v
+	}
+	if recordedAt != nil {
+		item.RecordedAt = recordedAt.Format(time.RFC3339)
+	}
+	item.SceneType = sceneType
+	if len(learningRaw) > 0 {
+		_ = json.Unmarshal(learningRaw, &item.LearningPoints)
+	}
+	return &item, nil
+}
+
+type benchmarkCandidateInput struct {
+	TenantID    int64
+	RecordingID int64
+	EmployeeID  int64
+	RoleCode    string
+	Dimension   string
+	Score       float64
+	ClipText    string
+	Confidence  string
+	Source      string
+}
+
+func (s *Store) InsertBenchmarkClipIfNotExists(ctx context.Context, in benchmarkCandidateInput) (bool, error) {
+	if strings.TrimSpace(in.ClipText) == "" || strings.TrimSpace(in.Dimension) == "" || strings.TrimSpace(in.RoleCode) == "" {
+		return false, nil
+	}
+	learningBytes := []byte("[]")
+	tag := `auto`
+	if strings.TrimSpace(in.Source) != "" {
+		tag = strings.TrimSpace(in.Source)
+	}
+	cmd, err := s.pool.Exec(ctx, `
+		INSERT INTO benchmark_clips (
+			tenant_id, recording_id, employee_id, role_code, dimension, score,
+			clip_text, learning_points, source, status, confidence, used_in_meetings, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8::jsonb, $9, 'pending', $10, 0, NOW(), NOW()
+		)
+		ON CONFLICT (tenant_id, recording_id, role_code, dimension) DO NOTHING
+	`, in.TenantID, in.RecordingID, in.EmployeeID, in.RoleCode, in.Dimension, in.Score, strings.TrimSpace(in.ClipText), string(learningBytes), tag, strings.TrimSpace(in.Confidence))
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (s *Store) CreateManualBenchmarkClip(ctx context.Context, tenantID int64, recordingID int64, employeeID int64, req CreateManualBenchmarkClipRequest) (*BenchmarkClip, error) {
+	learningBytes := []byte("[]")
+	var (
+		item        BenchmarkClip
+		createdAt   time.Time
+		updatedAt   time.Time
+		acceptedAt  *time.Time
+		learningRaw []byte
+	)
+	if err := s.pool.QueryRow(ctx, `
+		INSERT INTO benchmark_clips (
+			tenant_id, recording_id, employee_id, role_code, dimension, score,
+			clip_text, learning_points, source, status, confidence, used_in_meetings, accepted_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8::jsonb, 'manual', 'accepted', $9, 0, NOW(), NOW(), NOW()
+		)
+		RETURNING id, tenant_id, recording_id, employee_id, role_code, dimension, score, clip_text,
+		          COALESCE(ai_comment, ''), COALESCE(learning_points, '[]'::jsonb), source, status, COALESCE(confidence,''),
+		          audio_start_seconds, audio_end_seconds, used_in_meetings, accepted_at, rejected_at, created_at, updated_at
+	`, tenantID, recordingID, employeeID, strings.TrimSpace(req.RoleCode), strings.TrimSpace(req.Dimension), req.Score, strings.TrimSpace(req.ClipText), string(learningBytes), strings.TrimSpace(req.Confidence)).Scan(
+		&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID, &item.RoleCode, &item.Dimension, &item.Score, &item.ClipText,
+		&item.AIComment, &learningRaw, &item.Source, &item.Status, &item.Confidence,
+		&item.AudioStartSecond, &item.AudioEndSecond, &item.UsedInMeetings, &acceptedAt, &item.RejectedAt, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if acceptedAt != nil {
+		v := acceptedAt.Format(time.RFC3339)
+		item.AcceptedAt = &v
+	}
+	if len(learningRaw) > 0 {
+		_ = json.Unmarshal(learningRaw, &item.LearningPoints)
+	}
+	return &item, nil
+}
+
+func (s *Store) UpdateBenchmarkClipStatus(
+	ctx context.Context,
+	tenantID int64,
+	id int64,
+	status string,
+	aiComment string,
+	learningPoints []string,
+) (*BenchmarkClip, error) {
+	learningBytes, _ := json.Marshal(learningPoints)
+	if len(learningBytes) == 0 {
+		learningBytes = []byte("[]")
+	}
+	var (
+		item        BenchmarkClip
+		createdAt   time.Time
+		updatedAt   time.Time
+		acceptedAt  *time.Time
+		rejectedAt  *time.Time
+		learningRaw []byte
+	)
+	if err := s.pool.QueryRow(ctx, `
+		UPDATE benchmark_clips
+		SET status = $3,
+		    ai_comment = CASE WHEN $3 = 'accepted' THEN $4 ELSE ai_comment END,
+		    learning_points = CASE WHEN $3 = 'accepted' THEN $5::jsonb ELSE learning_points END,
+		    accepted_at = CASE WHEN $3 = 'accepted' THEN NOW() ELSE accepted_at END,
+		    rejected_at = CASE WHEN $3 = 'rejected' THEN NOW() ELSE rejected_at END,
+		    updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2
+		RETURNING id, tenant_id, recording_id, employee_id, role_code, dimension, score, clip_text,
+		          COALESCE(ai_comment, ''), COALESCE(learning_points, '[]'::jsonb), source, status, COALESCE(confidence,''),
+		          audio_start_seconds, audio_end_seconds, used_in_meetings, accepted_at, rejected_at, created_at, updated_at
+	`, tenantID, id, status, strings.TrimSpace(aiComment), string(learningBytes)).Scan(
+		&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID, &item.RoleCode, &item.Dimension, &item.Score, &item.ClipText,
+		&item.AIComment, &learningRaw, &item.Source, &item.Status, &item.Confidence,
+		&item.AudioStartSecond, &item.AudioEndSecond, &item.UsedInMeetings, &acceptedAt, &rejectedAt, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if acceptedAt != nil {
+		v := acceptedAt.Format(time.RFC3339)
+		item.AcceptedAt = &v
+	}
+	if rejectedAt != nil {
+		v := rejectedAt.Format(time.RFC3339)
+		item.RejectedAt = &v
+	}
+	if len(learningRaw) > 0 {
+		_ = json.Unmarshal(learningRaw, &item.LearningPoints)
+	}
+	return &item, nil
+}
+
+func (s *Store) MarkBenchmarkUsedInMeeting(ctx context.Context, tenantID int64, recordingID int64, roleCode string) (*BenchmarkClip, error) {
+	var id int64
+	if err := s.pool.QueryRow(ctx, `
+		WITH target AS (
+			SELECT bc.id
+			FROM benchmark_clips bc
+			WHERE bc.tenant_id = $1
+			  AND bc.recording_id = $2
+			  AND bc.status = 'accepted'
+			  AND ($3 = '' OR bc.role_code = $3)
+			ORDER BY COALESCE(bc.used_in_meetings, 0) ASC, bc.created_at DESC
+			LIMIT 1
+		)
+		UPDATE benchmark_clips bc
+		SET used_in_meetings = COALESCE(bc.used_in_meetings, 0) + 1,
+		    updated_at = NOW()
+		FROM target
+		WHERE bc.id = target.id
+		RETURNING bc.id
+	`, tenantID, recordingID, strings.TrimSpace(roleCode)).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.GetBenchmarkClipByID(ctx, tenantID, id)
+}
+
+func (s *Store) CreateBenchmarkClipPushes(ctx context.Context, tenantID int64, clipID int64, pushedBy int64, targetEmployeeIDs []int64, note string) (int64, error) {
+	if len(targetEmployeeIDs) == 0 {
+		return 0, nil
+	}
+	var inserted int64
+	for _, eid := range targetEmployeeIDs {
+		if eid <= 0 {
+			continue
+		}
+		var name string
+		_ = s.pool.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(full_name,''), NULLIF(name,''), phone, '')
+			FROM employees
+			WHERE id = $1 AND tenant_id = $2
+		`, eid, tenantID).Scan(&name)
+		cmd, err := s.pool.Exec(ctx, `
+			INSERT INTO benchmark_clip_pushes (
+				tenant_id, benchmark_clip_id, target_employee_id, target_employee_name,
+				note, status, pushed_by, pushed_at, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4,
+				$5, 'sent', $6, NOW(), NOW(), NOW()
+			)
+		`, tenantID, clipID, eid, strings.TrimSpace(name), strings.TrimSpace(note), pushedBy)
+		if err != nil {
+			return inserted, err
+		}
+		inserted += cmd.RowsAffected()
+	}
+	return inserted, nil
+}
+
+func (s *Store) ListBenchmarkClipPushes(ctx context.Context, tenantID int64, clipID int64) ([]BenchmarkClipPushRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, benchmark_clip_id, target_employee_id, COALESCE(target_employee_name, ''),
+		       COALESCE(note, ''), status, pushed_by, pushed_at, acknowledged_at, created_at, updated_at
+		FROM benchmark_clip_pushes
+		WHERE tenant_id = $1 AND benchmark_clip_id = $2
+		ORDER BY created_at DESC, id DESC
+	`, tenantID, clipID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]BenchmarkClipPushRecord, 0)
+	for rows.Next() {
+		var (
+			item         BenchmarkClipPushRecord
+			pushedAt     time.Time
+			createdAt    time.Time
+			updatedAt    time.Time
+			acknowledged *time.Time
+		)
+		if err := rows.Scan(&item.ID, &item.BenchmarkClipID, &item.TargetEmployeeID, &item.TargetEmployeeName,
+			&item.Note, &item.Status, &item.PushedBy, &pushedAt, &acknowledged, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		item.PushedAt = pushedAt.Format(time.RFC3339)
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		item.UpdatedAt = updatedAt.Format(time.RFC3339)
+		if acknowledged != nil {
+			v := acknowledged.Format(time.RFC3339)
+			item.AcknowledgedAt = &v
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AckBenchmarkClipPush(ctx context.Context, tenantID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
+	var (
+		item         BenchmarkClipPushRecord
+		pushedAt     time.Time
+		createdAt    time.Time
+		updatedAt    time.Time
+		acknowledged *time.Time
+	)
+	if err := s.pool.QueryRow(ctx, `
+		UPDATE benchmark_clip_pushes
+		SET status = 'acknowledged', acknowledged_at = NOW(), updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2
+		RETURNING id, benchmark_clip_id, target_employee_id, COALESCE(target_employee_name, ''),
+		          COALESCE(note, ''), status, pushed_by, pushed_at, acknowledged_at, created_at, updated_at
+	`, tenantID, pushID).Scan(
+		&item.ID, &item.BenchmarkClipID, &item.TargetEmployeeID, &item.TargetEmployeeName,
+		&item.Note, &item.Status, &item.PushedBy, &pushedAt, &acknowledged, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.PushedAt = pushedAt.Format(time.RFC3339)
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if acknowledged != nil {
+		v := acknowledged.Format(time.RFC3339)
+		item.AcknowledgedAt = &v
+	}
+	return &item, nil
+}
+
+type benchmarkSourceRow struct {
+	RecordingID   int64
+	EmployeeID    int64
+	RoleCode      string
+	AnalysisRaw   []byte
+	StructuredRaw []byte
+	RecordedAtRaw *time.Time
+}
+
+func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, days int) ([]benchmarkSourceRow, error) {
+	if days <= 0 {
+		days = 30
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			r.id,
+			COALESCE(r.employee_id, 0),
+			COALESCE(NULLIF(r.business_scope,''), 'unknown') AS role_code,
+			COALESCE(r.analysis_result, '{}'::json)::text::bytea,
+			COALESCE(rar.result_data, '{}'::json)::text::bytea,
+			r.recorded_at
+		FROM recordings r
+		LEFT JOIN LATERAL (
+			SELECT result_data
+			FROM recording_analysis_results
+			WHERE recording_id = r.id
+			  AND prompt_code = 'doctor_segue_structured'
+			ORDER BY is_active DESC, created_at DESC, id DESC
+			LIMIT 1
+		) rar ON TRUE
+		WHERE r.tenant_id = $1
+		  AND r.recorded_at >= NOW() - ($2 || ' days')::interval
+		  AND COALESCE(r.analysis_status, '') = 'completed'
+		ORDER BY r.recorded_at DESC, r.id DESC
+		LIMIT 1000
+	`, tenantID, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]benchmarkSourceRow, 0)
+	for rows.Next() {
+		var item benchmarkSourceRow
+		if err := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.RoleCode, &item.AnalysisRaw, &item.StructuredRaw, &item.RecordedAtRaw); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // GetRecordingByID retrieves a medical recording by ID

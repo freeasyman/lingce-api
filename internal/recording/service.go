@@ -418,6 +418,10 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 	if err := json.Unmarshal(row.AnalysisRaw, &analysis); err != nil {
 		return nil
 	}
+	var structured map[string]interface{}
+	if len(row.StructuredRaw) > 0 {
+		_ = json.Unmarshal(row.StructuredRaw, &structured)
+	}
 	role := strings.TrimSpace(row.RoleCode)
 	out := make([]benchmarkCandidateInput, 0)
 
@@ -462,10 +466,22 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 				Source:     "auto",
 			})
 		}
-	case "doctor", "therapist":
+	case "doctor":
 		segue := pickMap(analysis, "segue_detail")
 		groupScores := pickMap(segue, "group_scores")
+		if len(groupScores) == 0 {
+			groupScores = pickMap(analysis, "segue_scores")
+		}
+		if len(groupScores) == 0 {
+			groupScores = pickMap(pickMap(structured, "segue"), "group_scores")
+		}
 		items := pickArray(segue, "items")
+		if len(items) == 0 {
+			items = pickArray(pickMap(pickMap(analysis, "raw"), "doctor_segue_structured"), "items")
+		}
+		if len(items) == 0 {
+			items = pickArray(pickMap(structured, "segue"), "items")
+		}
 		highlights := pickStringArray(analysis, "highlights")
 		for k, v := range groupScores {
 			scoreMap := toScoreMap(map[string]interface{}{"score": v})
@@ -487,6 +503,31 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 			out = append(out, benchmarkCandidateInput{
 				RoleCode:   role,
 				Dimension:  k,
+				Score:      score,
+				ClipText:   text,
+				Confidence: "medium",
+				Source:     "auto",
+			})
+		}
+	case "therapist":
+		dimensionScores := toScoreMap(pickMap(analysis, "dimension_scores"))
+		resetItems := pickArray(pickMap(pickMap(pickMap(analysis, "raw"), "therapist_reset_analysis"), "reset"), "items")
+		highlights := pickStringArray(analysis, "highlights")
+		for dim, rawScore := range dimensionScores {
+			score := normalizeScoreToHundredLocal(rawScore)
+			if score < 80 {
+				continue
+			}
+			text := pickPositiveResetEvidenceForDimension(resetItems, dim)
+			if text == "" {
+				text = pickFirstPositiveText(highlights)
+			}
+			if text == "" || looksNegativeText(text) {
+				text = fmt.Sprintf("该片段在%s维度表现稳定且具备可复制性，适合用于团队讲评。", dim)
+			}
+			out = append(out, benchmarkCandidateInput{
+				RoleCode:   role,
+				Dimension:  dim,
 				Score:      score,
 				ClipText:   text,
 				Confidence: "medium",
@@ -521,6 +562,29 @@ func pickPositiveEvidenceForDimension(items []interface{}, groupCode string) str
 			continue
 		}
 		if strings.ToUpper(strings.TrimSpace(pickString(m, "result"))) != "Y" {
+			continue
+		}
+		ev := strings.TrimSpace(pickString(m, "evidence"))
+		if ev != "" && !looksNegativeText(ev) {
+			return ev
+		}
+	}
+	return ""
+}
+
+func pickPositiveResetEvidenceForDimension(items []interface{}, groupCode string) string {
+	prefix := strings.TrimSpace(groupCode) + "-"
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		code := strings.TrimSpace(pickString(m, "code"))
+		if !strings.HasPrefix(code, prefix) {
+			continue
+		}
+		result := strings.ToUpper(strings.TrimSpace(pickString(m, "result")))
+		if result != "Y" && result != "U" {
 			continue
 		}
 		ev := strings.TrimSpace(pickString(m, "evidence"))
