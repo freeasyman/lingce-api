@@ -136,6 +136,33 @@ func (h *Handler) GetDoctorAbilityDetail(w http.ResponseWriter, r *http.Request)
 	httputil.WriteSuccess(w, resp)
 }
 
+// GetConsultantAbilityDetail handles getting consultant ability detail
+func (h *Handler) GetConsultantAbilityDetail(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	resp, err := h.service.GetConsultantAbilityDetail(r.Context(), tenantID, employeeID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 // GetMedicalRecordingRoute handles /recordings/{id}/route endpoint.
 func (h *Handler) GetMedicalRecordingRoute(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -447,6 +474,292 @@ func (h *Handler) GetTeamTrends(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) ListManagementEvents(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	roleType := strings.TrimSpace(r.URL.Query().Get("role_type"))
+	dimensionCode := strings.TrimSpace(r.URL.Query().Get("dimension_code"))
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+	items, svcErr := h.service.ListManagementEvents(r.Context(), tenantID, roleType, dimensionCode, period)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, ManagementEventListResponse{Items: items})
+}
+
+func (h *Handler) CreateManagementEvent(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req CreateManagementEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	item, svcErr := h.service.CreateManagementEvent(r.Context(), tenantID, claims.UserID, req)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) ListBenchmarkClips(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	pageSize, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size")))
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	autoGenerate := strings.TrimSpace(r.URL.Query().Get("auto_generate"))
+	if status == "pending" && autoGenerate != "0" && autoGenerate != "false" {
+		_, _ = h.service.GenerateBenchmarkCandidates(r.Context(), tenantID)
+	}
+	resp, svcErr := h.service.ListBenchmarkClips(
+		r.Context(),
+		tenantID,
+		status,
+		strings.TrimSpace(r.URL.Query().Get("source")),
+		strings.TrimSpace(r.URL.Query().Get("role_code")),
+		strings.TrimSpace(r.URL.Query().Get("dimension")),
+		strings.TrimSpace(r.URL.Query().Get("keyword")),
+		page,
+		pageSize,
+	)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GenerateBenchmarkCandidates(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	created, svcErr := h.service.GenerateBenchmarkCandidates(r.Context(), tenantID)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"created_count": created,
+	})
+}
+
+func (h *Handler) AcceptBenchmarkClip(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req UpdateBenchmarkClipStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, svcErr := h.service.AcceptBenchmarkClip(r.Context(), tenantID, id, req)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) RejectBenchmarkClip(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	item, svcErr := h.service.RejectBenchmarkClip(r.Context(), tenantID, id)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) CreateManualBenchmarkClip(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	var req CreateManualBenchmarkClipRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, svcErr := h.service.CreateManualBenchmarkClip(r.Context(), tenantID, recordingID, req)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) MarkBenchmarkUsedInMeeting(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req MarkBenchmarkMeetingUsedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, svcErr := h.service.MarkBenchmarkUsedInMeeting(r.Context(), tenantID, req)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) PushBenchmarkClip(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	clipID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || clipID <= 0 {
+		httputil.WriteBadRequest(w, "invalid clip id")
+		return
+	}
+	var req PushBenchmarkClipRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	inserted, svcErr := h.service.PushBenchmarkClip(r.Context(), tenantID, clipID, claims.UserID, req)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"inserted": inserted})
+}
+
+func (h *Handler) ListBenchmarkClipPushes(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	clipID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || clipID <= 0 {
+		httputil.WriteBadRequest(w, "invalid clip id")
+		return
+	}
+	items, svcErr := h.service.ListBenchmarkClipPushes(r.Context(), tenantID, clipID)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items})
+}
+
+func (h *Handler) AckBenchmarkClipPush(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	pushID, err := strconv.ParseInt(r.PathValue("push_id"), 10, 64)
+	if err != nil || pushID <= 0 {
+		httputil.WriteBadRequest(w, "invalid push id")
+		return
+	}
+	item, svcErr := h.service.AckBenchmarkClipPush(r.Context(), tenantID, pushID)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }
 
 // MarkHighlight handles marking highlight
@@ -1253,13 +1566,23 @@ func (h *Handler) GetDoctorAbilitySegue(w http.ResponseWriter, r *http.Request) 
 	}
 	items := make([]map[string]interface{}, 0, len(list))
 	for _, row := range list {
+		segueScores := map[string]interface{}{
+			"overall": row.AvgScore,
+		}
+		for _, code := range []string{"G1", "G2", "G3", "G4", "G5", "G6"} {
+			if row.StageScores != nil {
+				if v, ok := row.StageScores[code]; ok {
+					segueScores[code] = v
+					continue
+				}
+			}
+			segueScores[code] = 0.0
+		}
 		items = append(items, map[string]interface{}{
 			"employee_id":     row.EmployeeID,
 			"employee_name":   row.EmployeeName,
 			"recording_count": row.RecordingCount,
-			"segue_scores": map[string]interface{}{
-				"overall": row.AvgScore,
-			},
+			"segue_scores":    segueScores,
 		})
 	}
 	httputil.WriteSuccess(w, map[string]interface{}{

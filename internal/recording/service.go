@@ -217,6 +217,370 @@ func compactRecordingListItem(resp *RecordingResponse) {
 	resp.SuggestedTask = nil
 }
 
+func (s *Service) ListManagementEvents(
+	ctx context.Context,
+	tenantID int64,
+	roleType string,
+	dimensionCode string,
+	period string,
+) ([]ManagementEvent, error) {
+	var startDate *time.Time
+	var endDate *time.Time
+	now := time.Now()
+	period = strings.TrimSpace(period)
+	switch period {
+	case "1m":
+		d := now.AddDate(0, -1, 0)
+		startDate = &d
+		endDate = &now
+	case "6m":
+		d := now.AddDate(0, -6, 0)
+		startDate = &d
+		endDate = &now
+	case "3m", "":
+		d := now.AddDate(0, -3, 0)
+		startDate = &d
+		endDate = &now
+	default:
+		// fallback to 3m for unknown values
+		d := now.AddDate(0, -3, 0)
+		startDate = &d
+		endDate = &now
+	}
+	return s.store.ListManagementEvents(ctx, tenantID, roleType, dimensionCode, startDate, endDate)
+}
+
+func (s *Service) CreateManagementEvent(ctx context.Context, tenantID int64, createdBy int64, req CreateManagementEventRequest) (*ManagementEvent, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	if strings.TrimSpace(req.EventDate) == "" {
+		return nil, fmt.Errorf("event_date is required")
+	}
+	if strings.TrimSpace(req.EventType) == "" {
+		return nil, fmt.Errorf("event_type is required")
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(req.RoleType) == "" {
+		return nil, fmt.Errorf("role_type is required")
+	}
+	if strings.TrimSpace(req.DimensionCode) == "" {
+		return nil, fmt.Errorf("dimension_code is required")
+	}
+	return s.store.CreateManagementEvent(ctx, tenantID, createdBy, req)
+}
+
+func (s *Service) ListBenchmarkClips(
+	ctx context.Context,
+	tenantID int64,
+	status string,
+	source string,
+	roleCode string,
+	dimension string,
+	keyword string,
+	page int,
+	pageSize int,
+) (*BenchmarkClipListResponse, error) {
+	if strings.TrimSpace(status) == "pending" && strings.TrimSpace(source) == "" {
+		source = "auto"
+	}
+	items, total, err := s.store.ListBenchmarkClips(ctx, tenantID, status, source, roleCode, dimension, keyword, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	return &BenchmarkClipListResponse{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int64) (int, error) {
+	rows, err := s.store.ListBenchmarkSourceRows(ctx, tenantID, 30)
+	if err != nil {
+		return 0, err
+	}
+	created := 0
+	for _, row := range rows {
+		candidates := deriveBenchmarkCandidatesFromAnalysis(row)
+		for _, c := range candidates {
+			c.TenantID = tenantID
+			c.RecordingID = row.RecordingID
+			c.EmployeeID = row.EmployeeID
+			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
+			if insErr != nil {
+				continue
+			}
+			if inserted {
+				created++
+			}
+		}
+	}
+	return created, nil
+}
+
+func (s *Service) AcceptBenchmarkClip(ctx context.Context, tenantID int64, id int64, req UpdateBenchmarkClipStatusRequest) (*BenchmarkClip, error) {
+	comment := strings.TrimSpace(req.AIComment)
+	points := req.LearningPoints
+	if comment == "" || len(points) == 0 {
+		item, err := s.store.GetBenchmarkClipByID(ctx, tenantID, id)
+		if err == nil && item != nil {
+			autoComment, autoPoints := buildBenchmarkCommentAndPoints(item)
+			if comment == "" {
+				comment = autoComment
+			}
+			if len(points) == 0 {
+				points = autoPoints
+			}
+		}
+	}
+	return s.store.UpdateBenchmarkClipStatus(ctx, tenantID, id, "accepted", comment, points)
+}
+
+func (s *Service) RejectBenchmarkClip(ctx context.Context, tenantID int64, id int64) (*BenchmarkClip, error) {
+	return s.store.UpdateBenchmarkClipStatus(ctx, tenantID, id, "rejected", "", nil)
+}
+
+func (s *Service) CreateManualBenchmarkClip(ctx context.Context, tenantID int64, recordingID int64, req CreateManualBenchmarkClipRequest) (*BenchmarkClip, error) {
+	rec, err := s.store.GetRecordingByID(ctx, recordingID)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.TenantID != tenantID {
+		return nil, fmt.Errorf("recording not found")
+	}
+	if strings.TrimSpace(req.RoleCode) == "" || strings.TrimSpace(req.Dimension) == "" || strings.TrimSpace(req.ClipText) == "" {
+		return nil, fmt.Errorf("role_code, dimension, clip_text are required")
+	}
+	item, createErr := s.store.CreateManualBenchmarkClip(ctx, tenantID, recordingID, rec.EmployeeID, req)
+	if createErr != nil {
+		return nil, createErr
+	}
+	comment, points := buildBenchmarkCommentAndPoints(item)
+	updated, updErr := s.store.UpdateBenchmarkClipStatus(ctx, tenantID, item.ID, "accepted", comment, points)
+	if updErr != nil {
+		return item, nil
+	}
+	return updated, nil
+}
+
+func (s *Service) MarkBenchmarkUsedInMeeting(ctx context.Context, tenantID int64, req MarkBenchmarkMeetingUsedRequest) (*BenchmarkClip, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	if req.RecordingID <= 0 {
+		return nil, fmt.Errorf("recording_id is required")
+	}
+	return s.store.MarkBenchmarkUsedInMeeting(ctx, tenantID, req.RecordingID, req.RoleCode)
+}
+
+func (s *Service) PushBenchmarkClip(ctx context.Context, tenantID int64, clipID int64, pushedBy int64, req PushBenchmarkClipRequest) (int64, error) {
+	if tenantID <= 0 {
+		return 0, fmt.Errorf("tenant_id is required")
+	}
+	if clipID <= 0 {
+		return 0, fmt.Errorf("clip_id is required")
+	}
+	if len(req.TargetEmployeeIDs) == 0 {
+		return 0, fmt.Errorf("target_employee_ids is required")
+	}
+	return s.store.CreateBenchmarkClipPushes(ctx, tenantID, clipID, pushedBy, req.TargetEmployeeIDs, req.Note)
+}
+
+func (s *Service) ListBenchmarkClipPushes(ctx context.Context, tenantID int64, clipID int64) ([]BenchmarkClipPushRecord, error) {
+	if tenantID <= 0 || clipID <= 0 {
+		return []BenchmarkClipPushRecord{}, nil
+	}
+	return s.store.ListBenchmarkClipPushes(ctx, tenantID, clipID)
+}
+
+func (s *Service) AckBenchmarkClipPush(ctx context.Context, tenantID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
+	if tenantID <= 0 || pushID <= 0 {
+		return nil, fmt.Errorf("invalid request")
+	}
+	return s.store.AckBenchmarkClipPush(ctx, tenantID, pushID)
+}
+
+func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCandidateInput {
+	if len(row.AnalysisRaw) == 0 {
+		return nil
+	}
+	var analysis map[string]interface{}
+	if err := json.Unmarshal(row.AnalysisRaw, &analysis); err != nil {
+		return nil
+	}
+	role := strings.TrimSpace(row.RoleCode)
+	out := make([]benchmarkCandidateInput, 0)
+
+	switch role {
+	case "consultant":
+		qs := pickMap(analysis, "quality_score")
+		stages := pickArray(qs, "stages")
+		highlights := pickStringArray(analysis, "highlights")
+		for _, st := range stages {
+			m, ok := st.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			scorePtr := pickFloat(m, "score")
+			if scorePtr == nil || *scorePtr < 4 {
+				continue
+			}
+			score := *scorePtr
+			name := pickString(m, "name")
+			if name == "" {
+				name = pickString(m, "group")
+			}
+			text := pickString(m, "evidence")
+			if text == "" {
+				text = pickFirstPositiveText(highlights)
+			}
+			if text == "" {
+				text = fmt.Sprintf("该片段在%s维度达到高分，表达方式具备复制价值。", name)
+			}
+			if looksNegativeText(text) {
+				text = fmt.Sprintf("该片段在%s维度达到高分，表达方式具备复制价值。", name)
+			}
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			out = append(out, benchmarkCandidateInput{
+				RoleCode:   role,
+				Dimension:  name,
+				Score:      score * 20,
+				ClipText:   text,
+				Confidence: "medium",
+				Source:     "auto",
+			})
+		}
+	case "doctor", "therapist":
+		segue := pickMap(analysis, "segue_detail")
+		groupScores := pickMap(segue, "group_scores")
+		items := pickArray(segue, "items")
+		highlights := pickStringArray(analysis, "highlights")
+		for k, v := range groupScores {
+			scoreMap := toScoreMap(map[string]interface{}{"score": v})
+			f, ok := scoreMap["score"]
+			if !ok {
+				continue
+			}
+			score := normalizeScoreToHundredLocal(f)
+			if score < 80 {
+				continue
+			}
+			text := pickPositiveEvidenceForDimension(items, k)
+			if text == "" {
+				text = pickFirstPositiveText(highlights)
+			}
+			if text == "" || looksNegativeText(text) {
+				text = fmt.Sprintf("该片段在%s维度表现稳定且具备可复制性，适合用于团队讲评。", k)
+			}
+			out = append(out, benchmarkCandidateInput{
+				RoleCode:   role,
+				Dimension:  k,
+				Score:      score,
+				ClipText:   text,
+				Confidence: "medium",
+				Source:     "auto",
+			})
+		}
+	}
+	return out
+}
+
+func buildBenchmarkCommentAndPoints(item *BenchmarkClip) (string, []string) {
+	dim := strings.TrimSpace(item.Dimension)
+	if dim == "" {
+		dim = "关键沟通"
+	}
+	return fmt.Sprintf("该片段在%s维度表现较好，表达清晰、节奏稳定，适合用于团队复盘讲评。", dim), []string{
+		"先明确对方具体情境，再给针对性回应",
+		"使用容易理解的表述，减少抽象术语",
+		"结尾给出明确下一步，形成沟通闭环",
+	}
+}
+
+func pickPositiveEvidenceForDimension(items []interface{}, groupCode string) string {
+	prefix := strings.TrimSpace(groupCode) + "-"
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		code := strings.TrimSpace(pickString(m, "code"))
+		if !strings.HasPrefix(code, prefix) {
+			continue
+		}
+		if strings.ToUpper(strings.TrimSpace(pickString(m, "result"))) != "Y" {
+			continue
+		}
+		ev := strings.TrimSpace(pickString(m, "evidence"))
+		if ev != "" && !looksNegativeText(ev) {
+			return ev
+		}
+	}
+	return ""
+}
+
+func pickStringArray(source map[string]interface{}, key string) []string {
+	arr := pickArray(source, key)
+	if len(arr) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
+}
+
+func pickFirstPositiveText(values []string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" && !looksNegativeText(v) {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func looksNegativeText(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return false
+	}
+	patterns := []string{"缺失", "不足", "未说明", "未解释", "未设", "未鼓励", "风险", "问题", "下降", "薄弱", "混乱", "依赖", "犹豫", "受限"}
+	for _, p := range patterns {
+		if strings.Contains(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeScoreToHundredLocal(raw float64) float64 {
+	if raw <= 0 {
+		return 0
+	}
+	if raw <= 1 {
+		return raw * 100
+	}
+	if raw <= 5 {
+		return raw * 20
+	}
+	return raw
+}
+
 // GetRecording retrieves a medical recording by ID
 func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingResponse, error) {
 	recording, err := s.store.GetRecordingByID(ctx, id)
@@ -2877,17 +3241,26 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 		Name       string
 		TS         time.Time
 		Analysis   map[string]interface{}
+		Structured map[string]interface{}
 	}
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT r.employee_id,
 		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知医生') AS employee_name,
 		       COALESCE(r.recorded_at, r.created_at) AS ts,
-		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(ars.result_data, '{}'::json) AS structured_result
 		FROM recordings r
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN LATERAL (
+			SELECT rar.result_data
+			FROM recording_analysis_results rar
+			WHERE rar.recording_id = r.id
+			  AND rar.prompt_code = 'doctor_segue_structured'
+			ORDER BY rar.created_at DESC
+			LIMIT 1
+		) ars ON true
 		WHERE r.tenant_id = $1
 		  AND r.analysis_status = 'completed'
-		  AND r.analysis_result IS NOT NULL
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
 		  AND EXISTS (
@@ -2920,7 +3293,7 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 
 	for rows.Next() {
 		var row doctorAbilityRow
-		if scanErr := rows.Scan(&row.EmployeeID, &row.Name, &row.TS, &row.Analysis); scanErr != nil {
+		if scanErr := rows.Scan(&row.EmployeeID, &row.Name, &row.TS, &row.Analysis, &row.Structured); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan doctor ability row: %w", scanErr)
 		}
 		if row.EmployeeID <= 0 {
@@ -2936,7 +3309,23 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 			aggByEmployee[row.EmployeeID] = agg
 		}
 
-		score := resolveWeeklyDisplayScore(row.Analysis)
+		mergedAnalysis := row.Analysis
+		if mergedAnalysis == nil {
+			mergedAnalysis = map[string]interface{}{}
+		}
+		if row.Structured != nil {
+			if segue, ok := row.Structured["segue"]; ok {
+				mergedAnalysis["segue"] = segue
+			}
+			if segueScores, ok := row.Structured["segue_scores"]; ok {
+				mergedAnalysis["segue_scores"] = segueScores
+			}
+			if quality, ok := row.Structured["quality_score"]; ok {
+				mergedAnalysis["quality_score"] = quality
+			}
+		}
+
+		score := resolveWeeklyDisplayScore(mergedAnalysis)
 		if row.TS.Before(currentStart) {
 			if score > 0 {
 				agg.PreviousSegueScores = append(agg.PreviousSegueScores, score)
@@ -2949,26 +3338,14 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 			agg.CurrentSegueScores = append(agg.CurrentSegueScores, score)
 		}
 
-		quality := pickMap(row.Analysis, "quality_score")
-		if stagesAny, ok := quality["stages"]; ok {
-			if stages, ok := stagesAny.([]interface{}); ok {
-				for _, item := range stages {
-					stage, ok := item.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					code := toDimensionCode(firstNonEmptyText(stage["group"], stage["code"], stage["key"], stage["name"]))
-					if code == "" {
-						continue
-					}
-					if stageScore, ok := toFloat(stage["score"]); ok {
-						agg.StageScores[code] = append(agg.StageScores[code], stageScore)
-					}
-				}
+		dims := extractDoctorDimensionScores(mergedAnalysis)
+		for code, value := range dims {
+			if value > 0 {
+				agg.StageScores[code] = append(agg.StageScores[code], value)
 			}
 		}
 
-		statusRaw := resolveVisitOutcomeStatus(row.Analysis)
+		statusRaw := resolveVisitOutcomeStatus(mergedAnalysis)
 		if normalized := normalizePatientStatus(statusRaw); normalized != "" {
 			agg.PatientStatusTotal++
 			if normalized == "顺利接受" {
@@ -2976,14 +3353,14 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 			}
 		}
 
-		if startEmotion, endEmotion, ok := readEmotionPair(row.Analysis); ok {
+		if startEmotion, endEmotion, ok := readEmotionPair(mergedAnalysis); ok {
 			agg.EmotionTotal++
 			if isEmotionImproved(startEmotion, endEmotion) {
 				agg.EmotionImproveCount++
 			}
 		}
 
-		if critical := pickBool(row.Analysis, "critical_gap"); critical != nil && *critical {
+		if critical := pickBool(mergedAnalysis, "critical_gap"); critical != nil && *critical {
 			agg.CriticalGapCount++
 		}
 	}
@@ -3010,6 +3387,14 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 			EmployeeName:   agg.Name,
 			RecordingCount: agg.CurrentCount,
 			AvgScore:       roundFloat(curAvg, 1),
+			StageScores: map[string]float64{
+				"G1": roundFloat(avgFloat(agg.StageScores["G1"]), 1),
+				"G2": roundFloat(avgFloat(agg.StageScores["G2"]), 1),
+				"G3": roundFloat(avgFloat(agg.StageScores["G3"]), 1),
+				"G4": roundFloat(avgFloat(agg.StageScores["G4"]), 1),
+				"G5": roundFloat(avgFloat(agg.StageScores["G5"]), 1),
+				"G6": roundFloat(avgFloat(agg.StageScores["G6"]), 1),
+			},
 			SegueAvg:       roundFloat(curAvg, 1),
 			SegueTrend:     roundFloat(curAvg-prevAvg, 1),
 			StrongestDim:   strongest,
@@ -3135,8 +3520,6 @@ func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employee
 	teamRows := make([]medicalTrendRow, 0, len(allRows))
 	empCurrentRows := make([]medicalTrendRow, 0, 32)
 	empPreviousRows := make([]medicalTrendRow, 0, 32)
-	employeeSegueScores := make([]float64, 0, 64)
-	teamSegueScores := make([]float64, 0, len(allRows))
 	var employeeTotalDuration int64
 	for _, row := range allRows {
 		wrapped := medicalTrendRow{
@@ -3144,15 +3527,9 @@ func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employee
 			TS:       row.TS,
 		}
 		teamRows = append(teamRows, wrapped)
-		if score := resolveWeeklyDisplayScore(row.Analysis); score > 0 {
-			teamSegueScores = append(teamSegueScores, score)
-		}
 		if row.EmployeeID == employeeID {
 			employeeRows = append(employeeRows, wrapped)
 			employeeTotalDuration += row.Duration
-			if score := resolveWeeklyDisplayScore(row.Analysis); score > 0 {
-				employeeSegueScores = append(employeeSegueScores, score)
-			}
 			if !row.TS.Before(curStart) {
 				empCurrentRows = append(empCurrentRows, wrapped)
 			} else if !row.TS.Before(prevStart) && row.TS.Before(curStart) {
@@ -3218,25 +3595,7 @@ func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employee
 	professionalism := roundFloat((employeeStage["G3"]+employeeStage["G6"])/2, 2)
 	empathy := roundFloat(employeeStage["G4"], 2)
 	efficiency := roundFloat(employeeStage["G5"], 2)
-	if !hasPositiveDimension(employeeStage) {
-		empSegueAvg := roundFloat(avgFloat(employeeSegueScores), 2)
-		teamSegueAvg := roundFloat(avgFloat(teamSegueScores), 2)
-		if empSegueAvg > 0 {
-			communication, professionalism, empathy, efficiency = empSegueAvg, empSegueAvg, empSegueAvg, empSegueAvg
-			gap := roundFloat(empSegueAvg-teamSegueAvg, 2)
-			if gap > eps {
-				strengths = []string{fmt.Sprintf("总体接诊得分高于团队均值 %.2f 分", gap)}
-				weaknesses = []string{"建议继续提升关键阶段稳定性"}
-			} else if gap < -eps {
-				strengths = []string{"技术解释与接诊流程具备基础稳定性"}
-				weaknesses = []string{fmt.Sprintf("总体接诊得分低于团队均值 %.2f 分", -gap)}
-			} else {
-				strengths = []string{"总体接诊得分与团队均值基本持平"}
-				weaknesses = []string{"建议加强关键阶段表现，拉开优势"}
-			}
-		}
-	}
-	if len(employeeRows) == 0 || (communication == 0 && professionalism == 0 && empathy == 0 && efficiency == 0) {
+	if len(employeeRows) == 0 || !hasPositiveDimension(employeeStage) {
 		communication, professionalism, empathy, efficiency = 0, 0, 0, 0
 		recentTrend = "stable"
 		strengths = []string{"暂无足够样本"}
@@ -4217,21 +4576,79 @@ func stageNameToDimensionCode(name string) string {
 func toDimensionCode(raw string) string {
 	text := strings.ToUpper(strings.TrimSpace(raw))
 	switch {
-	case strings.HasPrefix(text, "G1") || strings.Contains(text, "建立接诊环境"):
+	case strings.HasPrefix(text, "G1") || strings.Contains(text, "建立接诊环境") || strings.Contains(text, "建立接诊阶段"):
 		return "G1"
 	case strings.HasPrefix(text, "G2") || strings.Contains(text, "引出信息"):
 		return "G2"
 	case strings.HasPrefix(text, "G3") || strings.Contains(text, "给予信息"):
 		return "G3"
-	case strings.HasPrefix(text, "G4") || strings.Contains(text, "理解患者视角"):
+	case strings.HasPrefix(text, "G4") || strings.Contains(text, "理解患者视角") || strings.Contains(text, "同理沟通"):
 		return "G4"
 	case strings.HasPrefix(text, "G5") || strings.Contains(text, "结束接诊"):
 		return "G5"
-	case strings.HasPrefix(text, "G6") || strings.Contains(text, "治疗/预防计划"):
+	case strings.HasPrefix(text, "G6") || strings.Contains(text, "治疗/预防计划") || strings.Contains(text, "治疗预防计划"):
 		return "G6"
 	default:
 		return ""
 	}
+}
+
+func normalizeDimensionScore(value float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	if value <= 1 {
+		return value * 100
+	}
+	return value
+}
+
+func mergeDimensionScoresFromMap(target map[string]float64, source map[string]interface{}) {
+	if len(source) == 0 {
+		return
+	}
+	for _, code := range []string{"G1", "G2", "G3", "G4", "G5", "G6"} {
+		if v, ok := source[code]; ok {
+			if n, ok := toFloat(v); ok && n > 0 {
+				target[code] = normalizeDimensionScore(n)
+			}
+		}
+	}
+}
+
+func extractDoctorDimensionScores(analysis map[string]interface{}) map[string]float64 {
+	out := map[string]float64{
+		"G1": 0, "G2": 0, "G3": 0, "G4": 0, "G5": 0, "G6": 0,
+	}
+	if analysis == nil {
+		return out
+	}
+
+	// 1) Prefer explicit SEGUE maps when present.
+	mergeDimensionScoresFromMap(out, pickMap(analysis, "segue_scores"))
+	mergeDimensionScoresFromMap(out, pickMap(pickMap(analysis, "segue"), "group_scores"))
+	mergeDimensionScoresFromMap(out, pickMap(pickMap(analysis, "segue_detail"), "group_scores"))
+
+	// 2) Fallback to stage arrays.
+	quality := pickMap(analysis, "quality_score")
+	if stagesAny, ok := quality["stages"]; ok {
+		if stages, ok := stagesAny.([]interface{}); ok {
+			for _, item := range stages {
+				stage, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				code := toDimensionCode(firstNonEmptyText(stage["group"], stage["code"], stage["key"], stage["name"]))
+				if code == "" {
+					continue
+				}
+				if stageScore, ok := toFloat(stage["score"]); ok && stageScore > 0 {
+					out[code] = normalizeDimensionScore(stageScore)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func collectPatientTrend(rows []medicalTrendRow) (acceptanceRate float64, emotionImproveRate float64) {

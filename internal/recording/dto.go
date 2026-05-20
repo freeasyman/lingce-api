@@ -296,6 +296,7 @@ type DoctorAbilityRankingResponse struct {
 	RecordingCount int64   `json:"recording_count"`
 	AvgScore       float64 `json:"avg_score"`
 	Rank           int     `json:"rank"`
+	StageScores    map[string]float64 `json:"stage_scores,omitempty"`
 	SegueAvg       float64 `json:"segue_avg,omitempty"`
 	SegueTrend     float64 `json:"segue_trend,omitempty"`
 	StrongestDim   string  `json:"strongest_dimension,omitempty"`
@@ -480,6 +481,107 @@ type TeamAbilityResponse struct {
 	EmployeeMatrix []TeamAbilityEmployeeMatrixItem `json:"employee_matrix"`
 	GrowthTrend    []TeamAbilityGrowthPoint        `json:"growth_trend"`
 	Highlights     TeamAbilityHighlights           `json:"highlights"`
+}
+
+type ManagementEvent struct {
+	ID            int64                  `json:"id"`
+	TenantID      int64                  `json:"tenant_id"`
+	EventDate     string                 `json:"event_date"`
+	EventType     string                 `json:"event_type"`
+	Title         string                 `json:"title"`
+	Description   string                 `json:"description,omitempty"`
+	RoleType      string                 `json:"role_type"`
+	DimensionCode string                 `json:"dimension_code"`
+	Status        string                 `json:"status"`
+	Meta          map[string]interface{} `json:"meta,omitempty"`
+	CreatedBy     int64                  `json:"created_by"`
+	CreatedAt     string                 `json:"created_at"`
+	UpdatedAt     string                 `json:"updated_at"`
+}
+
+type ManagementEventListResponse struct {
+	Items []ManagementEvent `json:"items"`
+}
+
+type CreateManagementEventRequest struct {
+	EventDate     string                 `json:"event_date"`
+	EventType     string                 `json:"event_type"`
+	Title         string                 `json:"title"`
+	Description   string                 `json:"description"`
+	RoleType      string                 `json:"role_type"`
+	DimensionCode string                 `json:"dimension_code"`
+	Meta          map[string]interface{} `json:"meta"`
+}
+
+type BenchmarkClip struct {
+	ID               int64    `json:"id"`
+	TenantID         int64    `json:"tenant_id"`
+	RecordingID      int64    `json:"recording_id"`
+	EmployeeID       int64    `json:"employee_id"`
+	EmployeeName     string   `json:"employee_name"`
+	RoleCode         string   `json:"role_code"`
+	Dimension        string   `json:"dimension"`
+	Score            float64  `json:"score"`
+	ClipText         string   `json:"clip_text"`
+	AIComment        string   `json:"ai_comment,omitempty"`
+	LearningPoints   []string `json:"learning_points,omitempty"`
+	Source           string   `json:"source"`
+	Status           string   `json:"status"`
+	Confidence       string   `json:"confidence,omitempty"`
+	RecordedAt       string   `json:"recorded_at,omitempty"`
+	SceneType        string   `json:"scene_type,omitempty"`
+	AudioStartSecond *int     `json:"audio_start_seconds,omitempty"`
+	AudioEndSecond   *int     `json:"audio_end_seconds,omitempty"`
+	UsedInMeetings   int      `json:"used_in_meetings"`
+	AcceptedAt       *string  `json:"accepted_at,omitempty"`
+	RejectedAt       *string  `json:"rejected_at,omitempty"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+}
+
+type BenchmarkClipListResponse struct {
+	Items    []BenchmarkClip `json:"items"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+}
+
+type CreateManualBenchmarkClipRequest struct {
+	RoleCode   string  `json:"role_code"`
+	Dimension  string  `json:"dimension"`
+	Score      float64 `json:"score"`
+	ClipText   string  `json:"clip_text"`
+	Confidence string  `json:"confidence"`
+}
+
+type UpdateBenchmarkClipStatusRequest struct {
+	AIComment      string   `json:"ai_comment"`
+	LearningPoints []string `json:"learning_points"`
+}
+
+type MarkBenchmarkMeetingUsedRequest struct {
+	RecordingID int64  `json:"recording_id"`
+	RoleCode    string `json:"role_code"`
+	MeetingType string `json:"meeting_type"`
+}
+
+type PushBenchmarkClipRequest struct {
+	TargetEmployeeIDs []int64 `json:"target_employee_ids"`
+	Note              string  `json:"note"`
+}
+
+type BenchmarkClipPushRecord struct {
+	ID                 int64   `json:"id"`
+	BenchmarkClipID    int64   `json:"benchmark_clip_id"`
+	TargetEmployeeID   int64   `json:"target_employee_id"`
+	TargetEmployeeName string  `json:"target_employee_name"`
+	Note               string  `json:"note,omitempty"`
+	Status             string  `json:"status"`
+	PushedBy           int64   `json:"pushed_by"`
+	PushedAt           string  `json:"pushed_at"`
+	AcknowledgedAt     *string `json:"acknowledged_at,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // TrendDataPoint represents a data point in trend
