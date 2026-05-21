@@ -1258,6 +1258,9 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedBenchmarkReviewPrompt(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed benchmark review prompt: %w", err)
 	}
+	if err := seedBenchmarkCommentModelConfig(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed benchmark model config: %w", err)
+	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
 	return nil
@@ -1296,6 +1299,37 @@ func seedBenchmarkReviewPrompt(ctx context.Context, pool *pgxpool.Pool) error {
 			true, 0, 1, 1, NOW(), NOW()
 		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1::text)
 	`, promptCode, "标杆收录点评生成", "标杆收录后生成AI点评与学习要点", "management_dashboard", systemPrompt, userPrompt, outputSchema, "v1")
+	return err
+}
+
+func seedBenchmarkCommentModelConfig(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO llm_model_configs (
+			tenant_id, model_code, function_type, model_name, provider,
+			model_params, extra_params, is_default, is_active, description, created_by, created_at, updated_at
+		)
+		SELECT
+			0,
+			'qwen-plus',
+			'recording_benchmark_comment',
+			'通义千问 Plus',
+			'aliyun',
+			'{"temperature":0.2,"max_tokens":900,"timeout_seconds":45}'::json,
+			'{}'::json,
+			true,
+			true,
+			'标杆收录点评生成默认模型配置',
+			0,
+			NOW(),
+			NOW()
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND tenant_id = 0
+			  AND function_type = 'recording_benchmark_comment'
+		)
+	`)
 	return err
 }
 
