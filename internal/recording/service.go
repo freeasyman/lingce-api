@@ -390,63 +390,83 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 		})
 	}
 	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil)
+	overdueDetails, _ := s.listOverdueTaskAttentionRows(ctx, tenantID, 3)
 	if taskStats != nil && taskStats.OverdueTasks > 0 {
+		evidence := []string{"存在超时未执行任务，可能导致跟进节奏断裂"}
+		for _, d := range overdueDetails {
+			evidence = append(evidence, fmt.Sprintf("患者%s → %s · 已超时%d小时", d.CustomerName, d.AssigneeName, d.OverdueHours))
+		}
 		sections[1].Items = append(sections[1].Items, ManagementRiskCard{
 			ID:              "task-overdue",
 			Type:            "attention_task",
 			Priority:        7,
 			Title:           fmt.Sprintf("跟进任务超时 %d 条", taskStats.OverdueTasks),
 			Description:     fmt.Sprintf("待处理 %d 条，已完成 %d 条", taskStats.PendingTasks, taskStats.CompletedTasks),
-			Evidence:        []string{"存在超时未执行任务，可能导致跟进节奏断裂"},
+			Evidence:        evidence,
 			Confidence:      confidenceBySamples(taskStats.TotalTasks),
 			SuggestedAction: "查看任务详情",
 		})
 	}
 
-	// 3) 运营健康度：客户关联率/任务执行率/成交标记率
+	// 3) 运营健康度：未关联/未执行/未标记比例
 	totalCount, linkedCount, dealTaggedCount, err := s.getOpsHealthCounts(ctx, tenantID, startAt, endAt)
 	if err != nil {
 		return nil, err
 	}
-	customerRate := 0.0
-	dealRate := 0.0
-	if totalCount > 0 {
-		customerRate = roundRisk(float64(linkedCount) / float64(totalCount) * 100)
-		dealRate = roundRisk(float64(dealTaggedCount) / float64(totalCount) * 100)
+	unlinkedCount := totalCount - linkedCount
+	if unlinkedCount < 0 {
+		unlinkedCount = 0
 	}
+	unlinkedRate := 0.0
+	dealUnmarkedRate := 0.0
+	if totalCount > 0 {
+		unlinkedRate = roundRisk(float64(unlinkedCount) / float64(totalCount) * 100)
+		dealUnmarkedRate = roundRisk(float64(totalCount-dealTaggedCount) / float64(totalCount) * 100)
+	}
+	periodLabel := "本周"
+	if normalizedPeriod == "2w" {
+		periodLabel = "近2周"
+	} else if normalizedPeriod == "4w" {
+		periodLabel = "近4周"
+	}
+	dealPeriodLabel := "本月"
 	sections[2].Items = append(sections[2].Items, ManagementRiskCard{
 		ID:          "ops-health-customer",
 		Type:        "ops_health",
 		Priority:    6,
-		Title:       fmt.Sprintf("客户关联率 %.1f%%", customerRate),
-		Description: "未关联客户的录音会影响转化追踪",
-		Evidence:    []string{fmt.Sprintf("本周期录音 %d 条，已关联 %d 条", totalCount, linkedCount)},
-		Confidence:  confidenceBySamples(totalCount),
-	})
-	sections[2].Items = append(sections[2].Items, ManagementRiskCard{
-		ID:          "ops-health-deal",
-		Type:        "ops_health",
-		Priority:    6,
-		Title:       fmt.Sprintf("成交标记率 %.1f%%", dealRate),
-		Description: "成交未标记会导致转化率失真",
-		Evidence:    []string{fmt.Sprintf("本周期录音 %d 条，已标记成交结果 %d 条", totalCount, dealTaggedCount)},
+		Title:       fmt.Sprintf("%s %d 条录音未关联客户（占比 %.1f%%）", periodLabel, unlinkedCount, unlinkedRate),
+		Description: "无法追踪转化结果，建议要求相关员工当天完成关联",
+		Evidence:    []string{fmt.Sprintf("%s录音 %d 条，已关联 %d 条", periodLabel, totalCount, linkedCount)},
 		Confidence:  confidenceBySamples(totalCount),
 	})
 	if taskStats != nil {
-		executedRate := 0.0
+		overdueRate := 0.0
 		if taskStats.TotalTasks > 0 {
-			executedRate = float64(taskStats.CompletedTasks) / float64(taskStats.TotalTasks) * 100
+			overdueRate = roundRisk(float64(taskStats.OverdueTasks) / float64(taskStats.TotalTasks) * 100)
 		}
 		sections[2].Items = append(sections[2].Items, ManagementRiskCard{
 			ID:          "ops-health-task",
 			Type:        "ops_health",
 			Priority:    6,
-			Title:       fmt.Sprintf("任务执行率 %.1f%%", roundRisk(executedRate)),
-			Description: "任务执行率过低会造成机会流失",
-			Evidence:    []string{fmt.Sprintf("总任务 %d，已完成 %d，超时 %d", taskStats.TotalTasks, taskStats.CompletedTasks, taskStats.OverdueTasks)},
+			Title:       fmt.Sprintf("%s %d 条跟进任务未执行（超时率 %.1f%%）", periodLabel, taskStats.OverdueTasks, overdueRate),
+			Description: "跟进节奏断裂，建议在早会上通报",
+			Evidence:    []string{fmt.Sprintf("%s总任务 %d，超时 %d，已完成 %d", periodLabel, taskStats.TotalTasks, taskStats.OverdueTasks, taskStats.CompletedTasks)},
 			Confidence:  confidenceBySamples(taskStats.TotalTasks),
 		})
 	}
+	unmarkedDeals := totalCount - dealTaggedCount
+	if unmarkedDeals < 0 {
+		unmarkedDeals = 0
+	}
+	sections[2].Items = append(sections[2].Items, ManagementRiskCard{
+		ID:          "ops-health-deal",
+		Type:        "ops_health",
+		Priority:    6,
+		Title:       fmt.Sprintf("%s %d 条成交未标记（占比 %.1f%%）", dealPeriodLabel, unmarkedDeals, dealUnmarkedRate),
+		Description: "无法计算转化率，建议建立成交登记流程",
+		Evidence:    []string{fmt.Sprintf("%s录音 %d 条，已标记成交结果 %d 条", dealPeriodLabel, totalCount, dealTaggedCount)},
+		Confidence:  confidenceBySamples(totalCount),
+	})
 
 	// 4) 正向变化：从已收录标杆挑选近期高分样本
 	accepted, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "", "", "", "", 1, 5)
@@ -645,6 +665,13 @@ type weeklySigmaAlert struct {
 type weekStat struct {
 	sum   float64
 	count int64
+}
+
+type overdueTaskAttentionRow struct {
+	TaskID       int64
+	CustomerName string
+	AssigneeName string
+	OverdueHours int64
 }
 
 func (s *Service) detectAbilityAttentionBySigma(ctx context.Context, tenantID int64) ([]weeklySigmaAlert, error) {
@@ -899,6 +926,39 @@ func displayDimensionLabel(roleCode, dim string) string {
 		}
 	}
 	return dim
+}
+
+func (s *Service) listOverdueTaskAttentionRows(ctx context.Context, tenantID int64, limit int) ([]overdueTaskAttentionRow, error) {
+	if limit <= 0 {
+		limit = 3
+	}
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT
+			t.id,
+			COALESCE(NULLIF(t.customer_name, ''), '未命名患者') AS customer_name,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), NULLIF(e.username, ''), '未分配') AS assignee_name,
+			GREATEST(1, FLOOR(EXTRACT(EPOCH FROM (NOW() - t.due_at))/3600))::bigint AS overdue_hours
+		FROM recording_tasks t
+		LEFT JOIN employees e ON e.id = t.assigned_to
+		WHERE t.tenant_id = $1
+		  AND t.status IN ('pending', 'assigned')
+		  AND t.due_at < NOW()
+		ORDER BY t.due_at ASC
+		LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]overdueTaskAttentionRow, 0, limit)
+	for rows.Next() {
+		var item overdueTaskAttentionRow
+		if err := rows.Scan(&item.TaskID, &item.CustomerName, &item.AssigneeName, &item.OverdueHours); err != nil {
+			return out, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func classifyFrontdeskRiskText(text string) (level string, label string, hit string) {
