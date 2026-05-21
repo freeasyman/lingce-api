@@ -1257,6 +1257,37 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			UNIQUE (tenant_id, risk_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_management_risk_handled_tenant_time ON management_risk_handled(tenant_id, handled_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS morning_meeting_materials (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			role_code VARCHAR(32) NOT NULL,
+			meeting_date DATE NOT NULL,
+			review_date DATE NOT NULL,
+			recording_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL DEFAULT 0,
+			employee_name TEXT,
+			scene_name TEXT,
+			selection_reason TEXT,
+			overall_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+			overall_score_text VARCHAR(64),
+			primary_dimension VARCHAR(64),
+			primary_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+			primary_score_text VARCHAR(64),
+			evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+			diagnosis TEXT,
+			coaching_script TEXT,
+			generation_method VARCHAR(16) NOT NULL DEFAULT 'rule',
+			generation_status VARCHAR(16) NOT NULL DEFAULT 'success',
+			fallback_reason TEXT,
+			prompt_code VARCHAR(128),
+			model_code VARCHAR(128),
+			llm_request_id VARCHAR(128),
+			is_edited BOOLEAN NOT NULL DEFAULT false,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (tenant_id, role_code, meeting_date)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_morning_meeting_materials_lookup ON morning_meeting_materials(tenant_id, role_code, meeting_date DESC)`,
 	}
 
 	for i, stmt := range stmts {
@@ -1276,6 +1307,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	if err := seedBenchmarkCommentModelConfig(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed benchmark model config: %w", err)
+	}
+	if err := seedMorningMeetingPrompt(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed morning meeting prompt: %w", err)
+	}
+	if err := seedMorningMeetingModelConfig(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed morning meeting model config: %w", err)
 	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
@@ -1344,6 +1381,71 @@ func seedBenchmarkCommentModelConfig(ctx context.Context, pool *pgxpool.Pool) er
 			WHERE deleted_at IS NULL
 			  AND tenant_id = 0
 			  AND function_type = 'recording_benchmark_comment'
+		)
+	`)
+	return err
+}
+
+func seedMorningMeetingPrompt(ctx context.Context, pool *pgxpool.Pool) error {
+	const promptCode = "morning_meeting_review_v1"
+	const systemPrompt = "你是一名医疗场景晨会带教主管。请基于提供的评分、证据和分析摘要，为管理者生成可直接拿去讲评的内容。不得编造事实。"
+	const userPrompt = `请基于以下早会讲评上下文输出严格 JSON：
+
+{
+  "diagnosis": "2-3句话，明确指出问题所在或值得表扬之处，并说明为什么这条录音值得今天讲评",
+  "coaching_script": "一段可直接在早会上说的话，语气像主管带教，先点出现状，再给出具体改进动作或复用动作"
+}
+
+要求：
+1) 只能使用输入中的真实信息；
+2) 诊断要具体，不要空话，不要泛泛而谈；
+3) 讲评话术要口语化、可执行，长度控制在120-220字；
+4) 如果是低分录音，要点出最需要改的一处；如果是高分录音，要点出最值得团队复用的一处；
+5) 输出必须是 JSON，不要 Markdown。
+
+上下文：
+{{morning_meeting_context_json}}`
+	const outputSchema = `{"type":"object","required":["diagnosis","coaching_script"],"properties":{"diagnosis":{"type":"string"},"coaching_script":{"type":"string"}}}`
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO recording_analysis_prompts (
+			code, name, description, category, system_prompt, user_prompt_template,
+			output_schema, version, is_active, usage_count, created_by, updated_by, created_at, updated_at
+		)
+		SELECT
+			$1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::jsonb, $8::text,
+			true, 0, 1, 1, NOW(), NOW()
+		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1::text)
+	`, promptCode, "早会讲评生成", "早会低分讲评录音的系统诊断与讲评话术生成", "management_dashboard", systemPrompt, userPrompt, outputSchema, "v1")
+	return err
+}
+
+func seedMorningMeetingModelConfig(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO llm_model_configs (
+			tenant_id, model_code, function_type, model_name, provider,
+			model_params, extra_params, is_default, is_active, description, created_by, created_at, updated_at
+		)
+		SELECT
+			0,
+			'qwen-plus',
+			'recording_morning_meeting_comment',
+			'通义千问 Plus',
+			'dashscope',
+			'{"temperature":0.2,"max_tokens":1000,"timeout_seconds":45}'::json,
+			'{}'::json,
+			true,
+			true,
+			'早会讲评生成默认模型配置',
+			0,
+			NOW(),
+			NOW()
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND tenant_id = 0
+			  AND function_type = 'recording_morning_meeting_comment'
 		)
 	`)
 	return err

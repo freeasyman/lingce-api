@@ -611,7 +611,17 @@ func (h *Handler) GetTeamAbility(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "months must be between 1 and 12")
 		return
 	}
-	resp, err := h.service.GetTeamAbility(r.Context(), tenantID, months)
+	scope := RecordingScope(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if scope == "" {
+		scope = RecordingScopeConsultant
+	}
+	switch scope {
+	case RecordingScopeConsultant, RecordingScopeDoctor, RecordingScopeFrontdesk, RecordingScopeTherapist:
+	default:
+		httputil.WriteBadRequest(w, "invalid scope")
+		return
+	}
+	resp, err := h.service.GetTeamAbility(r.Context(), tenantID, months, scope)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -632,7 +642,9 @@ func (h *Handler) GetMorningMeetingMaterial(w http.ResponseWriter, r *http.Reque
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetWeeklyMeetingMaterial(r.Context(), tenantID)
+	roleCode := strings.TrimSpace(r.URL.Query().Get("role_code"))
+	meetingDate := strings.TrimSpace(r.URL.Query().Get("meeting_date"))
+	resp, err := h.service.GetMorningMeetingMaterial(r.Context(), tenantID, roleCode, meetingDate)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

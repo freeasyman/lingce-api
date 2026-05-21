@@ -472,18 +472,18 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 	positiveAlerts, _ := s.detectPositiveChangesByWeek(ctx, tenantID, 5)
 	for _, item := range positiveAlerts {
 		sections[3].Items = append(sections[3].Items, ManagementRiskCard{
-			ID:              fmt.Sprintf("positive:%s:%d:%s", item.RoleCode, item.EmployeeID, item.DimensionCode),
-			Type:            "positive_change",
-			Priority:        4,
-			Title:           fmt.Sprintf("%s（%s）%s本周 %s，较上周 %s", item.EmployeeName, roleLabelForRisk(item.RoleCode), item.DimensionLabel, positiveScoreText(item.RoleCode, item.CurrentScore), positiveDeltaText(item.RoleCode, item.Delta)),
-			Description:     "",
-			Evidence:        []string{fmt.Sprintf("上周 %s → 本周 %s", positiveScoreText(item.RoleCode, item.PreviousScore), positiveScoreText(item.RoleCode, item.CurrentScore))},
-			RoleCode:        item.RoleCode,
-			EmployeeID:      item.EmployeeID,
-			EmployeeName:    item.EmployeeName,
-			DimensionCode:   item.DimensionCode,
-			Score:           item.CurrentScore,
-			Confidence:      "medium",
+			ID:            fmt.Sprintf("positive:%s:%d:%s", item.RoleCode, item.EmployeeID, item.DimensionCode),
+			Type:          "positive_change",
+			Priority:      4,
+			Title:         fmt.Sprintf("%s（%s）%s本周 %s，较上周 %s", item.EmployeeName, roleLabelForRisk(item.RoleCode), item.DimensionLabel, positiveScoreText(item.RoleCode, item.CurrentScore), positiveDeltaText(item.RoleCode, item.Delta)),
+			Description:   "",
+			Evidence:      []string{fmt.Sprintf("上周 %s → 本周 %s", positiveScoreText(item.RoleCode, item.PreviousScore), positiveScoreText(item.RoleCode, item.CurrentScore))},
+			RoleCode:      item.RoleCode,
+			EmployeeID:    item.EmployeeID,
+			EmployeeName:  item.EmployeeName,
+			DimensionCode: item.DimensionCode,
+			Score:         item.CurrentScore,
+			Confidence:    "medium",
 		})
 	}
 
@@ -1738,6 +1738,7 @@ func buildBenchmarkCommentAndPoints(item *BenchmarkClip) (string, []string) {
 
 const (
 	benchmarkReviewPromptCode = "benchmark_clip_review_v1"
+	morningMeetingPromptCode  = "morning_meeting_review_v1"
 )
 
 func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantID int64, item *BenchmarkClip) (string, []string) {
@@ -5520,6 +5521,111 @@ func (s *Service) GetCommunicationAnalysis(ctx context.Context, tenantID int64) 
 	}, nil
 }
 
+type morningMeetingCandidate struct {
+	RecordingID      int64
+	EmployeeID       int64
+	EmployeeName     string
+	SceneName        string
+	RecordedAt       time.Time
+	QualityScore     float64
+	Analysis         map[string]interface{}
+	DimensionScores  map[string]float64
+	OverallScore     float64
+	OverallScoreText string
+	PrimaryDimension string
+	PrimaryScore     float64
+	PrimaryScoreText string
+	Evidence         []string
+	Narrative        string
+	Positive         bool
+	SelectionReason  string
+	DropDimension    string
+	DropAmount       float64
+	DropBaseline     float64
+}
+
+type morningMeetingMaterialRow struct {
+	RecordingID      int64
+	EmployeeID       int64
+	EmployeeName     string
+	SceneName        string
+	SelectionReason  string
+	OverallScore     float64
+	OverallScoreText string
+	PrimaryDimension string
+	PrimaryScore     float64
+	PrimaryScoreText string
+	Evidence         []string
+	Diagnosis        string
+	CoachingScript   string
+	GenerationMethod string
+	GenerationStatus string
+	FallbackReason   string
+	PromptCode       string
+	ModelCode        string
+	LLMRequestID     string
+}
+
+func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, meetingDate string) (*MorningMeetingMaterialResponse, error) {
+	role := normalizeMorningMeetingRole(roleCode)
+	if role == "" {
+		role = "consultant"
+	}
+	meetDate, err := parseMorningMeetingDate(meetingDate)
+	if err != nil {
+		return nil, err
+	}
+	reviewDate := meetDate.AddDate(0, 0, -1)
+	candidates, err := s.listMorningMeetingCandidates(ctx, tenantID, role, reviewDate)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &MorningMeetingMaterialResponse{
+		MeetingDate:      meetDate.Format("2006-01-02"),
+		ReviewDate:       reviewDate.Format("2006-01-02"),
+		RoleCode:         role,
+		Highlights:       []string{},
+		BestPractices:    []BestPracticeItem{},
+		ImprovementAreas: []string{},
+	}
+	if len(candidates) == 0 {
+		return resp, nil
+	}
+
+	selected := selectMorningMeetingCandidate(role, candidates)
+	material, err := s.ensureMorningMeetingMaterial(ctx, tenantID, role, meetDate, reviewDate, selected)
+	if err != nil {
+		return nil, err
+	}
+	resp.TodayReview = &MorningMeetingReviewItem{
+		RecordingID:       material.RecordingID,
+		EmployeeID:        material.EmployeeID,
+		EmployeeName:      material.EmployeeName,
+		RoleCode:          role,
+		SceneName:         material.SceneName,
+		ReviewDate:        reviewDate.Format("2006-01-02"),
+		MeetingDate:       meetDate.Format("2006-01-02"),
+		SelectionReason:   material.SelectionReason,
+		OverallScore:      material.OverallScore,
+		OverallScoreText:  material.OverallScoreText,
+		PrimaryDimension:  material.PrimaryDimension,
+		PrimaryScore:      material.PrimaryScore,
+		PrimaryScoreText:  material.PrimaryScoreText,
+		Evidence:          material.Evidence,
+		Diagnosis:         material.Diagnosis,
+		CoachingScript:    material.CoachingScript,
+		GenerationMethod:  material.GenerationMethod,
+		GenerationStatus:  material.GenerationStatus,
+		FallbackReason:    material.FallbackReason,
+		PromptCode:        material.PromptCode,
+		ModelCode:         material.ModelCode,
+		LLMRequestID:      material.LLMRequestID,
+		SourceRecordCount: int64(len(candidates)),
+	}
+	return resp, nil
+}
+
 // GetWeeklyMeetingMaterial retrieves weekly meeting material
 func (s *Service) GetWeeklyMeetingMaterial(ctx context.Context, tenantID int64) (*WeeklyMeetingMaterialResponse, error) {
 	now := time.Now()
@@ -5553,6 +5659,767 @@ func (s *Service) GetWeeklyMeetingMaterial(ctx context.Context, tenantID int64) 
 		BestPractices:    best,
 		ImprovementAreas: []string{"关注失败和待处理录音", "持续优化跟进动作闭环"},
 	}, nil
+}
+
+func normalizeMorningMeetingRole(roleCode string) string {
+	switch strings.ToLower(strings.TrimSpace(roleCode)) {
+	case "doctor", "doctor_assistant":
+		return "doctor"
+	case "therapist":
+		return "therapist"
+	case "consultant":
+		return "consultant"
+	default:
+		return ""
+	}
+}
+
+func parseMorningMeetingDate(raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		now := time.Now()
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()), nil
+	}
+	dt, err := time.Parse("2006-01-02", strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid meeting_date")
+	}
+	return dt, nil
+}
+
+func (s *Service) listMorningMeetingCandidates(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time) ([]morningMeetingCandidate, error) {
+	start := reviewDate.Format("2006-01-02")
+	end := reviewDate.Add(24 * time.Hour).Format("2006-01-02")
+	filterClause := morningMeetingRoleFilterSQL(roleCode)
+	rows, err := s.store.pool.Query(ctx, fmt.Sprintf(`
+		SELECT
+			r.id,
+			r.employee_id,
+			COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工') AS employee_name,
+			COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene, ''), '') AS scene_name,
+			COALESCE(r.recorded_at, r.created_at) AS ts,
+			COALESCE(r.quality_score, 0)::float8,
+			COALESCE(r.analysis_result, '{}'::json)
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  %s
+		ORDER BY ts DESC, r.id DESC
+	`, filterClause), tenantID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query morning meeting candidates: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]morningMeetingCandidate, 0, 32)
+	for rows.Next() {
+		var item morningMeetingCandidate
+		if scanErr := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.EmployeeName, &item.SceneName, &item.RecordedAt, &item.QualityScore, &item.Analysis); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan morning meeting candidate: %w", scanErr)
+		}
+		s.enrichMorningMeetingCandidate(&item, roleCode)
+		s.enrichMorningMeetingSuddenDrop(ctx, tenantID, roleCode, reviewDate, &item)
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func morningMeetingRoleFilterSQL(roleCode string) string {
+	switch normalizeMorningMeetingRole(roleCode) {
+	case "doctor":
+		return `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant'])
+		  )`
+	case "therapist":
+		return `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = 'therapist'
+		  )`
+	default:
+		return `
+		  AND EXISTS (
+			SELECT 1 FROM inst_employee_roles ier
+			WHERE ier.tenant_id = r.tenant_id
+			  AND ier.employee_id = r.employee_id
+			  AND lower(ier.role_code) = 'consultant'
+		  )`
+	}
+}
+
+func (s *Service) enrichMorningMeetingCandidate(item *morningMeetingCandidate, roleCode string) {
+	if item == nil {
+		return
+	}
+	role := normalizeMorningMeetingRole(roleCode)
+	switch role {
+	case "doctor":
+		scores := computeDoctorMorningScores(item.Analysis)
+		item.DimensionScores = scores
+		item.OverallScore, item.PrimaryDimension, item.PrimaryScore = pickLowestMorningScore(scores)
+		item.Evidence = extractDimensionEvidence(item.Analysis, role, item.PrimaryDimension)
+		item.Narrative = strings.TrimSpace(pickString(pickMap(pickMap(item.Analysis, "raw"), "doctor_content_gen"), "draft_note"))
+	case "therapist":
+		scores := computeTherapistMorningScores(item.Analysis)
+		item.DimensionScores = scores
+		item.OverallScore, item.PrimaryDimension, item.PrimaryScore = pickLowestMorningScore(scores)
+		item.Evidence = extractDimensionEvidence(item.Analysis, role, item.PrimaryDimension)
+		raw := pickMap(item.Analysis, "raw")
+		item.Narrative = strings.TrimSpace(firstNonEmptyText(
+			pickString(pickMap(pickMap(raw, "therapist_reset_analysis"), "treatment_record"), "pre_assessment"),
+			pickString(pickMap(pickMap(raw, "therapist_reset_analysis"), "treatment_record"), "post_change"),
+			strings.Join(pickStringSlice(firstNonEmptyArray(
+				pickArray(pickMap(raw, "therapist_reset_analysis"), "improvement_priorities"),
+				pickArray(pickMap(pickMap(raw, "therapist_reset_analysis"), "reset"), "improvement_priorities"),
+			)), "；"),
+		))
+	default:
+		scores := computeConsultantMorningScores(item.Analysis, item.QualityScore)
+		item.DimensionScores = scores
+		item.OverallScore, item.PrimaryDimension, item.PrimaryScore = pickLowestMorningScore(scores)
+		item.Evidence = extractDimensionEvidence(item.Analysis, role, item.PrimaryDimension)
+		item.Narrative = strings.TrimSpace(pickString(item.Analysis, "report"))
+	}
+	if item.OverallScore <= 0 {
+		item.OverallScore = 0
+	}
+	item.Positive = item.OverallScore >= morningMeetingPositiveThreshold(role)
+	item.OverallScoreText = morningMeetingScoreText(role, item.OverallScore)
+	item.PrimaryScoreText = morningMeetingDimensionScoreText(role, item.PrimaryScore)
+}
+
+func computeConsultantMorningScores(analysis map[string]interface{}, qualityScore float64) map[string]float64 {
+	out := map[string]float64{}
+	for _, raw := range pickArray(analysis, "quality_score") {
+		_ = raw
+	}
+	for _, st := range pickArray(analysis, "stages") {
+		m, ok := st.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(pickString(m, "name"))
+		score := valueOrZeroFloat(pickFloat(m, "score"))
+		if name == "" || score <= 0 {
+			continue
+		}
+		out[name] = score
+	}
+	if len(out) == 0 && qualityScore > 0 {
+		out["综合"] = roundFloat(qualityScore/20, 1)
+	}
+	return out
+}
+
+func computeDoctorMorningScores(analysis map[string]interface{}) map[string]float64 {
+	result := map[string]float64{}
+	counts := map[string]float64{}
+	raw := pickMap(analysis, "raw")
+	items := pickArray(pickMap(pickMap(raw, "doctor_segue_structured"), "segue"), "items")
+	if len(items) == 0 {
+		items = pickArray(pickMap(raw, "doctor_segue_structured"), "items")
+	}
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		code := strings.TrimSpace(pickString(m, "code"))
+		if len(code) < 2 {
+			continue
+		}
+		group := normalizeDoctorDimensionCode(code[:2])
+		switch strings.ToUpper(strings.TrimSpace(pickString(m, "result"))) {
+		case "Y":
+			result[group] += 1
+			counts[group] += 1
+		case "U":
+			result[group] += 0.5
+			counts[group] += 1
+		case "N":
+			counts[group] += 1
+		}
+	}
+	out := map[string]float64{}
+	for group, total := range counts {
+		if total <= 0 {
+			continue
+		}
+		out[doctorDimensionCodeToLabel(group)] = roundFloat(result[group]/total*100, 1)
+	}
+	return out
+}
+
+func computeTherapistMorningScores(analysis map[string]interface{}) map[string]float64 {
+	result := map[string]float64{}
+	counts := map[string]float64{}
+	raw := pickMap(analysis, "raw")
+	items := pickArray(pickMap(pickMap(raw, "therapist_reset_analysis"), "reset"), "items")
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		group := strings.ToUpper(strings.TrimSpace(pickString(m, "group")))
+		if group == "" {
+			code := strings.TrimSpace(pickString(m, "code"))
+			if len(code) >= 2 {
+				group = code[:2]
+			}
+		}
+		group = normalizeTherapistDimensionCode(group)
+		switch strings.ToUpper(strings.TrimSpace(pickString(m, "result"))) {
+		case "Y":
+			result[group] += 1
+			counts[group] += 1
+		case "U":
+			result[group] += 0.5
+			counts[group] += 1
+		case "N":
+			counts[group] += 1
+		}
+	}
+	out := map[string]float64{}
+	for group, total := range counts {
+		if total <= 0 {
+			continue
+		}
+		out[therapistDimensionCodeToLabel(group)] = roundFloat(result[group]/total*100, 1)
+	}
+	return out
+}
+
+func pickLowestMorningScore(scores map[string]float64) (float64, string, float64) {
+	if len(scores) == 0 {
+		return 0, "", 0
+	}
+	keys := make([]string, 0, len(scores))
+	var sum float64
+	for key, score := range scores {
+		keys = append(keys, key)
+		sum += score
+	}
+	sort.Strings(keys)
+	overall := roundFloat(sum/float64(len(keys)), 1)
+	weakest := keys[0]
+	weakestScore := scores[weakest]
+	for _, key := range keys[1:] {
+		if scores[key] < weakestScore {
+			weakest = key
+			weakestScore = scores[key]
+		}
+	}
+	return overall, weakest, weakestScore
+}
+
+func (s *Service) enrichMorningMeetingSuddenDrop(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time, item *morningMeetingCandidate) {
+	if item == nil || item.EmployeeID <= 0 || len(item.DimensionScores) == 0 {
+		return
+	}
+	baselines, err := s.loadMorningMeetingDimensionBaseline(ctx, tenantID, roleCode, item.EmployeeID, reviewDate)
+	if err != nil || len(baselines) == 0 {
+		return
+	}
+	var (
+		bestDimension string
+		bestDrop      float64
+		bestBaseline  float64
+	)
+	for dim, current := range item.DimensionScores {
+		baseline, ok := baselines[dim]
+		if !ok || baseline <= 0 {
+			continue
+		}
+		drop := baseline - current
+		if drop > bestDrop {
+			bestDimension = dim
+			bestDrop = drop
+			bestBaseline = baseline
+		}
+	}
+	if bestDrop > 1.0 {
+		item.DropDimension = bestDimension
+		item.DropAmount = roundFloat(bestDrop, 1)
+		item.DropBaseline = roundFloat(bestBaseline, 1)
+	}
+}
+
+func (s *Service) loadMorningMeetingDimensionBaseline(ctx context.Context, tenantID int64, roleCode string, employeeID int64, reviewDate time.Time) (map[string]float64, error) {
+	start := reviewDate.AddDate(0, 0, -14).Format("2006-01-02")
+	end := reviewDate.Format("2006-01-02")
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT COALESCE(r.quality_score, 0)::float8, COALESCE(r.analysis_result, '{}'::json)
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND r.employee_id = $2
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $3
+		  AND COALESCE(r.recorded_at, r.created_at) < $4
+		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
+		LIMIT 20
+	`, tenantID, employeeID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sums := map[string]float64{}
+	counts := map[string]float64{}
+	for rows.Next() {
+		var (
+			qualityScore float64
+			analysis     map[string]interface{}
+		)
+		if scanErr := rows.Scan(&qualityScore, &analysis); scanErr != nil {
+			return nil, scanErr
+		}
+		var scores map[string]float64
+		switch normalizeMorningMeetingRole(roleCode) {
+		case "doctor":
+			scores = computeDoctorMorningScores(analysis)
+		case "therapist":
+			scores = computeTherapistMorningScores(analysis)
+		default:
+			scores = computeConsultantMorningScores(analysis, qualityScore)
+		}
+		for dim, score := range scores {
+			if score <= 0 {
+				continue
+			}
+			sums[dim] += score
+			counts[dim] += 1
+		}
+	}
+	out := map[string]float64{}
+	for dim, total := range counts {
+		if total <= 0 {
+			continue
+		}
+		out[dim] = roundFloat(sums[dim]/total, 1)
+	}
+	return out, nil
+}
+
+func selectMorningMeetingCandidate(roleCode string, items []morningMeetingCandidate) morningMeetingCandidate {
+	if len(items) == 0 {
+		return morningMeetingCandidate{}
+	}
+	threshold := morningMeetingPositiveThreshold(roleCode)
+	allHigh := true
+	lowest := items[0]
+	for _, item := range items[1:] {
+		if item.OverallScore < lowest.OverallScore {
+			lowest = item
+		}
+	}
+	for _, item := range items {
+		if item.OverallScore < threshold {
+			allHigh = false
+			break
+		}
+	}
+	if !allHigh {
+		lowest.SelectionReason = "昨日综合分最低，适合作为今天优先讲评录音。"
+		return lowest
+	}
+	var (
+		hasDrop bool
+		dropHit = items[0]
+	)
+	for _, item := range items {
+		if item.DropAmount <= 1 {
+			continue
+		}
+		if !hasDrop || item.DropAmount > dropHit.DropAmount {
+			hasDrop = true
+			dropHit = item
+		}
+	}
+	if hasDrop {
+		dropHit.SelectionReason = fmt.Sprintf("%s较本人近期均值下降 %.1f，适合做针对性讲评。", dropHit.DropDimension, dropHit.DropAmount)
+		return dropHit
+	}
+	best := items[0]
+	for _, item := range items[1:] {
+		if item.OverallScore > best.OverallScore {
+			best = item
+		}
+	}
+	best.Positive = true
+	best.SelectionReason = "昨日整体表现较稳，选取高分录音做正向示范。"
+	return best
+}
+
+func morningMeetingPositiveThreshold(roleCode string) float64 {
+	if normalizeMorningMeetingRole(roleCode) == "consultant" {
+		return 4
+	}
+	return 80
+}
+
+func morningMeetingScoreText(roleCode string, score float64) string {
+	if normalizeMorningMeetingRole(roleCode) == "consultant" {
+		return fmt.Sprintf("%.1f/5", score)
+	}
+	return fmt.Sprintf("%.1f%%", score)
+}
+
+func morningMeetingDimensionScoreText(roleCode string, score float64) string {
+	return morningMeetingScoreText(roleCode, score)
+}
+
+func doctorDimensionCodeToLabel(code string) string {
+	switch normalizeDoctorDimensionCode(code) {
+	case "G1":
+		return "建立接诊阶段"
+	case "G2":
+		return "引出信息阶段"
+	case "G3":
+		return "给予信息阶段"
+	case "G4":
+		return "理解患者视角"
+	case "G5":
+		return "结束接诊"
+	case "G6":
+		return "治疗/预防计划"
+	default:
+		return strings.TrimSpace(code)
+	}
+}
+
+func therapistDimensionCodeToLabel(code string) string {
+	switch normalizeTherapistDimensionCode(code) {
+	case "D1":
+		return "治疗铺垫"
+	case "D2":
+		return "互动评估"
+	case "D3":
+		return "专业操作"
+	case "D4":
+		return "顾虑处理"
+	case "D5":
+		return "方案闭环"
+	default:
+		return strings.TrimSpace(code)
+	}
+}
+
+func (s *Service) ensureMorningMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, meetingDate, reviewDate time.Time, candidate morningMeetingCandidate) (*morningMeetingMaterialRow, error) {
+	existing, err := s.loadMorningMeetingMaterial(ctx, tenantID, roleCode, meetingDate)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && existing.RecordingID == candidate.RecordingID && strings.TrimSpace(existing.Diagnosis) != "" && strings.TrimSpace(existing.CoachingScript) != "" {
+		return existing, nil
+	}
+
+	diagnosis, script, method, status, fallbackReason, promptCode, modelCode, requestID := s.generateMorningMeetingContent(ctx, tenantID, roleCode, candidate)
+	row := &morningMeetingMaterialRow{
+		RecordingID:      candidate.RecordingID,
+		EmployeeID:       candidate.EmployeeID,
+		EmployeeName:     candidate.EmployeeName,
+		SceneName:        candidate.SceneName,
+		SelectionReason:  candidate.SelectionReason,
+		OverallScore:     candidate.OverallScore,
+		OverallScoreText: candidate.OverallScoreText,
+		PrimaryDimension: candidate.PrimaryDimension,
+		PrimaryScore:     candidate.PrimaryScore,
+		PrimaryScoreText: candidate.PrimaryScoreText,
+		Evidence:         candidate.Evidence,
+		Diagnosis:        diagnosis,
+		CoachingScript:   script,
+		GenerationMethod: method,
+		GenerationStatus: status,
+		FallbackReason:   fallbackReason,
+		PromptCode:       promptCode,
+		ModelCode:        modelCode,
+		LLMRequestID:     requestID,
+	}
+	if err := s.upsertMorningMeetingMaterial(ctx, tenantID, roleCode, meetingDate, reviewDate, row); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func (s *Service) loadMorningMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, meetingDate time.Time) (*morningMeetingMaterialRow, error) {
+	var row morningMeetingMaterialRow
+	var evidenceRaw []byte
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT recording_id, employee_id, COALESCE(employee_name, ''), COALESCE(scene_name, ''),
+		       COALESCE(selection_reason, ''), COALESCE(overall_score, 0), COALESCE(overall_score_text, ''),
+		       COALESCE(primary_dimension, ''), COALESCE(primary_score, 0), COALESCE(primary_score_text, ''),
+		       COALESCE(evidence, '[]'::jsonb), COALESCE(diagnosis, ''), COALESCE(coaching_script, ''),
+		       COALESCE(generation_method, 'rule'), COALESCE(generation_status, 'success'), COALESCE(fallback_reason, ''),
+		       COALESCE(prompt_code, ''), COALESCE(model_code, ''), COALESCE(llm_request_id, '')
+		FROM morning_meeting_materials
+		WHERE tenant_id = $1 AND role_code = $2 AND meeting_date = $3
+		LIMIT 1
+	`, tenantID, roleCode, meetingDate.Format("2006-01-02")).Scan(
+		&row.RecordingID, &row.EmployeeID, &row.EmployeeName, &row.SceneName,
+		&row.SelectionReason, &row.OverallScore, &row.OverallScoreText,
+		&row.PrimaryDimension, &row.PrimaryScore, &row.PrimaryScoreText,
+		&evidenceRaw, &row.Diagnosis, &row.CoachingScript,
+		&row.GenerationMethod, &row.GenerationStatus, &row.FallbackReason,
+		&row.PromptCode, &row.ModelCode, &row.LLMRequestID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to load morning meeting material: %w", err)
+	}
+	_ = json.Unmarshal(evidenceRaw, &row.Evidence)
+	return &row, nil
+}
+
+func (s *Service) upsertMorningMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, meetingDate, reviewDate time.Time, row *morningMeetingMaterialRow) error {
+	if row == nil {
+		return nil
+	}
+	evidenceJSON, _ := json.Marshal(row.Evidence)
+	_, err := s.store.pool.Exec(ctx, `
+		INSERT INTO morning_meeting_materials (
+			tenant_id, role_code, meeting_date, review_date, recording_id, employee_id, employee_name, scene_name,
+			selection_reason, overall_score, overall_score_text, primary_dimension, primary_score, primary_score_text,
+			evidence, diagnosis, coaching_script, generation_method, generation_status, fallback_reason,
+			prompt_code, model_code, llm_request_id, updated_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,
+			$9,$10,$11,$12,$13,$14,
+			$15::jsonb,$16,$17,$18,$19,$20,
+			$21,$22,$23,NOW()
+		)
+		ON CONFLICT (tenant_id, role_code, meeting_date) DO UPDATE SET
+			review_date = EXCLUDED.review_date,
+			recording_id = EXCLUDED.recording_id,
+			employee_id = EXCLUDED.employee_id,
+			employee_name = EXCLUDED.employee_name,
+			scene_name = EXCLUDED.scene_name,
+			selection_reason = EXCLUDED.selection_reason,
+			overall_score = EXCLUDED.overall_score,
+			overall_score_text = EXCLUDED.overall_score_text,
+			primary_dimension = EXCLUDED.primary_dimension,
+			primary_score = EXCLUDED.primary_score,
+			primary_score_text = EXCLUDED.primary_score_text,
+			evidence = EXCLUDED.evidence,
+			diagnosis = EXCLUDED.diagnosis,
+			coaching_script = EXCLUDED.coaching_script,
+			generation_method = EXCLUDED.generation_method,
+			generation_status = EXCLUDED.generation_status,
+			fallback_reason = EXCLUDED.fallback_reason,
+			prompt_code = EXCLUDED.prompt_code,
+			model_code = EXCLUDED.model_code,
+			llm_request_id = EXCLUDED.llm_request_id,
+			updated_at = NOW()
+	`, tenantID, roleCode, meetingDate.Format("2006-01-02"), reviewDate.Format("2006-01-02"), row.RecordingID, row.EmployeeID, row.EmployeeName, row.SceneName, row.SelectionReason, row.OverallScore, row.OverallScoreText, row.PrimaryDimension, row.PrimaryScore, row.PrimaryScoreText, string(evidenceJSON), row.Diagnosis, row.CoachingScript, row.GenerationMethod, row.GenerationStatus, row.FallbackReason, row.PromptCode, row.ModelCode, row.LLMRequestID)
+	if err != nil {
+		return fmt.Errorf("failed to save morning meeting material: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) generateMorningMeetingContent(ctx context.Context, tenantID int64, roleCode string, candidate morningMeetingCandidate) (string, string, string, string, string, string, string, string) {
+	fallbackDiagnosis, fallbackScript := buildMorningMeetingFallback(roleCode, candidate)
+	if candidate.Positive || s.llmClient == nil {
+		return fallbackDiagnosis, fallbackScript, "rule", "success", "", "", "", ""
+	}
+	systemPrompt, userPrompt, err := s.loadMorningMeetingPrompt(ctx, tenantID)
+	if err != nil || strings.TrimSpace(userPrompt) == "" {
+		return fallbackDiagnosis, fallbackScript, "rule", "success", "prompt_unavailable", "", "", ""
+	}
+	model, err := s.resolveMorningMeetingLLMModelConfig(ctx, tenantID)
+	if err != nil {
+		return fallbackDiagnosis, fallbackScript, "rule", "success", "model_unavailable", morningMeetingPromptCode, "", ""
+	}
+	ctxPkg := map[string]interface{}{
+		"role_code":         roleCode,
+		"employee_name":     candidate.EmployeeName,
+		"scene_name":        candidate.SceneName,
+		"overall_score":     candidate.OverallScoreText,
+		"primary_dimension": candidate.PrimaryDimension,
+		"primary_score":     candidate.PrimaryScoreText,
+		"selection_reason":  candidate.SelectionReason,
+		"evidence":          candidate.Evidence,
+		"analysis_summary":  candidate.Narrative,
+	}
+	pkgJSON, _ := json.MarshalIndent(ctxPkg, "", "  ")
+	renderedUserPrompt := strings.ReplaceAll(userPrompt, "{{morning_meeting_context_json}}", string(pkgJSON))
+	req := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "recording.morning_meeting",
+		FunctionType:  model.FunctionType,
+		Provider:      model.Provider,
+		ModelCode:     model.ModelCode,
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: renderedUserPrompt},
+		},
+		Params: &llmgateway.Params{
+			Temperature:    0.2,
+			MaxTokens:      1000,
+			TimeoutSeconds: 45,
+			ResponseFormat: "json",
+		},
+	}
+	applyModelParamsToBenchmarkLLMRequest(&req, model.ModelParams)
+	resp, err := s.llmClient.TextInference(ctx, req)
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return fallbackDiagnosis, fallbackScript, "rule", "success", "llm_failed", morningMeetingPromptCode, model.ModelCode, ""
+	}
+	diagnosis, script, ok := parseMorningMeetingLLMOutput(resp.Content)
+	if !ok {
+		return fallbackDiagnosis, fallbackScript, "rule", "success", "llm_parse_failed", morningMeetingPromptCode, model.ModelCode, resp.RequestID
+	}
+	return diagnosis, script, "llm", "success", "", morningMeetingPromptCode, model.ModelCode, resp.RequestID
+}
+
+func buildMorningMeetingFallback(roleCode string, candidate morningMeetingCandidate) (string, string) {
+	evidence := ""
+	if len(candidate.Evidence) > 0 {
+		evidence = truncateText(strings.TrimSpace(candidate.Evidence[0]), 60)
+	}
+	if candidate.Positive {
+		diagnosis := fmt.Sprintf("%s在%s维度表现突出，动作清晰，适合作为团队正向示范。", candidate.EmployeeName, candidate.PrimaryDimension)
+		script := fmt.Sprintf("这条录音今天不讲问题，讲动作。%s在%s拿到了%s，关键不在说了多少，而在于%s。大家听的时候重点记一句：下次遇到类似场景，怎样把这个动作迁移到自己的对话里。", candidate.EmployeeName, candidate.PrimaryDimension, candidate.PrimaryScoreText, buildDiscoveryInsightSummary(roleCode, candidate.PrimaryDimension, candidate.Evidence, evidence))
+		return diagnosis, script
+	}
+	diagnosis := fmt.Sprintf("这条录音昨天综合表现偏弱，主要短板出在%s（%s）。%s", candidate.PrimaryDimension, candidate.PrimaryScoreText, buildMorningMeetingEvidenceDiagnosis(roleCode, candidate.PrimaryDimension, evidence))
+	script := fmt.Sprintf("%s，这条我今天拿出来不是说你不努力，而是想帮你把最关键的一步补上。你在%s这里目前只有%s，说明这个动作还没形成稳定习惯。下次先只改一件事：%s。先把这一处练顺，再谈后面的展开。", candidate.EmployeeName, candidate.PrimaryDimension, candidate.PrimaryScoreText, buildMorningMeetingActionHint(roleCode, candidate.PrimaryDimension))
+	return diagnosis, script
+}
+
+func buildMorningMeetingEvidenceDiagnosis(roleCode, dimension, evidence string) string {
+	if evidence == "" {
+		return "当前表达还没有把关键动作做扎实。"
+	}
+	role := normalizeMorningMeetingRole(roleCode)
+	if role == "consultant" {
+		return fmt.Sprintf("从原话“%s”看，沟通停留在信息说明，没有把患者个人情况真正问出来。", evidence)
+	}
+	if role == "doctor" {
+		return fmt.Sprintf("从原话“%s”看，接诊动作覆盖还不完整，患者很难形成清晰的理解与决策。", evidence)
+	}
+	return fmt.Sprintf("从原话“%s”看，治疗过程中虽有交流，但关键确认动作还不够完整。", evidence)
+}
+
+func buildMorningMeetingActionHint(roleCode, dimension string) string {
+	role := normalizeMorningMeetingRole(roleCode)
+	switch role {
+	case "consultant":
+		if strings.Contains(dimension, "需求探索") {
+			return "先连续问出患者的场景、顾虑和预算，再进入方案说明"
+		}
+		if strings.Contains(dimension, "问题放大") {
+			return "把不处理的后果说具体，并和患者自身场景绑定"
+		}
+		return "先确认患者真实需求，再讲专业内容"
+	case "doctor":
+		if strings.Contains(dimension, "理解患者视角") {
+			return "先接住患者担心，再给医学解释和建议"
+		}
+		return "把接诊阶段动作补齐，不要直接跳到给方案"
+	default:
+		if strings.Contains(dimension, "互动评估") {
+			return "每做一个动作都追问一次体感变化，再决定下一步"
+		}
+		return "操作、解释、确认三步要连起来，不要只做动作不给判断"
+	}
+}
+
+func (s *Service) resolveMorningMeetingLLMModelConfig(ctx context.Context, tenantID int64) (*benchmarkLLMModelSelection, error) {
+	candidates := []string{"recording_morning_meeting_comment", "chat"}
+	for _, functionType := range candidates {
+		var out benchmarkLLMModelSelection
+		err := s.store.pool.QueryRow(ctx, `
+			SELECT
+				COALESCE(function_type, ''),
+				COALESCE(provider, ''),
+				COALESCE(model_code, ''),
+				COALESCE(model_params, extra_params, '{}'::json)
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND COALESCE(is_active, true) = true
+			  AND function_type = $1
+			  AND tenant_id IN ($2, 0)
+			ORDER BY
+			  CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END,
+			  CASE WHEN COALESCE(is_default, false) THEN 0 ELSE 1 END,
+			  updated_at DESC,
+			  id DESC
+			LIMIT 1
+		`, functionType, tenantID).Scan(&out.FunctionType, &out.Provider, &out.ModelCode, &out.ModelParams)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		if strings.TrimSpace(out.ModelCode) == "" {
+			continue
+		}
+		if strings.TrimSpace(out.FunctionType) == "" {
+			out.FunctionType = functionType
+		}
+		return &out, nil
+	}
+	return nil, fmt.Errorf("no llm model config for morning meeting")
+}
+
+func (s *Service) loadMorningMeetingPrompt(ctx context.Context, tenantID int64) (string, string, error) {
+	var tenantPrompt string
+	_ = s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(custom_user_prompt_template, '')
+		FROM recording_analysis_tenant_configs
+		WHERE tenant_id = $1
+		  AND prompt_code = $2
+		  AND COALESCE(is_enabled, true) = true
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, morningMeetingPromptCode).Scan(&tenantPrompt)
+	basePrompt, err := s.store.GetRecordingPromptByCode(ctx, morningMeetingPromptCode)
+	if err != nil {
+		return "", "", err
+	}
+	systemPrompt := strings.TrimSpace(basePrompt.SystemPrompt)
+	userPrompt := strings.TrimSpace(basePrompt.PromptText)
+	if strings.TrimSpace(tenantPrompt) != "" {
+		userPrompt = strings.TrimSpace(tenantPrompt)
+	}
+	if systemPrompt == "" {
+		systemPrompt = "你是一名医疗场景晨会带教主管。"
+	}
+	return systemPrompt, userPrompt, nil
+}
+
+func parseMorningMeetingLLMOutput(text string) (string, string, bool) {
+	payload := strings.TrimSpace(text)
+	if payload == "" {
+		return "", "", false
+	}
+	var out struct {
+		Diagnosis      string `json:"diagnosis"`
+		CoachingScript string `json:"coaching_script"`
+	}
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		return "", "", false
+	}
+	out.Diagnosis = strings.TrimSpace(out.Diagnosis)
+	out.CoachingScript = strings.TrimSpace(out.CoachingScript)
+	if out.Diagnosis == "" || out.CoachingScript == "" {
+		return "", "", false
+	}
+	return out.Diagnosis, out.CoachingScript, true
 }
 
 type weeklySummaryRow struct {

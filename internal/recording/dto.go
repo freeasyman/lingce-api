@@ -338,6 +338,42 @@ type WeeklyMeetingMaterialResponse struct {
 	ImprovementAreas []string           `json:"improvement_areas"`
 }
 
+type MorningMeetingReviewItem struct {
+	RecordingID       int64    `json:"recording_id"`
+	EmployeeID        int64    `json:"employee_id"`
+	EmployeeName      string   `json:"employee_name"`
+	RoleCode          string   `json:"role_code"`
+	SceneName         string   `json:"scene_name,omitempty"`
+	ReviewDate        string   `json:"review_date"`
+	MeetingDate       string   `json:"meeting_date"`
+	SelectionReason   string   `json:"selection_reason"`
+	OverallScore      float64  `json:"overall_score"`
+	OverallScoreText  string   `json:"overall_score_text"`
+	PrimaryDimension  string   `json:"primary_dimension,omitempty"`
+	PrimaryScore      float64  `json:"primary_score,omitempty"`
+	PrimaryScoreText  string   `json:"primary_score_text,omitempty"`
+	Evidence          []string `json:"evidence,omitempty"`
+	Diagnosis         string   `json:"diagnosis,omitempty"`
+	CoachingScript    string   `json:"coaching_script,omitempty"`
+	GenerationMethod  string   `json:"generation_method,omitempty"`
+	GenerationStatus  string   `json:"generation_status,omitempty"`
+	FallbackReason    string   `json:"fallback_reason,omitempty"`
+	PromptCode        string   `json:"prompt_code,omitempty"`
+	ModelCode         string   `json:"model_code,omitempty"`
+	LLMRequestID      string   `json:"llm_request_id,omitempty"`
+	SourceRecordCount int64    `json:"source_record_count,omitempty"`
+}
+
+type MorningMeetingMaterialResponse struct {
+	MeetingDate      string                    `json:"meeting_date"`
+	ReviewDate       string                    `json:"review_date"`
+	RoleCode         string                    `json:"role_code"`
+	Highlights       []string                  `json:"highlights,omitempty"`
+	BestPractices    []BestPracticeItem        `json:"best_practices,omitempty"`
+	ImprovementAreas []string                  `json:"improvement_areas,omitempty"`
+	TodayReview      *MorningMeetingReviewItem `json:"today_review,omitempty"`
+}
+
 // BestPracticeItem represents a best practice item
 type BestPracticeItem struct {
 	RecordingID  int64  `json:"recording_id"`
