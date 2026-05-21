@@ -1241,6 +1241,11 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_benchmark_clip_pushes_clip ON benchmark_clip_pushes(tenant_id, benchmark_clip_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_benchmark_clip_pushes_target ON benchmark_clip_pushes(tenant_id, target_employee_id, status, created_at DESC)`,
+		`ALTER TABLE IF EXISTS benchmark_clip_pushes ADD COLUMN IF NOT EXISTS status VARCHAR(20)`,
+		`ALTER TABLE IF EXISTS benchmark_clip_pushes ALTER COLUMN status SET DEFAULT 'sent'`,
+		`UPDATE benchmark_clip_pushes SET status = 'sent' WHERE status IS NULL OR status = ''`,
+		`ALTER TABLE IF EXISTS benchmark_clip_pushes ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMP`,
+		`CREATE INDEX IF NOT EXISTS idx_pushes_employee_status ON benchmark_clip_pushes(target_employee_id, status, pushed_at DESC)`,
 	}
 
 	for i, stmt := range stmts {

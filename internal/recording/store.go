@@ -975,6 +975,147 @@ func (s *Store) ListBenchmarkClipPushes(ctx context.Context, tenantID int64, cli
 	return out, rows.Err()
 }
 
+func (s *Store) GetBenchmarkClipPushStatistics(ctx context.Context, tenantID int64, clipID int64) (BenchmarkClipPushStatistics, error) {
+	var stats BenchmarkClipPushStatistics
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) AS total_pushed,
+			COUNT(CASE WHEN status = 'acknowledged' THEN 1 END) AS acknowledged_count,
+			COALESCE(ROUND(
+				COUNT(CASE WHEN status = 'acknowledged' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100,
+				2
+			), 0)::float8 AS learning_rate
+		FROM benchmark_clip_pushes
+		WHERE tenant_id = $1 AND benchmark_clip_id = $2
+	`, tenantID, clipID).Scan(&stats.TotalPushed, &stats.AcknowledgedCount, &stats.LearningRate); err != nil {
+		return BenchmarkClipPushStatistics{}, err
+	}
+	return stats, nil
+}
+
+func (s *Store) ListEmployeeLearningTasks(ctx context.Context, tenantID int64, employeeID int64, status string, page int, pageSize int) ([]EmployeeLearningTask, int64, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM benchmark_clip_pushes p
+		WHERE p.tenant_id = $1
+		  AND p.target_employee_id = $2
+		  AND ($3::text = '' OR p.status = $3::text)
+	`, tenantID, employeeID, strings.TrimSpace(status)).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			p.id,
+			p.benchmark_clip_id,
+			bc.dimension,
+			COALESCE(bc.score, 0),
+			COALESCE(bc.role_code, ''),
+			COALESCE(bc.employee_name, ''),
+			COALESCE(bc.clip_text, ''),
+			COALESCE(bc.ai_comment, ''),
+			COALESCE(bc.learning_points, '[]'::jsonb),
+			COALESCE(pusher.full_name, pusher.name, ''),
+			COALESCE(p.note, ''),
+			p.pushed_at,
+			COALESCE(p.status, 'sent'),
+			p.acknowledged_at
+		FROM benchmark_clip_pushes p
+		JOIN benchmark_clips bc ON bc.id = p.benchmark_clip_id
+		LEFT JOIN employees pusher ON pusher.id = p.pushed_by
+		WHERE p.tenant_id = $1
+		  AND p.target_employee_id = $2
+		  AND ($3::text = '' OR p.status = $3::text)
+		ORDER BY
+			CASE WHEN p.status = 'sent' THEN 0 ELSE 1 END,
+			p.pushed_at DESC
+		LIMIT $4 OFFSET $5
+	`, tenantID, employeeID, strings.TrimSpace(status), pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]EmployeeLearningTask, 0)
+	for rows.Next() {
+		var (
+			item         EmployeeLearningTask
+			pushedAt     time.Time
+			acknowledged *time.Time
+			learningRaw  []byte
+		)
+		if err := rows.Scan(
+			&item.PushID,
+			&item.ClipID,
+			&item.Dimension,
+			&item.Score,
+			&item.RoleCode,
+			&item.EmployeeName,
+			&item.ClipText,
+			&item.AIComment,
+			&learningRaw,
+			&item.PushedByName,
+			&item.Note,
+			&pushedAt,
+			&item.Status,
+			&acknowledged,
+		); err != nil {
+			return nil, 0, err
+		}
+		item.PushedAt = pushedAt.Format(time.RFC3339)
+		if acknowledged != nil {
+			v := acknowledged.Format(time.RFC3339)
+			item.AcknowledgedAt = &v
+		}
+		if len(learningRaw) > 0 {
+			_ = json.Unmarshal(learningRaw, &item.LearningPoints)
+		}
+		out = append(out, item)
+	}
+	return out, total, rows.Err()
+}
+
+func (s *Store) AckEmployeeLearningTask(ctx context.Context, tenantID int64, employeeID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
+	var (
+		item         BenchmarkClipPushRecord
+		pushedAt     time.Time
+		createdAt    time.Time
+		updatedAt    time.Time
+		acknowledged *time.Time
+	)
+	if err := s.pool.QueryRow(ctx, `
+		UPDATE benchmark_clip_pushes
+		SET
+			status = 'acknowledged',
+			acknowledged_at = COALESCE(acknowledged_at, NOW()),
+			updated_at = NOW()
+		WHERE tenant_id = $1
+		  AND target_employee_id = $2
+		  AND id = $3
+		RETURNING id, benchmark_clip_id, target_employee_id, COALESCE(target_employee_name, ''),
+		          COALESCE(note, ''), status, pushed_by, pushed_at, acknowledged_at, created_at, updated_at
+	`, tenantID, employeeID, pushID).Scan(
+		&item.ID, &item.BenchmarkClipID, &item.TargetEmployeeID, &item.TargetEmployeeName,
+		&item.Note, &item.Status, &item.PushedBy, &pushedAt, &acknowledged, &createdAt, &updatedAt,
+	); err != nil {
+		return nil, err
+	}
+	item.PushedAt = pushedAt.Format(time.RFC3339)
+	item.CreatedAt = createdAt.Format(time.RFC3339)
+	item.UpdatedAt = updatedAt.Format(time.RFC3339)
+	if acknowledged != nil {
+		v := acknowledged.Format(time.RFC3339)
+		item.AcknowledgedAt = &v
+	}
+	return &item, nil
+}
+
 func (s *Store) AckBenchmarkClipPush(ctx context.Context, tenantID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
 	var (
 		item         BenchmarkClipPushRecord

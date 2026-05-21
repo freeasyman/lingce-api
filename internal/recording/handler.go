@@ -128,6 +128,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/recordings/benchmark-clips/clip/{id}/actions/push", authMw(http.HandlerFunc(h.PushBenchmarkClip)))
 	mux.Handle("GET /api/v1/recordings/benchmark-clips/clip/{id}/pushes", authMw(http.HandlerFunc(h.ListBenchmarkClipPushes)))
 	mux.Handle("POST /api/v1/recordings/benchmark-clips/push/{push_id}/actions/ack", authMw(http.HandlerFunc(h.AckBenchmarkClipPush)))
+	mux.Handle("GET /api/v1/employees/learning-tasks", authMw(http.HandlerFunc(h.ListMyLearningTasks)))
+	mux.Handle("POST /api/v1/employees/learning-tasks/{push_id}/actions/acknowledge", authMw(http.HandlerFunc(h.AckMyLearningTask)))
 	mux.Handle("POST /api/v1/recordings/{id}/benchmark-clip", authMw(http.HandlerFunc(h.CreateManualBenchmarkClip)))
 
 	// Recording Prompt Advanced endpoints

@@ -291,19 +291,19 @@ type IssueCount struct {
 
 // DoctorAbilityRankingResponse represents doctor ability ranking
 type DoctorAbilityRankingResponse struct {
-	EmployeeID     int64   `json:"employee_id"`
-	EmployeeName   string  `json:"employee_name"`
-	RecordingCount int64   `json:"recording_count"`
-	AvgScore       float64 `json:"avg_score"`
-	Rank           int     `json:"rank"`
+	EmployeeID     int64              `json:"employee_id"`
+	EmployeeName   string             `json:"employee_name"`
+	RecordingCount int64              `json:"recording_count"`
+	AvgScore       float64            `json:"avg_score"`
+	Rank           int                `json:"rank"`
 	StageScores    map[string]float64 `json:"stage_scores,omitempty"`
-	SegueAvg       float64 `json:"segue_avg,omitempty"`
-	SegueTrend     float64 `json:"segue_trend,omitempty"`
-	StrongestDim   string  `json:"strongest_dimension,omitempty"`
-	WeakestDim     string  `json:"weakest_dimension,omitempty"`
-	AcceptanceRate float64 `json:"patient_acceptance_rate,omitempty"`
-	EmotionRate    float64 `json:"emotion_improvement_rate,omitempty"`
-	CriticalGaps   int64   `json:"critical_gap_count,omitempty"`
+	SegueAvg       float64            `json:"segue_avg,omitempty"`
+	SegueTrend     float64            `json:"segue_trend,omitempty"`
+	StrongestDim   string             `json:"strongest_dimension,omitempty"`
+	WeakestDim     string             `json:"weakest_dimension,omitempty"`
+	AcceptanceRate float64            `json:"patient_acceptance_rate,omitempty"`
+	EmotionRate    float64            `json:"emotion_improvement_rate,omitempty"`
+	CriticalGaps   int64              `json:"critical_gap_count,omitempty"`
 }
 
 // DoctorAbilityDetailResponse represents detailed doctor ability
@@ -582,6 +582,39 @@ type BenchmarkClipPushRecord struct {
 	AcknowledgedAt     *string `json:"acknowledged_at,omitempty"`
 	CreatedAt          string  `json:"created_at"`
 	UpdatedAt          string  `json:"updated_at"`
+}
+
+type BenchmarkClipPushStatistics struct {
+	TotalPushed       int64   `json:"total_pushed"`
+	AcknowledgedCount int64   `json:"acknowledged_count"`
+	LearningRate      float64 `json:"learning_rate"`
+}
+
+type EmployeeLearningTask struct {
+	PushID             int64    `json:"id"`
+	ClipID             int64    `json:"clip_id"`
+	Dimension          string   `json:"dimension"`
+	Score              float64  `json:"score"`
+	RoleCode           string   `json:"role_code"`
+	EmployeeName       string   `json:"employee_name"`
+	ClipText           string   `json:"clip_text"`
+	AIComment          string   `json:"ai_comment"`
+	LearningPoints     []string `json:"learning_points"`
+	PushedByName       string   `json:"pushed_by_name"`
+	Note               string   `json:"note"`
+	PushedAt           string   `json:"pushed_at"`
+	Status             string   `json:"status"`
+	AcknowledgedAt     *string  `json:"acknowledged_at,omitempty"`
+	BenchmarkClipID    int64    `json:"benchmark_clip_id,omitempty"`
+	TargetEmployeeID   int64    `json:"target_employee_id,omitempty"`
+	TargetEmployeeName string   `json:"target_employee_name,omitempty"`
+}
+
+type EmployeeLearningTaskListResponse struct {
+	Items    []EmployeeLearningTask `json:"items"`
+	Total    int64                  `json:"total"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
 }
 
 // TrendDataPoint represents a data point in trend

@@ -406,11 +406,47 @@ func (s *Service) ListBenchmarkClipPushes(ctx context.Context, tenantID int64, c
 	return s.store.ListBenchmarkClipPushes(ctx, tenantID, clipID)
 }
 
+func (s *Service) GetBenchmarkClipPushStatistics(ctx context.Context, tenantID int64, clipID int64) (BenchmarkClipPushStatistics, error) {
+	if tenantID <= 0 || clipID <= 0 {
+		return BenchmarkClipPushStatistics{}, nil
+	}
+	return s.store.GetBenchmarkClipPushStatistics(ctx, tenantID, clipID)
+}
+
 func (s *Service) AckBenchmarkClipPush(ctx context.Context, tenantID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
 	if tenantID <= 0 || pushID <= 0 {
 		return nil, fmt.Errorf("invalid request")
 	}
 	return s.store.AckBenchmarkClipPush(ctx, tenantID, pushID)
+}
+
+func (s *Service) ListMyLearningTasks(ctx context.Context, tenantID int64, employeeID int64, status string, page int, pageSize int) (*EmployeeLearningTaskListResponse, error) {
+	if tenantID <= 0 || employeeID <= 0 {
+		return nil, fmt.Errorf("invalid request")
+	}
+	items, total, err := s.store.ListEmployeeLearningTasks(ctx, tenantID, employeeID, status, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	return &EmployeeLearningTaskListResponse{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func (s *Service) AckMyLearningTask(ctx context.Context, tenantID int64, employeeID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
+	if tenantID <= 0 || employeeID <= 0 || pushID <= 0 {
+		return nil, fmt.Errorf("invalid request")
+	}
+	return s.store.AckEmployeeLearningTask(ctx, tenantID, employeeID, pushID)
 }
 
 func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCandidateInput {

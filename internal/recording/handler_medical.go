@@ -735,7 +735,12 @@ func (h *Handler) ListBenchmarkClipPushes(w http.ResponseWriter, r *http.Request
 		httputil.WriteBadRequest(w, svcErr.Error())
 		return
 	}
-	httputil.WriteSuccess(w, map[string]interface{}{"items": items})
+	stats, statsErr := h.service.GetBenchmarkClipPushStatistics(r.Context(), tenantID, clipID)
+	if statsErr != nil {
+		httputil.WriteBadRequest(w, statsErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "statistics": stats})
 }
 
 func (h *Handler) AckBenchmarkClipPush(w http.ResponseWriter, r *http.Request) {
@@ -760,6 +765,75 @@ func (h *Handler) AckBenchmarkClipPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) ListMyLearningTasks(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	employeeID := claims.UserID
+	if employeeID <= 0 {
+		httputil.WriteForbidden(w, "invalid employee identity")
+		return
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	page := 1
+	pageSize := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		if v, parseErr := strconv.Atoi(raw); parseErr == nil && v > 0 {
+			page = v
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("page_size")); raw != "" {
+		if v, parseErr := strconv.Atoi(raw); parseErr == nil && v > 0 {
+			pageSize = v
+		}
+	}
+	resp, svcErr := h.service.ListMyLearningTasks(r.Context(), tenantID, employeeID, status, page, pageSize)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) AckMyLearningTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	employeeID := claims.UserID
+	if employeeID <= 0 {
+		httputil.WriteForbidden(w, "invalid employee identity")
+		return
+	}
+	pushID, err := strconv.ParseInt(r.PathValue("push_id"), 10, 64)
+	if err != nil || pushID <= 0 {
+		httputil.WriteBadRequest(w, "invalid push id")
+		return
+	}
+	item, svcErr := h.service.AckMyLearningTask(r.Context(), tenantID, employeeID, pushID)
+	if svcErr != nil {
+		httputil.WriteBadRequest(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"success":         true,
+		"acknowledged_at": item.AcknowledgedAt,
+	})
 }
 
 // MarkHighlight handles marking highlight
