@@ -1291,8 +1291,10 @@ func seedBenchmarkReviewPrompt(ctx context.Context, pool *pgxpool.Pool) error {
 			code, name, description, category, system_prompt, user_prompt_template,
 			output_schema, version, is_active, created_by, updated_by, created_at, updated_at
 		)
-		SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, true, 1, 1, NOW(), NOW()
-		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1)
+		SELECT
+			$1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::jsonb, $8::text,
+			true, 1, 1, NOW(), NOW()
+		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1::text)
 	`, promptCode, "标杆收录点评生成", "标杆收录后生成AI点评与学习要点", "management_dashboard", systemPrompt, userPrompt, outputSchema, "v1")
 	return err
 }
