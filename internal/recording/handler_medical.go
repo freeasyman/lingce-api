@@ -490,7 +490,9 @@ func (h *Handler) ListManagementEvents(w http.ResponseWriter, r *http.Request) {
 	roleType := strings.TrimSpace(r.URL.Query().Get("role_type"))
 	dimensionCode := strings.TrimSpace(r.URL.Query().Get("dimension_code"))
 	period := strings.TrimSpace(r.URL.Query().Get("period"))
-	items, svcErr := h.service.ListManagementEvents(r.Context(), tenantID, roleType, dimensionCode, period)
+	includeFuture := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_future")), "true") ||
+		strings.TrimSpace(r.URL.Query().Get("include_future")) == "1"
+	items, svcErr := h.service.ListManagementEvents(r.Context(), tenantID, roleType, dimensionCode, period, includeFuture)
 	if svcErr != nil {
 		httputil.WriteInternalError(w, svcErr.Error())
 		return

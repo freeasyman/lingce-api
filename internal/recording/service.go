@@ -227,6 +227,7 @@ func (s *Service) ListManagementEvents(
 	roleType string,
 	dimensionCode string,
 	period string,
+	includeFuture bool,
 ) ([]ManagementEvent, error) {
 	var startDate *time.Time
 	var endDate *time.Time
@@ -236,20 +237,28 @@ func (s *Service) ListManagementEvents(
 	case "1m":
 		d := now.AddDate(0, -1, 0)
 		startDate = &d
-		endDate = &now
+		if !includeFuture {
+			endDate = &now
+		}
 	case "6m":
 		d := now.AddDate(0, -6, 0)
 		startDate = &d
-		endDate = &now
+		if !includeFuture {
+			endDate = &now
+		}
 	case "3m", "":
 		d := now.AddDate(0, -3, 0)
 		startDate = &d
-		endDate = &now
+		if !includeFuture {
+			endDate = &now
+		}
 	default:
 		// fallback to 3m for unknown values
 		d := now.AddDate(0, -3, 0)
 		startDate = &d
-		endDate = &now
+		if !includeFuture {
+			endDate = &now
+		}
 	}
 	return s.store.ListManagementEvents(ctx, tenantID, roleType, dimensionCode, startDate, endDate)
 }
@@ -343,26 +352,41 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 		})
 	}
 
-	// 2) 需关注：医生关键缺口 + 任务超时
-	doctorRows, _ := s.GetDoctorAbilityRanking(ctx, tenantID, "1m")
-	for _, item := range doctorRows {
-		if item.CriticalGaps <= 0 {
-			continue
+	// 2) 需关注：能力（均值-1σ且连续2周） + 任务超时
+	abilityAlerts, err := s.detectAbilityAttentionBySigma(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, alert := range abilityAlerts {
+		gap := roundRisk(alert.CurrentMean - alert.CurrentScore)
+		if gap < 0 {
+			gap = 0
+		}
+		benchmarkRecordingID := int64(0)
+		accepted, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "", alert.RoleCode, alert.DimensionCode, "", 1, 1)
+		if len(accepted) > 0 {
+			benchmarkRecordingID = accepted[0].RecordingID
+		}
+		suggestText := "建议：安排1对1辅导"
+		if benchmarkRecordingID > 0 {
+			suggestText = fmt.Sprintf("建议：安排1对1辅导，用标杆录音 #%d 做示范", benchmarkRecordingID)
 		}
 		sections[1].Items = append(sections[1].Items, ManagementRiskCard{
-			ID:              fmt.Sprintf("doctor-gap-%d", item.EmployeeID),
+			ID:              fmt.Sprintf("ability:%s:%d:%s", alert.RoleCode, alert.EmployeeID, alert.DimensionCode),
 			Type:            "attention_ability",
 			Priority:        8,
-			Title:           fmt.Sprintf("%s（医生）关键缺口 %d 条", item.EmployeeName, item.CriticalGaps),
-			Description:     fmt.Sprintf("SEGUE 综合 %.1f%%，建议优先复盘关键缺口环节", item.SegueAvg),
-			Evidence:        []string{"近1月关键缺口条目累计偏高"},
-			RoleCode:        "doctor",
-			EmployeeID:      item.EmployeeID,
-			EmployeeName:    item.EmployeeName,
-			Score:           item.SegueAvg,
-			Confidence:      confidenceBySamples(item.RecordingCount),
+			Title:           fmt.Sprintf("%s（%s）本周%s均分 %.1f，低于团队均值 %.1f", alert.EmployeeName, roleLabelForRisk(alert.RoleCode), alert.DimensionLabel, alert.CurrentScore, gap),
+			Description:     "连续2周未改善",
+			Evidence:        []string{suggestText},
+			RoleCode:        alert.RoleCode,
+			EmployeeID:      alert.EmployeeID,
+			EmployeeName:    alert.EmployeeName,
+			DimensionCode:   alert.DimensionCode,
+			Score:           alert.CurrentScore,
+			Confidence:      "",
 			SuggestedAction: "查看她的录音",
 			SecondaryAction: "创建辅导任务",
+			TertiaryAction:  "查看标杆",
 		})
 	}
 	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil)
@@ -591,6 +615,290 @@ func riskFingerprint(fullText, hit, level string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(raw))
 	return fmt.Sprintf("%x", h.Sum64())
+}
+
+type roleDimensionScorePoint struct {
+	RoleCode     string
+	EmployeeID   int64
+	EmployeeName string
+	Dimension    string
+	Score        float64
+	TS           time.Time
+}
+
+type weeklySigmaAlert struct {
+	RoleCode            string
+	EmployeeID          int64
+	EmployeeName        string
+	DimensionCode       string
+	DimensionLabel      string
+	CurrentScore        float64
+	CurrentMean         float64
+	CurrentThreshold    float64
+	PreviousScore       float64
+	PreviousMean        float64
+	PreviousThreshold   float64
+	CurrentSampleCount  int64
+	PreviousSampleCount int64
+}
+
+type weekStat struct {
+	sum   float64
+	count int64
+}
+
+func (s *Service) detectAbilityAttentionBySigma(ctx context.Context, tenantID int64) ([]weeklySigmaAlert, error) {
+	now := time.Now()
+	monday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -int(now.Weekday())+1)
+	if now.Weekday() == time.Sunday {
+		monday = monday.AddDate(0, 0, -6)
+	}
+	prevStart := monday.AddDate(0, 0, -7)
+	prev2Start := monday.AddDate(0, 0, -14)
+	weekEnd := monday.AddDate(0, 0, 7)
+
+	points, err := s.loadRoleDimensionScorePoints(ctx, tenantID, prev2Start, weekEnd)
+	if err != nil {
+		return nil, err
+	}
+	type weekKey struct {
+		role      string
+		dimension string
+		weekStart string
+	}
+	empWeek := make(map[weekKey]map[int64]*weekStat)
+	empName := make(map[int64]string)
+	for _, p := range points {
+		ws := mondayOf(p.TS).Format("2006-01-02")
+		k := weekKey{role: p.RoleCode, dimension: p.Dimension, weekStart: ws}
+		if _, ok := empWeek[k]; !ok {
+			empWeek[k] = make(map[int64]*weekStat)
+		}
+		if _, ok := empWeek[k][p.EmployeeID]; !ok {
+			empWeek[k][p.EmployeeID] = &weekStat{}
+		}
+		empWeek[k][p.EmployeeID].sum += p.Score
+		empWeek[k][p.EmployeeID].count++
+		if p.EmployeeName != "" {
+			empName[p.EmployeeID] = p.EmployeeName
+		}
+	}
+
+	curWeek := monday.Format("2006-01-02")
+	prevWeek := prevStart.Format("2006-01-02")
+	alerts := make([]weeklySigmaAlert, 0)
+	dimOrder := []struct{ role, dim string }{
+		{"consultant", "开场建立权威"}, {"consultant", "需求探索"}, {"consultant", "问题放大"}, {"consultant", "专业呈现"}, {"consultant", "方案定制"}, {"consultant", "异议化解"}, {"consultant", "成交促成"},
+		{"doctor", "G1"}, {"doctor", "G2"}, {"doctor", "G3"}, {"doctor", "G4"}, {"doctor", "G5"}, {"doctor", "G6"},
+		{"therapist", "D1"}, {"therapist", "D2"}, {"therapist", "D3"}, {"therapist", "D4"}, {"therapist", "D5"},
+	}
+	for _, item := range dimOrder {
+		curK := weekKey{role: item.role, dimension: item.dim, weekStart: curWeek}
+		prevK := weekKey{role: item.role, dimension: item.dim, weekStart: prevWeek}
+		curMap := empWeek[curK]
+		prevMap := empWeek[prevK]
+		if len(curMap) < 2 || len(prevMap) < 2 {
+			continue
+		}
+		curAvgByEmp, curMean, curStd := buildWeekStats(curMap)
+		prevAvgByEmp, prevMean, prevStd := buildWeekStats(prevMap)
+		curThreshold := curMean - curStd
+		prevThreshold := prevMean - prevStd
+		for empID, curVal := range curAvgByEmp {
+			prevVal, ok := prevAvgByEmp[empID]
+			if !ok {
+				continue
+			}
+			if curVal < curThreshold && prevVal < prevThreshold {
+				alerts = append(alerts, weeklySigmaAlert{
+					RoleCode:            item.role,
+					EmployeeID:          empID,
+					EmployeeName:        empName[empID],
+					DimensionCode:       item.dim,
+					DimensionLabel:      displayDimensionLabel(item.role, item.dim),
+					CurrentScore:        roundRisk(curVal),
+					CurrentMean:         roundRisk(curMean),
+					CurrentThreshold:    roundRisk(curThreshold),
+					PreviousScore:       roundRisk(prevVal),
+					PreviousMean:        roundRisk(prevMean),
+					PreviousThreshold:   roundRisk(prevThreshold),
+					CurrentSampleCount:  int64(len(curMap)),
+					PreviousSampleCount: int64(len(prevMap)),
+				})
+			}
+		}
+	}
+	sort.Slice(alerts, func(i, j int) bool {
+		if alerts[i].RoleCode != alerts[j].RoleCode {
+			return alerts[i].RoleCode < alerts[j].RoleCode
+		}
+		if alerts[i].DimensionCode != alerts[j].DimensionCode {
+			return alerts[i].DimensionCode < alerts[j].DimensionCode
+		}
+		return alerts[i].EmployeeID < alerts[j].EmployeeID
+	})
+	return alerts, nil
+}
+
+func (s *Service) loadRoleDimensionScorePoints(ctx context.Context, tenantID int64, startAt, endAt time.Time) ([]roleDimensionScorePoint, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.employee_id,
+		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未命名员工') AS employee_name,
+		       r.business_scope,
+		       COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+		       COALESCE(r.recorded_at, r.created_at) AS ts
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  AND r.business_scope IN ('consultant', 'doctor', 'therapist')
+	`, tenantID, startAt, endAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	points := make([]roleDimensionScorePoint, 0, 4096)
+	for rows.Next() {
+		var employeeID int64
+		var employeeName, roleCode string
+		var analysis map[string]interface{}
+		var ts time.Time
+		if scanErr := rows.Scan(&employeeID, &employeeName, &roleCode, &analysis, &ts); scanErr != nil {
+			return nil, scanErr
+		}
+		dims := extractRoleDimensionScores(roleCode, analysis)
+		for dim, score := range dims {
+			if score <= 0 {
+				continue
+			}
+			points = append(points, roleDimensionScorePoint{
+				RoleCode:     roleCode,
+				EmployeeID:   employeeID,
+				EmployeeName: employeeName,
+				Dimension:    dim,
+				Score:        score,
+				TS:           ts,
+			})
+		}
+	}
+	return points, rows.Err()
+}
+
+func extractRoleDimensionScores(roleCode string, analysis map[string]interface{}) map[string]float64 {
+	role := strings.TrimSpace(roleCode)
+	switch role {
+	case "doctor":
+		return extractDoctorDimensionScores(analysis)
+	case "therapist":
+		out := map[string]float64{"D1": 0, "D2": 0, "D3": 0, "D4": 0, "D5": 0}
+		for dim, raw := range toScoreMap(pickMap(analysis, "dimension_scores")) {
+			code := normalizeTherapistDimensionCode(dim)
+			if _, ok := out[code]; !ok {
+				continue
+			}
+			out[code] = normalizeScoreToHundredLocal(raw)
+		}
+		return out
+	default:
+		out := map[string]float64{
+			"开场建立权威": 0, "需求探索": 0, "问题放大": 0, "专业呈现": 0, "方案定制": 0, "异议化解": 0, "成交促成": 0,
+		}
+		quality := pickMap(analysis, "quality_score")
+		stages := pickArray(quality, "stages")
+		for _, item := range stages {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name := strings.TrimSpace(firstNonEmptyText(m["name"], m["group"]))
+			if name == "促成与收尾" {
+				name = "成交促成"
+			}
+			if _, ok := out[name]; !ok {
+				continue
+			}
+			if score, ok := toFloat(m["score"]); ok && score > 0 {
+				out[name] = score
+			}
+		}
+		return out
+	}
+}
+
+func mondayOf(t time.Time) time.Time {
+	base := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	offset := int(base.Weekday()) - 1
+	if base.Weekday() == time.Sunday {
+		offset = 6
+	}
+	return base.AddDate(0, 0, -offset)
+}
+
+func buildWeekStats(input map[int64]*weekStat) (map[int64]float64, float64, float64) {
+	avgByEmp := make(map[int64]float64, len(input))
+	values := make([]float64, 0, len(input))
+	for empID, st := range input {
+		if st == nil || st.count <= 0 {
+			continue
+		}
+		avg := st.sum / float64(st.count)
+		avgByEmp[empID] = avg
+		values = append(values, avg)
+	}
+	if len(values) == 0 {
+		return avgByEmp, 0, 0
+	}
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(len(values))
+	var varSum float64
+	for _, v := range values {
+		diff := v - mean
+		varSum += diff * diff
+	}
+	std := 0.0
+	if len(values) > 1 {
+		std = math.Sqrt(varSum / float64(len(values)))
+	}
+	return avgByEmp, mean, std
+}
+
+func displayDimensionLabel(roleCode, dim string) string {
+	if roleCode == "doctor" {
+		switch dim {
+		case "G1":
+			return "建立接诊阶段"
+		case "G2":
+			return "引出信息阶段"
+		case "G3":
+			return "给予信息阶段"
+		case "G4":
+			return "理解患者视角"
+		case "G5":
+			return "结束接诊"
+		case "G6":
+			return "治疗/预防计划"
+		}
+	}
+	if roleCode == "therapist" {
+		switch dim {
+		case "D1":
+			return "治疗铺垫"
+		case "D2":
+			return "互动评估"
+		case "D3":
+			return "专业操作"
+		case "D4":
+			return "顾虑处理"
+		case "D5":
+			return "方案闭环"
+		}
+	}
+	return dim
 }
 
 func classifyFrontdeskRiskText(text string) (level string, label string, hit string) {
