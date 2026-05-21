@@ -1313,7 +1313,7 @@ func seedBenchmarkCommentModelConfig(ctx context.Context, pool *pgxpool.Pool) er
 			'qwen-plus',
 			'recording_benchmark_comment',
 			'通义千问 Plus',
-			'aliyun',
+			'dashscope',
 			'{"temperature":0.2,"max_tokens":900,"timeout_seconds":45}'::json,
 			'{}'::json,
 			true,
