@@ -848,11 +848,11 @@ func (s *Store) UpdateBenchmarkClipStatus(
 	)
 	if err := s.pool.QueryRow(ctx, `
 		UPDATE benchmark_clips
-		SET status = $3,
-		    ai_comment = CASE WHEN $3 = 'accepted' THEN $4 ELSE ai_comment END,
-		    learning_points = CASE WHEN $3 = 'accepted' THEN $5::jsonb ELSE learning_points END,
-		    accepted_at = CASE WHEN $3 = 'accepted' THEN NOW() ELSE accepted_at END,
-		    rejected_at = CASE WHEN $3 = 'rejected' THEN NOW() ELSE rejected_at END,
+		SET status = $3::text,
+		    ai_comment = CASE WHEN $3::text = 'accepted' THEN $4 ELSE ai_comment END,
+		    learning_points = CASE WHEN $3::text = 'accepted' THEN $5::jsonb ELSE learning_points END,
+		    accepted_at = CASE WHEN $3::text = 'accepted' THEN NOW() ELSE accepted_at END,
+		    rejected_at = CASE WHEN $3::text = 'rejected' THEN NOW() ELSE rejected_at END,
 		    updated_at = NOW()
 		WHERE tenant_id = $1 AND id = $2
 		RETURNING id, tenant_id, recording_id, employee_id, role_code, dimension, score, clip_text,
