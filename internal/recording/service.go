@@ -5588,10 +5588,15 @@ func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64,
 		Highlights:       []string{},
 		BestPractices:    []BestPracticeItem{},
 		ImprovementAreas: []string{},
+		AttentionItems:   []string{},
+		PraiseItems:      []MorningMeetingPraiseItem{},
 	}
 	if len(candidates) == 0 {
 		return resp, nil
 	}
+
+	resp.AttentionItems = s.buildMorningMeetingAttentionItems(ctx, tenantID, role, reviewDate, candidates)
+	resp.PraiseItems = s.buildMorningMeetingPraiseItems(role, candidates)
 
 	selected := selectMorningMeetingCandidate(role, candidates)
 	material, err := s.ensureMorningMeetingMaterial(ctx, tenantID, role, meetDate, reviewDate, selected)
@@ -5624,6 +5629,221 @@ func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64,
 		SourceRecordCount: int64(len(candidates)),
 	}
 	return resp, nil
+}
+
+func (s *Service) buildMorningMeetingAttentionItems(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time, candidates []morningMeetingCandidate) []string {
+	lines := make([]string, 0, 2)
+	if line := s.buildMorningMeetingLowAverageLine(ctx, tenantID, roleCode, reviewDate, candidates); line != "" {
+		lines = append(lines, line)
+	}
+	if line := s.buildMorningMeetingOverdueTaskLine(ctx, tenantID, roleCode); line != "" {
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func (s *Service) buildMorningMeetingLowAverageLine(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time, candidates []morningMeetingCandidate) string {
+	type agg struct {
+		name  string
+		count int
+		sum   float64
+	}
+	byEmployee := map[int64]*agg{}
+	for _, item := range candidates {
+		entry := byEmployee[item.EmployeeID]
+		if entry == nil {
+			entry = &agg{name: item.EmployeeName}
+			byEmployee[item.EmployeeID] = entry
+		}
+		entry.count++
+		entry.sum += item.OverallScore
+	}
+	var (
+		bestLine string
+		bestGap  float64
+	)
+	for employeeID, entry := range byEmployee {
+		if entry.count <= 0 {
+			continue
+		}
+		yesterdayAvg := roundFloat(entry.sum/float64(entry.count), 1)
+		baseline, ok := s.loadMorningMeetingEmployeeBaseline(ctx, tenantID, employeeID, reviewDate, roleCode)
+		if !ok || baseline <= 0 {
+			continue
+		}
+		gap := baseline - yesterdayAvg
+		if gap <= 0 {
+			continue
+		}
+		if gap > bestGap {
+			bestGap = gap
+			bestLine = fmt.Sprintf("%s昨日%d条录音均分 %.1f，低于个人均值（%.1f）", entry.name, entry.count, yesterdayAvg, baseline)
+		}
+	}
+	return bestLine
+}
+
+func (s *Service) loadMorningMeetingEmployeeBaseline(ctx context.Context, tenantID int64, employeeID int64, reviewDate time.Time, roleCode string) (float64, bool) {
+	start := reviewDate.AddDate(0, 0, -14).Format("2006-01-02")
+	end := reviewDate.Format("2006-01-02")
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT COALESCE(r.quality_score, 0)::float8, COALESCE(r.analysis_result, '{}'::json)
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND r.employee_id = $2
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $3
+		  AND COALESCE(r.recorded_at, r.created_at) < $4
+		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC
+		LIMIT 20
+	`, tenantID, employeeID, start, end)
+	if err != nil {
+		return 0, false
+	}
+	defer rows.Close()
+
+	var (
+		sum   float64
+		count float64
+	)
+	for rows.Next() {
+		var qualityScore float64
+		var analysis map[string]interface{}
+		if scanErr := rows.Scan(&qualityScore, &analysis); scanErr != nil {
+			return 0, false
+		}
+		var scores map[string]float64
+		switch normalizeMorningMeetingRole(roleCode) {
+		case "doctor":
+			scores = computeDoctorMorningScores(analysis)
+		case "therapist":
+			scores = computeTherapistMorningScores(analysis)
+		default:
+			scores = computeConsultantMorningScores(analysis, qualityScore)
+		}
+		overall, _, _ := pickLowestMorningScore(scores)
+		if overall <= 0 {
+			continue
+		}
+		sum += overall
+		count += 1
+	}
+	if count <= 0 {
+		return 0, false
+	}
+	return roundFloat(sum/count, 1), true
+}
+
+func (s *Service) buildMorningMeetingOverdueTaskLine(ctx context.Context, tenantID int64, roleCode string) string {
+	type taskAgg struct {
+		name  string
+		count int
+	}
+	rows, err := s.store.pool.Query(ctx, fmt.Sprintf(`
+		SELECT
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), NULLIF(e.username, ''), '未分配') AS assignee_name,
+			COUNT(*)::bigint
+		FROM recording_tasks t
+		JOIN recordings r ON r.id = t.recording_id
+		LEFT JOIN employees e ON e.id = t.assigned_to
+		WHERE t.tenant_id = $1
+		  AND t.status IN ('pending', 'assigned')
+		  AND t.due_at < NOW()
+		  %s
+		GROUP BY assignee_name
+		ORDER BY COUNT(*) DESC, assignee_name ASC
+		LIMIT 5
+	`, morningMeetingRoleFilterSQL(roleCode)), tenantID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	parts := make([]string, 0, 5)
+	total := 0
+	for rows.Next() {
+		var name string
+		var count int
+		if scanErr := rows.Scan(&name, &count); scanErr != nil {
+			return ""
+		}
+		total += count
+		parts = append(parts, fmt.Sprintf("%s%d条", name, count))
+	}
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("跟进任务超时 %d 条（%s）", total, strings.Join(parts, "、"))
+}
+
+func (s *Service) buildMorningMeetingPraiseItems(roleCode string, candidates []morningMeetingCandidate) []MorningMeetingPraiseItem {
+	if len(candidates) == 0 {
+		return nil
+	}
+	best := pickMorningMeetingPraiseCandidate(roleCode, candidates)
+	if best == nil {
+		return nil
+	}
+	scoreText := best.PrimaryScoreText
+	if normalizeMorningMeetingRole(roleCode) == "consultant" && isMorningMeetingPerfectScore(roleCode, best.PrimaryScore) {
+		scoreText = "5分满分"
+	}
+	text := fmt.Sprintf("%s 录音 #%d %s %s", best.EmployeeName, best.RecordingID, best.PrimaryDimension, scoreText)
+	if !isMorningMeetingPerfectScore(roleCode, best.PrimaryScore) && !isMorningMeetingStrongScore(roleCode, best.PrimaryScore) {
+		text = fmt.Sprintf("%s 录音 #%d %s %s（昨日相对最好）", best.EmployeeName, best.RecordingID, best.PrimaryDimension, scoreText)
+	}
+	quote := ""
+	if len(best.Evidence) > 0 {
+		quote = truncateText(strings.TrimSpace(best.Evidence[0]), 40)
+	}
+	return []MorningMeetingPraiseItem{{Text: text, Quote: quote}}
+}
+
+func pickMorningMeetingPraiseCandidate(roleCode string, candidates []morningMeetingCandidate) *morningMeetingCandidate {
+	var (
+		perfect *morningMeetingCandidate
+		strong  *morningMeetingCandidate
+		best    *morningMeetingCandidate
+	)
+	for i := range candidates {
+		item := &candidates[i]
+		if best == nil || item.OverallScore > best.OverallScore {
+			best = item
+		}
+		if isMorningMeetingPerfectScore(roleCode, item.PrimaryScore) {
+			if perfect == nil || item.PrimaryScore > perfect.PrimaryScore || (item.PrimaryScore == perfect.PrimaryScore && item.OverallScore > perfect.OverallScore) {
+				perfect = item
+			}
+			continue
+		}
+		if isMorningMeetingStrongScore(roleCode, item.PrimaryScore) {
+			if strong == nil || item.PrimaryScore > strong.PrimaryScore || (item.PrimaryScore == strong.PrimaryScore && item.OverallScore > strong.OverallScore) {
+				strong = item
+			}
+		}
+	}
+	if perfect != nil {
+		return perfect
+	}
+	if strong != nil {
+		return strong
+	}
+	return best
+}
+
+func isMorningMeetingPerfectScore(roleCode string, score float64) bool {
+	if normalizeMorningMeetingRole(roleCode) == "consultant" {
+		return roundFloat(score, 1) >= 5
+	}
+	return roundFloat(score, 1) >= 100
+}
+
+func isMorningMeetingStrongScore(roleCode string, score float64) bool {
+	if normalizeMorningMeetingRole(roleCode) == "consultant" {
+		return roundFloat(score, 1) >= 4.5
+	}
+	return roundFloat(score, 1) >= 90
 }
 
 // GetWeeklyMeetingMaterial retrieves weekly meeting material
