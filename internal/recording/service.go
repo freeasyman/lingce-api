@@ -468,24 +468,22 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 		Confidence:  confidenceBySamples(totalCount),
 	})
 
-	// 4) 正向变化：从已收录标杆挑选近期高分样本
-	accepted, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "", "", "", "", 1, 5)
-	for _, item := range accepted {
+	// 4) 正向变化：某人某维度本周 > 上周 + 0.3（按周聚合）
+	positiveAlerts, _ := s.detectPositiveChangesByWeek(ctx, tenantID, 5)
+	for _, item := range positiveAlerts {
 		sections[3].Items = append(sections[3].Items, ManagementRiskCard{
-			ID:              fmt.Sprintf("positive-%d", item.ID),
+			ID:              fmt.Sprintf("positive:%s:%d:%s", item.RoleCode, item.EmployeeID, item.DimensionCode),
 			Type:            "positive_change",
 			Priority:        4,
-			Title:           fmt.Sprintf("%s（%s）%s %s", item.EmployeeName, roleLabelForRisk(item.RoleCode), item.Dimension, scoreTextForRisk(item.Score, item.RoleCode)),
-			Description:     "该片段已被团队收录，可用于复盘和示范",
-			Evidence:        []string{truncateText(item.ClipText, 56)},
+			Title:           fmt.Sprintf("%s（%s）%s本周 %s，较上周 %s", item.EmployeeName, roleLabelForRisk(item.RoleCode), item.DimensionLabel, positiveScoreText(item.RoleCode, item.CurrentScore), positiveDeltaText(item.RoleCode, item.Delta)),
+			Description:     "",
+			Evidence:        []string{fmt.Sprintf("上周 %s → 本周 %s", positiveScoreText(item.RoleCode, item.PreviousScore), positiveScoreText(item.RoleCode, item.CurrentScore))},
 			RoleCode:        item.RoleCode,
 			EmployeeID:      item.EmployeeID,
 			EmployeeName:    item.EmployeeName,
-			RecordingID:     item.RecordingID,
-			DimensionCode:   item.Dimension,
-			Score:           item.Score,
+			DimensionCode:   item.DimensionCode,
+			Score:           item.CurrentScore,
 			Confidence:      "medium",
-			SuggestedAction: "查看标杆",
 		})
 	}
 
@@ -662,6 +660,17 @@ type weeklySigmaAlert struct {
 	PreviousSampleCount int64
 }
 
+type weeklyPositiveAlert struct {
+	RoleCode       string
+	EmployeeID     int64
+	EmployeeName   string
+	DimensionCode  string
+	DimensionLabel string
+	CurrentScore   float64
+	PreviousScore  float64
+	Delta          float64
+}
+
 type weekStat struct {
 	sum   float64
 	count int64
@@ -764,6 +773,102 @@ func (s *Service) detectAbilityAttentionBySigma(ctx context.Context, tenantID in
 		}
 		return alerts[i].EmployeeID < alerts[j].EmployeeID
 	})
+	return alerts, nil
+}
+
+func (s *Service) detectPositiveChangesByWeek(ctx context.Context, tenantID int64, limit int) ([]weeklyPositiveAlert, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	now := time.Now()
+	monday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -int(now.Weekday())+1)
+	if now.Weekday() == time.Sunday {
+		monday = monday.AddDate(0, 0, -6)
+	}
+	prevStart := monday.AddDate(0, 0, -7)
+	weekEnd := monday.AddDate(0, 0, 7)
+
+	points, err := s.loadRoleDimensionScorePoints(ctx, tenantID, prevStart, weekEnd)
+	if err != nil {
+		return nil, err
+	}
+	type weekKey struct {
+		role      string
+		dimension string
+		weekStart string
+	}
+	empWeek := make(map[weekKey]map[int64]*weekStat)
+	empName := make(map[int64]string)
+	for _, p := range points {
+		ws := mondayOf(p.TS).Format("2006-01-02")
+		k := weekKey{role: p.RoleCode, dimension: p.Dimension, weekStart: ws}
+		if _, ok := empWeek[k]; !ok {
+			empWeek[k] = make(map[int64]*weekStat)
+		}
+		if _, ok := empWeek[k][p.EmployeeID]; !ok {
+			empWeek[k][p.EmployeeID] = &weekStat{}
+		}
+		empWeek[k][p.EmployeeID].sum += p.Score
+		empWeek[k][p.EmployeeID].count++
+		if p.EmployeeName != "" {
+			empName[p.EmployeeID] = p.EmployeeName
+		}
+	}
+
+	curWeek := monday.Format("2006-01-02")
+	prevWeek := prevStart.Format("2006-01-02")
+	dimOrder := []struct{ role, dim string }{
+		{"consultant", "开场建立权威"}, {"consultant", "需求探索"}, {"consultant", "问题放大"}, {"consultant", "专业呈现"}, {"consultant", "方案定制"}, {"consultant", "异议化解"}, {"consultant", "成交促成"},
+		{"doctor", "G1"}, {"doctor", "G2"}, {"doctor", "G3"}, {"doctor", "G4"}, {"doctor", "G5"}, {"doctor", "G6"},
+		{"therapist", "D1"}, {"therapist", "D2"}, {"therapist", "D3"}, {"therapist", "D4"}, {"therapist", "D5"},
+	}
+	alerts := make([]weeklyPositiveAlert, 0, 64)
+	for _, item := range dimOrder {
+		curK := weekKey{role: item.role, dimension: item.dim, weekStart: curWeek}
+		prevK := weekKey{role: item.role, dimension: item.dim, weekStart: prevWeek}
+		curMap := empWeek[curK]
+		prevMap := empWeek[prevK]
+		if len(curMap) == 0 || len(prevMap) == 0 {
+			continue
+		}
+		for empID, curSt := range curMap {
+			prevSt, ok := prevMap[empID]
+			if !ok || curSt == nil || prevSt == nil || curSt.count <= 0 || prevSt.count <= 0 {
+				continue
+			}
+			curAvg := curSt.sum / float64(curSt.count)
+			prevAvg := prevSt.sum / float64(prevSt.count)
+			delta := curAvg - prevAvg
+			if delta <= 0.3 {
+				continue
+			}
+			alerts = append(alerts, weeklyPositiveAlert{
+				RoleCode:       item.role,
+				EmployeeID:     empID,
+				EmployeeName:   empName[empID],
+				DimensionCode:  item.dim,
+				DimensionLabel: positiveDimensionLabel(item.role, item.dim),
+				CurrentScore:   roundRisk(curAvg),
+				PreviousScore:  roundRisk(prevAvg),
+				Delta:          roundRisk(delta),
+			})
+		}
+	}
+	sort.Slice(alerts, func(i, j int) bool {
+		if alerts[i].Delta != alerts[j].Delta {
+			return alerts[i].Delta > alerts[j].Delta
+		}
+		if alerts[i].RoleCode != alerts[j].RoleCode {
+			return alerts[i].RoleCode < alerts[j].RoleCode
+		}
+		if alerts[i].DimensionCode != alerts[j].DimensionCode {
+			return alerts[i].DimensionCode < alerts[j].DimensionCode
+		}
+		return alerts[i].EmployeeID < alerts[j].EmployeeID
+	})
+	if len(alerts) > limit {
+		alerts = alerts[:limit]
+	}
 	return alerts, nil
 }
 
@@ -1093,6 +1198,20 @@ func scoreTextForRisk(v float64, roleCode string) string {
 	return fmt.Sprintf("%.1f%%", roundRisk(v))
 }
 
+func positiveScoreText(roleCode string, score float64) string {
+	if strings.TrimSpace(roleCode) == string(RecordingScopeConsultant) || strings.TrimSpace(roleCode) == "consultant" {
+		return fmt.Sprintf("%.1f", roundRisk(score))
+	}
+	return fmt.Sprintf("%.1f%%", roundRisk(score))
+}
+
+func positiveDeltaText(roleCode string, delta float64) string {
+	if strings.TrimSpace(roleCode) == string(RecordingScopeConsultant) || strings.TrimSpace(roleCode) == "consultant" {
+		return fmt.Sprintf("+%.1f", roundRisk(delta))
+	}
+	return fmt.Sprintf("+%.1f%%", roundRisk(delta))
+}
+
 func roleLabelForRisk(roleCode string) string {
 	switch strings.TrimSpace(roleCode) {
 	case string(RecordingScopeConsultant):
@@ -1106,6 +1225,29 @@ func roleLabelForRisk(roleCode string) string {
 	default:
 		return roleCode
 	}
+}
+
+func positiveDimensionLabel(roleCode, dim string) string {
+	d := strings.TrimSpace(dim)
+	label := displayDimensionLabel(roleCode, d)
+	if strings.TrimSpace(roleCode) == string(RecordingScopeDoctor) || strings.TrimSpace(roleCode) == "doctor" {
+		short := map[string]string{
+			"G1": "开场",
+			"G2": "信息引出",
+			"G3": "信息给予",
+			"G4": "同理沟通",
+			"G5": "结束接诊",
+			"G6": "治疗计划",
+		}
+		if s, ok := short[d]; ok {
+			return fmt.Sprintf("%s%s", d, s)
+		}
+		return d
+	}
+	if strings.TrimSpace(roleCode) == string(RecordingScopeTherapist) || strings.TrimSpace(roleCode) == "therapist" {
+		return fmt.Sprintf("%s%s", d, label)
+	}
+	return label
 }
 
 func truncateText(s string, n int) string {
