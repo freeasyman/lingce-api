@@ -487,27 +487,89 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 		})
 	}
 
-	// 5) 标杆发现：本周候选高分片段
-	pending, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "pending", "auto", "", "", "", 1, 5)
+	// 5) 标杆发现：按页面时间范围筛选新出现的高分片段
+	pending, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "pending", "auto", "", "", "", 1, 200)
+	discoveryItems := make([]BenchmarkClip, 0, 32)
 	for _, item := range pending {
+		createdAt, err := time.Parse(time.RFC3339, strings.TrimSpace(item.CreatedAt))
+		if err != nil {
+			continue
+		}
+		if createdAt.Before(startAt) || !createdAt.Before(endAt) {
+			continue
+		}
+		if !isDiscoveryScoreQualified(item.RoleCode, item.Score) {
+			continue
+		}
+		discoveryItems = append(discoveryItems, item)
+	}
+	discoveryPendingTotal := len(discoveryItems)
+	discoveryHandledTotal := 0
+	acceptedAuto, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "auto", "", "", "", 1, 200)
+	for _, item := range acceptedAuto {
+		createdAt, err := time.Parse(time.RFC3339, strings.TrimSpace(item.CreatedAt))
+		if err != nil || createdAt.Before(startAt) || !createdAt.Before(endAt) {
+			continue
+		}
+		if !isDiscoveryScoreQualified(item.RoleCode, item.Score) {
+			continue
+		}
+		discoveryHandledTotal++
+	}
+	rejectedAuto, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "rejected", "auto", "", "", "", 1, 200)
+	for _, item := range rejectedAuto {
+		createdAt, err := time.Parse(time.RFC3339, strings.TrimSpace(item.CreatedAt))
+		if err != nil || createdAt.Before(startAt) || !createdAt.Before(endAt) {
+			continue
+		}
+		if !isDiscoveryScoreQualified(item.RoleCode, item.Score) {
+			continue
+		}
+		discoveryHandledTotal++
+	}
+	sort.Slice(discoveryItems, func(i, j int) bool {
+		li, lj := discoveryItems[i], discoveryItems[j]
+		ti, ei := time.Parse(time.RFC3339, strings.TrimSpace(li.CreatedAt))
+		tj, ej := time.Parse(time.RFC3339, strings.TrimSpace(lj.CreatedAt))
+		if ei == nil && ej == nil && !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return li.ID > lj.ID
+	})
+	if len(discoveryItems) > 5 {
+		discoveryItems = discoveryItems[:5]
+	}
+	for _, item := range discoveryItems {
+		dimensionLabel := displayDimensionLabel(item.RoleCode, item.Dimension)
+		if strings.TrimSpace(item.RoleCode) == string(RecordingScopeDoctor) || strings.TrimSpace(item.RoleCode) == "doctor" {
+			dimensionLabel = fmt.Sprintf("%s%s", strings.TrimSpace(item.Dimension), discoveryDoctorShortLabel(strings.TrimSpace(item.Dimension)))
+		}
+		reason := buildDiscoveryReason(item.RoleCode, dimensionLabel, item.Score)
+		if rec, recErr := s.store.GetRecordingByID(ctx, item.RecordingID); recErr == nil && rec != nil {
+			analysis := map[string]interface{}(rec.AnalysisResult)
+			evidenceList := extractDimensionEvidence(analysis, item.RoleCode, item.Dimension)
+			reason = buildDiscoveryReasonFromEvidence(item.RoleCode, dimensionLabel, item.Score, evidenceList, item.ClipText)
+		}
 		sections[4].Items = append(sections[4].Items, ManagementRiskCard{
 			ID:              fmt.Sprintf("benchmark-discovery-%d", item.ID),
 			Type:            "benchmark_discovery",
 			Priority:        3,
-			Title:           fmt.Sprintf("录音 #%d %s %s", item.RecordingID, item.Dimension, scoreTextForRisk(item.Score, item.RoleCode)),
-			Description:     fmt.Sprintf("%s · %s", item.EmployeeName, roleLabelForRisk(item.RoleCode)),
-			Evidence:        []string{truncateText(item.ClipText, 72)},
+			Title:           fmt.Sprintf("录音 #%d %s %s %s", item.RecordingID, strings.TrimSpace(item.EmployeeName), strings.TrimSpace(dimensionLabel), discoveryScoreText(item.RoleCode, item.Score)),
+			Description:     "",
+			Evidence:        []string{fmt.Sprintf("推荐理由：%s", reason), fmt.Sprintf("“%s”", truncateText(item.ClipText, 56))},
 			RoleCode:        item.RoleCode,
 			EmployeeID:      item.EmployeeID,
 			EmployeeName:    item.EmployeeName,
 			RecordingID:     item.RecordingID,
-			DimensionCode:   item.Dimension,
+			DimensionCode:   strings.TrimSpace(item.Dimension),
 			Score:           item.Score,
 			Confidence:      "medium",
 			SuggestedAction: "加入标杆库",
 			SecondaryAction: "在早会上讲评",
+			TertiaryAction:  "忽略",
 		})
 	}
+	sections[4].Title = fmt.Sprintf("标杆发现（待处理 %d 条，已处理 %d 条）", discoveryPendingTotal, discoveryHandledTotal)
 
 	return &ManagementRisksResponse{
 		Period:   normalizedPeriod,
@@ -1248,6 +1310,107 @@ func positiveDimensionLabel(roleCode, dim string) string {
 		return fmt.Sprintf("%s%s", d, label)
 	}
 	return label
+}
+
+func isDiscoveryScoreQualified(roleCode string, score float64) bool {
+	role := strings.TrimSpace(roleCode)
+	if role == string(RecordingScopeConsultant) || role == "consultant" {
+		normalized := math.Round((score/20.0)*10.0) / 10.0
+		return normalized >= 4.0
+	}
+	return roundRisk(score) >= 80.0
+}
+
+func discoveryScoreText(roleCode string, score float64) string {
+	role := strings.TrimSpace(roleCode)
+	if role == string(RecordingScopeConsultant) || role == "consultant" {
+		normalized := math.Round((score/20.0)*10.0) / 10.0
+		if normalized >= 5.0 {
+			return "5分满分"
+		}
+		return fmt.Sprintf("%.1f分", normalized)
+	}
+	return fmt.Sprintf("%.1f%%", roundRisk(score))
+}
+
+func discoveryDoctorShortLabel(code string) string {
+	short := map[string]string{
+		"G1": "开场",
+		"G2": "信息引出",
+		"G3": "信息给予",
+		"G4": "同理沟通",
+		"G5": "结束接诊",
+		"G6": "治疗计划",
+	}
+	if s, ok := short[strings.TrimSpace(code)]; ok {
+		return s
+	}
+	return strings.TrimSpace(code)
+}
+
+func buildDiscoveryReason(roleCode, dimensionLabel string, score float64) string {
+	role := strings.TrimSpace(roleCode)
+	if role == string(RecordingScopeConsultant) || role == "consultant" {
+		return fmt.Sprintf("%s达到高分阈值（%s）。", strings.TrimSpace(dimensionLabel), discoveryScoreText(roleCode, score))
+	}
+	return fmt.Sprintf("%s达到高分阈值（%s）。", strings.TrimSpace(dimensionLabel), discoveryScoreText(roleCode, score))
+}
+
+func buildDiscoveryReasonFromEvidence(roleCode, dimensionLabel string, score float64, evidenceList []string, clipText string) string {
+	summary := buildDiscoveryInsightSummary(roleCode, dimensionLabel, evidenceList, clipText)
+	if strings.TrimSpace(summary) != "" {
+		return summary
+	}
+	scorePart := fmt.Sprintf("%s达到高分阈值（%s）", strings.TrimSpace(dimensionLabel), discoveryScoreText(roleCode, score))
+	clip := strings.TrimSpace(truncateText(strings.TrimSpace(clipText), 30))
+	if clip == "" {
+		return scorePart
+	}
+	return fmt.Sprintf("%s；原文体现为“%s”。", scorePart, clip)
+}
+
+func buildDiscoveryInsightSummary(roleCode, dimensionLabel string, evidenceList []string, clipText string) string {
+	role := strings.TrimSpace(roleCode)
+	dim := strings.TrimSpace(dimensionLabel)
+	src := strings.ToLower(strings.Join(append(append([]string{}, evidenceList...), clipText), " "))
+	if role == string(RecordingScopeConsultant) || role == "consultant" {
+		switch {
+		case strings.Contains(dim, "异议化解"):
+			if strings.Contains(src, "案例") || strings.Contains(src, "对比") || strings.Contains(src, "别人") {
+				return "用同类案例对比化解顾虑，降低患者对方案的心理阻力。"
+			}
+			return "针对患者顾虑做有针对性的回应，推动对话从犹豫走向决策。"
+		case strings.Contains(dim, "需求探索"):
+			return "通过连续追问澄清真实诉求，避免基于模糊信息给出方案。"
+		case strings.Contains(dim, "问题放大"):
+			return "把风险后果具体化，帮助患者形成及时行动的紧迫感。"
+		case strings.Contains(dim, "专业呈现"):
+			return "用可验证的专业信息建立信任，提升方案接受度。"
+		}
+	}
+	if role == string(RecordingScopeDoctor) || role == "doctor" {
+		switch {
+		case strings.Contains(dim, "G1"):
+			return "开场先设定议程与时间预期，帮助患者快速进入沟通节奏。"
+		case strings.Contains(dim, "G4"):
+			return "先回应患者视角再给建议，减少沟通对抗并提升配合度。"
+		default:
+			return "该段对话完整覆盖关键接诊动作，适合作为团队示范片段。"
+		}
+	}
+	if role == string(RecordingScopeTherapist) || role == "therapist" {
+		switch {
+		case strings.Contains(dim, "互动评估"):
+			return "通过持续确认即时体感反馈，动态评估治疗反应并及时校正操作。"
+		case strings.Contains(dim, "治疗铺垫"):
+			return "治疗前先确认症状与影响场景，为后续干预建立清晰起点。"
+		case strings.Contains(dim, "专业操作"):
+			return "操作过程中同步解释与确认关键点，提升患者理解和配合度。"
+		default:
+			return "该片段体现了标准化治疗沟通动作，便于团队复盘复用。"
+		}
+	}
+	return ""
 }
 
 func truncateText(s string, n int) string {
