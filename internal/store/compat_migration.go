@@ -1246,6 +1246,17 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`UPDATE benchmark_clip_pushes SET status = 'sent' WHERE status IS NULL OR status = ''`,
 		`ALTER TABLE IF EXISTS benchmark_clip_pushes ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMP`,
 		`CREATE INDEX IF NOT EXISTS idx_pushes_employee_status ON benchmark_clip_pushes(target_employee_id, status, pushed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS management_risk_handled (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			risk_id VARCHAR(255) NOT NULL,
+			handled_by BIGINT NOT NULL DEFAULT 0,
+			handled_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (tenant_id, risk_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_management_risk_handled_tenant_time ON management_risk_handled(tenant_id, handled_at DESC)`,
 	}
 
 	for i, stmt := range stmts {

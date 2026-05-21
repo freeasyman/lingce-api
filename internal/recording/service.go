@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"math"
 	"net"
@@ -273,6 +274,479 @@ func (s *Service) CreateManagementEvent(ctx context.Context, tenantID int64, cre
 		return nil, fmt.Errorf("dimension_code is required")
 	}
 	return s.store.CreateManagementEvent(ctx, tenantID, createdBy, req)
+}
+
+func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period string, status string) (*ManagementRisksResponse, error) {
+	startAt, endAt, normalizedPeriod := parseManagementPeriod(period)
+	handledRiskIDs, _ := s.listHandledRiskIDs(ctx, tenantID)
+	showHandledOnly := strings.EqualFold(strings.TrimSpace(status), "handled")
+	showAll := strings.EqualFold(strings.TrimSpace(status), "all")
+
+	sections := []ManagementRiskSection{
+		{Key: "high_risk", Title: "高风险", Items: []ManagementRiskCard{}},
+		{Key: "attention", Title: "需关注", Items: []ManagementRiskCard{}},
+		{Key: "ops_health", Title: "运营健康度", Items: []ManagementRiskCard{}},
+		{Key: "positive", Title: "正向变化", Items: []ManagementRiskCard{}},
+		{Key: "benchmark_discovery", Title: "标杆发现", Items: []ManagementRiskCard{}},
+	}
+
+	// 1) 高风险：前台录音命中风险关键词
+	frontdeskRows, err := s.listFrontdeskRiskRows(ctx, tenantID, startAt, endAt, 30)
+	if err != nil {
+		return nil, err
+	}
+	frontdeskRows = dedupeFrontdeskRiskRows(frontdeskRows)
+	for _, row := range frontdeskRows {
+		_, isHandled := handledRiskIDs[row.RiskID]
+		if showHandledOnly && !isHandled {
+			continue
+		}
+		if !showHandledOnly && !showAll && isHandled {
+			continue
+		}
+		if row.RiskLevel != "high" && row.RiskLevel != "medium" {
+			continue
+		}
+		priority := 10
+		titlePrefix := "前台录音命中合规高风险"
+		confidence := "medium"
+		if row.RiskLevel == "medium" {
+			priority = 5
+			titlePrefix = "可疑风险（待复核）"
+			confidence = "low"
+		}
+		evidence := []string{fmt.Sprintf("命中词：%s", row.HitKeyword), row.Snippet}
+		description := fmt.Sprintf("%s · 前台 %s · 录音 #%d", row.RecordedAt, row.EmployeeName, row.RecordingID)
+		if row.DuplicateCount > 1 {
+			description = fmt.Sprintf("%s · 涉及 %d 条相似录音", description, row.DuplicateCount)
+			evidence = append(evidence, fmt.Sprintf("已合并同类事件，示例录音：#%d", row.RecordingID))
+		}
+		cardTitle := fmt.Sprintf("%s：%s", titlePrefix, row.RiskLabel)
+		if isHandled {
+			cardTitle = "已处理 · " + cardTitle
+		}
+		sections[0].Items = append(sections[0].Items, ManagementRiskCard{
+			ID:              row.RiskID,
+			Type:            "high_risk",
+			Priority:        priority,
+			Title:           cardTitle,
+			Description:     description,
+			Evidence:        evidence,
+			RoleCode:        "frontdesk",
+			EmployeeID:      row.EmployeeID,
+			EmployeeName:    row.EmployeeName,
+			RecordingID:     row.RecordingID,
+			Confidence:      confidence,
+			SuggestedAction: "查看录音",
+			SecondaryAction: "标记已处理",
+			CreatedAt:       row.RecordedAt,
+		})
+	}
+
+	// 2) 需关注：医生关键缺口 + 任务超时
+	doctorRows, _ := s.GetDoctorAbilityRanking(ctx, tenantID, "1m")
+	for _, item := range doctorRows {
+		if item.CriticalGaps <= 0 {
+			continue
+		}
+		sections[1].Items = append(sections[1].Items, ManagementRiskCard{
+			ID:              fmt.Sprintf("doctor-gap-%d", item.EmployeeID),
+			Type:            "attention_ability",
+			Priority:        8,
+			Title:           fmt.Sprintf("%s（医生）关键缺口 %d 条", item.EmployeeName, item.CriticalGaps),
+			Description:     fmt.Sprintf("SEGUE 综合 %.1f%%，建议优先复盘关键缺口环节", item.SegueAvg),
+			Evidence:        []string{"近1月关键缺口条目累计偏高"},
+			RoleCode:        "doctor",
+			EmployeeID:      item.EmployeeID,
+			EmployeeName:    item.EmployeeName,
+			Score:           item.SegueAvg,
+			Confidence:      confidenceBySamples(item.RecordingCount),
+			SuggestedAction: "查看她的录音",
+			SecondaryAction: "创建辅导任务",
+		})
+	}
+	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil)
+	if taskStats != nil && taskStats.OverdueTasks > 0 {
+		sections[1].Items = append(sections[1].Items, ManagementRiskCard{
+			ID:              "task-overdue",
+			Type:            "attention_task",
+			Priority:        7,
+			Title:           fmt.Sprintf("跟进任务超时 %d 条", taskStats.OverdueTasks),
+			Description:     fmt.Sprintf("待处理 %d 条，已完成 %d 条", taskStats.PendingTasks, taskStats.CompletedTasks),
+			Evidence:        []string{"存在超时未执行任务，可能导致跟进节奏断裂"},
+			Confidence:      confidenceBySamples(taskStats.TotalTasks),
+			SuggestedAction: "查看任务详情",
+		})
+	}
+
+	// 3) 运营健康度：客户关联率/任务执行率/成交标记率
+	totalCount, linkedCount, dealTaggedCount, err := s.getOpsHealthCounts(ctx, tenantID, startAt, endAt)
+	if err != nil {
+		return nil, err
+	}
+	customerRate := 0.0
+	dealRate := 0.0
+	if totalCount > 0 {
+		customerRate = roundRisk(float64(linkedCount) / float64(totalCount) * 100)
+		dealRate = roundRisk(float64(dealTaggedCount) / float64(totalCount) * 100)
+	}
+	sections[2].Items = append(sections[2].Items, ManagementRiskCard{
+		ID:          "ops-health-customer",
+		Type:        "ops_health",
+		Priority:    6,
+		Title:       fmt.Sprintf("客户关联率 %.1f%%", customerRate),
+		Description: "未关联客户的录音会影响转化追踪",
+		Evidence:    []string{fmt.Sprintf("本周期录音 %d 条，已关联 %d 条", totalCount, linkedCount)},
+		Confidence:  confidenceBySamples(totalCount),
+	})
+	sections[2].Items = append(sections[2].Items, ManagementRiskCard{
+		ID:          "ops-health-deal",
+		Type:        "ops_health",
+		Priority:    6,
+		Title:       fmt.Sprintf("成交标记率 %.1f%%", dealRate),
+		Description: "成交未标记会导致转化率失真",
+		Evidence:    []string{fmt.Sprintf("本周期录音 %d 条，已标记成交结果 %d 条", totalCount, dealTaggedCount)},
+		Confidence:  confidenceBySamples(totalCount),
+	})
+	if taskStats != nil {
+		executedRate := 0.0
+		if taskStats.TotalTasks > 0 {
+			executedRate = float64(taskStats.CompletedTasks) / float64(taskStats.TotalTasks) * 100
+		}
+		sections[2].Items = append(sections[2].Items, ManagementRiskCard{
+			ID:          "ops-health-task",
+			Type:        "ops_health",
+			Priority:    6,
+			Title:       fmt.Sprintf("任务执行率 %.1f%%", roundRisk(executedRate)),
+			Description: "任务执行率过低会造成机会流失",
+			Evidence:    []string{fmt.Sprintf("总任务 %d，已完成 %d，超时 %d", taskStats.TotalTasks, taskStats.CompletedTasks, taskStats.OverdueTasks)},
+			Confidence:  confidenceBySamples(taskStats.TotalTasks),
+		})
+	}
+
+	// 4) 正向变化：从已收录标杆挑选近期高分样本
+	accepted, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "", "", "", "", 1, 5)
+	for _, item := range accepted {
+		sections[3].Items = append(sections[3].Items, ManagementRiskCard{
+			ID:              fmt.Sprintf("positive-%d", item.ID),
+			Type:            "positive_change",
+			Priority:        4,
+			Title:           fmt.Sprintf("%s（%s）%s %s", item.EmployeeName, roleLabelForRisk(item.RoleCode), item.Dimension, scoreTextForRisk(item.Score, item.RoleCode)),
+			Description:     "该片段已被团队收录，可用于复盘和示范",
+			Evidence:        []string{truncateText(item.ClipText, 56)},
+			RoleCode:        item.RoleCode,
+			EmployeeID:      item.EmployeeID,
+			EmployeeName:    item.EmployeeName,
+			RecordingID:     item.RecordingID,
+			DimensionCode:   item.Dimension,
+			Score:           item.Score,
+			Confidence:      "medium",
+			SuggestedAction: "查看标杆",
+		})
+	}
+
+	// 5) 标杆发现：本周候选高分片段
+	pending, _, _ := s.store.ListBenchmarkClips(ctx, tenantID, "pending", "auto", "", "", "", 1, 5)
+	for _, item := range pending {
+		sections[4].Items = append(sections[4].Items, ManagementRiskCard{
+			ID:              fmt.Sprintf("benchmark-discovery-%d", item.ID),
+			Type:            "benchmark_discovery",
+			Priority:        3,
+			Title:           fmt.Sprintf("录音 #%d %s %s", item.RecordingID, item.Dimension, scoreTextForRisk(item.Score, item.RoleCode)),
+			Description:     fmt.Sprintf("%s · %s", item.EmployeeName, roleLabelForRisk(item.RoleCode)),
+			Evidence:        []string{truncateText(item.ClipText, 72)},
+			RoleCode:        item.RoleCode,
+			EmployeeID:      item.EmployeeID,
+			EmployeeName:    item.EmployeeName,
+			RecordingID:     item.RecordingID,
+			DimensionCode:   item.Dimension,
+			Score:           item.Score,
+			Confidence:      "medium",
+			SuggestedAction: "加入标杆库",
+			SecondaryAction: "在早会上讲评",
+		})
+	}
+
+	return &ManagementRisksResponse{
+		Period:   normalizedPeriod,
+		Sections: sections,
+	}, nil
+}
+
+type frontdeskRiskRow struct {
+	RiskID         string
+	RecordingID    int64
+	EmployeeID     int64
+	EmployeeName   string
+	RecordedAt     string
+	Snippet        string
+	RiskLabel      string
+	RiskLevel      string
+	HitKeyword     string
+	Fingerprint    string
+	DuplicateCount int
+}
+
+func (s *Service) listFrontdeskRiskRows(ctx context.Context, tenantID int64, startAt, endAt time.Time, limit int) ([]frontdeskRiskRow, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT r.id,
+		       COALESCE(r.employee_id, 0),
+		       COALESCE(e.name, '未命名员工'),
+		       to_char(COALESCE(r.recorded_at, r.created_at), 'YYYY-MM-DD HH24:MI'),
+		       COALESCE(
+		         CASE
+		           WHEN r.cleaned_transcription IS NULL THEN ''
+		           WHEN jsonb_typeof(r.cleaned_transcription) = 'string' THEN trim(both '"' from r.cleaned_transcription::text)
+		           WHEN jsonb_typeof(r.cleaned_transcription) = 'object' THEN COALESCE(r.cleaned_transcription->>'full_text', r.cleaned_transcription->>'text', '')
+		           ELSE ''
+		         END,
+		         COALESCE(r.transcription_text, '')
+		       )
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.business_scope = 'frontdesk'
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  AND COALESCE(
+		        CASE
+		          WHEN r.cleaned_transcription IS NULL THEN ''
+		          WHEN jsonb_typeof(r.cleaned_transcription) = 'string' THEN trim(both '"' from r.cleaned_transcription::text)
+		          WHEN jsonb_typeof(r.cleaned_transcription) = 'object' THEN COALESCE(r.cleaned_transcription->>'full_text', r.cleaned_transcription->>'text', '')
+		          ELSE ''
+		        END,
+		        COALESCE(r.transcription_text, '')
+		      ) <> ''
+		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC
+		LIMIT $4
+	`, tenantID, startAt, endAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]frontdeskRiskRow, 0, limit)
+	for rows.Next() {
+		var it frontdeskRiskRow
+		var fullText string
+		if err := rows.Scan(&it.RecordingID, &it.EmployeeID, &it.EmployeeName, &it.RecordedAt, &fullText); err != nil {
+			return out, err
+		}
+		level, label, hit := classifyFrontdeskRiskText(fullText)
+		if level == "" {
+			continue
+		}
+		it.RiskLevel = level
+		it.RiskLabel = label
+		it.HitKeyword = hit
+		it.Snippet = extractRiskSnippet(fullText, hit, 72)
+		it.Fingerprint = riskFingerprint(fullText, hit, level)
+		it.DuplicateCount = 1
+		it.RiskID = fmt.Sprintf("frontdesk:%d:%s", it.RecordingID, hit)
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func dedupeFrontdeskRiskRows(rows []frontdeskRiskRow) []frontdeskRiskRow {
+	if len(rows) <= 1 {
+		return rows
+	}
+	type agg struct {
+		item frontdeskRiskRow
+	}
+	order := make([]string, 0, len(rows))
+	byKey := make(map[string]*agg, len(rows))
+	for _, r := range rows {
+		key := strings.TrimSpace(r.RiskLevel) + "|" + strings.TrimSpace(r.HitKeyword) + "|" + strings.TrimSpace(r.Fingerprint)
+		if key == "||" {
+			key = fmt.Sprintf("fallback:%d:%s", r.RecordingID, r.HitKeyword)
+		}
+		if hit, ok := byKey[key]; ok {
+			hit.item.DuplicateCount++
+			continue
+		}
+		cp := r
+		byKey[key] = &agg{item: cp}
+		order = append(order, key)
+	}
+	out := make([]frontdeskRiskRow, 0, len(order))
+	for _, k := range order {
+		out = append(out, byKey[k].item)
+	}
+	return out
+}
+
+func riskFingerprint(fullText, hit, level string) string {
+	src := strings.ToLower(strings.TrimSpace(fullText))
+	src = strings.ReplaceAll(src, " ", "")
+	src = strings.ReplaceAll(src, "\n", "")
+	src = strings.ReplaceAll(src, "\t", "")
+	if len([]rune(src)) > 180 {
+		src = string([]rune(src)[:180])
+	}
+	raw := level + "|" + hit + "|" + src
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(raw))
+	return fmt.Sprintf("%x", h.Sum64())
+}
+
+func classifyFrontdeskRiskText(text string) (level string, label string, hit string) {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return "", "", ""
+	}
+	strongKeywords := []string{"私人微信收款", "代开药", "绕开处方", "微信转账给我", "药品直接邮寄"}
+	weakKeywords := []string{"转账", "邮寄", "微信", "药品"}
+	for _, k := range strongKeywords {
+		if strings.Contains(t, k) {
+			return "high", "私域合规违规", k
+		}
+	}
+	for _, k := range weakKeywords {
+		if strings.Contains(t, k) {
+			return "medium", "可疑合规表达", k
+		}
+	}
+	return "", "", ""
+}
+
+func extractRiskSnippet(text, keyword string, maxLen int) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return ""
+	}
+	if keyword == "" {
+		return truncateText(t, maxLen)
+	}
+	idx := strings.Index(t, keyword)
+	if idx < 0 {
+		return truncateText(t, maxLen)
+	}
+	runes := []rune(t)
+	pos := len([]rune(t[:idx]))
+	start := pos - (maxLen / 2)
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxLen
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return strings.TrimSpace(string(runes[start:end]))
+}
+
+func (s *Service) listHandledRiskIDs(ctx context.Context, tenantID int64) (map[string]struct{}, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT risk_id
+		FROM management_risk_handled
+		WHERE tenant_id = $1
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var riskID string
+		if err := rows.Scan(&riskID); err != nil {
+			return out, err
+		}
+		out[riskID] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) MarkManagementRiskHandled(ctx context.Context, tenantID, handledBy int64, riskID string) error {
+	_, err := s.store.pool.Exec(ctx, `
+		INSERT INTO management_risk_handled (tenant_id, risk_id, handled_by, handled_at, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW(), NOW())
+		ON CONFLICT (tenant_id, risk_id)
+		DO UPDATE SET handled_by = EXCLUDED.handled_by, handled_at = EXCLUDED.handled_at, updated_at = NOW()
+	`, tenantID, strings.TrimSpace(riskID), handledBy)
+	return err
+}
+
+func (s *Service) getOpsHealthCounts(ctx context.Context, tenantID int64, startAt, endAt time.Time) (int64, int64, int64, error) {
+	row := s.store.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) AS total_count,
+			COUNT(*) FILTER (WHERE r.customer_id IS NOT NULL) AS linked_count,
+			COUNT(*) FILTER (
+				WHERE COALESCE(NULLIF(r.analysis_display->>'visit_outcome', ''), NULLIF(r.analysis_result->>'visit_outcome', ''), NULLIF(r.analysis_display->>'decision_status', ''), '') <> ''
+			) AS deal_tagged_count
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  AND r.business_scope IN ('consultant', 'doctor', 'therapist')
+	`, tenantID, startAt, endAt)
+	var totalCount, linkedCount, dealTaggedCount int64
+	if err := row.Scan(&totalCount, &linkedCount, &dealTaggedCount); err != nil {
+		return 0, 0, 0, err
+	}
+	return totalCount, linkedCount, dealTaggedCount, nil
+}
+
+func parseManagementPeriod(period string) (time.Time, time.Time, string) {
+	now := time.Now()
+	switch strings.TrimSpace(period) {
+	case "2w":
+		return now.AddDate(0, 0, -14), now, "近2周"
+	case "4w":
+		return now.AddDate(0, 0, -28), now, "近4周"
+	case "1w", "":
+		fallthrough
+	default:
+		return now.AddDate(0, 0, -7), now, "本周"
+	}
+}
+
+func confidenceBySamples(n int64) string {
+	if n >= 10 {
+		return "high"
+	}
+	if n >= 5 {
+		return "medium"
+	}
+	return "low"
+}
+
+func roundRisk(v float64) float64 {
+	return math.Round(v*10) / 10
+}
+
+func scoreTextForRisk(v float64, roleCode string) string {
+	if roleCode == string(RecordingScopeConsultant) || roleCode == "consultant" {
+		return fmt.Sprintf("%.1f/5分", math.Round((v/20.0)*10.0)/10.0)
+	}
+	return fmt.Sprintf("%.1f%%", roundRisk(v))
+}
+
+func roleLabelForRisk(roleCode string) string {
+	switch strings.TrimSpace(roleCode) {
+	case string(RecordingScopeConsultant):
+		return "咨询师"
+	case string(RecordingScopeDoctor):
+		return "医生"
+	case string(RecordingScopeTherapist):
+		return "康复师"
+	case string(RecordingScopeFrontdesk):
+		return "前台"
+	default:
+		return roleCode
+	}
+}
+
+func truncateText(s string, n int) string {
+	t := strings.TrimSpace(s)
+	if n <= 0 || len([]rune(t)) <= n {
+		return t
+	}
+	rs := []rune(t)
+	return string(rs[:n]) + "..."
 }
 
 func (s *Service) ListBenchmarkClips(

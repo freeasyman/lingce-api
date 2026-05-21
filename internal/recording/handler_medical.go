@@ -522,6 +522,57 @@ func (h *Handler) CreateManagementEvent(w http.ResponseWriter, r *http.Request) 
 	httputil.WriteSuccess(w, item)
 }
 
+func (h *Handler) GetManagementRisks(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	period := strings.TrimSpace(r.URL.Query().Get("period"))
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	resp, svcErr := h.service.GetManagementRisks(r.Context(), tenantID, period, status)
+	if svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) MarkManagementRiskHandled(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req MarkManagementRiskHandledRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.RiskID) == "" {
+		httputil.WriteBadRequest(w, "risk_id is required")
+		return
+	}
+	if svcErr := h.service.MarkManagementRiskHandled(r.Context(), tenantID, claims.UserID, req.RiskID); svcErr != nil {
+		httputil.WriteInternalError(w, svcErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"success": true,
+		"risk_id": req.RiskID,
+	})
+}
+
 func (h *Handler) ListBenchmarkClips(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {

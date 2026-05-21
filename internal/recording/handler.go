@@ -120,6 +120,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/recordings/dashboard/employee-growth", authMw(http.HandlerFunc(h.GetEmployeeGrowth)))
 	mux.Handle("GET /api/v1/recordings/management-events", authMw(http.HandlerFunc(h.ListManagementEvents)))
 	mux.Handle("POST /api/v1/recordings/management-events", authMw(http.HandlerFunc(h.CreateManagementEvent)))
+	mux.Handle("GET /api/v1/recordings/management-risks", authMw(http.HandlerFunc(h.GetManagementRisks)))
+	mux.Handle("POST /api/v1/recordings/management-risks/actions/handle", authMw(http.HandlerFunc(h.MarkManagementRiskHandled)))
 	mux.Handle("GET /api/v1/recordings/benchmark-clips", authMw(http.HandlerFunc(h.ListBenchmarkClips)))
 	mux.Handle("POST /api/v1/recordings/benchmark-clips/generate-candidates", authMw(http.HandlerFunc(h.GenerateBenchmarkCandidates)))
 	mux.Handle("POST /api/v1/recordings/benchmark-clips/{id}/actions/accept", authMw(http.HandlerFunc(h.AcceptBenchmarkClip)))

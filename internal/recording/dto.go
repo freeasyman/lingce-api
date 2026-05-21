@@ -513,6 +513,41 @@ type CreateManagementEventRequest struct {
 	Meta          map[string]interface{} `json:"meta"`
 }
 
+type ManagementRiskCard struct {
+	ID              string   `json:"id"`
+	Type            string   `json:"type"`
+	Priority        int      `json:"priority"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description,omitempty"`
+	Evidence        []string `json:"evidence,omitempty"`
+	RoleCode        string   `json:"role_code,omitempty"`
+	EmployeeID      int64    `json:"employee_id,omitempty"`
+	EmployeeName    string   `json:"employee_name,omitempty"`
+	RecordingID     int64    `json:"recording_id,omitempty"`
+	DimensionCode   string   `json:"dimension_code,omitempty"`
+	Score           float64  `json:"score,omitempty"`
+	Confidence      string   `json:"confidence,omitempty"` // high/medium/low
+	SuggestedAction string   `json:"suggested_action,omitempty"`
+	SecondaryAction string   `json:"secondary_action,omitempty"`
+	TertiaryAction  string   `json:"tertiary_action,omitempty"`
+	CreatedAt       string   `json:"created_at,omitempty"`
+}
+
+type ManagementRiskSection struct {
+	Key   string               `json:"key"`
+	Title string               `json:"title"`
+	Items []ManagementRiskCard `json:"items"`
+}
+
+type ManagementRisksResponse struct {
+	Period   string                  `json:"period"`
+	Sections []ManagementRiskSection `json:"sections"`
+}
+
+type MarkManagementRiskHandledRequest struct {
+	RiskID string `json:"risk_id"`
+}
+
 type BenchmarkClip struct {
 	ID               int64    `json:"id"`
 	TenantID         int64    `json:"tenant_id"`
