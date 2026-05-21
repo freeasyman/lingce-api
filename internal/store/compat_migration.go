@@ -1183,6 +1183,64 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS recording_analysis_results ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE INDEX IF NOT EXISTS idx_recording_analysis_results_run_id ON recording_analysis_results (run_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_recording_analysis_results_active ON recording_analysis_results (recording_id, is_active, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS management_events (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			event_date DATE NOT NULL,
+			event_type VARCHAR(50) NOT NULL,
+			title VARCHAR(255) NOT NULL,
+			description TEXT,
+			role_type VARCHAR(32) NOT NULL,
+			dimension_code VARCHAR(32) NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_by BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_management_events_tenant_role_dim_date ON management_events (tenant_id, role_type, dimension_code, event_date DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_management_events_tenant_status_date ON management_events (tenant_id, status, event_date DESC)`,
+		`CREATE TABLE IF NOT EXISTS benchmark_clips (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			role_code VARCHAR(50) NOT NULL,
+			dimension VARCHAR(100) NOT NULL,
+			score DECIMAL(5,2),
+			clip_text TEXT NOT NULL,
+			ai_comment TEXT,
+			learning_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+			source VARCHAR(20) NOT NULL,
+			status VARCHAR(20) NOT NULL,
+			confidence VARCHAR(20),
+			audio_start_seconds INTEGER,
+			audio_end_seconds INTEGER,
+			used_in_meetings INTEGER NOT NULL DEFAULT 0,
+			accepted_at TIMESTAMP,
+			rejected_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_benchmark_clips_tenant_recording_role_dim ON benchmark_clips(tenant_id, recording_id, role_code, dimension)`,
+		`CREATE INDEX IF NOT EXISTS idx_benchmark_clips_status ON benchmark_clips(tenant_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_benchmark_clips_role_dim ON benchmark_clips(tenant_id, role_code, dimension)`,
+		`CREATE TABLE IF NOT EXISTS benchmark_clip_pushes (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			benchmark_clip_id BIGINT NOT NULL,
+			target_employee_id BIGINT NOT NULL,
+			target_employee_name TEXT,
+			note TEXT,
+			status VARCHAR(20) NOT NULL DEFAULT 'sent',
+			pushed_by BIGINT NOT NULL DEFAULT 0,
+			pushed_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			acknowledged_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_benchmark_clip_pushes_clip ON benchmark_clip_pushes(tenant_id, benchmark_clip_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_benchmark_clip_pushes_target ON benchmark_clip_pushes(tenant_id, target_employee_id, status, created_at DESC)`,
 	}
 
 	for i, stmt := range stmts {
@@ -1197,9 +1255,46 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedDefaultAnalysisRoutes(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed default analysis routes: %w", err)
 	}
+	if err := seedBenchmarkReviewPrompt(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed benchmark review prompt: %w", err)
+	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
 	return nil
+}
+
+func seedBenchmarkReviewPrompt(ctx context.Context, pool *pgxpool.Pool) error {
+	const promptCode = "benchmark_clip_review_v1"
+	const systemPrompt = "你是一名医疗管理培训教练。请仅根据提供的证据生成可复用、可执行的点评，不得杜撰事实。"
+	const userPrompt = `请基于以下标杆收录上下文生成点评，返回严格 JSON：
+{
+  "ai_comment": "80-160字，说明这段表达为什么值得团队学习，必须引用证据，不要空话，不要使用“缺失/不足/未...”等负面诊断语气",
+  "learning_points": [
+    "学习要点1（可执行动作）",
+    "学习要点2（可执行动作）",
+    "学习要点3（可执行动作）"
+  ]
+}
+
+约束：
+1) 只能依据输入内容，不得编造；
+2) 学习要点输出3-5条，每条不超过32字；
+3) 优先使用片段原文与维度证据；
+4) 输出必须是 JSON，不要 Markdown。
+
+上下文：
+{{benchmark_context_json}}`
+	const outputSchema = `{"type":"object","required":["ai_comment","learning_points"],"properties":{"ai_comment":{"type":"string"},"learning_points":{"type":"array","items":{"type":"string"},"minItems":3,"maxItems":5}}}`
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO recording_analysis_prompts (
+			code, name, description, category, system_prompt, user_prompt_template,
+			output_schema, version, is_active, created_by, updated_by, created_at, updated_at
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, true, 1, 1, NOW(), NOW()
+		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1)
+	`, promptCode, "标杆收录点评生成", "标杆收录后生成AI点评与学习要点", "management_dashboard", systemPrompt, userPrompt, outputSchema, "v1")
+	return err
 }
 
 type builtinAnalysisPipelineSeed struct {

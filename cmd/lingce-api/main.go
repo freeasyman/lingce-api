@@ -139,9 +139,12 @@ func main() {
 	empHandler := employee.NewHandler(empService)
 	empHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// Create LLM gateway client
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
-	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken)
+	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken, llmClient)
 	recHandler := recording.NewHandler(recService)
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
@@ -154,9 +157,6 @@ func main() {
 	rbacService := rbac.NewService(rbacStore)
 	rbacHandler := rbac.NewHandler(rbacService)
 	rbacHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	// Create LLM gateway client
-	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 
 	// Register support module
 	supportStore := support.NewStore(pool)

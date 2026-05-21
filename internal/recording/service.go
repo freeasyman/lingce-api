@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,6 +30,7 @@ type Service struct {
 	lingceWorkerURL   string
 	lingceWorkerToken string
 	httpClient        *http.Client
+	llmClient         *llmgateway.Client
 }
 
 type workerUnavailableError struct {
@@ -79,7 +81,7 @@ func IsWorkerUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
-func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken string) *Service {
+func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken string, llmClient *llmgateway.Client) *Service {
 	return &Service{
 		store:             store,
 		employeeStore:     employeeStore,
@@ -87,6 +89,7 @@ func NewService(store *Store, employeeStore *employee.Store, workerURL, workerTo
 		workerToken:       workerToken,
 		lingceWorkerURL:   strings.TrimRight(lingceWorkerURL, "/"),
 		lingceWorkerToken: lingceWorkerToken,
+		llmClient:         llmClient,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -334,7 +337,7 @@ func (s *Service) AcceptBenchmarkClip(ctx context.Context, tenantID int64, id in
 	if comment == "" || len(points) == 0 {
 		item, err := s.store.GetBenchmarkClipByID(ctx, tenantID, id)
 		if err == nil && item != nil {
-			autoComment, autoPoints := buildBenchmarkCommentAndPoints(item)
+			autoComment, autoPoints := s.generateBenchmarkCommentAndPoints(ctx, tenantID, item)
 			if comment == "" {
 				comment = autoComment
 			}
@@ -365,7 +368,7 @@ func (s *Service) CreateManualBenchmarkClip(ctx context.Context, tenantID int64,
 	if createErr != nil {
 		return nil, createErr
 	}
-	comment, points := buildBenchmarkCommentAndPoints(item)
+	comment, points := s.generateBenchmarkCommentAndPoints(ctx, tenantID, item)
 	updated, updErr := s.store.UpdateBenchmarkClipStatus(ctx, tenantID, item.ID, "accepted", comment, points)
 	if updErr != nil {
 		return item, nil
@@ -548,6 +551,461 @@ func buildBenchmarkCommentAndPoints(item *BenchmarkClip) (string, []string) {
 		"使用容易理解的表述，减少抽象术语",
 		"结尾给出明确下一步，形成沟通闭环",
 	}
+}
+
+const (
+	benchmarkReviewPromptCode = "benchmark_clip_review_v1"
+)
+
+func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantID int64, item *BenchmarkClip) (string, []string) {
+	// 兜底策略：任一步失败都回退模板，保证收录流程可用。
+	fallbackComment, fallbackPoints := buildBenchmarkCommentAndPoints(item)
+	if s.llmClient == nil || item == nil {
+		return fallbackComment, fallbackPoints
+	}
+	systemPrompt, userPrompt, err := s.loadBenchmarkReviewPrompt(ctx, tenantID)
+	if err != nil || strings.TrimSpace(userPrompt) == "" {
+		return fallbackComment, fallbackPoints
+	}
+	model, err := s.resolveBenchmarkLLMModelConfig(ctx, tenantID)
+	if err != nil {
+		return fallbackComment, fallbackPoints
+	}
+	pkg, err := s.buildBenchmarkLLMContextPackage(ctx, item)
+	if err != nil {
+		return fallbackComment, fallbackPoints
+	}
+	pkgJSON, _ := json.MarshalIndent(pkg, "", "  ")
+	renderedUserPrompt := strings.ReplaceAll(userPrompt, "{{benchmark_context_json}}", string(pkgJSON))
+	llmReq := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "recording.benchmark",
+		FunctionType:  model.FunctionType,
+		Provider:      model.Provider,
+		ModelCode:     model.ModelCode,
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: renderedUserPrompt},
+		},
+		Params: &llmgateway.Params{
+			Temperature:    0.2,
+			MaxTokens:      900,
+			TimeoutSeconds: 45,
+			ResponseFormat: "json",
+		},
+	}
+	applyModelParamsToBenchmarkLLMRequest(&llmReq, model.ModelParams)
+	resp, err := s.llmClient.TextInference(ctx, llmReq)
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return fallbackComment, fallbackPoints
+	}
+	aiComment, learningPoints, ok := parseBenchmarkReviewLLMOutput(resp.Content)
+	if !ok {
+		return fallbackComment, fallbackPoints
+	}
+	return aiComment, learningPoints
+}
+
+type benchmarkLLMModelSelection struct {
+	FunctionType string
+	Provider     string
+	ModelCode    string
+	ModelParams  JSONObject
+}
+
+func (s *Service) resolveBenchmarkLLMModelConfig(ctx context.Context, tenantID int64) (*benchmarkLLMModelSelection, error) {
+	candidates := []string{"recording_benchmark_comment", "chat"}
+	for _, functionType := range candidates {
+		var out benchmarkLLMModelSelection
+		err := s.store.pool.QueryRow(ctx, `
+			SELECT
+				COALESCE(function_type, ''),
+				COALESCE(provider, ''),
+				COALESCE(model_code, ''),
+				COALESCE(model_params, extra_params, '{}'::json)
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND COALESCE(is_active, true) = true
+			  AND function_type = $1
+			  AND tenant_id IN ($2, 0)
+			ORDER BY
+			  CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END,
+			  CASE WHEN COALESCE(is_default, false) THEN 0 ELSE 1 END,
+			  updated_at DESC,
+			  id DESC
+			LIMIT 1
+		`, functionType, tenantID).Scan(&out.FunctionType, &out.Provider, &out.ModelCode, &out.ModelParams)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		if strings.TrimSpace(out.ModelCode) == "" {
+			continue
+		}
+		if strings.TrimSpace(out.FunctionType) == "" {
+			out.FunctionType = functionType
+		}
+		return &out, nil
+	}
+	return nil, fmt.Errorf("no llm model config for benchmark review")
+}
+
+func (s *Service) loadBenchmarkReviewPrompt(ctx context.Context, tenantID int64) (string, string, error) {
+	var tenantPrompt string
+	_ = s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(custom_user_prompt_template, '')
+		FROM recording_analysis_tenant_configs
+		WHERE tenant_id = $1
+		  AND prompt_code = $2
+		  AND COALESCE(is_enabled, true) = true
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, benchmarkReviewPromptCode).Scan(&tenantPrompt)
+	basePrompt, err := s.store.GetRecordingPromptByCode(ctx, benchmarkReviewPromptCode)
+	if err != nil {
+		return "", "", err
+	}
+	systemPrompt := strings.TrimSpace(basePrompt.SystemPrompt)
+	userPrompt := strings.TrimSpace(basePrompt.PromptText)
+	if strings.TrimSpace(tenantPrompt) != "" {
+		userPrompt = strings.TrimSpace(tenantPrompt)
+	}
+	if systemPrompt == "" {
+		systemPrompt = "你是一名医疗场景培训教练，负责基于证据产出可复用点评。"
+	}
+	return systemPrompt, userPrompt, nil
+}
+
+func (s *Service) buildBenchmarkLLMContextPackage(ctx context.Context, item *BenchmarkClip) (map[string]interface{}, error) {
+	rec, err := s.store.GetRecordingByID(ctx, item.RecordingID)
+	if err != nil || rec == nil {
+		return nil, fmt.Errorf("recording not found")
+	}
+	scene := ""
+	if rec.Scene != nil {
+		scene = string(*rec.Scene)
+	}
+	analysis := map[string]interface{}(rec.AnalysisResult)
+	contextLines := extractTranscriptContextLines(analysis, item.ClipText, 4)
+	dimensionEvidence := extractDimensionEvidence(analysis, item.RoleCode, item.Dimension)
+	summary := extractRoleSummaries(rec)
+	return map[string]interface{}{
+		"role_code":          strings.TrimSpace(item.RoleCode),
+		"dimension":          strings.TrimSpace(item.Dimension),
+		"score":              item.Score,
+		"scene_type":         scene,
+		"recorded_at":        rec.CreatedAt.Format("2006-01-02 15:04:05"),
+		"employee_name":      strings.TrimSpace(rec.EmployeeName),
+		"clip_text":          strings.TrimSpace(item.ClipText),
+		"context_lines":      contextLines,
+		"dimension_evidence": dimensionEvidence,
+		"role_summaries":     summary,
+	}, nil
+}
+
+func extractRoleSummaries(rec *MedicalRecording) []string {
+	out := make([]string, 0, 2)
+	appendIf := func(v *string) {
+		if v == nil {
+			return
+		}
+		s := strings.TrimSpace(*v)
+		if s != "" {
+			if len([]rune(s)) > 120 {
+				s = string([]rune(s)[:120])
+			}
+			out = append(out, s)
+		}
+	}
+	appendIf(rec.DoctorSummary)
+	appendIf(rec.TherapistSummary)
+	appendIf(rec.ConsultantSummary)
+	if len(out) > 2 {
+		return out[:2]
+	}
+	return out
+}
+
+func extractTranscriptContextLines(analysis map[string]interface{}, clipText string, maxLines int) []string {
+	lines := make([]string, 0, maxLines)
+	if strings.TrimSpace(clipText) != "" {
+		lines = append(lines, strings.TrimSpace(clipText))
+	}
+	segments := pickArray(analysis, "timeline_transcript")
+	if len(segments) == 0 {
+		segments = pickArray(analysis, "structured_transcript")
+	}
+	for _, seg := range segments {
+		if len(lines) >= maxLines {
+			break
+		}
+		m, ok := seg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(pickString(m, "text"))
+		if text == "" {
+			text = strings.TrimSpace(pickString(m, "content"))
+		}
+		if text == "" {
+			continue
+		}
+		if containsLine(lines, text) {
+			continue
+		}
+		lines = append(lines, text)
+	}
+	return lines
+}
+
+func containsLine(lines []string, target string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == strings.TrimSpace(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractDimensionEvidence(analysis map[string]interface{}, roleCode, dimension string) []string {
+	out := make([]string, 0, 3)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || looksNegativeText(v) {
+			return
+		}
+		for _, existing := range out {
+			if existing == v {
+				return
+			}
+		}
+		out = append(out, v)
+	}
+	role := strings.TrimSpace(strings.ToLower(roleCode))
+	dim := strings.TrimSpace(dimension)
+	raw := pickMap(analysis, "raw")
+	switch role {
+	case "doctor":
+		items := pickArray(pickMap(raw, "doctor_segue_structured"), "items")
+		prefix := normalizeDoctorDimensionCode(dim) + "-"
+		for _, it := range items {
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			code := strings.TrimSpace(pickString(m, "code"))
+			if !strings.HasPrefix(code, prefix) {
+				continue
+			}
+			if strings.ToUpper(strings.TrimSpace(pickString(m, "result"))) != "Y" {
+				continue
+			}
+			add(pickString(m, "evidence"))
+		}
+	case "therapist":
+		items := pickArray(pickMap(pickMap(raw, "therapist_reset_analysis"), "reset"), "items")
+		prefix := normalizeTherapistDimensionCode(dim) + "-"
+		for _, it := range items {
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			code := strings.TrimSpace(pickString(m, "code"))
+			if !strings.HasPrefix(code, prefix) {
+				continue
+			}
+			result := strings.ToUpper(strings.TrimSpace(pickString(m, "result")))
+			if result != "Y" && result != "U" {
+				continue
+			}
+			add(pickString(m, "evidence"))
+		}
+	default:
+		stages := pickArray(analysis, "stages")
+		for _, st := range stages {
+			m, ok := st.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name := strings.TrimSpace(pickString(m, "name"))
+			if name != dim {
+				continue
+			}
+			add(pickString(m, "evidence"))
+			add(pickString(m, "highlight"))
+		}
+	}
+	return out
+}
+
+func normalizeDoctorDimensionCode(dim string) string {
+	d := strings.ToUpper(strings.TrimSpace(dim))
+	if strings.HasPrefix(d, "G") {
+		return d
+	}
+	switch d {
+	case "建立接诊阶段":
+		return "G1"
+	case "引出信息阶段":
+		return "G2"
+	case "给予信息阶段":
+		return "G3"
+	case "理解患者视角":
+		return "G4"
+	case "结束接诊":
+		return "G5"
+	case "治疗/预防计划":
+		return "G6"
+	default:
+		return d
+	}
+}
+
+func normalizeTherapistDimensionCode(dim string) string {
+	d := strings.ToUpper(strings.TrimSpace(dim))
+	if strings.HasPrefix(d, "D") {
+		return d
+	}
+	switch strings.TrimSpace(dim) {
+	case "治疗铺垫":
+		return "D1"
+	case "互动评估":
+		return "D2"
+	case "专业操作":
+		return "D3"
+	case "顾虑处理":
+		return "D4"
+	case "方案闭环":
+		return "D5"
+	default:
+		return d
+	}
+}
+
+func applyModelParamsToBenchmarkLLMRequest(req *llmgateway.TextInferenceRequest, modelParams JSONObject) {
+	if req == nil || len(modelParams) == 0 {
+		return
+	}
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	if value, ok := modelParams["temperature"]; ok {
+		if v, ok := toFloat64(value); ok {
+			req.Params.Temperature = v
+		}
+	}
+	if value, ok := modelParams["max_tokens"]; ok {
+		if v, ok := toInt(value); ok && v > 0 {
+			req.Params.MaxTokens = v
+		}
+	}
+	if value, ok := modelParams["timeout_seconds"]; ok {
+		if v, ok := toInt(value); ok && v > 0 {
+			req.Params.TimeoutSeconds = v
+		}
+	}
+}
+
+func toFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
+func toInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err == nil {
+			return int(i), true
+		}
+		f, ferr := n.Float64()
+		if ferr != nil {
+			return 0, false
+		}
+		return int(f), true
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, false
+		}
+		return i, true
+	default:
+		return 0, false
+	}
+}
+
+func parseBenchmarkReviewLLMOutput(text string) (string, []string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", nil, false
+	}
+	parse := func(raw string) (string, []string, bool) {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+			return "", nil, false
+		}
+		comment := strings.TrimSpace(pickString(obj, "ai_comment"))
+		pointsRaw := pickArray(obj, "learning_points")
+		points := make([]string, 0, len(pointsRaw))
+		for _, p := range pointsRaw {
+			if s, ok := p.(string); ok && strings.TrimSpace(s) != "" {
+				points = append(points, strings.TrimSpace(s))
+			}
+		}
+		if comment == "" || len(points) == 0 {
+			return "", nil, false
+		}
+		if len(points) > 5 {
+			points = points[:5]
+		}
+		return comment, points, true
+	}
+	if c, p, ok := parse(trimmed); ok {
+		return c, p, true
+	}
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start >= 0 && end > start {
+		return parse(trimmed[start : end+1])
+	}
+	return "", nil, false
 }
 
 func pickPositiveEvidenceForDimension(items []interface{}, groupCode string) string {
