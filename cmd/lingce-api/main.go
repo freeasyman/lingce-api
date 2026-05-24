@@ -21,6 +21,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/mobile"
 	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
@@ -147,6 +148,9 @@ func main() {
 	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken, llmClient)
 	recHandler := recording.NewHandler(recService)
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	mobileService := mobile.NewService(pool, recService)
+	mobileHandler := mobile.NewHandler(mobileService)
+	mobileHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register sysconfig module
 	sysconfigHandler := sysconfig.NewHandler(sysconfigService)
