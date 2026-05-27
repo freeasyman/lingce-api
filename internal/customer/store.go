@@ -126,7 +126,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		FROM customers
 		LEFT JOIN (
 			SELECT customer_id,
-			       MIN(channel) AS first_channel,
+			       MIN(COALESCE(NULLIF(channel_type, ''), 'unknown')) AS first_channel,
 			       COUNT(*)::int AS identity_count
 			FROM customer_identities
 			GROUP BY customer_id

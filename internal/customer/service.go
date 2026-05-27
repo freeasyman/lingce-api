@@ -63,9 +63,6 @@ func (s *Service) CreateCustomer(ctx context.Context, tenantID, createdBy int64,
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if req.Notes == nil || len([]rune(strings.TrimSpace(*req.Notes))) < 10 {
-		return nil, fmt.Errorf("建档备注为必填，且至少 10 个字符")
-	}
 	if req.Phone != nil {
 		trimmed := strings.TrimSpace(*req.Phone)
 		if trimmed == "" {
@@ -80,6 +77,14 @@ func (s *Service) CreateCustomer(ctx context.Context, tenantID, createdBy int64,
 			req.Email = nil
 		} else {
 			req.Email = &trimmed
+		}
+	}
+	if req.Notes != nil {
+		trimmed := strings.TrimSpace(*req.Notes)
+		if trimmed == "" {
+			req.Notes = nil
+		} else {
+			req.Notes = &trimmed
 		}
 	}
 	if req.Phone != nil || req.Email != nil {

@@ -16,6 +16,7 @@ type Config struct {
 	JWT      JWTConfig
 	External ExternalConfig
 	Aliyun   AliyunConfig
+	WeCom    WeComConfig
 	Log      LogConfig
 }
 
@@ -58,6 +59,17 @@ type AliyunConfig struct {
 	SMSTemplateCode string
 	OSSEndpoint     string
 	OSSBucket       string
+}
+
+type WeComConfig struct {
+	SuiteID            string
+	SuiteSecret        string
+	Token              string
+	EncodingAESKey     string
+	CallbackBaseURL    string
+	APIBaseURL         string
+	InstallRedirectURL string
+	InstallAuthType    int
 }
 
 type LogConfig struct {
@@ -117,6 +129,16 @@ func Load() (*Config, error) {
 			SMSTemplateCode: getEnv("ALIYUN_SMS_TEMPLATE_CODE", ""),
 			OSSEndpoint:     getEnv("ALIYUN_OSS_ENDPOINT", ""),
 			OSSBucket:       getEnv("ALIYUN_OSS_BUCKET", ""),
+		},
+		WeCom: WeComConfig{
+			SuiteID:            getEnv("WECOM_SUITE_ID", ""),
+			SuiteSecret:        getEnv("WECOM_SUITE_SECRET", ""),
+			Token:              getEnv("WECOM_TOKEN", ""),
+			EncodingAESKey:     getEnv("WECOM_ENCODING_AES_KEY", ""),
+			CallbackBaseURL:    getEnv("WECOM_CALLBACK_BASE_URL", ""),
+			APIBaseURL:         getEnv("WECOM_API_BASE_URL", "https://qyapi.weixin.qq.com"),
+			InstallRedirectURL: getEnv("WECOM_INSTALL_REDIRECT_URL", ""),
+			InstallAuthType:    getEnvInt("WECOM_INSTALL_AUTH_TYPE", 1),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

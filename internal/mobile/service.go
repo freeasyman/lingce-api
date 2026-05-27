@@ -35,7 +35,7 @@ func (s *Service) GetHome(ctx context.Context, claims *auth.Claims) (*HomeRespon
 		return nil, err
 	}
 
-	todoTasks, todoTotal, err := s.ListTasks(ctx, claims, "todo", 1, 3)
+	todoTasks, todoTotal, err := s.ListTasks(ctx, claims, TaskListParams{Status: "todo", Page: 1, PageSize: 3})
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (s *Service) GetHome(ctx context.Context, claims *auth.Claims) (*HomeRespon
 	if err != nil {
 		return nil, err
 	}
-	recordings, recordingTotal, err := s.ListRecordings(ctx, claims, 1, 3)
+	recordings, recordingTotal, err := s.ListRecordings(ctx, claims, RecordingListParams{Page: 1, PageSize: 3})
 	if err != nil {
 		return nil, err
 	}
@@ -63,15 +63,15 @@ func (s *Service) GetHome(ctx context.Context, claims *auth.Claims) (*HomeRespon
 	}, nil
 }
 
-func (s *Service) ListTasks(ctx context.Context, claims *auth.Claims, status string, page, pageSize int) ([]*recording.TaskResponse, int, error) {
-	if page <= 0 {
-		page = 1
+func (s *Service) ListTasks(ctx context.Context, claims *auth.Claims, params TaskListParams) ([]*recording.TaskResponse, int, error) {
+	if params.Page <= 0 {
+		params.Page = 1
 	}
-	if pageSize <= 0 {
-		pageSize = 20
+	if params.PageSize <= 0 {
+		params.PageSize = 20
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if params.PageSize > 100 {
+		params.PageSize = 100
 	}
 
 	me, err := s.getCurrentEmployee(ctx, claims)
@@ -79,20 +79,22 @@ func (s *Service) ListTasks(ctx context.Context, claims *auth.Claims, status str
 		return nil, 0, err
 	}
 
-	switch strings.ToLower(strings.TrimSpace(status)) {
+	switch strings.ToLower(strings.TrimSpace(params.Status)) {
 	case "", "todo":
-		return s.listTodoTasks(ctx, me, page, pageSize)
+		return s.listTodoTasks(ctx, me, params)
 	case "done":
 		done := recording.TaskStatusCompleted
-		return s.recordingService.ListRecordingTasks(ctx, recording.TaskListRequest{
+		req := recording.TaskListRequest{
 			TenantID:   &me.TenantID,
 			AssignedTo: &me.ID,
 			Status:     &done,
-			Page:       page,
-			PageSize:   pageSize,
-		})
+			Page:       params.Page,
+			PageSize:   params.PageSize,
+		}
+		s.applyTaskFilters(&req, params)
+		return s.recordingService.ListRecordingTasks(ctx, req)
 	default:
-		return nil, 0, fmt.Errorf("unsupported task status: %s", status)
+		return nil, 0, fmt.Errorf("unsupported task status: %s", params.Status)
 	}
 }
 
@@ -126,21 +128,59 @@ func (s *Service) CompleteTask(ctx context.Context, claims *auth.Claims, taskID 
 	return s.recordingService.CompleteTask(ctx, taskID, me.ID, req)
 }
 
-func (s *Service) ListRecordings(ctx context.Context, claims *auth.Claims, page, pageSize int) ([]*recording.RecordingResponse, int, error) {
+func (s *Service) ListRecordings(ctx context.Context, claims *auth.Claims, params RecordingListParams) ([]*recording.RecordingResponse, int, error) {
+	if params.Page <= 0 {
+		params.Page = 1
+	}
+	if params.PageSize <= 0 {
+		params.PageSize = 20
+	}
+	if params.PageSize > 100 {
+		params.PageSize = 100
+	}
 	me, err := s.getCurrentEmployee(ctx, claims)
 	if err != nil {
 		return nil, 0, err
 	}
 	scope := recordingScopeForRole(me.RoleCode)
 	includeShort := false
-	return s.recordingService.ListRecordings(ctx, recording.RecordingListRequest{
+	req := recording.RecordingListRequest{
 		TenantID:     me.TenantID,
 		EmployeeID:   &me.ID,
 		Scope:        &scope,
 		IncludeShort: &includeShort,
-		Page:         page,
-		PageSize:     pageSize,
-	})
+		Page:         params.Page,
+		PageSize:     params.PageSize,
+	}
+	if params.BusinessScope != "" {
+		req.BusinessScope = &params.BusinessScope
+	}
+	if params.Q != "" {
+		req.Keyword = &params.Q
+	}
+	if params.AnalysisStatus != "" {
+		status := recording.RecordingStatus(strings.TrimSpace(params.AnalysisStatus))
+		req.Status = &status
+	}
+	if params.HasTask != nil {
+		req.HasTask = params.HasTask
+	}
+	if params.HasContentSeed != nil {
+		req.HasContentSeed = params.HasContentSeed
+	}
+	if params.CriticalGap != nil {
+		req.CriticalGapOnly = params.CriticalGap
+	}
+	if params.Sort != "" {
+		req.Sort = &params.Sort
+	}
+	if startDate, endDate, err := resolveDateRange(params.DateFrom, params.DateTo, params.TimeRange); err != nil {
+		return nil, 0, err
+	} else {
+		req.StartDate = startDate
+		req.EndDate = endDate
+	}
+	return s.recordingService.ListRecordings(ctx, req)
 }
 
 func (s *Service) GetRecording(ctx context.Context, claims *auth.Claims, recordingID int64) (*recording.RecordingResponse, error) {
@@ -173,12 +213,12 @@ func (s *Service) countTasks(ctx context.Context, claims *auth.Claims, status re
 	return total, err
 }
 
-func (s *Service) listTodoTasks(ctx context.Context, me *EmployeeSummary, page, pageSize int) ([]*recording.TaskResponse, int, error) {
-	pendingTasks, pendingTotal, err := s.fetchAllTasksByStatus(ctx, me, recording.TaskStatusPending)
+func (s *Service) listTodoTasks(ctx context.Context, me *EmployeeSummary, params TaskListParams) ([]*recording.TaskResponse, int, error) {
+	pendingTasks, pendingTotal, err := s.fetchAllTasksByStatus(ctx, me, recording.TaskStatusPending, params)
 	if err != nil {
 		return nil, 0, err
 	}
-	assignedTasks, assignedTotal, err := s.fetchAllTasksByStatus(ctx, me, recording.TaskStatusAssigned)
+	assignedTasks, assignedTotal, err := s.fetchAllTasksByStatus(ctx, me, recording.TaskStatusAssigned, params)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -191,31 +231,33 @@ func (s *Service) listTodoTasks(ctx context.Context, me *EmployeeSummary, page, 
 	})
 
 	total := pendingTotal + assignedTotal
-	start := (page - 1) * pageSize
+	start := (params.Page - 1) * params.PageSize
 	if start >= len(merged) {
 		return []*recording.TaskResponse{}, total, nil
 	}
-	end := start + pageSize
+	end := start + params.PageSize
 	if end > len(merged) {
 		end = len(merged)
 	}
 	return merged[start:end], total, nil
 }
 
-func (s *Service) fetchAllTasksByStatus(ctx context.Context, me *EmployeeSummary, status recording.TaskStatus) ([]*recording.TaskResponse, int, error) {
+func (s *Service) fetchAllTasksByStatus(ctx context.Context, me *EmployeeSummary, status recording.TaskStatus, params TaskListParams) ([]*recording.TaskResponse, int, error) {
 	all := make([]*recording.TaskResponse, 0)
 	page := 1
 	pageSize := 100
 	total := 0
 
 	for {
-		items, itemTotal, err := s.recordingService.ListRecordingTasks(ctx, recording.TaskListRequest{
+		req := recording.TaskListRequest{
 			TenantID:   &me.TenantID,
 			AssignedTo: &me.ID,
 			Status:     &status,
 			Page:       page,
 			PageSize:   pageSize,
-		})
+		}
+		s.applyTaskFilters(&req, params)
+		items, itemTotal, err := s.recordingService.ListRecordingTasks(ctx, req)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -230,6 +272,82 @@ func (s *Service) fetchAllTasksByStatus(ctx context.Context, me *EmployeeSummary
 	}
 
 	return all, total, nil
+}
+
+func (s *Service) applyTaskFilters(req *recording.TaskListRequest, params TaskListParams) {
+	if req == nil {
+		return
+	}
+	if params.Q != "" {
+		req.Keyword = &params.Q
+	}
+	if params.Priority != "" {
+		req.Priority = &params.Priority
+	}
+	if params.DueBucket != "" {
+		req.DueBucket = &params.DueBucket
+	}
+	if params.Sort != "" {
+		req.Sort = &params.Sort
+	}
+	if params.TaskType != "" {
+		taskType := recording.TaskType(strings.TrimSpace(params.TaskType))
+		req.TaskType = &taskType
+	}
+	if startDate, endDate, err := resolveDateRange(params.DateFrom, params.DateTo, ""); err == nil {
+		req.StartDate = startDate
+		req.EndDate = endDate
+	}
+}
+
+func resolveDateRange(dateFrom, dateTo, timeRange string) (*time.Time, *time.Time, error) {
+	if strings.TrimSpace(timeRange) != "" {
+		now := time.Now()
+		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		switch strings.TrimSpace(timeRange) {
+		case "today":
+			start := dayStart
+			end := dayStart.Add(24*time.Hour - time.Second)
+			return &start, &end, nil
+		case "yesterday":
+			start := dayStart.AddDate(0, 0, -1)
+			end := dayStart.Add(-time.Second)
+			return &start, &end, nil
+		case "last_7d":
+			start := dayStart.AddDate(0, 0, -6)
+			end := dayStart.Add(24*time.Hour - time.Second)
+			return &start, &end, nil
+		case "last_30d":
+			start := dayStart.AddDate(0, 0, -29)
+			end := dayStart.Add(24*time.Hour - time.Second)
+			return &start, &end, nil
+		case "this_month":
+			start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+			end := dayStart.Add(24*time.Hour - time.Second)
+			return &start, &end, nil
+		default:
+			return nil, nil, fmt.Errorf("unsupported time_range: %s", timeRange)
+		}
+	}
+
+	var startDate *time.Time
+	var endDate *time.Time
+	if strings.TrimSpace(dateFrom) != "" {
+		parsed, err := time.Parse("2006-01-02", strings.TrimSpace(dateFrom))
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid date_from, expected YYYY-MM-DD")
+		}
+		startDate = &parsed
+	}
+	if strings.TrimSpace(dateTo) != "" {
+		parsed, err := time.Parse("2006-01-02", strings.TrimSpace(dateTo))
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid date_to, expected YYYY-MM-DD")
+		}
+		parsed = parsed.Add(24*time.Hour - time.Second)
+		endDate = &parsed
+	}
+	return startDate, endDate, nil
 }
 
 func (s *Service) getCurrentEmployee(ctx context.Context, claims *auth.Claims) (*EmployeeSummary, error) {

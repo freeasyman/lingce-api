@@ -390,8 +390,19 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='in_use', current_status='assigned_employee', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, employee_phone=NULLIF($6, ''),
-			    assigned_at=NOW(), updated_at=NOW()
+			SET status='in_use',
+			    current_status='in_use',
+			    lifecycle_status='active',
+			    assignment_status='employee',
+			    tenant_id=$2,
+			    tenant_name=$3,
+			    employee_id=$4,
+			    employee_name=$5,
+			    employee_phone=NULLIF($6, ''),
+			    assigned_at=NOW(),
+			    assigned_to_tenant_at=NOW(),
+			    assigned_to_emp_at=NOW(),
+			    updated_at=NOW()
 			WHERE id=$1
 		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
@@ -424,18 +435,19 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 	return success, failed, errors, nil
 }
 
-func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, operatorID int64, operatorName string) (int, int, error) {
+func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, operatorID int64, operatorName string) (int, int, []string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	defer tx.Rollback(ctx)
 	success := 0
 	failed := 0
+	errors := make([]string, 0)
 	for i, deviceID := range req.DeviceIDs {
 		savepoint := fmt.Sprintf("sp_reclaim_%d", i)
 		if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
-			return success, failed, fmt.Errorf("failed to create savepoint: %w", err)
+			return success, failed, errors, fmt.Errorf("failed to create savepoint: %w", err)
 		}
 
 		var deviceNo string
@@ -445,33 +457,55 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
 			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
 			failed++
+			errors = append(errors, fmt.Sprintf("device %d not found", deviceID))
+			continue
+		}
+		if fromStatus != "in_use" && fromStatus != "ready" {
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
+			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
+			failed++
+			errors = append(errors, fmt.Sprintf("device %s status is %s, only in_use or ready devices can be reclaimed", deviceNo, fromStatus))
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status='ready', current_status='reclaimed', lifecycle_status='active', assignment_status='unassigned', tenant_id=NULL, tenant_name=NULL, employee_id=NULL, employee_name=NULL, employee_phone=NULL, updated_at=NOW()
+			SET status='ready',
+			    current_status='ready',
+			    lifecycle_status='active',
+			    assignment_status='unassigned',
+			    tenant_id=NULL,
+			    tenant_name=NULL,
+			    employee_id=NULL,
+			    employee_name=NULL,
+			    employee_phone=NULL,
+			    assigned_at=NULL,
+			    assigned_to_tenant_at=NULL,
+			    assigned_to_emp_at=NULL,
+			    updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
 			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
 			failed++
+			errors = append(errors, fmt.Sprintf("device %s reclaim failed: %v", deviceNo, err))
 			continue
 		}
 		if err := s.v2InsertDeviceLogTx(ctx, tx, deviceID, deviceNo, "reclaim", &fromStatus, strPtr("ready"), &operatorID, &operatorName, strPtr("admin"), JSONObject{"reason": req.Reason}); err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint)
 			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint)
 			failed++
+			errors = append(errors, fmt.Sprintf("device %s log failed: %v", deviceNo, err))
 			continue
 		}
 		if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
-			return success, failed, fmt.Errorf("failed to release savepoint: %w", err)
+			return success, failed, errors, fmt.Errorf("failed to release savepoint: %w", err)
 		}
 		success++
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
-	return success, failed, nil
+	return success, failed, errors, nil
 }
 
 func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRequest, operatorID int64, operatorName string) error {
@@ -490,7 +524,18 @@ func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRe
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE badge_devices
-		SET status='in_use', current_status='assigned_employee', lifecycle_status='active', assignment_status='employee', tenant_id=$2, tenant_name=$3, employee_id=$4, employee_name=$5, assigned_at=NOW(), updated_at=NOW()
+		SET status='in_use',
+		    current_status='in_use',
+		    lifecycle_status='active',
+		    assignment_status='employee',
+		    tenant_id=$2,
+		    tenant_name=$3,
+		    employee_id=$4,
+		    employee_name=$5,
+		    assigned_at=NOW(),
+		    assigned_to_tenant_at=NOW(),
+		    assigned_to_emp_at=NOW(),
+		    updated_at=NOW()
 		WHERE id=$1
 	`, deviceID, req.ToTenantID, req.ToTenantName, req.ToEmployeeID, req.ToEmployeeName); err != nil {
 		return err

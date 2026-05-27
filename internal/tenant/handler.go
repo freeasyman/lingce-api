@@ -244,7 +244,29 @@ func (h *Handler) GetTenantSubscription(w http.ResponseWriter, r *http.Request) 
 	}
 	subscription, err := h.service.GetTenantSubscription(r.Context(), id)
 	if err != nil {
-		httputil.WriteNotFound(w, err.Error())
+		tenant, tErr := h.service.GetTenantByID(r.Context(), id)
+		if tErr != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+		start := "1970-01-01"
+		end := "2099-12-31"
+		if tenant.ValidFrom != nil {
+			start = tenant.ValidFrom.Format("2006-01-02")
+		}
+		if tenant.ValidTo != nil {
+			end = tenant.ValidTo.Format("2006-01-02")
+		}
+		httputil.WriteSuccess(w, map[string]interface{}{
+			"id":         int64(0),
+			"tenant_id":  id,
+			"status":     "active",
+			"start_date": start,
+			"end_date":   end,
+			"created_at": tenant.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at": tenant.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+			"fallback":   true,
+		})
 		return
 	}
 	httputil.WriteSuccess(w, subscription)

@@ -64,8 +64,19 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	items, total, err := h.service.ListTasks(r.Context(), claims, status, page, pageSize)
+	params := TaskListParams{
+		Page:      page,
+		PageSize:  pageSize,
+		Status:    strings.TrimSpace(r.URL.Query().Get("status")),
+		Q:         strings.TrimSpace(r.URL.Query().Get("q")),
+		Priority:  strings.TrimSpace(r.URL.Query().Get("priority")),
+		TaskType:  strings.TrimSpace(r.URL.Query().Get("task_type")),
+		DueBucket: strings.TrimSpace(r.URL.Query().Get("due_bucket")),
+		DateFrom:  strings.TrimSpace(r.URL.Query().Get("date_from")),
+		DateTo:    strings.TrimSpace(r.URL.Query().Get("date_to")),
+		Sort:      strings.TrimSpace(r.URL.Query().Get("sort")),
+	}
+	items, total, err := h.service.ListTasks(r.Context(), claims, params)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -126,9 +137,32 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	items, total, err := h.service.ListRecordings(r.Context(), claims, page, pageSize)
+	params := RecordingListParams{
+		Page:           page,
+		PageSize:       pageSize,
+		Q:              strings.TrimSpace(r.URL.Query().Get("q")),
+		AnalysisStatus: strings.TrimSpace(r.URL.Query().Get("analysis_status")),
+		DateFrom:       strings.TrimSpace(r.URL.Query().Get("date_from")),
+		DateTo:         strings.TrimSpace(r.URL.Query().Get("date_to")),
+		TimeRange:      strings.TrimSpace(r.URL.Query().Get("time_range")),
+		BusinessScope:  strings.TrimSpace(r.URL.Query().Get("business_scope")),
+		Sort:           strings.TrimSpace(r.URL.Query().Get("sort")),
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("has_task")); raw != "" {
+		val := raw == "true" || raw == "1"
+		params.HasTask = &val
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("has_content_seed")); raw != "" {
+		val := raw == "true" || raw == "1"
+		params.HasContentSeed = &val
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("critical_gap")); raw != "" {
+		val := raw == "true" || raw == "1"
+		params.CriticalGap = &val
+	}
+	items, total, err := h.service.ListRecordings(r.Context(), claims, params)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	if page <= 0 {

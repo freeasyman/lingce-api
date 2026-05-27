@@ -29,3 +29,31 @@ type HomeResponse struct {
 	RecentRecordings []*recording.RecordingResponse `json:"recent_recordings"`
 	ServerTime       string                         `json:"server_time"`
 }
+
+type RecordingListParams struct {
+	Page           int
+	PageSize       int
+	Q              string
+	AnalysisStatus string
+	DateFrom       string
+	DateTo         string
+	TimeRange      string
+	BusinessScope  string
+	HasTask        *bool
+	HasContentSeed *bool
+	CriticalGap    *bool
+	Sort           string
+}
+
+type TaskListParams struct {
+	Page      int
+	PageSize  int
+	Status    string
+	Q         string
+	Priority  string
+	TaskType  string
+	DueBucket string
+	DateFrom  string
+	DateTo    string
+	Sort      string
+}

@@ -656,6 +656,46 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 				    override_mode = COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END)
 			  WHERE item_type IS NULL OR item_type = '' OR item_code IS NULL OR item_code = '' OR override_mode IS NULL OR override_mode = ''`,
 		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'learning_center_benchmarks', '标杆学习', '/learning-center/benchmarks', 901, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'learning_center_benchmarks'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_overview', '团队总览', '/management-dashboard/overview', 951, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_overview'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_tracking', '变化追踪', '/management-dashboard/tracking', 952, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_tracking'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_benchmarks', '标杆库', '/management-dashboard/benchmarks', 953, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_benchmarks'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_risks', '风险与待办', '/management-dashboard/risks', 954, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_risks'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_coaching_tasks', '辅导任务', '/management-dashboard/coaching-tasks', 955, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_coaching_tasks'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_meetings_morning', '早会', '/management-dashboard/meetings/morning', 956, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_meetings_morning'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'management_dashboard_meetings_weekly', '周会', '/management-dashboard/meetings/weekly', 957, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'management_dashboard_meetings_weekly'
+		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
 		 SELECT 'frontdesk_recordings', '录音列表', '/frontdesk-recordings', 1151, true, NOW()
 		 WHERE NOT EXISTS (
 		 	SELECT 1 FROM inst_menus WHERE code = 'frontdesk_recordings'
@@ -665,6 +705,54 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		 WHERE NOT EXISTS (
 		 	SELECT 1 FROM inst_menus WHERE code = 'therapist_recordings'
 		 )`,
+		`UPDATE inst_menus
+		    SET name = '标杆学习',
+		        path = '/learning-center/benchmarks',
+		        order_index = COALESCE(order_index, 901),
+		        is_active = true
+		  WHERE code = 'learning_center_benchmarks'`,
+		`UPDATE inst_menus
+		    SET name = '团队总览',
+		        path = '/management-dashboard/overview',
+		        order_index = COALESCE(order_index, 951),
+		        is_active = true
+		  WHERE code = 'management_dashboard_overview'`,
+		`UPDATE inst_menus
+		    SET name = '变化追踪',
+		        path = '/management-dashboard/tracking',
+		        order_index = COALESCE(order_index, 952),
+		        is_active = true
+		  WHERE code = 'management_dashboard_tracking'`,
+		`UPDATE inst_menus
+		    SET name = '标杆库',
+		        path = '/management-dashboard/benchmarks',
+		        order_index = COALESCE(order_index, 953),
+		        is_active = true
+		  WHERE code = 'management_dashboard_benchmarks'`,
+		`UPDATE inst_menus
+		    SET name = '风险与待办',
+		        path = '/management-dashboard/risks',
+		        order_index = COALESCE(order_index, 954),
+		        is_active = true
+		  WHERE code = 'management_dashboard_risks'`,
+		`UPDATE inst_menus
+		    SET name = '辅导任务',
+		        path = '/management-dashboard/coaching-tasks',
+		        order_index = COALESCE(order_index, 955),
+		        is_active = true
+		  WHERE code = 'management_dashboard_coaching_tasks'`,
+		`UPDATE inst_menus
+		    SET name = '早会',
+		        path = '/management-dashboard/meetings/morning',
+		        order_index = COALESCE(order_index, 956),
+		        is_active = true
+		  WHERE code = 'management_dashboard_meetings_morning'`,
+		`UPDATE inst_menus
+		    SET name = '周会',
+		        path = '/management-dashboard/meetings/weekly',
+		        order_index = COALESCE(order_index, 957),
+		        is_active = true
+		  WHERE code = 'management_dashboard_meetings_weekly'`,
 		`UPDATE inst_menus
 		    SET name = '录音列表',
 		        path = '/frontdesk-recordings',
@@ -693,6 +781,26 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		        is_default_for_admin = false,
 		        feature_code = NULL,
 		        feature_name = NULL`,
+		`UPDATE inst_menus
+		    SET is_feature_assignable = true,
+		        is_default_for_admin = true,
+		        feature_code = 'learning_center',
+		        feature_name = '学习中心'
+		  WHERE code = 'learning_center_benchmarks'`,
+		`UPDATE inst_menus
+		    SET is_feature_assignable = true,
+		        is_default_for_admin = true,
+		        feature_code = 'management_dashboard',
+		        feature_name = '管理看板'
+		  WHERE code IN (
+		    'management_dashboard_overview',
+		    'management_dashboard_tracking',
+		    'management_dashboard_benchmarks',
+		    'management_dashboard_risks',
+		    'management_dashboard_coaching_tasks',
+		    'management_dashboard_meetings_morning',
+		    'management_dashboard_meetings_weekly'
+		  )`,
 		`UPDATE inst_menus
 		    SET is_feature_assignable = true,
 		        is_default_for_admin = true,
@@ -1282,12 +1390,77 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			prompt_code VARCHAR(128),
 			model_code VARCHAR(128),
 			llm_request_id VARCHAR(128),
+			used_at TIMESTAMP,
+			used_by BIGINT,
 			is_edited BOOLEAN NOT NULL DEFAULT false,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE (tenant_id, role_code, meeting_date)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_morning_meeting_materials_lookup ON morning_meeting_materials(tenant_id, role_code, meeting_date DESC)`,
+		`ALTER TABLE IF EXISTS morning_meeting_materials ADD COLUMN IF NOT EXISTS used_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS morning_meeting_materials ADD COLUMN IF NOT EXISTS used_by BIGINT`,
+
+		// WeCom third-party integration
+		`CREATE TABLE IF NOT EXISTS wecom_suite_tickets (
+			id BIGSERIAL PRIMARY KEY,
+			suite_id TEXT NOT NULL,
+			suite_ticket TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_suite_tickets_suite_created_at ON wecom_suite_tickets(suite_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS wecom_corp_installs (
+			corp_id TEXT PRIMARY KEY,
+			corp_name TEXT,
+			permanent_code TEXT NOT NULL,
+			agent_id BIGINT NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			cancelled_at TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_corp_installs_status ON wecom_corp_installs(status, updated_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS wecom_user_bindings (
+			id BIGSERIAL PRIMARY KEY,
+			corp_id TEXT NOT NULL,
+			wecom_user_id TEXT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			tenant_id BIGINT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'manual',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (corp_id, wecom_user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_user_bindings_employee_id ON wecom_user_bindings(employee_id)`,
+		`CREATE TABLE IF NOT EXISTS wecom_event_logs (
+			id BIGSERIAL PRIMARY KEY,
+			corp_id TEXT,
+			info_type TEXT NOT NULL,
+			raw_payload TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_event_logs_created_at ON wecom_event_logs(created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS wecom_message_logs (
+			id BIGSERIAL PRIMARY KEY,
+			corp_id TEXT,
+			tenant_id BIGINT NOT NULL DEFAULT 0,
+			employee_id BIGINT NOT NULL DEFAULT 0,
+			wecom_user_id TEXT,
+			message_scene TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			target_url TEXT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			error_message TEXT,
+			request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			response_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			biz_date DATE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_wecom_message_logs_dedupe_key ON wecom_message_logs(dedupe_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_message_logs_employee_created_at ON wecom_message_logs(employee_id, created_at DESC)`,
 	}
 
 	for i, stmt := range stmts {

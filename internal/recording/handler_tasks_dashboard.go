@@ -652,6 +652,30 @@ func (h *Handler) GetMorningMeetingMaterial(w http.ResponseWriter, r *http.Reque
 	httputil.WriteSuccess(w, resp)
 }
 
+func (h *Handler) MarkMorningMeetingUsed(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req MarkMorningMeetingUsedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	resp, err := h.service.MarkMorningMeetingUsed(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 // GetEmployeeGrowth handles getting employee growth
 func (h *Handler) GetEmployeeGrowth(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())

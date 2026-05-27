@@ -43,6 +43,7 @@ const (
 	RecordingScopeDoctor     RecordingScope = "doctor"
 	RecordingScopeConsultant RecordingScope = "consultant"
 	RecordingScopeFrontdesk  RecordingScope = "frontdesk"
+	RecordingScopeTherapist  RecordingScope = "therapist"
 )
 
 // TaskStatus represents the status of a recording task

@@ -101,6 +101,12 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		argIndex++
 	}
 
+	if req.BusinessScope != nil && strings.TrimSpace(*req.BusinessScope) != "" {
+		conditions = append(conditions, fmt.Sprintf("lower(coalesce(r.business_scope, '')) = lower($%d)", argIndex))
+		args = append(args, strings.TrimSpace(*req.BusinessScope))
+		argIndex++
+	}
+
 	if req.Scope != nil {
 		switch *req.Scope {
 		case RecordingScopeDoctor:
@@ -207,10 +213,22 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			COALESCE(sbe.device_no, '') ILIKE $%d OR
 			COALESCE(r.file_url, '') ILIKE $%d OR
 			COALESCE(r.transcription_text, '') ILIKE $%d OR
+			COALESCE(r.analysis_result::text, '') ILIKE $%d OR
+			COALESCE(r.analysis_display::text, '') ILIKE $%d OR
 			COALESCE(r.analysis_display->>'summary', '') ILIKE $%d OR
 			COALESCE(r.analysis_display->>'subjective_summary', '') ILIKE $%d OR
-			COALESCE(r.analysis_display->>'doctor_summary', '') ILIKE $%d
-		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+			COALESCE(r.analysis_display->>'doctor_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'therapist_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'consultant_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'conversation_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'status_summary', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'chief_complaint', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'diagnosis', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'current_state', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'decision_status', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'visit_outcome', '') ILIKE $%d OR
+			COALESCE(r.analysis_display->>'visit_outcome_status', '') ILIKE $%d
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
 		args = append(args, keyword)
 		argIndex++
 	}
@@ -246,14 +264,42 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	if req.StartDate != nil {
-		conditions = append(conditions, fmt.Sprintf("r.created_at >= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("COALESCE(r.recorded_at, r.created_at) >= $%d", argIndex))
 		args = append(args, *req.StartDate)
 		argIndex++
 	}
 
 	if req.EndDate != nil {
-		conditions = append(conditions, fmt.Sprintf("r.created_at <= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("COALESCE(r.recorded_at, r.created_at) <= $%d", argIndex))
 		args = append(args, *req.EndDate)
+		argIndex++
+	}
+
+	if req.HasTask != nil {
+		if *req.HasTask {
+			conditions = append(conditions, "EXISTS (SELECT 1 FROM recording_tasks rt WHERE rt.recording_id = r.id)")
+		} else {
+			conditions = append(conditions, "NOT EXISTS (SELECT 1 FROM recording_tasks rt WHERE rt.recording_id = r.id)")
+		}
+	}
+
+	if req.HasContentSeed != nil {
+		if *req.HasContentSeed {
+			conditions = append(conditions, "EXISTS (SELECT 1 FROM recording_content_seeds rcs WHERE rcs.recording_id = r.id)")
+		} else {
+			conditions = append(conditions, "NOT EXISTS (SELECT 1 FROM recording_content_seeds rcs WHERE rcs.recording_id = r.id)")
+		}
+	}
+
+	if req.CriticalGapOnly != nil {
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(
+				NULLIF(r.analysis_display->>'critical_gap', '')::boolean,
+				NULLIF(r.analysis_result->>'critical_gap', '')::boolean,
+				false
+			) = $%d
+		)`, argIndex))
+		args = append(args, *req.CriticalGapOnly)
 		argIndex++
 	}
 
@@ -312,6 +358,17 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	}
 
 	offset := (req.Page - 1) * req.PageSize
+	orderBy := "COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC"
+	if req.Sort != nil {
+		switch strings.TrimSpace(*req.Sort) {
+		case "recorded_at_asc":
+			orderBy = "COALESCE(r.recorded_at, r.created_at) ASC, r.id ASC"
+		case "duration_desc":
+			orderBy = "COALESCE(r.duration, 0) DESC, r.id DESC"
+		case "duration_asc":
+			orderBy = "COALESCE(r.duration, 0) ASC, r.id ASC"
+		}
+	}
 	query := fmt.Sprintf(`
 		SELECT
 			r.id,
@@ -375,9 +432,9 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		) sbe ON TRUE
 		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE %s
-		ORDER BY r.created_at DESC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, whereClause, orderBy, argIndex, argIndex+1)
 
 	args = append(args, req.PageSize, offset)
 
@@ -879,6 +936,35 @@ func (s *Store) UpdateBenchmarkClipStatus(
 		_ = json.Unmarshal(learningRaw, &item.LearningPoints)
 	}
 	return &item, nil
+}
+
+func (s *Store) UpdateBenchmarkClipContent(
+	ctx context.Context,
+	tenantID int64,
+	id int64,
+	clipText string,
+	aiComment string,
+	learningPoints []string,
+	audioStartSeconds *int,
+	audioEndSeconds *int,
+) (*BenchmarkClip, error) {
+	learningBytes, _ := json.Marshal(learningPoints)
+	if len(learningBytes) == 0 {
+		learningBytes = []byte("[]")
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE benchmark_clips
+		SET clip_text = CASE WHEN NULLIF($3::text, '') IS NOT NULL THEN $3::text ELSE clip_text END,
+		    ai_comment = CASE WHEN NULLIF($4::text, '') IS NOT NULL THEN $4::text ELSE ai_comment END,
+		    learning_points = CASE WHEN jsonb_array_length($5::jsonb) > 0 THEN $5::jsonb ELSE learning_points END,
+		    audio_start_seconds = COALESCE($6, audio_start_seconds),
+		    audio_end_seconds = COALESCE($7, audio_end_seconds),
+		    updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id, strings.TrimSpace(clipText), strings.TrimSpace(aiComment), string(learningBytes), audioStartSeconds, audioEndSeconds); err != nil {
+		return nil, err
+	}
+	return s.GetBenchmarkClipByID(ctx, tenantID, id)
 }
 
 func (s *Store) MarkBenchmarkUsedInMeeting(ctx context.Context, tenantID int64, recordingID int64, roleCode string) (*BenchmarkClip, error) {
@@ -1565,6 +1651,18 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		argIndex++
 	}
 
+	if req.Keyword != nil && strings.TrimSpace(*req.Keyword) != "" {
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(title, '') ILIKE $%d OR
+			COALESCE(description, '') ILIKE $%d OR
+			COALESCE(customer_name, '') ILIKE $%d OR
+			COALESCE(script, '') ILIKE $%d OR
+			COALESCE(contact_reason, '') ILIKE $%d
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.Keyword)+"%")
+		argIndex++
+	}
+
 	if req.Status != nil {
 		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
 		args = append(args, *req.Status)
@@ -1575,6 +1673,44 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		conditions = append(conditions, fmt.Sprintf("source_type = $%d", argIndex))
 		args = append(args, string(*req.TaskType))
 		argIndex++
+	}
+
+	if req.Priority != nil && strings.TrimSpace(*req.Priority) != "" {
+		switch strings.TrimSpace(*req.Priority) {
+		case "high":
+			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) IN ('high', 'h', '1', '高')")
+		case "low":
+			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) IN ('low', 'l', '3', '低')")
+		case "medium":
+			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) NOT IN ('high', 'h', '1', '高', 'low', 'l', '3', '低')")
+		}
+	}
+
+	if req.StartDate != nil {
+		conditions = append(conditions, fmt.Sprintf("due_at >= $%d", argIndex))
+		args = append(args, *req.StartDate)
+		argIndex++
+	}
+
+	if req.EndDate != nil {
+		conditions = append(conditions, fmt.Sprintf("due_at <= $%d", argIndex))
+		args = append(args, *req.EndDate)
+		argIndex++
+	}
+
+	if req.DueBucket != nil && strings.TrimSpace(*req.DueBucket) != "" {
+		switch strings.TrimSpace(*req.DueBucket) {
+		case "overdue":
+			conditions = append(conditions, "due_at IS NOT NULL AND due_at < NOW()")
+		case "today":
+			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) AND due_at < date_trunc('day', NOW()) + INTERVAL '1 day'")
+		case "tomorrow":
+			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) + INTERVAL '1 day' AND due_at < date_trunc('day', NOW()) + INTERVAL '2 day'")
+		case "this_week":
+			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) AND due_at < date_trunc('day', NOW()) + INTERVAL '7 day'")
+		case "no_due_date":
+			conditions = append(conditions, "due_at IS NULL")
+		}
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
@@ -1588,6 +1724,21 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	// Query tasks
 	offset := (req.Page - 1) * req.PageSize
+	orderBy := "created_at DESC"
+	if req.Sort != nil {
+		switch strings.TrimSpace(*req.Sort) {
+		case "due_at_asc":
+			orderBy = "due_at ASC NULLS LAST, created_at DESC"
+		case "due_at_desc":
+			orderBy = "due_at DESC NULLS LAST, created_at DESC"
+		case "priority_desc":
+			orderBy = `CASE
+				WHEN lower(COALESCE(priority, 'medium')) IN ('high', 'h', '1', '高') THEN 3
+				WHEN lower(COALESCE(priority, 'medium')) IN ('low', 'l', '3', '低') THEN 1
+				ELSE 2
+			END DESC, due_at ASC NULLS LAST, created_at DESC`
+		}
+	}
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
 		       customer_name, priority, script, contact_reason, source_type, source_detail,
@@ -1595,9 +1746,9 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by, NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason, created_at, updated_at
 		FROM recording_tasks
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, whereClause, orderBy, argIndex, argIndex+1)
 
 	args = append(args, req.PageSize, offset)
 

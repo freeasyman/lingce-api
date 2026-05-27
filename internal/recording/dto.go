@@ -133,25 +133,30 @@ type ResetCodeDictionaryResponse struct {
 
 // RecordingListRequest represents a request to list medical recordings
 type RecordingListRequest struct {
-	TenantID     int64            `json:"tenant_id"`
-	TenantIDs    []int64          `json:"tenant_ids,omitempty"`
-	RecordingID  *int64           `json:"recording_id,omitempty"`
-	Scope        *RecordingScope  `json:"recording_scope,omitempty"`
-	EmployeeID   *int64           `json:"employee_id,omitempty"`
-	PatientName  *string          `json:"patient_name,omitempty"`
-	Status       *RecordingStatus `json:"status,omitempty"`
-	Scene        *RecordingScene  `json:"scene,omitempty"`
-	Source       *RecordingSource `json:"source,omitempty"`
-	SceneType    *string          `json:"scene_type,omitempty"`
-	VisitOutcome *string          `json:"visit_outcome,omitempty"`
-	IncludeShort *bool            `json:"include_short,omitempty"`
-	SegueMin     *float64         `json:"segue_min,omitempty"`
-	SegueMax     *float64         `json:"segue_max,omitempty"`
-	StartDate    *time.Time       `json:"start_date,omitempty"`
-	EndDate      *time.Time       `json:"end_date,omitempty"`
-	Keyword      *string          `json:"keyword,omitempty"`
-	Page         int              `json:"page"`
-	PageSize     int              `json:"page_size"`
+	TenantID        int64            `json:"tenant_id"`
+	TenantIDs       []int64          `json:"tenant_ids,omitempty"`
+	RecordingID     *int64           `json:"recording_id,omitempty"`
+	Scope           *RecordingScope  `json:"recording_scope,omitempty"`
+	EmployeeID      *int64           `json:"employee_id,omitempty"`
+	BusinessScope   *string          `json:"business_scope,omitempty"`
+	PatientName     *string          `json:"patient_name,omitempty"`
+	Status          *RecordingStatus `json:"status,omitempty"`
+	Scene           *RecordingScene  `json:"scene,omitempty"`
+	Source          *RecordingSource `json:"source,omitempty"`
+	SceneType       *string          `json:"scene_type,omitempty"`
+	VisitOutcome    *string          `json:"visit_outcome,omitempty"`
+	IncludeShort    *bool            `json:"include_short,omitempty"`
+	SegueMin        *float64         `json:"segue_min,omitempty"`
+	SegueMax        *float64         `json:"segue_max,omitempty"`
+	StartDate       *time.Time       `json:"start_date,omitempty"`
+	EndDate         *time.Time       `json:"end_date,omitempty"`
+	Keyword         *string          `json:"keyword,omitempty"`
+	HasTask         *bool            `json:"has_task,omitempty"`
+	HasContentSeed  *bool            `json:"has_content_seed,omitempty"`
+	CriticalGapOnly *bool            `json:"critical_gap_only,omitempty"`
+	Sort            *string          `json:"sort,omitempty"`
+	Page            int              `json:"page"`
+	PageSize        int              `json:"page_size"`
 }
 
 // Recording Statistics DTOs
@@ -331,11 +336,98 @@ type CommunicationAnalysisResponse struct {
 
 // WeeklyMeetingMaterialResponse represents weekly meeting material
 type WeeklyMeetingMaterialResponse struct {
-	WeekStart        string             `json:"week_start"`
-	WeekEnd          string             `json:"week_end"`
-	Highlights       []string           `json:"highlights"`
-	BestPractices    []BestPracticeItem `json:"best_practices"`
-	ImprovementAreas []string           `json:"improvement_areas"`
+	WeekStart                 string                            `json:"week_start"`
+	WeekEnd                   string                            `json:"week_end"`
+	RoleCode                  string                            `json:"role_code,omitempty"`
+	WeekLabel                 string                            `json:"week_label,omitempty"`
+	Highlights                []string                          `json:"highlights"`
+	BestPractices             []BestPracticeItem                `json:"best_practices"`
+	ImprovementAreas          []string                          `json:"improvement_areas"`
+	WeeklyStats               *WeeklyMeetingStats               `json:"weekly_stats,omitempty"`
+	BenchmarkStudy            *WeeklyMeetingBenchmarkStudy      `json:"benchmark_study,omitempty"`
+	ProblemReview             *WeeklyMeetingProblemReview       `json:"problem_review,omitempty"`
+	ActionTracking            []WeeklyMeetingActionTrackingItem `json:"action_tracking,omitempty"`
+	ActionTrackingEmptyReason string                            `json:"action_tracking_empty_reason,omitempty"`
+	NextFocus                 []string                          `json:"next_focus,omitempty"`
+}
+
+type WeeklyMeetingStats struct {
+	TotalRecordings    int64                              `json:"total_recordings"`
+	PreviousRecordings int64                              `json:"previous_recordings"`
+	AvgScore           float64                            `json:"avg_score"`
+	PreviousAvgScore   float64                            `json:"previous_avg_score"`
+	DealCount          int64                              `json:"deal_count"`
+	PreviousDealCount  int64                              `json:"previous_deal_count"`
+	WeakestDimension   string                             `json:"weakest_dimension,omitempty"`
+	DimensionChanges   []WeeklyMeetingDimensionChangeItem `json:"dimension_changes,omitempty"`
+}
+
+type WeeklyMeetingDimensionChangeItem struct {
+	Dimension  string  `json:"dimension"`
+	Current    float64 `json:"current"`
+	Previous   float64 `json:"previous"`
+	Delta      float64 `json:"delta"`
+	Trend      string  `json:"trend,omitempty"`
+	Conclusion string  `json:"conclusion,omitempty"`
+}
+
+type WeeklyMeetingBenchmarkStudy struct {
+	ClipID             int64    `json:"clip_id"`
+	RecordingID        int64    `json:"recording_id"`
+	EmployeeID         int64    `json:"employee_id"`
+	EmployeeName       string   `json:"employee_name"`
+	Dimension          string   `json:"dimension"`
+	Score              float64  `json:"score"`
+	ScoreText          string   `json:"score_text,omitempty"`
+	SceneName          string   `json:"scene_name,omitempty"`
+	InsightSummary     string   `json:"insight_summary,omitempty"`
+	ClipText           string   `json:"clip_text,omitempty"`
+	LearningPoints     []string `json:"learning_points,omitempty"`
+	UsedInMeetings     int64    `json:"used_in_meetings,omitempty"`
+	AudioStartSeconds  *int     `json:"audio_start_seconds,omitempty"`
+	AudioEndSeconds    *int     `json:"audio_end_seconds,omitempty"`
+	AlreadyInBenchmark bool     `json:"already_in_benchmark"`
+}
+
+type WeeklyMeetingProblemReview struct {
+	RecordingID       int64    `json:"recording_id"`
+	EmployeeID        int64    `json:"employee_id"`
+	EmployeeName      string   `json:"employee_name"`
+	SceneName         string   `json:"scene_name,omitempty"`
+	SelectionReason   string   `json:"selection_reason,omitempty"`
+	OverallScore      float64  `json:"overall_score"`
+	OverallScoreText  string   `json:"overall_score_text,omitempty"`
+	PrimaryDimension  string   `json:"primary_dimension,omitempty"`
+	PrimaryScore      float64  `json:"primary_score,omitempty"`
+	PrimaryScoreText  string   `json:"primary_score_text,omitempty"`
+	Evidence          []string `json:"evidence,omitempty"`
+	Diagnosis         string   `json:"diagnosis,omitempty"`
+	CoachingScript    string   `json:"coaching_script,omitempty"`
+	GenerationMethod  string   `json:"generation_method,omitempty"`
+	GenerationStatus  string   `json:"generation_status,omitempty"`
+	FallbackReason    string   `json:"fallback_reason,omitempty"`
+	PromptCode        string   `json:"prompt_code,omitempty"`
+	ModelCode         string   `json:"model_code,omitempty"`
+	LLMRequestID      string   `json:"llm_request_id,omitempty"`
+	AudioStartSeconds *int     `json:"audio_start_seconds,omitempty"`
+	AudioEndSeconds   *int     `json:"audio_end_seconds,omitempty"`
+}
+
+type WeeklyMeetingActionTrackingItem struct {
+	Title            string `json:"title"`
+	DecisionText     string `json:"decision_text,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Outcome          string `json:"outcome,omitempty"`
+	FollowUpAdvice   string `json:"follow_up_advice,omitempty"`
+	Status           string `json:"status,omitempty"`
+	StatusLabel      string `json:"status_label,omitempty"`
+	OwnerName        string `json:"owner_name,omitempty"`
+	DueDate          string `json:"due_date,omitempty"`
+	TaskStatus       string `json:"task_status,omitempty"`
+	TaskStatusLabel  string `json:"task_status_label,omitempty"`
+	Dimension        string `json:"dimension,omitempty"`
+	CurrentScoreText string `json:"current_score_text,omitempty"`
+	DeltaText        string `json:"delta_text,omitempty"`
 }
 
 type MorningMeetingReviewItem struct {
@@ -362,16 +454,34 @@ type MorningMeetingReviewItem struct {
 	ModelCode         string   `json:"model_code,omitempty"`
 	LLMRequestID      string   `json:"llm_request_id,omitempty"`
 	SourceRecordCount int64    `json:"source_record_count,omitempty"`
+	AudioStartSeconds *int     `json:"audio_start_seconds,omitempty"`
+	AudioEndSeconds   *int     `json:"audio_end_seconds,omitempty"`
+	UsedAt            string   `json:"used_at,omitempty"`
 }
 
 type MorningMeetingMaterialResponse struct {
-	MeetingDate      string                    `json:"meeting_date"`
-	ReviewDate       string                    `json:"review_date"`
-	RoleCode         string                    `json:"role_code"`
-	Highlights       []string                  `json:"highlights,omitempty"`
-	BestPractices    []BestPracticeItem        `json:"best_practices,omitempty"`
-	ImprovementAreas []string                  `json:"improvement_areas,omitempty"`
-	TodayReview      *MorningMeetingReviewItem `json:"today_review,omitempty"`
+	MeetingDate       string                     `json:"meeting_date"`
+	ReviewDate        string                     `json:"review_date"`
+	RoleCode          string                     `json:"role_code"`
+	SourceRecordCount int64                      `json:"source_record_count,omitempty"`
+	UsableRecordCount int64                      `json:"usable_record_count,omitempty"`
+	EmptyStateMessage string                     `json:"empty_state_message,omitempty"`
+	Highlights        []string                   `json:"highlights,omitempty"`
+	BestPractices     []BestPracticeItem         `json:"best_practices,omitempty"`
+	ImprovementAreas  []string                   `json:"improvement_areas,omitempty"`
+	TodayReview       *MorningMeetingReviewItem  `json:"today_review,omitempty"`
+	AttentionItems    []string                   `json:"attention_items,omitempty"`
+	PraiseItems       []MorningMeetingPraiseItem `json:"praise_items,omitempty"`
+}
+
+type MorningMeetingPraiseItem struct {
+	Text  string `json:"text"`
+	Quote string `json:"quote,omitempty"`
+}
+
+type MarkMorningMeetingUsedRequest struct {
+	RoleCode    string `json:"role_code"`
+	MeetingDate string `json:"meeting_date"`
 }
 
 // BestPracticeItem represents a best practice item
@@ -782,6 +892,10 @@ type TaskListRequest struct {
 	AssignedTo  *int64      `json:"assigned_to,omitempty"`
 	Status      *TaskStatus `json:"status,omitempty"`
 	TaskType    *TaskType   `json:"task_type,omitempty"`
+	Keyword     *string     `json:"keyword,omitempty"`
+	Priority    *string     `json:"priority,omitempty"`
+	DueBucket   *string     `json:"due_bucket,omitempty"`
+	Sort        *string     `json:"sort,omitempty"`
 	StartDate   *time.Time  `json:"start_date,omitempty"`
 	EndDate     *time.Time  `json:"end_date,omitempty"`
 	Page        int         `json:"page"`

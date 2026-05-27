@@ -9,6 +9,14 @@ CREATE TEMP TABLE tmp_manifest_menus (
 ) ON COMMIT DROP;
 
 INSERT INTO tmp_manifest_menus (code, name, path, order_index) VALUES
+  ('learning_center_benchmarks', '标杆学习', '/learning-center/benchmarks', 901),
+  ('management_dashboard_overview', '团队总览', '/management-dashboard/overview', 951),
+  ('management_dashboard_tracking', '变化追踪', '/management-dashboard/tracking', 952),
+  ('management_dashboard_benchmarks', '标杆库', '/management-dashboard/benchmarks', 953),
+  ('management_dashboard_risks', '风险与待办', '/management-dashboard/risks', 954),
+  ('management_dashboard_coaching_tasks', '辅导任务', '/management-dashboard/coaching-tasks', 955),
+  ('management_dashboard_meetings_morning', '早会', '/management-dashboard/meetings/morning', 956),
+  ('management_dashboard_meetings_weekly', '周会', '/management-dashboard/meetings/weekly', 957),
   ('doctor_recordings', '录音列表', '/doctor-recordings', 1001),
   ('doctor_recordings_ability', '医生列表', '/doctor-recordings/ability', 1002),
   ('doctor_recordings_team_trends', '团队趋势', '/doctor-recordings/team-trends', 1003),
@@ -17,6 +25,7 @@ INSERT INTO tmp_manifest_menus (code, name, path, order_index) VALUES
   ('consultant_recordings_team_ability', '团队能力', '/consultant-recordings/team-ability', 1102),
   ('consultant_recordings_dashboard', '经营看板', '/consultant-recordings/dashboard', 1103),
   ('frontdesk_recordings', '录音列表', '/frontdesk-recordings', 1151),
+  ('therapist_recordings', '录音列表', '/therapist-recordings', 1152),
   ('tasks', '任务列表', '/tasks', 1201),
   ('tasks_board', '任务看板', '/tasks/board', 1202),
   ('tasks_partnerships', '主责人与执行人配置', '/tasks/partnerships', 1203),

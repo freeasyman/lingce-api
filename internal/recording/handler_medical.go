@@ -417,7 +417,9 @@ func (h *Handler) GetWeeklyMeetingMaterial(w http.ResponseWriter, r *http.Reques
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	resp, err := h.service.GetWeeklyMeetingMaterial(r.Context(), tenantID)
+	roleCode := strings.TrimSpace(r.URL.Query().Get("role_code"))
+	weekOffset, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("week_offset")))
+	resp, err := h.service.GetWeeklyMeetingMaterial(r.Context(), tenantID, roleCode, weekOffset)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

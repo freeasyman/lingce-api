@@ -30,6 +30,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 	"github.com/freeasyman/lingce-api/internal/tenant"
+	"github.com/freeasyman/lingce-api/internal/wecom"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/freeasyman/lingce-api/pkg/oss"
@@ -106,6 +107,20 @@ func main() {
 	authService := auth.NewService(authStore, smsClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
+
+	var wecomCrypto *wecom.Crypto
+	if strings.TrimSpace(cfg.WeCom.Token) != "" && strings.TrimSpace(cfg.WeCom.EncodingAESKey) != "" && strings.TrimSpace(cfg.WeCom.SuiteID) != "" {
+		wecomCrypto, err = wecom.NewCrypto(cfg.WeCom.Token, cfg.WeCom.EncodingAESKey, cfg.WeCom.SuiteID)
+		if err != nil {
+			slog.Error("failed to initialize wecom crypto", "error", err)
+			os.Exit(1)
+		}
+	}
+	wecomStore := wecom.NewStore(pool)
+	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL, cfg.WeCom.SuiteID, cfg.WeCom.SuiteSecret)
+	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, wecomCrypto, cfg.WeCom.SuiteID, cfg.JWT.Secret, cfg.JWT.ExpiryHours, cfg.WeCom.CallbackBaseURL, cfg.WeCom.InstallRedirectURL, cfg.WeCom.InstallAuthType)
+	wecomHandler := wecom.NewHandler(wecomService, cfg.External.LingceWorkerToken)
+	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
 	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)

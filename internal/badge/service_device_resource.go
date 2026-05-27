@@ -542,11 +542,11 @@ func (s *Service) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest,
 	if len(req.DeviceIDs) == 0 {
 		return nil, fmt.Errorf("device_ids is required")
 	}
-	success, failed, err := s.store.V2BatchReclaim(ctx, req, operatorID, operatorName)
+	success, failed, errors, err := s.store.V2BatchReclaim(ctx, req, operatorID, operatorName)
 	if err != nil {
 		return nil, err
 	}
-	return JSONObject{"success": success, "failed": failed}, nil
+	return JSONObject{"success": success, "failed": failed, "errors": errors}, nil
 }
 
 func (s *Service) V2Transfer(ctx context.Context, id int64, req V2TransferRequest, operatorID int64, operatorName string) error {

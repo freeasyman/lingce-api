@@ -1729,10 +1729,86 @@ func buildBenchmarkCommentAndPoints(item *BenchmarkClip) (string, []string) {
 	if dim == "" {
 		dim = "关键沟通"
 	}
-	return fmt.Sprintf("该片段在%s维度表现较好，表达清晰、节奏稳定，适合用于团队复盘讲评。", dim), []string{
-		"先明确对方具体情境，再给针对性回应",
-		"使用容易理解的表述，减少抽象术语",
-		"结尾给出明确下一步，形成沟通闭环",
+	role := normalizeMorningMeetingRole(item.RoleCode)
+	switch role {
+	case "consultant":
+		switch dim {
+		case "问题放大":
+			return "把潜在风险和后果说具体，让客户从“知道问题”走向“感到需要现在处理”。", []string{
+				"用生活场景或未来后果把风险说具体，不只停留在抽象判断。",
+				"把放大点和客户自己的年龄、职业或当前困扰绑定起来。",
+				"放大后顺势收回到行动建议，避免只制造压力不承接。",
+			}
+		case "需求探索":
+			return "通过连续追问把客户真实诉求问透，为后续方案推荐建立清晰依据。", []string{
+				"先问需求和顾虑，再进入方案介绍。",
+				"围绕客户背景连续追问，不满足于一句笼统回答。",
+				"把问到的信息及时收束成后续推荐依据。",
+			}
+		case "异议化解":
+			return "先接住顾虑，再用具体对比或案例回应，让客户更容易继续往下决策。", []string{
+				"先复述顾虑，避免一上来反驳。",
+				"多用案例、对比和具体场景，而不是空泛保证。",
+				"回应后重新拉回客户自己的决策条件。",
+			}
+		case "专业呈现":
+			return "用客户听得懂的专业表达建立信任，而不是堆砌术语和参数。", []string{
+				"优先讲客户能理解的专业依据。",
+				"把专业点和客户当下问题直接关联起来。",
+				"避免只有结论，没有解释过程。",
+			}
+		case "方案定制":
+			return "方案不是平铺选项，而是基于客户情况做针对性匹配。", []string{
+				"先明确客户条件，再给个性化推荐。",
+				"说明为什么这个方案更适合她，而不是罗列全部方案。",
+				"把推荐理由说到客户能复述出来的程度。",
+			}
+		case "成交促成", "促成与收尾":
+			return "在客户已被说服的基础上，顺势把决策往前推一步，而不是停在模糊态。", []string{
+				"识别客户已经松动的信号，及时收口。",
+				"给出明确下一步，而不是把决定悬空。",
+				"收尾时同步确认时间、流程或动作。",
+			}
+		default:
+			return fmt.Sprintf("该片段在%s维度有较强可复制性，适合拆成团队可复用的话术动作。", dim), []string{
+				"先识别这段对话里最关键的高分动作。",
+				"把动作拆成团队可模仿的表达方式。",
+				"复盘时重点讲“为什么有效”，不是只讲“说了什么”。",
+			}
+		}
+	case "doctor":
+		return "这段接诊对话覆盖了清晰的关键动作，适合拿来示范医生如何稳定推进沟通节奏。", []string{
+			"按接诊阶段推进，不随意跳步。",
+			"先回应患者视角，再进入专业建议。",
+			"把关键解释说到患者能听懂、能配合。",
+		}
+	case "therapist":
+		switch dim {
+		case "互动评估":
+			return "治疗过程中持续确认即时体感反馈，让评估和操作形成同步闭环。", []string{
+				"边操作边确认患者体感，不等结束后再问。",
+				"把反馈立即用于调整动作和判断反应。",
+				"让患者知道每一步为什么这样做。",
+			}
+		case "治疗铺垫":
+			return "治疗前先把症状、影响和预期讲清楚，为后续干预建立共同起点。", []string{
+				"先确认主诉和影响场景，再进入操作。",
+				"提前说明接下来会做什么、为什么做。",
+				"让患者在开始前就建立清晰预期。",
+			}
+		default:
+			return fmt.Sprintf("该片段在%s维度体现了标准化治疗沟通动作，适合团队复盘复用。", dim), []string{
+				"把关键动作说清楚，让患者跟得上治疗过程。",
+				"在治疗中持续确认理解和感受。",
+				"把这类动作沉淀成团队标准流程。",
+			}
+		}
+	default:
+		return fmt.Sprintf("该片段在%s维度表现较好，适合用于团队复盘讲评。", dim), []string{
+			"先明确对方具体情境，再给针对性回应。",
+			"使用容易理解的表述，减少抽象术语。",
+			"结尾给出明确下一步，形成沟通闭环。",
+		}
 	}
 }
 
@@ -1747,15 +1823,17 @@ func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantI
 	if s.llmClient == nil || item == nil {
 		return fallbackComment, fallbackPoints
 	}
-	systemPrompt, userPrompt, err := s.loadBenchmarkReviewPrompt(ctx, tenantID)
+	llmCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	systemPrompt, userPrompt, err := s.loadBenchmarkReviewPrompt(llmCtx, tenantID)
 	if err != nil || strings.TrimSpace(userPrompt) == "" {
 		return fallbackComment, fallbackPoints
 	}
-	model, err := s.resolveBenchmarkLLMModelConfig(ctx, tenantID)
+	model, err := s.resolveBenchmarkLLMModelConfig(llmCtx, tenantID)
 	if err != nil {
 		return fallbackComment, fallbackPoints
 	}
-	pkg, err := s.buildBenchmarkLLMContextPackage(ctx, item)
+	pkg, err := s.buildBenchmarkLLMContextPackage(llmCtx, item)
 	if err != nil {
 		return fallbackComment, fallbackPoints
 	}
@@ -1775,12 +1853,12 @@ func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantI
 		Params: &llmgateway.Params{
 			Temperature:    0.2,
 			MaxTokens:      900,
-			TimeoutSeconds: 45,
+			TimeoutSeconds: 2,
 			ResponseFormat: "json",
 		},
 	}
 	applyModelParamsToBenchmarkLLMRequest(&llmReq, model.ModelParams)
-	resp, err := s.llmClient.TextInference(ctx, llmReq)
+	resp, err := s.llmClient.TextInference(llmCtx, llmReq)
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
 		return fallbackComment, fallbackPoints
 	}
@@ -1989,6 +2067,13 @@ func extractDimensionEvidence(analysis map[string]interface{}, roleCode, dimensi
 			}
 			add(pickString(m, "evidence"))
 		}
+		if len(out) == 0 {
+			for _, text := range pickStringSlice(pickArray(analysis, "highlights")) {
+				add(text)
+			}
+			add(pickString(analysis, "critical_summary"))
+			add(pickString(analysis, "report"))
+		}
 	case "therapist":
 		items := pickArray(pickMap(pickMap(raw, "therapist_reset_analysis"), "reset"), "items")
 		prefix := normalizeTherapistDimensionCode(dim) + "-"
@@ -2007,8 +2092,18 @@ func extractDimensionEvidence(analysis map[string]interface{}, roleCode, dimensi
 			}
 			add(pickString(m, "evidence"))
 		}
+		if len(out) == 0 {
+			for _, text := range pickStringSlice(pickArray(analysis, "highlights")) {
+				add(text)
+			}
+			add(pickString(analysis, "critical_summary"))
+			add(pickString(analysis, "report"))
+		}
 	default:
 		stages := pickArray(analysis, "stages")
+		if len(stages) == 0 {
+			stages = pickArray(pickMap(analysis, "quality_score"), "stages")
+		}
 		for _, st := range stages {
 			m, ok := st.(map[string]interface{})
 			if !ok {
@@ -2020,6 +2115,13 @@ func extractDimensionEvidence(analysis map[string]interface{}, roleCode, dimensi
 			}
 			add(pickString(m, "evidence"))
 			add(pickString(m, "highlight"))
+			add(pickString(m, "highlight_narrative"))
+		}
+		if len(out) == 0 {
+			for _, text := range pickStringSlice(pickArray(analysis, "key_quotes")) {
+				add(text)
+			}
+			add(pickString(analysis, "report"))
 		}
 	}
 	return out
@@ -5527,6 +5629,8 @@ type morningMeetingCandidate struct {
 	EmployeeName     string
 	SceneName        string
 	RecordedAt       time.Time
+	DurationSeconds  int64
+	TranscriptText   string
 	QualityScore     float64
 	Analysis         map[string]interface{}
 	DimensionScores  map[string]float64
@@ -5542,6 +5646,9 @@ type morningMeetingCandidate struct {
 	DropDimension    string
 	DropAmount       float64
 	DropBaseline     float64
+	InvalidReason    string
+	AudioStartSecond *int
+	AudioEndSecond   *int
 }
 
 type morningMeetingMaterialRow struct {
@@ -5564,6 +5671,7 @@ type morningMeetingMaterialRow struct {
 	PromptCode       string
 	ModelCode        string
 	LLMRequestID     string
+	UsedAt           *time.Time
 }
 
 func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, meetingDate string) (*MorningMeetingMaterialResponse, error) {
@@ -5582,23 +5690,39 @@ func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64,
 	}
 
 	resp := &MorningMeetingMaterialResponse{
-		MeetingDate:      meetDate.Format("2006-01-02"),
-		ReviewDate:       reviewDate.Format("2006-01-02"),
-		RoleCode:         role,
-		Highlights:       []string{},
-		BestPractices:    []BestPracticeItem{},
-		ImprovementAreas: []string{},
-		AttentionItems:   []string{},
-		PraiseItems:      []MorningMeetingPraiseItem{},
+		MeetingDate:       meetDate.Format("2006-01-02"),
+		ReviewDate:        reviewDate.Format("2006-01-02"),
+		RoleCode:          role,
+		SourceRecordCount: int64(len(candidates)),
+		Highlights:        []string{},
+		BestPractices:     []BestPracticeItem{},
+		ImprovementAreas:  []string{},
+		AttentionItems:    []string{},
+		PraiseItems:       []MorningMeetingPraiseItem{},
 	}
 	if len(candidates) == 0 {
+		resp.EmptyStateMessage = "所选日期前一天暂无录音，今日早会暂无可自动生成素材。"
 		return resp, nil
 	}
 
 	resp.AttentionItems = s.buildMorningMeetingAttentionItems(ctx, tenantID, role, reviewDate, candidates)
-	resp.PraiseItems = s.buildMorningMeetingPraiseItems(role, candidates)
+	usableCandidates := filterUsableMorningMeetingCandidates(candidates)
+	resp.UsableRecordCount = int64(len(usableCandidates))
+	if len(usableCandidates) == 0 {
+		fallbackDate, fallbackCandidates, fallbackErr := s.findRecentUsableMorningMeetingCandidates(ctx, tenantID, role, reviewDate, 7)
+		if fallbackErr == nil && len(fallbackCandidates) > 0 {
+			usableCandidates = fallbackCandidates
+			resp.AttentionItems = append([]string{fmt.Sprintf("昨日无可直接讲评录音，已回退到 %s 最近一条可复盘录音。", fallbackDate.Format("2006-01-02"))}, resp.AttentionItems...)
+			reviewDate = fallbackDate
+		} else {
+			resp.EmptyStateMessage = "昨日有录音，但转写或分析证据不足，暂不建议直接用于讲评。请先补齐录音质量与分析结果。"
+			resp.AttentionItems = append([]string{"昨日有录音，但可用于讲评的有效对话不足，请优先复核录音完整性。"}, resp.AttentionItems...)
+			return resp, nil
+		}
+	}
+	resp.PraiseItems = s.buildMorningMeetingPraiseItems(role, usableCandidates)
 
-	selected := selectMorningMeetingCandidate(role, candidates)
+	selected := selectMorningMeetingCandidate(role, usableCandidates)
 	material, err := s.ensureMorningMeetingMaterial(ctx, tenantID, role, meetDate, reviewDate, selected)
 	if err != nil {
 		return nil, err
@@ -5626,9 +5750,51 @@ func (s *Service) GetMorningMeetingMaterial(ctx context.Context, tenantID int64,
 		PromptCode:        material.PromptCode,
 		ModelCode:         material.ModelCode,
 		LLMRequestID:      material.LLMRequestID,
-		SourceRecordCount: int64(len(candidates)),
+		SourceRecordCount: int64(len(usableCandidates)),
+		AudioStartSeconds: selected.AudioStartSecond,
+		AudioEndSeconds:   selected.AudioEndSecond,
+	}
+	if material.UsedAt != nil {
+		resp.TodayReview.UsedAt = material.UsedAt.Format(time.RFC3339)
 	}
 	return resp, nil
+}
+
+func (s *Service) findRecentUsableMorningMeetingCandidates(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time, maxDays int) (time.Time, []morningMeetingCandidate, error) {
+	if maxDays <= 0 {
+		maxDays = 7
+	}
+	for i := 1; i <= maxDays; i++ {
+		targetDate := reviewDate.AddDate(0, 0, -i)
+		candidates, err := s.listMorningMeetingCandidates(ctx, tenantID, roleCode, targetDate)
+		if err != nil {
+			return time.Time{}, nil, err
+		}
+		usable := filterUsableMorningMeetingCandidates(candidates)
+		if len(usable) > 0 {
+			return targetDate, usable, nil
+		}
+	}
+	return time.Time{}, nil, nil
+}
+
+func (s *Service) MarkMorningMeetingUsed(ctx context.Context, tenantID int64, usedBy int64, req MarkMorningMeetingUsedRequest) (*MorningMeetingMaterialResponse, error) {
+	role := normalizeMorningMeetingRole(req.RoleCode)
+	if role == "" {
+		return nil, fmt.Errorf("role_code is required")
+	}
+	meetingDate, err := parseMorningMeetingDate(req.MeetingDate)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.pool.Exec(ctx, `
+		UPDATE morning_meeting_materials
+		SET used_at = NOW(), used_by = $4, updated_at = NOW()
+		WHERE tenant_id = $1 AND role_code = $2 AND meeting_date = $3
+	`, tenantID, role, meetingDate.Format("2006-01-02"), usedBy); err != nil {
+		return nil, fmt.Errorf("failed to mark morning meeting used: %w", err)
+	}
+	return s.GetMorningMeetingMaterial(ctx, tenantID, role, meetingDate.Format("2006-01-02"))
 }
 
 func (s *Service) buildMorningMeetingAttentionItems(ctx context.Context, tenantID int64, roleCode string, reviewDate time.Time, candidates []morningMeetingCandidate) []string {
@@ -5781,104 +5947,1035 @@ func (s *Service) buildMorningMeetingPraiseItems(roleCode string, candidates []m
 	if len(candidates) == 0 {
 		return nil
 	}
-	best := pickMorningMeetingPraiseCandidate(roleCode, candidates)
-	if best == nil {
+	signal := pickMorningMeetingPraiseSignal(roleCode, candidates)
+	if signal == nil {
 		return nil
 	}
-	scoreText := best.PrimaryScoreText
-	if normalizeMorningMeetingRole(roleCode) == "consultant" && isMorningMeetingPerfectScore(roleCode, best.PrimaryScore) {
-		scoreText = "5分满分"
-	}
-	text := fmt.Sprintf("%s 录音 #%d %s %s", best.EmployeeName, best.RecordingID, best.PrimaryDimension, scoreText)
-	if !isMorningMeetingPerfectScore(roleCode, best.PrimaryScore) && !isMorningMeetingStrongScore(roleCode, best.PrimaryScore) {
-		text = fmt.Sprintf("%s 录音 #%d %s %s（昨日相对最好）", best.EmployeeName, best.RecordingID, best.PrimaryDimension, scoreText)
-	}
-	quote := ""
-	if len(best.Evidence) > 0 {
-		quote = truncateText(strings.TrimSpace(best.Evidence[0]), 40)
-	}
-	return []MorningMeetingPraiseItem{{Text: text, Quote: quote}}
+	return []MorningMeetingPraiseItem{{
+		Text:  signal.Text,
+		Quote: signal.Quote,
+	}}
 }
 
-func pickMorningMeetingPraiseCandidate(roleCode string, candidates []morningMeetingCandidate) *morningMeetingCandidate {
-	var (
-		perfect *morningMeetingCandidate
-		strong  *morningMeetingCandidate
-		best    *morningMeetingCandidate
-	)
+type morningMeetingPraiseSignal struct {
+	Text     string
+	Quote    string
+	Score    float64
+	Priority int
+}
+
+func pickMorningMeetingPraiseSignal(roleCode string, candidates []morningMeetingCandidate) *morningMeetingPraiseSignal {
+	var best *morningMeetingPraiseSignal
 	for i := range candidates {
-		item := &candidates[i]
-		if best == nil || item.OverallScore > best.OverallScore {
-			best = item
-		}
-		if isMorningMeetingPerfectScore(roleCode, item.PrimaryScore) {
-			if perfect == nil || item.PrimaryScore > perfect.PrimaryScore || (item.PrimaryScore == perfect.PrimaryScore && item.OverallScore > perfect.OverallScore) {
-				perfect = item
-			}
+		item := candidates[i]
+		signal := buildMorningMeetingPraiseSignal(roleCode, item)
+		if signal == nil {
 			continue
 		}
-		if isMorningMeetingStrongScore(roleCode, item.PrimaryScore) {
-			if strong == nil || item.PrimaryScore > strong.PrimaryScore || (item.PrimaryScore == strong.PrimaryScore && item.OverallScore > strong.OverallScore) {
-				strong = item
-			}
+		if best == nil ||
+			signal.Priority > best.Priority ||
+			(signal.Priority == best.Priority && signal.Score > best.Score) {
+			best = signal
 		}
-	}
-	if perfect != nil {
-		return perfect
-	}
-	if strong != nil {
-		return strong
 	}
 	return best
 }
 
-func isMorningMeetingPerfectScore(roleCode string, score float64) bool {
-	if normalizeMorningMeetingRole(roleCode) == "consultant" {
-		return roundFloat(score, 1) >= 5
+func isMorningMeetingPraiseUsable(item morningMeetingCandidate) bool {
+	if strings.TrimSpace(item.InvalidReason) != "" {
+		return false
 	}
-	return roundFloat(score, 1) >= 100
+	if item.PrimaryScore <= 0 || strings.TrimSpace(item.PrimaryDimension) == "" {
+		return false
+	}
+	if len(item.Evidence) == 0 {
+		return false
+	}
+	if looksNegativeText(item.Evidence[0]) {
+		return false
+	}
+	return true
 }
 
-func isMorningMeetingStrongScore(roleCode string, score float64) bool {
-	if normalizeMorningMeetingRole(roleCode) == "consultant" {
-		return roundFloat(score, 1) >= 4.5
+func buildMorningMeetingPraiseSignal(roleCode string, item morningMeetingCandidate) *morningMeetingPraiseSignal {
+	if !isMorningMeetingPraiseUsable(item) {
+		return nil
 	}
-	return roundFloat(score, 1) >= 90
+	dimension, score := pickHighestMorningScore(item.DimensionScores)
+	if strings.TrimSpace(dimension) == "" || score <= 0 {
+		dimension = item.PrimaryDimension
+		score = item.PrimaryScore
+	}
+	if strings.TrimSpace(dimension) == "" || score <= 0 {
+		return nil
+	}
+	evidence := extractDimensionEvidence(item.Analysis, roleCode, dimension)
+	if len(evidence) == 0 {
+		evidence = extractMorningFallbackEvidence(roleCode, item.Analysis, item.Narrative)
+	}
+	quote := ""
+	if len(evidence) > 0 {
+		quote = truncateText(strings.TrimSpace(evidence[0]), 60)
+	}
+	if quote == "" {
+		return nil
+	}
+	scoreText := morningMeetingDimensionScoreText(roleCode, score)
+	if normalizeMorningMeetingRole(roleCode) == "consultant" && roundFloat(score, 1) >= 5 {
+		scoreText = "5分满分"
+	}
+	priority := morningMeetingPraisePriority(roleCode, score)
+	if priority <= 0 {
+		return nil
+	}
+	text := fmt.Sprintf("%s 昨日%s有一处做得比较扎实（%s）", item.EmployeeName, dimension, scoreText)
+	if priority >= 3 {
+		text = fmt.Sprintf("%s 昨日%s有一处做得很好（%s）", item.EmployeeName, dimension, scoreText)
+	}
+	return &morningMeetingPraiseSignal{
+		Text:     text,
+		Quote:    buildMorningMeetingPraiseQuote(roleCode, dimension, quote),
+		Score:    score,
+		Priority: priority,
+	}
+}
+
+func pickHighestMorningScore(scores map[string]float64) (string, float64) {
+	if len(scores) == 0 {
+		return "", 0
+	}
+	bestDim := ""
+	bestScore := -1.0
+	for dim, score := range scores {
+		if score > bestScore {
+			bestDim = dim
+			bestScore = score
+		}
+	}
+	return bestDim, roundFloat(bestScore, 1)
+}
+
+func morningMeetingPraisePriority(roleCode string, score float64) int {
+	if normalizeMorningMeetingRole(roleCode) == "consultant" {
+		switch {
+		case roundFloat(score, 1) >= 5:
+			return 4
+		case roundFloat(score, 1) >= 4:
+			return 3
+		case roundFloat(score, 1) >= 3:
+			return 2
+		default:
+			return 0
+		}
+	}
+	switch {
+	case roundFloat(score, 1) >= 90:
+		return 4
+	case roundFloat(score, 1) >= 80:
+		return 3
+	case roundFloat(score, 1) >= 70:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func buildMorningMeetingPraiseQuote(roleCode, dimension, quote string) string {
+	role := normalizeMorningMeetingRole(roleCode)
+	switch role {
+	case "consultant":
+		if strings.Contains(dimension, "需求探索") {
+			return fmt.Sprintf("先把客户场景和真实顾虑问出来，再往下讲方案。原话：%s", quote)
+		}
+		if strings.Contains(dimension, "异议化解") {
+			return fmt.Sprintf("先接住顾虑，再回应担心，不跟客户硬顶。原话：%s", quote)
+		}
+		if strings.Contains(dimension, "促成") {
+			return fmt.Sprintf("把下一步动作说具体，客户更容易往前走。原话：%s", quote)
+		}
+		return fmt.Sprintf("这句表达能看出动作是落地的，不是空讲。原话：%s", quote)
+	case "doctor":
+		if strings.Contains(dimension, "引出信息") {
+			return fmt.Sprintf("先把患者情况问清，再进入解释，接诊会稳很多。原话：%s", quote)
+		}
+		if strings.Contains(dimension, "理解患者视角") {
+			return fmt.Sprintf("先接住患者担心，再给医学解释，更容易建立信任。原话：%s", quote)
+		}
+		return fmt.Sprintf("这句体现了可复用的接诊动作。原话：%s", quote)
+	default:
+		if strings.Contains(dimension, "互动评估") {
+			return fmt.Sprintf("做完动作立刻确认体感变化，后续判断才有依据。原话：%s", quote)
+		}
+		if strings.Contains(dimension, "专业操作") {
+			return fmt.Sprintf("边做边解释关键点，患者会更容易理解和配合。原话：%s", quote)
+		}
+		if strings.Contains(dimension, "方案闭环") {
+			return fmt.Sprintf("把下一步说清楚，患者更知道回去该怎么做。原话：%s", quote)
+		}
+		return fmt.Sprintf("这句能直接拿来做团队动作示范。原话：%s", quote)
+	}
 }
 
 // GetWeeklyMeetingMaterial retrieves weekly meeting material
-func (s *Service) GetWeeklyMeetingMaterial(ctx context.Context, tenantID int64) (*WeeklyMeetingMaterialResponse, error) {
-	now := time.Now()
-	weekStart := now.AddDate(0, 0, -6)
-	stats, err := s.store.GetStatsOverview(ctx, tenantID, nil, nil)
+func (s *Service) GetWeeklyMeetingMaterial(ctx context.Context, tenantID int64, roleCode string, weekOffset int) (*WeeklyMeetingMaterialResponse, error) {
+	role := normalizeMorningMeetingRole(roleCode)
+	if role == "" {
+		role = "consultant"
+	}
+	weekStart, weekEnd := weeklyMeetingWindow(time.Now(), weekOffset)
+	prevWeekStart := weekStart.AddDate(0, 0, -7)
+	prevWeekEnd := weekEnd.AddDate(0, 0, -7)
+
+	currentCandidates, err := s.listWeeklyMeetingCandidates(ctx, tenantID, role, weekStart, weekEnd)
 	if err != nil {
 		return nil, err
 	}
-	practices, err := s.store.ListBestPractices(ctx, tenantID)
+	previousCandidates, err := s.listWeeklyMeetingCandidates(ctx, tenantID, role, prevWeekStart, prevWeekEnd)
 	if err != nil {
 		return nil, err
 	}
-	best := make([]BestPracticeItem, 0, len(practices))
-	for i, p := range practices {
-		if i >= 5 {
-			break
-		}
-		best = append(best, BestPracticeItem{
-			RecordingID: p.RecordingID,
-			Title:       p.Title,
-			Description: strOrDefault(p.Description, ""),
+
+	usableCurrent := filterUsableMorningMeetingCandidates(currentCandidates)
+	usablePrevious := filterUsableMorningMeetingCandidates(previousCandidates)
+	weeklyStats := s.buildWeeklyMeetingStats(ctx, tenantID, role, weekStart, weekEnd, prevWeekStart, prevWeekEnd, currentCandidates, previousCandidates)
+	benchmarkStudy := s.selectWeeklyBenchmarkStudy(ctx, tenantID, role, weeklyStats)
+	problemReview := s.buildWeeklyProblemReview(ctx, tenantID, role, usableCurrent)
+	actionTracking, actionTrackingEmptyReason := s.buildWeeklyActionTracking(ctx, tenantID, role, prevWeekStart, prevWeekEnd, weekEnd, weeklyStats)
+	nextFocus := s.buildWeeklyNextFocus(role, weeklyStats, benchmarkStudy, problemReview, actionTracking)
+
+	highlights := []string{
+		fmt.Sprintf("本周录音 %d 条（上周 %d）", len(currentCandidates), len(previousCandidates)),
+		fmt.Sprintf("本周团队均分 %s（上周 %s）", formatWeeklyScoreText(role, averageWeeklyOverallScore(usableCurrent)), formatWeeklyScoreText(role, averageWeeklyOverallScore(usablePrevious))),
+	}
+	if weeklyStats != nil && normalizeMorningMeetingRole(role) == "consultant" {
+		highlights = append(highlights, fmt.Sprintf("本周成交 %d 单（上周 %d）", weeklyStats.DealCount, weeklyStats.PreviousDealCount))
+	}
+
+	bestPractices := make([]BestPracticeItem, 0, 1)
+	if benchmarkStudy != nil {
+		bestPractices = append(bestPractices, BestPracticeItem{
+			RecordingID:  benchmarkStudy.RecordingID,
+			Title:        fmt.Sprintf("%s · %s", benchmarkStudy.Dimension, benchmarkStudy.EmployeeName),
+			Description:  benchmarkStudy.InsightSummary,
+			EmployeeName: benchmarkStudy.EmployeeName,
 		})
 	}
+	improvementAreas := []string{}
+	if problemReview != nil {
+		improvementAreas = append(improvementAreas, fmt.Sprintf("%s：%s", problemReview.EmployeeName, problemReview.PrimaryDimension))
+	}
+	if weeklyStats != nil && strings.TrimSpace(weeklyStats.WeakestDimension) != "" {
+		improvementAreas = append(improvementAreas, fmt.Sprintf("团队共性短板：%s", weeklyStats.WeakestDimension))
+	}
+
 	return &WeeklyMeetingMaterialResponse{
-		WeekStart: weekStart.Format("2006-01-02"),
-		WeekEnd:   now.Format("2006-01-02"),
-		Highlights: []string{
-			fmt.Sprintf("本周累计处理录音 %d 条", stats.TotalRecordings),
-			fmt.Sprintf("本周完成率 %.1f%%", safeRate(stats.CompletedRecordings, stats.TotalRecordings)),
-		},
-		BestPractices:    best,
-		ImprovementAreas: []string{"关注失败和待处理录音", "持续优化跟进动作闭环"},
+		WeekStart:                 weekStart.Format("2006-01-02"),
+		WeekEnd:                   weekEnd.Format("2006-01-02"),
+		RoleCode:                  role,
+		WeekLabel:                 formatWeeklyMeetingLabel(weekStart, weekEnd),
+		Highlights:                highlights,
+		BestPractices:             bestPractices,
+		ImprovementAreas:          improvementAreas,
+		WeeklyStats:               weeklyStats,
+		BenchmarkStudy:            benchmarkStudy,
+		ProblemReview:             problemReview,
+		ActionTracking:            actionTracking,
+		ActionTrackingEmptyReason: actionTrackingEmptyReason,
+		NextFocus:                 nextFocus,
 	}, nil
+}
+
+func weeklyMeetingWindow(now time.Time, weekOffset int) (time.Time, time.Time) {
+	local := now.In(time.Local)
+	base := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
+	weekday := int(base.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := base.AddDate(0, 0, -(weekday-1)-7*weekOffset)
+	sunday := monday.AddDate(0, 0, 6)
+	return monday, sunday
+}
+
+func formatWeeklyMeetingLabel(weekStart, weekEnd time.Time) string {
+	year, week := weekStart.ISOWeek()
+	_ = year
+	return fmt.Sprintf("第%d周(%d/%d-%d/%d)", week, weekStart.Month(), weekStart.Day(), weekEnd.Month(), weekEnd.Day())
+}
+
+func (s *Service) listWeeklyMeetingCandidates(ctx context.Context, tenantID int64, roleCode string, weekStart, weekEnd time.Time) ([]morningMeetingCandidate, error) {
+	start := weekStart.Format("2006-01-02")
+	end := weekEnd.Add(24 * time.Hour).Format("2006-01-02")
+	filterClause := morningMeetingRoleFilterSQL(roleCode)
+	rows, err := s.store.pool.Query(ctx, fmt.Sprintf(`
+		SELECT
+			r.id,
+			r.employee_id,
+			COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工') AS employee_name,
+			COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene, ''), '') AS scene_name,
+			COALESCE(r.recorded_at, r.created_at) AS ts,
+			COALESCE(r.duration, 0)::bigint,
+			COALESCE(
+				NULLIF(
+					CASE
+						WHEN r.cleaned_transcription IS NULL THEN ''
+						WHEN jsonb_typeof(r.cleaned_transcription) = 'string' THEN trim(both '"' from r.cleaned_transcription::text)
+						WHEN jsonb_typeof(r.cleaned_transcription) = 'object' THEN COALESCE(r.cleaned_transcription->>'full_text', r.cleaned_transcription->>'text', '')
+						ELSE ''
+					END,
+					''
+				),
+				COALESCE(r.transcription_text, '')
+			) AS transcript_text,
+			COALESCE(r.quality_score, 0)::float8,
+			COALESCE(r.analysis_result, '{}'::json)
+		FROM recordings r
+		JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.analysis_status = 'completed'
+		  AND r.analysis_result IS NOT NULL
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  %s
+		ORDER BY ts DESC, r.id DESC
+	`, filterClause), tenantID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query weekly meeting candidates: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]morningMeetingCandidate, 0, 128)
+	for rows.Next() {
+		var item morningMeetingCandidate
+		if scanErr := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.EmployeeName, &item.SceneName, &item.RecordedAt, &item.DurationSeconds, &item.TranscriptText, &item.QualityScore, &item.Analysis); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan weekly meeting candidate: %w", scanErr)
+		}
+		s.enrichMorningMeetingCandidate(&item, roleCode)
+		item.InvalidReason = detectMorningMeetingInvalidReason(item)
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func averageWeeklyOverallScore(items []morningMeetingCandidate) float64 {
+	if len(items) == 0 {
+		return 0
+	}
+	total := 0.0
+	for _, item := range items {
+		total += item.OverallScore
+	}
+	return roundFloat(total/float64(len(items)), 1)
+}
+
+func formatWeeklyScoreText(role string, score float64) string {
+	if normalizeMorningMeetingRole(role) == "consultant" {
+		return fmt.Sprintf("%.1f", roundFloat(score, 1))
+	}
+	return fmt.Sprintf("%.1f%%", roundFloat(score, 1))
+}
+
+func (s *Service) buildWeeklyMeetingStats(ctx context.Context, tenantID int64, roleCode string, weekStart, weekEnd, prevWeekStart, prevWeekEnd time.Time, currentCandidates, previousCandidates []morningMeetingCandidate) *WeeklyMeetingStats {
+	currentUsable := filterUsableMorningMeetingCandidates(currentCandidates)
+	previousUsable := filterUsableMorningMeetingCandidates(previousCandidates)
+	currentAvg := averageWeeklyOverallScore(currentUsable)
+	previousAvg := averageWeeklyOverallScore(previousUsable)
+	currentDeals := s.countWeeklyDeals(ctx, tenantID, roleCode, weekStart, weekEnd)
+	previousDeals := s.countWeeklyDeals(ctx, tenantID, roleCode, prevWeekStart, prevWeekEnd)
+	changes, weakest := buildWeeklyDimensionChanges(roleCode, currentUsable, previousUsable)
+	return &WeeklyMeetingStats{
+		TotalRecordings:    int64(len(currentCandidates)),
+		PreviousRecordings: int64(len(previousCandidates)),
+		AvgScore:           currentAvg,
+		PreviousAvgScore:   previousAvg,
+		DealCount:          currentDeals,
+		PreviousDealCount:  previousDeals,
+		WeakestDimension:   weakest,
+		DimensionChanges:   changes,
+	}
+}
+
+func (s *Service) countWeeklyDeals(ctx context.Context, tenantID int64, roleCode string, start, end time.Time) int64 {
+	if normalizeMorningMeetingRole(roleCode) != "consultant" {
+		return 0
+	}
+	filterClause := morningMeetingRoleFilterSQL(roleCode)
+	var count int64
+	_ = s.store.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND COALESCE(r.recorded_at, r.created_at) >= $2
+		  AND COALESCE(r.recorded_at, r.created_at) < $3
+		  AND r.confirmed_deal_status = '成交了'
+		  %s
+	`, filterClause), tenantID, start.Format("2006-01-02"), end.Add(24*time.Hour).Format("2006-01-02")).Scan(&count)
+	return count
+}
+
+func buildWeeklyDimensionChanges(roleCode string, current, previous []morningMeetingCandidate) ([]WeeklyMeetingDimensionChangeItem, string) {
+	currentAvg := aggregateWeeklyDimensionAverages(current)
+	previousAvg := aggregateWeeklyDimensionAverages(previous)
+	if len(currentAvg) == 0 {
+		return []WeeklyMeetingDimensionChangeItem{}, ""
+	}
+	keys := make([]string, 0, len(currentAvg))
+	for key := range currentAvg {
+		keys = append(keys, key)
+		if _, ok := previousAvg[key]; !ok {
+			previousAvg[key] = 0
+		}
+	}
+	sort.Strings(keys)
+	items := make([]WeeklyMeetingDimensionChangeItem, 0, len(keys))
+	weakest := ""
+	weakestScore := math.MaxFloat64
+	for _, key := range keys {
+		cur := roundFloat(currentAvg[key], 1)
+		prev := roundFloat(previousAvg[key], 1)
+		delta := roundFloat(cur-prev, 1)
+		trend := "flat"
+		conclusion := "持平"
+		if delta > 0 {
+			trend = "up"
+			conclusion = "改善"
+		} else if delta < 0 {
+			trend = "down"
+			conclusion = "需关注"
+		}
+		items = append(items, WeeklyMeetingDimensionChangeItem{
+			Dimension:  key,
+			Current:    cur,
+			Previous:   prev,
+			Delta:      delta,
+			Trend:      trend,
+			Conclusion: conclusion,
+		})
+		if cur < weakestScore {
+			weakestScore = cur
+			weakest = key
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Delta == items[j].Delta {
+			return items[i].Current < items[j].Current
+		}
+		return items[i].Delta > items[j].Delta
+	})
+	if len(items) > 4 {
+		items = items[:4]
+	}
+	return items, weakest
+}
+
+func aggregateWeeklyDimensionAverages(items []morningMeetingCandidate) map[string]float64 {
+	total := map[string]float64{}
+	count := map[string]int{}
+	for _, item := range items {
+		for key, value := range item.DimensionScores {
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			total[key] += value
+			count[key]++
+		}
+	}
+	out := make(map[string]float64, len(total))
+	for key, value := range total {
+		if count[key] == 0 {
+			continue
+		}
+		out[key] = value / float64(count[key])
+	}
+	return out
+}
+
+func (s *Service) selectWeeklyBenchmarkStudy(ctx context.Context, tenantID int64, roleCode string, stats *WeeklyMeetingStats) *WeeklyMeetingBenchmarkStudy {
+	items, _, err := s.store.ListBenchmarkClips(ctx, tenantID, "accepted", "", roleCode, "", "", 1, 100)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	targetDimension := ""
+	if stats != nil {
+		targetDimension = strings.TrimSpace(stats.WeakestDimension)
+	}
+	var selected *BenchmarkClip
+	for idx := range items {
+		item := items[idx]
+		if targetDimension != "" && strings.TrimSpace(item.Dimension) == targetDimension {
+			selected = &item
+			break
+		}
+	}
+	if selected == nil {
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].UsedInMeetings == items[j].UsedInMeetings {
+				return items[i].ID > items[j].ID
+			}
+			return items[i].UsedInMeetings < items[j].UsedInMeetings
+		})
+		selected = &items[0]
+	}
+	clipText := strings.TrimSpace(selected.ClipText)
+	learningPoints := append([]string{}, selected.LearningPoints...)
+	audioStart := selected.AudioStartSecond
+	audioEnd := selected.AudioEndSecond
+	evidence := []string{}
+	if isWeakWeeklyBenchmarkClipText(clipText) || len(learningPoints) == 0 || audioStart == nil || audioEnd == nil {
+		fallbackEvidence, fallbackClip, fallbackStart, fallbackEnd, ok := s.loadWeeklyBenchmarkSupport(ctx, selected.RecordingID, roleCode, selected.Dimension)
+		if ok {
+			evidence = fallbackEvidence
+			if isWeakWeeklyBenchmarkClipText(clipText) && strings.TrimSpace(fallbackClip) != "" {
+				clipText = strings.TrimSpace(fallbackClip)
+			}
+			if audioStart == nil {
+				audioStart = fallbackStart
+			}
+			if audioEnd == nil {
+				audioEnd = fallbackEnd
+			}
+		}
+	}
+	if len(evidence) == 0 && strings.TrimSpace(clipText) != "" {
+		evidence = []string{clipText}
+	}
+	summary := strings.TrimSpace(selected.AIComment)
+	if summary == "" {
+		summary = buildDiscoveryInsightSummary(roleCode, selected.Dimension, evidence, clipText)
+	}
+	if len(learningPoints) == 0 {
+		learningPoints = buildWeeklyBenchmarkLearningPoints(roleCode, selected.Dimension, summary, clipText)
+	}
+	scoreText := weeklyBenchmarkScoreText(roleCode, selected.Score)
+	return &WeeklyMeetingBenchmarkStudy{
+		ClipID:             selected.ID,
+		RecordingID:        selected.RecordingID,
+		EmployeeID:         selected.EmployeeID,
+		EmployeeName:       selected.EmployeeName,
+		Dimension:          selected.Dimension,
+		Score:              selected.Score,
+		ScoreText:          scoreText,
+		SceneName:          selected.SceneType,
+		InsightSummary:     summary,
+		ClipText:           clipText,
+		LearningPoints:     learningPoints,
+		UsedInMeetings:     int64(selected.UsedInMeetings),
+		AudioStartSeconds:  audioStart,
+		AudioEndSeconds:    audioEnd,
+		AlreadyInBenchmark: true,
+	}
+}
+
+func (s *Service) ensureWeeklyBenchmarkClipReady(ctx context.Context, tenantID int64, roleCode string, item *BenchmarkClip) *BenchmarkClip {
+	if item == nil {
+		return nil
+	}
+	needsClip := isWeakWeeklyBenchmarkClipText(item.ClipText) || item.AudioStartSecond == nil || item.AudioEndSecond == nil
+	needsComment := isWeakWeeklyBenchmarkComment(roleCode, item.Dimension, item.AIComment)
+	needsPoints := isWeakWeeklyBenchmarkLearningPoints(roleCode, item.Dimension, item.LearningPoints)
+	needsLLM := needsComment || needsPoints
+	if !needsClip && !needsLLM {
+		return item
+	}
+	evidence, fallbackClip, fallbackStart, fallbackEnd, ok := s.loadWeeklyBenchmarkSupport(ctx, item.RecordingID, roleCode, item.Dimension)
+	clipText := strings.TrimSpace(item.ClipText)
+	if ok && strings.TrimSpace(fallbackClip) != "" && (needsClip || strings.TrimSpace(clipText) == "") {
+		clipText = strings.TrimSpace(fallbackClip)
+	}
+	aiComment := strings.TrimSpace(item.AIComment)
+	learningPoints := append([]string{}, item.LearningPoints...)
+	if needsLLM {
+		temp := *item
+		if strings.TrimSpace(clipText) != "" {
+			temp.ClipText = clipText
+		}
+		comment, points := s.generateBenchmarkCommentAndPoints(ctx, tenantID, &temp)
+		if needsComment && strings.TrimSpace(comment) != "" {
+			aiComment = strings.TrimSpace(comment)
+		}
+		if needsPoints && len(points) > 0 {
+			learningPoints = points
+		}
+	}
+	if strings.TrimSpace(aiComment) == "" {
+		aiComment = buildDiscoveryInsightSummary(roleCode, item.Dimension, evidence, clipText)
+	}
+	if len(learningPoints) == 0 {
+		learningPoints = buildWeeklyBenchmarkLearningPoints(roleCode, item.Dimension, aiComment, clipText)
+	}
+	updated, err := s.store.UpdateBenchmarkClipContent(ctx, tenantID, item.ID, clipText, aiComment, learningPoints, fallbackStart, fallbackEnd)
+	if err != nil || updated == nil {
+		item.ClipText = clipText
+		item.AIComment = aiComment
+		item.LearningPoints = learningPoints
+		if item.AudioStartSecond == nil {
+			item.AudioStartSecond = fallbackStart
+		}
+		if item.AudioEndSecond == nil {
+			item.AudioEndSecond = fallbackEnd
+		}
+		return item
+	}
+	return updated
+}
+
+func weeklyBenchmarkScoreText(roleCode string, score float64) string {
+	role := normalizeMorningMeetingRole(roleCode)
+	if role == "consultant" {
+		normalized := score
+		if normalized > 5 {
+			normalized = roundFloat(normalized/20.0, 1)
+		}
+		if normalized >= 5 {
+			return "5分满分"
+		}
+		if math.Abs(normalized-math.Round(normalized)) < 0.05 {
+			return fmt.Sprintf("%.0f/5分", math.Round(normalized))
+		}
+		return fmt.Sprintf("%.1f/5分", normalized)
+	}
+	return fmt.Sprintf("%.1f%%", roundFloat(score, 1))
+}
+
+func isWeakWeeklyBenchmarkClipText(text string) bool {
+	raw := strings.TrimSpace(text)
+	if raw == "" {
+		return true
+	}
+	if strings.HasPrefix(raw, "推荐说明：") || strings.HasPrefix(raw, "推荐依据：") {
+		return true
+	}
+	if len([]rune(raw)) < 10 {
+		return true
+	}
+	return false
+}
+
+func isWeakWeeklyBenchmarkComment(roleCode, dimension, comment string) bool {
+	raw := strings.TrimSpace(comment)
+	if raw == "" {
+		return true
+	}
+	if strings.Contains(raw, "表现较好，表达清晰、节奏稳定") {
+		return true
+	}
+	if strings.Contains(raw, "适合用于团队复盘讲评") && !strings.Contains(raw, "风险") && !strings.Contains(raw, "顾虑") && !strings.Contains(raw, "治疗") && !strings.Contains(raw, "患者") {
+		return true
+	}
+	betterComment, _ := buildBenchmarkCommentAndPoints(&BenchmarkClip{
+		RoleCode:  roleCode,
+		Dimension: dimension,
+	})
+	return raw == strings.TrimSpace(betterComment)
+}
+
+func isWeakWeeklyBenchmarkLearningPoints(roleCode, dimension string, points []string) bool {
+	if len(points) == 0 {
+		return true
+	}
+	normalized := make([]string, 0, len(points))
+	for _, item := range points {
+		text := strings.TrimSpace(item)
+		if text != "" {
+			normalized = append(normalized, text)
+		}
+	}
+	if len(normalized) == 0 {
+		return true
+	}
+	generic := []string{
+		"先明确对方具体情境，再给针对性回应",
+		"使用容易理解的表述，减少抽象术语",
+		"结尾给出明确下一步，形成沟通闭环",
+	}
+	if len(normalized) == len(generic) {
+		match := true
+		for idx := range generic {
+			if normalized[idx] != generic[idx] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) loadWeeklyBenchmarkSupport(ctx context.Context, recordingID int64, roleCode string, dimension string) ([]string, string, *int, *int, bool) {
+	var (
+		transcriptText      string
+		qualityScore        float64
+		analysis            map[string]interface{}
+		cleanedSegmentsRaw  interface{}
+		timelineSegmentsRaw interface{}
+	)
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(
+				NULLIF(
+					CASE
+						WHEN cleaned_transcription IS NULL THEN ''
+						WHEN jsonb_typeof(cleaned_transcription) = 'string' THEN trim(both '"' from cleaned_transcription::text)
+						WHEN jsonb_typeof(cleaned_transcription) = 'object' THEN COALESCE(cleaned_transcription->>'full_text', cleaned_transcription->>'text', '')
+						ELSE ''
+					END,
+					''
+				),
+				COALESCE(transcription_text, '')
+			) AS transcript_text,
+			COALESCE(quality_score, 0)::float8,
+			COALESCE(analysis_result, '{}'::json),
+			cleaned_transcription,
+			transcription_segments
+		FROM recordings
+		WHERE id = $1
+		LIMIT 1
+	`, recordingID).Scan(&transcriptText, &qualityScore, &analysis, &cleanedSegmentsRaw, &timelineSegmentsRaw)
+	if err != nil {
+		return nil, "", nil, nil, false
+	}
+	item := morningMeetingCandidate{
+		RecordingID:    recordingID,
+		TranscriptText: transcriptText,
+		QualityScore:   qualityScore,
+		Analysis:       analysis,
+	}
+	evidence := extractDimensionEvidence(analysis, roleCode, dimension)
+	item.Evidence = evidence
+	start, end := locateMorningMeetingAudioWindow(item, cleanedSegmentsRaw, timelineSegmentsRaw)
+	clip := ""
+	if len(evidence) > 0 {
+		clip = evidence[0]
+	}
+	return evidence, clip, start, end, true
+}
+
+func buildWeeklyBenchmarkLearningPoints(roleCode, dimension, summary, clipText string) []string {
+	role := normalizeMorningMeetingRole(roleCode)
+	dim := strings.TrimSpace(dimension)
+	if role == "consultant" {
+		switch dim {
+		case "问题放大":
+			return []string{
+				"用生活场景类比，不直接堆专业术语。",
+				"把后果和患者年龄、职业或日常困扰绑在一起。",
+				"引导患者自己意识到问题，而不是直接施压。",
+			}
+		case "需求探索":
+			return []string{
+				"先问真实诉求，再进入方案介绍。",
+				"连续追问工作、用眼、预算等关键信息。",
+				"避免基于模糊需求直接推荐全部选项。",
+			}
+		case "异议化解":
+			return []string{
+				"先复述顾虑，再回应，不要立刻反驳。",
+				"多用同类案例或具体对比，降低抽象争论。",
+				"把回应落回患者自己的决策场景。",
+			}
+		}
+	}
+	if role == "doctor" {
+		return []string{
+			"按接诊阶段推进，避免信息跳跃。",
+			"先回应患者视角，再给专业建议。",
+			"把关键动作说清楚，方便团队模仿复用。",
+		}
+	}
+	if role == "therapist" {
+		return []string{
+			"操作中持续确认患者体感和理解。",
+			"治疗前后都给患者清晰预期。",
+			"把可复用的标准化动作沉淀下来。",
+		}
+	}
+	out := make([]string, 0, 3)
+	if strings.TrimSpace(summary) != "" {
+		out = append(out, summary)
+	}
+	if strings.TrimSpace(clipText) != "" {
+		out = append(out, "围绕这句原文拆解可复制动作。")
+	}
+	if len(out) == 0 {
+		out = append(out, "提炼该片段中的高分动作，转成团队可复用话术。")
+	}
+	if len(out) > 3 {
+		return out[:3]
+	}
+	return out
+}
+
+func (s *Service) buildWeeklyProblemReview(ctx context.Context, tenantID int64, roleCode string, candidates []morningMeetingCandidate) *WeeklyMeetingProblemReview {
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].OverallScore == candidates[j].OverallScore {
+			return candidates[i].RecordedAt.After(candidates[j].RecordedAt)
+		}
+		return candidates[i].OverallScore < candidates[j].OverallScore
+	})
+	selected := candidates[0]
+	if len(selected.Evidence) == 0 || selected.AudioStartSecond == nil || selected.AudioEndSecond == nil {
+		evidence, _, start, end, ok := s.loadWeeklyBenchmarkSupport(ctx, selected.RecordingID, roleCode, selected.PrimaryDimension)
+		if ok {
+			if len(selected.Evidence) == 0 && len(evidence) > 0 {
+				selected.Evidence = evidence
+			}
+			if selected.AudioStartSecond == nil {
+				selected.AudioStartSecond = start
+			}
+			if selected.AudioEndSecond == nil {
+				selected.AudioEndSecond = end
+			}
+		}
+	}
+	diagnosis, script := buildMorningMeetingFallback(roleCode, selected)
+	return &WeeklyMeetingProblemReview{
+		RecordingID:       selected.RecordingID,
+		EmployeeID:        selected.EmployeeID,
+		EmployeeName:      selected.EmployeeName,
+		SceneName:         selected.SceneName,
+		SelectionReason:   fmt.Sprintf("本周综合分最低，优先作为周会复盘录音。"),
+		OverallScore:      selected.OverallScore,
+		OverallScoreText:  formatWeeklyScoreText(roleCode, selected.OverallScore),
+		PrimaryDimension:  selected.PrimaryDimension,
+		PrimaryScore:      selected.PrimaryScore,
+		PrimaryScoreText:  selected.PrimaryScoreText,
+		Evidence:          selected.Evidence,
+		Diagnosis:         diagnosis,
+		CoachingScript:    script,
+		GenerationMethod:  "rule",
+		GenerationStatus:  "success",
+		FallbackReason:    "weekly_non_blocking",
+		AudioStartSeconds: selected.AudioStartSecond,
+		AudioEndSeconds:   selected.AudioEndSecond,
+	}
+}
+
+func (s *Service) buildWeeklyActionTracking(ctx context.Context, tenantID int64, roleCode string, prevWeekStart, prevWeekEnd, currentWeekEnd time.Time, stats *WeeklyMeetingStats) ([]WeeklyMeetingActionTrackingItem, string) {
+	events, err := s.store.ListManagementEvents(ctx, tenantID, roleCode, "", &prevWeekStart, &currentWeekEnd)
+	if err != nil || len(events) == 0 {
+		return []WeeklyMeetingActionTrackingItem{}, "上周未记录会议决议，本周暂无可追踪内容。建议本次周会结束后记录1-3条明确决议，供下周自动追踪。"
+	}
+	hasPreviousWeekDecision := false
+	items := make([]WeeklyMeetingActionTrackingItem, 0, 3)
+	for idx := len(events) - 1; idx >= 0; idx-- {
+		event := events[idx]
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(event.EventType)), "meeting_decision") {
+			continue
+		}
+		eventDate, parseErr := time.Parse("2006-01-02", event.EventDate)
+		if parseErr != nil {
+			continue
+		}
+		matchesPreviousWeek := !(eventDate.Before(prevWeekStart) || eventDate.After(prevWeekEnd))
+		metaWeekStart := strings.TrimSpace(pickString(event.Meta, "week_start"))
+		metaMeetingType := strings.TrimSpace(pickString(event.Meta, "meeting_type"))
+		metaSource := strings.TrimSpace(pickString(event.Meta, "source"))
+		if metaMeetingType != "" && !strings.EqualFold(metaMeetingType, "weekly") {
+			continue
+		}
+		if metaSource != "" && !strings.EqualFold(metaSource, "weekly_meeting") {
+			continue
+		}
+		if metaWeekStart != "" {
+			matchesPreviousWeek = metaWeekStart == prevWeekStart.Format("2006-01-02")
+		}
+		if !matchesPreviousWeek {
+			continue
+		}
+		hasPreviousWeekDecision = true
+		decisionText := strings.TrimSpace(pickString(event.Meta, "decision_text"))
+		if decisionText == "" {
+			decisionText = weeklyDecisionText(event.Title)
+		}
+		ownerName := strings.TrimSpace(pickString(event.Meta, "owner_name"))
+		dueDate := strings.TrimSpace(pickString(event.Meta, "due_date"))
+		taskStatus, taskStatusLabel := s.loadWeeklyDecisionTaskStatus(ctx, tenantID, roleCode, decisionText, event.CreatedAt)
+		status := "warning"
+		statusLabel := "⚠️ 需继续跟进"
+		outcome := "本周已纳入追踪，建议继续复核落地情况。"
+		followUpAdvice := "建议继续跟进，避免会议决议停留在口头。"
+		currentScoreText := ""
+		deltaText := ""
+		dimension := strings.TrimSpace(pickString(event.Meta, "tracking_dimension"))
+		if dimension == "" {
+			dimension = strings.TrimSpace(event.DimensionCode)
+		}
+		if stats != nil && dimension != "" {
+			for _, change := range stats.DimensionChanges {
+				if strings.TrimSpace(change.Dimension) != dimension {
+					continue
+				}
+				currentScoreText = formatWeeklyScoreText(roleCode, change.Current)
+				if change.Delta > 0 {
+					deltaText = fmt.Sprintf("+%.1f", change.Delta)
+					outcome = fmt.Sprintf("%s本周 %s，较上周 %s。", change.Dimension, currentScoreText, deltaText)
+					if taskStatus == "completed" {
+						status = "success"
+						statusLabel = "✅ 有改善"
+						followUpAdvice = "本周已有改善，建议继续抽查，避免回弹。"
+					} else {
+						status = "progress"
+						statusLabel = "🟡 有动作"
+						followUpAdvice = "数据已有改善，但动作还要继续盯到稳定。"
+					}
+				} else if change.Delta < 0 {
+					deltaText = fmt.Sprintf("%.1f", change.Delta)
+					outcome = fmt.Sprintf("%s本周 %s，较上周 %s。", change.Dimension, currentScoreText, deltaText)
+					status = "warning"
+					statusLabel = "⚠️ 未见改善"
+					if taskStatus == "completed" {
+						followUpAdvice = "动作已执行，但结果还没起来，建议升级为1对1辅导。"
+					} else {
+						followUpAdvice = "结果仍未改善，且动作未真正落地，建议升级为1对1辅导。"
+					}
+				} else {
+					deltaText = "持平"
+					outcome = fmt.Sprintf("%s本周 %s，较上周持平。", change.Dimension, currentScoreText)
+					if taskStatus == "completed" {
+						status = "progress"
+						statusLabel = "🟡 已执行待观察"
+						followUpAdvice = "动作已经执行，但结果暂时没变化，建议再盯一周。"
+					} else {
+						status = "warning"
+						statusLabel = "⚠️ 执行偏弱"
+						followUpAdvice = "本周尚未见变化，建议明确责任人与截止时间后继续追踪。"
+					}
+				}
+				break
+			}
+		}
+		if outcome != "" && taskStatusLabel != "" {
+			outcome = fmt.Sprintf("%s %s。", strings.TrimSuffix(outcome, "。"), taskStatusLabel)
+		}
+		items = append(items, WeeklyMeetingActionTrackingItem{
+			Title:            event.Title,
+			DecisionText:     decisionText,
+			Description:      weeklyActionTrackingDescription(ownerName, dueDate),
+			Outcome:          outcome,
+			FollowUpAdvice:   followUpAdvice,
+			Status:           status,
+			StatusLabel:      statusLabel,
+			OwnerName:        ownerName,
+			DueDate:          dueDate,
+			TaskStatus:       taskStatus,
+			TaskStatusLabel:  taskStatusLabel,
+			Dimension:        dimension,
+			CurrentScoreText: currentScoreText,
+			DeltaText:        deltaText,
+		})
+		if len(items) >= 3 {
+			break
+		}
+	}
+	if len(items) == 0 {
+		if hasPreviousWeekDecision {
+			return []WeeklyMeetingActionTrackingItem{}, "上周已记录会议决议，但本周暂未形成可量化的追踪结果，建议先核对任务执行与维度数据。"
+		}
+		return []WeeklyMeetingActionTrackingItem{}, "上周未记录会议决议，本周暂无可追踪内容。建议本次周会结束后记录1-3条明确决议，供下周自动追踪。"
+	}
+	return items, ""
+}
+
+func weeklyDecisionText(title string) string {
+	text := strings.TrimSpace(title)
+	text = strings.TrimPrefix(text, "周会决议：")
+	text = strings.TrimPrefix(text, "早会决议：")
+	return strings.TrimSpace(text)
+}
+
+func weeklyActionTrackingDescription(ownerName, dueDate string) string {
+	parts := make([]string, 0, 2)
+	if ownerName != "" {
+		parts = append(parts, fmt.Sprintf("责任人：%s", ownerName))
+	}
+	if dueDate != "" {
+		parts = append(parts, fmt.Sprintf("截止：%s", dueDate))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (s *Service) loadWeeklyDecisionTaskStatus(ctx context.Context, tenantID int64, roleCode, decisionText, eventCreatedAt string) (string, string) {
+	taskTitle := fmt.Sprintf("周会行动：%s", strings.TrimSpace(decisionText))
+	if strings.TrimSpace(decisionText) == "" {
+		return "", ""
+	}
+	var (
+		status      string
+		completedAt *time.Time
+		dueAt       *time.Time
+	)
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT status, completed_at, due_at
+		FROM recording_tasks
+		WHERE tenant_id = $1
+		  AND recording_role_category = $2
+		  AND source_detail = 'meeting_decision'
+		  AND title = $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID, roleCode, taskTitle).Scan(&status, &completedAt, &dueAt)
+	if err != nil {
+		return "", ""
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		if completedAt != nil {
+			return "completed", fmt.Sprintf("责任任务已完成（%s）", completedAt.Format("01-02"))
+		}
+		return "completed", "责任任务已完成"
+	case "cancelled":
+		return "cancelled", "责任任务已取消"
+	case "assigned", "pending":
+		if dueAt != nil && dueAt.Before(time.Now()) {
+			return "overdue", "责任任务已到期未完成"
+		}
+		return "in_progress", "责任任务进行中"
+	default:
+		return strings.ToLower(strings.TrimSpace(status)), ""
+	}
+}
+
+func (s *Service) buildWeeklyNextFocus(roleCode string, stats *WeeklyMeetingStats, benchmark *WeeklyMeetingBenchmarkStudy, problem *WeeklyMeetingProblemReview, actionTracking []WeeklyMeetingActionTrackingItem) []string {
+	items := make([]string, 0, 3)
+	if stats != nil && strings.TrimSpace(stats.WeakestDimension) != "" {
+		items = append(items, fmt.Sprintf("团队级：%s 仍是本周薄弱点，建议做一次专项讨论。", stats.WeakestDimension))
+	}
+	if unresolved := pickWeeklyActionFollowUp(actionTracking); unresolved != "" {
+		items = append(items, unresolved)
+	} else if problem != nil {
+		items = append(items, fmt.Sprintf("个人级：%s 的%s需要继续1对1复盘。", problem.EmployeeName, problem.PrimaryDimension))
+	}
+	if benchmark != nil {
+		items = append(items, fmt.Sprintf("标杆复制：把%s在“%s”里的做法拆成团队可复用动作。", benchmark.EmployeeName, benchmark.Dimension))
+	}
+	if len(items) > 3 {
+		return items[:3]
+	}
+	return items
+}
+
+func pickWeeklyActionFollowUp(items []WeeklyMeetingActionTrackingItem) string {
+	for _, item := range items {
+		if strings.TrimSpace(item.Status) == "warning" {
+			if strings.TrimSpace(item.DecisionText) != "" {
+				return fmt.Sprintf("跟进级：上周“%s”仍未落稳，建议明确责任人后继续追踪。", item.DecisionText)
+			}
+			if strings.TrimSpace(item.FollowUpAdvice) != "" {
+				return fmt.Sprintf("跟进级：%s", item.FollowUpAdvice)
+			}
+		}
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.Status) == "progress" && strings.TrimSpace(item.DecisionText) != "" {
+			return fmt.Sprintf("跟进级：上周“%s”已有动作，建议下周继续核对是否稳定。", item.DecisionText)
+		}
+	}
+	return ""
 }
 
 func normalizeMorningMeetingRole(roleCode string) string {
@@ -5917,8 +7014,23 @@ func (s *Service) listMorningMeetingCandidates(ctx context.Context, tenantID int
 			COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工') AS employee_name,
 			COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene, ''), '') AS scene_name,
 			COALESCE(r.recorded_at, r.created_at) AS ts,
+			COALESCE(r.duration, 0)::bigint,
+			COALESCE(
+				NULLIF(
+					CASE
+						WHEN r.cleaned_transcription IS NULL THEN ''
+						WHEN jsonb_typeof(r.cleaned_transcription) = 'string' THEN trim(both '"' from r.cleaned_transcription::text)
+						WHEN jsonb_typeof(r.cleaned_transcription) = 'object' THEN COALESCE(r.cleaned_transcription->>'full_text', r.cleaned_transcription->>'text', '')
+						ELSE ''
+					END,
+					''
+				),
+				COALESCE(r.transcription_text, '')
+			) AS transcript_text,
 			COALESCE(r.quality_score, 0)::float8,
-			COALESCE(r.analysis_result, '{}'::json)
+			COALESCE(r.analysis_result, '{}'::json),
+			r.cleaned_transcription,
+			r.transcription_segments
 		FROM recordings r
 		JOIN employees e ON e.id = r.employee_id
 		WHERE r.tenant_id = $1
@@ -5936,12 +7048,18 @@ func (s *Service) listMorningMeetingCandidates(ctx context.Context, tenantID int
 
 	items := make([]morningMeetingCandidate, 0, 32)
 	for rows.Next() {
-		var item morningMeetingCandidate
-		if scanErr := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.EmployeeName, &item.SceneName, &item.RecordedAt, &item.QualityScore, &item.Analysis); scanErr != nil {
+		var (
+			item                morningMeetingCandidate
+			cleanedSegmentsRaw  interface{}
+			timelineSegmentsRaw interface{}
+		)
+		if scanErr := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.EmployeeName, &item.SceneName, &item.RecordedAt, &item.DurationSeconds, &item.TranscriptText, &item.QualityScore, &item.Analysis, &cleanedSegmentsRaw, &timelineSegmentsRaw); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan morning meeting candidate: %w", scanErr)
 		}
 		s.enrichMorningMeetingCandidate(&item, roleCode)
 		s.enrichMorningMeetingSuddenDrop(ctx, tenantID, roleCode, reviewDate, &item)
+		item.InvalidReason = detectMorningMeetingInvalidReason(item)
+		item.AudioStartSecond, item.AudioEndSecond = locateMorningMeetingAudioWindow(item, cleanedSegmentsRaw, timelineSegmentsRaw)
 		items = append(items, item)
 	}
 	return items, nil
@@ -5976,6 +7094,161 @@ func morningMeetingRoleFilterSQL(roleCode string) string {
 	}
 }
 
+func detectMorningMeetingInvalidReason(item morningMeetingCandidate) string {
+	text := strings.TrimSpace(item.TranscriptText)
+	if item.DurationSeconds > 0 && item.DurationSeconds <= 15 {
+		return "录音时长过短"
+	}
+	if text == "" {
+		return "转写为空"
+	}
+	if len([]rune(text)) < 20 {
+		return "有效对话过少"
+	}
+	if item.OverallScore <= 0 && len(item.Evidence) == 0 && strings.TrimSpace(item.Narrative) == "" {
+		return "未识别出可复盘对话"
+	}
+	return ""
+}
+
+func filterUsableMorningMeetingCandidates(items []morningMeetingCandidate) []morningMeetingCandidate {
+	out := make([]morningMeetingCandidate, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.InvalidReason) != "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func locateMorningMeetingAudioWindow(item morningMeetingCandidate, cleanedSegmentsRaw, timelineSegmentsRaw interface{}) (*int, *int) {
+	targets := make([]string, 0, 4)
+	if len(item.Evidence) > 0 {
+		targets = append(targets, item.Evidence...)
+	}
+	if strings.TrimSpace(item.Narrative) != "" {
+		targets = append(targets, item.Narrative)
+	}
+	if strings.TrimSpace(item.TranscriptText) != "" {
+		targets = append(targets, item.TranscriptText)
+	}
+	timeline := buildMorningMeetingTimeline(cleanedSegmentsRaw, timelineSegmentsRaw, item.TranscriptText)
+	if len(timeline) == 0 {
+		return nil, nil
+	}
+	for _, target := range targets {
+		start, end, ok := findMorningMeetingWindowFromTimeline(timeline, target)
+		if ok {
+			return &start, &end
+		}
+	}
+	return nil, nil
+}
+
+func buildMorningMeetingTimeline(cleanedSegmentsRaw, timelineSegmentsRaw interface{}, transcriptText string) []map[string]interface{} {
+	if segments := decodeSegmentsJSON(timelineSegmentsRaw); len(segments) > 0 {
+		_, timeline := buildTranscriptFromSegments(segments)
+		if len(timeline) > 0 {
+			return timeline
+		}
+	}
+	if segments := decodeSegmentsJSON(cleanedSegmentsRaw); len(segments) > 0 {
+		_, timeline := buildTranscriptFromSegments(segments)
+		if len(timeline) > 0 {
+			return timeline
+		}
+	}
+	_, timeline := buildTranscriptFallback(transcriptText)
+	return timeline
+}
+
+func findMorningMeetingWindowFromTimeline(timeline []map[string]interface{}, target string) (int, int, bool) {
+	normalizedTarget := normalizeMorningMeetingSnippet(target)
+	if normalizedTarget == "" {
+		return 0, 0, false
+	}
+	bestIdx := -1
+	bestScore := 0
+	bestStart := 0
+	bestEnd := 0
+	for idx, segment := range timeline {
+		text := strings.TrimSpace(firstNonEmptyText(segment["text"], segment["content"]))
+		normalizedText := normalizeMorningMeetingSnippet(text)
+		if normalizedText == "" {
+			continue
+		}
+		score := overlapMorningMeetingSnippetScore(normalizedTarget, normalizedText)
+		if score <= bestScore {
+			continue
+		}
+		bestIdx = idx
+		bestScore = score
+		bestStart = pickIntValue(segment["start_seconds"], segment["start_time"], segment["start"], 0)
+		bestEnd = pickIntValue(segment["end_seconds"], segment["end_time"], segment["end"], bestStart+estimateDurationSeconds(text))
+	}
+	if bestIdx < 0 || bestScore < 4 {
+		return 0, 0, false
+	}
+	if bestStart < 0 {
+		bestStart = 0
+	}
+	if bestEnd < bestStart {
+		bestEnd = bestStart
+	}
+	if bestEnd-bestStart < 8 {
+		bestEnd = bestStart + 8
+	}
+	if bestIdx+1 < len(timeline) {
+		nextStart := pickIntValue(timeline[bestIdx+1]["start_seconds"], timeline[bestIdx+1]["start_time"], timeline[bestIdx+1]["start"], bestEnd)
+		if nextStart > bestStart {
+			bestEnd = nextStart
+		}
+	}
+	return bestStart, bestEnd, true
+}
+
+func normalizeMorningMeetingSnippet(text string) string {
+	replacer := strings.NewReplacer("…", "", "...", "", "“", "", "”", "", "\"", "", "，", "", "。", "", "？", "", "！", "", "；", "", "：", "", "\n", "", "\r", "", "\t", "", " ", "")
+	return strings.ToLower(strings.TrimSpace(replacer.Replace(text)))
+}
+
+func overlapMorningMeetingSnippetScore(target, candidate string) int {
+	if target == "" || candidate == "" {
+		return 0
+	}
+	if strings.Contains(candidate, target) || strings.Contains(target, candidate) {
+		return maxInt(len([]rune(candidate)), len([]rune(target)))
+	}
+	best := 0
+	runes := []rune(target)
+	window := len(runes)
+	if window > 24 {
+		window = 24
+	}
+	for size := window; size >= 4; size-- {
+		for start := 0; start+size <= len(runes); start++ {
+			token := string(runes[start : start+size])
+			if strings.Contains(candidate, token) {
+				return size
+			}
+		}
+		if best > 0 {
+			break
+		}
+	}
+	return best
+}
+
+func pickIntValue(values ...interface{}) int {
+	for _, value := range values {
+		if ptr := pickInt(value); ptr != nil {
+			return *ptr
+		}
+	}
+	return 0
+}
+
 func (s *Service) enrichMorningMeetingCandidate(item *morningMeetingCandidate, roleCode string) {
 	if item == nil {
 		return
@@ -5987,7 +7260,11 @@ func (s *Service) enrichMorningMeetingCandidate(item *morningMeetingCandidate, r
 		item.DimensionScores = scores
 		item.OverallScore, item.PrimaryDimension, item.PrimaryScore = pickLowestMorningScore(scores)
 		item.Evidence = extractDimensionEvidence(item.Analysis, role, item.PrimaryDimension)
-		item.Narrative = strings.TrimSpace(pickString(pickMap(pickMap(item.Analysis, "raw"), "doctor_content_gen"), "draft_note"))
+		item.Narrative = strings.TrimSpace(firstNonEmptyText(
+			pickString(pickMap(pickMap(item.Analysis, "raw"), "doctor_content_gen"), "draft_note"),
+			pickString(item.Analysis, "critical_summary"),
+			pickString(item.Analysis, "report"),
+		))
 	case "therapist":
 		scores := computeTherapistMorningScores(item.Analysis)
 		item.DimensionScores = scores
@@ -6001,16 +7278,30 @@ func (s *Service) enrichMorningMeetingCandidate(item *morningMeetingCandidate, r
 				pickArray(pickMap(raw, "therapist_reset_analysis"), "improvement_priorities"),
 				pickArray(pickMap(pickMap(raw, "therapist_reset_analysis"), "reset"), "improvement_priorities"),
 			)), "；"),
+			pickString(item.Analysis, "critical_summary"),
+			pickString(item.Analysis, "report"),
 		))
 	default:
 		scores := computeConsultantMorningScores(item.Analysis, item.QualityScore)
 		item.DimensionScores = scores
 		item.OverallScore, item.PrimaryDimension, item.PrimaryScore = pickLowestMorningScore(scores)
 		item.Evidence = extractDimensionEvidence(item.Analysis, role, item.PrimaryDimension)
-		item.Narrative = strings.TrimSpace(pickString(item.Analysis, "report"))
+		item.Narrative = strings.TrimSpace(firstNonEmptyText(
+			pickString(item.Analysis, "report"),
+			pickString(pickMap(item.Analysis, "quality_score"), "summary"),
+		))
+	}
+	if strings.TrimSpace(item.PrimaryDimension) == "" {
+		item.PrimaryDimension = inferMorningPrimaryDimension(role, item.Analysis, item.Narrative)
+	}
+	if item.PrimaryScore <= 0 {
+		item.PrimaryScore = inferMorningPrimaryScore(role, item.Analysis, item.OverallScore)
+	}
+	if len(item.Evidence) == 0 {
+		item.Evidence = extractMorningFallbackEvidence(role, item.Analysis, item.Narrative)
 	}
 	if item.OverallScore <= 0 {
-		item.OverallScore = 0
+		item.OverallScore = inferMorningOverallScore(role, item.Analysis)
 	}
 	item.Positive = item.OverallScore >= morningMeetingPositiveThreshold(role)
 	item.OverallScoreText = morningMeetingScoreText(role, item.OverallScore)
@@ -6019,10 +7310,11 @@ func (s *Service) enrichMorningMeetingCandidate(item *morningMeetingCandidate, r
 
 func computeConsultantMorningScores(analysis map[string]interface{}, qualityScore float64) map[string]float64 {
 	out := map[string]float64{}
-	for _, raw := range pickArray(analysis, "quality_score") {
-		_ = raw
+	stages := pickArray(analysis, "stages")
+	if len(stages) == 0 {
+		stages = pickArray(pickMap(analysis, "quality_score"), "stages")
 	}
-	for _, st := range pickArray(analysis, "stages") {
+	for _, st := range stages {
 		m, ok := st.(map[string]interface{})
 		if !ok {
 			continue
@@ -6033,6 +7325,9 @@ func computeConsultantMorningScores(analysis map[string]interface{}, qualityScor
 			continue
 		}
 		out[name] = score
+	}
+	if qualityScore <= 0 {
+		qualityScore = valueOrZeroFloat(pickFloat(pickMap(analysis, "quality_score"), "total"))
 	}
 	if len(out) == 0 && qualityScore > 0 {
 		out["综合"] = roundFloat(qualityScore/20, 1)
@@ -6076,6 +7371,23 @@ func computeDoctorMorningScores(analysis map[string]interface{}) map[string]floa
 		}
 		out[doctorDimensionCodeToLabel(group)] = roundFloat(result[group]/total*100, 1)
 	}
+	if len(out) == 0 {
+		for key, value := range pickMap(analysis, "dimension_scores") {
+			score := 0.0
+			switch v := value.(type) {
+			case float64:
+				score = v
+			case json.Number:
+				score, _ = v.Float64()
+			case string:
+				score, _ = strconv.ParseFloat(strings.TrimSpace(v), 64)
+			}
+			if score <= 0 {
+				continue
+			}
+			out[doctorDimensionCodeToLabel(key)] = roundFloat(score, 1)
+		}
+	}
 	return out
 }
 
@@ -6115,6 +7427,131 @@ func computeTherapistMorningScores(analysis map[string]interface{}) map[string]f
 		}
 		out[therapistDimensionCodeToLabel(group)] = roundFloat(result[group]/total*100, 1)
 	}
+	if len(out) == 0 {
+		for key, value := range pickMap(analysis, "dimension_scores") {
+			score := 0.0
+			switch v := value.(type) {
+			case float64:
+				score = v
+			case json.Number:
+				score, _ = v.Float64()
+			case string:
+				score, _ = strconv.ParseFloat(strings.TrimSpace(v), 64)
+			}
+			if score <= 0 {
+				continue
+			}
+			out[therapistDimensionCodeToLabel(key)] = roundFloat(score, 1)
+		}
+	}
+	return out
+}
+
+func inferMorningOverallScore(roleCode string, analysis map[string]interface{}) float64 {
+	role := normalizeMorningMeetingRole(roleCode)
+	switch role {
+	case "consultant":
+		total := valueOrZeroFloat(pickFloat(pickMap(analysis, "quality_score"), "total"))
+		if total > 0 {
+			return roundFloat(total/20, 1)
+		}
+	case "doctor":
+		if score := valueOrZeroFloat(pickFloat(analysis, "segue_percent")); score > 0 {
+			return roundFloat(score, 1)
+		}
+	case "therapist":
+		if score := valueOrZeroFloat(pickFloat(analysis, "reset_percent")); score > 0 {
+			return roundFloat(score, 1)
+		}
+		if score := valueOrZeroFloat(pickFloat(analysis, "segue_percent")); score > 0 {
+			return roundFloat(score, 1)
+		}
+	}
+	return 0
+}
+
+func inferMorningPrimaryScore(roleCode string, analysis map[string]interface{}, overall float64) float64 {
+	if overall > 0 {
+		return roundFloat(overall, 1)
+	}
+	return inferMorningOverallScore(roleCode, analysis)
+}
+
+func inferMorningPrimaryDimension(roleCode string, analysis map[string]interface{}, narrative string) string {
+	text := strings.ToLower(strings.Join([]string{
+		narrative,
+		pickString(analysis, "critical_summary"),
+		pickString(analysis, "report"),
+		strings.Join(pickStringSlice(pickArray(analysis, "improvement_priorities")), " "),
+		strings.Join(pickStringSlice(pickArray(analysis, "highlights")), " "),
+	}, " "))
+	role := normalizeMorningMeetingRole(roleCode)
+	switch role {
+	case "consultant":
+		switch {
+		case strings.Contains(text, "异议"), strings.Contains(text, "顾虑"), strings.Contains(text, "后遗症"):
+			return "异议化解"
+		case strings.Contains(text, "需求"), strings.Contains(text, "场景"), strings.Contains(text, "预算"):
+			return "需求探索"
+		case strings.Contains(text, "方案"):
+			return "方案定制"
+		case strings.Contains(text, "收尾"), strings.Contains(text, "预约"), strings.Contains(text, "下一步"):
+			return "促成与收尾"
+		default:
+			return "综合"
+		}
+	case "doctor":
+		switch {
+		case strings.Contains(text, "主诉"), strings.Contains(text, "问诊"), strings.Contains(text, "病情"):
+			return "引出信息阶段"
+		case strings.Contains(text, "计划"), strings.Contains(text, "治疗"), strings.Contains(text, "副作用"):
+			return "治疗/预防计划"
+		case strings.Contains(text, "同理"), strings.Contains(text, "担心"), strings.Contains(text, "视角"):
+			return "理解患者视角"
+		default:
+			return "综合"
+		}
+	default:
+		switch {
+		case strings.Contains(text, "疗程"), strings.Contains(text, "家庭训练"), strings.Contains(text, "下次"), strings.Contains(text, "总结"):
+			return "方案闭环"
+		case strings.Contains(text, "感受"), strings.Contains(text, "体感"), strings.Contains(text, "变化"):
+			return "互动评估"
+		case strings.Contains(text, "解释"), strings.Contains(text, "操作"), strings.Contains(text, "评估"):
+			return "专业操作"
+		case strings.Contains(text, "铺垫"), strings.Contains(text, "治疗前"):
+			return "治疗铺垫"
+		default:
+			return "综合"
+		}
+	}
+}
+
+func extractMorningFallbackEvidence(roleCode string, analysis map[string]interface{}, narrative string) []string {
+	out := make([]string, 0, 2)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || looksNegativeText(v) {
+			return
+		}
+		out = append(out, truncateText(v, 90))
+	}
+	for _, text := range pickStringSlice(pickArray(analysis, "highlights")) {
+		add(text)
+		if len(out) >= 2 {
+			return out
+		}
+	}
+	if roleCode == "consultant" || normalizeMorningMeetingRole(roleCode) == "consultant" {
+		for _, text := range pickStringSlice(pickArray(analysis, "key_quotes")) {
+			add(text)
+			if len(out) >= 2 {
+				return out
+			}
+		}
+	}
+	add(pickString(analysis, "critical_summary"))
+	add(narrative)
 	return out
 }
 
@@ -6339,7 +7776,12 @@ func (s *Service) ensureMorningMeetingMaterial(ctx context.Context, tenantID int
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil && existing.RecordingID == candidate.RecordingID && strings.TrimSpace(existing.Diagnosis) != "" && strings.TrimSpace(existing.CoachingScript) != "" {
+	if existing != nil &&
+		existing.RecordingID == candidate.RecordingID &&
+		strings.TrimSpace(existing.Diagnosis) != "" &&
+		strings.TrimSpace(existing.CoachingScript) != "" &&
+		strings.TrimSpace(existing.PrimaryDimension) != "" &&
+		strings.TrimSpace(existing.PrimaryScoreText) != "" {
 		return existing, nil
 	}
 
@@ -6380,7 +7822,7 @@ func (s *Service) loadMorningMeetingMaterial(ctx context.Context, tenantID int64
 		       COALESCE(primary_dimension, ''), COALESCE(primary_score, 0), COALESCE(primary_score_text, ''),
 		       COALESCE(evidence, '[]'::jsonb), COALESCE(diagnosis, ''), COALESCE(coaching_script, ''),
 		       COALESCE(generation_method, 'rule'), COALESCE(generation_status, 'success'), COALESCE(fallback_reason, ''),
-		       COALESCE(prompt_code, ''), COALESCE(model_code, ''), COALESCE(llm_request_id, '')
+		       COALESCE(prompt_code, ''), COALESCE(model_code, ''), COALESCE(llm_request_id, ''), used_at
 		FROM morning_meeting_materials
 		WHERE tenant_id = $1 AND role_code = $2 AND meeting_date = $3
 		LIMIT 1
@@ -6390,7 +7832,7 @@ func (s *Service) loadMorningMeetingMaterial(ctx context.Context, tenantID int64
 		&row.PrimaryDimension, &row.PrimaryScore, &row.PrimaryScoreText,
 		&evidenceRaw, &row.Diagnosis, &row.CoachingScript,
 		&row.GenerationMethod, &row.GenerationStatus, &row.FallbackReason,
-		&row.PromptCode, &row.ModelCode, &row.LLMRequestID,
+		&row.PromptCode, &row.ModelCode, &row.LLMRequestID, &row.UsedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -6512,6 +7954,11 @@ func buildMorningMeetingFallback(roleCode string, candidate morningMeetingCandid
 	if candidate.Positive {
 		diagnosis := fmt.Sprintf("%s在%s维度表现突出，动作清晰，适合作为团队正向示范。", candidate.EmployeeName, candidate.PrimaryDimension)
 		script := fmt.Sprintf("这条录音今天不讲问题，讲动作。%s在%s拿到了%s，关键不在说了多少，而在于%s。大家听的时候重点记一句：下次遇到类似场景，怎样把这个动作迁移到自己的对话里。", candidate.EmployeeName, candidate.PrimaryDimension, candidate.PrimaryScoreText, buildDiscoveryInsightSummary(roleCode, candidate.PrimaryDimension, candidate.Evidence, evidence))
+		return diagnosis, script
+	}
+	if evidence == "" {
+		diagnosis := fmt.Sprintf("这条录音昨天综合表现偏弱，主要短板出在%s（%s）。当前系统只识别到了评分结果，还没有抓到足够清晰的证据片段，建议结合完整录音人工复核。", candidate.PrimaryDimension, candidate.PrimaryScoreText)
+		script := fmt.Sprintf("%s，这条先不急着下结论。系统已经提示%s偏弱，但证据片段还不够完整。今天建议大家先带着问题回听完整录音，重点确认这一步到底卡在没问、没解释，还是没做收口。", candidate.EmployeeName, candidate.PrimaryDimension)
 		return diagnosis, script
 	}
 	diagnosis := fmt.Sprintf("这条录音昨天综合表现偏弱，主要短板出在%s（%s）。%s", candidate.PrimaryDimension, candidate.PrimaryScoreText, buildMorningMeetingEvidenceDiagnosis(roleCode, candidate.PrimaryDimension, evidence))

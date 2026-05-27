@@ -1,11 +1,14 @@
 package badge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -42,6 +45,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/assign-employee", authMw(http.HandlerFunc(h.AssignDeviceToEmployeeAction)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/reclaim-employee", authMw(http.HandlerFunc(h.ReclaimDeviceFromEmployeeAction)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/reclaim-tenant", authMw(http.HandlerFunc(h.ReclaimDeviceFromTenantAction)))
+	// Legacy lifecycle endpoints kept for frontend compatibility while resource routes are adopted.
+	mux.Handle("POST /api/v1/badge-control/assign/tenant", authMw(http.HandlerFunc(h.AssignToTenant)))
+	mux.Handle("POST /api/v1/badge-control/assign/employee", authMw(http.HandlerFunc(h.AssignToEmployee)))
+	mux.Handle("POST /api/v1/badge-control/reclaim/employee", authMw(http.HandlerFunc(h.ReclaimFromEmployee)))
+	mux.Handle("POST /api/v1/badge-control/reclaim/tenant", authMw(http.HandlerFunc(h.ReclaimFromTenant)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/transfer", authMw(http.HandlerFunc(h.V2TransferDevice)))
 	mux.Handle("POST /api/v1/badge-devices/{id}/actions/health-check", authMw(http.HandlerFunc(h.V2HealthCheck)))
 	mux.Handle("POST /api/v1/badge-devices/actions/batch-health-check", authMw(http.HandlerFunc(h.V2BatchHealthCheck)))
@@ -188,13 +196,21 @@ func (h *Handler) ReclaimFromEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ReclaimRequest
+	var req struct {
+		DeviceIDs []int64 `json:"device_ids"`
+		Notes     *string `json:"notes,omitempty"`
+		Remark    *string `json:"remark,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.Remark
+	}
 
-	if err := h.service.ReclaimFromEmployee(r.Context(), req.DeviceIDs, claims.UserID, req.Notes); err != nil {
+	if err := h.service.ReclaimFromEmployee(r.Context(), req.DeviceIDs, claims.UserID, notes); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -216,13 +232,21 @@ func (h *Handler) ReclaimFromTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ReclaimRequest
+	var req struct {
+		DeviceIDs []int64 `json:"device_ids"`
+		Notes     *string `json:"notes,omitempty"`
+		Remark    *string `json:"remark,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
+	notes := req.Notes
+	if notes == nil {
+		notes = req.Remark
+	}
 
-	if err := h.service.ReclaimFromTenant(r.Context(), req.DeviceIDs, claims.UserID, req.Notes); err != nil {
+	if err := h.service.ReclaimFromTenant(r.Context(), req.DeviceIDs, claims.UserID, notes); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -1003,6 +1027,48 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 		BatteryLevel:    device.BatteryLevel,
 		FirmwareVersion: device.FirmwareVersion,
 		LastOnlineAt:    device.LastOnlineAt,
+	}
+
+	if strings.TrimSpace(device.ManufacturerCode) != "" && strings.TrimSpace(device.DeviceNo) != "" {
+		refreshCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+
+		adapter := h.service.getManufacturerAdapter(device.ManufacturerCode)
+		if adapter != nil {
+			info, err := adapter.GetDeviceRealtimeInfo(refreshCtx, device.DeviceNo)
+			if err != nil {
+				slog.Warn("refresh my badge realtime status failed",
+					"device_id", device.ID,
+					"device_no", device.DeviceNo,
+					"manufacturer_code", device.ManufacturerCode,
+					"error", err,
+				)
+			} else if info != nil {
+				if info.Online && info.LastOnlineAt == nil {
+					now := time.Now()
+					info.LastOnlineAt = &now
+				}
+
+				var hardwareModelPtr *string
+				if info.HardwareModel != "" {
+					hardwareModelPtr = &info.HardwareModel
+				}
+				if err := h.service.store.V2UpdateRealtimeSnapshot(refreshCtx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr); err != nil {
+					slog.Warn("update my badge realtime snapshot failed",
+						"device_id", device.ID,
+						"device_no", device.DeviceNo,
+						"error", err,
+					)
+				}
+
+				status.IsOnline = info.Online
+				status.BatteryLevel = info.BatteryLevel
+				if info.LastOnlineAt != nil {
+					formatted := info.LastOnlineAt.Format("2006-01-02T15:04:05Z07:00")
+					status.LastOnlineAt = &formatted
+				}
+			}
+		}
 	}
 
 	httputil.WriteSuccess(w, status)
