@@ -1020,13 +1020,16 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := &MyBadgeStatusResponse{
-		DeviceNo:        &device.DeviceNo,
-		DeviceID:        &device.ID,
-		Status:          &device.Status,
-		IsOnline:        device.Status != "reclaimed" && device.Status != "retired",
-		BatteryLevel:    device.BatteryLevel,
-		FirmwareVersion: device.FirmwareVersion,
-		LastOnlineAt:    device.LastOnlineAt,
+		DeviceNo:                 &device.DeviceNo,
+		DeviceID:                 &device.ID,
+		Status:                   &device.Status,
+		IsOnline:                 device.Status != "reclaimed" && device.Status != "retired",
+		IsRecording:              false,
+		RecordStatus:             intPtr(0),
+		RecordingDurationSeconds: intPtr(0),
+		BatteryLevel:             device.BatteryLevel,
+		FirmwareVersion:          device.FirmwareVersion,
+		LastOnlineAt:             device.LastOnlineAt,
 	}
 
 	if strings.TrimSpace(device.ManufacturerCode) != "" && strings.TrimSpace(device.DeviceNo) != "" {
@@ -1068,6 +1071,30 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 					status.LastOnlineAt = &formatted
 				}
 			}
+		}
+	}
+
+	if latestState, err := h.service.store.GetLatestRecordingControlState(r.Context(), device.DeviceNo); err != nil {
+		slog.Warn("load my badge recording state failed",
+			"device_id", device.ID,
+			"device_no", device.DeviceNo,
+			"error", err,
+		)
+	} else if latestState != nil {
+		if latestState.Action == "start" {
+			// Treat very old unmatched starts as stale to avoid locking the UI forever.
+			if elapsed := time.Since(latestState.CreatedAt); elapsed >= 0 && elapsed <= 12*time.Hour {
+				status.IsRecording = true
+				recordStatus := 1
+				durationSeconds := int(elapsed / time.Second)
+				status.RecordStatus = &recordStatus
+				status.RecordingDurationSeconds = &durationSeconds
+			}
+		} else {
+			recordStatus := 0
+			durationSeconds := 0
+			status.RecordStatus = &recordStatus
+			status.RecordingDurationSeconds = &durationSeconds
 		}
 	}
 
@@ -1128,6 +1155,10 @@ func (h *Handler) StopMyRecording(w http.ResponseWriter, r *http.Request) {
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 func (h *Handler) getMyAssignedDevice(r *http.Request, employeeID int64) (*DeviceResponse, error) {

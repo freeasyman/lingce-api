@@ -11,6 +11,17 @@ import (
 // ApplyCompatMigrations applies minimal schema compatibility fixes for 18080 API integration.
 // All statements are idempotent.
 func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	// Phase 1: Bootstrap core tables (CREATE TABLE IF NOT EXISTS for tables
+	// originally created by the legacy Python/Alembic migrations).
+	bootstrapStmts := bootstrapCoreTableStatements()
+	for i, stmt := range bootstrapStmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("bootstrap schema failed at step %d: %w", i+1, err)
+		}
+	}
+	slog.Info("bootstrap schema applied", "steps", len(bootstrapStmts))
+
+	// Phase 2: Compatibility migrations (ALTER TABLE, CREATE INDEX, seed data).
 	stmts := []string{
 		// Customer module soft-delete compatibility
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
@@ -27,24 +38,14 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS extra_data JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE customers SET status = 'lead' WHERE status IS NULL`,
-		`UPDATE customers SET momentum = 0 WHERE momentum IS NULL`,
-		`UPDATE customers SET extra_data = '{}'::jsonb WHERE extra_data IS NULL`,
-		`UPDATE customers SET created_by = 0 WHERE created_by IS NULL`,
-		`UPDATE customers SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS customer_tags ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_groups ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_groups ADD COLUMN IF NOT EXISTS member_count INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE IF EXISTS customer_interactions ADD COLUMN IF NOT EXISTS interacted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_interactions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`,
-		`UPDATE customer_interactions SET interacted_at = COALESCE(interacted_at, created_at, NOW()) WHERE interacted_at IS NULL`,
-		`UPDATE customer_interactions SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS status TEXT`,
-		`UPDATE customer_follow_ups SET status = 'planned' WHERE status IS NULL`,
 		`ALTER TABLE IF EXISTS customer_group_members ADD COLUMN IF NOT EXISTS created_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_group_members ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`,
-		`UPDATE customer_group_members SET created_at = COALESCE(created_at, NOW()) WHERE created_at IS NULL`,
-		`UPDATE customer_group_members SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 
 		// Recording business scope compatibility
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
@@ -68,39 +69,7 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('therapist') THEN 'therapist'
 			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('nurse') THEN 'nurse'
 			WHEN lower(COALESCE(NULLIF(r.scene, ''), '')) IN ('lingce_sales') THEN 'lingce_sales'
-			ELSE CASE
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
-				) THEN 'frontdesk'
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('doctor','therapist','doctor_assistant')
-				) THEN 'doctor'
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('consultant')
-				) THEN 'consultant'
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('therapist')
-				) THEN 'therapist'
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('nurse')
-				) THEN 'nurse'
-				WHEN EXISTS (
-					SELECT 1 FROM inst_employee_roles ier
-					WHERE ier.tenant_id = r.tenant_id AND ier.employee_id = r.employee_id
-					AND lower(ier.role_code) IN ('lingce_sales')
-				) THEN 'lingce_sales'
-				ELSE 'unknown'
-			END
+			ELSE 'unknown'
 		END
 		WHERE r.business_scope = 'unknown' OR r.business_scope IS NULL`,
 
@@ -114,13 +83,11 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS contact_email TEXT`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS industry TEXT`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE tenants SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS code TEXT`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS parent_id BIGINT`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE departments SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS username TEXT`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS password_hash TEXT`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS full_name TEXT`,
@@ -131,17 +98,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE employees SET full_name = COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), username, 'unknown')`,
-		`UPDATE employees
-		 SET full_name = phone
-		 WHERE NULLIF(phone, '') IS NOT NULL
-		   AND lower(trim(COALESCE(full_name, ''))) = 'unknown'
-		   AND lower(trim(COALESCE(name, ''))) = 'unknown'`,
-		`UPDATE employees
-		 SET name = full_name
-		 WHERE COALESCE(NULLIF(full_name, ''), '') <> ''
-		   AND COALESCE(NULLIF(full_name, ''), '') <> COALESCE(NULLIF(name, ''), '')`,
-		`UPDATE employees SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`CREATE TABLE IF NOT EXISTS institution_roles (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -164,69 +120,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_institution_department_roles_department_id ON institution_department_roles(department_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_institution_department_roles_role_id ON institution_department_roles(role_id)`,
-		`INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
-		 SELECT t.id,
-		        COALESCE(NULLIF(r.name_cn, ''), r.code),
-		        r.code,
-		        r.description,
-		        COALESCE(r.is_active, true),
-		        COALESCE(r.created_at, NOW()),
-		        COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
-		 FROM tenants t
-		 CROSS JOIN inst_roles r
-		 ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
-		 DO UPDATE SET
-		   name = EXCLUDED.name,
-		   description = EXCLUDED.description,
-		   is_active = EXCLUDED.is_active,
-		   updated_at = NOW()`,
-		`INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
-		 SELECT dr.department_id, ir.id, COALESCE(dr.is_default, true), COALESCE(dr.created_at, NOW())
-		 FROM inst_department_roles dr
-		 JOIN institution_roles ir ON ir.tenant_id = dr.tenant_id AND ir.code = dr.role_code AND ir.deleted_at IS NULL
-		 JOIN departments d ON d.id = dr.department_id AND d.deleted_at IS NULL
-		 ON CONFLICT (department_id)
-		 DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default`,
-		`UPDATE inst_roles
-		 SET description = CASE lower(code)
-		     WHEN 'consultant' THEN '负责患者咨询与跟进'
-		     WHEN 'customer_service' THEN '负责电话与在线接待，处理客户咨询'
-		     WHEN 'doctor_assistant' THEN '协助医生完成接诊记录与患者沟通'
-		     WHEN 'employee' THEN '普通员工角色'
-		     WHEN 'marketing_manager' THEN '负责内容运营、客资管理、客户档案与知识库'
-		     WHEN 'operating_manager' THEN '负责运营数据、任务与报表管理'
-		     WHEN 'therapist' THEN '负责康复治疗与治疗记录'
-		     ELSE description
-		 END
-		 WHERE lower(code) IN (
-		     'consultant',
-		     'customer_service',
-		     'doctor_assistant',
-		     'employee',
-		     'marketing_manager',
-		     'operating_manager',
-		     'therapist'
-		 )`,
-		`UPDATE institution_roles
-		 SET description = CASE lower(code)
-		     WHEN 'consultant' THEN '负责患者咨询与跟进'
-		     WHEN 'customer_service' THEN '负责电话与在线接待，处理客户咨询'
-		     WHEN 'doctor_assistant' THEN '协助医生完成接诊记录与患者沟通'
-		     WHEN 'employee' THEN '普通员工角色'
-		     WHEN 'marketing_manager' THEN '负责内容运营、客资管理、客户档案与知识库'
-		     WHEN 'operating_manager' THEN '负责运营数据、任务与报表管理'
-		     WHEN 'therapist' THEN '负责康复治疗与治疗记录'
-		     ELSE description
-		 END
-		 WHERE lower(code) IN (
-		     'consultant',
-		     'customer_service',
-		     'doctor_assistant',
-		     'employee',
-		     'marketing_manager',
-		     'operating_manager',
-		     'therapist'
-		 )`,
 
 		// Content module compatibility (deleted_at + missing content_items table)
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
@@ -239,12 +132,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS extra_data JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS created_by BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE IF EXISTS content_topics ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE content_topics SET tags = '[]'::jsonb WHERE tags IS NULL`,
-		`UPDATE content_topics SET source = 'manual' WHERE source IS NULL`,
-		`UPDATE content_topics SET status = 'draft' WHERE status IS NULL`,
-		`UPDATE content_topics SET extra_data = '{}'::jsonb WHERE extra_data IS NULL`,
-		`UPDATE content_topics SET created_by = 0 WHERE created_by IS NULL`,
-		`UPDATE content_topics SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS content_publish_tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`CREATE TABLE IF NOT EXISTS content_items (
 			id BIGSERIAL PRIMARY KEY,
@@ -286,11 +173,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS last_online_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE badge_devices SET status = 'in_use' WHERE status IS NULL`,
-		`UPDATE badge_devices SET manufacturer_code = '' WHERE manufacturer_code IS NULL`,
-		`UPDATE badge_devices SET extra_data = '{}'::jsonb WHERE extra_data IS NULL`,
-		`UPDATE badge_devices SET created_at = NOW() WHERE created_at IS NULL`,
-		`UPDATE badge_devices SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`ALTER TABLE IF EXISTS badge_manufacturers ADD COLUMN IF NOT EXISTS contact_person TEXT`,
 		`ALTER TABLE IF EXISTS badge_manufacturers ADD COLUMN IF NOT EXISTS contact_phone TEXT`,
 		`ALTER TABLE IF EXISTS badge_manufacturers ADD COLUMN IF NOT EXISTS contact_email TEXT`,
@@ -325,16 +207,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_badge_tickets_ticket_no ON badge_tickets(ticket_no)`,
 		`ALTER TABLE IF EXISTS badge_device_lifecycle_logs ADD COLUMN IF NOT EXISTS action TEXT`,
 		`ALTER TABLE IF EXISTS badge_device_lifecycle_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`DO $$
-		BEGIN
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'badge_device_lifecycle_logs' AND column_name = 'operation'
-			) THEN
-				EXECUTE 'UPDATE badge_device_lifecycle_logs SET action = COALESCE(action, operation, ''unknown'') WHERE action IS NULL';
-			END IF;
-		END $$`,
-		`UPDATE badge_device_lifecycle_logs SET action = COALESCE(action, 'unknown') WHERE action IS NULL`,
 		// Badge V2 refactoring schema compatibility
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS manufacturer_name TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS hardware_model TEXT`,
@@ -347,12 +219,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS last_check_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS import_batch_no TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb`,
-		`UPDATE badge_devices SET health_status = 'unknown' WHERE health_status IS NULL`,
-		`UPDATE badge_devices SET health_status = 'healthy' WHERE lower(trim(COALESCE(health_status, ''))) = 'normal'`,
-		`UPDATE badge_devices
-		 SET health_status = 'unknown'
-		 WHERE trim(COALESCE(health_status, '')) = ''
-		    OR lower(trim(COALESCE(health_status, ''))) NOT IN ('unknown', 'healthy', 'warning', 'error')`,
 		`DO $$
 		BEGIN
 			IF NOT EXISTS (
@@ -365,7 +231,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 					CHECK (health_status IN ('unknown', 'healthy', 'warning', 'error'));
 			END IF;
 		END $$`,
-		`UPDATE badge_devices SET metadata = '{}'::jsonb WHERE metadata IS NULL`,
 		`CREATE TABLE IF NOT EXISTS badge_device_logs (
 			id BIGSERIAL PRIMARY KEY,
 			device_id BIGINT NOT NULL,
@@ -461,7 +326,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS feature_group_id BIGINT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_subscription_plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE tenant_subscription_plans SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`CREATE TABLE IF NOT EXISTS tenant_subscriptions (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -478,33 +342,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS grace_end_date TIMESTAMP`,
 		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`DO $$
-		BEGIN
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'tenant_subscriptions' AND column_name = 'started_on'
-			) THEN
-				EXECUTE 'UPDATE tenant_subscriptions
-				           SET start_date = COALESCE(start_date, started_on::timestamp, created_at, NOW())
-				         WHERE start_date IS NULL';
-			END IF;
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'tenant_subscriptions' AND column_name = 'expired_on'
-			) THEN
-				EXECUTE 'UPDATE tenant_subscriptions
-				           SET end_date = COALESCE(end_date, expired_on::timestamp, start_date, NOW())
-				         WHERE end_date IS NULL';
-			END IF;
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'tenant_subscriptions' AND column_name = 'grace_end_on'
-			) THEN
-				EXECUTE 'UPDATE tenant_subscriptions
-				           SET grace_end_date = COALESCE(grace_end_date, grace_end_on::timestamp)
-				         WHERE grace_end_date IS NULL';
-			END IF;
-		END $$`,
 		`CREATE TABLE IF NOT EXISTS tenant_subscription_events (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -529,12 +366,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS operator_name TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS notes TEXT`,
 		`ALTER TABLE IF EXISTS tenant_subscription_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE tenant_subscription_events
-		    SET request_id = COALESCE(NULLIF(request_id, ''), CONCAT('compat_', tenant_id::text, '_', EXTRACT(EPOCH FROM created_at)::bigint::text))
-		  WHERE request_id IS NULL OR request_id = ''`,
-		`UPDATE tenant_subscription_events
-		    SET operator_name = COALESCE(NULLIF(operator_name, ''), 'system')
-		  WHERE operator_name IS NULL OR operator_name = ''`,
 		`CREATE TABLE IF NOT EXISTS tenant_validity_change_logs (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -567,7 +398,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_feature_groups ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS tenant_feature_groups ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_feature_groups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE tenant_feature_groups SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 		`CREATE TABLE IF NOT EXISTS tenant_feature_group_items (
 			id BIGSERIAL PRIMARY KEY,
 			group_id BIGINT NOT NULL,
@@ -579,20 +409,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenant_feature_group_items ADD COLUMN IF NOT EXISTS item_code VARCHAR(128)`,
 		`ALTER TABLE IF EXISTS tenant_feature_group_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS tenant_feature_group_items ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN NOT NULL DEFAULT TRUE`,
-		`DO $$
-		BEGIN
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'tenant_feature_group_items' AND column_name = 'code'
-			) THEN
-				EXECUTE 'UPDATE tenant_feature_group_items SET feature_code = COALESCE(feature_code, code) WHERE feature_code IS NULL';
-			END IF;
-			END $$`,
-		`UPDATE tenant_feature_group_items
-				SET item_type = COALESCE(NULLIF(item_type, ''), 'feature'),
-				    item_code = COALESCE(NULLIF(item_code, ''), feature_code, '')
-			  WHERE item_type IS NULL OR item_type = '' OR item_code IS NULL OR item_code = ''`,
-		`UPDATE tenant_feature_group_items SET feature_code = COALESCE(feature_code, '') WHERE feature_code IS NULL`,
 		`CREATE TABLE IF NOT EXISTS tenant_feature_assignments (
 			tenant_id BIGINT PRIMARY KEY,
 			group_id BIGINT NOT NULL,
@@ -632,29 +448,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN tenant_id SET DEFAULT 0`,
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN model_code SET DEFAULT ''`,
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN function_type SET DEFAULT 'general'`,
-		`UPDATE llm_model_configs
-			SET api_endpoint = COALESCE(api_endpoint, api_base_url)
-			WHERE api_endpoint IS NULL`,
-		`UPDATE llm_model_configs
-			SET api_key = COALESCE(api_key, api_key_encrypted)
-			WHERE api_key IS NULL`,
-		`UPDATE llm_model_configs
-			SET model_params = COALESCE(model_params, extra_params)
-			WHERE model_params IS NULL`,
-		`DO $$
-		BEGIN
-			IF EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'tenant_feature_overrides' AND column_name = 'code'
-			) THEN
-				EXECUTE 'UPDATE tenant_feature_overrides SET feature_code = COALESCE(feature_code, code) WHERE feature_code IS NULL';
-			END IF;
-			END $$`,
-		`UPDATE tenant_feature_overrides
-				SET item_type = COALESCE(NULLIF(item_type, ''), 'feature'),
-				    item_code = COALESCE(NULLIF(item_code, ''), feature_code, ''),
-				    override_mode = COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END)
-			  WHERE item_type IS NULL OR item_type = '' OR item_code IS NULL OR item_code = '' OR override_mode IS NULL OR override_mode = ''`,
 		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
 		 SELECT 'learning_center_benchmarks', '标杆学习', '/learning-center/benchmarks', 901, true, NOW()
 		 WHERE NOT EXISTS (
@@ -1022,60 +815,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (admin_id, role_id)
 		)`,
-		`INSERT INTO operations_roles (name, code, description, is_active, created_at, updated_at)
-			SELECT
-				COALESCE(NULLIF(r.name_cn, ''), r.code),
-				r.code,
-				r.description,
-				COALESCE(r.is_active, true),
-				COALESCE(r.created_at, NOW()),
-				COALESCE(r.updated_at, NOW())
-			FROM ops_roles r
-			WHERE NOT EXISTS (
-				SELECT 1 FROM operations_roles nr WHERE nr.code = r.code
-			)`,
-		`INSERT INTO operations_menus (id, name, code, path, icon, parent_id, sort_order, is_active, created_at, updated_at, deleted_at)
-			SELECT
-				m.id,
-				m.name,
-				m.code,
-				COALESCE(m.path, ''),
-				m.icon,
-				m.parent_id,
-				COALESCE(m.order_index, 0),
-				COALESCE(m.is_active, true),
-				COALESCE(m.created_at, NOW()),
-				COALESCE(m.created_at, NOW()),
-				NULL
-			FROM ops_menus m
-			WHERE NOT EXISTS (
-				SELECT 1 FROM operations_menus nm WHERE nm.id = m.id OR nm.code = m.code
-			)`,
-		`SELECT setval('operations_menus_id_seq', COALESCE((SELECT MAX(id) FROM operations_menus), 1), true)`,
-		`INSERT INTO operations_role_menus (role_id, menu_id, created_at)
-			SELECT
-				r.id,
-				rm.menu_id,
-				COALESCE(rm.created_at, NOW())
-			FROM ops_role_menus rm
-			JOIN operations_roles r ON r.code = rm.role_code
-			JOIN operations_menus m ON m.id = rm.menu_id
-			WHERE NOT EXISTS (
-				SELECT 1 FROM operations_role_menus nrm
-				WHERE nrm.role_id = r.id AND nrm.menu_id = rm.menu_id
-			)`,
-		`INSERT INTO operations_admin_roles (admin_id, role_id, created_at)
-			SELECT
-				ar.admin_id,
-				r.id,
-				COALESCE(ar.created_at, NOW())
-			FROM ops_admin_roles ar
-			JOIN operations_roles r ON r.code = ar.role_code
-			JOIN operations_admins a ON a.id = ar.admin_id AND a.deleted_at IS NULL
-			WHERE NOT EXISTS (
-				SELECT 1 FROM operations_admin_roles nar
-				WHERE nar.admin_id = ar.admin_id AND nar.role_id = r.id
-			)`,
 
 		// Customer detail compatibility
 		`ALTER TABLE IF EXISTS customer_memberships ADD COLUMN IF NOT EXISTS tenant_id BIGINT`,
@@ -1086,23 +825,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS customer_memberships ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS customer_memberships ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS customer_memberships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE customer_memberships cm
-			SET tenant_id = c.tenant_id
-			FROM customers c
-			WHERE cm.customer_id = c.id AND cm.tenant_id IS NULL`,
-		`UPDATE customer_memberships SET points = 0 WHERE points IS NULL`,
-		`UPDATE customer_memberships SET start_date = COALESCE(start_date, created_at, NOW()) WHERE start_date IS NULL`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS tenant_id BIGINT`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS employee_id BIGINT`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS customer_follow_ups ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`UPDATE customer_follow_ups cf
-			SET tenant_id = c.tenant_id
-			FROM customers c
-			WHERE cf.customer_id = c.id AND cf.tenant_id IS NULL`,
-		`UPDATE customer_follow_ups SET scheduled_at = COALESCE(scheduled_at, created_at, NOW()) WHERE scheduled_at IS NULL`,
 
 		// Badge lifecycle log compatibility
 		`ALTER TABLE IF EXISTS badge_device_lifecycle_logs ADD COLUMN IF NOT EXISTS from_status TEXT`,
@@ -1118,8 +846,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS scene TEXT`,
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS notes TEXT`,
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`,
-		`UPDATE recordings SET status = 'pending' WHERE status IS NULL`,
-		`UPDATE recordings SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL`,
 
 		`CREATE TABLE IF NOT EXISTS frontdesk_knowledge_bases (
 			id BIGSERIAL PRIMARY KEY,

@@ -241,13 +241,16 @@ type CallbackPayload struct {
 
 // MyBadgeStatusResponse represents my badge status
 type MyBadgeStatusResponse struct {
-	DeviceNo        *string `json:"device_no,omitempty"`
-	DeviceID        *int64  `json:"device_id,omitempty"`
-	Status          *string `json:"status,omitempty"`
-	IsOnline        bool    `json:"is_online"`
-	BatteryLevel    *int    `json:"battery_level,omitempty"`
-	FirmwareVersion *string `json:"firmware_version,omitempty"`
-	LastOnlineAt    *string `json:"last_online_at,omitempty"`
+	DeviceNo                 *string `json:"device_no,omitempty"`
+	DeviceID                 *int64  `json:"device_id,omitempty"`
+	Status                   *string `json:"status,omitempty"`
+	IsOnline                 bool    `json:"is_online"`
+	IsRecording              bool    `json:"is_recording"`
+	RecordStatus             *int    `json:"record_status,omitempty"`
+	RecordingDurationSeconds *int    `json:"recording_duration_seconds,omitempty"`
+	BatteryLevel             *int    `json:"battery_level,omitempty"`
+	FirmwareVersion          *string `json:"firmware_version,omitempty"`
+	LastOnlineAt             *string `json:"last_online_at,omitempty"`
 }
 
 // ManufacturerResponse represents manufacturer response

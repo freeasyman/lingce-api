@@ -215,38 +215,46 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	if err != nil {
 		return nil, err
 	}
-	if binding != nil {
-		authResp, err := s.issueMobileLogin(ctx, binding.EmployeeID)
-		if err != nil {
-			return nil, err
-		}
-		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
-	}
 	if mobile := strings.TrimSpace(userDetail.Mobile); mobile != "" {
 		employeeID, err := s.store.FindUniqueEmployeeIDByPhone(ctx, mobile)
 		if err != nil {
 			return nil, err
 		}
 		if employeeID != nil {
-			employee, err := s.authStore.GetEmployeeByID(ctx, *employeeID)
-			if err != nil {
-				return nil, err
+			if binding == nil || binding.EmployeeID != *employeeID {
+				employee, err := s.authStore.GetEmployeeByID(ctx, *employeeID)
+				if err != nil {
+					return nil, err
+				}
+				source := "auto_phone"
+				if binding != nil && binding.EmployeeID != employee.ID {
+					source = "auto_phone_rebind"
+				}
+				if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+					CorpID:      corpID,
+					WeComUserID: userInfo.UserID,
+					EmployeeID:  employee.ID,
+					TenantID:    employee.TenantID,
+					Source:      source,
+				}); err != nil {
+					return nil, err
+				}
+				binding = &UserBindingRecord{
+					CorpID:      corpID,
+					WeComUserID: userInfo.UserID,
+					EmployeeID:  employee.ID,
+					TenantID:    employee.TenantID,
+					Source:      source,
+				}
 			}
-			if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
-				CorpID:      corpID,
-				WeComUserID: userInfo.UserID,
-				EmployeeID:  employee.ID,
-				TenantID:    employee.TenantID,
-				Source:      "auto_phone",
-			}); err != nil {
-				return nil, err
-			}
-			authResp, err := s.issueMobileLogin(ctx, employee.ID)
-			if err != nil {
-				return nil, err
-			}
-			return &OAuthLoginResponse{Status: "logged_in", AutoBound: true, Auth: authResp, Profile: profile}, nil
 		}
+	}
+	if binding != nil {
+		authResp, err := s.issueMobileLogin(ctx, binding.EmployeeID)
+		if err != nil {
+			return nil, err
+		}
+		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
 	}
 	return &OAuthLoginResponse{Status: "needs_bind", Profile: profile}, nil
 }

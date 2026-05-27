@@ -1,0 +1,15 @@
+services:
+  postgres-clean:
+    image: docker.1ms.run/pgvector/pgvector:pg16
+    container_name: lingce_postgres_clean
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: lince
+      POSTGRES_PASSWORD: lince_dev
+      POSTGRES_DB: lingce_dev
+    volumes:
+      - pgdata_clean:/var/lib/postgresql/data
+
+volumes:
+  pgdata_clean:

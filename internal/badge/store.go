@@ -825,6 +825,31 @@ func (s *Store) GetLatestAudioEventStatus(ctx context.Context, deviceNo string) 
 	return callbackOK, ingestOK, nil
 }
 
+type RecordingControlState struct {
+	Action    string
+	CreatedAt time.Time
+}
+
+func (s *Store) GetLatestRecordingControlState(ctx context.Context, deviceNo string) (*RecordingControlState, error) {
+	var state RecordingControlState
+	err := s.pool.QueryRow(ctx, `
+		SELECT action, created_at
+		FROM badge_recording_control_logs
+		WHERE device_no = $1
+		  AND status = 'success'
+		  AND action IN ('start', 'stop')
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, deviceNo).Scan(&state.Action, &state.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query latest recording control state: %w", err)
+	}
+	return &state, nil
+}
+
 // Manufacturer Methods
 
 // ListManufacturers retrieves all manufacturers
