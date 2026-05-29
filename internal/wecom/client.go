@@ -169,8 +169,8 @@ func (c *Client) GetCorpToken(ctx context.Context, suiteAccessToken, corpID, per
 
 func (c *Client) GetUserInfo3rd(ctx context.Context, suiteAccessToken, code string) (*userInfo3rdResponse, error) {
 	var resp userInfo3rdResponse
-	path := "/cgi-bin/service/getuserinfo3rd?suite_access_token=" + url.QueryEscape(suiteAccessToken)
-	err := c.postJSON(ctx, path, map[string]string{"code": code}, &resp)
+	path := "/cgi-bin/service/getuserinfo3rd?suite_access_token=" + url.QueryEscape(suiteAccessToken) + "&code=" + url.QueryEscape(code)
+	err := c.getJSON(ctx, path, &resp)
 	if err != nil {
 		return nil, err
 	}
