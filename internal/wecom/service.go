@@ -170,37 +170,46 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	if !s.IsEnabled() {
 		return nil, fmt.Errorf("wecom is not configured")
 	}
+	slog.Info("wecom oauth login started", "corp_id", corpID, "code_prefix", truncateToken(code, 12))
 	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.suiteID)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: suite ticket missing", "error", err)
 		return nil, err
 	}
 	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: suite access token", "error", err)
 		return nil, err
 	}
 	userInfo, err := s.client.GetUserInfo3rd(ctx, suiteAccessToken, code)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: get user info", "corp_id", corpID, "code_prefix", truncateToken(code, 12), "error", err)
 		return nil, err
 	}
 	if corpID == "" {
 		corpID = userInfo.CorpID
 	}
 	if corpID == "" {
+		slog.Warn("wecom oauth login failed: corp id empty", "user_info_corp_id", userInfo.CorpID)
 		return nil, fmt.Errorf("corp id is empty")
 	}
 	if strings.TrimSpace(userInfo.UserID) == "" {
+		slog.Warn("wecom oauth login failed: empty user id", "corp_id", corpID)
 		return nil, fmt.Errorf("wecom returned empty user id")
 	}
 	install, err := s.store.GetCorpInstallByCorpID(ctx, corpID)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: corp install not found", "corp_id", corpID, "error", err)
 		return nil, err
 	}
 	corpAccessToken, _, err := s.client.GetCorpToken(ctx, suiteAccessToken, corpID, install.PermanentCode)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: get corp token", "corp_id", corpID, "error", err)
 		return nil, err
 	}
 	userDetail, err := s.client.GetUserDetail(ctx, corpAccessToken, userInfo.UserID)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: get user detail", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "error", err)
 		return nil, err
 	}
 	profile := &OAuthUserProfile{
@@ -213,17 +222,20 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	}
 	binding, err := s.store.GetUserBinding(ctx, corpID, userInfo.UserID)
 	if err != nil {
+		slog.Warn("wecom oauth login failed: query binding", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "error", err)
 		return nil, err
 	}
 	if mobile := strings.TrimSpace(userDetail.Mobile); mobile != "" {
 		employeeID, err := s.store.FindUniqueEmployeeIDByPhone(ctx, mobile)
 		if err != nil {
+			slog.Warn("wecom oauth login failed: find employee by phone", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "mobile_suffix", maskPhone(mobile), "error", err)
 			return nil, err
 		}
 		if employeeID != nil {
 			if binding == nil || binding.EmployeeID != *employeeID {
 				employee, err := s.authStore.GetEmployeeByID(ctx, *employeeID)
 				if err != nil {
+					slog.Warn("wecom oauth login failed: load employee for auto bind", "employee_id", *employeeID, "error", err)
 					return nil, err
 				}
 				source := "auto_phone"
@@ -237,8 +249,10 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 					TenantID:    employee.TenantID,
 					Source:      source,
 				}); err != nil {
+					slog.Warn("wecom oauth login failed: upsert auto binding", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", employee.ID, "error", err)
 					return nil, err
 				}
+				slog.Info("wecom oauth auto binding updated", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", employee.ID, "source", source)
 				binding = &UserBindingRecord{
 					CorpID:      corpID,
 					WeComUserID: userInfo.UserID,
@@ -252,10 +266,13 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	if binding != nil {
 		authResp, err := s.issueMobileLogin(ctx, binding.EmployeeID)
 		if err != nil {
+			slog.Warn("wecom oauth login failed: issue mobile login", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", binding.EmployeeID, "error", err)
 			return nil, err
 		}
+		slog.Info("wecom oauth login succeeded", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", binding.EmployeeID, "source", binding.Source)
 		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
 	}
+	slog.Info("wecom oauth login needs bind", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "mobile_suffix", maskPhone(userDetail.Mobile))
 	return &OAuthLoginResponse{Status: "needs_bind", Profile: profile}, nil
 }
 
@@ -264,13 +281,17 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	if err != nil {
 		return err
 	}
-	return s.store.UpsertUserBinding(ctx, UserBindingRecord{
+	if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
 		CorpID:      corpID,
 		WeComUserID: wecomUserID,
 		EmployeeID:  employee.ID,
 		TenantID:    employee.TenantID,
 		Source:      "manual",
-	})
+	}); err != nil {
+		return err
+	}
+	slog.Info("wecom manual binding created", "corp_id", corpID, "wecom_user_id", wecomUserID, "employee_id", employee.ID)
+	return nil
 }
 
 func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessageRequest) (*InternalSendMessageResponse, error) {
@@ -539,6 +560,14 @@ func truncateToken(value string, keep int) string {
 		return value
 	}
 	return value[:keep]
+}
+
+func maskPhone(phone string) string {
+	phone = strings.TrimSpace(phone)
+	if len(phone) < 7 {
+		return phone
+	}
+	return phone[:3] + "****" + phone[len(phone)-4:]
 }
 
 func firstNonEmpty(values ...string) string {

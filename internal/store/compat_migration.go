@@ -11,17 +11,6 @@ import (
 // ApplyCompatMigrations applies minimal schema compatibility fixes for 18080 API integration.
 // All statements are idempotent.
 func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	// Phase 1: Bootstrap core tables (CREATE TABLE IF NOT EXISTS for tables
-	// originally created by the legacy Python/Alembic migrations).
-	bootstrapStmts := bootstrapCoreTableStatements()
-	for i, stmt := range bootstrapStmts {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("bootstrap schema failed at step %d: %w", i+1, err)
-		}
-	}
-	slog.Info("bootstrap schema applied", "steps", len(bootstrapStmts))
-
-	// Phase 2: Compatibility migrations (ALTER TABLE, CREATE INDEX, seed data).
 	stmts := []string{
 		// Customer module soft-delete compatibility
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
@@ -792,23 +781,19 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS operations_admins (
 			id BIGSERIAL PRIMARY KEY,
+			name VARCHAR(255) NOT NULL DEFAULT '',
+			phone VARCHAR(50) NOT NULL DEFAULT '',
 			username TEXT,
-			password_hash TEXT,
-			email TEXT,
-			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			password_hash TEXT NOT NULL DEFAULT '',
+			email VARCHAR(255),
+			is_active INTEGER DEFAULT 1,
+			tenant_id INTEGER,
+			last_login_at TIMESTAMP,
 			session_version INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP,
 			deleted_at TIMESTAMP
 		)`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS username TEXT`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS password_hash TEXT`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS email TEXT`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
-		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`CREATE TABLE IF NOT EXISTS operations_admin_roles (
 			admin_id BIGINT NOT NULL,
 			role_id BIGINT NOT NULL,

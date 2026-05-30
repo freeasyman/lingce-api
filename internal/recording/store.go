@@ -1250,8 +1250,8 @@ func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, day
 			r.id,
 			COALESCE(r.employee_id, 0),
 			COALESCE(NULLIF(r.business_scope,''), 'unknown') AS role_code,
-			COALESCE(r.analysis_result, '{}'::json)::text::bytea,
-			COALESCE(rar.result_data, '{}'::json)::text::bytea,
+			COALESCE(r.analysis_result, '{}'::json)::text,
+			COALESCE(rar.result_data, '{}'::json)::text,
 			r.recorded_at
 		FROM recordings r
 		LEFT JOIN LATERAL (
@@ -1263,7 +1263,7 @@ func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, day
 			LIMIT 1
 		) rar ON TRUE
 		WHERE r.tenant_id = $1
-		  AND r.recorded_at >= NOW() - ($2 || ' days')::interval
+		  AND r.recorded_at >= NOW() - make_interval(days => $2)
 		  AND COALESCE(r.analysis_status, '') = 'completed'
 		ORDER BY r.recorded_at DESC, r.id DESC
 		LIMIT 1000
