@@ -8,16 +8,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// NewPostgresPool creates a new PostgreSQL connection pool
-func NewPostgresPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+// NewPostgresPool creates a new PostgreSQL connection pool.
+func NewPostgresPool(ctx context.Context, databaseURL string, maxConns, minConns int32) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database URL: %w", err)
 	}
 
-	// Configure connection pool
-	config.MaxConns = 20
-	config.MinConns = 5
+	if maxConns > 0 {
+		config.MaxConns = maxConns
+	}
+	if minConns > 0 {
+		config.MinConns = minConns
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {

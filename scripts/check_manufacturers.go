@@ -1,14 +1,21 @@
 package main
+
 import (
 	"context"
+	"flag"
 	"fmt"
-	"os"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
+
+	"github.com/freeasyman/lingce-api/internal/scriptutil"
 )
+
 func main() {
-	_ = godotenv.Load("configs/.env")
-	pool, _ := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
+	flag.Parse()
+
+	_, pool, err := scriptutil.OpenPool(context.Background(), *configPath)
+	if err != nil {
+		panic(err)
+	}
 	defer pool.Close()
 
 	var count int

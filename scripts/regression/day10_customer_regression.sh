@@ -6,6 +6,7 @@ API_PREFIX="${API_PREFIX:-/api/v1}"
 TENANT_ID="${TENANT_ID:-1}"
 SESSION_VERSION="${SESSION_VERSION:-47}"
 JWT_EXPIRY_HOURS="${JWT_EXPIRY_HOURS:-24}"
+CONFIG_PATH="${CONFIG_PATH:-./configs/dev.toml}"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -52,9 +53,28 @@ ensure_token() {
     return
   fi
 
-  if [[ -f "configs/.env" ]]; then
-    # shellcheck disable=SC1091
-    source "configs/.env"
+  if [[ -f "${CONFIG_PATH}" ]]; then
+    JWT_SECRET="$(
+      go run - "${CONFIG_PATH}" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/scriptutil"
+)
+
+func main() {
+	cfg, err := scriptutil.Load(os.Args[1])
+	if err != nil {
+		return
+	}
+	fmt.Print(strings.TrimSpace(cfg.JWT.Secret))
+}
+EOF
+    )"
     if [[ -n "${JWT_SECRET:-}" ]]; then
       TOKEN="$(gen_dev_token "$JWT_SECRET")"
       return
@@ -62,7 +82,7 @@ ensure_token() {
   fi
 
   log "ERROR: TOKEN/JWT_SECRET not provided."
-  log "Set TOKEN directly, or provide JWT_SECRET (env or configs/.env)."
+  log "Set TOKEN directly, provide JWT_SECRET, or point CONFIG_PATH at a TOML config file."
   exit 1
 }
 

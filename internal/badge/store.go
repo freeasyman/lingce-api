@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -18,7 +17,16 @@ import (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool      *pgxpool.Pool
+	ossConfig OSSConfig
+}
+
+type OSSConfig struct {
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	AccessKeySecret string
+	PublicBaseURL   string
 }
 
 type AudioCallbackIngestResult struct {
@@ -27,8 +35,8 @@ type AudioCallbackIngestResult struct {
 	Created     bool
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func NewStore(pool *pgxpool.Pool, ossConfig OSSConfig) *Store {
+	return &Store{pool: pool, ossConfig: ossConfig}
 }
 
 // Device Methods
@@ -489,7 +497,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	`, deviceNo).Scan(&tenantID, &employeeID); err != nil {
 		return nil, fmt.Errorf("device mapping not ready for %s: %w", deviceNo, err)
 	}
-	normalizedURL, ossKey, err := normalizeAudioToOwnedOSS(ctx, tenantID, orderNo, fileName, originalFileURL)
+	normalizedURL, ossKey, err := s.normalizeAudioToOwnedOSS(ctx, tenantID, orderNo, fileName, originalFileURL)
 	if err != nil {
 		return nil, fmt.Errorf("normalize callback audio to owned oss: %w", err)
 	}
@@ -584,13 +592,13 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	}, nil
 }
 
-func normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, fileName, sourceURL string) (string, string, error) {
-	endpoint := firstNonEmptyEnv("OSS_ENDPOINT", "ALIYUN_OSS_ENDPOINT")
-	bucket := firstNonEmptyEnv("OSS_BUCKET", "ALIYUN_OSS_BUCKET")
-	accessKeyID := firstNonEmptyEnv("OSS_ACCESS_KEY_ID", "ALIYUN_OSS_ACCESS_KEY_ID")
-	accessKeySecret := firstNonEmptyEnv("OSS_ACCESS_KEY_SECRET", "ALIYUN_OSS_ACCESS_KEY_SECRET")
+func (s *Store) normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, fileName, sourceURL string) (string, string, error) {
+	endpoint := strings.TrimSpace(s.ossConfig.Endpoint)
+	bucket := strings.TrimSpace(s.ossConfig.Bucket)
+	accessKeyID := strings.TrimSpace(s.ossConfig.AccessKeyID)
+	accessKeySecret := strings.TrimSpace(s.ossConfig.AccessKeySecret)
 	if endpoint == "" || bucket == "" || accessKeyID == "" || accessKeySecret == "" {
-		return "", "", fmt.Errorf("OSS env is not configured")
+		return "", "", fmt.Errorf("OSS config is not configured")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
@@ -624,7 +632,7 @@ func normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, file
 		ext = ".mp3"
 	}
 	ossKey := ossutil.GenerateObjectKey(fmt.Sprintf("recordings/%d/%s", tenantID, time.Now().UTC().Format("2006/01/02")), ext)
-	clientOSS, err := ossutil.NewClient(endpoint, accessKeyID, accessKeySecret, bucket)
+	clientOSS, err := ossutil.NewClient(endpoint, accessKeyID, accessKeySecret, bucket, strings.TrimSpace(s.ossConfig.PublicBaseURL))
 	if err != nil {
 		return "", "", fmt.Errorf("init oss client: %w", err)
 	}
@@ -639,15 +647,6 @@ func normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, file
 		return "", "", fmt.Errorf("upload source audio to oss: %w", err)
 	}
 	return ownedURL, ossKey, nil
-}
-
-func firstNonEmptyEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func firstNonEmptyCallback(values ...string) string {

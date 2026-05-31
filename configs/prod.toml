@@ -1,0 +1,50 @@
+[app]
+name = "lingce-api"
+env = "prod"
+secrets_file = "/etc/lingce/secrets.toml"
+
+[server]
+port = "18080"
+host = "0.0.0.0"
+
+[database]
+host = "pgm-2ze5k275270fch1pmo.pg.rds.aliyuncs.com"
+port = 5432
+name = "lingce_prod"
+user = "freeasyman"
+sslmode = "require"
+max_conns = 2
+min_conns = 1
+
+[jwt]
+expiry_hours = 24
+
+[recording]
+play_url_require_owned_media = true
+reset_code_dictionary_path = "/opt/lingce/configs/reset_code_dictionary.json"
+
+[external]
+llm_gateway_url = "http://127.0.0.1:8080"
+badge_middleware_url = "http://127.0.0.1:18082"
+recording_worker_url = "http://127.0.0.1:18090"
+lingce_worker_url = "http://127.0.0.1:18083"
+
+[external.ticket_notify]
+smtp_port = 25
+
+[aliyun]
+sms_sign_name = ""
+sms_template_code = ""
+oss_endpoint = "oss-cn-beijing.aliyuncs.com"
+oss_bucket = "lince"
+oss_public_base_url = "https://lince.oss-cn-beijing.aliyuncs.com"
+
+[wecom]
+suite_id = ""
+callback_base_url = ""
+api_base_url = "https://qyapi.weixin.qq.com"
+install_redirect_url = ""
+install_auth_type = 1
+
+[log]
+level = "info"

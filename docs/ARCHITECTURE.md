@@ -94,7 +94,9 @@ lingce-api/
 │       └── builder.go        # 动态 WHERE / ORDER BY 构建
 │
 ├── configs/                  # 配置文件模板
-│   └── .env.example
+│   ├── dev.toml
+│   ├── prod.toml
+│   └── example.secrets.toml
 │
 ├── deploy/                   # 部署文件
 │   └── lingce-api.service    # systemd 服务文件
@@ -477,9 +479,8 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=lingce
-ExecStart=/opt/lingce-api/lingce-api
+ExecStart=/opt/lingce-api/lingce-api --config /etc/lingce/lingce-api.toml
 WorkingDirectory=/opt/lingce-api
-EnvironmentFile=/opt/lingce-api/.env
 Restart=always
 RestartSec=5
 
@@ -494,4 +495,3 @@ GET /healthz → 200 {"status": "ok", "version": "1.0.0"}
 ```
 
 检查项：数据库连接可用。
-

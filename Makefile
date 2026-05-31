@@ -3,6 +3,7 @@
 APP_NAME := lingce-api
 BUILD_DIR := bin
 MAIN_PATH := ./cmd/lingce-api
+TEST_PKGS := $(shell go list ./... | grep -v '/scripts$$')
 
 help:
 	@echo "Available targets:"
@@ -21,11 +22,11 @@ build:
 
 run: build
 	@echo "Running $(APP_NAME)..."
-	$(BUILD_DIR)/$(APP_NAME)
+	$(BUILD_DIR)/$(APP_NAME) --config ./configs/dev.toml
 
 test:
 	@echo "Running tests..."
-	go test ./... -v -count=1
+	go test $(TEST_PKGS) -v -count=1
 
 lint:
 	@echo "Running linter..."

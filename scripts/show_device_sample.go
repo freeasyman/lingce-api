@@ -1,14 +1,21 @@
 package main
+
 import (
 	"context"
+	"flag"
 	"fmt"
-	"os"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
+
+	"github.com/freeasyman/lingce-api/internal/scriptutil"
 )
+
 func main() {
-	_ = godotenv.Load("configs/.env")
-	pool, _ := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
+	flag.Parse()
+
+	_, pool, err := scriptutil.OpenPool(context.Background(), *configPath)
+	if err != nil {
+		panic(err)
+	}
 	defer pool.Close()
 
 	fmt.Println("设备数据示例（前3台）:")
@@ -39,16 +46,22 @@ func main() {
 }
 
 func strPtr(s *string) string {
-	if s == nil { return "无" }
+	if s == nil {
+		return "无"
+	}
 	return *s
 }
 
 func int64Ptr(i *int64) string {
-	if i == nil { return "无" }
+	if i == nil {
+		return "无"
+	}
 	return fmt.Sprintf("%d", *i)
 }
 
 func intPtr(i *int) string {
-	if i == nil { return "无" }
+	if i == nil {
+		return "无"
+	}
 	return fmt.Sprintf("%d", *i)
 }

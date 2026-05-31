@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,21 +45,29 @@ var (
 )
 
 func main() {
-	// Setup logger
-	setupLogger()
+	setupLogger("info")
 
-	slog.Info("starting lingce-api", "version", version)
+	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
+	flag.Parse()
 
-	// Load configuration
-	cfg, err := config.Load()
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		slog.Error("failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// Create database connection pool
+	setupLogger(cfg.Log.Level)
+	slog.Info("starting lingce-api",
+		"version", version,
+		"env", cfg.App.Env,
+		"config", *configPath,
+		"db_host", cfg.Database.Host,
+		"db_name", cfg.Database.Name,
+		"db_user", cfg.Database.User,
+	)
+
 	ctx := context.Background()
-	pool, err := store.NewPostgresPool(ctx, cfg.Database.URL)
+	pool, err := store.NewPostgresPool(ctx, cfg.Database.DSN(), cfg.Database.MaxConns, cfg.Database.MinConns)
 	if err != nil {
 		slog.Error("failed to create database pool", "error", err)
 		os.Exit(1)
@@ -160,8 +169,23 @@ func main() {
 
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
-	recService := recording.NewService(recStore, empStore, cfg.External.RecordingWorkerURL, cfg.External.RecordingWorkerToken, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken, llmClient)
-	recHandler := recording.NewHandler(recService)
+	recService := recording.NewService(
+		recStore,
+		empStore,
+		cfg.External.RecordingWorkerURL,
+		cfg.External.RecordingWorkerToken,
+		cfg.External.LingceWorkerURL,
+		cfg.External.LingceWorkerToken,
+		cfg.Recording.ResetCodeDictionaryPath,
+		llmClient,
+	)
+	recHandler := recording.NewHandler(recService, cfg.Recording.PlayURLRequireOwnedMedia, recording.RecordingOSSConfig{
+		Endpoint:        cfg.Aliyun.OSSEndpoint,
+		Bucket:          cfg.Aliyun.OSSBucket,
+		AccessKeyID:     cfg.Aliyun.AccessKeyID,
+		AccessKeySecret: cfg.Aliyun.AccessKeySecret,
+		PublicBaseURL:   cfg.Aliyun.OSSPublicBaseURL,
+	})
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	mobileService := mobile.NewService(pool, recService)
 	mobileHandler := mobile.NewHandler(mobileService)
@@ -190,30 +214,36 @@ func main() {
 	customerHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register badge module
-	badgeStore := badge.NewStore(pool)
+	badgeStore := badge.NewStore(pool, badge.OSSConfig{
+		Endpoint:        cfg.Aliyun.OSSEndpoint,
+		Bucket:          cfg.Aliyun.OSSBucket,
+		AccessKeyID:     cfg.Aliyun.AccessKeyID,
+		AccessKeySecret: cfg.Aliyun.AccessKeySecret,
+		PublicBaseURL:   cfg.Aliyun.OSSPublicBaseURL,
+	})
 	ticketNotifier := badge.NewTicketEmailNotifier(
-		cfg.External.TicketNotifySMTPHost,
-		cfg.External.TicketNotifySMTPPort,
-		cfg.External.TicketNotifySMTPUser,
-		cfg.External.TicketNotifySMTPPass,
-		cfg.External.TicketNotifyFrom,
-		cfg.External.TicketNotifyTo,
+		cfg.External.TicketNotify.SMTPHost,
+		cfg.External.TicketNotify.SMTPPort,
+		cfg.External.TicketNotify.SMTPUser,
+		cfg.External.TicketNotify.SMTPPass,
+		cfg.External.TicketNotify.From,
+		cfg.External.TicketNotify.To,
 	)
 	if ticketNotifier == nil {
 		slog.Warn("badge ticket email notifier disabled", "missing", badge.MissingTicketEmailNotifierFields(
-			cfg.External.TicketNotifySMTPHost,
-			cfg.External.TicketNotifySMTPPort,
-			cfg.External.TicketNotifySMTPUser,
-			cfg.External.TicketNotifySMTPPass,
-			cfg.External.TicketNotifyFrom,
-			cfg.External.TicketNotifyTo,
+			cfg.External.TicketNotify.SMTPHost,
+			cfg.External.TicketNotify.SMTPPort,
+			cfg.External.TicketNotify.SMTPUser,
+			cfg.External.TicketNotify.SMTPPass,
+			cfg.External.TicketNotify.From,
+			cfg.External.TicketNotify.To,
 		))
 	} else {
 		slog.Info("badge ticket email notifier enabled",
-			"smtp_host", cfg.External.TicketNotifySMTPHost,
-			"smtp_port", cfg.External.TicketNotifySMTPPort,
-			"from", cfg.External.TicketNotifyFrom,
-			"to", cfg.External.TicketNotifyTo)
+			"smtp_host", cfg.External.TicketNotify.SMTPHost,
+			"smtp_port", cfg.External.TicketNotify.SMTPPort,
+			"from", cfg.External.TicketNotify.From,
+			"to", cfg.External.TicketNotify.To)
 	}
 	badgeService := badge.NewServiceWithMiddleware(
 		badgeStore,
@@ -244,6 +274,7 @@ func main() {
 			cfg.Aliyun.AccessKeyID,
 			cfg.Aliyun.AccessKeySecret,
 			cfg.Aliyun.OSSBucket,
+			cfg.Aliyun.OSSPublicBaseURL,
 		)
 		if err != nil {
 			slog.Warn("failed to create OSS client", "error", err)
@@ -313,9 +344,18 @@ func main() {
 	slog.Info("server stopped")
 }
 
-func setupLogger() {
+func setupLogger(level string) {
+	logLevel := slog.LevelInfo
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn", "warning":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	}
 	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel,
 	}
 	handler := slog.NewJSONHandler(os.Stdout, opts)
 	slog.SetDefault(slog.New(handler))

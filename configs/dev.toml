@@ -1,0 +1,50 @@
+[app]
+name = "lingce-api"
+env = "dev"
+secrets_file = "./secrets.local.toml"
+
+[server]
+port = "18080"
+host = "0.0.0.0"
+
+[database]
+host = "127.0.0.1"
+port = 5432
+name = "lingce_dev"
+user = "lingce_api"
+sslmode = "disable"
+max_conns = 2
+min_conns = 1
+
+[jwt]
+expiry_hours = 24
+
+[recording]
+play_url_require_owned_media = true
+reset_code_dictionary_path = "./reset_code_dictionary.json"
+
+[external]
+llm_gateway_url = "http://localhost:8080"
+badge_middleware_url = "http://localhost:18082"
+recording_worker_url = "http://localhost:18090"
+lingce_worker_url = "http://localhost:18083"
+
+[external.ticket_notify]
+smtp_port = 25
+
+[aliyun]
+sms_sign_name = ""
+sms_template_code = ""
+oss_endpoint = "oss-cn-beijing.aliyuncs.com"
+oss_bucket = "lince"
+oss_public_base_url = "https://lince.oss-cn-beijing.aliyuncs.com"
+
+[wecom]
+suite_id = ""
+callback_base_url = ""
+api_base_url = "https://qyapi.weixin.qq.com"
+install_redirect_url = ""
+install_auth_type = 1
+
+[log]
+level = "debug"

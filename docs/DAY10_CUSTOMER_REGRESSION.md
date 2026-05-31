@@ -39,12 +39,19 @@ bash scripts/regression/day10_customer_regression.sh
 脚本会按顺序读取：
 
 1. 环境变量 `JWT_SECRET`
-2. `configs/.env` 中的 `JWT_SECRET`
+2. `CONFIG_PATH` 指向的 TOML 配置及其 `secrets_file` 中的 `jwt.secret`
 
 示例：
 
 ```bash
 JWT_SECRET='your-secret-key-change-in-production' \
+bash scripts/regression/day10_customer_regression.sh
+```
+
+或：
+
+```bash
+CONFIG_PATH=./configs/dev.toml \
 bash scripts/regression/day10_customer_regression.sh
 ```
 

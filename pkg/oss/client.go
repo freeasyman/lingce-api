@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -13,12 +14,13 @@ import (
 
 // Client represents an OSS client
 type Client struct {
-	client *oss.Client
-	bucket *oss.Bucket
+	client        *oss.Client
+	bucket        *oss.Bucket
+	publicBaseURL string
 }
 
 // NewClient creates a new OSS client
-func NewClient(endpoint, accessKeyID, accessKeySecret, bucketName string) (*Client, error) {
+func NewClient(endpoint, accessKeyID, accessKeySecret, bucketName, publicBaseURL string) (*Client, error) {
 	client, err := oss.New(endpoint, accessKeyID, accessKeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OSS client: %w", err)
@@ -30,8 +32,9 @@ func NewClient(endpoint, accessKeyID, accessKeySecret, bucketName string) (*Clie
 	}
 
 	return &Client{
-		client: client,
-		bucket: bucket,
+		client:        client,
+		bucket:        bucket,
+		publicBaseURL: strings.TrimRight(strings.TrimSpace(publicBaseURL), "/"),
 	}, nil
 }
 
@@ -63,8 +66,7 @@ func (c *Client) UploadFile(ctx context.Context, objectKey string, data io.Reade
 	}
 
 	// Generate URL
-	url := fmt.Sprintf("https://%s.%s/%s", c.bucket.BucketName, c.bucket.Client.Config.Endpoint, objectKey)
-	return url, nil
+	return c.ObjectURL(objectKey), nil
 }
 
 // UploadBytes uploads bytes to OSS
@@ -98,6 +100,9 @@ func (c *Client) GetSignedURL(objectKey string, expireSeconds int64) (string, er
 
 // ObjectURL builds public object URL for the configured bucket.
 func (c *Client) ObjectURL(objectKey string) string {
+	if c.publicBaseURL != "" {
+		return c.publicBaseURL + "/" + strings.TrimLeft(objectKey, "/")
+	}
 	return fmt.Sprintf("https://%s.%s/%s", c.bucket.BucketName, c.bucket.Client.Config.Endpoint, objectKey)
 }
 

@@ -15,11 +15,21 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service             *Service
+	playURLRequireOwned bool
+	ossConfig           RecordingOSSConfig
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+type RecordingOSSConfig struct {
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	AccessKeySecret string
+	PublicBaseURL   string
+}
+
+func NewHandler(service *Service, playURLRequireOwned bool, ossConfig RecordingOSSConfig) *Handler {
+	return &Handler{service: service, playURLRequireOwned: playURLRequireOwned, ossConfig: ossConfig}
 }
 
 // RegisterRoutes registers medical recording routes

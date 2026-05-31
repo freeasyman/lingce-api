@@ -63,8 +63,8 @@ git clone git@github.com:yiliiang/lingce-api.git
 cd lingce-api
 
 # 配置
-cp configs/.env.example configs/.env
-# 编辑 configs/.env 填入数据库连接等配置
+cp configs/example.secrets.toml configs/secrets.local.toml
+# 编辑 configs/dev.toml 和 configs/secrets.local.toml
 
 # 构建 & 运行
 make build

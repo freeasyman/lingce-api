@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,14 +23,15 @@ import (
 )
 
 type Service struct {
-	store             *Store
-	employeeStore     *employee.Store
-	workerURL         string
-	workerToken       string
-	lingceWorkerURL   string
-	lingceWorkerToken string
-	httpClient        *http.Client
-	llmClient         *llmgateway.Client
+	store                   *Store
+	employeeStore           *employee.Store
+	workerURL               string
+	workerToken             string
+	lingceWorkerURL         string
+	lingceWorkerToken       string
+	resetCodeDictionaryPath string
+	httpClient              *http.Client
+	llmClient               *llmgateway.Client
 }
 
 type workerUnavailableError struct {
@@ -82,15 +82,16 @@ func IsWorkerUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
-func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken string, llmClient *llmgateway.Client) *Service {
+func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken, resetCodeDictionaryPath string, llmClient *llmgateway.Client) *Service {
 	return &Service{
-		store:             store,
-		employeeStore:     employeeStore,
-		workerURL:         strings.TrimRight(workerURL, "/"),
-		workerToken:       workerToken,
-		lingceWorkerURL:   strings.TrimRight(lingceWorkerURL, "/"),
-		lingceWorkerToken: lingceWorkerToken,
-		llmClient:         llmClient,
+		store:                   store,
+		employeeStore:           employeeStore,
+		workerURL:               strings.TrimRight(workerURL, "/"),
+		workerToken:             workerToken,
+		lingceWorkerURL:         strings.TrimRight(lingceWorkerURL, "/"),
+		lingceWorkerToken:       lingceWorkerToken,
+		resetCodeDictionaryPath: strings.TrimSpace(resetCodeDictionaryPath),
+		llmClient:               llmClient,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -2436,7 +2437,7 @@ func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistRe
 				continue
 			}
 			code := strings.ToUpper(strings.TrimSpace(fmt.Sprintf("%v", item["code"])))
-			base := describeResetCode(code)
+			base := s.describeResetCode(code)
 			reason := strings.TrimSpace(fmt.Sprintf("%v", item["reason"]))
 			action := strings.TrimSpace(fmt.Sprintf("%v", item["action"]))
 			if reason == "" || reason == "<nil>" {
@@ -2462,7 +2463,7 @@ func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistRe
 	}
 	if len(criticalDetail) == 0 {
 		for _, code := range criticalMissing {
-			criticalDetail = append(criticalDetail, describeResetCode(code))
+			criticalDetail = append(criticalDetail, s.describeResetCode(code))
 		}
 	}
 	for _, item := range items {
@@ -2470,7 +2471,7 @@ func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistRe
 		if code == "" {
 			continue
 		}
-		desc := describeResetCode(code)
+		desc := s.describeResetCode(code)
 		if _, ok := item["title"]; !ok {
 			item["title"] = desc.Title
 		}
@@ -2498,9 +2499,9 @@ func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistRe
 	}, nil
 }
 
-func describeResetCode(code string) ResetCodeInfo {
+func (s *Service) describeResetCode(code string) ResetCodeInfo {
 	trimmed := strings.ToUpper(strings.TrimSpace(code))
-	dict := getResetCodeDictionaryMap()
+	dict := s.getResetCodeDictionaryMap()
 	if v, ok := dict[trimmed]; ok {
 		return v
 	}
@@ -2534,7 +2535,7 @@ var defaultResetCodeDictionary = map[string]ResetCodeInfo{
 }
 
 func (s *Service) GetResetCodeDictionary() []ResetCodeInfo {
-	dict := getResetCodeDictionaryMap()
+	dict := s.getResetCodeDictionaryMap()
 	keys := make([]string, 0, len(dict))
 	for k := range dict {
 		keys = append(keys, k)
@@ -2547,14 +2548,14 @@ func (s *Service) GetResetCodeDictionary() []ResetCodeInfo {
 	return out
 }
 
-func getResetCodeDictionaryMap() map[string]ResetCodeInfo {
+func (s *Service) getResetCodeDictionaryMap() map[string]ResetCodeInfo {
 	merged := make(map[string]ResetCodeInfo, len(defaultResetCodeDictionary))
 	for k, v := range defaultResetCodeDictionary {
 		merged[k] = v
 	}
-	path := strings.TrimSpace(os.Getenv("RESET_CODE_DICTIONARY_PATH"))
+	path := strings.TrimSpace(s.resetCodeDictionaryPath)
 	if path == "" {
-		path = filepath.Join("configs", "reset_code_dictionary.json")
+		path = "configs/reset_code_dictionary.json"
 	}
 	bytes, err := os.ReadFile(path)
 	if err != nil || len(bytes) == 0 {

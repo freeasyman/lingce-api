@@ -37,13 +37,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
+
+	"github.com/freeasyman/lingce-api/internal/scriptutil"
 )
 func main() {
-	_ = godotenv.Load("configs/.env")
-	pool, _ := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	_, pool, err := scriptutil.OpenPool(context.Background(), "./configs/dev.toml")
+	if err != nil {
+		panic(err)
+	}
 	defer pool.Close()
 
 	var total, draft, available, inUse, returned, broken, scrapped, errorCount int

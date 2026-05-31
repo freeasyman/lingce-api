@@ -2,25 +2,20 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 
+	"github.com/freeasyman/lingce-api/internal/scriptutil"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	_ = godotenv.Load("configs/.env")
-	_ = godotenv.Load(".env")
-
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		log.Fatal("DATABASE_URL not set")
-	}
+	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
+	flag.Parse()
 
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dbURL)
+	_, pool, err := scriptutil.OpenPool(ctx, *configPath)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}

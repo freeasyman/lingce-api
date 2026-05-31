@@ -45,38 +45,39 @@ CREATE DATABASE lingce_medical;
 \q
 ```
 
-### 步骤 3：配置环境变量
+### 步骤 3：准备配置文件
 
 ```bash
 cd /Users/yiliiang/Documents/lingce-api
 
-# 复制配置文件
-cp configs/.env.example configs/.env
+# 复制 secrets 模板
+cp configs/example.secrets.toml configs/secrets.local.toml
 
 # 编辑配置文件
-nano configs/.env  # 或使用你喜欢的编辑器
+nano configs/dev.toml
+nano configs/secrets.local.toml
 ```
 
-**最小化配置**（只需修改数据库连接）：
+**最小化配置**（只需修改 `configs/dev.toml` 和 `configs/secrets.local.toml`）：
 
 ```bash
-# configs/.env
-SERVER_PORT=18080
-SERVER_HOST=0.0.0.0
+# configs/dev.toml
+[server]
+port = 18080
 
-# 修改为你的数据库连接信息
-DATABASE_URL=postgresql://lince:password@localhost:5432/lince_medical?sslmode=disable
+[database]
+host = "127.0.0.1"
+port = 5432
+name = "lingce_dev"
+user = "postgres"
+sslmode = "disable"
 
-# JWT 密钥（开发环境可以保持默认）
-JWT_SECRET=dev-secret-key-for-testing
-JWT_EXPIRY_HOURS=24
+# configs/secrets.local.toml
+[database]
+password = "replace-with-local-db-password"
 
-# 外部服务（暂时留空，不影响核心功能）
-LLM_GATEWAY_URL=http://localhost:8080
-LLM_GATEWAY_API_KEY=
-
-# 日志级别
-LOG_LEVEL=debug
+[auth]
+jwt_secret = "dev-secret-key-for-testing"
 ```
 
 ### 步骤 4：构建并运行
@@ -239,8 +240,9 @@ lsof -i :18080
 kill -9 <PID>
 
 # 或修改配置文件中的端口
-# configs/.env
-SERVER_PORT=18081
+# configs/dev.toml
+[server]
+port = "18081"
 ```
 
 ### 问题 3：JWT token 无效

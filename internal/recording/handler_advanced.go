@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -215,18 +214,14 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	ossEndpoint := firstNonEmptyEnv("OSS_ENDPOINT", "ALIYUN_OSS_ENDPOINT")
-	ossBucket := firstNonEmptyEnv("OSS_BUCKET", "ALIYUN_OSS_BUCKET")
-	ossAccessKeyID := firstNonEmptyEnv("OSS_ACCESS_KEY_ID", "ALIYUN_OSS_ACCESS_KEY_ID")
-	ossAccessKeySecret := firstNonEmptyEnv("OSS_ACCESS_KEY_SECRET", "ALIYUN_OSS_ACCESS_KEY_SECRET")
-	requireOwned := strings.EqualFold(strings.TrimSpace(os.Getenv("PLAY_URL_REQUIRE_OWNED_MEDIA")), "true")
-	if !requireOwned {
-		// Default to strict mode unless explicitly disabled.
-		requireOwned = strings.TrimSpace(os.Getenv("PLAY_URL_REQUIRE_OWNED_MEDIA")) == ""
-	}
+	ossEndpoint := strings.TrimSpace(h.ossConfig.Endpoint)
+	ossBucket := strings.TrimSpace(h.ossConfig.Bucket)
+	ossAccessKeyID := strings.TrimSpace(h.ossConfig.AccessKeyID)
+	ossAccessKeySecret := strings.TrimSpace(h.ossConfig.AccessKeySecret)
+	requireOwned := h.playURLRequireOwned
 
 	if strings.TrimSpace(ref.OSSKey) != "" && ossEndpoint != "" && ossBucket != "" && ossAccessKeyID != "" && ossAccessKeySecret != "" {
-		client, cErr := ossutil.NewClient(ossEndpoint, ossAccessKeyID, ossAccessKeySecret, ossBucket)
+		client, cErr := ossutil.NewClient(ossEndpoint, ossAccessKeyID, ossAccessKeySecret, ossBucket, strings.TrimSpace(h.ossConfig.PublicBaseURL))
 		if cErr != nil {
 			httputil.WriteInternalError(w, "failed to init oss client")
 			return
@@ -254,15 +249,6 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		URL:       ref.FileURL,
 		ExpiresAt: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 	})
-}
-
-func firstNonEmptyEnv(keys ...string) string {
-	for _, k := range keys {
-		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // TestPlayback handles testing playback

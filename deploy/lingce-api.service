@@ -7,8 +7,7 @@ Type=simple
 User=lingce
 Group=lingce
 WorkingDirectory=/opt/lingce-api
-ExecStart=/opt/lingce-api/lingce-api
-EnvironmentFile=/opt/lingce-api/.env
+ExecStart=/opt/lingce-api/lingce-api --config /etc/lingce/lingce-api.toml
 
 Restart=always
 RestartSec=5
