@@ -7,7 +7,6 @@ import (
 	"log"
 
 	"github.com/freeasyman/lingce-api/internal/scriptutil"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {

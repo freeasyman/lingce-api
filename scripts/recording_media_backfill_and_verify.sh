@@ -42,7 +42,7 @@ echo "[1/4] Pre-check coverage"
 
 if [[ "${RUN_BACKFILL:-0}" == "1" ]]; then
   echo "[2/4] Run backfill (DRY_RUN=${DRY_RUN:-false})"
-  (cd "${ROOT_DIR}" && go run ./scripts/backfill_recording_media_to_oss.go --config "${CONFIG_PATH}" ${DRY_RUN:+--dry-run})
+  (cd "${ROOT_DIR}" && go run ./scripts/cmd/backfill_recording_media_to_oss --config "${CONFIG_PATH}" ${DRY_RUN:+--dry-run})
 else
   echo "[2/4] Skip backfill (set RUN_BACKFILL=1 to execute)"
 fi
