@@ -527,11 +527,11 @@ func (s *Store) syncTenantValidityWithSubscriptionTx(ctx context.Context, tx pgx
 	setClauses := []string{"valid_from = $2", "valid_to = $3", "updated_at = NOW()"}
 	args := []interface{}{tenantID, validFrom, validTo}
 	if hasServiceStartedOn {
-		setClauses = append(setClauses, fmt.Sprintf("service_started_on = $%d::date", len(args)))
+		setClauses = append(setClauses, fmt.Sprintf("service_started_on = $%d::date", len(args)+1))
 		args = append(args, validFrom)
 	}
 	if hasServiceExpiredOn {
-		setClauses = append(setClauses, fmt.Sprintf("service_expired_on = $%d::date", len(args)))
+		setClauses = append(setClauses, fmt.Sprintf("service_expired_on = $%d::date", len(args)+1))
 		args = append(args, validTo)
 	}
 

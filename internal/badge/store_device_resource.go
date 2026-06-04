@@ -14,17 +14,17 @@ import (
 func v2CurrentStatusFromStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "pending":
-		return "pending"
+		return "pending_acceptance"
 	case "ready":
-		return "ready"
+		return "in_stock"
 	case "in_use":
-		return "in_use"
+		return "assigned_employee"
 	case "blocked":
-		return "blocked"
+		return "repair_pending"
 	case "retired":
-		return "retired"
+		return "scrapped"
 	default:
-		return "pending"
+		return "pending_acceptance"
 	}
 }
 
@@ -254,7 +254,7 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 				status, health_status, import_batch_no, metadata, ext_json, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
-				'pending', 'pending_acceptance', 'unassigned', 'unknown',
+					'pending_acceptance', 'pending_acceptance', 'unassigned', 'unknown',
 				$5, $6, NULLIF($7, ''),
 				'pending', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
@@ -391,7 +391,7 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
 			SET status='in_use',
-			    current_status='in_use',
+			    current_status='assigned_employee',
 			    lifecycle_status='active',
 			    assignment_status='employee',
 			    tenant_id=$2,
@@ -470,7 +470,7 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 		if _, err := tx.Exec(ctx, `
 			UPDATE badge_devices
 			SET status='ready',
-			    current_status='ready',
+			    current_status='in_stock',
 			    lifecycle_status='active',
 			    assignment_status='unassigned',
 			    tenant_id=NULL,
@@ -525,7 +525,7 @@ func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRe
 	if _, err := tx.Exec(ctx, `
 		UPDATE badge_devices
 		SET status='in_use',
-		    current_status='in_use',
+		    current_status='assigned_employee',
 		    lifecycle_status='active',
 		    assignment_status='employee',
 		    tenant_id=$2,
