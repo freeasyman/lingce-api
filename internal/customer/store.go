@@ -1309,7 +1309,8 @@ func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, p
 			r.analysis_status,
 			r.transcription_status,
 			r.recorded_at,
-			r.created_at
+			r.created_at,
+			COALESCE(r.analysis_result::text, '{}') AS analysis_result
 		FROM recordings r
 		LEFT JOIN employees e ON e.id = r.employee_id
 		WHERE r.customer_id = $1
@@ -1329,9 +1330,11 @@ func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, p
 		var duration *int
 		var analysisStatus, transcriptionStatus *string
 		var recordedAt, createdAt interface{}
-		if err := rows.Scan(&id, &employeeID, &employeeName, &fileURL, &duration, &analysisStatus, &transcriptionStatus, &recordedAt, &createdAt); err != nil {
+		var analysisRaw string
+		if err := rows.Scan(&id, &employeeID, &employeeName, &fileURL, &duration, &analysisStatus, &transcriptionStatus, &recordedAt, &createdAt, &analysisRaw); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan consultation record: %w", err)
 		}
+		consultationRecord := buildCustomerConsultationRecord(analysisRaw, recordedAt)
 		status := "processing"
 		if analysisStatus != nil && *analysisStatus == "completed" {
 			status = "completed"
@@ -1351,10 +1354,132 @@ func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, p
 			"status":               status,
 			"recorded_at":          fmt.Sprintf("%v", recordedAt),
 			"created_at":           fmt.Sprintf("%v", createdAt),
+			"recording_id":         id,
+			"consultation_record":  consultationRecord,
 		})
 	}
 
 	return records, total, nil
+}
+
+func buildCustomerConsultationRecord(analysisRaw string, recordedAt interface{}) map[string]interface{} {
+	result := map[string]interface{}{}
+	analysis := map[string]interface{}{}
+	if strings.TrimSpace(analysisRaw) != "" {
+		_ = json.Unmarshal([]byte(analysisRaw), &analysis)
+	}
+	consultation := mapValue(analysis, "consultation_record")
+	workRecord := mapValue(analysis, "work_record")
+	persuasive := mapValue(analysis, "persuasive")
+
+	result["visit_time"] = firstString(valueAt(consultation, "visit_time"), fmt.Sprintf("%v", recordedAt))
+	result["chief_complaint"] = firstString(
+		valueAt(consultation, "chief_complaint"),
+		workRecordField(workRecord, "主诉", "诉求", "核心问题", "来院目的", "咨询目的", "需求"),
+		valueAt(workRecord, "summary"),
+	)
+	result["present_illness"] = firstString(valueAt(consultation, "present_illness"), valueAt(workRecord, "summary"))
+	result["past_history"] = firstString(
+		valueAt(consultation, "past_history"),
+		joinWorkRecordFields(workRecord, "既往史", "过敏史", "手术史", "治疗史", "戴镜史", "家族史", "病史"),
+	)
+	result["examination"] = firstString(
+		valueAt(consultation, "examination"),
+		workRecordField(workRecord, "检查", "检验", "检查安排", "检测", "评估", "复查"),
+	)
+	result["consultation_item"] = firstString(
+		valueAt(consultation, "consultation_item"),
+		workRecordField(workRecord, "咨询项目", "意向项目", "治疗项目", "手术项目", "产品", "术式", "项目"),
+		valueAt(persuasive, "intent_product_name"),
+		valueAt(persuasive, "intent_project"),
+	)
+	result["consultation_content"] = firstString(valueAt(consultation, "consultation_content"), valueAt(workRecord, "summary"))
+	result["deal_intention"] = firstString(valueAt(consultation, "deal_intention"), valueAt(persuasive, "deal_status"))
+	result["intention_note"] = firstString(valueAt(consultation, "intention_note"), valueAt(persuasive, "real_reason"), valueAt(persuasive, "real_concern"))
+	result["follow_up_suggestion"] = firstString(valueAt(consultation, "follow_up_suggestion"), valueAt(persuasive, "next_action"))
+	result["consultant_note"] = firstString(valueAt(consultation, "consultant_note"))
+	return result
+}
+
+func mapValue(m map[string]interface{}, key string) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	if child, ok := m[key].(map[string]interface{}); ok {
+		return child
+	}
+	return nil
+}
+
+func valueAt(m map[string]interface{}, key string) interface{} {
+	if m == nil {
+		return nil
+	}
+	return m[key]
+}
+
+func firstString(values ...interface{}) string {
+	for _, value := range values {
+		text := strings.TrimSpace(fmt.Sprintf("%v", value))
+		if text == "" || text == "<nil>" {
+			continue
+		}
+		if text == "persuasive" || text == "retention" || text == "none" {
+			continue
+		}
+		return text
+	}
+	return ""
+}
+
+func workRecordField(workRecord map[string]interface{}, keywords ...string) string {
+	fields, ok := workRecord["fields"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, raw := range fields {
+		field, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		label := strings.TrimSpace(fmt.Sprintf("%v", field["label"]))
+		value := strings.TrimSpace(fmt.Sprintf("%v", field["value"]))
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		for _, keyword := range keywords {
+			if strings.Contains(label, keyword) {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func joinWorkRecordFields(workRecord map[string]interface{}, keywords ...string) string {
+	fields, ok := workRecord["fields"].([]interface{})
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, len(fields))
+	for _, raw := range fields {
+		field, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		label := strings.TrimSpace(fmt.Sprintf("%v", field["label"]))
+		value := strings.TrimSpace(fmt.Sprintf("%v", field["value"]))
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		for _, keyword := range keywords {
+			if strings.Contains(label, keyword) {
+				parts = append(parts, fmt.Sprintf("%s：%s", label, value))
+				break
+			}
+		}
+	}
+	return strings.Join(parts, "；")
 }
 
 func (s *Store) ListEMRRecords(ctx context.Context, customerID int64, page, pageSize int) ([]map[string]interface{}, int, error) {
