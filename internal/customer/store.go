@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -121,6 +122,8 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		       COALESCE(ci.first_channel, source) AS first_channel,
 		       COALESCE(ci.identity_count, 0) AS identity_count,
 		       COALESCE(it.total_interactions, 0) AS total_interactions,
+		       COALESCE(ds.deal_count, 0) AS deal_count,
+		       COALESCE(ds.total_converted_amount, 0)::float8 AS total_converted_amount,
 		       it.last_interaction_at,
 		       notes, extra_data, created_by, created_at, updated_at
 		FROM customers
@@ -145,6 +148,28 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			WHERE r.customer_id IS NOT NULL
 			GROUP BY r.customer_id
 		) it ON it.customer_id = customers.id
+		LEFT JOIN (
+			SELECT r.customer_id,
+			       COUNT(*) FILTER (WHERE (
+			           CASE
+			               WHEN NULLIF(r.confirmed_deal_status, '') IS NOT NULL THEN r.confirmed_deal_status = '成交了'
+			               ELSE COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status', '') IN ('顺利接受', '已接受治疗', '已决定治疗', '已成交')
+			           END
+			       ))::int AS deal_count,
+			       COALESCE(SUM(
+			           CASE
+			               WHEN NULLIF(r.confirmed_deal_status, '') = '成交了' THEN COALESCE(r.converted_amount, 0)
+			               WHEN NULLIF(r.confirmed_deal_status, '') IS NULL
+			                    AND COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status', '') IN ('顺利接受', '已接受治疗', '已决定治疗', '已成交')
+			                    AND COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'intent_amount', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+			                   THEN (r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'intent_amount')::numeric
+			               ELSE 0
+			           END
+			       ), 0)::float8 AS total_converted_amount
+			FROM recordings r
+			WHERE r.customer_id IS NOT NULL
+			GROUP BY r.customer_id
+		) ds ON ds.customer_id = customers.id
 		WHERE %s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
@@ -164,7 +189,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
 			&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.FirstChannel,
-			&c.IdentityCount, &c.TotalInteractions, &c.LastInteractionAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.IdentityCount, &c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.LastInteractionAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan customer: %w", err)
 		}
@@ -246,20 +271,70 @@ func (s *Store) GetCustomerStats(ctx context.Context, tenantID *int64) (*Custome
 // GetCustomerByID retrieves a customer by ID
 func (s *Store) GetCustomerByID(ctx context.Context, id int64) (*Customer, error) {
 	query := `
-		SELECT id, tenant_id, name, phone, email, gender, age, source, status, momentum,
-		       assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
-		       COALESCE(NULLIF(lifecycle_stage, ''), 'unknown') AS lifecycle_stage,
-		       COALESCE(value_score, momentum, 0) AS value_score,
-		       notes, extra_data, created_by, created_at, updated_at
+		SELECT customers.id, customers.tenant_id, customers.name, customers.phone, customers.email, customers.gender, customers.age, customers.source, customers.status, customers.momentum,
+		       customers.assigned_to, customers.assigned_at, customers.converted_at, customers.last_contacted_at, customers.next_follow_up_at,
+		       COALESCE(NULLIF(customers.lifecycle_stage, ''), 'unknown') AS lifecycle_stage,
+		       COALESCE(customers.value_score, customers.momentum, 0) AS value_score,
+		       COALESCE(ci.first_channel, customers.source) AS first_channel,
+		       COALESCE(ci.identity_count, 0) AS identity_count,
+		       COALESCE(it.total_interactions, 0) AS total_interactions,
+		       COALESCE(ds.deal_count, 0) AS deal_count,
+		       COALESCE(ds.total_converted_amount, 0)::float8 AS total_converted_amount,
+		       it.last_interaction_at,
+		       customers.notes, customers.extra_data, customers.created_by, customers.created_at, customers.updated_at
 		FROM customers
-		WHERE id = $1 AND deleted_at IS NULL
+		LEFT JOIN (
+			SELECT customer_id,
+			       MIN(COALESCE(NULLIF(channel_type, ''), 'unknown')) AS first_channel,
+			       COUNT(*)::int AS identity_count
+			FROM customer_identities
+			GROUP BY customer_id
+		) ci ON ci.customer_id = customers.id
+		LEFT JOIN (
+			SELECT r.customer_id,
+			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id) + COUNT(DISTINCT t.id))::int AS total_interactions,
+			       GREATEST(
+			           COALESCE(MAX(i.interacted_at), '1970-01-01'::timestamp),
+			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp),
+			           COALESCE(MAX(t.updated_at), '1970-01-01'::timestamp)
+			       ) AS last_interaction_at
+			FROM recordings r
+			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
+			LEFT JOIN recording_tasks t ON t.recording_id = r.id AND t.status IN ('completed', 'cancelled')
+			WHERE r.customer_id IS NOT NULL
+			GROUP BY r.customer_id
+		) it ON it.customer_id = customers.id
+		LEFT JOIN (
+			SELECT r.customer_id,
+			       COUNT(*) FILTER (WHERE (
+			           CASE
+			               WHEN NULLIF(r.confirmed_deal_status, '') IS NOT NULL THEN r.confirmed_deal_status = '成交了'
+			               ELSE COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status', '') IN ('顺利接受', '已接受治疗', '已决定治疗', '已成交')
+			           END
+			       ))::int AS deal_count,
+			       COALESCE(SUM(
+			           CASE
+			               WHEN NULLIF(r.confirmed_deal_status, '') = '成交了' THEN COALESCE(r.converted_amount, 0)
+			               WHEN NULLIF(r.confirmed_deal_status, '') IS NULL
+			                    AND COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status', '') IN ('顺利接受', '已接受治疗', '已决定治疗', '已成交')
+			                    AND COALESCE(r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'intent_amount', '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+			                   THEN (r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'intent_amount')::numeric
+			               ELSE 0
+			           END
+			       ), 0)::float8 AS total_converted_amount
+			FROM recordings r
+			WHERE r.customer_id IS NOT NULL
+			GROUP BY r.customer_id
+		) ds ON ds.customer_id = customers.id
+		WHERE customers.id = $1 AND customers.deleted_at IS NULL
 	`
 
 	var c Customer
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 		&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
-		&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.Notes, &c.ExtraData, &c.CreatedBy,
+		&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.FirstChannel, &c.IdentityCount,
+		&c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.LastInteractionAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
 		&c.CreatedAt, &c.UpdatedAt,
 	)
 
@@ -1368,9 +1443,10 @@ func buildCustomerConsultationRecord(analysisRaw string, recordedAt interface{})
 	if strings.TrimSpace(analysisRaw) != "" {
 		_ = json.Unmarshal([]byte(analysisRaw), &analysis)
 	}
-	consultation := mapValue(analysis, "consultation_record")
-	workRecord := mapValue(analysis, "work_record")
-	persuasive := mapValue(analysis, "persuasive")
+	normalized := normalizeCustomerConsultationAnalysis(analysis)
+	consultation := mapValue(normalized, "consultation_record")
+	workRecord := mapValue(normalized, "work_record")
+	persuasive := mapValue(normalized, "persuasive")
 
 	result["visit_time"] = firstString(valueAt(consultation, "visit_time"), fmt.Sprintf("%v", recordedAt))
 	result["chief_complaint"] = firstString(
@@ -1398,7 +1474,61 @@ func buildCustomerConsultationRecord(analysisRaw string, recordedAt interface{})
 	result["intention_note"] = firstString(valueAt(consultation, "intention_note"), valueAt(persuasive, "real_reason"), valueAt(persuasive, "real_concern"))
 	result["follow_up_suggestion"] = firstString(valueAt(consultation, "follow_up_suggestion"), valueAt(persuasive, "next_action"))
 	result["consultant_note"] = firstString(valueAt(consultation, "consultant_note"))
+	result["converted_amount"] = firstNumericString(valueAt(persuasive, "intent_amount"))
 	return result
+}
+
+func normalizeCustomerConsultationAnalysis(analysis map[string]interface{}) map[string]interface{} {
+	if analysis == nil {
+		return nil
+	}
+	if hasConsultationPayload(analysis) {
+		return analysis
+	}
+	if raw := mapValue(analysis, "raw"); raw != nil {
+		if nested := mapValue(raw, "consultant_conversion_analysis_v1"); hasConsultationPayload(nested) {
+			return nested
+		}
+	}
+	if nested := mapValue(analysis, "analysis_result"); hasConsultationPayload(nested) {
+		return nested
+	}
+	return analysis
+}
+
+func hasConsultationPayload(m map[string]interface{}) bool {
+	if m == nil {
+		return false
+	}
+	return mapValue(m, "consultation_record") != nil || mapValue(m, "persuasive") != nil || mapValue(m, "work_record") != nil
+}
+
+func firstNumericString(values ...interface{}) interface{} {
+	for _, value := range values {
+		switch v := value.(type) {
+		case float64:
+			return v
+		case float32:
+			return float64(v)
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		case json.Number:
+			if parsed, err := v.Float64(); err == nil {
+				return parsed
+			}
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				continue
+			}
+			if parsed, err := strconv.ParseFloat(trimmed, 64); err == nil {
+				return parsed
+			}
+		}
+	}
+	return nil
 }
 
 func mapValue(m map[string]interface{}, key string) map[string]interface{} {
