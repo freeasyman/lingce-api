@@ -106,7 +106,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -132,7 +132,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
@@ -200,7 +200,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -226,7 +226,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
@@ -456,7 +456,7 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -482,7 +482,7 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		           FROM inst_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),

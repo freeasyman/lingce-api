@@ -33,6 +33,14 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func (s *Store) tableExistsTx(ctx context.Context, tx pgx.Tx, tableName string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+tableName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("failed to detect table %s: %w", tableName, err)
+	}
+	return exists, nil
+}
+
 func (s *Store) tenantIsActiveUsesInteger(ctx context.Context) (bool, error) {
 	var dataType string
 	err := s.pool.QueryRow(ctx, `
@@ -395,20 +403,63 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		return fmt.Errorf("failed to resolve tenant admin role: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `
+	hasInstitutionEmployeeRoles, err := s.tableExistsTx(ctx, tx, "institution_employee_roles")
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		DELETE FROM inst_employee_roles
 		WHERE tenant_id = $1 AND employee_id = $2
-	`, tenantID, employeeID)
+	`, tenantID, employeeID); err != nil {
+		return fmt.Errorf("failed to clear existing tenant admin role source: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at, updated_at)
+		VALUES ($1, $2, 'admin', 'tenant_init', NOW(), NOW())
+	`, tenantID, employeeID); err != nil {
+		return fmt.Errorf("failed to assign tenant admin role source: %w", err)
+	}
+	hasInstitutionRoleMenus, err := s.tableExistsTx(ctx, tx, "institution_role_menus")
 	if err != nil {
-		return fmt.Errorf("failed to clear existing tenant admin role: %w", err)
+		return err
+	}
+	hasInstitutionMenus, err := s.tableExistsTx(ctx, tx, "institution_menus")
+	if err != nil {
+		return err
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at)
-		VALUES ($1, $2, 'admin', 'tenant_init', NOW())
-	`, tenantID, employeeID)
-	if err != nil {
-		return fmt.Errorf("failed to assign tenant admin role: %w", err)
+	if hasInstitutionEmployeeRoles {
+		_, err = tx.Exec(ctx, `
+			DELETE FROM institution_employee_roles
+			WHERE tenant_id = $1 AND employee_id = $2
+		`, tenantID, employeeID)
+		if err != nil {
+			return fmt.Errorf("failed to clear existing institution tenant admin role mirror: %w", err)
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO institution_employee_roles (employee_id, role_id, tenant_id, role_code, source, created_at, updated_at)
+			VALUES ($1, $2, $3, 'admin', 'tenant_init', NOW(), NOW())
+		`, employeeID, adminRoleID, tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to assign institution tenant admin role mirror: %w", err)
+		}
+	}
+
+	if hasInstitutionRoleMenus && hasInstitutionMenus {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+			SELECT $1, 'admin', m.code, NOW(), NOW()
+			FROM institution_menus m
+			WHERE m.deleted_at IS NULL
+			  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
+			  AND COALESCE(m.is_active, true) = true
+			  AND COALESCE(m.is_default_for_admin, false) = true
+			ON CONFLICT (tenant_id, role_code, menu_code) DO NOTHING
+		`, tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to assign institution tenant admin menus: %w", err)
+		}
 	}
 
 	// Tenant admins should start with access to menus explicitly marked as default admin menus.
@@ -451,15 +502,22 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		if !exists {
 			continue
 		}
-		roleID, roleExists := roleIDByCode[item.DefaultRole]
+		roleCode := strings.TrimSpace(item.DefaultRole)
+		roleID, roleExists := roleIDByCode[roleCode]
 		if !roleExists {
 			roleID = adminRoleID
+			roleCode = "admin"
 		}
 		_, err = tx.Exec(ctx, `
-			INSERT INTO institution_department_roles (department_id, role_id, is_default, created_at)
-			VALUES ($1, $2, true, NOW())
-			ON CONFLICT (department_id) DO UPDATE SET role_id = EXCLUDED.role_id, is_default = EXCLUDED.is_default
-		`, departmentID, roleID)
+			INSERT INTO institution_department_roles (department_id, role_id, tenant_id, role_code, is_default, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, true, NOW(), NOW())
+			ON CONFLICT (department_id) DO UPDATE
+			SET role_id = EXCLUDED.role_id,
+			    tenant_id = EXCLUDED.tenant_id,
+			    role_code = EXCLUDED.role_code,
+			    is_default = EXCLUDED.is_default,
+			    updated_at = NOW()
+		`, departmentID, roleID, tenantID, roleCode)
 		if err != nil {
 			return fmt.Errorf("failed to assign default role for department %s: %w", item.Name, err)
 		}

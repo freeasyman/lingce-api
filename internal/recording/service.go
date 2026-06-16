@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
+	authpkg "github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
 )
@@ -96,6 +97,79 @@ func NewService(store *Store, employeeStore *employee.Store, workerURL, workerTo
 			Timeout: 15 * time.Second,
 		},
 	}
+}
+
+func recordingScopeMenuCode(scope RecordingScope) string {
+	switch scope {
+	case RecordingScopeDoctor:
+		return "doctor_recordings"
+	case RecordingScopeConsultant:
+		return "consultant_recordings"
+	case RecordingScopeFrontdesk:
+		return "frontdesk_recordings"
+	case RecordingScopeTherapist:
+		return "therapist_recordings"
+	default:
+		return ""
+	}
+}
+
+func businessScopeMenuCode(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "doctor":
+		return "doctor_recordings"
+	case "consultant":
+		return "consultant_recordings"
+	case "frontdesk", "reception", "receptionist", "customer_service", "service":
+		return "frontdesk_recordings"
+	case "therapist":
+		return "therapist_recordings"
+	default:
+		return ""
+	}
+}
+
+func (s *Service) ValidateRecordingScopeAccess(ctx context.Context, userType authpkg.UserType, userID int64, scope *RecordingScope) error {
+	if scope == nil {
+		return nil
+	}
+	if userType != authpkg.UserTypeEmployee && userType != authpkg.UserTypeMobile {
+		return nil
+	}
+
+	menuCode := recordingScopeMenuCode(*scope)
+	if menuCode == "" {
+		return nil
+	}
+
+	allowed, err := s.store.EmployeeHasInstitutionMenuAccess(ctx, userID, menuCode)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("recording scope %s requires menu %s", *scope, menuCode)
+	}
+	return nil
+}
+
+func (s *Service) ValidateBusinessScopeAccess(ctx context.Context, userType authpkg.UserType, userID int64, businessScope string) error {
+	if userType != authpkg.UserTypeEmployee && userType != authpkg.UserTypeMobile {
+		return nil
+	}
+
+	menuCode := businessScopeMenuCode(businessScope)
+	if menuCode == "" {
+		return nil
+	}
+
+	allowed, err := s.store.EmployeeHasInstitutionMenuAccess(ctx, userID, menuCode)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("business scope %s requires menu %s", strings.TrimSpace(businessScope), menuCode)
+	}
+	return nil
 }
 
 // ListRecordings retrieves a paginated list of medical recordings
@@ -2918,10 +2992,12 @@ func toMapSliceFromUnknown(raw interface{}) []map[string]interface{} {
 
 func normalizeTaskPriority(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "high", "urgent":
+	case "high", "urgent", "高":
 		return "high"
-	case "low":
+	case "low", "低":
 		return "low"
+	case "medium", "中":
+		return "medium"
 	default:
 		return "medium"
 	}

@@ -123,7 +123,7 @@ func (s *Service) SearchRecordings(ctx context.Context, req SearchRequest) ([]Se
 				SELECT lower(er.role_code)
 				FROM inst_employee_roles er
 				WHERE er.tenant_id = r.tenant_id AND er.employee_id = r.employee_id
-				ORDER BY er.created_at DESC
+				ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 				LIMIT 1
 			), '') AS employee_role,
 			COALESCE(NULLIF(c.name, ''), NULLIF(r.analysis_display->>'patient_name', ''), '-') AS patient_name,
@@ -316,7 +316,7 @@ func (s *Service) loadSourceRecordings(ctx context.Context, q pgx.Tx, sourceTena
 		           SELECT lower(er.role_code)
 		           FROM inst_employee_roles er
 		           WHERE er.tenant_id = recordings.tenant_id AND er.employee_id = recordings.employee_id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       file_url, COALESCE(file_name, ''), COALESCE(duration, 0),
@@ -348,7 +348,7 @@ func (s *Service) loadTargetEmployeeRoleMap(ctx context.Context, q pgx.Tx, tenan
 		           SELECT lower(er.role_code)
 		           FROM inst_employee_roles er
 		           WHERE er.tenant_id = e.tenant_id AND er.employee_id = e.id
-		           ORDER BY er.created_at DESC
+		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 		           LIMIT 1
 		       ), '') AS role_code
 		FROM employees e

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -321,6 +322,26 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 	}
 
 	return &emp, nil
+}
+
+func (s *Store) GetLatestEmployeeRoleCode(ctx context.Context, tenantID, employeeID int64) (string, error) {
+	var roleCode string
+	err := s.pool.QueryRow(ctx, `
+		SELECT lower(trim(er.role_code)) AS role_code
+		FROM inst_employee_roles er
+		WHERE er.tenant_id = $1
+		  AND er.employee_id = $2
+		  AND trim(COALESCE(er.role_code, '')) <> ''
+		ORDER BY COALESCE(er.updated_at, er.created_at) DESC, er.id DESC
+		LIMIT 1
+	`, tenantID, employeeID).Scan(&roleCode)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to query employee role code: %w", err)
+	}
+	return strings.TrimSpace(roleCode), nil
 }
 
 // GetTenantByID retrieves a tenant by ID

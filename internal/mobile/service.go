@@ -378,7 +378,7 @@ func (s *Service) getCurrentEmployee(ctx context.Context, claims *auth.Claims) (
 				FROM inst_employee_roles er
 				WHERE er.tenant_id = e.tenant_id
 				  AND er.employee_id = e.id
-				ORDER BY er.created_at DESC
+				ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 				LIMIT 1
 			), '') AS role_code,
 			COALESCE((
@@ -404,7 +404,7 @@ func (s *Service) getCurrentEmployee(ctx context.Context, claims *auth.Claims) (
 				FROM inst_employee_roles er
 				WHERE er.tenant_id = e.tenant_id
 				  AND er.employee_id = e.id
-				ORDER BY er.created_at DESC
+				ORDER BY COALESCE(er.updated_at, er.created_at) DESC
 				LIMIT 1
 			), '') AS role_name
 		FROM employees e

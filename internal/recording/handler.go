@@ -38,7 +38,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Recording CRUD endpoints
 	mux.Handle("GET /api/v1/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
+	mux.Handle("GET /api/v1/recordings/prompt-debug", authMw(http.HandlerFunc(h.ListPromptDebugRecordings)))
 	mux.Handle("GET /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
+	mux.Handle("GET /api/v1/recordings/{id}/prompt-debug-annotation", authMw(http.HandlerFunc(h.GetPromptDebugAnnotation)))
+	mux.Handle("PUT /api/v1/recordings/{id}/prompt-debug-annotation", authMw(http.HandlerFunc(h.UpsertPromptDebugAnnotation)))
 	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
 	mux.Handle("PATCH /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
@@ -220,6 +223,19 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := h.service.ValidateRecordingScopeAccess(r.Context(), claims.UserType, claims.UserID, req.Scope); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	if businessScope := strings.TrimSpace(r.URL.Query().Get("business_scope")); businessScope != "" {
+		req.BusinessScope = &businessScope
+		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, businessScope); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+
 	if empIDStr := r.URL.Query().Get("employee_id"); empIDStr != "" {
 		empID, _ := strconv.ParseInt(empIDStr, 10, 64)
 		req.EmployeeID = &empID
@@ -380,6 +396,10 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 	if claims.UserType != auth.UserTypeAdmin {
 		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
 			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, recording.BusinessScope); err != nil {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
 	}

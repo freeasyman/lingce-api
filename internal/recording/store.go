@@ -18,7 +18,9 @@ type Store struct {
 
 type RecordingMediaRef struct {
 	RecordingID int64
+	TenantID    int64
 	FileURL     string
+	FileName    string
 	OSSKey      string
 }
 
@@ -31,6 +33,147 @@ var (
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) getLatestEmployeeRoleCode(ctx context.Context, employeeID int64) (int64, string, error) {
+	var tenantID int64
+	var roleCode string
+	err := s.pool.QueryRow(ctx, `
+		SELECT er.tenant_id, lower(trim(er.role_code)) AS role_code
+		FROM inst_employee_roles er
+		JOIN employees e
+		  ON e.id = er.employee_id
+		 AND e.tenant_id = er.tenant_id
+		 AND e.deleted_at IS NULL
+		WHERE er.employee_id = $1
+		  AND trim(COALESCE(er.role_code, '')) <> ''
+		ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		LIMIT 1
+	`, employeeID).Scan(&tenantID, &roleCode)
+	if err != nil {
+		return 0, "", err
+	}
+	return tenantID, roleCode, nil
+}
+
+func (s *Store) isTenantMenuAllowed(ctx context.Context, tenantID int64, menuCode string) (bool, error) {
+	menuCode = strings.ToLower(strings.TrimSpace(menuCode))
+	if menuCode == "" {
+		return false, nil
+	}
+
+	var groupID *int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT g.id
+		FROM tenant_feature_assignments a
+		JOIN tenant_feature_groups g ON g.id = a.group_id
+		WHERE a.tenant_id = $1
+		  AND CASE
+		      WHEN g.is_active::text IN ('1','t','true','TRUE') THEN true
+		      ELSE false
+		  END = true
+	`, tenantID).Scan(&groupID)
+	if err != nil && err != pgx.ErrNoRows {
+		return false, fmt.Errorf("query tenant feature assignment: %w", err)
+	}
+	if groupID == nil {
+		return false, nil
+	}
+
+	allowed := false
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM tenant_feature_group_items
+			WHERE group_id = $1
+			  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+			  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
+			  AND COALESCE(is_enabled, true) = true
+		)
+	`, *groupID, menuCode).Scan(&allowed); err != nil {
+		return false, fmt.Errorf("query feature-group menu allowance: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) AS code,
+		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode
+		FROM tenant_feature_overrides
+		WHERE tenant_id = $1
+		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+		  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
+	`, tenantID, menuCode)
+	if err != nil {
+		return false, fmt.Errorf("query feature overrides: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var code, mode string
+		if err := rows.Scan(&code, &mode); err != nil {
+			return false, fmt.Errorf("scan feature override: %w", err)
+		}
+		if code != menuCode {
+			continue
+		}
+		if mode == "allow" {
+			allowed = true
+		} else {
+			allowed = false
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate feature overrides: %w", err)
+	}
+	return allowed, nil
+}
+
+func (s *Store) EmployeeHasInstitutionMenuAccess(ctx context.Context, employeeID int64, menuCode string) (bool, error) {
+	menuCode = strings.ToLower(strings.TrimSpace(menuCode))
+	if menuCode == "" {
+		return false, nil
+	}
+
+	tenantID, roleCode, err := s.getLatestEmployeeRoleCode(ctx, employeeID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("load employee role for menu access: %w", err)
+	}
+
+	var menuActive bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM institution_menus m
+			WHERE lower(trim(m.code)) = $1
+			  AND m.deleted_at IS NULL
+			  AND COALESCE(m.is_active, true) = true
+			  AND (m.tenant_id = $2 OR m.tenant_id IS NULL)
+		)
+	`, menuCode, tenantID).Scan(&menuActive); err != nil {
+		return false, fmt.Errorf("check institution menu active: %w", err)
+	}
+	if !menuActive {
+		return false, nil
+	}
+
+	var granted bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM institution_role_menus
+			WHERE tenant_id = $1
+			  AND lower(trim(role_code)) = $2
+			  AND lower(trim(menu_code)) = $3
+		)
+	`, tenantID, roleCode, menuCode).Scan(&granted); err != nil {
+		return false, fmt.Errorf("check role menu grant: %w", err)
+	}
+	if !granted {
+		return false, nil
+	}
+
+	return s.isTenantMenuAllowed(ctx, tenantID, menuCode)
 }
 
 func buildOverallSegueScoreSQL() string {
@@ -1394,19 +1537,33 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 
 func (s *Store) GetRecordingMediaRef(ctx context.Context, id int64) (*RecordingMediaRef, error) {
 	const query = `
-		SELECT id, COALESCE(file_url, ''), COALESCE(oss_key, '')
+		SELECT id, tenant_id, COALESCE(file_url, ''), COALESCE(file_name, ''), COALESCE(oss_key, '')
 		FROM recordings
 		WHERE id = $1
 		LIMIT 1
 	`
 	var ref RecordingMediaRef
-	if err := s.pool.QueryRow(ctx, query, id).Scan(&ref.RecordingID, &ref.FileURL, &ref.OSSKey); err != nil {
+	if err := s.pool.QueryRow(ctx, query, id).Scan(&ref.RecordingID, &ref.TenantID, &ref.FileURL, &ref.FileName, &ref.OSSKey); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("recording not found")
 		}
 		return nil, fmt.Errorf("failed to query recording media ref: %w", err)
 	}
 	return &ref, nil
+}
+
+func (s *Store) UpdateRecordingMediaRef(ctx context.Context, id int64, fileURL, ossKey string) error {
+	const query = `
+		UPDATE recordings
+		SET file_url = $2,
+		    oss_key = NULLIF($3, ''),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+	if _, err := s.pool.Exec(ctx, query, id, strings.TrimSpace(fileURL), strings.TrimSpace(ossKey)); err != nil {
+		return fmt.Errorf("failed to update recording media ref: %w", err)
+	}
+	return nil
 }
 
 // CreateRecording creates a new medical recording
