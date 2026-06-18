@@ -24,6 +24,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
 	"github.com/freeasyman/lingce-api/internal/organization"
+	"github.com/freeasyman/lingce-api/internal/product"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/sandbox"
@@ -39,7 +40,7 @@ import (
 )
 
 var (
-	version   = "1.0.2"
+	version   = "1.0.3"
 	gitSHA    = "unknown"
 	buildTime = "unknown"
 )
@@ -75,10 +76,12 @@ func main() {
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
 
+	slog.Info("applying compatibility migrations")
 	if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
 		slog.Error("failed to apply compatibility migrations", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("compatibility migrations applied")
 
 	// Setup HTTP router
 	mux := http.NewServeMux()
@@ -157,6 +160,11 @@ func main() {
 	kbService := knowledge.NewService(kbStore)
 	kbHandler := knowledge.NewHandler(kbService)
 	kbHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	productStore := product.NewStore(pool)
+	productService := product.NewService(productStore)
+	productHandler := product.NewHandler(productService)
+	productHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Register employee module
 	empStore := employee.NewStore(pool)
