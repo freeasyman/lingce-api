@@ -711,20 +711,34 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		    AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
 		      SELECT code FROM inst_menus WHERE COALESCE(is_feature_assignable, false) = true
 		    )`,
-		`INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
-		 SELECT DISTINCT r.tenant_id, 'admin', m.id, NOW()
-		 FROM institution_roles r
-		 JOIN inst_menus m
-		   ON COALESCE(m.is_active, true) = true
-		  AND COALESCE(m.is_default_for_admin, false) = true
-		 WHERE lower(r.code) = 'admin'
-		   AND NOT EXISTS (
-		     SELECT 1
-		     FROM inst_role_menus rm
-		     WHERE rm.tenant_id = r.tenant_id
-		       AND lower(rm.role_code) = 'admin'
-		       AND rm.menu_id = m.id
-		   )`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_role_menus'
+			) AND EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_roles'
+			) AND EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_menus'
+			) THEN
+				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+				SELECT DISTINCT r.tenant_id, 'admin', m.code, NOW(), NOW()
+				FROM institution_roles r
+				JOIN institution_menus m
+				  ON COALESCE(m.is_active, true) = true
+				 AND COALESCE(m.is_default_for_admin, false) = true
+				 AND m.deleted_at IS NULL
+				 AND (m.tenant_id = r.tenant_id OR m.tenant_id IS NULL)
+				WHERE lower(r.code) = 'admin'
+				  AND r.deleted_at IS NULL
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM institution_role_menus rm
+					WHERE rm.tenant_id = r.tenant_id
+					  AND lower(rm.role_code) = 'admin'
+					  AND lower(rm.menu_code) = lower(m.code)
+				  );
+			END IF;
+		END $$`,
 		`CREATE TABLE IF NOT EXISTS tenant_feature_change_logs (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -1198,8 +1212,151 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedMorningMeetingModelConfig(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed morning meeting model config: %w", err)
 	}
+	if err := ensureProductLibrarySchema(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration ensure product library schema: %w", err)
+	}
+	if err := seedTenantProductCatalog(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration seed tenant product catalog: %w", err)
+	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
+	return nil
+}
+
+func ensureProductLibrarySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	statements := []string{
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = 'products'
+			) AND NOT EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = 'legacy_products'
+			) THEN
+				ALTER TABLE products RENAME TO legacy_products;
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_class WHERE relname = 'products_id_seq'
+			) AND NOT EXISTS (
+				SELECT 1 FROM pg_class WHERE relname = 'legacy_products_id_seq'
+			) THEN
+				ALTER SEQUENCE products_id_seq RENAME TO legacy_products_id_seq;
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_name = 'legacy_products' AND column_name = 'id'
+			) THEN
+				ALTER TABLE legacy_products ALTER COLUMN id SET DEFAULT nextval('legacy_products_id_seq'::regclass);
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'product_recommendations_product_id_fkey'
+			) THEN
+				ALTER TABLE product_recommendations DROP CONSTRAINT product_recommendations_product_id_fkey;
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.tables WHERE table_name = 'legacy_products'
+			) THEN
+				ALTER TABLE product_recommendations
+					ADD CONSTRAINT product_recommendations_product_id_fkey
+					FOREIGN KEY (product_id) REFERENCES legacy_products(id);
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_constraint WHERE conname = 'product_sales_product_id_fkey'
+			) THEN
+				ALTER TABLE product_sales DROP CONSTRAINT product_sales_product_id_fkey;
+			END IF;
+			IF EXISTS (
+				SELECT 1 FROM information_schema.tables WHERE table_name = 'legacy_products'
+			) THEN
+				ALTER TABLE product_sales
+					ADD CONSTRAINT product_sales_product_id_fkey
+					FOREIGN KEY (product_id) REFERENCES legacy_products(id);
+			END IF;
+		END $$`,
+		`CREATE TABLE IF NOT EXISTS products (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			industry TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
+			price NUMERIC(12,2) NOT NULL DEFAULT 0,
+			applicable TEXT NOT NULL DEFAULT '',
+			selling_point TEXT NOT NULL DEFAULT '',
+			upgrade_to TEXT NOT NULL DEFAULT '',
+			combine_with TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			is_template BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_products_tenant_id ON products(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_products_industry ON products(industry)`,
+		`CREATE INDEX IF NOT EXISTS idx_products_status ON products(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_products_is_template ON products(is_template)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_products_tenant_name_template ON products(tenant_id, lower(name), is_template)`,
+	}
+
+	for i, stmt := range statements {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("product library migration failed at step %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+func seedTenantProductCatalog(ctx context.Context, pool *pgxpool.Pool) error {
+	seedSQL := `
+	WITH seed_rows AS (
+		SELECT *
+		FROM (
+			VALUES
+				(4::BIGINT, '屈光'::TEXT, '全飞秒近视手术'::TEXT, '["全飞","普通全飞","smile","全飞秒"]'::jsonb, 25800::numeric, '角膜条件合适、希望切口更小的近视/散光患者'::TEXT, '切口小、恢复快、主流术式'::TEXT, '散光>100度或追求更高视觉质量时建议升全飞Pro'::TEXT, '伴睑板腺堵塞或干眼时可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
+				(4::BIGINT, '屈光'::TEXT, '半飞秒近视手术'::TEXT, '["半飞","半飞秒","lasik"]'::jsonb, 19800::numeric, '角膜条件更适合角膜瓣方案或预算更敏感人群'::TEXT, '适应范围广、角膜利用率更灵活'::TEXT, '若散光高、追求视觉质量可升级全飞Pro或晶体方案'::TEXT, '伴干眼症状时可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
+				(4::BIGINT, '屈光'::TEXT, '全飞秒Pro近视手术'::TEXT, '["全飞pro","全飞PRO","全飞秒pro","全飞秒PRO","pro","9秒的"]'::jsonb, 33800::numeric, '散光较高、追求更高精准度与视觉质量的人群'::TEXT, '9秒激光、旋转补偿、中心定位更精准'::TEXT, ''::TEXT, '伴干眼或睑板腺问题可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
+				(4::BIGINT, '屈光'::TEXT, 'ICL晶体植入术'::TEXT, '["晶体","icl","晶体植入","icl晶体"]'::jsonb, 36000::numeric, '高度近视、角膜偏薄或不适合角膜切削者'::TEXT, '不切削角膜、适合高度近视'::TEXT, ''::TEXT, '术前干眼管理可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
+				(4::BIGINT, '屈光'::TEXT, '干眼OPT治疗'::TEXT, '["opt","干眼opt","睑板腺疏通","opt治疗"]'::jsonb, 980::numeric, '伴睑板腺堵塞、蒸发型干眼、术前需改善眼表者'::TEXT, '改善眼表状态、帮助术前准备和术后体验'::TEXT, ''::TEXT, ''::TEXT, 'active'::TEXT, FALSE),
+				(0::BIGINT, '屈光'::TEXT, '全飞秒近视手术'::TEXT, '["全飞","普通全飞","smile","全飞秒"]'::jsonb, 25800::numeric, '角膜条件合适、希望切口更小的近视/散光患者'::TEXT, '切口小、恢复快、主流术式'::TEXT, '散光>100度或追求更高视觉质量时建议升全飞Pro'::TEXT, '伴睑板腺堵塞或干眼时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(0::BIGINT, '屈光'::TEXT, '半飞秒近视手术'::TEXT, '["半飞","半飞秒","lasik"]'::jsonb, 19800::numeric, '角膜条件更适合角膜瓣方案或预算更敏感人群'::TEXT, '适应范围广、角膜利用率更灵活'::TEXT, '若散光高、追求视觉质量可升级全飞Pro或晶体方案'::TEXT, '伴干眼症状时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(0::BIGINT, '屈光'::TEXT, '全飞秒Pro近视手术'::TEXT, '["全飞pro","全飞PRO","全飞秒pro","全飞秒PRO","pro","9秒的"]'::jsonb, 33800::numeric, '散光较高、追求更高精准度与视觉质量的人群'::TEXT, '9秒激光、旋转补偿、中心定位更精准'::TEXT, ''::TEXT, '伴干眼或睑板腺问题可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(0::BIGINT, '屈光'::TEXT, 'ICL晶体植入术'::TEXT, '["晶体","icl","晶体植入","icl晶体"]'::jsonb, 36000::numeric, '高度近视、角膜偏薄或不适合角膜切削者'::TEXT, '不切削角膜、适合高度近视'::TEXT, ''::TEXT, '术前干眼管理可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(0::BIGINT, '屈光'::TEXT, '干眼OPT治疗'::TEXT, '["opt","干眼opt","睑板腺疏通","opt治疗"]'::jsonb, 980::numeric, '伴睑板腺堵塞、蒸发型干眼、术前需改善眼表者'::TEXT, '改善眼表状态、帮助术前准备和术后体验'::TEXT, ''::TEXT, ''::TEXT, 'active'::TEXT, TRUE)
+		) AS t(tenant_id, industry, name, aliases, price, applicable, selling_point, upgrade_to, combine_with, status, is_template)
+	)
+	INSERT INTO products (
+		tenant_id, industry, name, aliases, price, applicable, selling_point,
+		upgrade_to, combine_with, status, is_template, created_at, updated_at
+	)
+	SELECT
+		tenant_id, industry, name, aliases, price, applicable, selling_point,
+		upgrade_to, combine_with, status, is_template, NOW(), NOW()
+	FROM seed_rows s
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM products p
+		WHERE p.tenant_id = s.tenant_id
+		  AND lower(p.name) = lower(s.name)
+		  AND p.is_template = s.is_template
+	)
+	`
+	if _, err := pool.Exec(ctx, seedSQL); err != nil {
+		return fmt.Errorf("seed products: %w", err)
+	}
 	return nil
 }
 

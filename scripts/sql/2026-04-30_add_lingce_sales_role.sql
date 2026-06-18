@@ -22,31 +22,37 @@ VALUES (
 -- 请根据实际情况修改查询条件
 
 -- 方式1：根据部门ID添加角色
--- INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, created_at, updated_at)
+-- INSERT INTO institution_employee_roles (tenant_id, employee_id, role_id, role_code, source, created_at, updated_at)
 -- SELECT
 --     e.tenant_id,
 --     e.id as employee_id,
+--     ir.id as role_id,
 --     'lingce_sales' as role_code,
+--     'manual' as source,
 --     NOW() as created_at,
 --     NOW() as updated_at
 -- FROM employees e
+-- JOIN institution_roles ir ON ir.tenant_id = e.tenant_id AND lower(ir.code) = 'lingce_sales' AND ir.deleted_at IS NULL
 -- WHERE e.department_id = 100  -- 销售部门ID
 --   AND NOT EXISTS (
---       SELECT 1 FROM inst_employee_roles r
+--       SELECT 1 FROM institution_employee_roles r
 --       WHERE r.employee_id = e.id AND r.role_code = 'lingce_sales'
 --   );
 
 -- 方式2：根据员工ID列表添加角色
--- INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, created_at, updated_at)
+-- INSERT INTO institution_employee_roles (tenant_id, employee_id, role_id, role_code, source, created_at, updated_at)
 -- SELECT
 --     1 as tenant_id,  -- 替换为实际的 tenant_id
 --     employee_id,
+--     ir.id as role_id,
 --     'lingce_sales' as role_code,
+--     'manual' as source,
 --     NOW() as created_at,
 --     NOW() as updated_at
 -- FROM unnest(ARRAY[101, 102, 103]) as employee_id  -- 替换为实际的员工ID列表
+-- JOIN institution_roles ir ON ir.tenant_id = 1 AND lower(ir.code) = 'lingce_sales' AND ir.deleted_at IS NULL
 -- WHERE NOT EXISTS (
---     SELECT 1 FROM inst_employee_roles r
+--     SELECT 1 FROM institution_employee_roles r
 --     WHERE r.employee_id = employee_id AND r.role_code = 'lingce_sales'
 -- );
 
@@ -56,7 +62,7 @@ VALUES (
 --     e.name as employee_name,
 --     r.role_code,
 --     r.created_at
--- FROM inst_employee_roles r
+-- FROM institution_employee_roles r
 -- JOIN employees e ON e.id = r.employee_id
 -- WHERE r.role_code = 'lingce_sales'
 -- ORDER BY r.created_at DESC;
@@ -71,7 +77,7 @@ VALUES (
 --     r.created_at
 -- FROM recordings r
 -- JOIN employees e ON e.id = r.employee_id
--- JOIN inst_employee_roles er ON er.employee_id = r.employee_id
+-- JOIN institution_employee_roles er ON er.employee_id = r.employee_id
 -- WHERE er.role_code = 'lingce_sales'
 -- ORDER BY r.created_at DESC
 -- LIMIT 10;
