@@ -204,62 +204,39 @@ func (s *Store) GetRoleGrantedMenuCodes(ctx context.Context, tenantID int64, rol
 	if err != nil {
 		return nil, err
 	}
-	if hasInstitutionRoleMenus && hasInstitutionMenus {
-		rows, err := s.pool.Query(ctx, `
-			SELECT DISTINCT lower(trim(rm.menu_code)) AS menu_code
-			FROM institution_role_menus rm
-			JOIN institution_menus m ON lower(trim(m.code)) = lower(trim(rm.menu_code))
-			WHERE rm.tenant_id = $1
-			  AND lower(trim(rm.role_code)) = $2
-			  AND m.deleted_at IS NULL
-			  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
-		`, tenantID, roleCode)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query institution role menus: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var menuCode string
-			if err := rows.Scan(&menuCode); err != nil {
-				return nil, fmt.Errorf("failed to scan institution role menu code: %w", err)
-			}
-			if menuCode != "" {
-				granted[menuCode] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("failed to iterate institution role menu codes: %w", err)
-		}
-		return granted, nil
+	if !hasInstitutionRoleMenus || !hasInstitutionMenus {
+		return nil, fmt.Errorf("institution role menu tables not prepared")
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT lower(trim(m.code)) AS menu_code
-		FROM inst_role_menus rm
-		JOIN inst_menus m ON m.id = rm.menu_id
+		SELECT DISTINCT lower(trim(rm.menu_code)) AS menu_code
+		FROM institution_role_menus rm
+		JOIN institution_menus m ON lower(trim(m.code)) = lower(trim(rm.menu_code))
 		WHERE rm.tenant_id = $1
 		  AND lower(trim(rm.role_code)) = $2
+		  AND m.deleted_at IS NULL
+		  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
 	`, tenantID, roleCode)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query legacy role menus: %w", err)
+		return nil, fmt.Errorf("failed to query institution role menus: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var menuCode string
 		if err := rows.Scan(&menuCode); err != nil {
-			return nil, fmt.Errorf("failed to scan legacy role menu code: %w", err)
+			return nil, fmt.Errorf("failed to scan institution role menu code: %w", err)
 		}
 		if menuCode != "" {
 			granted[menuCode] = struct{}{}
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate legacy role menu codes: %w", err)
+		return nil, fmt.Errorf("failed to iterate institution role menu codes: %w", err)
 	}
 	return granted, nil
 }
 
-// upsertInstitutionEmployeeRoleTx keeps the legacy institution_employee_roles table as a compatibility mirror.
+// upsertInstitutionEmployeeRoleTx writes the institution permission truth row.
 func (s *Store) upsertInstitutionEmployeeRoleTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID int64, roleID *int64, roleCode, source string) error {
 	roleCode = normalizeInstitutionRoleCode(roleCode)
 	var roleIDValue interface{}
@@ -301,59 +278,33 @@ func (s *Store) syncDepartmentEmployeeRolesTx(ctx context.Context, tx pgx.Tx, te
 		roleIDValue = *roleID
 	}
 
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM inst_employee_roles
-		WHERE tenant_id = $1
-		  AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND department_id = $2 AND deleted_at IS NULL)
-		  AND source = 'department'
-	`, tenantID, departmentID); err != nil {
-		return fmt.Errorf("failed to clear department-sourced employee role source: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at, updated_at)
-		SELECT $1, e.id, $3, 'department', NOW(), NOW()
-		FROM employees e
-		WHERE e.tenant_id = $1 AND e.department_id = $2 AND e.deleted_at IS NULL
-		  AND NOT EXISTS (
-			  SELECT 1
-			  FROM inst_employee_roles existing
-			  WHERE existing.tenant_id = $1
-			    AND existing.employee_id = e.id
-		  )
-	`, tenantID, departmentID, roleCode); err != nil {
-		return fmt.Errorf("failed to apply department role to employee role source: %w", err)
-	}
-
 	hasCompatTable, err := s.hasInstitutionEmployeeRolesTable(ctx)
 	if err != nil {
 		return err
 	}
-	if !hasCompatTable {
-		return nil
-	}
-
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM institution_employee_roles
-		WHERE tenant_id = $1
-		  AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND department_id = $2 AND deleted_at IS NULL)
-		  AND source = 'department'
-	`, tenantID, departmentID); err != nil {
-		return fmt.Errorf("failed to clear institution department-sourced employee role mirror: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO institution_employee_roles (employee_id, role_id, tenant_id, role_code, source, created_at, updated_at)
-		SELECT e.id, $3, $1, $4, 'department', NOW(), NOW()
-		FROM employees e
-		WHERE e.tenant_id = $1 AND e.department_id = $2 AND e.deleted_at IS NULL
-		  AND EXISTS (
-			  SELECT 1
-			  FROM inst_employee_roles src
-			  WHERE src.tenant_id = $1
-			    AND src.employee_id = e.id
-			    AND src.source = 'department'
-		  )
-	`, tenantID, departmentID, roleIDValue, roleCode); err != nil {
-		return fmt.Errorf("failed to apply institution department role mirror to employees: %w", err)
+	if hasCompatTable {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM institution_employee_roles
+			WHERE tenant_id = $1
+			  AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND department_id = $2 AND deleted_at IS NULL)
+			  AND source = 'department'
+		`, tenantID, departmentID); err != nil {
+			return fmt.Errorf("failed to clear department-sourced institution employee roles: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO institution_employee_roles (employee_id, role_id, tenant_id, role_code, source, created_at, updated_at)
+			SELECT e.id, $3, $1, $4, 'department', NOW(), NOW()
+			FROM employees e
+			WHERE e.tenant_id = $1 AND e.department_id = $2 AND e.deleted_at IS NULL
+			  AND NOT EXISTS (
+				  SELECT 1
+				  FROM institution_employee_roles existing
+				  WHERE existing.tenant_id = $1
+				    AND existing.employee_id = e.id
+			  )
+		`, tenantID, departmentID, roleIDValue, roleCode); err != nil {
+			return fmt.Errorf("failed to apply department role to institution employee roles: %w", err)
+		}
 	}
 
 	return nil
@@ -725,9 +676,6 @@ func (s *Store) DeleteInstitutionRole(ctx context.Context, tenantID, id int64) e
 		code, err := s.findLegacyRoleCodeByID(ctx, id)
 		if err != nil {
 			return fmt.Errorf("legacy role not found: %w", err)
-		}
-		if _, err := s.pool.Exec(ctx, "DELETE FROM inst_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, code); err != nil {
-			return fmt.Errorf("failed to clean legacy role menus: %w", err)
 		}
 		result, err := s.pool.Exec(ctx, "DELETE FROM inst_roles WHERE code = $1", code)
 		if err != nil {
@@ -1282,40 +1230,25 @@ func (s *Store) AssignPermissionsToInstitutionRole(ctx context.Context, tenantID
 	if err != nil {
 		return err
 	}
-	if hasInstitutionRoleMenus && institutionMenusExists {
-		menuCodes, err := s.resolveMenuCodesByIDs(ctx, tenantID, permissionIDs)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "DELETE FROM institution_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, roleCode); err != nil {
-			return fmt.Errorf("failed to delete existing institution role menus: %w", err)
-		}
-		for _, menuCode := range menuCodes {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
-				VALUES ($1, $2, $3, NOW(), NOW())
-			`, tenantID, roleCode, menuCode); err != nil {
-				return fmt.Errorf("failed to assign institution role menu: %w", err)
-			}
-		}
-		return tx.Commit(ctx)
+	if !hasInstitutionRoleMenus || !institutionMenusExists {
+		return fmt.Errorf("institution role menu tables not prepared")
 	}
 
-	_, err = tx.Exec(ctx, "DELETE FROM inst_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, roleCode)
+	menuCodes, err := s.resolveMenuCodesByIDs(ctx, tenantID, permissionIDs)
 	if err != nil {
-		return fmt.Errorf("failed to delete existing role menus: %w", err)
+		return err
 	}
-
-	for _, menuID := range permissionIDs {
-		_, err = tx.Exec(ctx, `
-			INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
-			VALUES ($1, $2, $3, NOW())
-		`, tenantID, roleCode, menuID)
-		if err != nil {
-			return fmt.Errorf("failed to assign role menu: %w", err)
+	if _, err := tx.Exec(ctx, "DELETE FROM institution_role_menus WHERE tenant_id = $1 AND role_code = $2", tenantID, roleCode); err != nil {
+		return fmt.Errorf("failed to delete existing institution role menus: %w", err)
+	}
+	for _, menuCode := range menuCodes {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+			VALUES ($1, $2, $3, NOW(), NOW())
+		`, tenantID, roleCode, menuCode); err != nil {
+			return fmt.Errorf("failed to assign institution role menu: %w", err)
 		}
 	}
-
 	return tx.Commit(ctx)
 }
 
@@ -1348,30 +1281,23 @@ func (s *Store) RemovePermissionsFromInstitutionRole(ctx context.Context, tenant
 	if err != nil {
 		return err
 	}
-	if hasInstitutionRoleMenus && institutionMenusExists {
-		menuCodes, err := s.resolveMenuCodesByIDs(ctx, tenantID, permissionIDs)
-		if err != nil {
-			return err
-		}
-		if len(menuCodes) == 0 {
-			return nil
-		}
-		_, err = s.pool.Exec(ctx, `
-			DELETE FROM institution_role_menus
-			WHERE tenant_id = $1 AND role_code = $2 AND menu_code = ANY($3)
-		`, tenantID, roleCode, menuCodes)
-		if err != nil {
-			return fmt.Errorf("failed to remove institution role menus: %w", err)
-		}
-		return nil
+	if !hasInstitutionRoleMenus || !institutionMenusExists {
+		return fmt.Errorf("institution role menu tables not prepared")
 	}
 
-	_, err = s.pool.Exec(ctx, `
-		DELETE FROM inst_role_menus
-		WHERE tenant_id = $1 AND role_code = $2 AND menu_id = ANY($3)
-	`, tenantID, roleCode, permissionIDs)
+	menuCodes, err := s.resolveMenuCodesByIDs(ctx, tenantID, permissionIDs)
 	if err != nil {
-		return fmt.Errorf("failed to remove role menus: %w", err)
+		return err
+	}
+	if len(menuCodes) == 0 {
+		return nil
+	}
+	_, err = s.pool.Exec(ctx, `
+		DELETE FROM institution_role_menus
+		WHERE tenant_id = $1 AND role_code = $2 AND menu_code = ANY($3)
+	`, tenantID, roleCode, menuCodes)
+	if err != nil {
+		return fmt.Errorf("failed to remove institution role menus: %w", err)
 	}
 
 	return nil
@@ -1406,6 +1332,9 @@ func (s *Store) GetInstitutionRolePermissions(ctx context.Context, tenantID, rol
 	if err != nil {
 		return nil, err
 	}
+	if !hasInstitutionRoleMenus || !institutionMenusExists {
+		return nil, fmt.Errorf("institution role menu tables not prepared")
+	}
 	query := `
 		SELECT m.id,
 		       m.name,
@@ -1414,32 +1343,16 @@ func (s *Store) GetInstitutionRolePermissions(ctx context.Context, tenantID, rol
 		       'view'::varchar AS action,
 		       m.path::varchar AS description,
 		       COALESCE(m.created_at, NOW()) AS created_at,
-		       COALESCE(m.created_at, NOW()) AS updated_at
-		FROM inst_menus m
-		JOIN inst_role_menus rm ON rm.menu_id = m.id
-		WHERE rm.tenant_id = $1 AND rm.role_code = $2
-		ORDER BY COALESCE(m.order_index, 0), m.id
+		       COALESCE(m.updated_at, m.created_at, NOW()) AS updated_at
+		FROM institution_menus m
+		JOIN institution_role_menus rm ON rm.menu_code = m.code
+		WHERE rm.tenant_id = $1
+		  AND rm.role_code = $2
+		  AND m.deleted_at IS NULL
+		  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
+		ORDER BY COALESCE(m.sort_order, 0), m.id
 	`
 	args := []interface{}{tenantID, roleCode}
-	if hasInstitutionRoleMenus && institutionMenusExists {
-		query = `
-			SELECT m.id,
-			       m.name,
-			       m.code,
-			       'menu'::varchar AS resource,
-			       'view'::varchar AS action,
-			       m.path::varchar AS description,
-			       COALESCE(m.created_at, NOW()) AS created_at,
-			       COALESCE(m.updated_at, m.created_at, NOW()) AS updated_at
-			FROM institution_menus m
-			JOIN institution_role_menus rm ON rm.menu_code = m.code
-			WHERE rm.tenant_id = $1
-			  AND rm.role_code = $2
-			  AND m.deleted_at IS NULL
-			  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
-			ORDER BY COALESCE(m.sort_order, 0), m.id
-		`
-	}
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -1471,6 +1384,13 @@ func (s *Store) GetEmployeeRole(ctx context.Context, employeeID int64) (*Institu
 	if err != nil {
 		return nil, err
 	}
+	hasInstitutionEmployeeRoles, err := s.hasInstitutionEmployeeRolesTable(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !hasInstitutionEmployeeRoles {
+		return nil, fmt.Errorf("institution employee role table not prepared")
+	}
 
 	var query string
 	if hasNewRoleTable {
@@ -1482,8 +1402,8 @@ func (s *Store) GetEmployeeRole(ctx context.Context, employeeID int64) (*Institu
 			       ir.description,
 			       COALESCE(ir.is_active, true) AS is_active,
 			       COALESCE(ir.created_at, er.created_at, NOW()) AS created_at,
-			       COALESCE(ir.updated_at, er.updated_at, er.created_at, NOW()) AS updated_at
-			FROM inst_employee_roles er
+			       COALESCE(ir.updated_at, ir.created_at, er.created_at, NOW()) AS updated_at
+			FROM institution_employee_roles er
 			LEFT JOIN institution_roles ir
 			  ON ir.tenant_id = er.tenant_id
 			 AND lower(ir.code) = lower(er.role_code)
@@ -1491,7 +1411,7 @@ func (s *Store) GetEmployeeRole(ctx context.Context, employeeID int64) (*Institu
 			LEFT JOIN inst_roles r ON lower(r.code) = lower(er.role_code)
 			WHERE er.tenant_id = $1 AND er.employee_id = $2
 			  AND trim(COALESCE(er.role_code, '')) <> ''
-			ORDER BY COALESCE(er.updated_at, er.created_at) DESC, er.id DESC
+			ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 			LIMIT 1
 		`
 	} else {
@@ -1503,12 +1423,12 @@ func (s *Store) GetEmployeeRole(ctx context.Context, employeeID int64) (*Institu
 			       NULL::text AS description,
 			       true AS is_active,
 			       COALESCE(er.created_at, NOW()) AS created_at,
-			       COALESCE(er.updated_at, er.created_at, NOW()) AS updated_at
-			FROM inst_employee_roles er
+			       COALESCE(er.created_at, NOW()) AS updated_at
+			FROM institution_employee_roles er
 			LEFT JOIN inst_roles r ON lower(r.code) = lower(er.role_code)
 			WHERE er.tenant_id = $1 AND er.employee_id = $2
 			  AND trim(COALESCE(er.role_code, '')) <> ''
-			ORDER BY COALESCE(er.updated_at, er.created_at) DESC, er.id DESC
+			ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 			LIMIT 1
 		`
 	}
@@ -1539,7 +1459,7 @@ func (s *Store) SetEmployeeRole(ctx context.Context, employeeID, roleID int64) e
 	if err != nil {
 		return err
 	}
-	hasCompatEmployeeRoleTable, err := s.hasInstitutionEmployeeRolesTable(ctx)
+	hasInstitutionEmployeeRoleTable, err := s.hasInstitutionEmployeeRolesTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -1581,25 +1501,13 @@ func (s *Store) SetEmployeeRole(ctx context.Context, employeeID, roleID int64) e
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM inst_employee_roles
-		WHERE tenant_id = $1 AND employee_id = $2
-	`, tenantID, employeeID); err != nil {
-		return fmt.Errorf("failed to clear employee role source: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at, updated_at)
-		VALUES ($1, $2, $3, 'manual', NOW(), NOW())
-	`, tenantID, employeeID, roleCode); err != nil {
-		return fmt.Errorf("failed to set employee role source: %w", err)
-	}
-	if hasCompatEmployeeRoleTable {
+	if hasInstitutionEmployeeRoleTable {
 		if err := s.upsertInstitutionEmployeeRoleTx(ctx, tx, tenantID, employeeID, institutionRoleID, roleCode, "manual"); err != nil {
 			return err
 		}
+		return tx.Commit(ctx)
 	}
-
-	return tx.Commit(ctx)
+	return fmt.Errorf("institution employee role table not prepared")
 }
 
 // RemoveEmployeeRole removes the role from an employee
@@ -1610,7 +1518,7 @@ func (s *Store) RemoveEmployeeRole(ctx context.Context, employeeID int64) error 
 	`, employeeID).Scan(&tenantID); err != nil {
 		return fmt.Errorf("employee not found: %w", err)
 	}
-	hasCompatEmployeeRoleTable, err := s.hasInstitutionEmployeeRolesTable(ctx)
+	hasInstitutionEmployeeRoleTable, err := s.hasInstitutionEmployeeRolesTable(ctx)
 	if err != nil {
 		return err
 	}
@@ -1621,19 +1529,13 @@ func (s *Store) RemoveEmployeeRole(ctx context.Context, employeeID int64) error 
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM inst_employee_roles
-		WHERE tenant_id = $1 AND employee_id = $2
-	`, tenantID, employeeID); err != nil {
-		return fmt.Errorf("failed to remove employee role source: %w", err)
-	}
-	if hasCompatEmployeeRoleTable {
+	if hasInstitutionEmployeeRoleTable {
 		if err := s.removeInstitutionEmployeeRoleTx(ctx, tx, tenantID, employeeID); err != nil {
 			return err
 		}
+		return tx.Commit(ctx)
 	}
-
-	return tx.Commit(ctx)
+	return fmt.Errorf("institution employee role table not prepared")
 }
 
 // GetDepartmentRole retrieves the default role for a department.

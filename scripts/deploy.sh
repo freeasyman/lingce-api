@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Optional environment variables:
 #   DEPLOY_HOST               (default: root@8.140.246.26)
-#   DEPLOY_REMOTE_DIR         (default: /opt/lingce-api)
+#   DEPLOY_REMOTE_DIR         (default: /opt/lingce/bin)
 #   DEPLOY_SERVICE_NAME       (default: lingce-api)
 #   DEPLOY_HEALTH_URL         (default: http://127.0.0.1:18080/healthz)
 #   DEPLOY_HEALTH_TIMEOUT_SEC (default: 30)
@@ -11,7 +11,7 @@ set -euo pipefail
 #   DEPLOY_ACTOR              (default: $USER)
 
 REMOTE_HOST="${DEPLOY_HOST:-root@8.140.246.26}"
-REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/opt/lingce-api}"
+REMOTE_DIR="${DEPLOY_REMOTE_DIR:-/opt/lingce/bin}"
 SERVICE_NAME="${DEPLOY_SERVICE_NAME:-lingce-api}"
 HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:18080/healthz}"
 HEALTH_TIMEOUT_SEC="${DEPLOY_HEALTH_TIMEOUT_SEC:-30}"

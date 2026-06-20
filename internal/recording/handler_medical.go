@@ -73,6 +73,10 @@ func (h *Handler) GetQualityControlDashboard(w http.ResponseWriter, r *http.Requ
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
@@ -92,6 +96,10 @@ func (h *Handler) GetDoctorAbilityRanking(w http.ResponseWriter, r *http.Request
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings_ability"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -114,6 +122,10 @@ func (h *Handler) GetDoctorAbilityDetail(w http.ResponseWriter, r *http.Request)
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings_ability"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -390,6 +402,10 @@ func (h *Handler) GetCommunicationAnalysis(w http.ResponseWriter, r *http.Reques
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
@@ -411,6 +427,10 @@ func (h *Handler) GetWeeklyMeetingMaterial(w http.ResponseWriter, r *http.Reques
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_meetings_weekly"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
@@ -418,6 +438,13 @@ func (h *Handler) GetWeeklyMeetingMaterial(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	roleCode := strings.TrimSpace(r.URL.Query().Get("role_code"))
+	if roleCode == "" {
+		roleCode = "consultant"
+	}
+	if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, roleCode); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	weekOffset, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("week_offset")))
 	resp, err := h.service.GetWeeklyMeetingMaterial(r.Context(), tenantID, roleCode, weekOffset)
 	if err != nil {
@@ -432,6 +459,10 @@ func (h *Handler) GetWeeklySummary(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings_weekly_summary"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -461,6 +492,10 @@ func (h *Handler) GetTeamTrends(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "doctor_recordings_team_trends"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
@@ -482,6 +517,10 @@ func (h *Handler) ListManagementEvents(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_tracking"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -508,6 +547,10 @@ func (h *Handler) CreateManagementEvent(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_tracking"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -532,6 +575,10 @@ func (h *Handler) GetManagementRisks(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_tracking"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -551,6 +598,10 @@ func (h *Handler) MarkManagementRiskHandled(w http.ResponseWriter, r *http.Reque
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_tracking"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -581,6 +632,10 @@ func (h *Handler) ListBenchmarkClips(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -619,6 +674,10 @@ func (h *Handler) GenerateBenchmarkCandidates(w http.ResponseWriter, r *http.Req
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -638,6 +697,10 @@ func (h *Handler) AcceptBenchmarkClip(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -669,6 +732,10 @@ func (h *Handler) RejectBenchmarkClip(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -691,6 +758,10 @@ func (h *Handler) CreateManualBenchmarkClip(w http.ResponseWriter, r *http.Reque
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -722,6 +793,10 @@ func (h *Handler) MarkBenchmarkUsedInMeeting(w http.ResponseWriter, r *http.Requ
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -744,6 +819,10 @@ func (h *Handler) PushBenchmarkClip(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
@@ -773,6 +852,10 @@ func (h *Handler) ListBenchmarkClipPushes(w http.ResponseWriter, r *http.Request
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)

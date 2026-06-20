@@ -247,6 +247,15 @@ type EmployeeRoleResponse struct {
 	Roles      []InstitutionRoleResponse `json:"roles"`
 }
 
+// EmployeeEffectiveMenuResponse represents effective menus for an employee.
+type EmployeeEffectiveMenuResponse struct {
+	EmployeeID int64                      `json:"employee_id"`
+	TenantID   int64                      `json:"tenant_id"`
+	RoleCode   string                     `json:"role_code,omitempty"`
+	MenuCodes  []string                   `json:"menu_codes"`
+	Menus      []*InstitutionMenuResponse `json:"menus"`
+}
+
 // SetEmployeeRoleRequest represents a request to set employee role
 type SetEmployeeRoleRequest struct {
 	RoleID int64 `json:"role_id"`

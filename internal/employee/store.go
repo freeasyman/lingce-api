@@ -52,7 +52,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		conditions = append(conditions, fmt.Sprintf(`
 			EXISTS (
 				SELECT 1
-				FROM inst_employee_roles er
+				FROM institution_employee_roles er
 				WHERE er.tenant_id = employees.tenant_id
 				  AND er.employee_id = employees.id
 				  AND lower(er.role_code) = lower($%d)
@@ -103,10 +103,10 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
 		           SELECT lower(er.role_code)
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -129,10 +129,10 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		               ),
 		               er.role_code
 		           )
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
@@ -197,10 +197,10 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
 		           SELECT lower(er.role_code)
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -223,10 +223,10 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		               ),
 		               er.role_code
 		           )
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),
@@ -453,10 +453,10 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		       COALESCE(phone, ''), COALESCE(email, ''),
 		       COALESCE((
 		           SELECT lower(er.role_code)
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_code,
 		       COALESCE((
@@ -479,10 +479,10 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		               ),
 		               er.role_code
 		           )
-		           FROM inst_employee_roles er
+		           FROM institution_employee_roles er
 		           WHERE er.employee_id = employees.id
 		             AND er.tenant_id = employees.tenant_id
-		           ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
 		       department_id, COALESCE(session_version, 0),

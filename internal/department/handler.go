@@ -1,7 +1,9 @@
 package department
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -16,6 +18,26 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth.Claims, menuCode string) error {
+	if claims == nil {
+		return fmt.Errorf("invalid token")
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return nil
+	}
+	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		return nil
+	}
+	allowed, err := h.service.store.EmployeeHasInstitutionMenuAccess(ctx, claims.UserID, menuCode)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("menu %s access denied", menuCode)
+	}
+	return nil
 }
 
 // RegisterRoutes registers department routes
@@ -38,6 +60,10 @@ func (h *Handler) ListDepartments(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -94,6 +120,10 @@ func (h *Handler) GetDepartment(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -123,6 +153,10 @@ func (h *Handler) CreateDepartment(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -158,6 +192,10 @@ func (h *Handler) UpdateDepartment(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -202,6 +240,10 @@ func (h *Handler) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 
@@ -288,6 +330,10 @@ func (h *Handler) GetDepartmentPerformance(w http.ResponseWriter, r *http.Reques
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 

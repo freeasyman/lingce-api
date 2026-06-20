@@ -40,14 +40,14 @@ func (s *Store) getLatestEmployeeRoleCode(ctx context.Context, employeeID int64)
 	var roleCode string
 	err := s.pool.QueryRow(ctx, `
 		SELECT er.tenant_id, lower(trim(er.role_code)) AS role_code
-		FROM inst_employee_roles er
+		FROM institution_employee_roles er
 		JOIN employees e
 		  ON e.id = er.employee_id
 		 AND e.tenant_id = er.tenant_id
 		 AND e.deleted_at IS NULL
 		WHERE er.employee_id = $1
 		  AND trim(COALESCE(er.role_code, '')) <> ''
-		ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+		ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		LIMIT 1
 	`, employeeID).Scan(&tenantID, &roleCode)
 	if err != nil {
@@ -256,9 +256,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'doctor'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
@@ -267,9 +266,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'consultant'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, consultantScopeRoleCodes)
@@ -278,9 +276,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			// Doctor/frontdesk scope wins on dual-role employees, so consultant scope excludes them.
 			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
@@ -288,9 +285,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 
 			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
@@ -299,9 +295,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'frontdesk'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, frontdeskScopeRoleCodes)
@@ -310,9 +305,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			// Doctor scope wins on dual-role employees.
 			conditions = append(conditions, fmt.Sprintf(`NOT EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, doctorScopeRoleCodes)
@@ -321,9 +315,8 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			conditions = append(conditions, "lower(coalesce(r.business_scope, '')) = 'therapist'")
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
 				SELECT 1
-				FROM inst_employee_roles ier
-				WHERE ier.tenant_id = r.tenant_id
-				  AND ier.employee_id = r.employee_id
+				FROM institution_employee_roles ier
+				WHERE ier.employee_id = r.employee_id
 				  AND lower(ier.role_code) = ANY($%d)
 			)`, argIndex))
 			args = append(args, therapistScopeRoleCodes)
@@ -2096,37 +2089,32 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		SELECT role_category, COUNT(*) AS cnt
 		FROM (
 			SELECT
-				CASE
-					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
-						WHERE ier.tenant_id = r.tenant_id
-						  AND ier.employee_id = r.employee_id
-						  AND lower(ier.role_code) = 'doctor'
-					) THEN 'doctor'
-					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
-						WHERE ier.tenant_id = r.tenant_id
-						  AND ier.employee_id = r.employee_id
-						  AND lower(ier.role_code) = 'therapist'
-					) THEN 'therapist'
-					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
-						WHERE ier.tenant_id = r.tenant_id
-						  AND ier.employee_id = r.employee_id
-						  AND lower(ier.role_code) = 'doctor_assistant'
-					) THEN 'doctor_assistant'
-					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
-						WHERE ier.tenant_id = r.tenant_id
-						  AND ier.employee_id = r.employee_id
-						  AND lower(ier.role_code) = ANY($%d)
-					) THEN 'customer_service'
-					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
-						WHERE ier.tenant_id = r.tenant_id
-						  AND ier.employee_id = r.employee_id
-						  AND lower(ier.role_code) = ANY($%d)
-					) THEN 'consultant'
+					CASE
+						WHEN EXISTS (
+							SELECT 1 FROM institution_employee_roles ier
+							WHERE ier.employee_id = r.employee_id
+							  AND lower(ier.role_code) = 'doctor'
+						) THEN 'doctor'
+						WHEN EXISTS (
+							SELECT 1 FROM institution_employee_roles ier
+							WHERE ier.employee_id = r.employee_id
+							  AND lower(ier.role_code) = 'therapist'
+						) THEN 'therapist'
+						WHEN EXISTS (
+							SELECT 1 FROM institution_employee_roles ier
+							WHERE ier.employee_id = r.employee_id
+							  AND lower(ier.role_code) = 'doctor_assistant'
+						) THEN 'doctor_assistant'
+						WHEN EXISTS (
+							SELECT 1 FROM institution_employee_roles ier
+							WHERE ier.employee_id = r.employee_id
+							  AND lower(ier.role_code) = ANY($%d)
+						) THEN 'customer_service'
+						WHEN EXISTS (
+							SELECT 1 FROM institution_employee_roles ier
+							WHERE ier.employee_id = r.employee_id
+							  AND lower(ier.role_code) = ANY($%d)
+						) THEN 'consultant'
 					ELSE 'other'
 				END AS role_category
 			FROM recording_tasks t

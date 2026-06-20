@@ -521,32 +521,32 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 				'smart_badge',
 				CASE
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
 					) THEN 'frontdesk'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('doctor','doctor_assistant')
 					) THEN 'doctor'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('consultant')
 					) THEN 'consultant'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('therapist')
 					) THEN 'therapist'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('nurse')
 					) THEN 'nurse'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
 						  AND lower(ier.role_code) IN ('lingce_sales')
 					) THEN 'lingce_sales'

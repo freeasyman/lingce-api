@@ -136,15 +136,13 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		) ci ON ci.customer_id = customers.id
 		LEFT JOIN (
 			SELECT r.customer_id,
-			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id) + COUNT(DISTINCT t.id))::int AS total_interactions,
+			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id))::int AS total_interactions,
 			       GREATEST(
 			           COALESCE(MAX(i.interacted_at), '1970-01-01'::timestamp),
-			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp),
-			           COALESCE(MAX(t.updated_at), '1970-01-01'::timestamp)
+			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp)
 			       ) AS last_interaction_at
 			FROM recordings r
 			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
-			LEFT JOIN recording_tasks t ON t.recording_id = r.id AND t.status IN ('completed', 'cancelled')
 			WHERE r.customer_id IS NOT NULL
 			GROUP BY r.customer_id
 		) it ON it.customer_id = customers.id
@@ -292,15 +290,13 @@ func (s *Store) GetCustomerByID(ctx context.Context, id int64) (*Customer, error
 		) ci ON ci.customer_id = customers.id
 		LEFT JOIN (
 			SELECT r.customer_id,
-			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id) + COUNT(DISTINCT t.id))::int AS total_interactions,
+			       (COUNT(DISTINCT i.id) + COUNT(DISTINCT r.id))::int AS total_interactions,
 			       GREATEST(
 			           COALESCE(MAX(i.interacted_at), '1970-01-01'::timestamp),
-			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp),
-			           COALESCE(MAX(t.updated_at), '1970-01-01'::timestamp)
+			           COALESCE(MAX(COALESCE(r.recorded_at, r.created_at)), '1970-01-01'::timestamp)
 			       ) AS last_interaction_at
 			FROM recordings r
 			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
-			LEFT JOIN recording_tasks t ON t.recording_id = r.id AND t.status IN ('completed', 'cancelled')
 			WHERE r.customer_id IS NOT NULL
 			GROUP BY r.customer_id
 		) it ON it.customer_id = customers.id

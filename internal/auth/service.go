@@ -33,6 +33,14 @@ func NewService(store *Store, smsClient *sms.AliyunClient, jwtSecret string, jwt
 	}
 }
 
+func (s *Service) resolveInstitutionRoleCode(ctx context.Context, tenantID, employeeID int64) string {
+	roleCode, err := s.store.GetLatestEmployeeRoleCode(ctx, tenantID, employeeID)
+	if err != nil {
+		return ""
+	}
+	return roleCode
+}
+
 // LoginAdmin authenticates an operations admin
 func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*LoginResponse, error) {
 	admin, err := s.store.GetAdminByUsername(ctx, username)
@@ -162,6 +170,8 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
 
+	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+
 	return &LoginResponse{
 		Token:       token,
 		AccessToken: token,
@@ -175,7 +185,7 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 			ID:         employee.ID,
 			Name:       firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
 			Phone:      employee.Phone,
-			Role:       string(auth.UserTypeEmployee),
+			Role:       firstNonEmpty(roleCode, string(auth.UserTypeEmployee)),
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
@@ -186,6 +196,7 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 			"phone":         employee.Phone,
 			"email":         employee.Email,
 			"department_id": employee.DepartmentID,
+			"role_code":     roleCode,
 		},
 	}, nil
 }
@@ -233,6 +244,8 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
 
+	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+
 	return &LoginResponse{
 		Token:       token,
 		AccessToken: token,
@@ -246,7 +259,7 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 			ID:         employee.ID,
 			Name:       firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
 			Phone:      employee.Phone,
-			Role:       string(auth.UserTypeMobile),
+			Role:       firstNonEmpty(roleCode, string(auth.UserTypeMobile)),
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
@@ -255,6 +268,7 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 			"real_name": employee.FullName,
 			"full_name": employee.FullName,
 			"phone":     employee.Phone,
+			"role_code": roleCode,
 		},
 	}, nil
 }
@@ -311,6 +325,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 		if err != nil {
 			return nil, fmt.Errorf("failed to get employee: %w", err)
 		}
+		roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
 
 		return &MeResponse{
 			UserID:   employee.ID,
@@ -324,6 +339,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 				"email":         employee.Email,
 				"department_id": employee.DepartmentID,
 				"is_active":     employee.IsActive,
+				"role_code":     roleCode,
 			},
 		}, nil
 
@@ -461,6 +477,8 @@ func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginRespo
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}
 
+	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+
 	return &LoginResponse{
 		Token:       token,
 		AccessToken: token,
@@ -474,13 +492,14 @@ func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginRespo
 			ID:         employee.ID,
 			Name:       employee.Username,
 			Phone:      employee.Phone,
-			Role:       string(auth.UserTypeMobile),
+			Role:       firstNonEmpty(roleCode, string(auth.UserTypeMobile)),
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
 			"full_name": employee.FullName,
 			"phone":     employee.Phone,
+			"role_code": roleCode,
 		},
 	}, nil
 }

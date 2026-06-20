@@ -328,11 +328,11 @@ func (s *Store) GetLatestEmployeeRoleCode(ctx context.Context, tenantID, employe
 	var roleCode string
 	err := s.pool.QueryRow(ctx, `
 		SELECT lower(trim(er.role_code)) AS role_code
-		FROM inst_employee_roles er
+		FROM institution_employee_roles er
 		WHERE er.tenant_id = $1
 		  AND er.employee_id = $2
 		  AND trim(COALESCE(er.role_code, '')) <> ''
-		ORDER BY COALESCE(er.updated_at, er.created_at) DESC, er.id DESC
+		ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		LIMIT 1
 	`, tenantID, employeeID).Scan(&roleCode)
 	if err == pgx.ErrNoRows {

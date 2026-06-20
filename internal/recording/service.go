@@ -5150,7 +5150,7 @@ func (s *Service) GetDoctorAbilityRanking(ctx context.Context, tenantID int64, p
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
@@ -5362,7 +5362,7 @@ func (s *Service) GetDoctorAbilityDetail(ctx context.Context, tenantID, employee
 		  AND COALESCE(r.recorded_at, r.created_at) >= NOW() - INTERVAL '30 days'
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
@@ -5531,14 +5531,14 @@ func (s *Service) GetConsultantAbilityDetail(ctx context.Context, tenantID, empl
 		  AND COALESCE(NULLIF(r.business_scope, ''), 'unknown') = 'consultant'
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = 'consultant'
 		  )
 		  AND NOT EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant','frontdesk','reception','receptionist','therapist'])
@@ -7147,7 +7147,7 @@ func morningMeetingRoleFilterSQL(roleCode string) string {
 	case "doctor":
 		return `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant'])
@@ -7155,7 +7155,7 @@ func morningMeetingRoleFilterSQL(roleCode string) string {
 	case "therapist":
 		return `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = 'therapist'
@@ -7163,7 +7163,7 @@ func morningMeetingRoleFilterSQL(roleCode string) string {
 	default:
 		return `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = 'consultant'
@@ -8214,7 +8214,7 @@ func (s *Service) GetWeeklySummary(ctx context.Context, tenantID int64, weekOffs
 		  AND COALESCE(r.recorded_at, r.created_at) < $3
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
@@ -8603,7 +8603,7 @@ func (s *Service) loadWeeklyHighlightCandidates(ctx context.Context, tenantID in
 		  AND COALESCE(r.recorded_at, r.created_at) >= $2
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
@@ -8697,7 +8697,7 @@ func (s *Service) GetTeamTrends(ctx context.Context, tenantID int64, dateFrom, d
 		  AND COALESCE(r.recorded_at, r.created_at) <= $3
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor', 'doctor_assistant'])
@@ -9066,7 +9066,7 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 	case RecordingScopeDoctor:
 		filterClause = `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant'])
@@ -9074,7 +9074,7 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 	case RecordingScopeFrontdesk:
 		filterClause = `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['frontdesk','reception','receptionist'])
@@ -9082,7 +9082,7 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 	case RecordingScopeTherapist:
 		filterClause = `
 		  AND EXISTS (
-			SELECT 1 FROM inst_employee_roles ier
+			SELECT 1 FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = 'therapist'
@@ -9092,14 +9092,14 @@ func (s *Service) GetTeamAbility(ctx context.Context, tenantID int64, months int
 		  AND COALESCE(NULLIF(r.business_scope, ''), 'unknown') = 'consultant'
 		  AND EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = 'consultant'
 		  )
 		  AND NOT EXISTS (
 			SELECT 1
-			FROM inst_employee_roles ier
+			FROM institution_employee_roles ier
 			WHERE ier.tenant_id = r.tenant_id
 			  AND ier.employee_id = r.employee_id
 			  AND lower(ier.role_code) = ANY(ARRAY['doctor','doctor_assistant','frontdesk','reception','receptionist','therapist'])
@@ -10428,13 +10428,13 @@ func (s *Service) enrichTaskListResponse(ctx context.Context, items []*TaskRespo
 				COALESCE(NULLIF(e.full_name, ''), COALESCE(e.name, '')) AS owner_name,
 				CASE
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = r.tenant_id
 						  AND ier.employee_id = r.employee_id
 						  AND lower(ier.role_code) = ANY($2)
 					) THEN 'doctor'
 					WHEN EXISTS (
-						SELECT 1 FROM inst_employee_roles ier
+						SELECT 1 FROM institution_employee_roles ier
 						WHERE ier.tenant_id = r.tenant_id
 						  AND ier.employee_id = r.employee_id
 						  AND lower(ier.role_code) = ANY($3)

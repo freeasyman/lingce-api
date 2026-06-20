@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -165,6 +166,11 @@ func (h *Handler) ResetAdminPassword(w http.ResponseWriter, r *http.Request) {
 
 // ListInstitutionRoles handles listing institution roles
 func (h *Handler) ListInstitutionRoles(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -196,6 +202,11 @@ func (h *Handler) ListInstitutionRoles(w http.ResponseWriter, r *http.Request) {
 
 // CreateInstitutionRole handles creating an institution role
 func (h *Handler) CreateInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -219,6 +230,11 @@ func (h *Handler) CreateInstitutionRole(w http.ResponseWriter, r *http.Request) 
 
 // GetInstitutionRole handles getting an institution role by ID
 func (h *Handler) GetInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -242,6 +258,11 @@ func (h *Handler) GetInstitutionRole(w http.ResponseWriter, r *http.Request) {
 
 // UpdateInstitutionRole handles updating an institution role
 func (h *Handler) UpdateInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -271,6 +292,11 @@ func (h *Handler) UpdateInstitutionRole(w http.ResponseWriter, r *http.Request) 
 
 // DeleteInstitutionRole handles deleting an institution role
 func (h *Handler) DeleteInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -295,6 +321,11 @@ func (h *Handler) DeleteInstitutionRole(w http.ResponseWriter, r *http.Request) 
 
 // ListInstitutionMenus handles listing institution menus
 func (h *Handler) ListInstitutionMenus(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 
 	var req InstitutionMenuListRequest
@@ -316,6 +347,11 @@ func (h *Handler) ListInstitutionMenus(w http.ResponseWriter, r *http.Request) {
 
 // GetInstitutionMenuTree handles getting institution menus as a tree.
 func (h *Handler) GetInstitutionMenuTree(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -331,8 +367,30 @@ func (h *Handler) GetInstitutionMenuTree(w http.ResponseWriter, r *http.Request)
 	httputil.WriteSuccess(w, menus)
 }
 
+// GetCurrentEmployeeEffectiveMenus handles getting the current employee's effective institution menus.
+func (h *Handler) GetCurrentEmployeeEffectiveMenus(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType == "admin" || claims.TenantID == nil {
+		httputil.WriteForbidden(w, "Institution employee access required")
+		return
+	}
+
+	resp, err := h.service.GetEmployeeEffectiveMenus(r.Context(), claims.UserID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
+}
+
 // CreateInstitutionMenu handles creating an institution menu
 func (h *Handler) CreateInstitutionMenu(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 
 	var req CreateInstitutionMenuRequest
@@ -352,6 +410,11 @@ func (h *Handler) CreateInstitutionMenu(w http.ResponseWriter, r *http.Request) 
 
 // GetInstitutionMenu handles getting an institution menu by ID
 func (h *Handler) GetInstitutionMenu(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -371,6 +434,11 @@ func (h *Handler) GetInstitutionMenu(w http.ResponseWriter, r *http.Request) {
 
 // UpdateInstitutionMenu handles updating an institution menu
 func (h *Handler) UpdateInstitutionMenu(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -396,6 +464,11 @@ func (h *Handler) UpdateInstitutionMenu(w http.ResponseWriter, r *http.Request) 
 
 // DeleteInstitutionMenu handles deleting an institution menu
 func (h *Handler) DeleteInstitutionMenu(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "menus"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -416,6 +489,11 @@ func (h *Handler) DeleteInstitutionMenu(w http.ResponseWriter, r *http.Request) 
 
 // AssignPermissionsToInstitutionRole handles assigning permissions to an institution role
 func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -460,6 +538,11 @@ func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *h
 
 // RemovePermissionsFromInstitutionRole handles removing permissions from an institution role
 func (h *Handler) RemovePermissionsFromInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -488,6 +571,11 @@ func (h *Handler) RemovePermissionsFromInstitutionRole(w http.ResponseWriter, r 
 
 // GetInstitutionRolePermissions handles getting permissions for an institution role
 func (h *Handler) GetInstitutionRolePermissions(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -513,6 +601,11 @@ func (h *Handler) GetInstitutionRolePermissions(w http.ResponseWriter, r *http.R
 
 // GetEmployeeRole handles getting the role for an employee
 func (h *Handler) GetEmployeeRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
@@ -530,6 +623,11 @@ func (h *Handler) GetEmployeeRole(w http.ResponseWriter, r *http.Request) {
 
 // SetEmployeeRole handles setting the role for an employee
 func (h *Handler) SetEmployeeRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
@@ -552,6 +650,11 @@ func (h *Handler) SetEmployeeRole(w http.ResponseWriter, r *http.Request) {
 
 // RemoveEmployeeRole handles removing the role from an employee
 func (h *Handler) RemoveEmployeeRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "roles"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
@@ -568,6 +671,11 @@ func (h *Handler) RemoveEmployeeRole(w http.ResponseWriter, r *http.Request) {
 
 // GetDepartmentRole handles getting default role for a department.
 func (h *Handler) GetDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -591,6 +699,11 @@ func (h *Handler) GetDepartmentRole(w http.ResponseWriter, r *http.Request) {
 
 // SetDepartmentRole handles setting default role for a department.
 func (h *Handler) SetDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")
@@ -619,6 +732,11 @@ func (h *Handler) SetDepartmentRole(w http.ResponseWriter, r *http.Request) {
 
 // RemoveDepartmentRole handles removing default role from a department.
 func (h *Handler) RemoveDepartmentRole(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID := h.getTenantID(r)
 	if tenantID == nil {
 		httputil.WriteForbidden(w, "Tenant access required")

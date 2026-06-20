@@ -1,9 +1,13 @@
 package recording
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -214,12 +218,33 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		recording, recErr := h.service.GetRecording(r.Context(), id)
+		if recErr != nil {
+			httputil.WriteNotFound(w, recErr.Error())
+			return
+		}
+		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, recording.BusinessScope); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
 	ossEndpoint := strings.TrimSpace(h.ossConfig.Endpoint)
 	ossBucket := strings.TrimSpace(h.ossConfig.Bucket)
 	ossAccessKeyID := strings.TrimSpace(h.ossConfig.AccessKeyID)
 	ossAccessKeySecret := strings.TrimSpace(h.ossConfig.AccessKeySecret)
 	requireOwned := h.playURLRequireOwned
 
+	if strings.TrimSpace(ref.OSSKey) == "" && strings.TrimSpace(ref.FileURL) != "" && ossEndpoint != "" && ossBucket != "" && ossAccessKeyID != "" && ossAccessKeySecret != "" {
+		refreshed, refreshErr := h.migrateRecordingMediaToOwnedStorage(r.Context(), ref)
+		if refreshErr == nil && refreshed != nil {
+			ref = refreshed
+		}
+	}
 	if strings.TrimSpace(ref.OSSKey) != "" && ossEndpoint != "" && ossBucket != "" && ossAccessKeyID != "" && ossAccessKeySecret != "" {
 		client, cErr := ossutil.NewClient(ossEndpoint, ossAccessKeyID, ossAccessKeySecret, ossBucket, strings.TrimSpace(h.ossConfig.PublicBaseURL))
 		if cErr != nil {
@@ -249,6 +274,69 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		URL:       ref.FileURL,
 		ExpiresAt: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 	})
+}
+
+func (h *Handler) migrateRecordingMediaToOwnedStorage(ctx context.Context, ref *RecordingMediaRef) (*RecordingMediaRef, error) {
+	if ref == nil {
+		return nil, fmt.Errorf("recording media ref is nil")
+	}
+	sourceURL := strings.TrimSpace(ref.FileURL)
+	if sourceURL == "" {
+		return nil, fmt.Errorf("source url is empty")
+	}
+	clientOSS, err := ossutil.NewClient(
+		strings.TrimSpace(h.ossConfig.Endpoint),
+		strings.TrimSpace(h.ossConfig.AccessKeyID),
+		strings.TrimSpace(h.ossConfig.AccessKeySecret),
+		strings.TrimSpace(h.ossConfig.Bucket),
+		strings.TrimSpace(h.ossConfig.PublicBaseURL),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("init oss client: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build source request: %w", err)
+	}
+	resp, err := (&http.Client{Timeout: 45 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download source audio: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download source audio status=%d", resp.StatusCode)
+	}
+	maxBytes := int64(150 * 1024 * 1024)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read source audio: %w", err)
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("source audio exceeds max bytes")
+	}
+
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(ref.FileName)))
+	if ext == "" {
+		ext = ".mp3"
+	}
+	ossKey := ossutil.GenerateObjectKey(fmt.Sprintf("recordings/%d/%s", ref.TenantID, time.Now().UTC().Format("2006/01/02")), ext)
+	ownedURL, err := clientOSS.UploadBytes(ctx, ossKey, body, &ossutil.UploadOptions{
+		ContentType: "audio/mpeg",
+		Metadata: map[string]string{
+			"source-recording-id": strconv.FormatInt(ref.RecordingID, 10),
+			"source-url":          sourceURL,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upload source audio to oss: %w", err)
+	}
+	if err := h.service.store.UpdateRecordingMediaRef(ctx, ref.RecordingID, ownedURL, ossKey); err != nil {
+		return nil, err
+	}
+	ref.FileURL = ownedURL
+	ref.OSSKey = ossKey
+	return ref, nil
 }
 
 // TestPlayback handles testing playback

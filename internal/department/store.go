@@ -17,6 +17,130 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func (s *Store) EmployeeHasInstitutionMenuAccess(ctx context.Context, employeeID int64, menuCode string) (bool, error) {
+	menuCode = strings.ToLower(strings.TrimSpace(menuCode))
+	if menuCode == "" {
+		return false, nil
+	}
+
+	var tenantID int64
+	var roleCode string
+	err := s.pool.QueryRow(ctx, `
+		SELECT er.tenant_id, lower(trim(er.role_code)) AS role_code
+		FROM institution_employee_roles er
+		JOIN employees e
+		  ON e.id = er.employee_id
+		 AND e.tenant_id = er.tenant_id
+		 AND e.deleted_at IS NULL
+		WHERE er.employee_id = $1
+		  AND trim(COALESCE(er.role_code, '')) <> ''
+		ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
+		LIMIT 1
+	`, employeeID).Scan(&tenantID, &roleCode)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load employee role for menu access: %w", err)
+	}
+
+	var menuActive bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM institution_menus m
+			WHERE lower(trim(m.code)) = $1
+			  AND m.deleted_at IS NULL
+			  AND COALESCE(m.is_active, true) = true
+			  AND (m.tenant_id = $2 OR m.tenant_id IS NULL)
+		)
+	`, menuCode, tenantID).Scan(&menuActive); err != nil {
+		return false, fmt.Errorf("check institution menu active: %w", err)
+	}
+	if !menuActive {
+		return false, nil
+	}
+
+	var granted bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM institution_role_menus
+			WHERE tenant_id = $1
+			  AND lower(trim(role_code)) = $2
+			  AND lower(trim(menu_code)) = $3
+		)
+	`, tenantID, roleCode, menuCode).Scan(&granted); err != nil {
+		return false, fmt.Errorf("check role menu grant: %w", err)
+	}
+	if !granted {
+		return false, nil
+	}
+
+	var groupID *int64
+	err = s.pool.QueryRow(ctx, `
+		SELECT g.id
+		FROM tenant_feature_assignments a
+		JOIN tenant_feature_groups g ON g.id = a.group_id
+		WHERE a.tenant_id = $1
+		  AND CASE
+		      WHEN g.is_active::text IN ('1','t','true','TRUE') THEN true
+		      ELSE false
+		  END = true
+	`, tenantID).Scan(&groupID)
+	if err != nil && err != pgx.ErrNoRows {
+		return false, fmt.Errorf("query tenant feature assignment: %w", err)
+	}
+	if groupID == nil {
+		return false, nil
+	}
+
+	allowed := false
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM tenant_feature_group_items
+			WHERE group_id = $1
+			  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+			  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
+			  AND COALESCE(is_enabled, true) = true
+		)
+	`, *groupID, menuCode).Scan(&allowed); err != nil {
+		return false, fmt.Errorf("query feature-group menu allowance: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) AS code,
+		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode
+		FROM tenant_feature_overrides
+		WHERE tenant_id = $1
+		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+		  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
+	`, tenantID, menuCode)
+	if err != nil {
+		return false, fmt.Errorf("query feature overrides: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var code, mode string
+		if err := rows.Scan(&code, &mode); err != nil {
+			return false, fmt.Errorf("scan feature override: %w", err)
+		}
+		if code != menuCode {
+			continue
+		}
+		if mode == "allow" {
+			allowed = true
+		} else {
+			allowed = false
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate feature overrides: %w", err)
+	}
+	return allowed, nil
+}
+
 // ListDepartments retrieves a paginated list of departments
 func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) ([]*Department, int, error) {
 	var conditions []string

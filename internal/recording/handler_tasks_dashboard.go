@@ -636,6 +636,10 @@ func (h *Handler) GetMorningMeetingMaterial(w http.ResponseWriter, r *http.Reque
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_meetings_morning"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
@@ -643,6 +647,13 @@ func (h *Handler) GetMorningMeetingMaterial(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	roleCode := strings.TrimSpace(r.URL.Query().Get("role_code"))
+	if roleCode == "" {
+		roleCode = "consultant"
+	}
+	if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, roleCode); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	meetingDate := strings.TrimSpace(r.URL.Query().Get("meeting_date"))
 	resp, err := h.service.GetMorningMeetingMaterial(r.Context(), tenantID, roleCode, meetingDate)
 	if err != nil {
@@ -658,6 +669,10 @@ func (h *Handler) MarkMorningMeetingUsed(w http.ResponseWriter, r *http.Request)
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_meetings_morning"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -666,6 +681,10 @@ func (h *Handler) MarkMorningMeetingUsed(w http.ResponseWriter, r *http.Request)
 	var req MarkMorningMeetingUsedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, req.RoleCode); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	resp, err := h.service.MarkMorningMeetingUsed(r.Context(), tenantID, claims.UserID, req)

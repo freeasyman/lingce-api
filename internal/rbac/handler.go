@@ -3,8 +3,10 @@ package rbac
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -38,6 +40,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Menu resource routes
 	mux.Handle("GET /api/v1/menus", authMw(http.HandlerFunc(h.ListMenus)))
+	mux.Handle("GET /api/v1/menus/effective", authMw(http.HandlerFunc(h.GetEffectiveMenusByScope)))
 	mux.Handle("POST /api/v1/menus", authMw(http.HandlerFunc(h.CreateMenu)))
 	mux.Handle("GET /api/v1/menus/{id}", authMw(http.HandlerFunc(h.GetMenu)))
 	mux.Handle("PUT /api/v1/menus/{id}", authMw(http.HandlerFunc(h.UpdateMenu)))
@@ -191,6 +194,14 @@ func (h *Handler) DeleteMenu(w http.ResponseWriter, r *http.Request) {
 	h.DeleteOperationsMenu(w, r)
 }
 
+func (h *Handler) GetEffectiveMenusByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		h.GetCurrentEmployeeEffectiveMenus(w, r)
+		return
+	}
+	httputil.WriteBadRequest(w, "effective menus are only supported for institution scope")
+}
+
 func (h *Handler) GetMenuTreeByScope(w http.ResponseWriter, r *http.Request) {
 	if h.roleScope(r) == "institution" {
 		h.GetInstitutionMenuTree(w, r)
@@ -211,6 +222,28 @@ func (h *Handler) UpdateMenuSortByScope(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) isAdmin(r *http.Request) bool {
 	claims := middleware.GetUserClaims(r.Context())
 	return claims != nil && claims.UserType == auth.UserTypeAdmin
+}
+
+func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth.Claims, menuCode string) error {
+	if claims == nil {
+		return fmt.Errorf("invalid token")
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return nil
+	}
+	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		return nil
+	}
+	resp, err := h.service.GetEmployeeEffectiveMenus(ctx, claims.UserID)
+	if err != nil {
+		return err
+	}
+	for _, code := range resp.MenuCodes {
+		if strings.EqualFold(strings.TrimSpace(code), strings.TrimSpace(menuCode)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("menu %s access denied", menuCode)
 }
 
 // getTenantID gets the tenant ID from the current user

@@ -407,18 +407,6 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM inst_employee_roles
-		WHERE tenant_id = $1 AND employee_id = $2
-	`, tenantID, employeeID); err != nil {
-		return fmt.Errorf("failed to clear existing tenant admin role source: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO inst_employee_roles (tenant_id, employee_id, role_code, source, created_at, updated_at)
-		VALUES ($1, $2, 'admin', 'tenant_init', NOW(), NOW())
-	`, tenantID, employeeID); err != nil {
-		return fmt.Errorf("failed to assign tenant admin role source: %w", err)
-	}
 	hasInstitutionRoleMenus, err := s.tableExistsTx(ctx, tx, "institution_role_menus")
 	if err != nil {
 		return err
@@ -445,7 +433,6 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 			return fmt.Errorf("failed to assign institution tenant admin role mirror: %w", err)
 		}
 	}
-
 	if hasInstitutionRoleMenus && hasInstitutionMenus {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
@@ -460,19 +447,8 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		if err != nil {
 			return fmt.Errorf("failed to assign institution tenant admin menus: %w", err)
 		}
-	}
-
-	// Tenant admins should start with access to menus explicitly marked as default admin menus.
-	_, err = tx.Exec(ctx, `
-		INSERT INTO inst_role_menus (tenant_id, role_code, menu_id, created_at)
-		SELECT $1, 'admin', m.id, NOW()
-		FROM inst_menus m
-		WHERE COALESCE(m.is_active, true) = true
-		  AND COALESCE(m.is_default_for_admin, false) = true
-		ON CONFLICT DO NOTHING
-	`, tenantID)
-	if err != nil {
-		return fmt.Errorf("failed to assign tenant admin menus: %w", err)
+	} else {
+		return fmt.Errorf("institution role menu tables not prepared for tenant initialization")
 	}
 	roleIDByCode := map[string]int64{
 		"admin": adminRoleID,

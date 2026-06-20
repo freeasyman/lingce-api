@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var ErrMenuOutOfPolicy = errors.New("menu out of tenant policy")
@@ -96,21 +98,87 @@ func toInstitutionRoleResponse(r *InstitutionRole) *InstitutionRoleResponse {
 
 // Institution Menu operations
 
-// ListInstitutionMenus retrieves all institution menus
-func (s *Service) ListInstitutionMenus(ctx context.Context, tenantID *int64, req InstitutionMenuListRequest) ([]*InstitutionMenuResponse, error) {
+func (s *Service) listEffectiveInstitutionMenus(ctx context.Context, tenantID *int64, req InstitutionMenuListRequest) ([]*InstitutionMenu, error) {
 	menus, err := s.store.ListInstitutionMenus(ctx, tenantID, req)
 	if err != nil {
 		return nil, err
 	}
+	if tenantID == nil {
+		return menus, nil
+	}
 
-	if tenantID != nil {
-		unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, *tenantID)
-		if err != nil {
-			return nil, err
+	unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, *tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if unrestricted {
+		return menus, nil
+	}
+	return filterMenusByAllowedCodes(menus, allowedCodes), nil
+}
+
+func orderedMenuCodes(menus []*InstitutionMenu, allowed map[string]struct{}) []string {
+	if len(allowed) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(allowed))
+	seen := make(map[string]struct{}, len(allowed))
+	for _, menu := range menus {
+		if _, ok := allowed[menu.Code]; !ok {
+			continue
 		}
-		if !unrestricted {
-			menus = filterMenusByAllowedCodes(menus, allowedCodes)
+		if _, exists := seen[menu.Code]; exists {
+			continue
 		}
+		seen[menu.Code] = struct{}{}
+		out = append(out, menu.Code)
+	}
+	return out
+}
+
+func filterPermissionsByAllowedCodes(permissions []*InstitutionPermission, allowed map[string]struct{}) []*InstitutionPermission {
+	if len(allowed) == 0 {
+		return []*InstitutionPermission{}
+	}
+	out := make([]*InstitutionPermission, 0, len(permissions))
+	for _, permission := range permissions {
+		if _, ok := allowed[permission.Code]; ok {
+			out = append(out, permission)
+		}
+	}
+	return out
+}
+
+func (s *Service) getTenantMenuScope(ctx context.Context, tenantID int64) (map[int64]struct{}, map[int64]struct{}, error) {
+	menus, err := s.store.ListInstitutionMenus(ctx, &tenantID, InstitutionMenuListRequest{})
+	if err != nil {
+		return nil, nil, err
+	}
+	allByID := make(map[int64]struct{}, len(menus))
+	for _, menu := range menus {
+		allByID[menu.ID] = struct{}{}
+	}
+
+	unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	effectiveMenus := menus
+	if !unrestricted {
+		effectiveMenus = filterMenusByAllowedCodes(menus, allowedCodes)
+	}
+	effectiveByID := make(map[int64]struct{}, len(effectiveMenus))
+	for _, menu := range effectiveMenus {
+		effectiveByID[menu.ID] = struct{}{}
+	}
+	return allByID, effectiveByID, nil
+}
+
+// ListInstitutionMenus retrieves all institution menus
+func (s *Service) ListInstitutionMenus(ctx context.Context, tenantID *int64, req InstitutionMenuListRequest) ([]*InstitutionMenuResponse, error) {
+	menus, err := s.listEffectiveInstitutionMenus(ctx, tenantID, req)
+	if err != nil {
+		return nil, err
 	}
 
 	responses := make([]*InstitutionMenuResponse, len(menus))
@@ -167,6 +235,66 @@ func filterMenusByAllowedCodes(menus []*InstitutionMenu, allowed map[string]stru
 	return out
 }
 
+func (s *Service) getEmployeeEffectiveInstitutionMenus(ctx context.Context, employeeID int64) (int64, string, []*InstitutionMenu, []string, error) {
+	tenantID, err := s.store.getEmployeeTenantID(ctx, employeeID)
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+
+	activeOnly := true
+	menus, err := s.store.ListInstitutionMenus(ctx, &tenantID, InstitutionMenuListRequest{IsActive: &activeOnly})
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+
+	role, err := s.store.GetEmployeeRole(ctx, employeeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tenantID, "", []*InstitutionMenu{}, []string{}, nil
+		}
+		return 0, "", nil, nil, err
+	}
+
+	roleCode := normalizeInstitutionRoleCode(role.Code)
+	if roleCode == "" {
+		return tenantID, "", []*InstitutionMenu{}, []string{}, nil
+	}
+
+	roleGrantedCodes, err := s.store.GetRoleGrantedMenuCodes(ctx, tenantID, roleCode)
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+	if len(roleGrantedCodes) == 0 {
+		return tenantID, roleCode, []*InstitutionMenu{}, []string{}, nil
+	}
+
+	unrestricted, tenantAllowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+
+	effectiveDirectCodes := make(map[string]struct{})
+	for _, menu := range menus {
+		menuCode := menu.Code
+		if _, granted := roleGrantedCodes[menuCode]; !granted {
+			continue
+		}
+		if !unrestricted {
+			if _, allowed := tenantAllowedCodes[menuCode]; !allowed {
+				continue
+			}
+		}
+		effectiveDirectCodes[menuCode] = struct{}{}
+	}
+
+	if len(effectiveDirectCodes) == 0 {
+		return tenantID, roleCode, []*InstitutionMenu{}, []string{}, nil
+	}
+
+	effectiveMenus := filterMenusByAllowedCodes(menus, effectiveDirectCodes)
+	return tenantID, roleCode, effectiveMenus, orderedMenuCodes(menus, effectiveDirectCodes), nil
+}
+
 func buildInstitutionMenuTree(menus []*InstitutionMenu) []*InstitutionMenuResponse {
 	menuMap := make(map[int64]*InstitutionMenuResponse, len(menus))
 	roots := make([]*InstitutionMenuResponse, 0)
@@ -193,18 +321,9 @@ func buildInstitutionMenuTree(menus []*InstitutionMenu) []*InstitutionMenuRespon
 
 // GetInstitutionMenuTree retrieves institution menus as a tree.
 func (s *Service) GetInstitutionMenuTree(ctx context.Context, tenantID *int64) ([]*InstitutionMenuResponse, error) {
-	menus, err := s.store.ListInstitutionMenus(ctx, tenantID, InstitutionMenuListRequest{})
+	menus, err := s.listEffectiveInstitutionMenus(ctx, tenantID, InstitutionMenuListRequest{})
 	if err != nil {
 		return nil, err
-	}
-	if tenantID != nil {
-		unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, *tenantID)
-		if err != nil {
-			return nil, err
-		}
-		if !unrestricted {
-			menus = filterMenusByAllowedCodes(menus, allowedCodes)
-		}
 	}
 	return buildInstitutionMenuTree(menus), nil
 }
@@ -292,6 +411,14 @@ func (s *Service) GetInstitutionRolePermissions(ctx context.Context, tenantID, r
 		return nil, err
 	}
 
+	unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !unrestricted {
+		permissions = filterPermissionsByAllowedCodes(permissions, allowedCodes)
+	}
+
 	responses := make([]*PermissionResponse, len(permissions))
 	for i, p := range permissions {
 		responses[i] = toInstitutionPermissionResponse(p)
@@ -328,6 +455,27 @@ func (s *Service) GetEmployeeRole(ctx context.Context, employeeID int64) (*Emplo
 	return &EmployeeRoleResponse{
 		EmployeeID: employeeID,
 		Roles:      []InstitutionRoleResponse{*toInstitutionRoleResponse(role)},
+	}, nil
+}
+
+// GetEmployeeEffectiveMenus retrieves the final effective institution menus for an employee.
+func (s *Service) GetEmployeeEffectiveMenus(ctx context.Context, employeeID int64) (*EmployeeEffectiveMenuResponse, error) {
+	tenantID, roleCode, menus, codes, err := s.getEmployeeEffectiveInstitutionMenus(ctx, employeeID)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]*InstitutionMenuResponse, len(menus))
+	for i, menu := range menus {
+		responses[i] = toInstitutionMenuResponse(menu)
+	}
+
+	return &EmployeeEffectiveMenuResponse{
+		EmployeeID: employeeID,
+		TenantID:   tenantID,
+		RoleCode:   roleCode,
+		MenuCodes:  codes,
+		Menus:      responses,
 	}, nil
 }
 
@@ -373,33 +521,17 @@ func (s *Service) ValidateInstitutionRoleMenuScope(ctx context.Context, tenantID
 	if len(ids) == 0 {
 		return nil
 	}
-	unrestricted, allowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)
-	if err != nil {
-		return err
-	}
-	if unrestricted {
-		return nil
-	}
 
-	menus, err := s.store.ListInstitutionMenus(ctx, &tenantID, InstitutionMenuListRequest{})
+	allByID, effectiveByID, err := s.getTenantMenuScope(ctx, tenantID)
 	if err != nil {
 		return err
-	}
-	allowedMenus := filterMenusByAllowedCodes(menus, allowedCodes)
-	allowedByID := make(map[int64]struct{}, len(allowedMenus))
-	allByID := make(map[int64]struct{}, len(menus))
-	for _, m := range allowedMenus {
-		allowedByID[m.ID] = struct{}{}
-	}
-	for _, m := range menus {
-		allByID[m.ID] = struct{}{}
 	}
 
 	for _, id := range ids {
 		if _, exists := allByID[id]; !exists {
 			continue
 		}
-		if _, ok := allowedByID[id]; !ok {
+		if _, ok := effectiveByID[id]; !ok {
 			return fmt.Errorf("%w: %d", ErrMenuOutOfPolicy, id)
 		}
 	}

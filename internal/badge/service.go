@@ -414,6 +414,14 @@ func (s *Service) CreateCallbackLog(ctx context.Context, payload CallbackPayload
 	if ingestResult == nil {
 		return nil
 	}
+	if !ingestResult.Created {
+		slog.Info("skip transcribe enqueue for duplicate audio callback",
+			"recording_id", ingestResult.RecordingID,
+			"tenant_id", ingestResult.TenantID,
+			"device_no", payload.DeviceNo,
+		)
+		return nil
+	}
 	if err := s.enqueueTranscribeJob(ctx, ingestResult.RecordingID, ingestResult.TenantID); err != nil {
 		// Non-blocking: keep callback success and let scanner fallback pick queued jobs.
 		slog.Warn("failed to enqueue worker transcribe job from audio callback",

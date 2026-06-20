@@ -375,10 +375,10 @@ func (s *Service) getCurrentEmployee(ctx context.Context, claims *auth.Claims) (
 			NULLIF(d.name, '') AS department_name,
 			COALESCE((
 				SELECT lower(er.role_code)
-				FROM inst_employee_roles er
+				FROM institution_employee_roles er
 				WHERE er.tenant_id = e.tenant_id
 				  AND er.employee_id = e.id
-				ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+				ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 				LIMIT 1
 			), '') AS role_code,
 			COALESCE((
@@ -401,10 +401,10 @@ func (s *Service) getCurrentEmployee(ctx context.Context, claims *auth.Claims) (
 					),
 					er.role_code
 				)
-				FROM inst_employee_roles er
+				FROM institution_employee_roles er
 				WHERE er.tenant_id = e.tenant_id
 				  AND er.employee_id = e.id
-				ORDER BY COALESCE(er.updated_at, er.created_at) DESC
+				ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 				LIMIT 1
 			), '') AS role_name
 		FROM employees e

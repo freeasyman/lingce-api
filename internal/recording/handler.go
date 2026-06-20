@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,16 +33,33 @@ func NewHandler(service *Service, playURLRequireOwned bool, ossConfig RecordingO
 	return &Handler{service: service, playURLRequireOwned: playURLRequireOwned, ossConfig: ossConfig}
 }
 
+func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth.Claims, menuCode string) error {
+	if claims == nil {
+		return fmt.Errorf("invalid token")
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return nil
+	}
+	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		return nil
+	}
+	allowed, err := h.service.store.EmployeeHasInstitutionMenuAccess(ctx, claims.UserID, menuCode)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("menu %s access denied", menuCode)
+	}
+	return nil
+}
+
 // RegisterRoutes registers medical recording routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
 	// Recording CRUD endpoints
 	mux.Handle("GET /api/v1/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
-	mux.Handle("GET /api/v1/recordings/prompt-debug", authMw(http.HandlerFunc(h.ListPromptDebugRecordings)))
 	mux.Handle("GET /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
-	mux.Handle("GET /api/v1/recordings/{id}/prompt-debug-annotation", authMw(http.HandlerFunc(h.GetPromptDebugAnnotation)))
-	mux.Handle("PUT /api/v1/recordings/{id}/prompt-debug-annotation", authMw(http.HandlerFunc(h.UpsertPromptDebugAnnotation)))
 	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
 	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
 	mux.Handle("PATCH /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
@@ -540,7 +558,7 @@ func (h *Handler) isTenantRecordingAdmin(ctx context.Context, tenantID, employee
 	var found int
 	err := h.service.store.pool.QueryRow(ctx, `
 		SELECT 1
-		FROM inst_employee_roles
+		FROM institution_employee_roles
 		WHERE tenant_id = $1
 		  AND employee_id = $2
 		  AND lower(role_code) IN ('admin', 'institution_admin')

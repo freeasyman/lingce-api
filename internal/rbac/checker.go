@@ -70,7 +70,7 @@ func (c *PermissionChecker) GetEmployeePermissions(ctx context.Context, employee
 	query := `
 		SELECT DISTINCT p.resource, p.action
 		FROM employees e
-		JOIN inst_employee_roles er
+		JOIN institution_employee_roles er
 		  ON er.tenant_id = e.tenant_id
 		 AND er.employee_id = e.id
 		JOIN institution_roles r
@@ -131,7 +131,7 @@ func (c *PermissionChecker) HasPermission(ctx context.Context, userID int64, use
 			SELECT EXISTS (
 				SELECT 1
 				FROM employees e
-				JOIN inst_employee_roles er
+				JOIN institution_employee_roles er
 				  ON er.tenant_id = e.tenant_id
 				 AND er.employee_id = e.id
 				JOIN institution_roles r
