@@ -279,11 +279,11 @@ func compactRecordingListItem(resp *RecordingResponse) {
 			resp.ConversationSummary = &s
 		}
 	}
+	resp.AnalysisResult = compactRecordingListAnalysisResult(resp.AnalysisResult)
 	resp.TranscriptText = nil
 	resp.DoctorSummary = nil
 	resp.TherapistSummary = nil
 	resp.ConsultantSummary = nil
-	resp.AnalysisResult = nil
 	resp.AnalysisSummary = nil
 	resp.AnalysisDisplay = nil
 	resp.StructuredTranscript = nil
@@ -294,6 +294,60 @@ func compactRecordingListItem(resp *RecordingResponse) {
 	resp.ConsultationRecord = nil
 	resp.DealOutcome = nil
 	resp.SuggestedTask = nil
+}
+
+func compactRecordingListAnalysisResult(source map[string]interface{}) map[string]interface{} {
+	if len(source) == 0 {
+		return nil
+	}
+
+	out := make(map[string]interface{})
+	copyStringField := func(key string) {
+		if value := pickString(source, key); value != "" {
+			out[key] = value
+		}
+	}
+	copyAnyField := func(key string) {
+		if value, ok := source[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+
+	copyStringField("summary")
+	copyStringField("conversation_summary")
+	copyStringField("status_summary")
+	copyStringField("relationship_frame")
+	copyStringField("scene_type_label")
+	copyStringField("intent_amount")
+	copyStringField("intent_project")
+
+	if dealOutcome := pickMap(source, "deal_outcome"); len(dealOutcome) > 0 {
+		out["deal_outcome"] = dealOutcome
+	}
+	if persuasive := pickMap(source, "persuasive"); len(persuasive) > 0 {
+		out["persuasive"] = persuasive
+	}
+	if doctorPatientView := pickMap(source, "doctor_patient_view"); len(doctorPatientView) > 0 {
+		slimDoctorPatientView := make(map[string]interface{})
+		if value := pickString(doctorPatientView, "relationship_frame"); value != "" {
+			slimDoctorPatientView["relationship_frame"] = value
+		}
+		if value := pickString(doctorPatientView, "summary"); value != "" {
+			slimDoctorPatientView["summary"] = value
+		}
+		if len(slimDoctorPatientView) > 0 {
+			out["doctor_patient_view"] = slimDoctorPatientView
+		}
+	}
+
+	copyAnyField("visit_outcome")
+	copyAnyField("decision_status")
+	copyAnyField("visit_outcome_status")
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *Service) ListManagementEvents(

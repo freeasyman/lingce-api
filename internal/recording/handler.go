@@ -344,20 +344,21 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 }
 
 type doctorRecordingListItem struct {
-	ID             int64    `json:"id"`
-	TenantID       int64    `json:"tenant_id,omitempty"`
-	TenantName     string   `json:"tenant_name,omitempty"`
-	BusinessScope  string   `json:"business_scope,omitempty"`
-	EmployeeID     int64    `json:"employee_id"`
-	EmployeeName   string   `json:"employee_name,omitempty"`
-	CustomerName   *string  `json:"customer_name"`
-	PatientName    *string  `json:"patient_name"`
-	AnalysisStatus *string  `json:"analysis_status"`
-	Duration       *int     `json:"duration"`
-	SeguePercent   *float64 `json:"segue_percent"`
-	CriticalGap    *bool    `json:"critical_gap"`
-	RecordedAt     *string  `json:"recorded_at"`
-	ChiefComplaint *string  `json:"chief_complaint,omitempty"`
+	ID             int64                  `json:"id"`
+	TenantID       int64                  `json:"tenant_id,omitempty"`
+	TenantName     string                 `json:"tenant_name,omitempty"`
+	BusinessScope  string                 `json:"business_scope,omitempty"`
+	EmployeeID     int64                  `json:"employee_id"`
+	EmployeeName   string                 `json:"employee_name,omitempty"`
+	CustomerName   *string                `json:"customer_name"`
+	PatientName    *string                `json:"patient_name"`
+	AnalysisResult map[string]interface{} `json:"analysis_result,omitempty"`
+	AnalysisStatus *string                `json:"analysis_status"`
+	Duration       *int                   `json:"duration"`
+	SeguePercent   *float64               `json:"segue_percent"`
+	CriticalGap    *bool                  `json:"critical_gap"`
+	RecordedAt     *string                `json:"recorded_at"`
+	ChiefComplaint *string                `json:"chief_complaint,omitempty"`
 }
 
 func projectDoctorRecordingListItems(items []*RecordingResponse) []*doctorRecordingListItem {
@@ -379,6 +380,7 @@ func projectDoctorRecordingListItems(items []*RecordingResponse) []*doctorRecord
 			EmployeeName:   item.EmployeeName,
 			CustomerName:   item.CustomerName,
 			PatientName:    patientName,
+			AnalysisResult: item.AnalysisResult,
 			AnalysisStatus: item.AnalysisStatus,
 			Duration:       item.Duration,
 			SeguePercent:   item.SeguePercent,
