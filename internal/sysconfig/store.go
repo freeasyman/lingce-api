@@ -750,11 +750,22 @@ func (s *Store) CreateFeatureGroup(ctx context.Context, req CreateFeatureGroupRe
 }
 
 var autoRoleCodesByMenuCode = map[string][]string{
-	"frontdesk_recordings": {"admin", "frontdesk", "reception", "receptionist"},
+	"consultant_recordings":              {"consultant"},
+	"consultant_recordings_dashboard":    {"consultant"},
+	"consultant_recordings_team_ability": {"consultant"},
+	"doctor_recordings":                  {"doctor", "nurse", "doctor_assistant"},
+	"doctor_recordings_ability":          {"doctor", "nurse", "doctor_assistant"},
+	"doctor_recordings_team_trends":      {"doctor", "nurse", "doctor_assistant"},
+	"doctor_recordings_weekly_summary":   {"doctor", "nurse", "doctor_assistant"},
+	"frontdesk_recordings":               {"frontdesk", "reception", "receptionist", "reception_manager", "customer_service"},
+	"therapist_recordings":               {"therapist"},
 }
 
 var autoRoleCodesByFeatureCode = map[string][]string{
-	"frontdesk_recording_center": {"admin", "frontdesk", "reception", "receptionist"},
+	"frontdesk_recording_center": {"frontdesk", "reception", "receptionist", "reception_manager", "customer_service"},
+	"medical_recording_center":   {"doctor", "nurse", "doctor_assistant"},
+	"recording_center":           {"consultant"},
+	"therapist_recording_center": {"therapist"},
 }
 
 // UpdateFeatureGroup updates a feature group
@@ -808,6 +819,11 @@ func (s *Store) UpdateFeatureGroup(ctx context.Context, id int64, req UpdateFeat
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to commit feature group update: %w", err)
 	}
+	if replaceItems {
+		if err := s.syncInstitutionRoleMenusForFeatureGroup(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	return &g, nil
 }
 
@@ -857,7 +873,7 @@ func (s *Store) AssignFeatureGroupToTenant(ctx context.Context, tenantID int64, 
 		return fmt.Errorf("failed to assign feature group: %w", err)
 	}
 
-	return nil
+	return s.syncInstitutionRoleMenusForTenantFeatureGroup(ctx, tenantID, *groupID)
 }
 
 // SetFeatureOverrides sets feature overrides for a tenant
@@ -1071,8 +1087,15 @@ func (s *Store) replaceFeatureGroupItems(ctx context.Context, tx pgx.Tx, groupID
 }
 
 func (s *Store) syncInstitutionRoleMenusForFeatureGroup(ctx context.Context, groupID int64) error {
-	_ = ctx
-	_ = groupID
+	tenantIDs, err := s.listTenantIDsByFeatureGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	for _, tenantID := range tenantIDs {
+		if err := s.syncInstitutionRoleMenusForTenantFeatureGroup(ctx, tenantID, groupID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1100,38 +1123,92 @@ func (s *Store) listTenantIDsByFeatureGroup(ctx context.Context, groupID int64) 
 }
 
 func (s *Store) syncInstitutionRoleMenusForTenantFeatureGroup(ctx context.Context, tenantID, groupID int64) error {
-	_ = ctx
-	_ = tenantID
-	_ = groupID
+	var hasRoleMenus bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('public.institution_role_menus') IS NOT NULL").Scan(&hasRoleMenus); err != nil {
+		return fmt.Errorf("failed to detect institution_role_menus: %w", err)
+	}
+	if !hasRoleMenus {
+		return nil
+	}
+
+	assignments, err := s.listAutoAssignableRoleMenusForFeatureGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	roleCodes, err := s.listTenantInstitutionRoleCodes(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if len(roleCodes) == 0 {
+		return nil
+	}
+
+	for roleCode, menuCodes := range assignments {
+		if _, ok := roleCodes[roleCode]; !ok {
+			continue
+		}
+		for _, menuCode := range menuCodes {
+			if _, err := s.pool.Exec(ctx, `
+				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+				SELECT $1, $2, $3, NOW(), NOW()
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM institution_role_menus
+					WHERE tenant_id = $1
+					  AND lower(trim(role_code)) = $2
+					  AND lower(trim(menu_code)) = $3
+				)
+			`, tenantID, roleCode, menuCode); err != nil {
+				return fmt.Errorf("failed to seed institution role menu for tenant %d role %s menu %s: %w", tenantID, roleCode, menuCode, err)
+			}
+		}
+	}
 	return nil
 }
 
-func (s *Store) listAutoAssignableRoleMenusForFeatureGroup(ctx context.Context, groupID int64) (map[string][]int64, error) {
+func (s *Store) listAutoAssignableRoleMenusForFeatureGroup(ctx context.Context, groupID int64) (map[string][]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id,
-		       lower(trim(COALESCE(m.code, ''))) AS menu_code,
-		       lower(trim(COALESCE(m.feature_code, ''))) AS feature_code
+		SELECT lower(trim(COALESCE(im.code, m.code, gi.item_code, ''))) AS menu_code,
+		       lower(trim(COALESCE(NULLIF(im.feature_code, ''), NULLIF(m.feature_code, ''), gi.feature_code, ''))) AS feature_code
 		FROM tenant_feature_group_items gi
-		JOIN inst_menus m ON lower(trim(m.code)) = lower(trim(gi.item_code))
+		LEFT JOIN inst_menus m ON lower(trim(m.code)) = lower(trim(gi.item_code))
+		LEFT JOIN institution_menus im ON lower(trim(im.code)) = lower(trim(gi.item_code))
+			AND im.deleted_at IS NULL
 		WHERE gi.group_id = $1
 		  AND COALESCE(NULLIF(gi.item_type, ''), 'feature') = 'menu'
 		  AND COALESCE(gi.is_enabled, true) = true
-		  AND COALESCE(m.is_active, true) = true
+		  AND COALESCE(im.is_active, COALESCE(m.is_active, true)) = true
 	`, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query auto-assignable menus for feature group %d: %w", groupID, err)
 	}
 	defer rows.Close()
 
-	assignments := make(map[string][]int64)
+	assignments := make(map[string][]string)
+	seen := make(map[string]map[string]struct{})
 	for rows.Next() {
-		var menuID int64
 		var menuCode, featureCode string
-		if err := rows.Scan(&menuID, &menuCode, &featureCode); err != nil {
+		if err := rows.Scan(&menuCode, &featureCode); err != nil {
 			return nil, fmt.Errorf("failed to scan auto-assignable menu: %w", err)
 		}
+		menuCode = strings.ToLower(strings.TrimSpace(menuCode))
+		featureCode = strings.ToLower(strings.TrimSpace(featureCode))
+		if menuCode == "" {
+			continue
+		}
 		for _, roleCode := range resolveAutoRoleCodesForMenu(menuCode, featureCode) {
-			assignments[roleCode] = append(assignments[roleCode], menuID)
+			if _, ok := seen[roleCode]; !ok {
+				seen[roleCode] = make(map[string]struct{})
+			}
+			if _, exists := seen[roleCode][menuCode]; exists {
+				continue
+			}
+			seen[roleCode][menuCode] = struct{}{}
+			assignments[roleCode] = append(assignments[roleCode], menuCode)
 		}
 	}
 	if err := rows.Err(); err != nil {

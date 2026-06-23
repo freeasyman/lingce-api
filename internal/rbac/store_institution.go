@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/menuaccess"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -814,8 +815,6 @@ func (s *Store) ListInstitutionMenus(ctx context.Context, tenantID *int64, req I
 
 // GetTenantAllowedMenuCodes returns whether tenant is unrestricted and explicit allowed menu codes.
 func (s *Store) GetTenantAllowedMenuCodes(ctx context.Context, tenantID int64) (bool, map[string]struct{}, error) {
-	allowed := make(map[string]struct{})
-
 	var groupID *int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT g.id
@@ -832,57 +831,100 @@ func (s *Store) GetTenantAllowedMenuCodes(ctx context.Context, tenantID int64) (
 	}
 
 	if groupID == nil {
-		return false, allowed, nil
+		return false, map[string]struct{}{}, nil
 	}
 
+	menuDefs, err := s.listTenantMenuDefinitions(ctx, tenantID)
+	if err != nil {
+		return false, nil, err
+	}
+
+	items := make([]menuaccess.PolicyItem, 0)
 	rows, err := s.pool.Query(ctx, `
-		SELECT COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		SELECT COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
 		       COALESCE(is_enabled, true) AS is_enabled
 		FROM tenant_feature_group_items
 		WHERE group_id = $1
-		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
 	`, *groupID)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to query feature group menu items: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var code string
+		var itemType, code string
 		var enabled bool
-		if err := rows.Scan(&code, &enabled); err != nil {
+		if err := rows.Scan(&itemType, &code, &enabled); err != nil {
 			return false, nil, fmt.Errorf("failed to scan feature group menu item: %w", err)
 		}
-		if enabled && code != "" {
-			allowed[code] = struct{}{}
-		}
+		items = append(items, menuaccess.PolicyItem{ItemType: itemType, ItemCode: code, Enabled: enabled})
 	}
 
+	overrides := make([]menuaccess.PolicyOverride, 0)
 	overrideRows, err := s.pool.Query(ctx, `
-		SELECT COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
+		SELECT COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')) AS item_code,
 		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode
 		FROM tenant_feature_overrides
 		WHERE tenant_id = $1
-		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
 	`, tenantID)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to query feature overrides: %w", err)
 	}
 	defer overrideRows.Close()
 	for overrideRows.Next() {
-		var code, mode string
-		if err := overrideRows.Scan(&code, &mode); err != nil {
+		var itemType, code, mode string
+		if err := overrideRows.Scan(&itemType, &code, &mode); err != nil {
 			return false, nil, fmt.Errorf("failed to scan feature override: %w", err)
 		}
-		if code == "" {
-			continue
-		}
-		if mode == "allow" {
-			allowed[code] = struct{}{}
-		} else {
-			delete(allowed, code)
-		}
+		overrides = append(overrides, menuaccess.PolicyOverride{ItemType: itemType, ItemCode: code, OverrideMode: mode})
 	}
-	return false, allowed, nil
+	return false, menuaccess.ResolveAllowedMenuCodes(menuDefs, items, overrides), nil
+}
+
+func (s *Store) listTenantMenuDefinitions(ctx context.Context, tenantID int64) ([]menuaccess.MenuDefinition, error) {
+	institutionMenusExists, err := s.hasInstitutionMenusTable(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT lower(trim(code)) AS code,
+		       lower(trim(COALESCE(feature_code, ''))) AS feature_code
+		FROM inst_menus
+		WHERE COALESCE(is_active, true) = true
+	`
+	args := []interface{}{}
+	if institutionMenusExists {
+		query = `
+			SELECT lower(trim(code)) AS code,
+			       lower(trim(COALESCE(feature_code, ''))) AS feature_code
+			FROM institution_menus
+			WHERE deleted_at IS NULL
+			  AND COALESCE(is_active, true) = true
+			  AND (tenant_id = $1 OR tenant_id IS NULL)
+		`
+		args = append(args, tenantID)
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tenant menu definitions: %w", err)
+	}
+	defer rows.Close()
+
+	defs := make([]menuaccess.MenuDefinition, 0)
+	for rows.Next() {
+		var def menuaccess.MenuDefinition
+		if err := rows.Scan(&def.Code, &def.FeatureCode); err != nil {
+			return nil, fmt.Errorf("failed to scan tenant menu definition: %w", err)
+		}
+		defs = append(defs, def)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate tenant menu definitions: %w", err)
+	}
+	return defs, nil
 }
 
 // GetInstitutionMenuByID retrieves an institution menu by ID

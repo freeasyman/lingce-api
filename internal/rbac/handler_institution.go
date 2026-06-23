@@ -487,6 +487,16 @@ func (h *Handler) DeleteInstitutionMenu(w http.ResponseWriter, r *http.Request) 
 
 // Institution Permission handlers
 
+// GetInstitutionRoleMenus handles getting menus for an institution role.
+func (h *Handler) GetInstitutionRoleMenus(w http.ResponseWriter, r *http.Request) {
+	h.GetInstitutionRolePermissions(w, r)
+}
+
+// AssignMenusToInstitutionRole handles assigning menus to an institution role.
+func (h *Handler) AssignMenusToInstitutionRole(w http.ResponseWriter, r *http.Request) {
+	h.AssignPermissionsToInstitutionRole(w, r)
+}
+
 // AssignPermissionsToInstitutionRole handles assigning permissions to an institution role
 func (h *Handler) AssignPermissionsToInstitutionRole(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())

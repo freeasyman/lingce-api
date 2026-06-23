@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/menuaccess"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -80,50 +81,106 @@ func (s *Store) isTenantMenuAllowed(ctx context.Context, tenantID int64, menuCod
 		return false, nil
 	}
 
-	allowed := false
-	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM tenant_feature_group_items
-			WHERE group_id = $1
-			  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
-			  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
-			  AND COALESCE(is_enabled, true) = true
-		)
-	`, *groupID, menuCode).Scan(&allowed); err != nil {
-		return false, fmt.Errorf("query feature-group menu allowance: %w", err)
+	menuDefs, err := s.listTenantMenuDefinitions(ctx, tenantID)
+	if err != nil {
+		return false, err
 	}
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) AS code,
+	items := make([]menuaccess.PolicyItem, 0)
+	groupRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) AS code,
+		       COALESCE(is_enabled, true) AS is_enabled
+		FROM tenant_feature_group_items
+		WHERE group_id = $1
+	`, *groupID)
+	if err != nil {
+		return false, fmt.Errorf("query feature-group items: %w", err)
+	}
+	defer groupRows.Close()
+	for groupRows.Next() {
+		var itemType, code string
+		var enabled bool
+		if err := groupRows.Scan(&itemType, &code, &enabled); err != nil {
+			return false, fmt.Errorf("scan feature-group item: %w", err)
+		}
+		items = append(items, menuaccess.PolicyItem{ItemType: itemType, ItemCode: code, Enabled: enabled})
+	}
+	if err := groupRows.Err(); err != nil {
+		return false, fmt.Errorf("iterate feature-group items: %w", err)
+	}
+
+	overrides := make([]menuaccess.PolicyOverride, 0)
+	overrideRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(item_type, ''), 'feature') AS item_type,
+		       lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) AS code,
 		       COALESCE(NULLIF(override_mode, ''), CASE WHEN COALESCE(is_enabled, true) THEN 'allow' ELSE 'deny' END) AS override_mode
 		FROM tenant_feature_overrides
 		WHERE tenant_id = $1
-		  AND COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
-		  AND lower(trim(COALESCE(NULLIF(item_code, ''), COALESCE(feature_code, '')))) = $2
-	`, tenantID, menuCode)
+	`, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("query feature overrides: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var code, mode string
-		if err := rows.Scan(&code, &mode); err != nil {
+	defer overrideRows.Close()
+	for overrideRows.Next() {
+		var itemType, code, mode string
+		if err := overrideRows.Scan(&itemType, &code, &mode); err != nil {
 			return false, fmt.Errorf("scan feature override: %w", err)
 		}
-		if code != menuCode {
-			continue
-		}
-		if mode == "allow" {
-			allowed = true
-		} else {
-			allowed = false
-		}
+		overrides = append(overrides, menuaccess.PolicyOverride{ItemType: itemType, ItemCode: code, OverrideMode: mode})
 	}
-	if err := rows.Err(); err != nil {
+	if err := overrideRows.Err(); err != nil {
 		return false, fmt.Errorf("iterate feature overrides: %w", err)
 	}
-	return allowed, nil
+
+	allowed := menuaccess.ResolveAllowedMenuCodes(menuDefs, items, overrides)
+	_, ok := allowed[menuCode]
+	return ok, nil
+}
+
+func (s *Store) listTenantMenuDefinitions(ctx context.Context, tenantID int64) ([]menuaccess.MenuDefinition, error) {
+	var institutionMenusExists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('public.institution_menus') IS NOT NULL").Scan(&institutionMenusExists); err != nil {
+		return nil, fmt.Errorf("detect institution menu table: %w", err)
+	}
+
+	query := `
+		SELECT lower(trim(code)) AS code,
+		       lower(trim(COALESCE(feature_code, ''))) AS feature_code
+		FROM inst_menus
+		WHERE COALESCE(is_active, true) = true
+	`
+	args := []interface{}{}
+	if institutionMenusExists {
+		query = `
+			SELECT lower(trim(code)) AS code,
+			       lower(trim(COALESCE(feature_code, ''))) AS feature_code
+			FROM institution_menus
+			WHERE deleted_at IS NULL
+			  AND COALESCE(is_active, true) = true
+			  AND (tenant_id = $1 OR tenant_id IS NULL)
+		`
+		args = append(args, tenantID)
+	}
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tenant menu definitions: %w", err)
+	}
+	defer rows.Close()
+
+	defs := make([]menuaccess.MenuDefinition, 0)
+	for rows.Next() {
+		var def menuaccess.MenuDefinition
+		if err := rows.Scan(&def.Code, &def.FeatureCode); err != nil {
+			return nil, fmt.Errorf("scan tenant menu definition: %w", err)
+		}
+		defs = append(defs, def)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant menu definitions: %w", err)
+	}
+	return defs, nil
 }
 
 func (s *Store) EmployeeHasInstitutionMenuAccess(ctx context.Context, employeeID int64, menuCode string) (bool, error) {
