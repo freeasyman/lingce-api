@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -94,17 +95,19 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 		var sessionVersion int
 		var employeeActive bool
 		var tenantActive bool
+		var tenantValidTo *time.Time
 		err := authValidationPool.QueryRow(ctx, `
 			SELECT COALESCE(e.session_version, 1) AS session_version,
 			       CASE WHEN COALESCE(e.is_active, 1) <> 0 THEN true ELSE false END AS employee_active,
-			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active
+			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active,
+			       COALESCE(t.valid_to, t.service_expired_on) AS tenant_valid_to
 			FROM employees e
 			JOIN tenants t ON t.id = e.tenant_id
 			WHERE e.id = $1
 			  AND e.tenant_id = $2
 			  AND e.deleted_at IS NULL
 			  AND t.deleted_at IS NULL
-		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive)
+		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantValidTo)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return fmt.Errorf("employee tenant relation not found")
@@ -113,6 +116,9 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 		}
 		if !employeeActive || !tenantActive || sessionVersion != claims.SessionVersion {
 			return fmt.Errorf("employee inactive/tenant inactive/session revoked")
+		}
+		if tenantValidTo != nil && tenantValidTo.Before(time.Now()) {
+			return fmt.Errorf("tenant expired")
 		}
 		return nil
 	}

@@ -349,7 +349,8 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 	query := `
 		SELECT id, name, COALESCE(code, '') AS code,
 		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       service_started_on AS valid_from, service_expired_on AS valid_to,
+		       COALESCE(valid_from, service_started_on) AS valid_from,
+		       COALESCE(valid_to, service_expired_on) AS valid_to,
 		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
 		WHERE id = $1 AND deleted_at IS NULL
