@@ -3,10 +3,47 @@ package tenant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 )
+
+const (
+	trialFeatureGroupCode        = "trial_experience"
+	trialFeatureGroupName        = "试用功能包"
+	trialSubscriptionPlanCode    = "trial"
+	trialSubscriptionPlanName    = "试用版"
+	trialSubscriptionDurationDay = 7
+)
+
+var trialFeatureGroupItems = []sysconfig.FeaturePolicyItem{
+	{ItemType: "menu", ItemCode: "trial_home"},
+	{ItemType: "menu", ItemCode: "recording_upload"},
+	{ItemType: "menu", ItemCode: "doctor_recordings"},
+	{ItemType: "menu", ItemCode: "consultant_recordings"},
+	{ItemType: "menu", ItemCode: "customers"},
+	{ItemType: "menu", ItemCode: "tasks"},
+	{ItemType: "menu", ItemCode: "departments"},
+}
+
+var trialDemoEmployeeSeeds = []TrialDemoEmployeeSeed{
+	{
+		FullName:       "示范医生",
+		Username:       "trial_doctor",
+		Phone:          "13900001001",
+		DepartmentName: "医疗部",
+		RoleCode:       "doctor",
+	},
+	{
+		FullName:       "示范咨询师",
+		Username:       "trial_consultant",
+		Phone:          "13900001002",
+		DepartmentName: "咨询部",
+		RoleCode:       "consultant",
+	},
+}
 
 type Service struct {
 	store            *Store
@@ -55,8 +92,22 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 	if err != nil {
 		return nil, err
 	}
+	if normalizeAccountMode(req.AccountMode) == "trial" {
+		if err := s.bootstrapTrialTenant(ctx, tenant.ID); err != nil {
+			return nil, err
+		}
+		refreshed, err := s.store.GetTenantByID(ctx, tenant.ID)
+		if err == nil {
+			return refreshed, nil
+		}
+		return tenant, nil
+	}
 	if err := s.syncTenantPlanAndFeatureGroup(ctx, tenant.ID, req.SubscriptionPlanID.Ptr(), req.SubscriptionPlanName); err != nil {
 		return nil, err
+	}
+	refreshed, err := s.store.GetTenantByID(ctx, tenant.ID)
+	if err == nil {
+		return refreshed, nil
 	}
 	return tenant, nil
 }
@@ -213,6 +264,37 @@ func (s *Service) GetInstitutionStatistics(ctx context.Context, tenantID int64) 
 	return s.store.GetInstitutionStatistics(ctx, tenantID)
 }
 
+func (s *Service) GetTrialHomeSummary(ctx context.Context, tenantID int64) (*TrialHomeResponse, error) {
+	t, err := s.store.GetTenantByID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	trialProfile, err := recording.NewStore(s.store.pool).GetTrialTenantProfile(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	expiresAt := ""
+	if t.ValidTo != nil {
+		expiresAt = t.ValidTo.Format(time.RFC3339)
+	}
+
+	return &TrialHomeResponse{
+		Tenant: TrialHomeTenantSummary{
+			AccountMode:         t.AccountMode,
+			TrialInitStatus:     "completed",
+			TrialExpiresAt:      expiresAt,
+			DaysRemaining:       calcDaysRemaining(t.ValidTo),
+			TrialMaxRecordings:  trialProfile.TrialMaxRecordings,
+			TrialUsedRecordings: trialProfile.TrialUsedRecordings,
+		},
+		DemoRecordings: []TrialHomeDemoRecording{
+			{RecordingID: tenantID*1000 + 1, RoleCode: "doctor", Title: "示范录音 · 医生"},
+			{RecordingID: tenantID*1000 + 2, RoleCode: "consultant", Title: "示范录音 · 咨询师"},
+		},
+	}, nil
+}
+
 func (s *Service) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialtyResponse, error) {
 	specialties, err := s.store.ListMedicalSpecialties(ctx)
 	if err != nil {
@@ -249,6 +331,136 @@ func buildSpecialtyTree(specialties []*MedicalSpecialty) []*MedicalSpecialtyResp
 	}
 
 	return roots
+}
+
+func (s *Service) bootstrapTrialTenant(ctx context.Context, tenantID int64) error {
+	groupID, err := s.ensureTrialFeatureGroup(ctx)
+	if err != nil {
+		return err
+	}
+	planID, err := s.ensureTrialSubscriptionPlan(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	notes := "trial_auto_bootstrap"
+	if err := s.sysconfigService.PerformSubscriptionAction(ctx, tenantID, sysconfig.SubscriptionActionRequest{
+		Action: "upgrade",
+		PlanID: &planID,
+		Notes:  &notes,
+	}); err != nil {
+		return err
+	}
+	if err := s.store.EnsureTrialDemoEmployees(ctx, tenantID, trialDemoEmployeeSeeds); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) RebootstrapTrialTenant(ctx context.Context, tenantID int64) error {
+	return s.bootstrapTrialTenant(ctx, tenantID)
+}
+
+func (s *Service) ensureTrialFeatureGroup(ctx context.Context) (int64, error) {
+	groups, err := s.sysconfigService.ListFeatureGroups(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	for _, group := range groups {
+		if strings.EqualFold(strings.TrimSpace(group.Code), trialFeatureGroupCode) {
+			if !group.IsActive || !samePolicyItems(group.Items, trialFeatureGroupItems) {
+				isActive := true
+				description := "试用租户默认功能包"
+				_, err := s.sysconfigService.UpdateFeatureGroup(ctx, group.ID, sysconfig.UpdateFeatureGroupRequest{
+					Description: &description,
+					IsActive:    &isActive,
+					Items:       &trialFeatureGroupItems,
+				})
+				if err != nil {
+					return 0, err
+				}
+			}
+			return group.ID, nil
+		}
+	}
+
+	description := "试用租户默认功能包"
+	group, err := s.sysconfigService.CreateFeatureGroup(ctx, sysconfig.CreateFeatureGroupRequest{
+		Name:        trialFeatureGroupName,
+		Code:        trialFeatureGroupCode,
+		Description: &description,
+		Items:       trialFeatureGroupItems,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return group.ID, nil
+}
+
+func samePolicyItems(actual, expected []sysconfig.FeaturePolicyItem) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	actualSet := make(map[string]struct{}, len(actual))
+	for _, item := range actual {
+		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
+		itemCode := strings.TrimSpace(item.ItemCode)
+		if itemType == "" || itemCode == "" {
+			return false
+		}
+		actualSet[itemType+":"+itemCode] = struct{}{}
+	}
+	for _, item := range expected {
+		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
+		itemCode := strings.TrimSpace(item.ItemCode)
+		if _, ok := actualSet[itemType+":"+itemCode]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) ensureTrialSubscriptionPlan(ctx context.Context, featureGroupID int64) (int64, error) {
+	plans, err := s.sysconfigService.ListSubscriptionPlans(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	for _, plan := range plans {
+		if strings.EqualFold(strings.TrimSpace(plan.Code), trialSubscriptionPlanCode) {
+			needsUpdate := plan.FeatureGroupID == nil || *plan.FeatureGroupID != featureGroupID || plan.DurationDays != trialSubscriptionDurationDay || !plan.IsActive
+			if !needsUpdate {
+				return plan.ID, nil
+			}
+			isActive := true
+			_, err := s.sysconfigService.UpdateSubscriptionPlan(ctx, plan.ID, sysconfig.UpdateSubscriptionPlanRequest{
+				FeatureGroupID:   &featureGroupID,
+				DurationDays:     intPtr(trialSubscriptionDurationDay),
+				GraceDaysDefault: intPtr(0),
+				IsActive:         &isActive,
+			})
+			if err != nil {
+				return 0, err
+			}
+			return plan.ID, nil
+		}
+	}
+
+	description := "试用租户默认套餐"
+	plan, err := s.sysconfigService.CreateSubscriptionPlan(ctx, sysconfig.CreateSubscriptionPlanRequest{
+		Name:             trialSubscriptionPlanName,
+		Code:             trialSubscriptionPlanCode,
+		Description:      &description,
+		DurationDays:     trialSubscriptionDurationDay,
+		GraceDaysDefault: 0,
+		FeatureGroupID:   &featureGroupID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return plan.ID, nil
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 func (s *Service) syncTenantPlanAndFeatureGroup(ctx context.Context, tenantID int64, planID *int64, planName *string) error {

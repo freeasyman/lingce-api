@@ -47,6 +47,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Tenant profile (tenant-scoped)
 	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
+	mux.Handle("GET /api/v1/tenants/{id}/trial-home", authMw(http.HandlerFunc(h.GetTrialHomeSummary)))
 	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("PATCH /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("GET /api/v1/tenants/{id}/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
@@ -459,6 +460,27 @@ func (h *Handler) UpdateTenantProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, profile)
+}
+
+func (h *Handler) GetTrialHomeSummary(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	if !h.isAdmin(r) {
+		claims := middleware.GetUserClaims(r.Context())
+		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 || *claims.TenantID != id {
+			httputil.WriteForbidden(w, "Admin access required")
+			return
+		}
+	}
+	summary, err := h.service.GetTrialHomeSummary(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, httputil.Response{Data: summary})
 }
 
 func (h *Handler) GetInstitutionStatistics(w http.ResponseWriter, r *http.Request) {

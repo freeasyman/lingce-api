@@ -2733,6 +2733,12 @@ func (s *Service) CreateRecording(ctx context.Context, req CreateRecordingReques
 	if req.RecordingURL == "" {
 		return nil, fmt.Errorf("recording_url is required")
 	}
+	if req.BusinessScope != nil {
+		scope := strings.ToLower(strings.TrimSpace(*req.BusinessScope))
+		if scope != "" && scope != "doctor" && scope != "consultant" && scope != "frontdesk" && scope != "therapist" {
+			return nil, fmt.Errorf("business_scope is invalid")
+		}
+	}
 
 	recording, err := s.store.CreateRecording(ctx, req)
 	if err != nil {

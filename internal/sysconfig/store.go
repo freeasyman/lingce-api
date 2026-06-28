@@ -1154,13 +1154,13 @@ func (s *Store) syncInstitutionRoleMenusForTenantFeatureGroup(ctx context.Contex
 		for _, menuCode := range menuCodes {
 			if _, err := s.pool.Exec(ctx, `
 				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
-				SELECT $1, $2, $3, NOW(), NOW()
+				SELECT $1::bigint, $2::text, $3::text, NOW(), NOW()
 				WHERE NOT EXISTS (
 					SELECT 1
 					FROM institution_role_menus
-					WHERE tenant_id = $1
-					  AND lower(trim(role_code)) = $2
-					  AND lower(trim(menu_code)) = $3
+					WHERE tenant_id = $1::bigint
+					  AND lower(trim(role_code)) = lower(trim($2::text))
+					  AND lower(trim(menu_code)) = lower(trim($3::text))
 				)
 			`, tenantID, roleCode, menuCode); err != nil {
 				return fmt.Errorf("failed to seed institution role menu for tenant %d role %s menu %s: %w", tenantID, roleCode, menuCode, err)
@@ -1318,7 +1318,10 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 			FROM institution_menus m
 			WHERE m.deleted_at IS NULL
 			  AND m.is_active = true
-			  AND COALESCE(m.is_feature_assignable, false) = true
+			  AND (
+			    COALESCE(m.is_feature_assignable, false) = true
+			    OR lower(trim(m.code)) IN ('trial_home', 'recording_upload')
+			  )
 			ORDER BY COALESCE(m.feature_name, ''), m.sort_order, m.id
 		`)
 		if err != nil {
@@ -1344,7 +1347,10 @@ func (s *Store) listMenuFeatureOptions(ctx context.Context) ([]MenuFeatureOption
 		       m.path
 		FROM inst_menus m
 		WHERE COALESCE(m.is_active, true) = true
-		  AND COALESCE(m.is_feature_assignable, false) = true
+		  AND (
+		    COALESCE(m.is_feature_assignable, false) = true
+		    OR lower(trim(m.code)) IN ('trial_home', 'recording_upload')
+		  )
 		ORDER BY COALESCE(m.feature_name, ''), COALESCE(m.order_index, 0), m.id
 	`)
 	if err != nil {
@@ -1408,5 +1414,7 @@ func (s *Store) ListValidInstitutionMenuCodes(ctx context.Context) (map[string]s
 		}
 		out[code] = struct{}{}
 	}
+	out["trial_home"] = struct{}{}
+	out["recording_upload"] = struct{}{}
 	return out, nil
 }

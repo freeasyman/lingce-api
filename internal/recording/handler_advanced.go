@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -17,6 +18,222 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
 )
+
+const trialUploadMaxBytes = 100 * 1024 * 1024
+
+var trialUploadAllowedExtensions = map[string]struct{}{
+	".mp3": {},
+	".wav": {},
+	".m4a": {},
+}
+
+func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	if claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid tenant")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "recording_upload"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	tenantID := *claims.TenantID
+	profile, err := h.service.store.GetTrialTenantProfile(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(profile.AccountMode), "trial") {
+		httputil.WriteForbidden(w, "当前租户不是试用账号")
+		return
+	}
+	if profile.ValidTo != nil && profile.ValidTo.Before(time.Now()) {
+		httputil.WriteForbidden(w, "试用已过期")
+		return
+	}
+	if profile.TrialUsedRecordings >= profile.TrialMaxRecordings {
+		httputil.WriteBadRequest(w, "试用录音额度已用完")
+		return
+	}
+
+	if err := r.ParseMultipartForm(trialUploadMaxBytes); err != nil {
+		httputil.WriteBadRequest(w, "上传表单无效")
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(r.FormValue("role")))
+	if role != "doctor" && role != "consultant" {
+		httputil.WriteBadRequest(w, "role 仅支持 doctor 或 consultant")
+		return
+	}
+	var durationSeconds *int
+	if raw := strings.TrimSpace(r.FormValue("duration_seconds")); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value <= 0 {
+			httputil.WriteBadRequest(w, "duration_seconds 无效")
+			return
+		}
+		durationSeconds = &value
+	}
+
+	file, fileHeader, err := r.FormFile("file")
+	if err != nil {
+		httputil.WriteBadRequest(w, "请上传音频文件")
+		return
+	}
+	defer file.Close()
+
+	contentType, ext, err := validateTrialUploadFile(fileHeader)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	payload, err := io.ReadAll(io.LimitReader(file, trialUploadMaxBytes+1))
+	if err != nil {
+		httputil.WriteInternalError(w, "读取文件失败")
+		return
+	}
+	if int64(len(payload)) > trialUploadMaxBytes {
+		httputil.WriteBadRequest(w, "文件过大，请上传 100MB 以内录音")
+		return
+	}
+
+	employeeID, err := h.resolveTrialUploadEmployeeID(r.Context(), tenantID, role)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	ossClient, err := ossutil.NewClient(
+		h.ossConfig.Endpoint,
+		h.ossConfig.AccessKeyID,
+		h.ossConfig.AccessKeySecret,
+		h.ossConfig.Bucket,
+		h.ossConfig.PublicBaseURL,
+	)
+	if err != nil {
+		httputil.WriteInternalError(w, fmt.Sprintf("初始化存储失败: %v", err))
+		return
+	}
+	prefix := fmt.Sprintf("recordings/%d/trial/%s", tenantID, time.Now().Format("2006/01/02"))
+	objectKey := ossutil.GenerateObjectKey(prefix, ext)
+	fileURL, err := ossClient.UploadBytes(r.Context(), objectKey, payload, &ossutil.UploadOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		httputil.WriteInternalError(w, fmt.Sprintf("上传录音失败: %v", err))
+		return
+	}
+
+	scene := "consultation"
+	source := "manual"
+	fileName := strings.TrimSpace(fileHeader.Filename)
+	recording, err := h.service.CreateRecording(r.Context(), CreateRecordingRequest{
+		TenantID:          tenantID,
+		EmployeeID:        employeeID,
+		PatientName:       "试用上传",
+		RecordingURL:      fileURL,
+		RecordingFileName: &fileName,
+		RecordingMimeType: stringPtr(contentType),
+		RecordingDuration: durationSeconds,
+		BusinessScope:     &role,
+		Scene:             &scene,
+		Source:            &source,
+	})
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if err := h.service.store.UpdateRecordingMediaRef(r.Context(), recording.ID, fileURL, objectKey); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if _, err := h.service.submitLingceWorkerJob(r.Context(), recording.ID, "transcribe", "trial_upload"); err != nil {
+		if IsRecordingValidationError(err) {
+			var code string = "BAD_REQUEST"
+			var validationErr interface{ Code() string }
+			if errors.As(err, &validationErr) {
+				code = validationErr.Code()
+			}
+			httputil.WriteError(w, http.StatusBadRequest, code, err.Error(), map[string]any{
+				"recording_id": recording.ID,
+				"role":         role,
+			})
+			return
+		}
+		if IsWorkerUnavailable(err) {
+			httputil.WriteError(w, http.StatusServiceUnavailable, "WORKER_UNAVAILABLE", "录音已上传，但分析服务暂不可用，请稍后重试", map[string]any{
+				"recording_id":    recording.ID,
+				"role":            role,
+				"analysis_status": "pending",
+				"redirect_url":    trialUploadRedirectURL(role),
+			})
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]any{
+		"recording_id":    recording.ID,
+		"role":            role,
+		"analysis_status": "queued",
+		"redirect_url":    trialUploadRedirectURL(role),
+	})
+}
+
+func validateTrialUploadFile(fileHeader *multipart.FileHeader) (string, string, error) {
+	fileName := strings.TrimSpace(fileHeader.Filename)
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if _, ok := trialUploadAllowedExtensions[ext]; !ok {
+		return "", "", fmt.Errorf("仅支持 mp3、wav、m4a 格式")
+	}
+	contentType := strings.ToLower(strings.TrimSpace(fileHeader.Header.Get("Content-Type")))
+	if contentType == "" {
+		switch ext {
+		case ".mp3":
+			contentType = "audio/mpeg"
+		case ".wav":
+			contentType = "audio/wav"
+		case ".m4a":
+			contentType = "audio/mp4"
+		}
+	}
+	if !strings.HasPrefix(contentType, "audio/") {
+		return "", "", fmt.Errorf("请上传音频文件")
+	}
+	return contentType, ext, nil
+}
+
+func (h *Handler) resolveTrialUploadEmployeeID(ctx context.Context, tenantID int64, role string) (int64, error) {
+	switch role {
+	case "doctor":
+		return h.service.store.GetTrialEmployeeID(ctx, tenantID, "trial_doctor")
+	case "consultant":
+		return h.service.store.GetTrialEmployeeID(ctx, tenantID, "trial_consultant")
+	default:
+		return 0, fmt.Errorf("unsupported role: %s", role)
+	}
+}
+
+func trialUploadRedirectURL(role string) string {
+	if role == "doctor" {
+		return "/doctor-recordings"
+	}
+	return "/consultant-recordings"
+}
+
+func stringPtr(v string) *string {
+	return &v
+}
 
 // Advanced Recording Handlers
 

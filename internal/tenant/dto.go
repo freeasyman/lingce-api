@@ -61,6 +61,7 @@ type TenantListRequest struct {
 type CreateTenantRequest struct {
 	Name                     string        `json:"name"`
 	Code                     string        `json:"code"`
+	AccountMode              *string       `json:"account_mode,omitempty"`
 	ContactName              *string       `json:"contact_name,omitempty"`
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
@@ -78,6 +79,7 @@ type CreateTenantRequest struct {
 type UpdateTenantRequest struct {
 	Name                     *string       `json:"name"`
 	Code                     *string       `json:"code"`
+	AccountMode              *string       `json:"account_mode,omitempty"`
 	ContactName              *string       `json:"contact_name,omitempty"`
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
@@ -139,6 +141,26 @@ type TenantProfileResponse struct {
 	ValidTo       *time.Time `json:"valid_to,omitempty"`
 	DaysRemaining int        `json:"days_remaining"`
 	CreatedAt     time.Time  `json:"created_at"`
+}
+
+type TrialHomeTenantSummary struct {
+	AccountMode         string `json:"account_mode"`
+	TrialInitStatus     string `json:"trial_init_status"`
+	TrialExpiresAt      string `json:"trial_expires_at,omitempty"`
+	DaysRemaining       int    `json:"days_remaining"`
+	TrialMaxRecordings  int    `json:"trial_max_recordings"`
+	TrialUsedRecordings int    `json:"trial_used_recordings"`
+}
+
+type TrialHomeDemoRecording struct {
+	RecordingID int64  `json:"recording_id"`
+	RoleCode    string `json:"role_code"`
+	Title       string `json:"title"`
+}
+
+type TrialHomeResponse struct {
+	Tenant         TrialHomeTenantSummary   `json:"tenant"`
+	DemoRecordings []TrialHomeDemoRecording `json:"demo_recordings"`
 }
 
 type MedicalSpecialtyResponse struct {

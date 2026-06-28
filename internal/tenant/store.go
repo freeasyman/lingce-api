@@ -29,6 +29,14 @@ var defaultTenantDepartments = []struct {
 	{Name: "客服部", Code: "service_department", DefaultRole: "customer_service"},
 }
 
+type TrialDemoEmployeeSeed struct {
+	FullName       string
+	Username       string
+	Phone          string
+	DepartmentName string
+	RoleCode       string
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -99,6 +107,7 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
 		SELECT t.id, t.name, COALESCE(t.code, '') AS code,
+		       COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
 		       COALESCE(t.contact_name, '') AS contact_name,
 		       COALESCE(t.contact_phone, '') AS contact_phone,
 		       COALESCE(t.contact_email, '') AS contact_email,
@@ -135,6 +144,7 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 			&t.ID,
 			&t.Name,
 			&t.Code,
+			&t.AccountMode,
 			&t.ContactName,
 			&t.ContactPhone,
 			&t.ContactEmail,
@@ -162,6 +172,7 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 	query := `
 		SELECT t.id, t.name, COALESCE(t.code, '') AS code,
+		       COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
 		       COALESCE(t.contact_name, '') AS contact_name,
 		       COALESCE(t.contact_phone, '') AS contact_phone,
 		       COALESCE(t.contact_email, '') AS contact_email,
@@ -186,6 +197,7 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.AccountMode,
 		&t.ContactName,
 		&t.ContactPhone,
 		&t.ContactEmail,
@@ -237,6 +249,7 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 		end := validFrom.Add(365 * 24 * time.Hour)
 		validTo = &end
 	}
+	accountMode := normalizeAccountMode(req.AccountMode)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -245,9 +258,9 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	defer tx.Rollback(ctx)
 
 	query := `
-		INSERT INTO tenants (name, code, contact_name, contact_phone, contact_email, industry, is_active, valid_from, valid_to, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-		RETURNING id, name, code, COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
+		INSERT INTO tenants (name, code, account_mode, contact_name, contact_phone, contact_email, industry, is_active, valid_from, valid_to, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -258,10 +271,11 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	`
 
 	var t Tenant
-	err = tx.QueryRow(ctx, query, req.Name, req.Code, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, isActiveValue, validFrom, validTo).Scan(
+	err = tx.QueryRow(ctx, query, req.Name, req.Code, accountMode, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, isActiveValue, validFrom, validTo).Scan(
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.AccountMode,
 		&t.ContactName,
 		&t.ContactPhone,
 		&t.ContactEmail,
@@ -622,6 +636,198 @@ func derefString(v *string) string {
 	return *v
 }
 
+func normalizeAccountMode(v *string) string {
+	mode := strings.ToLower(strings.TrimSpace(derefString(v)))
+	switch mode {
+	case "trial":
+		return "trial"
+	default:
+		return "formal"
+	}
+}
+
+func (s *Store) EnsureTrialInstitutionMenus(ctx context.Context) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin trial menu transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	hasInstitutionMenus, err := s.tableExistsTx(ctx, tx, "institution_menus")
+	if err != nil {
+		return err
+	}
+	if !hasInstitutionMenus {
+		return fmt.Errorf("institution menus table not prepared")
+	}
+
+	parentID, err := s.ensureInstitutionMenuTx(ctx, tx, nil, "试用体验", "trial_experience", nil, 0, false)
+	if err != nil {
+		return err
+	}
+	if _, err := s.ensureInstitutionMenuTx(ctx, tx, parentID, "试用首页", "trial_home", stringPtrValue("/trial-home"), 0, true); err != nil {
+		return err
+	}
+	if _, err := s.ensureInstitutionMenuTx(ctx, tx, parentID, "上传录音", "recording_upload", stringPtrValue("/recording-upload"), 1, true); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit trial menu transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureInstitutionMenuTx(ctx context.Context, tx pgx.Tx, parentID *int64, name, code string, path *string, sortOrder int, featureAssignable bool) (*int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM institution_menus
+		WHERE tenant_id IS NULL
+		  AND lower(code) = lower($1)
+		  AND deleted_at IS NULL
+		ORDER BY id ASC
+		LIMIT 1
+	`, code).Scan(&id)
+	if err == nil {
+		_, updateErr := tx.Exec(ctx, `
+			UPDATE institution_menus
+			SET name = $1,
+			    path = $2,
+			    parent_id = $3,
+			    sort_order = $4,
+			    is_active = true,
+			    is_feature_assignable = $5,
+			    updated_at = NOW()
+			WHERE id = $6
+		`, name, path, parentID, sortOrder, featureAssignable, id)
+		if updateErr != nil {
+			return nil, fmt.Errorf("failed to refresh institution menu %s: %w", code, updateErr)
+		}
+		return &id, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("failed to query institution menu %s: %w", code, err)
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO institution_menus (
+			tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+			is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at
+		)
+		VALUES (NULL, $1, $2, $3, NULL, $4, $5, true, $6, false, NULL, NULL, NOW(), NOW())
+		RETURNING id
+	`, name, code, path, parentID, sortOrder, featureAssignable).Scan(&id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create institution menu %s: %w", code, err)
+	}
+	return &id, nil
+}
+
+func (s *Store) EnsureTrialDemoEmployees(ctx context.Context, tenantID int64, seeds []TrialDemoEmployeeSeed) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin trial employee transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	departmentIDs, err := s.ensureDefaultDepartmentsTx(ctx, tx, tenantID)
+	if err != nil {
+		return err
+	}
+	for index, seed := range seeds {
+		if err := s.ensureTrialDemoEmployeeTx(ctx, tx, tenantID, departmentIDs, seed, index); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit trial employee transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureTrialDemoEmployeeTx(ctx context.Context, tx pgx.Tx, tenantID int64, departmentIDs map[string]int64, seed TrialDemoEmployeeSeed, index int) error {
+	username := fmt.Sprintf("%s_%d", seed.Username, tenantID)
+	phone := fmt.Sprintf("9%010d", tenantID*10+int64(index+1))
+
+	var employeeID int64
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM employees
+		WHERE tenant_id = $1
+		  AND username = $2
+		  AND deleted_at IS NULL
+		ORDER BY id ASC
+		LIMIT 1
+	`, tenantID, username).Scan(&employeeID)
+	if err == pgx.ErrNoRows {
+		passwordHashBytes, hashErr := bcrypt.GenerateFromPassword([]byte(defaultTenantAdminPassword), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return fmt.Errorf("failed to hash trial demo password: %w", hashErr)
+		}
+		departmentID, ok := departmentIDs[seed.DepartmentName]
+		if !ok {
+			return fmt.Errorf("missing department for trial employee: %s", seed.DepartmentName)
+		}
+		resolvedUsername, resolvedPhone, resolveErr := s.resolveUniqueEmployeeIdentityTx(ctx, tx, tenantID, username, phone)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		err = tx.QueryRow(ctx, `
+			INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
+			VALUES ($1, $2, $3, $4::varchar, $5::text, $6, $7, $8, 0, '1', NOW(), NOW())
+			RETURNING id
+		`, tenantID, resolvedUsername, string(passwordHashBytes), seed.FullName, seed.FullName, resolvedPhone, "", departmentID).Scan(&employeeID)
+		if err != nil {
+			return fmt.Errorf("failed to create trial demo employee %s: %w", seed.Username, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to query trial demo employee %s: %w", seed.Username, err)
+	}
+
+	return s.ensureEmployeeRoleAssignmentTx(ctx, tx, tenantID, employeeID, seed.RoleCode)
+}
+
+func (s *Store) ensureEmployeeRoleAssignmentTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID int64, roleCode string) error {
+	var roleID int64
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM institution_roles
+		WHERE tenant_id = $1
+		  AND lower(code) = lower($2)
+		  AND deleted_at IS NULL
+		ORDER BY id DESC
+		LIMIT 1
+	`, tenantID, roleCode).Scan(&roleID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve trial employee role %s: %w", roleCode, err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM institution_employee_roles
+		WHERE tenant_id = $1
+		  AND employee_id = $2
+		  AND lower(role_code) = lower($3)
+	`, tenantID, employeeID, roleCode)
+	if err != nil {
+		return fmt.Errorf("failed to clear trial employee role %s: %w", roleCode, err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO institution_employee_roles (employee_id, role_id, tenant_id, role_code, source, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'trial_bootstrap', NOW(), NOW())
+	`, employeeID, roleID, tenantID, roleCode)
+	if err != nil {
+		return fmt.Errorf("failed to assign trial employee role %s: %w", roleCode, err)
+	}
+	return nil
+}
+
+func stringPtrValue(v string) *string {
+	return &v
+}
+
 func (s *Store) ResolveSubscriptionPlanID(ctx context.Context, planID *int64, planName *string) (*int64, error) {
 	if planID != nil && *planID > 0 {
 		var id int64
@@ -679,6 +885,12 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 	if req.Code != nil {
 		setClauses = append(setClauses, fmt.Sprintf("code = $%d", argIndex))
 		args = append(args, *req.Code)
+		argIndex++
+	}
+
+	if req.AccountMode != nil {
+		setClauses = append(setClauses, fmt.Sprintf("account_mode = $%d", argIndex))
+		args = append(args, normalizeAccountMode(req.AccountMode))
 		argIndex++
 	}
 
@@ -747,7 +959,7 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		UPDATE tenants
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, name, code, COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
+		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -762,6 +974,7 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		&t.ID,
 		&t.Name,
 		&t.Code,
+		&t.AccountMode,
 		&t.ContactName,
 		&t.ContactPhone,
 		&t.ContactEmail,

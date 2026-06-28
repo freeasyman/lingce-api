@@ -992,6 +992,14 @@ func (s *Store) CreateInstitutionMenu(ctx context.Context, tenantID *int64, req 
 	if err != nil {
 		return nil, err
 	}
+	featureAssignable := req.IsFeatureAssignable
+	if !featureAssignable {
+		code := strings.ToLower(strings.TrimSpace(req.Code))
+		switch code {
+		case "trial_home", "recording_upload":
+			featureAssignable = true
+		}
+	}
 	if !institutionMenusExists {
 		query := `
 			INSERT INTO inst_menus (code, name, path, icon, parent_id, order_index, is_active, is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at)
@@ -1007,7 +1015,7 @@ func (s *Store) CreateInstitutionMenu(ctx context.Context, tenantID *int64, req 
 			          COALESCE(created_at, NOW()) AS updated_at
 		`
 		var m InstitutionMenu
-		if err := s.pool.QueryRow(ctx, query, req.Code, req.Name, req.Path, req.Icon, req.ParentID, req.SortOrder, req.IsFeatureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
+		if err := s.pool.QueryRow(ctx, query, req.Code, req.Name, req.Path, req.Icon, req.ParentID, req.SortOrder, featureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
 			&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to create legacy menu: %w", err)
@@ -1023,7 +1031,7 @@ func (s *Store) CreateInstitutionMenu(ctx context.Context, tenantID *int64, req 
 	`
 
 	var m InstitutionMenu
-	err = s.pool.QueryRow(ctx, query, tenantID, req.Name, req.Code, req.Path, req.Icon, req.ParentID, req.SortOrder, req.IsFeatureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
+	err = s.pool.QueryRow(ctx, query, tenantID, req.Name, req.Code, req.Path, req.Icon, req.ParentID, req.SortOrder, featureAssignable, req.IsDefaultForAdmin, stringValue(req.FeatureCode), stringValue(req.FeatureName)).Scan(
 		&m.ID, &m.TenantID, &m.Name, &m.Code, &m.Path, &m.Icon, &m.ParentID, &m.SortOrder, &m.IsActive, &m.IsFeatureAssignable, &m.IsDefaultForAdmin, &m.FeatureCode, &m.FeatureName, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {

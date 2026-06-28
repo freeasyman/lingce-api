@@ -25,6 +25,14 @@ type RecordingMediaRef struct {
 	OSSKey      string
 }
 
+type TrialTenantProfile struct {
+	TenantID            int64
+	AccountMode         string
+	ValidTo             *time.Time
+	TrialMaxRecordings  int
+	TrialUsedRecordings int
+}
+
 var (
 	doctorScopeRoleCodes     = []string{"doctor", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
@@ -34,6 +42,71 @@ var (
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) GetTrialTenantProfile(ctx context.Context, tenantID int64) (*TrialTenantProfile, error) {
+	hasRecordingDeletedAt := false
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = 'recordings'
+			  AND column_name = 'deleted_at'
+		)
+	`).Scan(&hasRecordingDeletedAt); err != nil {
+		return nil, fmt.Errorf("failed to inspect recordings.deleted_at: %w", err)
+	}
+
+	recordingCountFilter := ""
+	if hasRecordingDeletedAt {
+		recordingCountFilter = "AND r.deleted_at IS NULL"
+	}
+
+	var profile TrialTenantProfile
+	var validTo sql.NullTime
+	query := fmt.Sprintf(`
+		SELECT t.id,
+		       COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
+		       COALESCE(t.valid_to, t.service_expired_on) AS valid_to,
+		       5 AS trial_max_recordings,
+		       (
+		         SELECT COUNT(*)
+		         FROM recordings r
+		         WHERE r.tenant_id = t.id
+		           %s
+		       ) AS trial_used_recordings
+		FROM tenants t
+		WHERE t.id = $1
+		  AND t.deleted_at IS NULL
+		LIMIT 1
+	`, recordingCountFilter)
+	err := s.pool.QueryRow(ctx, query, tenantID).Scan(&profile.TenantID, &profile.AccountMode, &validTo, &profile.TrialMaxRecordings, &profile.TrialUsedRecordings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get trial tenant profile: %w", err)
+	}
+	if validTo.Valid {
+		t := validTo.Time
+		profile.ValidTo = &t
+	}
+	return &profile, nil
+}
+
+func (s *Store) GetTrialEmployeeID(ctx context.Context, tenantID int64, usernamePrefix string) (int64, error) {
+	var employeeID int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM employees
+		WHERE tenant_id = $1
+		  AND deleted_at IS NULL
+		  AND username = $2
+		ORDER BY id ASC
+		LIMIT 1
+	`, tenantID, fmt.Sprintf("%s_%d", strings.TrimSpace(usernamePrefix), tenantID)).Scan(&employeeID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get trial employee %s: %w", usernamePrefix, err)
+	}
+	return employeeID, nil
 }
 
 func (s *Store) getLatestEmployeeRoleCode(ctx context.Context, employeeID int64) (int64, string, error) {
@@ -1619,11 +1692,30 @@ func (s *Store) UpdateRecordingMediaRef(ctx context.Context, id int64, fileURL, 
 // CreateRecording creates a new medical recording
 func (s *Store) CreateRecording(ctx context.Context, req CreateRecordingRequest) (*MedicalRecording, error) {
 	fileName := req.RecordingURL
+	if req.RecordingFileName != nil && strings.TrimSpace(*req.RecordingFileName) != "" {
+		fileName = strings.TrimSpace(*req.RecordingFileName)
+	}
 	if idx := strings.LastIndex(fileName, "/"); idx >= 0 && idx < len(fileName)-1 {
 		fileName = fileName[idx+1:]
 	}
 	if fileName == "" {
 		fileName = "recording.wav"
+	}
+	mimeType := "audio/wav"
+	if req.RecordingMimeType != nil && strings.TrimSpace(*req.RecordingMimeType) != "" {
+		mimeType = strings.TrimSpace(*req.RecordingMimeType)
+	}
+	source := "manual"
+	if req.Source != nil && strings.TrimSpace(*req.Source) != "" {
+		source = strings.TrimSpace(*req.Source)
+	}
+	scene := "consultation"
+	if req.Scene != nil && strings.TrimSpace(*req.Scene) != "" {
+		scene = strings.TrimSpace(*req.Scene)
+	}
+	businessScope := "consultant"
+	if req.BusinessScope != nil && strings.TrimSpace(*req.BusinessScope) != "" {
+		businessScope = strings.TrimSpace(*req.BusinessScope)
 	}
 
 	query := `
@@ -1632,7 +1724,7 @@ func (s *Store) CreateRecording(ctx context.Context, req CreateRecordingRequest)
 			source, scene, business_scope, notes, status, transcription_status, analysis_status,
 			recorded_at, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 'audio/wav', 'manual', 'consultation', 'consultant', $6, 'uploaded', 'pending', 'pending', NOW(), NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'uploaded', 'pending', 'pending', NOW(), NOW(), NOW())
 		RETURNING id
 	`
 	var newID int64
@@ -1642,6 +1734,10 @@ func (s *Store) CreateRecording(ctx context.Context, req CreateRecordingRequest)
 		req.RecordingURL,
 		fileName,
 		req.RecordingDuration,
+		mimeType,
+		source,
+		scene,
+		businessScope,
 		req.PatientName,
 	).Scan(&newID)
 

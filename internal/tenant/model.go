@@ -7,6 +7,7 @@ type Tenant struct {
 	ID                int64      `json:"id"`
 	Name              string     `json:"name"`
 	Code              string     `json:"code"`
+	AccountMode       string     `json:"account_mode,omitempty"`
 	ContactName       string     `json:"contact_name,omitempty"`
 	ContactPhone      string     `json:"contact_phone,omitempty"`
 	ContactEmail      string     `json:"contact_email,omitempty"`

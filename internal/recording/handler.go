@@ -40,6 +40,9 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 	if claims.UserType == auth.UserTypeAdmin {
 		return nil
 	}
+	if claims.TenantID != nil && h.isTenantRecordingAdmin(ctx, *claims.TenantID, claims.UserID) {
+		return nil
+	}
 	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
 		return nil
 	}
@@ -81,6 +84,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/recordings/stats/duration-distribution", authMw(http.HandlerFunc(h.GetDurationDistribution)))
 	mux.Handle("GET /api/v1/recordings/stats/daily", authMw(http.HandlerFunc(h.GetDailyStats)))
 	mux.Handle("POST /api/v1/recordings/actions/upload", authMw(http.HandlerFunc(h.UploadRecording)))
+	mux.Handle("/api/v1/trial-recordings/actions/upload", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			httputil.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
+			return
+		}
+		h.UploadTrialRecording(w, r)
+	})))
 	mux.Handle("GET /api/v1/recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
 	mux.Handle("GET /api/v1/recordings/{id}/file-test", authMw(http.HandlerFunc(h.TestPlayback)))
 	mux.Handle("POST /api/v1/recordings/{id}/actions/transcribe", authMw(http.HandlerFunc(h.TriggerTranscribe)))

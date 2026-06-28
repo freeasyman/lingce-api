@@ -11,9 +11,14 @@ type CreateRecordingRequest struct {
 	PatientGender      *string    `json:"patient_gender,omitempty"`
 	PatientPhone       *string    `json:"patient_phone,omitempty"`
 	RecordingURL       string     `json:"recording_url"`
+	RecordingFileName  *string    `json:"recording_file_name,omitempty"`
+	RecordingMimeType  *string    `json:"recording_mime_type,omitempty"`
 	RecordingDuration  *int       `json:"recording_duration,omitempty"`
 	RecordingStartedAt *time.Time `json:"recording_started_at,omitempty"`
 	RecordingEndedAt   *time.Time `json:"recording_ended_at,omitempty"`
+	BusinessScope      *string    `json:"business_scope,omitempty"`
+	Scene              *string    `json:"scene,omitempty"`
+	Source             *string    `json:"source,omitempty"`
 }
 
 // UpdateRecordingRequest represents a request to update a medical recording

@@ -36,6 +36,35 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS customer_group_members ADD COLUMN IF NOT EXISTS created_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS customer_group_members ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`,
 
+		// Support module compatibility
+		`CREATE TABLE IF NOT EXISTS device_tokens (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			user_type TEXT NOT NULL DEFAULT 'mobile',
+			token TEXT NOT NULL,
+			platform TEXT NOT NULL,
+			device_model TEXT,
+			app_version TEXT,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			last_used_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_device_tokens_user_type_token ON device_tokens(user_id, user_type, token)`,
+		`CREATE INDEX IF NOT EXISTS idx_device_tokens_user_active ON device_tokens(user_id, user_type, is_active)`,
+		`ALTER TABLE IF EXISTS notifications ADD COLUMN IF NOT EXISTS user_type TEXT NOT NULL DEFAULT 'mobile'`,
+		`ALTER TABLE IF EXISTS notifications ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE IF EXISTS notifications ADD COLUMN IF NOT EXISTS extra_data JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`UPDATE notifications
+		SET type = COALESCE(NULLIF(type, ''), NULLIF(message_type, ''), 'system')
+		WHERE type IS NULL OR trim(type) = ''`,
+		`UPDATE notifications
+		SET user_type = 'mobile'
+		WHERE user_type IS NULL OR trim(user_type) = ''`,
+		`ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system'`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_read ON notifications(user_id, user_type, is_read)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created_at ON notifications(user_id, user_type, created_at DESC)`,
+
 		// Recording business scope compatibility
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
 		`UPDATE recordings SET business_scope = 'unknown' WHERE business_scope IS NULL OR trim(business_scope) = ''`,
@@ -71,6 +100,8 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS contact_phone TEXT`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS contact_email TEXT`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS industry TEXT`,
+		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS account_mode TEXT NOT NULL DEFAULT 'formal'`,
+		`UPDATE tenants SET account_mode = 'formal' WHERE account_mode IS NULL OR trim(account_mode) = ''`,
 		`ALTER TABLE IF EXISTS tenants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS code TEXT`,
 		`ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS parent_id BIGINT`,
@@ -705,12 +736,133 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		  WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
 		    AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
 		      SELECT code FROM inst_menus WHERE COALESCE(is_feature_assignable, false) = true
+		      UNION
+		      SELECT 'trial_home'
+		      UNION
+		      SELECT 'recording_upload'
 		    )`,
 		`DELETE FROM tenant_feature_overrides
 		  WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
 		    AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
 		      SELECT code FROM inst_menus WHERE COALESCE(is_feature_assignable, false) = true
+		      UNION
+		      SELECT 'trial_home'
+		      UNION
+		      SELECT 'recording_upload'
 		    )`,
+		`DO $$
+		DECLARE
+			v_parent_id BIGINT;
+			v_group_id BIGINT;
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_menus'
+			) THEN
+				INSERT INTO institution_menus (
+					tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+					is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at
+				)
+				SELECT NULL, '试用体验', 'trial_experience', NULL, NULL, NULL, 0, true,
+				       false, false, NULL, NULL, NOW(), NOW()
+				WHERE NOT EXISTS (
+					SELECT 1 FROM institution_menus
+					WHERE tenant_id IS NULL AND lower(code) = 'trial_experience' AND deleted_at IS NULL
+				);
+
+				SELECT id INTO v_parent_id
+				FROM institution_menus
+				WHERE tenant_id IS NULL AND lower(code) = 'trial_experience' AND deleted_at IS NULL
+				ORDER BY id ASC
+				LIMIT 1;
+
+				IF v_parent_id IS NOT NULL THEN
+					UPDATE institution_menus
+					SET name = '试用体验',
+					    path = NULL,
+					    parent_id = NULL,
+					    sort_order = 0,
+					    is_active = true,
+					    is_feature_assignable = false,
+					    updated_at = NOW()
+					WHERE id = v_parent_id;
+
+					INSERT INTO institution_menus (
+						tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+						is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at
+					)
+					SELECT NULL, '试用首页', 'trial_home', '/trial-home', NULL, v_parent_id, 0, true,
+					       true, false, NULL, NULL, NOW(), NOW()
+					WHERE NOT EXISTS (
+						SELECT 1 FROM institution_menus
+						WHERE tenant_id IS NULL AND lower(code) = 'trial_home' AND deleted_at IS NULL
+					);
+
+					UPDATE institution_menus
+					SET name = '试用首页',
+					    path = '/trial-home',
+					    parent_id = v_parent_id,
+					    sort_order = 0,
+					    is_active = true,
+					    is_feature_assignable = true,
+					    updated_at = NOW()
+					WHERE tenant_id IS NULL AND lower(code) = 'trial_home' AND deleted_at IS NULL;
+
+					INSERT INTO institution_menus (
+						tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+						is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at
+					)
+					SELECT NULL, '上传录音', 'recording_upload', '/recording-upload', NULL, v_parent_id, 1, true,
+					       true, false, NULL, NULL, NOW(), NOW()
+					WHERE NOT EXISTS (
+						SELECT 1 FROM institution_menus
+						WHERE tenant_id IS NULL AND lower(code) = 'recording_upload' AND deleted_at IS NULL
+					);
+
+					UPDATE institution_menus
+					SET name = '上传录音',
+					    path = '/recording-upload',
+					    parent_id = v_parent_id,
+					    sort_order = 1,
+					    is_active = true,
+					    is_feature_assignable = true,
+					    updated_at = NOW()
+					WHERE tenant_id IS NULL AND lower(code) = 'recording_upload' AND deleted_at IS NULL;
+				END IF;
+			END IF;
+
+			INSERT INTO tenant_feature_groups (name, code, description, is_active, created_at, updated_at)
+			SELECT '试用功能包', 'trial_experience', '试用租户默认功能包', true, NOW(), NOW()
+			WHERE NOT EXISTS (
+				SELECT 1 FROM tenant_feature_groups WHERE lower(code) = 'trial_experience'
+			);
+
+			SELECT id INTO v_group_id
+			FROM tenant_feature_groups
+			WHERE lower(code) = 'trial_experience'
+			ORDER BY id ASC
+			LIMIT 1;
+
+			IF v_group_id IS NOT NULL THEN
+				UPDATE tenant_feature_groups
+				SET name = '试用功能包',
+				    description = '试用租户默认功能包',
+				    is_active = true,
+				    updated_at = NOW()
+				WHERE id = v_group_id;
+
+				DELETE FROM tenant_feature_group_items WHERE group_id = v_group_id;
+
+				INSERT INTO tenant_feature_group_items (group_id, item_type, item_code, feature_code, is_enabled, created_at)
+				VALUES
+					(v_group_id, 'menu', 'trial_home', '', true, NOW()),
+					(v_group_id, 'menu', 'recording_upload', '', true, NOW()),
+					(v_group_id, 'menu', 'doctor_recordings', '', true, NOW()),
+					(v_group_id, 'menu', 'consultant_recordings', '', true, NOW()),
+					(v_group_id, 'menu', 'customers', '', true, NOW()),
+					(v_group_id, 'menu', 'tasks', '', true, NOW()),
+					(v_group_id, 'menu', 'departments', '', true, NOW());
+			END IF;
+		END $$`,
 		`DO $$
 		BEGIN
 			IF EXISTS (
