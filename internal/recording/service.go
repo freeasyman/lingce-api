@@ -99,6 +99,57 @@ func NewService(store *Store, employeeStore *employee.Store, workerURL, workerTo
 	}
 }
 
+func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudioIngestRequest) (*RecordingResponse, bool, error) {
+	if req.TenantID <= 0 {
+		return nil, false, fmt.Errorf("tenant_id is required")
+	}
+	if req.EmployeeID <= 0 {
+		return nil, false, fmt.Errorf("employee_id is required")
+	}
+	if strings.TrimSpace(req.FileURL) == "" {
+		return nil, false, fmt.Errorf("file_url is required")
+	}
+	if strings.TrimSpace(req.BusinessScope) == "" {
+		scope, err := s.store.ResolveEmployeeBusinessScope(ctx, req.TenantID, req.EmployeeID)
+		if err != nil {
+			return nil, false, err
+		}
+		req.BusinessScope = scope
+	}
+	if strings.TrimSpace(req.Scene) == "" {
+		req.Scene = "consultation"
+	}
+	if strings.TrimSpace(req.Source) == "" {
+		req.Source = "manual"
+	}
+	if strings.TrimSpace(req.MIMEType) == "" {
+		req.MIMEType = "audio/mpeg"
+	}
+	if strings.TrimSpace(req.FileName) == "" {
+		req.FileName = "recording.audio"
+	}
+
+	recordingID, created, err := s.store.CreateOwnedAudioRecording(ctx, req)
+	if err != nil {
+		return nil, false, err
+	}
+	recording, err := s.store.GetRecordingByID(ctx, recordingID)
+	if err != nil {
+		return nil, false, err
+	}
+	resp := toRecordingResponse(recording)
+	if created {
+		triggerSource := strings.TrimSpace(req.TriggerSource)
+		if triggerSource == "" {
+			triggerSource = "external_audio_ingest"
+		}
+		if _, err := s.enqueueLingceWorkerJob(ctx, recordingID, "transcribe", triggerSource); err != nil {
+			return resp, true, err
+		}
+	}
+	return resp, created, nil
+}
+
 func recordingScopeMenuCode(scope RecordingScope) string {
 	switch scope {
 	case RecordingScopeDoctor:
@@ -4889,7 +4940,7 @@ type workerJobResponse struct {
 	JobID string `json:"job_id"`
 }
 
-func (s *Service) submitLingceWorkerJob(ctx context.Context, recordingID int64, jobType, triggerSource string) (string, error) {
+func (s *Service) enqueueLingceWorkerJob(ctx context.Context, recordingID int64, jobType, triggerSource string) (string, error) {
 	if s.lingceWorkerURL == "" {
 		return "", &recordingValidationError{code: "LINGCE_WORKER_NOT_CONFIGURED", message: "lingce-worker url is not configured"}
 	}
@@ -5061,7 +5112,7 @@ func (s *Service) triggerWorkerJob(ctx context.Context, id int64, jobType string
 	}
 
 	if s.lingceWorkerURL != "" {
-		return s.submitLingceWorkerJob(ctx, id, jobType, "manual_replay")
+		return s.enqueueLingceWorkerJob(ctx, id, jobType, "manual_replay")
 	}
 
 	traceID := fmt.Sprintf("trace-manual-%d-%d", id, time.Now().UnixNano())

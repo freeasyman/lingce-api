@@ -54,7 +54,133 @@ func (s *Service) GetCustomerByID(ctx context.Context, id int64) (*CustomerRespo
 		return nil, err
 	}
 
-	return toCustomerResponse(customer), nil
+	resp := toCustomerResponse(customer)
+	if resp == nil {
+		return nil, fmt.Errorf("customer not found")
+	}
+
+	if customer.AssignedTo != nil && *customer.AssignedTo > 0 {
+		var assignedName string
+		if err := s.store.pool.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), phone, '')
+			FROM employees
+			WHERE id = $1
+		`, *customer.AssignedTo).Scan(&assignedName); err == nil && strings.TrimSpace(assignedName) != "" {
+			resp.AssignedToName = &assignedName
+		}
+	}
+
+	interactionReq := InteractionListRequest{
+		CustomerID: id,
+		Page:       1,
+		PageSize:   20,
+	}
+	interactions, _, err := s.store.ListCustomerInteractions(ctx, interactionReq)
+	if err == nil {
+		employeeIDs := make([]int64, 0, len(interactions))
+		seen := map[int64]struct{}{}
+		for _, item := range interactions {
+			if item != nil && item.EmployeeID > 0 {
+				if _, ok := seen[item.EmployeeID]; !ok {
+					seen[item.EmployeeID] = struct{}{}
+					employeeIDs = append(employeeIDs, item.EmployeeID)
+				}
+			}
+		}
+		employeeNameMap := map[int64]string{}
+		if len(employeeIDs) > 0 {
+			rows, queryErr := s.store.pool.Query(ctx, `
+				SELECT id, COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), phone, '')
+				FROM employees
+				WHERE id = ANY($1)
+			`, employeeIDs)
+			if queryErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var employeeID int64
+					var employeeName string
+					if scanErr := rows.Scan(&employeeID, &employeeName); scanErr == nil {
+						employeeNameMap[employeeID] = employeeName
+					}
+				}
+			}
+		}
+
+		resp.RecentInteractions = make([]CustomerInteractionSummary, 0, len(interactions))
+		for _, item := range interactions {
+			if item == nil {
+				continue
+			}
+			summary := CustomerInteractionSummary{
+				ID:              item.ID,
+				InteractionType: item.Type,
+				Direction:       &item.Direction,
+				ContentSummary:  item.Content,
+				CreatedAt:       stringPtr(item.CreatedAt.Format("2006-01-02T15:04:05Z07:00")),
+				OccurredAt:      stringPtr(item.InteractedAt.Format("2006-01-02T15:04:05Z07:00")),
+			}
+			if name, ok := employeeNameMap[item.EmployeeID]; ok && strings.TrimSpace(name) != "" {
+				summary.StaffName = &name
+			}
+			resp.RecentInteractions = append(resp.RecentInteractions, summary)
+		}
+	}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT id,
+		       COALESCE(NULLIF(channel, ''), '') AS channel_type,
+		       NULLIF(channel_id, '') AS external_id,
+		       NULLIF(nickname, '') AS external_name
+		FROM customer_identities
+		WHERE customer_id = $1
+		ORDER BY id DESC
+	`, id)
+	if err == nil {
+		defer rows.Close()
+		resp.Identities = make([]CustomerIdentityResponse, 0, 8)
+		for rows.Next() {
+			var identity CustomerIdentityResponse
+			if scanErr := rows.Scan(&identity.ID, &identity.ChannelType, &identity.ExternalID, &identity.ExternalName); scanErr == nil {
+				identity.Status = "active"
+				resp.Identities = append(resp.Identities, identity)
+			}
+		}
+	}
+
+	var (
+		followType   string
+		followStatus string
+		scheduledAt  *string
+		completedAt  *string
+	)
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(type, ''), COALESCE(status, ''), 
+		       CASE WHEN scheduled_at IS NOT NULL THEN to_char(scheduled_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') ELSE NULL END,
+		       CASE WHEN completed_at IS NOT NULL THEN to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') ELSE NULL END
+		FROM customer_follow_ups
+		WHERE customer_id = $1
+		ORDER BY COALESCE(scheduled_at, completed_at, created_at) DESC, id DESC
+		LIMIT 1
+	`, id).Scan(&followType, &followStatus, &scheduledAt, &completedAt); err == nil {
+		parts := make([]string, 0, 3)
+		if strings.TrimSpace(followType) != "" {
+			parts = append(parts, followType)
+		}
+		if strings.TrimSpace(followStatus) != "" {
+			parts = append(parts, followStatus)
+		}
+		if completedAt != nil && strings.TrimSpace(*completedAt) != "" {
+			parts = append(parts, "已完成")
+		} else if scheduledAt != nil && strings.TrimSpace(*scheduledAt) != "" {
+			parts = append(parts, "待跟进")
+		}
+		if len(parts) > 0 {
+			statusText := strings.Join(parts, " · ")
+			resp.LatestFollowUpStatus = &statusText
+		}
+	}
+
+	return resp, nil
 }
 
 // CreateCustomer creates a new customer
@@ -472,11 +598,14 @@ func toCustomerResponse(c *Customer) *CustomerResponse {
 		TotalInteractions:    c.TotalInteractions,
 		DealCount:            c.DealCount,
 		TotalConvertedAmount: c.TotalConvertedAmount,
+		LastConsultationItem: c.LastConsultationItem,
+		LastDealResult:       c.LastDealResult,
 		Notes:                c.Notes,
 		ExtraData:            c.ExtraData,
 		CreatedAt:            c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:            c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+	resp.FirstContactAt = stringPtr(resp.CreatedAt)
 
 	if c.AssignedAt != nil {
 		formatted := c.AssignedAt.Format("2006-01-02T15:04:05Z07:00")
@@ -503,6 +632,13 @@ func toCustomerResponse(c *Customer) *CustomerResponse {
 	}
 
 	return resp
+}
+
+func stringPtr(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
 }
 
 // toInteractionResponse converts a CustomerInteraction to InteractionResponse

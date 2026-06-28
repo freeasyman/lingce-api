@@ -177,13 +177,18 @@ func (h *Handler) LoginMobile(w http.ResponseWriter, r *http.Request) {
 		loginID = req.Phone
 	}
 
-	if loginID == "" || req.Password == "" || req.TenantID == 0 {
-		httputil.WriteBadRequest(w, "Username, password and tenant_id are required")
+	if loginID == "" || req.Password == "" {
+		httputil.WriteBadRequest(w, "Username and password are required")
 		return
 	}
 
 	resp, err := h.service.LoginMobile(r.Context(), loginID, req.Password, req.TenantID)
 	if err != nil {
+		var authErr *AuthError
+		if errors.As(err, &authErr) {
+			httputil.WriteError(w, authErr.Status, authErr.Code, authErr.Message, authErr.Details)
+			return
+		}
 		httputil.WriteUnauthorized(w, err.Error())
 		return
 	}

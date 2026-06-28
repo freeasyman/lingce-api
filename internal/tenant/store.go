@@ -828,6 +828,58 @@ func stringPtrValue(v string) *string {
 	return &v
 }
 
+func (s *Store) EnsureTrialAnalysisRoutes(ctx context.Context, tenantID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin trial analysis route transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		WITH target_roles AS (
+			SELECT tenant_id, id AS role_id, lower(code) AS role_code
+			FROM institution_roles
+			WHERE tenant_id = $1
+			  AND lower(code) IN ('doctor', 'consultant')
+			  AND deleted_at IS NULL
+		),
+		route_seed AS (
+			SELECT tenant_id, role_id, role_code, 'doctor_patient'::text AS pipeline_code, 'v1'::text AS pipeline_version
+			FROM target_roles
+			WHERE role_code = 'doctor'
+			UNION ALL
+			SELECT tenant_id, role_id, role_code, 'consultant_conversion'::text AS pipeline_code, 'v1'::text AS pipeline_version
+			FROM target_roles
+			WHERE role_code = 'consultant'
+		)
+		INSERT INTO worker_analysis_routes (
+			tenant_id, role_id, role_code, pipeline_code, pipeline_version,
+			enabled, effective_from, remark, created_at, updated_at
+		)
+		SELECT
+			rs.tenant_id, rs.role_id, rs.role_code, rs.pipeline_code, rs.pipeline_version,
+			TRUE, NOW(), 'trial bootstrap route sync', NOW(), NOW()
+		FROM route_seed rs
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM worker_analysis_routes war
+			WHERE war.tenant_id = rs.tenant_id
+			  AND war.role_id = rs.role_id
+			  AND war.pipeline_code = rs.pipeline_code
+			  AND COALESCE(war.pipeline_version, '') = rs.pipeline_version
+			  AND war.enabled = TRUE
+			  AND war.deleted_at IS NULL
+		)
+	`, tenantID); err != nil {
+		return fmt.Errorf("seed worker analysis routes for trial tenant: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit trial analysis route transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ResolveSubscriptionPlanID(ctx context.Context, planID *int64, planName *string) (*int64, error) {
 	if planID != nil && *planID > 0 {
 		var id int64

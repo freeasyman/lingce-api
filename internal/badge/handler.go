@@ -1032,6 +1032,25 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 		LastOnlineAt:             device.LastOnlineAt,
 	}
 
+	if assignedAt := firstNonEmptyTime(device.AssignedToEmpAt, device.AssignedToTenantAt, device.AcceptedAt, stringPtr(device.CreatedAt)); assignedAt != nil {
+		workDays := int(time.Since(*assignedAt).Hours()/24) + 1
+		if workDays < 1 {
+			workDays = 1
+		}
+		status.WorkDays = &workDays
+	}
+
+	if totalRecordings, totalCustomers, err := h.getMyBadgeCompanionStats(r, device); err != nil {
+		slog.Warn("load my badge companion stats failed",
+			"device_id", device.ID,
+			"device_no", device.DeviceNo,
+			"error", err,
+		)
+	} else {
+		status.TotalRecordings = &totalRecordings
+		status.TotalCustomers = &totalCustomers
+	}
+
 	if strings.TrimSpace(device.ManufacturerCode) != "" && strings.TrimSpace(device.DeviceNo) != "" {
 		refreshCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
@@ -1159,6 +1178,51 @@ func stringPtr(s string) *string {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func firstNonEmptyTime(values ...*string) *time.Time {
+	for _, value := range values {
+		if value == nil || strings.TrimSpace(*value) == "" {
+			continue
+		}
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*value)); err == nil {
+			return &parsed
+		}
+		if parsed, err := time.Parse("2006-01-02 15:04:05", strings.TrimSpace(*value)); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func (h *Handler) getMyBadgeCompanionStats(r *http.Request, device *DeviceResponse) (int, int, error) {
+	if device == nil {
+		return 0, 0, fmt.Errorf("device is required")
+	}
+	if strings.TrimSpace(device.DeviceNo) == "" {
+		return 0, 0, fmt.Errorf("device_no is required")
+	}
+
+	var totalRecordings int
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM recordings
+		WHERE device_no = $1
+	`, device.DeviceNo).Scan(&totalRecordings); err != nil {
+		return 0, 0, fmt.Errorf("count recordings: %w", err)
+	}
+
+	var totalCustomers int
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT COUNT(DISTINCT customer_id)
+		FROM recordings
+		WHERE device_no = $1
+		  AND customer_id IS NOT NULL
+	`, device.DeviceNo).Scan(&totalCustomers); err != nil {
+		return 0, 0, fmt.Errorf("count customers: %w", err)
+	}
+
+	return totalRecordings, totalCustomers, nil
 }
 
 func (h *Handler) getMyAssignedDevice(r *http.Request, employeeID int64) (*DeviceResponse, error) {

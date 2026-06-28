@@ -125,6 +125,8 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		       COALESCE(ds.deal_count, 0) AS deal_count,
 		       COALESCE(ds.total_converted_amount, 0)::float8 AS total_converted_amount,
 		       it.last_interaction_at,
+		       lr.last_consultation_item,
+		       lr.last_deal_result,
 		       notes, extra_data, created_by, created_at, updated_at
 		FROM customers
 		LEFT JOIN (
@@ -168,6 +170,30 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			WHERE r.customer_id IS NOT NULL
 			GROUP BY r.customer_id
 		) ds ON ds.customer_id = customers.id
+		LEFT JOIN (
+			SELECT DISTINCT ON (r.customer_id)
+			       r.customer_id,
+			       NULLIF(TRIM(COALESCE(
+			           r.converted_item,
+			           r.analysis_result->'consultation_record'->>'consultation_item',
+			           r.analysis_result->'consultation_record'->>'treatment_item',
+			           r.analysis_result->'analysis_summary'->'visit_outcome'->>'treatment_item',
+			           r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'consultation_item',
+			           r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'treatment_item',
+			           ''
+			       )), '') AS last_consultation_item,
+			       NULLIF(TRIM(COALESCE(
+			           r.confirmed_deal_status,
+			           r.analysis_result->'analysis_summary'->'visit_outcome'->>'status',
+			           r.analysis_result->'deal_outcome'->>'result',
+			           r.analysis_result->'decision_state'->>'status',
+			           r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status',
+			           ''
+			       )), '') AS last_deal_result
+			FROM recordings r
+			WHERE r.customer_id IS NOT NULL
+			ORDER BY r.customer_id, COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
+		) lr ON lr.customer_id = customers.id
 		WHERE %s
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
@@ -187,7 +213,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
 			&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.FirstChannel,
-			&c.IdentityCount, &c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.LastInteractionAt, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.IdentityCount, &c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.LastInteractionAt, &c.LastConsultationItem, &c.LastDealResult, &c.Notes, &c.ExtraData, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan customer: %w", err)
 		}

@@ -353,6 +353,9 @@ func (s *Service) bootstrapTrialTenant(ctx context.Context, tenantID int64) erro
 	if err := s.store.EnsureTrialDemoEmployees(ctx, tenantID, trialDemoEmployeeSeeds); err != nil {
 		return err
 	}
+	if err := s.store.EnsureTrialAnalysisRoutes(ctx, tenantID); err != nil {
+		return err
+	}
 	return nil
 }
 

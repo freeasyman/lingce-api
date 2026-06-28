@@ -33,6 +33,71 @@ type TrialTenantProfile struct {
 	TrialUsedRecordings int
 }
 
+func (s *Store) GetTrialAgreementStatus(ctx context.Context, tenantID int64, agreementType, agreementVersion string) (*TrialAgreementStatusResponse, error) {
+	status := &TrialAgreementStatusResponse{
+		AgreementType:    strings.TrimSpace(agreementType),
+		AgreementVersion: strings.TrimSpace(agreementVersion),
+		Accepted:         false,
+	}
+	if status.AgreementType == "" {
+		status.AgreementType = "trial_privacy_notice"
+	}
+	if status.AgreementVersion == "" {
+		status.AgreementVersion = "v1"
+	}
+
+	var accepted bool
+	var acceptedAt sql.NullTime
+	err := s.pool.QueryRow(ctx, `
+		SELECT accepted, accepted_at
+		FROM tenant_trial_agreements
+		WHERE tenant_id = $1
+		  AND agreement_type = $2
+		  AND agreement_version = $3
+		LIMIT 1
+	`, tenantID, status.AgreementType, status.AgreementVersion).Scan(&accepted, &acceptedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return status, nil
+		}
+		return nil, fmt.Errorf("failed to get trial agreement status: %w", err)
+	}
+	status.Accepted = accepted
+	if acceptedAt.Valid {
+		v := acceptedAt.Time.Format(time.RFC3339)
+		status.AcceptedAt = &v
+	}
+	return status, nil
+}
+
+func (s *Store) AcceptTrialAgreement(ctx context.Context, tenantID, acceptedBy int64, agreementType, agreementVersion string) error {
+	agreementType = strings.TrimSpace(agreementType)
+	agreementVersion = strings.TrimSpace(agreementVersion)
+	if agreementType == "" {
+		agreementType = "trial_privacy_notice"
+	}
+	if agreementVersion == "" {
+		agreementVersion = "v1"
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO tenant_trial_agreements (
+			tenant_id, agreement_type, agreement_version, accepted, accepted_at, accepted_by, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, TRUE, NOW(), $4, NOW(), NOW()
+		)
+		ON CONFLICT (tenant_id, agreement_type, agreement_version)
+		DO UPDATE SET
+			accepted = TRUE,
+			accepted_at = NOW(),
+			accepted_by = EXCLUDED.accepted_by,
+			updated_at = NOW()
+	`, tenantID, agreementType, agreementVersion, acceptedBy)
+	if err != nil {
+		return fmt.Errorf("failed to accept trial agreement: %w", err)
+	}
+	return nil
+}
+
 var (
 	doctorScopeRoleCodes     = []string{"doctor", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
@@ -1687,6 +1752,83 @@ func (s *Store) UpdateRecordingMediaRef(ctx context.Context, id int64, fileURL, 
 		return fmt.Errorf("failed to update recording media ref: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ResolveEmployeeBusinessScope(ctx context.Context, tenantID, employeeID int64) (string, error) {
+	var scope string
+	err := s.pool.QueryRow(ctx, `
+		SELECT CASE
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
+			) THEN 'frontdesk'
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) IN ('doctor','doctor_assistant')
+			) THEN 'doctor'
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) = 'consultant'
+			) THEN 'consultant'
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) = 'therapist'
+			) THEN 'therapist'
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) = 'nurse'
+			) THEN 'nurse'
+			WHEN EXISTS (
+				SELECT 1 FROM institution_employee_roles ier
+				WHERE ier.tenant_id = $1 AND ier.employee_id = $2
+				  AND lower(ier.role_code) = 'lingce_sales'
+			) THEN 'lingce_sales'
+			ELSE 'unknown'
+		END
+	`, tenantID, employeeID).Scan(&scope)
+	if err != nil {
+		return "", fmt.Errorf("resolve employee business scope: %w", err)
+	}
+	return scope, nil
+}
+
+func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIngestRequest) (int64, bool, error) {
+	var recordingID int64
+	var created bool
+	err := s.pool.QueryRow(ctx, `
+		WITH ins AS (
+			INSERT INTO recordings (
+				tenant_id, employee_id, file_url, file_name, duration, mime_type,
+				source, scene, business_scope, status,
+				transcription_status, cleaned_transcription_status, analysis_status,
+				recorded_at, order_no, oss_key, created_at, updated_at
+			)
+			SELECT
+				$1::bigint, $2::bigint, $3::text, $4::text, NULLIF($5::integer, 0), $6::text,
+				$7::text, $8::text, $9::text, 'uploaded',
+				'queued', 'pending', 'pending',
+				$10::timestamp, NULLIF($11::text, ''), NULLIF($12::text, ''), NOW(), NOW()
+			WHERE NULLIF($11::text, '') IS NULL
+			   OR NOT EXISTS (SELECT 1 FROM recordings WHERE order_no = $11::text)
+			RETURNING id
+		)
+		SELECT id, true FROM ins
+		UNION ALL
+		SELECT id, false FROM recordings
+		WHERE NULLIF($11::text, '') IS NOT NULL
+		  AND order_no = $11::text
+		  AND NOT EXISTS (SELECT 1 FROM ins)
+		LIMIT 1
+	`, req.TenantID, req.EmployeeID, req.FileURL, req.FileName, req.DurationSeconds, req.MIMEType, req.Source, req.Scene, req.BusinessScope, req.RecordedAt, req.OrderNo, req.OSSKey).Scan(&recordingID, &created)
+	if err != nil {
+		return 0, false, fmt.Errorf("create owned audio recording: %w", err)
+	}
+	return recordingID, created, nil
 }
 
 // CreateRecording creates a new medical recording

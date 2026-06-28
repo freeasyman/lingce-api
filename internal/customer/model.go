@@ -31,6 +31,8 @@ type Customer struct {
 	DealCount            int        `json:"deal_count,omitempty"`
 	TotalConvertedAmount float64    `json:"total_converted_amount,omitempty"`
 	LastInteractionAt    *time.Time `json:"last_interaction_at,omitempty"`
+	LastConsultationItem *string    `json:"last_consultation_item,omitempty"`
+	LastDealResult       *string    `json:"last_deal_result,omitempty"`
 	Tags                 []string   `json:"tags,omitempty"`
 	Notes                *string    `json:"notes,omitempty"`
 	ExtraData            JSONObject `json:"extra_data,omitempty"`

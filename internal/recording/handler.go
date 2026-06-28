@@ -92,6 +92,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		}
 		h.UploadTrialRecording(w, r)
 	})))
+	mux.Handle("GET /api/v1/trial-agreements/current-status", authMw(http.HandlerFunc(h.GetTrialAgreementStatus)))
+	mux.Handle("POST /api/v1/trial-agreements/accept", authMw(http.HandlerFunc(h.AcceptTrialAgreement)))
 	mux.Handle("GET /api/v1/recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
 	mux.Handle("GET /api/v1/recordings/{id}/file-test", authMw(http.HandlerFunc(h.TestPlayback)))
 	mux.Handle("POST /api/v1/recordings/{id}/actions/transcribe", authMw(http.HandlerFunc(h.TriggerTranscribe)))

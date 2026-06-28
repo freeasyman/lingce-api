@@ -2,6 +2,22 @@ package recording
 
 import "time"
 
+type OwnedAudioIngestRequest struct {
+	TenantID        int64
+	EmployeeID      int64
+	FileURL         string
+	FileName        string
+	MIMEType        string
+	DurationSeconds int
+	RecordedAt      *time.Time
+	OrderNo         string
+	OSSKey          string
+	Source          string
+	BusinessScope   string
+	Scene           string
+	TriggerSource   string
+}
+
 // CreateRecordingRequest represents a request to create a medical recording
 type CreateRecordingRequest struct {
 	TenantID           int64      `json:"tenant_id"`
@@ -268,6 +284,18 @@ type GenerateOperationsPlanRequest struct {
 type PlayURLResponse struct {
 	URL       string `json:"url"`
 	ExpiresAt string `json:"expires_at"`
+}
+
+type TrialAgreementStatusResponse struct {
+	AgreementType    string  `json:"agreement_type"`
+	AgreementVersion string  `json:"agreement_version"`
+	Accepted         bool    `json:"accepted"`
+	AcceptedAt       *string `json:"accepted_at,omitempty"`
+}
+
+type AcceptTrialAgreementRequest struct {
+	AgreementType    string `json:"agreement_type"`
+	AgreementVersion string `json:"agreement_version"`
 }
 
 // LearningRecommendationResponse represents learning recommendation

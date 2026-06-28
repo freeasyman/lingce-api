@@ -118,6 +118,19 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS employees ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`CREATE TABLE IF NOT EXISTS tenant_trial_agreements (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			agreement_type TEXT NOT NULL,
+			agreement_version TEXT NOT NULL,
+			accepted BOOLEAN NOT NULL DEFAULT FALSE,
+			accepted_at TIMESTAMP,
+			accepted_by BIGINT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE(tenant_id, agreement_type, agreement_version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tenant_trial_agreements_tenant ON tenant_trial_agreements(tenant_id, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS institution_roles (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
@@ -1655,10 +1668,12 @@ type builtinAnalysisPipelineSeed struct {
 
 func seedBuiltinAnalysisPipelines(ctx context.Context, pool *pgxpool.Pool) error {
 	seeds := []builtinAnalysisPipelineSeed{
-		{Code: "doctor", Version: "v1", Name: "医生录音分析 v1", SceneScope: "post_call_analysis", Description: "default doctor pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "doctor", Version: "v1", Name: "医生录音分析 v1", SceneScope: "post_call_analysis", Description: "legacy doctor pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "doctor_patient", Version: "v1", Name: "医生我与患者分析 v1", SceneScope: "recording", Description: "default doctor patient pipeline", ReleaseNote: "builtin pipeline"},
 		{Code: "therapist", Version: "v1", Name: "治疗师录音分析 v1", SceneScope: "post_call_analysis", Description: "default therapist pipeline", ReleaseNote: "builtin pipeline"},
 		{Code: "frontdesk", Version: "v1", Name: "前台录音分析 v1", SceneScope: "frontdesk_reception", Description: "default frontdesk pipeline", ReleaseNote: "builtin pipeline"},
-		{Code: "consultant", Version: "v1", Name: "咨询录音分析 v1", SceneScope: "admission_consult", Description: "default consultant pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "consultant", Version: "v1", Name: "咨询录音分析 v1", SceneScope: "admission_consult", Description: "legacy consultant pipeline", ReleaseNote: "builtin pipeline"},
+		{Code: "consultant_conversion", Version: "v1", Name: "咨询成交转化分析 v1", SceneScope: "recording", Description: "default consultant conversion pipeline", ReleaseNote: "builtin pipeline"},
 		{Code: "lingce_sales", Version: "v1", Name: "销售录音分析 v1", SceneScope: "admission_consult", Description: "default lingce sales pipeline", ReleaseNote: "builtin pipeline"},
 		{Code: "customer", Version: "v1", Name: "客户录音分析 v1", SceneScope: "followup_quality", Description: "default customer pipeline", ReleaseNote: "builtin pipeline"},
 	}
@@ -1712,17 +1727,20 @@ func seedDefaultAnalysisRoutes(ctx context.Context, pool *pgxpool.Pool) error {
 				id AS role_id,
 				role_code AS role_code_snapshot,
 				CASE
-					WHEN role_code IN ('doctor', 'doctor_assistant', 'therapist') THEN 'post_call_analysis'
+					WHEN role_code = 'doctor' THEN 'recording'
+					WHEN role_code = 'consultant' THEN 'recording'
+					WHEN role_code IN ('doctor_assistant', 'therapist') THEN 'post_call_analysis'
 					WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk_reception'
-					WHEN role_code IN ('consultant', 'lingce_sales') THEN 'admission_consult'
+					WHEN role_code = 'lingce_sales' THEN 'admission_consult'
 					WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'followup_quality'
 					ELSE 'post_call_analysis'
 				END AS scene_scope,
 				CASE
-					WHEN role_code IN ('doctor', 'doctor_assistant') THEN 'doctor'
+					WHEN role_code = 'doctor' THEN 'doctor_patient'
+					WHEN role_code = 'doctor_assistant' THEN 'doctor'
 					WHEN role_code = 'therapist' THEN 'therapist'
 					WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk'
-					WHEN role_code = 'consultant' THEN 'consultant'
+					WHEN role_code = 'consultant' THEN 'consultant_conversion'
 					WHEN role_code = 'lingce_sales' THEN 'lingce_sales'
 					WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'customer'
 					ELSE 'doctor'
@@ -1782,6 +1800,99 @@ func seedDefaultAnalysisRoutes(ctx context.Context, pool *pgxpool.Pool) error {
 		)
 	`)
 	if err != nil {
+		return err
+	}
+
+	if _, err := pool.Exec(ctx, `
+		WITH target_roles AS (
+			SELECT tenant_id, id AS role_id, lower(code) AS role_code
+			FROM institution_roles
+			WHERE deleted_at IS NULL
+			  AND lower(code) IN ('doctor', 'consultant')
+		)
+		UPDATE analysis_role_routes arr
+		SET enabled = FALSE,
+		    status = 'disabled',
+		    updated_at = NOW()
+		FROM target_roles tr
+		WHERE arr.tenant_id = tr.tenant_id
+		  AND arr.role_id = tr.role_id
+		  AND arr.enabled = TRUE
+		  AND COALESCE(NULLIF(lower(arr.status), ''), 'draft') = 'published'
+		  AND (
+			(tr.role_code = 'doctor' AND arr.pipeline_code IN ('doctor', 'doctor_conversion'))
+			OR
+			(tr.role_code = 'consultant' AND arr.pipeline_code = 'consultant')
+		  )
+	`); err != nil {
+		return err
+	}
+
+	if _, err := pool.Exec(ctx, `
+		WITH target_roles AS (
+			SELECT tenant_id, id AS role_id, lower(code) AS role_code
+			FROM institution_roles
+			WHERE deleted_at IS NULL
+			  AND lower(code) IN ('doctor', 'consultant')
+		),
+		route_seed AS (
+			SELECT tenant_id, role_id, role_code, 'doctor_patient'::text AS pipeline_code, 'v1'::text AS pipeline_version
+			FROM target_roles
+			WHERE role_code = 'doctor'
+			UNION ALL
+			SELECT tenant_id, role_id, role_code, 'consultant_conversion'::text AS pipeline_code, 'v1'::text AS pipeline_version
+			FROM target_roles
+			WHERE role_code = 'consultant'
+		)
+		INSERT INTO worker_analysis_routes (
+			tenant_id, role_id, role_code, pipeline_code, pipeline_version,
+			enabled, effective_from, remark, created_at, updated_at
+		)
+		SELECT
+			rs.tenant_id, rs.role_id, rs.role_code, rs.pipeline_code, rs.pipeline_version,
+			TRUE, NOW(), 'default route migration', NOW(), NOW()
+		FROM route_seed rs
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM worker_analysis_routes war
+			WHERE war.tenant_id = rs.tenant_id
+			  AND war.role_id = rs.role_id
+			  AND lower(war.role_code) = rs.role_code
+			  AND war.pipeline_code = rs.pipeline_code
+			  AND COALESCE(war.pipeline_version, '') = rs.pipeline_version
+			  AND war.enabled = TRUE
+			  AND war.deleted_at IS NULL
+		)
+	`); err != nil {
+		return err
+	}
+
+	if _, err := pool.Exec(ctx, `
+		WITH target_roles AS (
+			SELECT tenant_id, id AS role_id, lower(code) AS role_code
+			FROM institution_roles
+			WHERE deleted_at IS NULL
+			  AND lower(code) IN ('doctor', 'consultant')
+		)
+		UPDATE worker_analysis_routes war
+		SET enabled = FALSE,
+		    deleted_at = COALESCE(war.deleted_at, NOW()),
+		    updated_at = NOW(),
+		    remark = CASE
+		    	WHEN COALESCE(NULLIF(war.remark, ''), '') = '' THEN 'disabled by default route migration'
+		    	ELSE war.remark || '; disabled by default route migration'
+		    END
+		FROM target_roles tr
+		WHERE war.tenant_id = tr.tenant_id
+		  AND war.role_id = tr.role_id
+		  AND war.enabled = TRUE
+		  AND war.deleted_at IS NULL
+		  AND (
+			(tr.role_code = 'doctor' AND war.pipeline_code IN ('doctor', 'doctor_conversion'))
+			OR
+			(tr.role_code = 'consultant' AND war.pipeline_code = 'consultant')
+		  )
+	`); err != nil {
 		return err
 	}
 

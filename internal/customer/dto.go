@@ -61,6 +61,7 @@ type CustomerResponse struct {
 	AssignedToName       *string    `json:"assigned_to_name,omitempty"`
 	AssignedAt           *string    `json:"assigned_at,omitempty"`
 	ConvertedAt          *string    `json:"converted_at,omitempty"`
+	FirstContactAt       *string    `json:"first_contact_at,omitempty"`
 	LastContactedAt      *string    `json:"last_contacted_at,omitempty"`
 	NextFollowUpAt       *string    `json:"next_follow_up_at,omitempty"`
 	LifecycleStage       string     `json:"lifecycle_stage,omitempty"`
@@ -71,11 +72,36 @@ type CustomerResponse struct {
 	DealCount            int        `json:"deal_count,omitempty"`
 	TotalConvertedAmount float64    `json:"total_converted_amount,omitempty"`
 	LastInteractionAt    *string    `json:"last_interaction_at,omitempty"`
+	LastConsultationItem *string    `json:"last_consultation_item,omitempty"`
+	LastDealResult       *string    `json:"last_deal_result,omitempty"`
+	LatestFollowUpStatus *string    `json:"latest_follow_up_status,omitempty"`
+	PatientID            *int64     `json:"patient_id,omitempty"`
+	LeadID               *int64     `json:"lead_id,omitempty"`
+	Identities           []CustomerIdentityResponse    `json:"identities,omitempty"`
+	RecentInteractions   []CustomerInteractionSummary  `json:"recent_interactions,omitempty"`
 	Tags                 []string   `json:"tags,omitempty"`
 	Notes                *string    `json:"notes,omitempty"`
 	ExtraData            JSONObject `json:"extra_data,omitempty"`
 	CreatedAt            string     `json:"created_at"`
 	UpdatedAt            string     `json:"updated_at"`
+}
+
+type CustomerIdentityResponse struct {
+	ID           int64   `json:"id"`
+	ChannelType  string  `json:"channel_type"`
+	ExternalID   *string `json:"external_id,omitempty"`
+	ExternalName *string `json:"external_name,omitempty"`
+	Status       string  `json:"status"`
+}
+
+type CustomerInteractionSummary struct {
+	ID             int64   `json:"id"`
+	InteractionType string  `json:"interaction_type"`
+	Direction      *string `json:"direction,omitempty"`
+	ContentSummary *string `json:"content_summary,omitempty"`
+	StaffName      *string `json:"staff_name,omitempty"`
+	OccurredAt     *string `json:"occurred_at,omitempty"`
+	CreatedAt      *string `json:"created_at,omitempty"`
 }
 
 // CreateCustomerRequest represents the request for creating a customer

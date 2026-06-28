@@ -24,17 +24,20 @@ route_seed AS (
     id AS role_id,
     role_code AS role_code_snapshot,
     CASE
-      WHEN role_code IN ('doctor', 'doctor_assistant', 'therapist') THEN 'post_call_analysis'
+      WHEN role_code = 'doctor' THEN 'recording'
+      WHEN role_code = 'consultant' THEN 'recording'
+      WHEN role_code IN ('doctor_assistant', 'therapist') THEN 'post_call_analysis'
       WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk_reception'
-      WHEN role_code IN ('consultant', 'lingce_sales') THEN 'admission_consult'
+      WHEN role_code = 'lingce_sales' THEN 'admission_consult'
       WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'followup_quality'
       ELSE 'post_call_analysis'
     END AS scene_scope,
     CASE
-      WHEN role_code IN ('doctor', 'doctor_assistant') THEN 'doctor'
+      WHEN role_code = 'doctor' THEN 'doctor_patient'
+      WHEN role_code = 'doctor_assistant' THEN 'doctor'
       WHEN role_code = 'therapist' THEN 'therapist'
       WHEN role_code IN ('frontdesk', 'reception', 'receptionist') THEN 'frontdesk'
-      WHEN role_code = 'consultant' THEN 'consultant'
+      WHEN role_code = 'consultant' THEN 'consultant_conversion'
       WHEN role_code = 'lingce_sales' THEN 'lingce_sales'
       WHEN role_code IN ('customer', 'customer_service', 'nurse') THEN 'customer'
       ELSE 'doctor'

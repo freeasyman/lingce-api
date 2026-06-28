@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 )
 
 const trialUploadMaxBytes = 100 * 1024 * 1024
+const trialUploadMinDurationSeconds = 2 * 60
+const trialUploadMaxDurationSeconds = 15 * 60
 
 var trialUploadAllowedExtensions = map[string]struct{}{
 	".mp3": {},
@@ -83,6 +86,22 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		}
 		durationSeconds = &value
 	}
+	if durationSeconds == nil {
+		httputil.WriteBadRequest(w, "未能正确读取录音时长，请更换文件或格式后重试")
+		return
+	}
+	if *durationSeconds < trialUploadMinDurationSeconds {
+		httputil.WriteBadRequest(w, "录音时间过短，预计无法充分分析出有效内容。请更换一段大于等于 2 分钟且小于等于 15 分钟的录音后再试，本次不会占用试用额度。")
+		return
+	}
+	if *durationSeconds > trialUploadMaxDurationSeconds {
+		httputil.WriteBadRequest(w, "录音时长超出试用标准。请更换一段大于等于 2 分钟且小于等于 15 分钟的录音后再试，本次不会占用试用额度。")
+		return
+	}
+	durationLogValue := 0
+	if durationSeconds != nil {
+		durationLogValue = *durationSeconds
+	}
 
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
@@ -105,6 +124,12 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "文件过大，请上传 100MB 以内录音")
 		return
 	}
+	slog.Info("trial upload duration parsed",
+		"tenant_id", tenantID,
+		"role", role,
+		"file_name", strings.TrimSpace(fileHeader.Filename),
+		"duration_seconds", durationLogValue,
+	)
 
 	employeeID, err := h.resolveTrialUploadEmployeeID(r.Context(), tenantID, role)
 	if err != nil {
@@ -133,31 +158,35 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scene := "consultation"
-	source := "manual"
-	fileName := strings.TrimSpace(fileHeader.Filename)
-	recording, err := h.service.CreateRecording(r.Context(), CreateRecordingRequest{
-		TenantID:          tenantID,
-		EmployeeID:        employeeID,
-		PatientName:       "试用上传",
-		RecordingURL:      fileURL,
-		RecordingFileName: &fileName,
-		RecordingMimeType: stringPtr(contentType),
-		RecordingDuration: durationSeconds,
-		BusinessScope:     &role,
-		Scene:             &scene,
-		Source:            &source,
+	duration := 0
+	if durationSeconds != nil {
+		duration = *durationSeconds
+	}
+	recording, _, err := h.service.IngestOwnedAudioAndEnqueue(r.Context(), OwnedAudioIngestRequest{
+		TenantID:        tenantID,
+		EmployeeID:      employeeID,
+		FileURL:         fileURL,
+		FileName:        strings.TrimSpace(fileHeader.Filename),
+		MIMEType:        contentType,
+		DurationSeconds: duration,
+		OSSKey:          objectKey,
+		Source:          "manual",
+		BusinessScope:   role,
+		Scene:           "consultation",
+		TriggerSource:   "trial_upload",
 	})
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	if err := h.service.store.UpdateRecordingMediaRef(r.Context(), recording.ID, fileURL, objectKey); err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	if _, err := h.service.submitLingceWorkerJob(r.Context(), recording.ID, "transcribe", "trial_upload"); err != nil {
 		if IsRecordingValidationError(err) {
+			message := strings.ToLower(strings.TrimSpace(err.Error()))
+			if strings.Contains(message, "transcription is already queued") {
+				httputil.WriteSuccess(w, map[string]any{
+					"recording_id":    recording.ID,
+					"role":            role,
+					"analysis_status": "queued",
+					"redirect_url":    trialUploadRedirectURL(role),
+				})
+				return
+			}
 			var code string = "BAD_REQUEST"
 			var validationErr interface{ Code() string }
 			if errors.As(err, &validationErr) {
@@ -414,6 +443,43 @@ func (h *Handler) UploadRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, rec)
+}
+
+func (h *Handler) GetTrialAgreementStatus(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	status, err := h.service.store.GetTrialAgreementStatus(r.Context(), *claims.TenantID, "trial_privacy_notice", "v1")
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, status)
+}
+
+func (h *Handler) AcceptTrialAgreement(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req AcceptTrialAgreementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.store.AcceptTrialAgreement(r.Context(), *claims.TenantID, claims.UserID, req.AgreementType, req.AgreementVersion); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	status, err := h.service.store.GetTrialAgreementStatus(r.Context(), *claims.TenantID, req.AgreementType, req.AgreementVersion)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, status)
 }
 
 // GetPlayURL handles getting play URL
@@ -1058,7 +1124,7 @@ func (h *Handler) GenerateOperationsPlan(w http.ResponseWriter, r *http.Request)
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	if _, err := h.service.submitLingceWorkerJob(r.Context(), rec.ID, "ops_plan", "manual_ops_plan"); err != nil {
+	if _, err := h.service.enqueueLingceWorkerJob(r.Context(), rec.ID, "ops_plan", "manual_ops_plan"); err != nil {
 		_, _ = h.service.store.pool.Exec(r.Context(), `
 			UPDATE recording_operations_plan_jobs
 			SET status = 'failed', error_message = $2, updated_at = NOW()

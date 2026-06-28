@@ -403,34 +403,107 @@ func (s *Service) CreateCallbackLog(ctx context.Context, payload CallbackPayload
 		return err
 	}
 
-	// Callback-main flow: AUDIO callback enters recording pipeline immediately.
+	// AUDIO callback should return quickly. Persist callback event first, then
+	// process the heavy recording pipeline asynchronously.
 	if !isAudioCallback(payload) {
 		return nil
 	}
-	ingestResult, err := s.store.UpsertRecordingFromAudioCallback(ctx, payload)
+	eventRef, err := s.store.UpsertAudioCallbackEvent(ctx, payload)
 	if err != nil {
 		return err
 	}
-	if ingestResult == nil {
+	if eventRef == nil {
 		return nil
+	}
+	core, _, err := buildAudioCallbackCoreFields(payload)
+	if err != nil {
+		return err
+	}
+	if core != nil && !core.ReadyForIngest {
+		slog.Warn("audio callback accepted with incomplete payload",
+			"device_no", eventRef.DeviceNo,
+			"app_id", eventRef.AppID,
+			"event_id", eventRef.EventID,
+			"order_no", eventRef.OrderNo,
+			"reason", core.ValidationError,
+		)
+		return nil
+	}
+	slog.Info("audio callback accepted for async processing",
+		"device_no", eventRef.DeviceNo,
+		"app_id", eventRef.AppID,
+		"event_id", eventRef.EventID,
+		"order_no", eventRef.OrderNo,
+	)
+	go s.processAudioCallbackAsync(*eventRef, payload)
+	return nil
+}
+
+func (s *Service) processAudioCallbackAsync(eventRef AudioCallbackEventRef, payload CallbackPayload) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	claimed, err := s.store.ClaimAudioCallbackEvent(ctx, eventRef.AppID, eventRef.EventID)
+	if err != nil {
+		slog.Error("audio callback async claim failed",
+			"device_no", eventRef.DeviceNo,
+			"app_id", eventRef.AppID,
+			"event_id", eventRef.EventID,
+			"order_no", eventRef.OrderNo,
+			"error", err,
+		)
+		return
+	}
+	if !claimed {
+		slog.Info("audio callback async skip unclaimable event",
+			"device_no", eventRef.DeviceNo,
+			"app_id", eventRef.AppID,
+			"event_id", eventRef.EventID,
+			"order_no", eventRef.OrderNo,
+		)
+		return
+	}
+
+	ingestResult, err := s.store.UpsertRecordingFromAudioCallback(ctx, payload)
+	if err != nil {
+		_ = s.store.MarkAudioCallbackEventFailed(ctx, eventRef.AppID, eventRef.EventID, err.Error())
+		slog.Error("audio callback async ingest failed",
+			"device_no", eventRef.DeviceNo,
+			"app_id", eventRef.AppID,
+			"event_id", eventRef.EventID,
+			"order_no", eventRef.OrderNo,
+			"error", err,
+		)
+		return
+	}
+	if ingestResult == nil {
+		_ = s.store.MarkAudioCallbackEventCompleted(ctx, eventRef.AppID, eventRef.EventID, 0)
+		return
+	}
+	if err := s.store.MarkAudioCallbackEventCompleted(ctx, eventRef.AppID, eventRef.EventID, ingestResult.RecordingID); err != nil {
+		slog.Warn("audio callback async mark completed failed",
+			"device_no", eventRef.DeviceNo,
+			"app_id", eventRef.AppID,
+			"event_id", eventRef.EventID,
+			"recording_id", ingestResult.RecordingID,
+			"error", err,
+		)
 	}
 	if !ingestResult.Created {
 		slog.Info("skip transcribe enqueue for duplicate audio callback",
 			"recording_id", ingestResult.RecordingID,
 			"tenant_id", ingestResult.TenantID,
-			"device_no", payload.DeviceNo,
+			"device_no", eventRef.DeviceNo,
 		)
-		return nil
+		return
 	}
 	if err := s.enqueueTranscribeJob(ctx, ingestResult.RecordingID, ingestResult.TenantID); err != nil {
-		// Non-blocking: keep callback success and let scanner fallback pick queued jobs.
 		slog.Warn("failed to enqueue worker transcribe job from audio callback",
 			"recording_id", ingestResult.RecordingID,
 			"tenant_id", ingestResult.TenantID,
 			"error", err,
 		)
 	}
-	return nil
 }
 
 func (s *Service) enqueueTranscribeJob(ctx context.Context, recordingID, tenantID int64) error {

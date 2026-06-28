@@ -251,6 +251,9 @@ type MyBadgeStatusResponse struct {
 	BatteryLevel             *int    `json:"battery_level,omitempty"`
 	FirmwareVersion          *string `json:"firmware_version,omitempty"`
 	LastOnlineAt             *string `json:"last_online_at,omitempty"`
+	WorkDays                 *int    `json:"work_days,omitempty"`
+	TotalRecordings          *int    `json:"total_recordings,omitempty"`
+	TotalCustomers           *int    `json:"total_customers,omitempty"`
 }
 
 // ManufacturerResponse represents manufacturer response

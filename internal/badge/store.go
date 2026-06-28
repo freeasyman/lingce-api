@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/recording"
 	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,6 +35,27 @@ type AudioCallbackIngestResult struct {
 	RecordingID int64
 	TenantID    int64
 	Created     bool
+}
+
+type AudioCallbackEventRef struct {
+	AppID    string
+	EventID  string
+	DeviceNo string
+	OrderNo  string
+}
+
+type audioCallbackCoreFields struct {
+	AppID           string
+	EventID         string
+	DeviceNo        string
+	OrderNo         string
+	OriginalFileURL string
+	FileName        string
+	Seconds         int
+	StartTime       *time.Time
+	EndTime         *time.Time
+	ReadyForIngest  bool
+	ValidationError string
 }
 
 func NewStore(pool *pgxpool.Pool, ossConfig OSSConfig) *Store {
@@ -449,44 +472,19 @@ func (s *Store) CreateRecordingControlLog(ctx context.Context, deviceNo string, 
 
 // UpsertRecordingFromAudioCallback ingests an audio callback as recordings + smart_badge_audio_events.
 func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload CallbackPayload) (*AudioCallbackIngestResult, error) {
-	deviceNo := strings.TrimSpace(payload.DeviceNo)
-	if deviceNo == "" {
-		return nil, fmt.Errorf("device_no is required")
+	core, data, err := buildAudioCallbackCoreFields(payload)
+	if err != nil {
+		return nil, err
 	}
 
-	data := payload.Data
-	if data == nil {
-		data = JSONObject{}
-	}
-	eventID := firstNonEmptyCallback(pickString(data, "event_id"), pickString(data, "eventId"))
-	orderNo := firstNonEmptyCallback(pickString(data, "order_no"), pickString(data, "orderNo"), eventID)
-	fileURL := firstNonEmptyCallback(pickString(data, "file_url"), pickString(data, "fileUrl"), pickString(data, "audio_file"))
-	if orderNo == "" {
-		return nil, fmt.Errorf("missing order_no/event_id")
-	}
-	if fileURL == "" {
-		return nil, fmt.Errorf("missing file_url")
-	}
-	originalFileURL := fileURL
-	fileName := firstNonEmptyCallback(pickString(data, "file_name"), pickString(data, "fileName"))
-	if fileName == "" {
-		base := path.Base(fileURL)
-		if strings.TrimSpace(base) != "" && base != "." && base != "/" {
-			fileName = base
-		} else {
-			fileName = orderNo + ".mp3"
-		}
-	}
-	seconds := pickInt(data, "seconds")
-	if seconds <= 0 {
-		seconds = pickInt(data, "duration")
-	}
-	if seconds <= 0 {
-		seconds = 1
-	}
-	startTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "start_time"), pickString(data, "startTime")))
-	endTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "end_time"), pickString(data, "endTime"), pickString(data, "stop_time"), pickString(data, "stopTime")))
-	appID := firstNonEmptyCallback(pickString(data, "app_id"), pickString(data, "appId"), "unknown")
+	slog.Info("audio callback ingest start",
+		"device_no", core.DeviceNo,
+		"app_id", core.AppID,
+		"event_id", core.EventID,
+		"order_no", core.OrderNo,
+		"file_name", core.FileName,
+		"source_file_url", core.OriginalFileURL,
+	)
 
 	var tenantID, employeeID int64
 	if err := s.pool.QueryRow(ctx, `
@@ -498,77 +496,67 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		  AND deleted_at IS NULL
 		ORDER BY updated_at DESC
 		LIMIT 1
-	`, deviceNo).Scan(&tenantID, &employeeID); err != nil {
-		return nil, fmt.Errorf("device mapping not ready for %s: %w", deviceNo, err)
+	`, core.DeviceNo).Scan(&tenantID, &employeeID); err != nil {
+		slog.Error("audio callback device mapping lookup failed",
+			"device_no", core.DeviceNo,
+			"app_id", core.AppID,
+			"event_id", core.EventID,
+			"order_no", core.OrderNo,
+			"error", err,
+		)
+		return nil, fmt.Errorf("device mapping not ready for %s: %w", core.DeviceNo, err)
 	}
-	normalizedURL, ossKey, err := s.normalizeAudioToOwnedOSS(ctx, tenantID, orderNo, fileName, originalFileURL)
+	normalizedURL, ossKey, err := s.normalizeAudioToOwnedOSS(ctx, tenantID, core.OrderNo, core.FileName, core.OriginalFileURL)
 	if err != nil {
+		slog.Error("audio callback oss normalization failed",
+			"device_no", core.DeviceNo,
+			"tenant_id", tenantID,
+			"employee_id", employeeID,
+			"app_id", core.AppID,
+			"event_id", core.EventID,
+			"order_no", core.OrderNo,
+			"source_file_url", core.OriginalFileURL,
+			"error", err,
+		)
 		return nil, fmt.Errorf("normalize callback audio to owned oss: %w", err)
 	}
-	fileURL = normalizedURL
+	fileURL := normalizedURL
 
-	var recordingID int64
-	var created bool
-	if err := s.pool.QueryRow(ctx, `
-		WITH ins AS (
-			INSERT INTO recordings (
-				tenant_id, employee_id, file_url, file_name, duration, mime_type,
-				source, business_scope, status, transcription_status, cleaned_transcription_status, analysis_status,
-				recorded_at, order_no, oss_key, created_at, updated_at
-			)
-			SELECT
-				$1, $2, $3, $4, $5, 'audio/mpeg',
-				'smart_badge',
-				CASE
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('frontdesk','receptionist','reception')
-					) THEN 'frontdesk'
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('doctor','doctor_assistant')
-					) THEN 'doctor'
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('consultant')
-					) THEN 'consultant'
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('therapist')
-					) THEN 'therapist'
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('nurse')
-					) THEN 'nurse'
-					WHEN EXISTS (
-						SELECT 1 FROM institution_employee_roles ier
-						WHERE ier.tenant_id = $1 AND ier.employee_id = $2
-						  AND lower(ier.role_code) IN ('lingce_sales')
-					) THEN 'lingce_sales'
-					ELSE 'unknown'
-				END,
-				'uploaded', 'queued', 'pending', 'pending',
-				$6::timestamp, $7::text, NULLIF($8::text, ''), NOW(), NOW()
-			WHERE NOT EXISTS (
-				SELECT 1 FROM recordings WHERE order_no = $7::text
-			)
-			RETURNING id
+	recordingStore := recording.NewStore(s.pool)
+	businessScope, err := recordingStore.ResolveEmployeeBusinessScope(ctx, tenantID, employeeID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve callback employee business scope: %w", err)
+	}
+	recordingID, created, err := recordingStore.CreateOwnedAudioRecording(ctx, recording.OwnedAudioIngestRequest{
+		TenantID:        tenantID,
+		EmployeeID:      employeeID,
+		FileURL:         fileURL,
+		FileName:        core.FileName,
+		MIMEType:        "audio/mpeg",
+		DurationSeconds: core.Seconds,
+		RecordedAt:      core.StartTime,
+		OrderNo:         core.OrderNo,
+		OSSKey:          ossKey,
+		Source:          "smart_badge",
+		BusinessScope:   businessScope,
+		Scene:           "consultation",
+	})
+	if err != nil {
+		slog.Error("audio callback recording upsert failed",
+			"device_no", core.DeviceNo,
+			"tenant_id", tenantID,
+			"employee_id", employeeID,
+			"app_id", core.AppID,
+			"event_id", core.EventID,
+			"order_no", core.OrderNo,
+			"normalized_file_url", fileURL,
+			"oss_key", ossKey,
+			"error", err,
 		)
-		SELECT id, true FROM ins
-		UNION ALL
-		SELECT id, false FROM recordings
-		WHERE order_no = $7::text AND NOT EXISTS (SELECT 1 FROM ins)
-		LIMIT 1
-	`, tenantID, employeeID, fileURL, fileName, seconds, startTime, orderNo, ossKey).Scan(&recordingID, &created); err != nil {
 		return nil, fmt.Errorf("upsert recording from callback: %w", err)
 	}
 
-	_, _ = s.pool.Exec(ctx, `
+	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO smart_badge_audio_events (
 			app_id, event_id, device_no, order_no, audio_file, start_time, end_time,
 			seconds, raw_payload, status, recording_id, created_at, updated_at
@@ -587,13 +575,148 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 			raw_payload = EXCLUDED.raw_payload,
 			recording_id = COALESCE(smart_badge_audio_events.recording_id, EXCLUDED.recording_id),
 			updated_at = NOW()
-	`, appID, eventID, deviceNo, orderNo, originalFileURL, startTime, endTime, seconds, data, recordingID)
+	`, core.AppID, core.EventID, core.DeviceNo, core.OrderNo, core.OriginalFileURL, core.StartTime, core.EndTime, core.Seconds, data, recordingID); err != nil {
+		slog.Error("audio callback event upsert failed",
+			"device_no", core.DeviceNo,
+			"tenant_id", tenantID,
+			"employee_id", employeeID,
+			"app_id", core.AppID,
+			"event_id", core.EventID,
+			"order_no", core.OrderNo,
+			"recording_id", recordingID,
+			"error", err,
+		)
+		return nil, fmt.Errorf("upsert smart badge audio event: %w", err)
+	}
+
+	slog.Info("audio callback ingest complete",
+		"device_no", core.DeviceNo,
+		"tenant_id", tenantID,
+		"employee_id", employeeID,
+		"app_id", core.AppID,
+		"event_id", core.EventID,
+		"order_no", core.OrderNo,
+		"recording_id", recordingID,
+		"created", created,
+		"normalized_file_url", fileURL,
+		"oss_key", ossKey,
+	)
 
 	return &AudioCallbackIngestResult{
 		RecordingID: recordingID,
 		TenantID:    tenantID,
 		Created:     created,
 	}, nil
+}
+
+func (s *Store) UpsertAudioCallbackEvent(ctx context.Context, payload CallbackPayload) (*AudioCallbackEventRef, error) {
+	core, data, err := buildAudioCallbackCoreFields(payload)
+	if err != nil {
+		return nil, err
+	}
+	status := "received"
+	var errorMessage *string
+	if !core.ReadyForIngest {
+		status = "failed"
+		msg := strings.TrimSpace(core.ValidationError)
+		if msg == "" {
+			msg = "audio callback payload is incomplete"
+		}
+		errorMessage = &msg
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO smart_badge_audio_events (
+			app_id, event_id, device_no, order_no, audio_file, start_time, end_time,
+			seconds, raw_payload, status, error_message, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6::timestamp, $7::timestamp,
+			$8, $9::jsonb, $10, $11, NOW(), NOW()
+		)
+		ON CONFLICT (app_id, event_id) DO UPDATE SET
+			device_no = EXCLUDED.device_no,
+			order_no = COALESCE(EXCLUDED.order_no, smart_badge_audio_events.order_no),
+			audio_file = EXCLUDED.audio_file,
+			start_time = COALESCE(EXCLUDED.start_time, smart_badge_audio_events.start_time),
+			end_time = COALESCE(EXCLUDED.end_time, smart_badge_audio_events.end_time),
+			seconds = COALESCE(EXCLUDED.seconds, smart_badge_audio_events.seconds),
+			raw_payload = EXCLUDED.raw_payload,
+			status = CASE
+				WHEN smart_badge_audio_events.recording_id IS NOT NULL THEN smart_badge_audio_events.status
+				WHEN smart_badge_audio_events.status = 'processing' THEN smart_badge_audio_events.status
+				ELSE EXCLUDED.status
+			END,
+			error_message = CASE
+				WHEN smart_badge_audio_events.status = 'processing' THEN smart_badge_audio_events.error_message
+				ELSE EXCLUDED.error_message
+			END,
+			updated_at = NOW()
+	`, core.AppID, core.EventID, core.DeviceNo, core.OrderNo, core.OriginalFileURL, core.StartTime, core.EndTime, core.Seconds, data, status, errorMessage); err != nil {
+		return nil, fmt.Errorf("upsert smart badge audio callback event: %w", err)
+	}
+	return &AudioCallbackEventRef{
+		AppID:    core.AppID,
+		EventID:  core.EventID,
+		DeviceNo: core.DeviceNo,
+		OrderNo:  core.OrderNo,
+	}, nil
+}
+
+func (s *Store) ClaimAudioCallbackEvent(ctx context.Context, appID, eventID string) (bool, error) {
+	var claimed bool
+	if err := s.pool.QueryRow(ctx, `
+		UPDATE smart_badge_audio_events
+		SET status = 'processing',
+			error_message = NULL,
+			updated_at = NOW()
+		WHERE app_id = $1
+		  AND event_id = $2
+		  AND (
+			recording_id IS NULL
+			AND status IN ('received', 'failed')
+		  )
+		RETURNING true
+	`, appID, eventID).Scan(&claimed); err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim audio callback event: %w", err)
+	}
+	return claimed, nil
+}
+
+func (s *Store) MarkAudioCallbackEventFailed(ctx context.Context, appID, eventID string, errMsg string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE smart_badge_audio_events
+		SET status = 'failed',
+			error_message = NULLIF($3, ''),
+			updated_at = NOW()
+		WHERE app_id = $1
+		  AND event_id = $2
+	`, appID, eventID, strings.TrimSpace(errMsg))
+	if err != nil {
+		return fmt.Errorf("mark audio callback event failed: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) MarkAudioCallbackEventCompleted(ctx context.Context, appID, eventID string, recordingID int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE smart_badge_audio_events
+		SET status = 'completed',
+			error_message = NULL,
+			recording_id = CASE
+				WHEN COALESCE(recording_id, 0) > 0 THEN recording_id
+				ELSE NULLIF($3, 0)
+			END,
+			updated_at = NOW()
+		WHERE app_id = $1
+		  AND event_id = $2
+	`, appID, eventID, recordingID)
+	if err != nil {
+		return fmt.Errorf("mark audio callback event completed: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, orderNo, fileName, sourceURL string) (string, string, error) {
@@ -604,6 +727,15 @@ func (s *Store) normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, or
 	if endpoint == "" || bucket == "" || accessKeyID == "" || accessKeySecret == "" {
 		return "", "", fmt.Errorf("OSS config is not configured")
 	}
+
+	slog.Info("audio callback oss normalization start",
+		"tenant_id", tenantID,
+		"order_no", orderNo,
+		"file_name", fileName,
+		"source_url", sourceURL,
+		"oss_bucket", bucket,
+		"oss_endpoint", endpoint,
+	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
@@ -650,6 +782,15 @@ func (s *Store) normalizeAudioToOwnedOSS(ctx context.Context, tenantID int64, or
 	if err != nil {
 		return "", "", fmt.Errorf("upload source audio to oss: %w", err)
 	}
+	slog.Info("audio callback oss normalization complete",
+		"tenant_id", tenantID,
+		"order_no", orderNo,
+		"file_name", fileName,
+		"source_url", sourceURL,
+		"oss_key", ossKey,
+		"uploaded_url", ownedURL,
+		"bytes", len(body),
+	)
 	return ownedURL, ossKey, nil
 }
 
@@ -661,6 +802,63 @@ func firstNonEmptyCallback(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildAudioCallbackCoreFields(payload CallbackPayload) (*audioCallbackCoreFields, JSONObject, error) {
+	deviceNo := strings.TrimSpace(payload.DeviceNo)
+	if deviceNo == "" {
+		return nil, nil, fmt.Errorf("device_no is required")
+	}
+
+	data := payload.Data
+	if data == nil {
+		data = JSONObject{}
+	}
+	eventID := firstNonEmptyCallback(pickString(data, "event_id"), pickString(data, "eventId"))
+	if eventID == "" {
+		eventID = fmt.Sprintf("missing-event-%s-%d", deviceNo, time.Now().UTC().UnixNano())
+	}
+	orderNo := firstNonEmptyCallback(pickString(data, "order_no"), pickString(data, "orderNo"), eventID)
+	fileURL := firstNonEmptyCallback(pickString(data, "file_url"), pickString(data, "fileUrl"), pickString(data, "audio_file"))
+	fileName := firstNonEmptyCallback(pickString(data, "file_name"), pickString(data, "fileName"))
+	if fileName == "" {
+		base := path.Base(fileURL)
+		if strings.TrimSpace(base) != "" && base != "." && base != "/" {
+			fileName = base
+		} else {
+			fileName = orderNo + ".mp3"
+		}
+	}
+	seconds := pickInt(data, "seconds")
+	if seconds <= 0 {
+		seconds = pickInt(data, "duration")
+	}
+	if seconds <= 0 {
+		seconds = 1
+	}
+	startTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "start_time"), pickString(data, "startTime")))
+	endTime := parseOptionalTime(firstNonEmptyCallback(pickString(data, "end_time"), pickString(data, "endTime"), pickString(data, "stop_time"), pickString(data, "stopTime")))
+	appID := firstNonEmptyCallback(pickString(data, "app_id"), pickString(data, "appId"), "unknown")
+	validationErrs := make([]string, 0, 2)
+	if strings.TrimSpace(orderNo) == "" {
+		validationErrs = append(validationErrs, "missing order_no/event_id")
+	}
+	if strings.TrimSpace(fileURL) == "" {
+		validationErrs = append(validationErrs, "missing file_url")
+	}
+	return &audioCallbackCoreFields{
+		AppID:           appID,
+		EventID:         eventID,
+		DeviceNo:        deviceNo,
+		OrderNo:         orderNo,
+		OriginalFileURL: fileURL,
+		FileName:        fileName,
+		Seconds:         seconds,
+		StartTime:       startTime,
+		EndTime:         endTime,
+		ReadyForIngest:  len(validationErrs) == 0,
+		ValidationError: strings.Join(validationErrs, "; "),
+	}, data, nil
 }
 
 func pickString(data JSONObject, key string) string {

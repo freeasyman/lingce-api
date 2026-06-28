@@ -203,35 +203,63 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 
 // LoginMobile authenticates a mobile employee (session isolated)
 func (s *Service) LoginMobile(ctx context.Context, username, password string, tenantID int64) (*LoginResponse, error) {
-	// Same as LoginEmployee but with different user type for session isolation
+	if tenantID == 0 {
+		options, optErr := s.store.ListEmployeeTenantOptionsByLoginID(ctx, username)
+		if optErr != nil {
+			return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
+		}
+		if len(options) == 0 {
+			return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
+		}
+
+		activeOptions := make([]TenantOption, 0, len(options))
+		for _, option := range options {
+			if option.IsActive {
+				activeOptions = append(activeOptions, option)
+			}
+		}
+
+		if len(activeOptions) == 0 {
+			return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
+		}
+		if len(activeOptions) > 1 {
+			return nil, newTenantSelectionRequiredError(activeOptions)
+		}
+
+		tenantID = activeOptions[0].TenantID
+	}
+
 	tenant, err := s.store.GetTenantByID(ctx, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid tenant")
+		return nil, newUnauthorizedError("INVALID_TENANT", "invalid tenant")
 	}
 
 	if !tenant.IsActive {
-		return nil, fmt.Errorf("tenant is inactive")
+		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
 	}
 
 	now := time.Now()
 	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
-		return nil, fmt.Errorf("tenant subscription expired")
+		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
 	}
 
 	employee, err := s.store.GetEmployeeByUsername(ctx, username, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid credentials")
+		anyTenantEmployee, anyErr := s.store.GetEmployeeByLoginAnyTenant(ctx, username)
+		if anyErr == nil && anyTenantEmployee != nil && anyTenantEmployee.TenantID != tenantID {
+			return nil, newUnauthorizedError("TENANT_MISMATCH", "tenant mismatch")
+		}
+		return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
 	}
 
 	if !employee.IsActive {
-		return nil, fmt.Errorf("account is inactive")
+		return nil, newUnauthorizedError("ACCOUNT_INACTIVE", "account is inactive")
 	}
 
 	if !s.verifyPassword(password, employee.PasswordHash) {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
 	}
 
-	// Use mobile user type for session isolation
 	token, expiresAt, err := auth.GenerateToken(
 		s.jwtSecret,
 		employee.ID,
