@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,7 +111,7 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	contentType, ext, err := validateTrialUploadFile(fileHeader)
+	declaredContentType, ext, err := validateTrialUploadFileHeader(fileHeader)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -122,6 +123,11 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	if int64(len(payload)) > trialUploadMaxBytes {
 		httputil.WriteBadRequest(w, "文件过大，请上传 100MB 以内录音")
+		return
+	}
+	contentType, err := validateTrialUploadPayload(ext, declaredContentType, payload)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	slog.Info("trial upload duration parsed",
@@ -219,7 +225,7 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func validateTrialUploadFile(fileHeader *multipart.FileHeader) (string, string, error) {
+func validateTrialUploadFileHeader(fileHeader *multipart.FileHeader) (string, string, error) {
 	fileName := strings.TrimSpace(fileHeader.Filename)
 	ext := strings.ToLower(filepath.Ext(fileName))
 	if _, ok := trialUploadAllowedExtensions[ext]; !ok {
@@ -236,10 +242,96 @@ func validateTrialUploadFile(fileHeader *multipart.FileHeader) (string, string, 
 			contentType = "audio/mp4"
 		}
 	}
-	if !strings.HasPrefix(contentType, "audio/") {
-		return "", "", fmt.Errorf("请上传音频文件")
-	}
 	return contentType, ext, nil
+}
+
+func validateTrialUploadPayload(ext, declaredContentType string, payload []byte) (string, error) {
+	sniffedType, ok := sniffTrialAudioType(payload)
+	if !ok {
+		return "", fmt.Errorf("文件格式无法识别，请上传 mp3、wav、m4a 音频文件")
+	}
+	if expected := expectedAudioTypeForExtension(ext); expected != "" && sniffedType != expected {
+		return "", fmt.Errorf("文件内容与扩展名不匹配，请确认上传的是正确的 mp3、wav、m4a 音频文件")
+	}
+	if declared := strings.ToLower(strings.TrimSpace(declaredContentType)); declared != "" && declared != "application/octet-stream" {
+		if !strings.HasPrefix(declared, "audio/") && !(ext == ".m4a" && declared == "video/mp4") {
+			return "", fmt.Errorf("请上传音频文件")
+		}
+	}
+	return sniffedType, nil
+}
+
+func expectedAudioTypeForExtension(ext string) string {
+	switch ext {
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".m4a":
+		return "audio/mp4"
+	default:
+		return ""
+	}
+}
+
+func sniffTrialAudioType(payload []byte) (string, bool) {
+	if isWAVPayload(payload) {
+		return "audio/wav", true
+	}
+	if isM4APayload(payload) {
+		return "audio/mp4", true
+	}
+	if isMP3Payload(payload) {
+		return "audio/mpeg", true
+	}
+	return "", false
+}
+
+func isWAVPayload(payload []byte) bool {
+	return len(payload) >= 12 &&
+		bytes.Equal(payload[0:4], []byte("RIFF")) &&
+		bytes.Equal(payload[8:12], []byte("WAVE"))
+}
+
+func isM4APayload(payload []byte) bool {
+	if len(payload) < 12 {
+		return false
+	}
+	searchLimit := len(payload)
+	if searchLimit > 64 {
+		searchLimit = 64
+	}
+	for i := 0; i+12 <= searchLimit; i++ {
+		if !bytes.Equal(payload[i+4:i+8], []byte("ftyp")) {
+			continue
+		}
+		brand := string(payload[i+8 : i+12])
+		switch brand {
+		case "M4A ", "M4B ", "isom", "iso2", "mp41", "mp42", "qt  ":
+			return true
+		}
+	}
+	return false
+}
+
+func isMP3Payload(payload []byte) bool {
+	if len(payload) >= 3 && bytes.Equal(payload[0:3], []byte("ID3")) {
+		return true
+	}
+	searchLimit := len(payload)
+	if searchLimit > 4096 {
+		searchLimit = 4096
+	}
+	for i := 0; i+1 < searchLimit; i++ {
+		if payload[i] != 0xFF {
+			continue
+		}
+		next := payload[i+1]
+		if next&0xE0 == 0xE0 && next != 0xFF && next != 0x00 {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) resolveTrialUploadEmployeeID(ctx context.Context, tenantID int64, role string) (int64, error) {
