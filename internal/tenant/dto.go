@@ -143,6 +143,28 @@ type TenantProfileResponse struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+type TrialInitRequest struct {
+	TemplateCode string `json:"template_code,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
+}
+
+type TrialInitEmployee struct {
+	RoleCode   string `json:"role_code"`
+	EmployeeID int64  `json:"employee_id"`
+}
+
+type TrialInitDemoRecording struct {
+	Role        string `json:"role"`
+	RecordingID int64  `json:"recording_id"`
+}
+
+type TrialInitResponse struct {
+	TenantID         int64                    `json:"tenant_id"`
+	Status           string                   `json:"status"`
+	CreatedEmployees []TrialInitEmployee      `json:"created_employees,omitempty"`
+	DemoRecordings   []TrialInitDemoRecording `json:"demo_recordings,omitempty"`
+}
+
 type TrialHomeTenantSummary struct {
 	AccountMode         string `json:"account_mode"`
 	TrialInitStatus     string `json:"trial_init_status"`

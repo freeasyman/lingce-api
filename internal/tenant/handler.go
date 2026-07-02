@@ -48,6 +48,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Tenant profile (tenant-scoped)
 	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
 	mux.Handle("GET /api/v1/tenants/{id}/trial-home", authMw(http.HandlerFunc(h.GetTrialHomeSummary)))
+	mux.Handle("POST /api/v1/tenants/{id}/actions/init-trial", authMw(http.HandlerFunc(h.InitTrialTenant)))
 	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("PATCH /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("GET /api/v1/tenants/{id}/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
@@ -460,6 +461,35 @@ func (h *Handler) UpdateTenantProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, profile)
+}
+
+func (h *Handler) InitTrialTenant(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	var req TrialInitRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		body, _ := io.ReadAll(r.Body)
+		if len(strings.TrimSpace(string(body))) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				httputil.WriteBadRequest(w, "Invalid request body")
+				return
+			}
+		}
+	}
+	resp, err := h.service.InitTrialTenant(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, httputil.Response{Data: resp})
 }
 
 func (h *Handler) GetTrialHomeSummary(w http.ResponseWriter, r *http.Request) {

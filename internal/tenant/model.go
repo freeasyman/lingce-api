@@ -32,3 +32,28 @@ type MedicalSpecialty struct {
 	Level     int    `json:"level"`
 	SortOrder int    `json:"sort_order"`
 }
+
+type TrialDemoRecordingAsset struct {
+	ID                int64  `json:"id"`
+	TemplateCode      string `json:"template_code"`
+	AssetCode         string `json:"asset_code"`
+	RoleCode          string `json:"role_code"`
+	Title             string `json:"title"`
+	SourceTenantID    int64  `json:"source_tenant_id"`
+	SourceRecordingID int64  `json:"source_recording_id"`
+	SourceCustomerID  *int64 `json:"source_customer_id,omitempty"`
+	Version           string `json:"version"`
+	IsActive          bool   `json:"is_active"`
+	SortOrder         int    `json:"sort_order"`
+}
+
+type TenantTrialDemoRecording struct {
+	TenantID     int64  `json:"tenant_id"`
+	TemplateCode string `json:"template_code"`
+	RoleCode     string `json:"role_code"`
+	AssetID      int64  `json:"asset_id"`
+	RecordingID  int64  `json:"recording_id"`
+	EmployeeID   int64  `json:"employee_id"`
+	CustomerID   *int64 `json:"customer_id,omitempty"`
+	Title        string `json:"title"`
+}
