@@ -134,11 +134,17 @@ func (s *Store) GetTrialTenantProfile(ctx context.Context, tenantID int64) (*Tri
 		SELECT t.id,
 		       COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
 		       COALESCE(t.valid_to, t.service_expired_on) AS valid_to,
-		       5 AS trial_max_recordings,
+		       15 AS trial_max_recordings,
 		       (
 		         SELECT COUNT(*)
 		         FROM recordings r
 		         WHERE r.tenant_id = t.id
+		           AND NOT EXISTS (
+		             SELECT 1
+		             FROM tenant_trial_demo_recordings d
+		             WHERE d.tenant_id = r.tenant_id
+		               AND d.recording_id = r.id
+		           )
 		           %s
 		       ) AS trial_used_recordings
 		FROM tenants t

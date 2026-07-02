@@ -12,6 +12,7 @@ import (
 
 const (
 	trialFeatureGroupCode        = "trial_experience"
+	defaultTrialTemplateCode     = "intent_trial_v1"
 	trialFeatureGroupName        = "试用功能包"
 	trialSubscriptionPlanCode    = "trial"
 	trialSubscriptionPlanName    = "试用版"
@@ -94,6 +95,9 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 	}
 	if normalizeAccountMode(req.AccountMode) == "trial" {
 		if err := s.bootstrapTrialTenant(ctx, tenant.ID); err != nil {
+			return nil, err
+		}
+		if _, err := s.store.EnsureTrialDemoRecordings(ctx, tenant.ID, defaultTrialTemplateCode); err != nil {
 			return nil, err
 		}
 		refreshed, err := s.store.GetTenantByID(ctx, tenant.ID)
@@ -264,6 +268,37 @@ func (s *Service) GetInstitutionStatistics(ctx context.Context, tenantID int64) 
 	return s.store.GetInstitutionStatistics(ctx, tenantID)
 }
 
+func (s *Service) InitTrialTenant(ctx context.Context, tenantID int64, req TrialInitRequest) (*TrialInitResponse, error) {
+	if err := s.bootstrapTrialTenant(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	templateCode := strings.TrimSpace(req.TemplateCode)
+	if templateCode == "" {
+		templateCode = defaultTrialTemplateCode
+	}
+	demos, err := s.store.EnsureTrialDemoRecordings(ctx, tenantID, templateCode)
+	if err != nil {
+		return nil, err
+	}
+	doctorID, _ := s.store.GetTrialEmployeeID(ctx, tenantID, "trial_doctor")
+	consultantID, _ := s.store.GetTrialEmployeeID(ctx, tenantID, "trial_consultant")
+	resp := &TrialInitResponse{
+		TenantID: tenantID,
+		Status:   "completed",
+		CreatedEmployees: []TrialInitEmployee{
+			{RoleCode: "doctor", EmployeeID: doctorID},
+			{RoleCode: "consultant", EmployeeID: consultantID},
+		},
+	}
+	for _, item := range demos {
+		resp.DemoRecordings = append(resp.DemoRecordings, TrialInitDemoRecording{
+			Role:        item.RoleCode,
+			RecordingID: item.RecordingID,
+		})
+	}
+	return resp, nil
+}
+
 func (s *Service) GetTrialHomeSummary(ctx context.Context, tenantID int64) (*TrialHomeResponse, error) {
 	t, err := s.store.GetTenantByID(ctx, tenantID)
 	if err != nil {
@@ -279,20 +314,34 @@ func (s *Service) GetTrialHomeSummary(ctx context.Context, tenantID int64) (*Tri
 		expiresAt = t.ValidTo.Format(time.RFC3339)
 	}
 
-	return &TrialHomeResponse{
+	demos, err := s.store.ListTenantTrialDemoRecordings(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	trialInitStatus := "pending"
+	if normalizeAccountMode(stringPtr(t.AccountMode)) != "trial" {
+		trialInitStatus = "not_trial"
+	} else if len(demos) > 0 {
+		trialInitStatus = "completed"
+	}
+	resp := &TrialHomeResponse{
 		Tenant: TrialHomeTenantSummary{
 			AccountMode:         t.AccountMode,
-			TrialInitStatus:     "completed",
+			TrialInitStatus:     trialInitStatus,
 			TrialExpiresAt:      expiresAt,
 			DaysRemaining:       calcDaysRemaining(t.ValidTo),
 			TrialMaxRecordings:  trialProfile.TrialMaxRecordings,
 			TrialUsedRecordings: trialProfile.TrialUsedRecordings,
 		},
-		DemoRecordings: []TrialHomeDemoRecording{
-			{RecordingID: tenantID*1000 + 1, RoleCode: "doctor", Title: "示范录音 · 医生"},
-			{RecordingID: tenantID*1000 + 2, RoleCode: "consultant", Title: "示范录音 · 咨询师"},
-		},
-	}, nil
+	}
+	for _, item := range demos {
+		resp.DemoRecordings = append(resp.DemoRecordings, TrialHomeDemoRecording{
+			RecordingID: item.RecordingID,
+			RoleCode:    item.RoleCode,
+			Title:       item.Title,
+		})
+	}
+	return resp, nil
 }
 
 func (s *Service) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialtyResponse, error) {
@@ -363,6 +412,14 @@ func (s *Service) RebootstrapTrialTenant(ctx context.Context, tenantID int64) er
 	return s.bootstrapTrialTenant(ctx, tenantID)
 }
 
+func stringPtr(value string) *string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
 func (s *Service) ensureTrialFeatureGroup(ctx context.Context) (int64, error) {
 	groups, err := s.sysconfigService.ListFeatureGroups(ctx, nil)
 	if err != nil {
@@ -370,13 +427,14 @@ func (s *Service) ensureTrialFeatureGroup(ctx context.Context) (int64, error) {
 	}
 	for _, group := range groups {
 		if strings.EqualFold(strings.TrimSpace(group.Code), trialFeatureGroupCode) {
-			if !group.IsActive || !samePolicyItems(group.Items, trialFeatureGroupItems) {
+			if !group.IsActive || !hasRequiredPolicyItems(group.Items, trialFeatureGroupItems) {
 				isActive := true
 				description := "试用租户默认功能包"
+				items := mergeRequiredPolicyItems(group.Items, trialFeatureGroupItems)
 				_, err := s.sysconfigService.UpdateFeatureGroup(ctx, group.ID, sysconfig.UpdateFeatureGroupRequest{
 					Description: &description,
 					IsActive:    &isActive,
-					Items:       &trialFeatureGroupItems,
+					Items:       &items,
 				})
 				if err != nil {
 					return 0, err
@@ -420,6 +478,34 @@ func hasRequiredPolicyItems(actual, required []sysconfig.FeaturePolicyItem) bool
 		}
 	}
 	return true
+}
+
+func mergeRequiredPolicyItems(actual, required []sysconfig.FeaturePolicyItem) []sysconfig.FeaturePolicyItem {
+	merged := make([]sysconfig.FeaturePolicyItem, 0, len(actual)+len(required))
+	seen := make(map[string]struct{}, len(actual)+len(required))
+	appendItem := func(item sysconfig.FeaturePolicyItem) {
+		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
+		itemCode := strings.TrimSpace(item.ItemCode)
+		if itemType == "" || itemCode == "" {
+			return
+		}
+		key := itemType + ":" + strings.ToLower(itemCode)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, sysconfig.FeaturePolicyItem{
+			ItemType: itemType,
+			ItemCode: itemCode,
+		})
+	}
+	for _, item := range actual {
+		appendItem(item)
+	}
+	for _, item := range required {
+		appendItem(item)
+	}
+	return merged
 }
 
 func (s *Service) ensureTrialSubscriptionPlan(ctx context.Context, featureGroupID int64) (int64, error) {

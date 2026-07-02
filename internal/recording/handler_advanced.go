@@ -3,11 +3,13 @@ package recording
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -23,7 +25,7 @@ import (
 
 const trialUploadMaxBytes = 100 * 1024 * 1024
 const trialUploadMinDurationSeconds = 2 * 60
-const trialUploadMaxDurationSeconds = 15 * 60
+const trialUploadMaxDurationSeconds = 20 * 60
 
 var trialUploadAllowedExtensions = map[string]struct{}{
 	".mp3": {},
@@ -78,30 +80,14 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "role 仅支持 doctor 或 consultant")
 		return
 	}
-	var durationSeconds *int
+	var clientDurationSeconds *int
 	if raw := strings.TrimSpace(r.FormValue("duration_seconds")); raw != "" {
 		value, parseErr := strconv.Atoi(raw)
 		if parseErr != nil || value <= 0 {
 			httputil.WriteBadRequest(w, "duration_seconds 无效")
 			return
 		}
-		durationSeconds = &value
-	}
-	if durationSeconds == nil {
-		httputil.WriteBadRequest(w, "未能正确读取录音时长，请更换文件或格式后重试")
-		return
-	}
-	if *durationSeconds < trialUploadMinDurationSeconds {
-		httputil.WriteBadRequest(w, "录音时间过短，预计无法充分分析出有效内容。请更换一段大于等于 2 分钟且小于等于 15 分钟的录音后再试，本次不会占用试用额度。")
-		return
-	}
-	if *durationSeconds > trialUploadMaxDurationSeconds {
-		httputil.WriteBadRequest(w, "录音时长超出试用标准。请更换一段大于等于 2 分钟且小于等于 15 分钟的录音后再试，本次不会占用试用额度。")
-		return
-	}
-	durationLogValue := 0
-	if durationSeconds != nil {
-		durationLogValue = *durationSeconds
+		clientDurationSeconds = &value
 	}
 
 	file, fileHeader, err := r.FormFile("file")
@@ -130,11 +116,25 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	actualDurationSeconds, err := detectTrialAudioDurationSeconds(ext, payload)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if actualDurationSeconds < trialUploadMinDurationSeconds {
+		httputil.WriteBadRequest(w, "录音时间过短，预计无法充分分析出有效内容。请更换一段大于等于 2 分钟且小于等于 20 分钟的录音后再试，本次不会占用试用额度。")
+		return
+	}
+	if actualDurationSeconds > trialUploadMaxDurationSeconds {
+		httputil.WriteBadRequest(w, "录音时长超出试用标准。请更换一段大于等于 2 分钟且小于等于 20 分钟的录音后再试，本次不会占用试用额度。")
+		return
+	}
 	slog.Info("trial upload duration parsed",
 		"tenant_id", tenantID,
 		"role", role,
 		"file_name", strings.TrimSpace(fileHeader.Filename),
-		"duration_seconds", durationLogValue,
+		"client_duration_seconds", intValue(clientDurationSeconds),
+		"actual_duration_seconds", actualDurationSeconds,
 	)
 
 	employeeID, err := h.resolveTrialUploadEmployeeID(r.Context(), tenantID, role)
@@ -164,17 +164,13 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	duration := 0
-	if durationSeconds != nil {
-		duration = *durationSeconds
-	}
-	recording, _, err := h.service.IngestOwnedAudioAndEnqueue(r.Context(), OwnedAudioIngestRequest{
+	recording, created, err := h.service.IngestOwnedAudioAndEnqueue(r.Context(), OwnedAudioIngestRequest{
 		TenantID:        tenantID,
 		EmployeeID:      employeeID,
 		FileURL:         fileURL,
 		FileName:        strings.TrimSpace(fileHeader.Filename),
 		MIMEType:        contentType,
-		DurationSeconds: duration,
+		DurationSeconds: actualDurationSeconds,
 		OSSKey:          objectKey,
 		Source:          "manual",
 		BusinessScope:   role,
@@ -182,6 +178,16 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		TriggerSource:   "trial_upload",
 	})
 	if err != nil {
+		if shouldRollbackTrialUploadObject(created, recording) {
+			if deleteErr := ossClient.DeleteFile(r.Context(), objectKey); deleteErr != nil {
+				slog.Error("trial upload rollback failed",
+					"tenant_id", tenantID,
+					"role", role,
+					"object_key", objectKey,
+					"error", deleteErr,
+				)
+			}
+		}
 		if IsRecordingValidationError(err) {
 			message := strings.ToLower(strings.TrimSpace(err.Error()))
 			if strings.Contains(message, "transcription is already queued") {
@@ -332,6 +338,334 @@ func isMP3Payload(payload []byte) bool {
 		}
 	}
 	return false
+}
+
+func detectTrialAudioDurationSeconds(ext string, payload []byte) (int, error) {
+	var (
+		duration float64
+		err      error
+	)
+	switch ext {
+	case ".wav":
+		duration, err = parseWAVDurationSeconds(payload)
+	case ".m4a":
+		duration, err = parseM4ADurationSeconds(payload)
+	case ".mp3":
+		duration, err = parseMP3DurationSeconds(payload)
+	default:
+		err = fmt.Errorf("仅支持 mp3、wav、m4a 格式")
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !isFinitePositiveDuration(duration) {
+		return 0, fmt.Errorf("未能正确读取录音时长，请更换文件或格式后重试")
+	}
+	return int(math.Round(duration)), nil
+}
+
+func parseWAVDurationSeconds(payload []byte) (float64, error) {
+	if len(payload) < 44 || !isWAVPayload(payload) {
+		return 0, fmt.Errorf("wav 文件内容损坏，请更换文件后重试")
+	}
+	var (
+		offset        = 12
+		byteRate      uint32
+		dataChunkSize uint32
+	)
+	for offset+8 <= len(payload) {
+		chunkID := string(payload[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(payload[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(payload) {
+			return 0, fmt.Errorf("wav 文件内容损坏，请更换文件后重试")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return 0, fmt.Errorf("wav 文件内容损坏，请更换文件后重试")
+			}
+			byteRate = binary.LittleEndian.Uint32(payload[offset+8 : offset+12])
+		case "data":
+			dataChunkSize = uint32(chunkSize)
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 && offset < len(payload) {
+			offset++
+		}
+	}
+	if byteRate == 0 || dataChunkSize == 0 {
+		return 0, fmt.Errorf("未能正确读取录音时长，请更换文件或格式后重试")
+	}
+	return float64(dataChunkSize) / float64(byteRate), nil
+}
+
+func parseM4ADurationSeconds(payload []byte) (float64, error) {
+	duration, ok := findM4AMdhdDuration(payload, 0, len(payload))
+	if !ok {
+		return 0, fmt.Errorf("未能正确读取录音时长，请更换文件或格式后重试")
+	}
+	return duration, nil
+}
+
+func findM4AMdhdDuration(payload []byte, start, end int) (float64, bool) {
+	offset := start
+	for offset+8 <= end {
+		size := int(binary.BigEndian.Uint32(payload[offset : offset+4]))
+		headerSize := 8
+		if size == 1 {
+			if offset+16 > end {
+				return 0, false
+			}
+			size64 := binary.BigEndian.Uint64(payload[offset+8 : offset+16])
+			if size64 < 16 || size64 > uint64(end-offset) {
+				return 0, false
+			}
+			size = int(size64)
+			headerSize = 16
+		} else if size == 0 {
+			size = end - offset
+		}
+		if size < headerSize || offset+size > end {
+			return 0, false
+		}
+		boxType := string(payload[offset+4 : offset+8])
+		boxStart := offset + headerSize
+		boxEnd := offset + size
+		if boxType == "mdhd" {
+			if boxStart+4 > boxEnd {
+				return 0, false
+			}
+			version := payload[boxStart]
+			if version == 1 {
+				if boxStart+32 > boxEnd {
+					return 0, false
+				}
+				timescale := binary.BigEndian.Uint32(payload[boxStart+20 : boxStart+24])
+				duration := binary.BigEndian.Uint64(payload[boxStart+24 : boxStart+32])
+				if timescale == 0 || duration == 0 {
+					return 0, false
+				}
+				return float64(duration) / float64(timescale), true
+			}
+			if boxStart+20 > boxEnd {
+				return 0, false
+			}
+			timescale := binary.BigEndian.Uint32(payload[boxStart+12 : boxStart+16])
+			duration := binary.BigEndian.Uint32(payload[boxStart+16 : boxStart+20])
+			if timescale == 0 || duration == 0 {
+				return 0, false
+			}
+			return float64(duration) / float64(timescale), true
+		}
+		if isM4AContainerBox(boxType) {
+			if duration, ok := findM4AMdhdDuration(payload, boxStart, boxEnd); ok {
+				return duration, true
+			}
+		}
+		offset += size
+	}
+	return 0, false
+}
+
+func isM4AContainerBox(boxType string) bool {
+	switch boxType {
+	case "moov", "trak", "mdia", "minf", "stbl", "edts", "udta":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseMP3DurationSeconds(payload []byte) (float64, error) {
+	offset := skipID3v2Tag(payload)
+	var totalSeconds float64
+	var frames int
+	for offset < len(payload) {
+		if hasID3v1Tag(payload, offset) {
+			break
+		}
+		headerOffset, ok := findNextMP3FrameHeader(payload, offset)
+		if !ok {
+			break
+		}
+		frame, ok := parseMP3FrameHeader(payload[headerOffset:])
+		if !ok {
+			offset = headerOffset + 1
+			continue
+		}
+		if headerOffset+frame.frameLength > len(payload) {
+			return 0, fmt.Errorf("mp3 文件内容损坏，请更换文件后重试")
+		}
+		totalSeconds += float64(frame.samplesPerFrame) / float64(frame.sampleRate)
+		frames++
+		offset = headerOffset + frame.frameLength
+	}
+	if frames == 0 || totalSeconds <= 0 {
+		return 0, fmt.Errorf("未能正确读取录音时长，请更换文件或格式后重试")
+	}
+	return totalSeconds, nil
+}
+
+func skipID3v2Tag(payload []byte) int {
+	if len(payload) < 10 || !bytes.Equal(payload[:3], []byte("ID3")) {
+		return 0
+	}
+	size := int(payload[6]&0x7F)<<21 | int(payload[7]&0x7F)<<14 | int(payload[8]&0x7F)<<7 | int(payload[9]&0x7F)
+	offset := 10 + size
+	if payload[5]&0x10 != 0 {
+		offset += 10
+	}
+	if offset > len(payload) {
+		return len(payload)
+	}
+	return offset
+}
+
+func hasID3v1Tag(payload []byte, offset int) bool {
+	return len(payload)-offset >= 128 && bytes.Equal(payload[offset:offset+3], []byte("TAG"))
+}
+
+func findNextMP3FrameHeader(payload []byte, start int) (int, bool) {
+	for i := start; i+4 <= len(payload); i++ {
+		if _, ok := parseMP3FrameHeader(payload[i:]); ok {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+type mp3FrameInfo struct {
+	frameLength     int
+	sampleRate      int
+	samplesPerFrame int
+}
+
+func parseMP3FrameHeader(payload []byte) (mp3FrameInfo, bool) {
+	if len(payload) < 4 || payload[0] != 0xFF || payload[1]&0xE0 != 0xE0 {
+		return mp3FrameInfo{}, false
+	}
+	versionID := (payload[1] >> 3) & 0x03
+	layerIndex := (payload[1] >> 1) & 0x03
+	bitrateIndex := (payload[2] >> 4) & 0x0F
+	sampleRateIndex := (payload[2] >> 2) & 0x03
+	padding := (payload[2] >> 1) & 0x01
+	if versionID == 0x01 || layerIndex == 0x00 || bitrateIndex == 0x00 || bitrateIndex == 0x0F || sampleRateIndex == 0x03 {
+		return mp3FrameInfo{}, false
+	}
+	version := mp3VersionName(versionID)
+	layer := 4 - int(layerIndex)
+	bitrate := mp3BitrateKbps(version, layer, int(bitrateIndex))
+	sampleRate := mp3SampleRate(versionID, int(sampleRateIndex))
+	samplesPerFrame := mp3SamplesPerFrame(version, layer)
+	if bitrate <= 0 || sampleRate <= 0 || samplesPerFrame <= 0 {
+		return mp3FrameInfo{}, false
+	}
+	frameLength := mp3FrameLength(version, layer, bitrate, sampleRate, int(padding))
+	if frameLength <= 0 {
+		return mp3FrameInfo{}, false
+	}
+	return mp3FrameInfo{
+		frameLength:     frameLength,
+		sampleRate:      sampleRate,
+		samplesPerFrame: samplesPerFrame,
+	}, true
+}
+
+func mp3VersionName(versionID byte) string {
+	switch versionID {
+	case 0x03:
+		return "1"
+	case 0x02:
+		return "2"
+	case 0x00:
+		return "2.5"
+	default:
+		return ""
+	}
+}
+
+func mp3SampleRate(versionID byte, index int) int {
+	table := map[byte][3]int{
+		0x03: {44100, 48000, 32000},
+		0x02: {22050, 24000, 16000},
+		0x00: {11025, 12000, 8000},
+	}
+	values, ok := table[versionID]
+	if !ok || index < 0 || index >= len(values) {
+		return 0
+	}
+	return values[index]
+}
+
+func mp3BitrateKbps(version string, layer, index int) int {
+	if index <= 0 || index >= 15 {
+		return 0
+	}
+	var table []int
+	switch {
+	case version == "1" && layer == 1:
+		table = []int{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448}
+	case version == "1" && layer == 2:
+		table = []int{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384}
+	case version == "1" && layer == 3:
+		table = []int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
+	case version != "1" && layer == 1:
+		table = []int{0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256}
+	case version != "1" && (layer == 2 || layer == 3):
+		table = []int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160}
+	default:
+		return 0
+	}
+	return table[index]
+}
+
+func mp3SamplesPerFrame(version string, layer int) int {
+	switch layer {
+	case 1:
+		return 384
+	case 2:
+		return 1152
+	case 3:
+		if version == "1" {
+			return 1152
+		}
+		return 576
+	default:
+		return 0
+	}
+}
+
+func mp3FrameLength(version string, layer, bitrateKbps, sampleRate, padding int) int {
+	bitrate := bitrateKbps * 1000
+	switch layer {
+	case 1:
+		return ((12 * bitrate / sampleRate) + padding) * 4
+	case 2:
+		return (144*bitrate)/sampleRate + padding
+	case 3:
+		if version == "1" {
+			return (144*bitrate)/sampleRate + padding
+		}
+		return (72*bitrate)/sampleRate + padding
+	default:
+		return 0
+	}
+}
+
+func isFinitePositiveDuration(duration float64) bool {
+	return !math.IsNaN(duration) && !math.IsInf(duration, 0) && duration > 0
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func shouldRollbackTrialUploadObject(created bool, recording *RecordingResponse) bool {
+	return recording == nil || recording.ID <= 0
 }
 
 func (h *Handler) resolveTrialUploadEmployeeID(ctx context.Context, tenantID int64, role string) (int64, error) {

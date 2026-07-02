@@ -135,7 +135,7 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 	}
 	recording, err := s.store.GetRecordingByID(ctx, recordingID)
 	if err != nil {
-		return nil, false, err
+		return nil, created, err
 	}
 	resp := toRecordingResponse(recording)
 	if created {
