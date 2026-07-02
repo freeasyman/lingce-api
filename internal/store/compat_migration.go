@@ -692,8 +692,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		      WHEN 'knowledge-list' THEN 'knowledge'
 		      WHEN 'knowledge_center' THEN 'knowledge'
 		      WHEN 'customer-list' THEN 'customers'
+		      WHEN 'products' THEN 'recordings_products'
+		      WHEN 'recordings_products' THEN 'recordings_products'
 		      WHEN 'content-workbench' THEN 'content_create'
 		      WHEN 'content-list' THEN 'content_library'
+		      WHEN 'content-center' THEN 'content_create'
+		      WHEN 'content-recording-seeds' THEN 'content_seeds'
 		      WHEN 'frontdesk' THEN 'frontdesk_recordings'
 		      WHEN 'frontdesk_recordings' THEN 'frontdesk_recordings'
 		      WHEN 'frontdesk_recording_list' THEN 'frontdesk_recordings'
@@ -721,8 +725,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		      WHEN 'knowledge-list' THEN 'knowledge'
 		      WHEN 'knowledge_center' THEN 'knowledge'
 		      WHEN 'customer-list' THEN 'customers'
+		      WHEN 'products' THEN 'recordings_products'
+		      WHEN 'recordings_products' THEN 'recordings_products'
 		      WHEN 'content-workbench' THEN 'content_create'
 		      WHEN 'content-list' THEN 'content_library'
+		      WHEN 'content-center' THEN 'content_create'
+		      WHEN 'content-recording-seeds' THEN 'content_seeds'
 		      WHEN 'frontdesk' THEN 'frontdesk_recordings'
 		      WHEN 'frontdesk_recordings' THEN 'frontdesk_recordings'
 		      WHEN 'frontdesk_recording_list' THEN 'frontdesk_recordings'
@@ -745,24 +753,63 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		      ELSE item_code
 		    END
 		  WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'`,
-		`DELETE FROM tenant_feature_group_items
-		  WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
-		    AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
-		      SELECT code FROM inst_menus WHERE COALESCE(is_feature_assignable, false) = true
-		      UNION
-		      SELECT 'trial_home'
-		      UNION
-		      SELECT 'recording_upload'
-		    )`,
-		`DELETE FROM tenant_feature_overrides
-		  WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
-		    AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
-		      SELECT code FROM inst_menus WHERE COALESCE(is_feature_assignable, false) = true
-		      UNION
-		      SELECT 'trial_home'
-		      UNION
-		      SELECT 'recording_upload'
-		    )`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = 'institution_menus'
+			) THEN
+				DELETE FROM tenant_feature_group_items
+				WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+				  AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
+					SELECT lower(trim(code))
+					FROM institution_menus
+					WHERE deleted_at IS NULL
+					  AND COALESCE(is_feature_assignable, false) = true
+					UNION
+					SELECT 'trial_home'
+					UNION
+					SELECT 'recording_upload'
+				  );
+
+				DELETE FROM tenant_feature_overrides
+				WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+				  AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
+					SELECT lower(trim(code))
+					FROM institution_menus
+					WHERE deleted_at IS NULL
+					  AND COALESCE(is_feature_assignable, false) = true
+					UNION
+					SELECT 'trial_home'
+					UNION
+					SELECT 'recording_upload'
+				  );
+			ELSE
+				DELETE FROM tenant_feature_group_items
+				WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+				  AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
+					SELECT lower(trim(code))
+					FROM inst_menus
+					WHERE COALESCE(is_feature_assignable, false) = true
+					UNION
+					SELECT 'trial_home'
+					UNION
+					SELECT 'recording_upload'
+				  );
+
+				DELETE FROM tenant_feature_overrides
+				WHERE COALESCE(NULLIF(item_type, ''), 'feature') = 'menu'
+				  AND COALESCE(NULLIF(item_code, ''), '') NOT IN (
+					SELECT lower(trim(code))
+					FROM inst_menus
+					WHERE COALESCE(is_feature_assignable, false) = true
+					UNION
+					SELECT 'trial_home'
+					UNION
+					SELECT 'recording_upload'
+				  );
+			END IF;
+		END $$`,
 		`DO $$
 		DECLARE
 			v_parent_id BIGINT;
@@ -863,17 +910,25 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 				    updated_at = NOW()
 				WHERE id = v_group_id;
 
-				DELETE FROM tenant_feature_group_items WHERE group_id = v_group_id;
-
 				INSERT INTO tenant_feature_group_items (group_id, item_type, item_code, feature_code, is_enabled, created_at)
-				VALUES
-					(v_group_id, 'menu', 'trial_home', '', true, NOW()),
-					(v_group_id, 'menu', 'recording_upload', '', true, NOW()),
-					(v_group_id, 'menu', 'doctor_recordings', '', true, NOW()),
-					(v_group_id, 'menu', 'consultant_recordings', '', true, NOW()),
-					(v_group_id, 'menu', 'customers', '', true, NOW()),
-					(v_group_id, 'menu', 'tasks', '', true, NOW()),
-					(v_group_id, 'menu', 'departments', '', true, NOW());
+				SELECT v_group_id, 'menu', v.item_code, '', true, NOW()
+				FROM (
+					VALUES
+						('trial_home'),
+						('recording_upload'),
+						('doctor_recordings'),
+						('consultant_recordings'),
+						('customers'),
+						('tasks'),
+						('departments')
+				) AS v(item_code)
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM tenant_feature_group_items existing
+					WHERE existing.group_id = v_group_id
+					  AND COALESCE(NULLIF(existing.item_type, ''), 'feature') = 'menu'
+					  AND lower(COALESCE(NULLIF(existing.item_code, ''), '')) = lower(v.item_code)
+				);
 			END IF;
 		END $$`,
 		`DO $$

@@ -399,22 +399,22 @@ func (s *Service) ensureTrialFeatureGroup(ctx context.Context) (int64, error) {
 	return group.ID, nil
 }
 
-func samePolicyItems(actual, expected []sysconfig.FeaturePolicyItem) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
+func hasRequiredPolicyItems(actual, required []sysconfig.FeaturePolicyItem) bool {
 	actualSet := make(map[string]struct{}, len(actual))
 	for _, item := range actual {
 		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
-		itemCode := strings.TrimSpace(item.ItemCode)
+		itemCode := strings.ToLower(strings.TrimSpace(item.ItemCode))
 		if itemType == "" || itemCode == "" {
-			return false
+			continue
 		}
 		actualSet[itemType+":"+itemCode] = struct{}{}
 	}
-	for _, item := range expected {
+	for _, item := range required {
 		itemType := strings.ToLower(strings.TrimSpace(item.ItemType))
-		itemCode := strings.TrimSpace(item.ItemCode)
+		itemCode := strings.ToLower(strings.TrimSpace(item.ItemCode))
+		if itemType == "" || itemCode == "" {
+			continue
+		}
 		if _, ok := actualSet[itemType+":"+itemCode]; !ok {
 			return false
 		}
