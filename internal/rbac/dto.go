@@ -116,6 +116,8 @@ type AdminListRequest struct {
 
 // CreateAdminRequest represents a request to create an admin
 type CreateAdminRequest struct {
+	Name     string  `json:"name"`
+	Phone    string  `json:"phone"`
 	Username string  `json:"username"`
 	Password string  `json:"password"`
 	Email    *string `json:"email,omitempty"`
@@ -124,6 +126,8 @@ type CreateAdminRequest struct {
 
 // UpdateAdminRequest represents a request to update an admin
 type UpdateAdminRequest struct {
+	Name     *string `json:"name,omitempty"`
+	Phone    *string `json:"phone,omitempty"`
 	Email    *string `json:"email,omitempty"`
 	IsActive *bool   `json:"is_active,omitempty"`
 	RoleIDs  []int64 `json:"role_ids,omitempty"`
@@ -132,6 +136,8 @@ type UpdateAdminRequest struct {
 // AdminResponse represents an admin response
 type AdminResponse struct {
 	ID        int64          `json:"id"`
+	Name      string         `json:"name"`
+	Phone     string         `json:"phone"`
 	Username  string         `json:"username"`
 	Email     *string        `json:"email,omitempty"`
 	IsActive  bool           `json:"is_active"`

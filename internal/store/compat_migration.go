@@ -1306,11 +1306,15 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			tenant_id BIGINT NOT NULL,
 			sales_owner_admin_id BIGINT,
 			sales_owner_name_snapshot TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			notes TEXT NOT NULL DEFAULT '',
 			assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			assigned_by BIGINT,
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			UNIQUE(tenant_id)
 		)`,
+		`ALTER TABLE IF EXISTS trial_customer_assignments ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE IF EXISTS trial_customer_assignments ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_trial_customer_assignments_owner ON trial_customer_assignments(sales_owner_admin_id, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS trial_customer_metrics (
 			tenant_id BIGINT PRIMARY KEY,

@@ -513,7 +513,7 @@ func (s *Store) AssignMenusToRole(ctx context.Context, roleID int64, menuIDs []i
 // ListOperationsAdmins retrieves a paginated list of operations admins
 func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) ([]*AdminResponse, int, error) {
 	query := `
-		SELECT a.id, COALESCE(a.username, ''), COALESCE(a.email, ''),
+		SELECT a.id, COALESCE(a.name, ''), COALESCE(a.phone, ''), COALESCE(a.username, ''), COALESCE(a.email, ''),
 		       CASE
 		           WHEN a.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -568,7 +568,7 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	var admins []*AdminResponse
 	for rows.Next() {
 		var admin AdminResponse
-		err := rows.Scan(&admin.ID, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt)
+		err := rows.Scan(&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan admin: %w", err)
 		}
@@ -617,7 +617,7 @@ func (s *Store) GetAdminRoles(ctx context.Context, adminID int64) ([]RoleRespons
 // GetOperationsAdminByID retrieves an operations admin by ID
 func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminResponse, error) {
 	query := `
-		SELECT id, COALESCE(username, ''), COALESCE(email, ''),
+		SELECT id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -629,7 +629,7 @@ func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminRes
 
 	var admin AdminResponse
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&admin.ID, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("admin not found: %w", err)
@@ -654,14 +654,14 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 
 	// Create admin
 	query := `
-		INSERT INTO operations_admins (username, password_hash, email, is_active, session_version, created_at, updated_at)
-		VALUES ($1, $2, $3, true, 1, NOW(), NOW())
-		RETURNING id, username, email, is_active, created_at, updated_at
+		INSERT INTO operations_admins (name, phone, username, password_hash, email, is_active, session_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, true, 1, NOW(), NOW())
+		RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), username, email, is_active, created_at, updated_at
 	`
 
 	var admin AdminResponse
-	err = tx.QueryRow(ctx, query, req.Username, hashedPassword, req.Email).Scan(
-		&admin.ID, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+	err = tx.QueryRow(ctx, query, req.Name, req.Phone, req.Username, hashedPassword, req.Email).Scan(
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create admin: %w", err)
@@ -704,6 +704,18 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 	args := []interface{}{}
 	argPos := 1
 
+	if req.Name != nil {
+		query += fmt.Sprintf(", name = $%d", argPos)
+		args = append(args, *req.Name)
+		argPos++
+	}
+
+	if req.Phone != nil {
+		query += fmt.Sprintf(", phone = $%d", argPos)
+		args = append(args, *req.Phone)
+		argPos++
+	}
+
 	if req.Email != nil {
 		query += fmt.Sprintf(", email = $%d", argPos)
 		args = append(args, *req.Email)
@@ -718,11 +730,11 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 
 	query += fmt.Sprintf(" WHERE id = $%d AND deleted_at IS NULL", argPos)
 	args = append(args, id)
-	query += " RETURNING id, username, email, is_active, created_at, updated_at"
+	query += " RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), username, email, is_active, created_at, updated_at"
 
 	var admin AdminResponse
 	err = tx.QueryRow(ctx, query, args...).Scan(
-		&admin.ID, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update admin: %w", err)

@@ -5,6 +5,7 @@ import "time"
 type TrialCustomerListRequest struct {
 	Keyword          string `json:"keyword"`
 	OwnerAdminID     *int64 `json:"owner_admin_id,omitempty"`
+	Source           string `json:"source,omitempty"`
 	Stage            string `json:"stage,omitempty"`
 	ActivationStatus string `json:"activation_status,omitempty"`
 	HasRealRecording *bool  `json:"has_real_recording,omitempty"`
@@ -16,6 +17,8 @@ type TrialCustomerAssignment struct {
 	TenantID               int64      `json:"tenant_id"`
 	SalesOwnerAdminID      *int64     `json:"sales_owner_admin_id,omitempty"`
 	SalesOwnerNameSnapshot string     `json:"sales_owner_name_snapshot,omitempty"`
+	Source                 string     `json:"source,omitempty"`
+	Notes                  string     `json:"notes,omitempty"`
 	AssignedAt             *time.Time `json:"assigned_at,omitempty"`
 	AssignedBy             *int64     `json:"assigned_by,omitempty"`
 	UpdatedAt              *time.Time `json:"updated_at,omitempty"`
@@ -80,8 +83,11 @@ type TrialCustomerListItem struct {
 	PriorityLevel            string     `json:"priority_level,omitempty"`
 	BlockingReason           string     `json:"blocking_reason,omitempty"`
 	NextActionHint           string     `json:"next_action_hint,omitempty"`
+	Source                   string     `json:"source,omitempty"`
+	Notes                    string     `json:"notes,omitempty"`
 	LatestFollowUpSummary    string     `json:"latest_follow_up_summary,omitempty"`
 	LatestFollowUpAt         *time.Time `json:"latest_follow_up_at,omitempty"`
+	NextFollowUpAt           *time.Time `json:"next_follow_up_at,omitempty"`
 }
 
 type TrialCustomerDetail struct {

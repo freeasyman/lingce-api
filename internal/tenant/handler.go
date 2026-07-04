@@ -289,6 +289,7 @@ func (h *Handler) ListTrialCustomers(w http.ResponseWriter, r *http.Request) {
 
 	req := TrialCustomerListRequest{
 		Keyword:          strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Source:           strings.TrimSpace(r.URL.Query().Get("source")),
 		Stage:            strings.TrimSpace(r.URL.Query().Get("stage")),
 		ActivationStatus: strings.TrimSpace(r.URL.Query().Get("activation_status")),
 		Page:             1,

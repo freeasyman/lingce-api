@@ -66,6 +66,9 @@ type CreateTenantRequest struct {
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
 	Industry                 *string       `json:"industry,omitempty"`
+	TrialSalesOwnerAdminID   *int64        `json:"trial_sales_owner_admin_id,omitempty"`
+	TrialSource              *string       `json:"trial_source,omitempty"`
+	TrialNotes               *string       `json:"trial_notes,omitempty"`
 	ValidFrom                *time.Time    `json:"valid_from"`
 	ValidTo                  *time.Time    `json:"valid_to"`
 	SubscriptionPlanID       FlexibleInt64 `json:"subscription_plan_id,omitempty"`

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/recording"
+	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 )
 
@@ -98,6 +99,13 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 			return nil, err
 		}
 		if _, err := s.store.EnsureTrialDemoRecordings(ctx, tenant.ID, defaultTrialTemplateCode); err != nil {
+			return nil, err
+		}
+		if _, err := s.store.UpsertTrialCustomerAssignment(ctx, tenant.ID, TrialCustomerUpsertAssignmentRequest{
+			SalesOwnerAdminID: req.TrialSalesOwnerAdminID,
+			Source:            req.TrialSource,
+			Notes:             req.TrialNotes,
+		}, nil); err != nil {
 			return nil, err
 		}
 		refreshed, err := s.store.GetTenantByID(ctx, tenant.ID)
@@ -260,10 +268,36 @@ func (s *Service) AssignTrialCustomerOwner(ctx context.Context, tenantID int64, 
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("invalid tenant id")
 	}
+	if assignedBy == nil || *assignedBy <= 0 {
+		return nil, fmt.Errorf("admin access required")
+	}
+	admin, err := rbac.NewService(rbac.NewStore(s.store.pool)).GetOperationsAdmin(ctx, *assignedBy)
+	if err != nil {
+		return nil, fmt.Errorf("load admin roles: %w", err)
+	}
+	canAssign := false
+	for _, role := range admin.Roles {
+		code := strings.ToLower(strings.TrimSpace(role.Code))
+		if code == "ops_super_admin" || code == "ops_admin" {
+			canAssign = true
+			break
+		}
+	}
+	if !canAssign {
+		return nil, fmt.Errorf("no permission to change trial customer owner")
+	}
 	if _, err := s.store.GetTenantByID(ctx, tenantID); err != nil {
 		return nil, err
 	}
-	return s.store.UpsertTrialCustomerAssignment(ctx, tenantID, req.SalesOwnerAdminID, assignedBy)
+	current, err := s.store.GetTrialCustomerDetail(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.UpsertTrialCustomerAssignment(ctx, tenantID, TrialCustomerUpsertAssignmentRequest{
+		SalesOwnerAdminID: req.SalesOwnerAdminID,
+		Source:            stringPtr(current.Assignment.Source),
+		Notes:             stringPtr(current.Assignment.Notes),
+	}, assignedBy)
 }
 
 func (s *Service) CreateTrialCustomerFollowUp(ctx context.Context, tenantID int64, req TrialCustomerFollowUpCreateRequest, createdBy *int64) (*TrialCustomerFollowUp, error) {

@@ -1621,6 +1621,11 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 		args = append(args, *req.OwnerAdminID)
 		argIndex++
 	}
+	if source := strings.TrimSpace(req.Source); source != "" {
+		conditions = append(conditions, fmt.Sprintf("lower(COALESCE(a.source, '')) = lower($%d)", argIndex))
+		args = append(args, source)
+		argIndex++
+	}
 	if stage := strings.TrimSpace(req.Stage); stage != "" {
 		conditions = append(conditions, fmt.Sprintf("COALESCE(m.current_stage, 'not_started') = $%d", argIndex))
 		args = append(args, stage)
@@ -1657,6 +1662,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
 			a.sales_owner_admin_id,
 			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			COALESCE(a.source, '') AS source,
+			COALESCE(a.notes, '') AS notes,
 			m.trial_started_at,
 			m.trial_expires_at,
 			m.first_login_at,
@@ -1687,7 +1694,15 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				WHERE tf.tenant_id = t.id
 				ORDER BY tf.created_at DESC, tf.id DESC
 				LIMIT 1
-			) AS latest_follow_up_at
+			) AS latest_follow_up_at,
+			(
+				SELECT tf.next_follow_up_at
+				FROM trial_customer_follow_ups tf
+				WHERE tf.tenant_id = t.id
+				  AND tf.next_follow_up_at IS NOT NULL
+				ORDER BY tf.created_at DESC, tf.id DESC
+				LIMIT 1
+			) AS next_follow_up_at
 		FROM tenants t
 		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
@@ -1717,6 +1732,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				&item.ActivationStatus,
 				&item.SalesOwnerAdminID,
 				&item.SalesOwnerName,
+				&item.Source,
+				&item.Notes,
 				&item.TrialStartedAt,
 				&item.TrialExpiresAt,
 				&item.FirstLoginAt,
@@ -1736,6 +1753,7 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				&item.NextActionHint,
 				&item.LatestFollowUpSummary,
 				&item.LatestFollowUpAt,
+				&item.NextFollowUpAt,
 			); err != nil {
 				return nil, fmt.Errorf("scan trial customer list item: %w", err)
 			}
@@ -1797,6 +1815,8 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
 			a.sales_owner_admin_id,
 			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			COALESCE(a.source, '') AS source,
+			COALESCE(a.notes, '') AS notes,
 			m.trial_started_at,
 			m.trial_expires_at,
 			m.first_login_at,
@@ -1831,6 +1851,8 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 		&selected.ActivationStatus,
 		&selected.SalesOwnerAdminID,
 		&selected.SalesOwnerName,
+		&selected.Source,
+		&selected.Notes,
 		&selected.TrialStartedAt,
 		&selected.TrialExpiresAt,
 		&selected.FirstLoginAt,
@@ -1878,10 +1900,10 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 
 	assignment := TrialCustomerAssignment{TenantID: tenantID}
 	_ = s.pool.QueryRow(ctx, `
-		SELECT tenant_id, sales_owner_admin_id, COALESCE(sales_owner_name_snapshot, ''), assigned_at, assigned_by, updated_at
+		SELECT tenant_id, sales_owner_admin_id, COALESCE(sales_owner_name_snapshot, ''), COALESCE(source, ''), COALESCE(notes, ''), assigned_at, assigned_by, updated_at
 		FROM trial_customer_assignments
 		WHERE tenant_id = $1
-	`, tenantID).Scan(&assignment.TenantID, &assignment.SalesOwnerAdminID, &assignment.SalesOwnerNameSnapshot, &assignment.AssignedAt, &assignment.AssignedBy, &assignment.UpdatedAt)
+	`, tenantID).Scan(&assignment.TenantID, &assignment.SalesOwnerAdminID, &assignment.SalesOwnerNameSnapshot, &assignment.Source, &assignment.Notes, &assignment.AssignedAt, &assignment.AssignedBy, &assignment.UpdatedAt)
 
 	roleUsage := []TrialCustomerRoleUsage{
 		{
@@ -1925,33 +1947,37 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 	}, nil
 }
 
-func (s *Store) UpsertTrialCustomerAssignment(ctx context.Context, tenantID int64, salesOwnerAdminID, assignedBy *int64) (*TrialCustomerAssignment, error) {
+func (s *Store) UpsertTrialCustomerAssignment(ctx context.Context, tenantID int64, req TrialCustomerUpsertAssignmentRequest, assignedBy *int64) (*TrialCustomerAssignment, error) {
 	var snapshot string
-	if salesOwnerAdminID != nil && *salesOwnerAdminID > 0 {
+	if req.SalesOwnerAdminID != nil && *req.SalesOwnerAdminID > 0 {
 		_ = s.pool.QueryRow(ctx, `
 			SELECT COALESCE(NULLIF(name, ''), username, '')
 			FROM operations_admins
 			WHERE id = $1
 			  AND deleted_at IS NULL
-		`, *salesOwnerAdminID).Scan(&snapshot)
+		`, *req.SalesOwnerAdminID).Scan(&snapshot)
 	}
 	item := &TrialCustomerAssignment{TenantID: tenantID}
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO trial_customer_assignments (
-			tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, assigned_at, assigned_by, updated_at
+			tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, source, notes, assigned_at, assigned_by, updated_at
 		)
-		VALUES ($1, $2, $3, NOW(), $4, NOW())
+		VALUES ($1, $2, $3, $4, $5, NOW(), $6, NOW())
 		ON CONFLICT (tenant_id) DO UPDATE
 		SET sales_owner_admin_id = EXCLUDED.sales_owner_admin_id,
 		    sales_owner_name_snapshot = EXCLUDED.sales_owner_name_snapshot,
+		    source = EXCLUDED.source,
+		    notes = EXCLUDED.notes,
 		    assigned_at = NOW(),
 		    assigned_by = EXCLUDED.assigned_by,
 		    updated_at = NOW()
-		RETURNING tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, assigned_at, assigned_by, updated_at
-	`, tenantID, salesOwnerAdminID, snapshot, assignedBy).Scan(
+		RETURNING tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, source, notes, assigned_at, assigned_by, updated_at
+	`, tenantID, req.SalesOwnerAdminID, snapshot, strings.TrimSpace(derefString(req.Source)), strings.TrimSpace(derefString(req.Notes)), assignedBy).Scan(
 		&item.TenantID,
 		&item.SalesOwnerAdminID,
 		&item.SalesOwnerNameSnapshot,
+		&item.Source,
+		&item.Notes,
 		&item.AssignedAt,
 		&item.AssignedBy,
 		&item.UpdatedAt,
