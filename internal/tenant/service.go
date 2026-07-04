@@ -217,6 +217,75 @@ func (s *Service) GetTenantProfile(ctx context.Context, tenantID int64) (*Tenant
 	}, nil
 }
 
+func (s *Service) ListTrialCustomers(ctx context.Context, req TrialCustomerListRequest) (*TrialCustomerListResponse, error) {
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+	if err := s.store.EnsureTrialCustomerMetricsSeed(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.ListTrialCustomers(ctx, req)
+}
+
+func (s *Service) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*TrialCustomerDetail, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("invalid tenant id")
+	}
+	if err := s.store.RecomputeTrialCustomerMetricsForTenant(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	detail, err := s.store.GetTrialCustomerDetail(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	trialProfile, err := recording.NewStore(s.store.pool).GetTrialTenantProfile(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Metrics.TrialMaxRecordings = trialProfile.TrialMaxRecordings
+	detail.Metrics.TrialRemainingUsage = trialProfile.TrialMaxRecordings - trialProfile.TrialUsedRecordings
+	if detail.Metrics.TrialRemainingUsage < 0 {
+		detail.Metrics.TrialRemainingUsage = 0
+	}
+	return detail, nil
+}
+
+func (s *Service) AssignTrialCustomerOwner(ctx context.Context, tenantID int64, req TrialCustomerAssignOwnerRequest, assignedBy *int64) (*TrialCustomerAssignment, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("invalid tenant id")
+	}
+	if _, err := s.store.GetTenantByID(ctx, tenantID); err != nil {
+		return nil, err
+	}
+	return s.store.UpsertTrialCustomerAssignment(ctx, tenantID, req.SalesOwnerAdminID, assignedBy)
+}
+
+func (s *Service) CreateTrialCustomerFollowUp(ctx context.Context, tenantID int64, req TrialCustomerFollowUpCreateRequest, createdBy *int64) (*TrialCustomerFollowUp, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("invalid tenant id")
+	}
+	if strings.TrimSpace(req.Summary) == "" {
+		return nil, fmt.Errorf("summary is required")
+	}
+	if strings.TrimSpace(req.Result) == "" {
+		return nil, fmt.Errorf("result is required")
+	}
+	return s.store.CreateTrialCustomerFollowUp(ctx, tenantID, req, createdBy)
+}
+
+func (s *Service) GetTrialCustomerFunnel(ctx context.Context) (*TrialCustomerFunnelResponse, error) {
+	if err := s.store.EnsureTrialCustomerMetricsSeed(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.GetTrialCustomerFunnel(ctx)
+}
+
 func (s *Service) UpdateTenantProfile(ctx context.Context, tenantID int64, req UpdateTenantProfileRequest) (*TenantProfileResponse, error) {
 	updateReq := UpdateTenantRequest{
 		Name:         req.Name,

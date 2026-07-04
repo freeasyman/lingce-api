@@ -56,6 +56,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Tenant validity logs (admin only)
 	mux.Handle("GET /api/v1/tenants/{id}/validity-logs", authMw(http.HandlerFunc(h.GetValidityChangeLogs)))
+
+	// Trial customer management (operation/admin only)
+	mux.Handle("GET /api/v1/ops/trial-customers", authMw(http.HandlerFunc(h.ListTrialCustomers)))
+	mux.Handle("GET /api/v1/ops/trial-customers/{id}", authMw(http.HandlerFunc(h.GetTrialCustomerDetail)))
+	mux.Handle("POST /api/v1/ops/trial-customers/{id}/assign-owner", authMw(http.HandlerFunc(h.AssignTrialCustomerOwner)))
+	mux.Handle("POST /api/v1/ops/trial-customers/{id}/follow-ups", authMw(http.HandlerFunc(h.CreateTrialCustomerFollowUp)))
+	mux.Handle("GET /api/v1/ops/trial-funnel", authMw(http.HandlerFunc(h.GetTrialCustomerFunnel)))
 }
 
 // isAdmin checks if the current user is an admin
@@ -272,6 +279,134 @@ func (h *Handler) GetTenantSubscription(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, subscription)
+}
+
+func (h *Handler) ListTrialCustomers(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	req := TrialCustomerListRequest{
+		Keyword:          strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Stage:            strings.TrimSpace(r.URL.Query().Get("stage")),
+		ActivationStatus: strings.TrimSpace(r.URL.Query().Get("activation_status")),
+		Page:             1,
+		PageSize:         20,
+	}
+	if page, _ := strconv.Atoi(r.URL.Query().Get("page")); page > 0 {
+		req.Page = page
+	}
+	if pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size")); pageSize > 0 {
+		req.PageSize = pageSize
+	}
+	if ownerIDStr := strings.TrimSpace(r.URL.Query().Get("owner_admin_id")); ownerIDStr != "" {
+		if ownerID, err := strconv.ParseInt(ownerIDStr, 10, 64); err == nil && ownerID > 0 {
+			req.OwnerAdminID = &ownerID
+		}
+	}
+	if hasRealRecordingStr := strings.TrimSpace(r.URL.Query().Get("has_real_recording")); hasRealRecordingStr != "" {
+		value := hasRealRecordingStr == "true" || hasRealRecordingStr == "1"
+		req.HasRealRecording = &value
+	}
+
+	resp, err := h.service.ListTrialCustomers(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetTrialCustomerDetail(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	tenantID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || tenantID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	resp, err := h.service.GetTrialCustomerDetail(r.Context(), tenantID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			httputil.WriteNotFound(w, err.Error())
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) AssignTrialCustomerOwner(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	tenantID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || tenantID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	var req TrialCustomerAssignOwnerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	var assignedBy *int64
+	if claims != nil && claims.UserID > 0 {
+		assignedBy = &claims.UserID
+	}
+	assignment, err := h.service.AssignTrialCustomerOwner(r.Context(), tenantID, req, assignedBy)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, assignment)
+}
+
+func (h *Handler) CreateTrialCustomerFollowUp(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	tenantID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || tenantID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	var req TrialCustomerFollowUpCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	var createdBy *int64
+	if claims != nil && claims.UserID > 0 {
+		createdBy = &claims.UserID
+	}
+	item, err := h.service.CreateTrialCustomerFollowUp(r.Context(), tenantID, req, createdBy)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) GetTrialCustomerFunnel(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	resp, err := h.service.GetTrialCustomerFunnel(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 func (h *Handler) PerformSubscriptionAction(w http.ResponseWriter, r *http.Request) {

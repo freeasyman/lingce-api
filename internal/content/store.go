@@ -339,7 +339,7 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
+		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.content_type, ci.platform, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
 		       ci.published_at, ci.unpublished_at, ci.view_count, ci.like_count, ci.share_count, ci.images,
 		       ci.extra_data, ci.created_by, ci.created_at, ci.updated_at,
 		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS creator_name
@@ -362,7 +362,7 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 	for rows.Next() {
 		var item ContentItem
 		if err := rows.Scan(
-			&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+			&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 			&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 			&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
@@ -378,7 +378,7 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 // GetContentByID retrieves a content item by ID
 func (s *Store) GetContentByID(ctx context.Context, id int64) (*ContentItem, error) {
 	query := `
-		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
+		SELECT ci.id, ci.tenant_id, ci.topic_id, ci.content_type, ci.platform, ci.title, ci.content, ci.summary, ci.category, ci.tags, ci.status,
 		       ci.published_at, ci.unpublished_at, ci.view_count, ci.like_count, ci.share_count, ci.images,
 		       ci.extra_data, ci.created_by, ci.created_at, ci.updated_at,
 		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS creator_name
@@ -389,7 +389,7 @@ func (s *Store) GetContentByID(ctx context.Context, id int64) (*ContentItem, err
 
 	var item ContentItem
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
@@ -408,10 +408,10 @@ func (s *Store) GetContentByID(ctx context.Context, id int64) (*ContentItem, err
 // CreateContent creates a new content item
 func (s *Store) CreateContent(ctx context.Context, tenantID, createdBy int64, req CreateContentRequest) (*ContentItem, error) {
 	query := `
-		INSERT INTO content_items (tenant_id, topic_id, title, content, summary, category, tags, status,
+		INSERT INTO content_items (tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
 		                           images, extra_data, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', $8, $9, $10, NOW(), NOW())
-		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, $11, $12, NOW(), NOW())
+		RETURNING id, tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
 		          extra_data, created_by, created_at, updated_at,
 		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
@@ -419,10 +419,10 @@ func (s *Store) CreateContent(ctx context.Context, tenantID, createdBy int64, re
 
 	var item ContentItem
 	err := s.pool.QueryRow(
-		ctx, query, tenantID, req.TopicID, req.Title, req.Content, req.Summary, req.Category,
+		ctx, query, tenantID, req.TopicID, req.ContentType, req.Platform, req.Title, req.Content, req.Summary, req.Category,
 		req.Tags, req.Images, req.ExtraData, createdBy,
 	).Scan(
-		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
@@ -454,6 +454,16 @@ func (s *Store) UpdateContent(ctx context.Context, id int64, req UpdateContentRe
 	if req.Summary != nil {
 		setClauses = append(setClauses, fmt.Sprintf("summary = $%d", argIndex))
 		args = append(args, *req.Summary)
+		argIndex++
+	}
+	if req.ContentType != nil {
+		setClauses = append(setClauses, fmt.Sprintf("content_type = $%d", argIndex))
+		args = append(args, *req.ContentType)
+		argIndex++
+	}
+	if req.Platform != nil {
+		setClauses = append(setClauses, fmt.Sprintf("platform = $%d", argIndex))
+		args = append(args, *req.Platform)
 		argIndex++
 	}
 	if req.Category != nil {
@@ -493,7 +503,7 @@ func (s *Store) UpdateContent(ctx context.Context, id int64, req UpdateContentRe
 		UPDATE content_items
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
+		RETURNING id, tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
 		          extra_data, created_by, created_at, updated_at,
 		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
@@ -501,7 +511,7 @@ func (s *Store) UpdateContent(ctx context.Context, id int64, req UpdateContentRe
 
 	var item ContentItem
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
@@ -539,7 +549,7 @@ func (s *Store) PublishContent(ctx context.Context, id int64) (*ContentItem, err
 		UPDATE content_items
 		SET status = 'published', published_at = NOW(), unpublished_at = NULL, updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
-		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
+		RETURNING id, tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
 		          extra_data, created_by, created_at, updated_at,
 		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
@@ -547,7 +557,7 @@ func (s *Store) PublishContent(ctx context.Context, id int64) (*ContentItem, err
 
 	var item ContentItem
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
@@ -567,7 +577,7 @@ func (s *Store) UnpublishContent(ctx context.Context, id int64) (*ContentItem, e
 		UPDATE content_items
 		SET status = 'unpublished', unpublished_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
-		RETURNING id, tenant_id, topic_id, title, content, summary, category, tags, status,
+		RETURNING id, tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
 		          published_at, unpublished_at, view_count, like_count, share_count, images,
 		          extra_data, created_by, created_at, updated_at,
 		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
@@ -575,7 +585,7 @@ func (s *Store) UnpublishContent(ctx context.Context, id int64) (*ContentItem, e
 
 	var item ContentItem
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&item.ID, &item.TenantID, &item.TopicID, &item.Title, &item.Content, &item.Summary,
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
 		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
 		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,

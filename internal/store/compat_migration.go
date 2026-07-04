@@ -170,6 +170,8 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
 			topic_id BIGINT,
+			content_type TEXT,
+			platform TEXT,
 			title TEXT NOT NULL DEFAULT '',
 			content TEXT NOT NULL DEFAULT '',
 			summary TEXT,
@@ -188,6 +190,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			deleted_at TIMESTAMP
 		)`,
+		`ALTER TABLE IF EXISTS content_items ADD COLUMN IF NOT EXISTS content_type TEXT`,
+		`ALTER TABLE IF EXISTS content_items ADD COLUMN IF NOT EXISTS platform TEXT`,
+		`UPDATE content_items
+		   SET content_type = COALESCE(
+		         NULLIF(content_type, ''),
+		         NULLIF(extra_data->>'content_type', '')
+		       )
+		 WHERE COALESCE(content_type, '') = ''
+		   AND extra_data IS NOT NULL`,
+		`UPDATE content_items
+		   SET platform = COALESCE(
+		         NULLIF(platform, ''),
+		         NULLIF(extra_data->>'platform', ''),
+		         NULLIF(extra_data->>'target_platform', '')
+		       )
+		 WHERE COALESCE(platform, '') = ''
+		   AND extra_data IS NOT NULL`,
 
 		// Badge module compatibility (missing columns/table)
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS device_id TEXT`,
@@ -1270,6 +1289,75 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_tenant_trial_demo_recordings_tenant_template_role ON tenant_trial_demo_recordings(tenant_id, template_code, role_code)`,
 		`CREATE INDEX IF NOT EXISTS idx_tenant_trial_demo_recordings_tenant ON tenant_trial_demo_recordings(tenant_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS employee_login_events (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			login_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			login_source TEXT NOT NULL DEFAULT 'institution_web',
+			ip TEXT NOT NULL DEFAULT '',
+			user_agent TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_employee_login_events_tenant_login_at ON employee_login_events(tenant_id, login_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_employee_login_events_employee_login_at ON employee_login_events(employee_id, login_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS trial_customer_assignments (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			sales_owner_admin_id BIGINT,
+			sales_owner_name_snapshot TEXT NOT NULL DEFAULT '',
+			assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			assigned_by BIGINT,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE(tenant_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_assignments_owner ON trial_customer_assignments(sales_owner_admin_id, updated_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS trial_customer_metrics (
+			tenant_id BIGINT PRIMARY KEY,
+			trial_started_at TIMESTAMP,
+			trial_expires_at TIMESTAMP,
+			first_login_at TIMESTAMP,
+			last_login_at TIMESTAMP,
+			login_count INTEGER NOT NULL DEFAULT 0,
+			doctor_demo_viewed_at TIMESTAMP,
+			consultant_demo_viewed_at TIMESTAMP,
+			first_upload_at TIMESTAMP,
+			last_upload_at TIMESTAMP,
+			upload_count INTEGER NOT NULL DEFAULT 0,
+			analysis_count INTEGER NOT NULL DEFAULT 0,
+			doctor_upload_count INTEGER NOT NULL DEFAULT 0,
+			consultant_upload_count INTEGER NOT NULL DEFAULT 0,
+			generated_customer_count INTEGER NOT NULL DEFAULT 0,
+			generated_task_count INTEGER NOT NULL DEFAULT 0,
+			generated_content_count INTEGER NOT NULL DEFAULT 0,
+			wechat_content_count INTEGER NOT NULL DEFAULT 0,
+			xiaohongshu_content_count INTEGER NOT NULL DEFAULT 0,
+			video_script_content_count INTEGER NOT NULL DEFAULT 0,
+			last_activity_at TIMESTAMP,
+			current_stage TEXT NOT NULL DEFAULT 'not_started',
+			priority_level TEXT NOT NULL DEFAULT 'normal',
+			blocking_reason TEXT NOT NULL DEFAULT '',
+			next_action_hint TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE IF EXISTS trial_customer_metrics ADD COLUMN IF NOT EXISTS generated_content_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE IF EXISTS trial_customer_metrics ADD COLUMN IF NOT EXISTS wechat_content_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE IF EXISTS trial_customer_metrics ADD COLUMN IF NOT EXISTS xiaohongshu_content_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE IF EXISTS trial_customer_metrics ADD COLUMN IF NOT EXISTS video_script_content_count INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_metrics_stage ON trial_customer_metrics(current_stage, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_metrics_last_activity ON trial_customer_metrics(last_activity_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS trial_customer_follow_ups (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			sales_owner_admin_id BIGINT,
+			follow_up_type TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL DEFAULT '',
+			next_follow_up_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_by BIGINT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_follow_ups_tenant_created_at ON trial_customer_follow_ups(tenant_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS management_events (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,

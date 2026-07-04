@@ -69,6 +69,23 @@ func (s *Store) tenantIsActiveUsesInteger(ctx context.Context) (bool, error) {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(dataType)), "int"), nil
 }
 
+func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = $1
+			  AND column_name = $2
+		)
+	`, tableName, columnName).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect %s.%s: %w", tableName, columnName, err)
+	}
+	return exists, nil
+}
+
 // ListTenants retrieves a paginated list of tenants
 func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tenant, int, error) {
 	var conditions []string
@@ -1277,6 +1294,1019 @@ func (s *Store) EnsureTrialDemoRecordings(ctx context.Context, tenantID int64, t
 		}
 	}
 	return out, nil
+}
+
+func (s *Store) RecomputeTrialCustomerMetrics(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id
+		FROM tenants
+		WHERE deleted_at IS NULL
+		  AND lower(COALESCE(account_mode, 'formal')) = 'trial'
+	`)
+	if err != nil {
+		return fmt.Errorf("query trial tenants: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tenantID int64
+		if err := rows.Scan(&tenantID); err != nil {
+			return fmt.Errorf("scan trial tenant id: %w", err)
+		}
+		if err := s.RecomputeTrialCustomerMetricsForTenant(ctx, tenantID); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate trial tenants: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) EnsureTrialCustomerMetricsSeed(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO trial_customer_metrics (tenant_id, trial_started_at, trial_expires_at, current_stage, priority_level, blocking_reason, next_action_hint, updated_at)
+		SELECT
+			t.id,
+			COALESCE(t.valid_from, t.created_at),
+			t.valid_to,
+			CASE
+				WHEN t.valid_to IS NOT NULL AND t.valid_to < NOW() THEN 'expired_unconverted'
+				ELSE 'not_started'
+			END,
+			'normal',
+			'开通后未登录',
+			'建议销售发起首次唤醒沟通，推动客户尽快登录试用后台',
+			NOW()
+		FROM tenants t
+		WHERE t.deleted_at IS NULL
+		  AND lower(COALESCE(t.account_mode, 'formal')) = 'trial'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM trial_customer_metrics m
+			WHERE m.tenant_id = t.id
+		  )
+	`)
+	if err != nil {
+		return fmt.Errorf("seed trial customer metrics: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RecomputeTrialCustomerMetricsForTenant(ctx context.Context, tenantID int64) error {
+	var trialStartedAt *time.Time
+	var trialExpiresAt *time.Time
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(valid_from, created_at) AS started_at, valid_to
+		FROM tenants
+		WHERE id = $1 AND deleted_at IS NULL
+	`, tenantID).Scan(&trialStartedAt, &trialExpiresAt); err != nil {
+		return fmt.Errorf("query trial tenant dates: %w", err)
+	}
+
+	var firstLoginAt, lastLoginAt *time.Time
+	var loginCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT MIN(login_at), MAX(login_at), COUNT(*)
+		FROM employee_login_events
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&firstLoginAt, &lastLoginAt, &loginCount); err != nil {
+		return fmt.Errorf("query employee login metrics: %w", err)
+	}
+
+	demoItems, err := s.ListTenantTrialDemoRecordings(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("list tenant trial demo recordings: %w", err)
+	}
+	demoRecordingIDs := make([]int64, 0, len(demoItems))
+	roleByRecordingID := make(map[int64]string, len(demoItems))
+	for _, item := range demoItems {
+		demoRecordingIDs = append(demoRecordingIDs, item.RecordingID)
+		roleByRecordingID[item.RecordingID] = strings.ToLower(strings.TrimSpace(item.RoleCode))
+	}
+
+	var doctorDemoViewedAt, consultantDemoViewedAt *time.Time
+	if len(demoRecordingIDs) > 0 {
+		rows, err := s.pool.Query(ctx, `
+			SELECT recording_id, MIN(created_at)
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			  AND recording_id = ANY($2)
+			GROUP BY recording_id
+		`, tenantID, demoRecordingIDs)
+		if err != nil {
+			return fmt.Errorf("query trial demo viewed tasks: %w", err)
+		}
+		for rows.Next() {
+			var recordingID int64
+			var occurredAt *time.Time
+			if err := rows.Scan(&recordingID, &occurredAt); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan trial demo viewed task: %w", err)
+			}
+			switch roleByRecordingID[recordingID] {
+			case "doctor":
+				if doctorDemoViewedAt == nil || (occurredAt != nil && occurredAt.Before(*doctorDemoViewedAt)) {
+					doctorDemoViewedAt = occurredAt
+				}
+			case "consultant":
+				if consultantDemoViewedAt == nil || (occurredAt != nil && occurredAt.Before(*consultantDemoViewedAt)) {
+					consultantDemoViewedAt = occurredAt
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate trial demo viewed tasks: %w", err)
+		}
+		rows.Close()
+	}
+
+	var firstUploadAt, lastUploadAt *time.Time
+	var uploadCount, analysisCount, doctorUploadCount, consultantUploadCount, generatedCustomerCount, generatedTaskCount int
+	var generatedContentCount, wechatContentCount, xiaohongshuContentCount, videoScriptContentCount int
+	recordingsHasDeletedAt, err := s.tableHasColumn(ctx, "recordings", "deleted_at")
+	if err != nil {
+		return err
+	}
+	recordingsDeletedCondition := "TRUE"
+	if recordingsHasDeletedAt {
+		recordingsDeletedCondition = "r.deleted_at IS NULL"
+	}
+
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT
+			r.id,
+			COALESCE(r.created_at, NOW()) AS created_at,
+			lower(COALESCE(NULLIF(r.business_scope, ''), 'unknown')) AS business_scope,
+			CASE
+				WHEN EXISTS (
+					SELECT 1
+					FROM tenant_trial_demo_recordings d
+					WHERE d.tenant_id = r.tenant_id
+					  AND d.recording_id = r.id
+				) THEN true
+				ELSE false
+			END AS is_demo,
+			CASE
+				WHEN COALESCE(NULLIF(r.analysis_status, ''), '') IN ('completed', 'done', 'success') THEN true
+				ELSE false
+			END AS analysis_completed,
+			CASE WHEN r.customer_id IS NOT NULL THEN 1 ELSE 0 END AS customer_generated,
+			(
+				SELECT COUNT(*)
+				FROM recording_tasks rt
+				WHERE rt.tenant_id = r.tenant_id
+				  AND rt.recording_id = r.id
+			) AS task_count
+		FROM recordings r
+		WHERE r.tenant_id = $1
+		  AND %s
+	`, recordingsDeletedCondition), tenantID)
+	if err != nil {
+		return fmt.Errorf("query trial recordings metrics: %w", err)
+	}
+	for rows.Next() {
+		var recordingID int64
+		var createdAt time.Time
+		var businessScope string
+		var isDemo bool
+		var analysisCompleted bool
+		var customerGenerated int
+		var taskCount int
+		if err := rows.Scan(&recordingID, &createdAt, &businessScope, &isDemo, &analysisCompleted, &customerGenerated, &taskCount); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan trial recording metrics: %w", err)
+		}
+		if !isDemo {
+			uploadCount++
+			if firstUploadAt == nil || createdAt.Before(*firstUploadAt) {
+				t := createdAt
+				firstUploadAt = &t
+			}
+			if lastUploadAt == nil || createdAt.After(*lastUploadAt) {
+				t := createdAt
+				lastUploadAt = &t
+			}
+			switch businessScope {
+			case "doctor":
+				doctorUploadCount++
+			case "consultant":
+				consultantUploadCount++
+			}
+			if analysisCompleted {
+				analysisCount++
+			}
+			generatedCustomerCount += customerGenerated
+			generatedTaskCount += taskCount
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate trial recordings metrics: %w", err)
+	}
+	rows.Close()
+
+	contentTypeColumnExists, err := s.tableHasColumn(ctx, "content_items", "content_type")
+	if err != nil {
+		return err
+	}
+	platformColumnExists, err := s.tableHasColumn(ctx, "content_items", "platform")
+	if err != nil {
+		return err
+	}
+	if contentTypeColumnExists || platformColumnExists {
+		contentRows, err := s.pool.Query(ctx, `
+			SELECT
+				COALESCE(NULLIF(lower(trim(content_type)), ''), lower(COALESCE(NULLIF(extra_data->>'content_type', ''), ''))) AS content_type,
+				COALESCE(NULLIF(lower(trim(platform)), ''), lower(COALESCE(NULLIF(extra_data->>'platform', ''), NULLIF(extra_data->>'target_platform', ''), ''))) AS platform
+			FROM content_items
+			WHERE tenant_id = $1
+			  AND deleted_at IS NULL
+		`, tenantID)
+		if err != nil {
+			return fmt.Errorf("query trial content metrics: %w", err)
+		}
+		for contentRows.Next() {
+			var contentType string
+			var platform string
+			if err := contentRows.Scan(&contentType, &platform); err != nil {
+				contentRows.Close()
+				return fmt.Errorf("scan trial content metrics: %w", err)
+			}
+			generatedContentCount++
+			switch normalizeTrialContentCategory(contentType, platform) {
+			case "wechat":
+				wechatContentCount++
+			case "xiaohongshu":
+				xiaohongshuContentCount++
+			case "video_script":
+				videoScriptContentCount++
+			}
+		}
+		if err := contentRows.Err(); err != nil {
+			contentRows.Close()
+			return fmt.Errorf("iterate trial content metrics: %w", err)
+		}
+		contentRows.Close()
+	}
+
+	lastActivityAt := latestTime(lastLoginAt, lastUploadAt)
+	currentStage := deriveTrialCustomerStage(loginCount, doctorDemoViewedAt, consultantDemoViewedAt, uploadCount, analysisCount, trialExpiresAt)
+	priorityLevel := deriveTrialCustomerPriority(trialExpiresAt, uploadCount, analysisCount, lastLoginAt)
+	blockingReason := deriveTrialCustomerBlockingReason(currentStage, trialExpiresAt)
+	nextActionHint := deriveTrialCustomerNextAction(currentStage, priorityLevel)
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO trial_customer_metrics (
+			tenant_id, trial_started_at, trial_expires_at, first_login_at, last_login_at, login_count,
+			doctor_demo_viewed_at, consultant_demo_viewed_at, first_upload_at, last_upload_at,
+			upload_count, analysis_count, doctor_upload_count, consultant_upload_count,
+			generated_customer_count, generated_task_count, generated_content_count, wechat_content_count, xiaohongshu_content_count, video_script_content_count, last_activity_at, current_stage,
+			priority_level, blocking_reason, next_action_hint, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10,
+			$11, $12, $13, $14,
+			$15, $16, $17, $18, $19, $20,
+			$21, $22, $23, $24, $25, NOW()
+		)
+		ON CONFLICT (tenant_id) DO UPDATE
+		SET trial_started_at = EXCLUDED.trial_started_at,
+		    trial_expires_at = EXCLUDED.trial_expires_at,
+		    first_login_at = EXCLUDED.first_login_at,
+		    last_login_at = EXCLUDED.last_login_at,
+		    login_count = EXCLUDED.login_count,
+		    doctor_demo_viewed_at = EXCLUDED.doctor_demo_viewed_at,
+		    consultant_demo_viewed_at = EXCLUDED.consultant_demo_viewed_at,
+		    first_upload_at = EXCLUDED.first_upload_at,
+		    last_upload_at = EXCLUDED.last_upload_at,
+		    upload_count = EXCLUDED.upload_count,
+		    analysis_count = EXCLUDED.analysis_count,
+		    doctor_upload_count = EXCLUDED.doctor_upload_count,
+		    consultant_upload_count = EXCLUDED.consultant_upload_count,
+		    generated_customer_count = EXCLUDED.generated_customer_count,
+		    generated_task_count = EXCLUDED.generated_task_count,
+		    generated_content_count = EXCLUDED.generated_content_count,
+		    wechat_content_count = EXCLUDED.wechat_content_count,
+		    xiaohongshu_content_count = EXCLUDED.xiaohongshu_content_count,
+		    video_script_content_count = EXCLUDED.video_script_content_count,
+		    last_activity_at = EXCLUDED.last_activity_at,
+		    current_stage = EXCLUDED.current_stage,
+		    priority_level = EXCLUDED.priority_level,
+		    blocking_reason = EXCLUDED.blocking_reason,
+		    next_action_hint = EXCLUDED.next_action_hint,
+		    updated_at = NOW()
+	`, tenantID, trialStartedAt, trialExpiresAt, firstLoginAt, lastLoginAt, loginCount, doctorDemoViewedAt, consultantDemoViewedAt, firstUploadAt, lastUploadAt, uploadCount, analysisCount, doctorUploadCount, consultantUploadCount, generatedCustomerCount, generatedTaskCount, generatedContentCount, wechatContentCount, xiaohongshuContentCount, videoScriptContentCount, lastActivityAt, currentStage, priorityLevel, blockingReason, nextActionHint)
+	if err != nil {
+		return fmt.Errorf("upsert trial customer metrics: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListRequest) (*TrialCustomerListResponse, error) {
+	conditions := []string{
+		"t.deleted_at IS NULL",
+		"lower(COALESCE(t.account_mode, 'formal')) = 'trial'",
+	}
+	args := make([]interface{}, 0, 8)
+	argIndex := 1
+	if keyword := strings.TrimSpace(req.Keyword); keyword != "" {
+		conditions = append(conditions, fmt.Sprintf("(t.name ILIKE $%d OR COALESCE(t.contact_name, '') ILIKE $%d OR COALESCE(t.contact_phone, '') ILIKE $%d)", argIndex, argIndex, argIndex))
+		args = append(args, "%"+keyword+"%")
+		argIndex++
+	}
+	if req.OwnerAdminID != nil {
+		conditions = append(conditions, fmt.Sprintf("a.sales_owner_admin_id = $%d", argIndex))
+		args = append(args, *req.OwnerAdminID)
+		argIndex++
+	}
+	if stage := strings.TrimSpace(req.Stage); stage != "" {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(m.current_stage, 'not_started') = $%d", argIndex))
+		args = append(args, stage)
+		argIndex++
+	}
+	if activationStatus := strings.TrimSpace(req.ActivationStatus); activationStatus != "" {
+		switch activationStatus {
+		case "not_activated":
+			conditions = append(conditions, "COALESCE(m.login_count, 0) = 0 AND COALESCE(m.upload_count, 0) = 0")
+		case "activated":
+			conditions = append(conditions, "(COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0)")
+		}
+	}
+	if req.HasRealRecording != nil {
+		if *req.HasRealRecording {
+			conditions = append(conditions, "COALESCE(m.upload_count, 0) > 0")
+		} else {
+			conditions = append(conditions, "COALESCE(m.upload_count, 0) = 0")
+		}
+	}
+	whereClause := strings.Join(conditions, " AND ")
+
+	offset := (req.Page - 1) * req.PageSize
+	listArgs := append(append([]interface{}{}, args...), req.PageSize, offset)
+	query := fmt.Sprintf(`
+		SELECT
+			t.id,
+			t.name,
+			COALESCE(t.code, '') AS tenant_code,
+			COALESCE(t.contact_name, '') AS contact_name,
+			COALESCE(t.contact_phone, '') AS contact_phone,
+			COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
+			COALESCE(m.current_stage, 'not_started') AS current_stage,
+			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
+			a.sales_owner_admin_id,
+			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			m.trial_started_at,
+			m.trial_expires_at,
+			m.first_login_at,
+			m.last_login_at,
+			m.first_upload_at,
+			m.last_upload_at,
+			COALESCE(m.login_count, 0),
+			COALESCE(m.analysis_count, 0),
+			COALESCE(m.upload_count, 0),
+			CASE WHEN m.doctor_demo_viewed_at IS NULL THEN false ELSE true END AS doctor_demo_viewed,
+			CASE WHEN m.consultant_demo_viewed_at IS NULL THEN false ELSE true END AS consultant_demo_viewed,
+			COALESCE(m.upload_count, 0) AS real_recording_upload_count,
+			COALESCE(m.generated_customer_count, 0),
+			COALESCE(m.generated_task_count, 0),
+			COALESCE(m.priority_level, 'normal') AS priority_level,
+			COALESCE(m.blocking_reason, '') AS blocking_reason,
+			COALESCE(m.next_action_hint, '') AS next_action_hint
+		FROM tenants t
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
+		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
+		WHERE %s
+		ORDER BY COALESCE(m.last_activity_at, m.trial_started_at, t.created_at) DESC, t.id DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+
+	loadItems := func(queryArgs []interface{}) ([]*TrialCustomerListItem, error) {
+		rows, err := s.pool.Query(ctx, query, queryArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("query trial customers: %w", err)
+		}
+		defer rows.Close()
+
+		items := make([]*TrialCustomerListItem, 0)
+		for rows.Next() {
+			item := &TrialCustomerListItem{}
+			if err := rows.Scan(
+				&item.TenantID,
+				&item.TenantName,
+				&item.TenantCode,
+				&item.ContactName,
+				&item.ContactPhone,
+				&item.AccountMode,
+				&item.CurrentStage,
+				&item.ActivationStatus,
+				&item.SalesOwnerAdminID,
+				&item.SalesOwnerName,
+				&item.TrialStartedAt,
+				&item.TrialExpiresAt,
+				&item.FirstLoginAt,
+				&item.LastLoginAt,
+				&item.FirstUploadAt,
+				&item.LastUploadAt,
+				&item.LoginCount,
+				&item.AnalysisCount,
+				&item.UploadCount,
+				&item.DoctorDemoViewed,
+				&item.ConsultantDemoViewed,
+				&item.RealRecordingUploadCount,
+				&item.GeneratedCustomerCount,
+				&item.GeneratedTaskCount,
+				&item.PriorityLevel,
+				&item.BlockingReason,
+				&item.NextActionHint,
+			); err != nil {
+				return nil, fmt.Errorf("scan trial customer list item: %w", err)
+			}
+			items = append(items, item)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate trial customers: %w", err)
+		}
+		return items, nil
+	}
+
+	items, err := loadItems(listArgs)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if item == nil || item.TenantID <= 0 {
+			continue
+		}
+		if err := s.RecomputeTrialCustomerMetricsForTenant(ctx, item.TenantID); err != nil {
+			return nil, err
+		}
+	}
+	items, err = loadItems(listArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM tenants t
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
+		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
+		WHERE %s
+	`, whereClause), args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count trial customers: %w", err)
+	}
+
+	return &TrialCustomerListResponse{
+		Items:    items,
+		Total:    total,
+		Page:     req.Page,
+		PageSize: req.PageSize,
+	}, nil
+}
+
+func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*TrialCustomerDetail, error) {
+	selected := &TrialCustomerListItem{}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			t.id,
+			t.name,
+			COALESCE(t.code, '') AS tenant_code,
+			COALESCE(t.contact_name, '') AS contact_name,
+			COALESCE(t.contact_phone, '') AS contact_phone,
+			COALESCE(NULLIF(trim(t.account_mode), ''), 'formal') AS account_mode,
+			COALESCE(m.current_stage, 'not_started') AS current_stage,
+			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
+			a.sales_owner_admin_id,
+			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			m.trial_started_at,
+			m.trial_expires_at,
+			m.first_login_at,
+			m.last_login_at,
+			m.first_upload_at,
+			m.last_upload_at,
+			COALESCE(m.login_count, 0),
+			COALESCE(m.analysis_count, 0),
+			COALESCE(m.upload_count, 0),
+			CASE WHEN m.doctor_demo_viewed_at IS NULL THEN false ELSE true END AS doctor_demo_viewed,
+			CASE WHEN m.consultant_demo_viewed_at IS NULL THEN false ELSE true END AS consultant_demo_viewed,
+			COALESCE(m.upload_count, 0) AS real_recording_upload_count,
+			COALESCE(m.generated_customer_count, 0),
+			COALESCE(m.generated_task_count, 0),
+			COALESCE(m.priority_level, 'normal') AS priority_level,
+			COALESCE(m.blocking_reason, '') AS blocking_reason,
+			COALESCE(m.next_action_hint, '') AS next_action_hint
+		FROM tenants t
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
+		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
+		WHERE t.id = $1
+		  AND t.deleted_at IS NULL
+		  AND lower(COALESCE(t.account_mode, 'formal')) = 'trial'
+	`, tenantID).Scan(
+		&selected.TenantID,
+		&selected.TenantName,
+		&selected.TenantCode,
+		&selected.ContactName,
+		&selected.ContactPhone,
+		&selected.AccountMode,
+		&selected.CurrentStage,
+		&selected.ActivationStatus,
+		&selected.SalesOwnerAdminID,
+		&selected.SalesOwnerName,
+		&selected.TrialStartedAt,
+		&selected.TrialExpiresAt,
+		&selected.FirstLoginAt,
+		&selected.LastLoginAt,
+		&selected.FirstUploadAt,
+		&selected.LastUploadAt,
+		&selected.LoginCount,
+		&selected.AnalysisCount,
+		&selected.UploadCount,
+		&selected.DoctorDemoViewed,
+		&selected.ConsultantDemoViewed,
+		&selected.RealRecordingUploadCount,
+		&selected.GeneratedCustomerCount,
+		&selected.GeneratedTaskCount,
+		&selected.PriorityLevel,
+		&selected.BlockingReason,
+		&selected.NextActionHint,
+	); err != nil {
+		return nil, fmt.Errorf("trial customer not found")
+	}
+
+	metrics := TrialCustomerMetrics{TenantID: tenantID}
+	_ = s.pool.QueryRow(ctx, `
+		SELECT
+			tenant_id, trial_started_at, trial_expires_at, first_login_at, last_login_at, login_count,
+			doctor_demo_viewed_at, consultant_demo_viewed_at, first_upload_at, last_upload_at,
+			upload_count, analysis_count, doctor_upload_count, consultant_upload_count,
+			generated_customer_count, generated_task_count, generated_content_count, wechat_content_count, xiaohongshu_content_count, video_script_content_count, last_activity_at, current_stage,
+			priority_level, blocking_reason, next_action_hint, updated_at
+		FROM trial_customer_metrics
+		WHERE tenant_id = $1
+	`, tenantID).Scan(
+		&metrics.TenantID, &metrics.TrialStartedAt, &metrics.TrialExpiresAt, &metrics.FirstLoginAt, &metrics.LastLoginAt, &metrics.LoginCount,
+		&metrics.DoctorDemoViewedAt, &metrics.ConsultantDemoViewedAt, &metrics.FirstUploadAt, &metrics.LastUploadAt,
+		&metrics.UploadCount, &metrics.AnalysisCount, &metrics.DoctorUploadCount, &metrics.ConsultantUploadCount,
+		&metrics.GeneratedCustomerCount, &metrics.GeneratedTaskCount, &metrics.GeneratedContentCount, &metrics.WechatContentCount, &metrics.XiaohongshuContentCount, &metrics.VideoScriptContentCount, &metrics.LastActivityAt, &metrics.CurrentStage,
+		&metrics.PriorityLevel, &metrics.BlockingReason, &metrics.NextActionHint, &metrics.UpdatedAt,
+	)
+	if metrics.TrialMaxRecordings > 0 {
+		metrics.TrialRemainingUsage = metrics.TrialMaxRecordings - metrics.UploadCount
+		if metrics.TrialRemainingUsage < 0 {
+			metrics.TrialRemainingUsage = 0
+		}
+	}
+
+	assignment := TrialCustomerAssignment{TenantID: tenantID}
+	_ = s.pool.QueryRow(ctx, `
+		SELECT tenant_id, sales_owner_admin_id, COALESCE(sales_owner_name_snapshot, ''), assigned_at, assigned_by, updated_at
+		FROM trial_customer_assignments
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&assignment.TenantID, &assignment.SalesOwnerAdminID, &assignment.SalesOwnerNameSnapshot, &assignment.AssignedAt, &assignment.AssignedBy, &assignment.UpdatedAt)
+
+	roleUsage := []TrialCustomerRoleUsage{
+		{
+			RoleCode:        "doctor",
+			DemoViewed:      metrics.DoctorDemoViewedAt != nil,
+			RealUploadCount: metrics.DoctorUploadCount,
+			InterestLevel:   deriveRoleInterest(metrics.DoctorDemoViewedAt != nil, metrics.DoctorUploadCount),
+			StatusSummary:   deriveRoleStatusSummary("doctor", metrics.DoctorDemoViewedAt != nil, metrics.DoctorUploadCount),
+		},
+		{
+			RoleCode:        "consultant",
+			DemoViewed:      metrics.ConsultantDemoViewedAt != nil,
+			RealUploadCount: metrics.ConsultantUploadCount,
+			InterestLevel:   deriveRoleInterest(metrics.ConsultantDemoViewedAt != nil, metrics.ConsultantUploadCount),
+			StatusSummary:   deriveRoleStatusSummary("consultant", metrics.ConsultantDemoViewedAt != nil, metrics.ConsultantUploadCount),
+		},
+	}
+
+	milestones := buildTrialCustomerMilestones(metrics)
+	followUps, err := s.ListTrialCustomerFollowUps(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	recommendation := TrialCustomerAIRecommendation{
+		Summary:         deriveTrialCustomerSummary(metrics.CurrentStage, metrics.AnalysisCount, metrics.UploadCount),
+		BlockingReason:  metrics.BlockingReason,
+		RecommendedStep: metrics.NextActionHint,
+		RecommendedTalk: deriveTrialCustomerTalkTrack(metrics.CurrentStage),
+		RecommendedWhen: deriveTrialCustomerWhen(metrics.PriorityLevel),
+	}
+
+	return &TrialCustomerDetail{
+		Item:             *selected,
+		Metrics:          metrics,
+		Assignment:       assignment,
+		Milestones:       milestones,
+		RoleUsage:        roleUsage,
+		FollowUps:        followUps,
+		AIRecommendation: recommendation,
+	}, nil
+}
+
+func (s *Store) UpsertTrialCustomerAssignment(ctx context.Context, tenantID int64, salesOwnerAdminID, assignedBy *int64) (*TrialCustomerAssignment, error) {
+	var snapshot string
+	if salesOwnerAdminID != nil && *salesOwnerAdminID > 0 {
+		_ = s.pool.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(name, ''), username, '')
+			FROM operations_admins
+			WHERE id = $1
+			  AND deleted_at IS NULL
+		`, *salesOwnerAdminID).Scan(&snapshot)
+	}
+	item := &TrialCustomerAssignment{TenantID: tenantID}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO trial_customer_assignments (
+			tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, assigned_at, assigned_by, updated_at
+		)
+		VALUES ($1, $2, $3, NOW(), $4, NOW())
+		ON CONFLICT (tenant_id) DO UPDATE
+		SET sales_owner_admin_id = EXCLUDED.sales_owner_admin_id,
+		    sales_owner_name_snapshot = EXCLUDED.sales_owner_name_snapshot,
+		    assigned_at = NOW(),
+		    assigned_by = EXCLUDED.assigned_by,
+		    updated_at = NOW()
+		RETURNING tenant_id, sales_owner_admin_id, sales_owner_name_snapshot, assigned_at, assigned_by, updated_at
+	`, tenantID, salesOwnerAdminID, snapshot, assignedBy).Scan(
+		&item.TenantID,
+		&item.SalesOwnerAdminID,
+		&item.SalesOwnerNameSnapshot,
+		&item.AssignedAt,
+		&item.AssignedBy,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("upsert trial customer assignment: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) CreateTrialCustomerFollowUp(ctx context.Context, tenantID int64, req TrialCustomerFollowUpCreateRequest, createdBy *int64) (*TrialCustomerFollowUp, error) {
+	var nextFollowUpAt *time.Time
+	if req.NextFollowUpAt != nil && strings.TrimSpace(*req.NextFollowUpAt) != "" {
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.NextFollowUpAt)); err == nil {
+			nextFollowUpAt = &parsed
+		}
+	}
+	var ownerAdminID *int64
+	_ = s.pool.QueryRow(ctx, `
+		SELECT sales_owner_admin_id
+		FROM trial_customer_assignments
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&ownerAdminID)
+	item := &TrialCustomerFollowUp{}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO trial_customer_follow_ups (
+			tenant_id, sales_owner_admin_id, follow_up_type, summary, result, next_follow_up_at, created_at, created_by
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
+		RETURNING id, tenant_id, sales_owner_admin_id, follow_up_type, summary, result, next_follow_up_at, created_at, created_by
+	`, tenantID, ownerAdminID, strings.TrimSpace(req.FollowUpType), strings.TrimSpace(req.Summary), strings.TrimSpace(req.Result), nextFollowUpAt, createdBy).Scan(
+		&item.ID, &item.TenantID, &item.SalesOwnerAdminID, &item.FollowUpType, &item.Summary, &item.Result, &item.NextFollowUpAt, &item.CreatedAt, &item.CreatedBy,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create trial customer follow up: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ListTrialCustomerFollowUps(ctx context.Context, tenantID int64) ([]TrialCustomerFollowUp, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, sales_owner_admin_id, follow_up_type, summary, result, next_follow_up_at, created_at, created_by
+		FROM trial_customer_follow_ups
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query trial customer follow ups: %w", err)
+	}
+	defer rows.Close()
+	items := make([]TrialCustomerFollowUp, 0)
+	for rows.Next() {
+		var item TrialCustomerFollowUp
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.SalesOwnerAdminID, &item.FollowUpType, &item.Summary, &item.Result, &item.NextFollowUpAt, &item.CreatedAt, &item.CreatedBy); err != nil {
+			return nil, fmt.Errorf("scan trial customer follow up: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trial customer follow ups: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetTrialCustomerFunnel(ctx context.Context) (*TrialCustomerFunnelResponse, error) {
+	stages := []TrialCustomerFunnelStage{
+		{Code: "trial_opened", Label: "已开通试用"},
+		{Code: "activated", Label: "已激活"},
+		{Code: "viewed_demo", Label: "已查看示范案例"},
+		{Code: "uploaded_real", Label: "已上传真实录音"},
+		{Code: "completed_analysis", Label: "已完成首条分析"},
+		{Code: "focused_followup", Label: "已进入转化跟进"},
+		{Code: "converted", Label: "已转正式"},
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenants WHERE deleted_at IS NULL AND lower(COALESCE(account_mode, 'formal')) = 'trial'`).Scan(&stages[0].Count); err != nil {
+		return nil, fmt.Errorf("count trial opened: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM trial_customer_metrics WHERE COALESCE(login_count, 0) > 0 OR COALESCE(upload_count, 0) > 0`).Scan(&stages[1].Count); err != nil {
+		return nil, fmt.Errorf("count activated: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM trial_customer_metrics WHERE doctor_demo_viewed_at IS NOT NULL OR consultant_demo_viewed_at IS NOT NULL`).Scan(&stages[2].Count); err != nil {
+		return nil, fmt.Errorf("count viewed demo: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM trial_customer_metrics WHERE upload_count > 0`).Scan(&stages[3].Count); err != nil {
+		return nil, fmt.Errorf("count uploaded real: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM trial_customer_metrics WHERE analysis_count > 0`).Scan(&stages[4].Count); err != nil {
+		return nil, fmt.Errorf("count completed analysis: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM trial_customer_metrics WHERE current_stage = 'focused_followup'`).Scan(&stages[5].Count); err != nil {
+		return nil, fmt.Errorf("count focused followup: %w", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenants WHERE deleted_at IS NULL AND lower(COALESCE(account_mode, 'formal')) = 'formal' AND id IN (SELECT tenant_id FROM trial_customer_metrics)`).Scan(&stages[6].Count); err != nil {
+		return nil, fmt.Errorf("count converted: %w", err)
+	}
+
+	ownerRows, err := s.pool.Query(ctx, `
+		SELECT
+			a.sales_owner_admin_id,
+			COALESCE(a.sales_owner_name_snapshot, '未分配') AS owner_name,
+			COUNT(*) AS trial_count,
+			COUNT(*) FILTER (WHERE COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) AS activated_count,
+			COUNT(*) FILTER (WHERE COALESCE(m.upload_count, 0) > 0) AS uploaded_count,
+			COUNT(*) FILTER (WHERE lower(COALESCE(t.account_mode, 'formal')) = 'formal') AS converted_count
+		FROM tenants t
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
+		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
+		WHERE t.deleted_at IS NULL
+		  AND t.id IN (SELECT tenant_id FROM trial_customer_metrics)
+		GROUP BY a.sales_owner_admin_id, COALESCE(a.sales_owner_name_snapshot, '未分配')
+		ORDER BY trial_count DESC, owner_name ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query trial funnel owner breakdown: %w", err)
+	}
+	defer ownerRows.Close()
+	ownerBreakdown := make([]TrialCustomerOwnerFunnel, 0)
+	for ownerRows.Next() {
+		var item TrialCustomerOwnerFunnel
+		if err := ownerRows.Scan(&item.OwnerAdminID, &item.OwnerName, &item.TrialCount, &item.ActivatedCount, &item.UploadedCount, &item.ConvertedCount); err != nil {
+			return nil, fmt.Errorf("scan trial funnel owner breakdown: %w", err)
+		}
+		ownerBreakdown = append(ownerBreakdown, item)
+	}
+	if err := ownerRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trial funnel owner breakdown: %w", err)
+	}
+
+	blockingRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(blocking_reason, ''), '未识别阻塞') AS blocking_reason, COUNT(*)
+		FROM trial_customer_metrics
+		GROUP BY COALESCE(NULLIF(blocking_reason, ''), '未识别阻塞')
+		ORDER BY COUNT(*) DESC, blocking_reason ASC
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query trial funnel blocking reasons: %w", err)
+	}
+	defer blockingRows.Close()
+	blockingReasons := make([]TrialCustomerFunnelStage, 0)
+	for blockingRows.Next() {
+		var item TrialCustomerFunnelStage
+		item.Code = "blocking_reason"
+		if err := blockingRows.Scan(&item.Label, &item.Count); err != nil {
+			return nil, fmt.Errorf("scan trial funnel blocking reason: %w", err)
+		}
+		blockingReasons = append(blockingReasons, item)
+	}
+	if err := blockingRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trial funnel blocking reasons: %w", err)
+	}
+
+	return &TrialCustomerFunnelResponse{
+		Stages:          stages,
+		OwnerBreakdown:  ownerBreakdown,
+		BlockingReasons: blockingReasons,
+	}, nil
+}
+
+func latestTime(values ...*time.Time) *time.Time {
+	var latest *time.Time
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if latest == nil || value.After(*latest) {
+			t := *value
+			latest = &t
+		}
+	}
+	return latest
+}
+
+func normalizeTrialContentCategory(contentType, platform string) string {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	platform = strings.ToLower(strings.TrimSpace(platform))
+
+	switch {
+	case platform == "wechat":
+		return "wechat"
+	case platform == "xiaohongshu":
+		return "xiaohongshu"
+	case platform == "douyin":
+		return "video_script"
+	}
+
+	switch contentType {
+	case "article", "wechat_article", "graphic_article", "公众号文章":
+		return "wechat"
+	case "graphic", "xhs_note", "graphic_note", "note", "xiaohongshu_note", "小红书", "小红书图文":
+		return "xiaohongshu"
+	case "video_script", "script", "short_video_script", "douyin_script", "视频脚本":
+		return "video_script"
+	default:
+		return ""
+	}
+}
+
+func deriveTrialCustomerStage(loginCount int, doctorDemoViewedAt, consultantDemoViewedAt *time.Time, uploadCount, analysisCount int, trialExpiresAt *time.Time) string {
+	now := time.Now()
+	if trialExpiresAt != nil && trialExpiresAt.Before(now) {
+		return "expired_unconverted"
+	}
+	if analysisCount > 0 {
+		return "completed_analysis"
+	}
+	if uploadCount > 0 {
+		return "uploaded_real_recording"
+	}
+	if doctorDemoViewedAt != nil || consultantDemoViewedAt != nil {
+		return "viewed_demo"
+	}
+	if loginCount > 0 {
+		return "logged_in"
+	}
+	return "not_started"
+}
+
+func deriveTrialCustomerPriority(trialExpiresAt *time.Time, uploadCount, analysisCount int, lastLoginAt *time.Time) string {
+	now := time.Now()
+	if trialExpiresAt != nil {
+		if trialExpiresAt.Before(now.Add(72 * time.Hour)) {
+			return "high"
+		}
+	}
+	if uploadCount > 0 || analysisCount > 0 {
+		return "high"
+	}
+	if lastLoginAt != nil {
+		return "medium"
+	}
+	return "normal"
+}
+
+func deriveTrialCustomerBlockingReason(currentStage string, trialExpiresAt *time.Time) string {
+	switch currentStage {
+	case "not_started":
+		return "开通后未登录"
+	case "logged_in":
+		return "已登录但未查看示范案例"
+	case "viewed_demo":
+		return "已看示范但未上传真实录音"
+	case "uploaded_real_recording":
+		return "已上传真实录音但尚未完成分析"
+	case "completed_analysis":
+		return "已出分析但尚未进入重点跟进"
+	case "expired_unconverted":
+		return "试用已到期仍未转化"
+	}
+	if trialExpiresAt != nil && trialExpiresAt.Before(time.Now()) {
+		return "试用已到期仍未转化"
+	}
+	return ""
+}
+
+func deriveTrialCustomerNextAction(currentStage, priority string) string {
+	switch currentStage {
+	case "not_started":
+		return "建议销售发起首次唤醒沟通，推动客户尽快登录试用后台"
+	case "logged_in":
+		return "建议引导客户先看医生或咨询师示范案例，快速建立价值认知"
+	case "viewed_demo":
+		return "建议推动客户上传一条真实录音，完成从示范到验证的转化"
+	case "uploaded_real_recording":
+		return "建议盯分析结果生成，并在结果产出后第一时间发起复盘"
+	case "completed_analysis":
+		return "建议围绕真实录音结果约一次短复盘，推动转正式讨论"
+	case "expired_unconverted":
+		return "建议复盘流失原因，判断是否还有二次激活价值"
+	}
+	if priority == "high" {
+		return "建议优先跟进，避免试用窗口流失"
+	}
+	return "建议继续观察并安排下一次跟进"
+}
+
+func deriveRoleInterest(demoViewed bool, uploadCount int) string {
+	if uploadCount > 0 {
+		return "high"
+	}
+	if demoViewed {
+		return "medium"
+	}
+	return "low"
+}
+
+func deriveRoleStatusSummary(roleCode string, demoViewed bool, uploadCount int) string {
+	roleLabel := "医生"
+	if roleCode == "consultant" {
+		roleLabel = "咨询师"
+	}
+	switch {
+	case uploadCount > 0:
+		return fmt.Sprintf("%s已上传真实录音", roleLabel)
+	case demoViewed:
+		return fmt.Sprintf("%s已看示范案例，待上传真实录音", roleLabel)
+	default:
+		return fmt.Sprintf("%s尚未启动", roleLabel)
+	}
+}
+
+func buildTrialCustomerMilestones(metrics TrialCustomerMetrics) []TrialCustomerMilestone {
+	return []TrialCustomerMilestone{
+		{Code: "trial_started", Label: "已开通试用", OccurredAt: metrics.TrialStartedAt},
+		{Code: "first_login", Label: "首次登录", OccurredAt: metrics.FirstLoginAt},
+		{Code: "demo_viewed", Label: "首次查看示范案例", OccurredAt: earliestTime(metrics.DoctorDemoViewedAt, metrics.ConsultantDemoViewedAt)},
+		{Code: "first_upload", Label: "首次上传真实录音", OccurredAt: metrics.FirstUploadAt},
+		{Code: "first_analysis", Label: "首次完成分析", OccurredAt: metrics.LastUploadAt},
+	}
+}
+
+func earliestTime(values ...*time.Time) *time.Time {
+	var earliest *time.Time
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if earliest == nil || value.Before(*earliest) {
+			t := *value
+			earliest = &t
+		}
+	}
+	return earliest
+}
+
+func deriveTrialCustomerSummary(stage string, analysisCount, uploadCount int) string {
+	switch stage {
+	case "not_started":
+		return "客户已开通试用，但尚未发生有效使用。"
+	case "logged_in":
+		return "客户已登录，已跨过最低激活门槛，但仍未进入价值体验。"
+	case "viewed_demo":
+		return "客户已完成示范体验，下一步关键是推动真实录音验证。"
+	case "uploaded_real_recording":
+		return "客户已经开始用真实录音验证产品，转化意愿明显增强。"
+	case "completed_analysis":
+		return "客户已拿到真实结果，当前重点是把分析结果转成转化沟通。"
+	case "expired_unconverted":
+		return "客户试用已到期，当前应复盘流失原因。"
+	}
+	if analysisCount > 0 {
+		return "客户已完成分析体验。"
+	}
+	if uploadCount > 0 {
+		return "客户已上传真实录音。"
+	}
+	return "客户仍处于早期试用阶段。"
+}
+
+func deriveTrialCustomerTalkTrack(stage string) string {
+	switch stage {
+	case "viewed_demo":
+		return "你们已经看过示范案例，下一步最有价值的是用一条自己的真实录音验证结果是否贴合你们场景。"
+	case "uploaded_real_recording":
+		return "你们已经进入真实验证阶段，建议下一步直接看分析结果怎样落到院内管理动作上。"
+	case "completed_analysis":
+		return "你们已经拿到真实分析结果，建议我们直接围绕任务、客户建档和管理价值做一次短复盘。"
+	default:
+		return "建议先从最关键的一步开始，把试用推进到下一阶段。"
+	}
+}
+
+func deriveTrialCustomerWhen(priority string) string {
+	switch priority {
+	case "high":
+		return "建议24小时内跟进"
+	case "medium":
+		return "建议48小时内跟进"
+	default:
+		return "建议本周内跟进"
+	}
 }
 
 func (s *Store) syncTrialDemoAssetToExistingRecording(ctx context.Context, existing TenantTrialDemoRecording, asset trialDemoAssetSource) error {
