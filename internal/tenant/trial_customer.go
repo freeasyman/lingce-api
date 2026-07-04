@@ -80,6 +80,8 @@ type TrialCustomerListItem struct {
 	PriorityLevel            string     `json:"priority_level,omitempty"`
 	BlockingReason           string     `json:"blocking_reason,omitempty"`
 	NextActionHint           string     `json:"next_action_hint,omitempty"`
+	LatestFollowUpSummary    string     `json:"latest_follow_up_summary,omitempty"`
+	LatestFollowUpAt         *time.Time `json:"latest_follow_up_at,omitempty"`
 }
 
 type TrialCustomerDetail struct {

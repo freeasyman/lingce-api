@@ -1673,7 +1673,21 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 			COALESCE(m.generated_task_count, 0),
 			COALESCE(m.priority_level, 'normal') AS priority_level,
 			COALESCE(m.blocking_reason, '') AS blocking_reason,
-			COALESCE(m.next_action_hint, '') AS next_action_hint
+			COALESCE(m.next_action_hint, '') AS next_action_hint,
+			COALESCE((
+				SELECT tf.summary
+				FROM trial_customer_follow_ups tf
+				WHERE tf.tenant_id = t.id
+				ORDER BY tf.created_at DESC, tf.id DESC
+				LIMIT 1
+			), '') AS latest_follow_up_summary,
+			(
+				SELECT tf.created_at
+				FROM trial_customer_follow_ups tf
+				WHERE tf.tenant_id = t.id
+				ORDER BY tf.created_at DESC, tf.id DESC
+				LIMIT 1
+			) AS latest_follow_up_at
 		FROM tenants t
 		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
@@ -1720,6 +1734,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				&item.PriorityLevel,
 				&item.BlockingReason,
 				&item.NextActionHint,
+				&item.LatestFollowUpSummary,
+				&item.LatestFollowUpAt,
 			); err != nil {
 				return nil, fmt.Errorf("scan trial customer list item: %w", err)
 			}
