@@ -41,6 +41,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Menu resource routes
 	mux.Handle("GET /api/v1/menus", authMw(http.HandlerFunc(h.ListMenus)))
 	mux.Handle("GET /api/v1/menus/effective", authMw(http.HandlerFunc(h.GetEffectiveMenusByScope)))
+	mux.Handle("POST /api/v1/menus/sync", authMw(http.HandlerFunc(h.SyncMenusByScope)))
 	mux.Handle("POST /api/v1/menus", authMw(http.HandlerFunc(h.CreateMenu)))
 	mux.Handle("GET /api/v1/menus/{id}", authMw(http.HandlerFunc(h.GetMenu)))
 	mux.Handle("PUT /api/v1/menus/{id}", authMw(http.HandlerFunc(h.UpdateMenu)))
@@ -170,6 +171,14 @@ func (h *Handler) CreateMenu(w http.ResponseWriter, r *http.Request) {
 	h.CreateOperationsMenu(w, r)
 }
 
+func (h *Handler) SyncMenusByScope(w http.ResponseWriter, r *http.Request) {
+	if h.roleScope(r) == "institution" {
+		httputil.WriteBadRequest(w, "institution scope sync is not supported")
+		return
+	}
+	h.SyncOperationsMenus(w, r)
+}
+
 func (h *Handler) GetMenu(w http.ResponseWriter, r *http.Request) {
 	if h.roleScope(r) == "institution" {
 		h.GetInstitutionMenu(w, r)
@@ -276,6 +285,28 @@ func (h *Handler) GetCurrentAdminEffectiveMenus(w http.ResponseWriter, r *http.R
 		return
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) SyncOperationsMenus(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	var req SyncOperationsMenusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if err := h.service.SyncOperationsMenus(r.Context(), req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, map[string]any{
+		"count": len(req.Items),
+	})
 }
 
 // Operations Role handlers

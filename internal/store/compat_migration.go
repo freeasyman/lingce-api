@@ -1567,6 +1567,9 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := normalizeOperationsMenus(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration normalize operations menus: %w", err)
 	}
+	if err := ensureOperationsNavigationMenus(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration ensure operations navigation menus: %w", err)
+	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
 	return nil
@@ -1701,6 +1704,12 @@ func normalizeOperationsMenus(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit operations menu normalization: %w", err)
 	}
+	return nil
+}
+
+func ensureOperationsNavigationMenus(ctx context.Context, pool *pgxpool.Pool) error {
+	_ = ctx
+	_ = pool
 	return nil
 }
 

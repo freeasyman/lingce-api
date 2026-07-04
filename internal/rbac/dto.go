@@ -156,6 +156,17 @@ type AssignMenusRequest struct {
 	MenuIDs []int64 `json:"menu_ids"`
 }
 
+type SyncOperationsMenusRequest struct {
+	Items []SyncOperationsMenuItem `json:"items"`
+}
+
+type SyncOperationsMenuItem struct {
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	SortOrder int    `json:"sort_order"`
+}
+
 // Institution RBAC DTOs
 
 // InstitutionRoleListRequest represents a request to list institution roles

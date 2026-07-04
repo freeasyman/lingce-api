@@ -256,6 +256,24 @@ func (s *Service) UpdateMenuSort(ctx context.Context, req MenuSortRequest) error
 	return s.store.UpdateMenuSort(ctx, req.Items)
 }
 
+func (s *Service) SyncOperationsMenus(ctx context.Context, req SyncOperationsMenusRequest) error {
+	if len(req.Items) == 0 {
+		return fmt.Errorf("items is required")
+	}
+	for _, item := range req.Items {
+		if item.Code == "" {
+			return fmt.Errorf("menu code is required")
+		}
+		if item.Name == "" {
+			return fmt.Errorf("menu name is required")
+		}
+		if item.Path == "" {
+			return fmt.Errorf("menu path is required")
+		}
+	}
+	return s.store.SyncOperationsMenus(ctx, req.Items)
+}
+
 // GetRoleMenus retrieves menus for a role
 func (s *Service) GetRoleMenus(ctx context.Context, roleID int64) ([]*MenuResponse, error) {
 	menus, err := s.store.GetRoleMenus(ctx, roleID)

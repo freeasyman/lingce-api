@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -448,6 +449,189 @@ func (s *Store) UpdateMenuSort(ctx context.Context, items []MenuSortItem) error 
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (s *Store) SyncOperationsMenus(ctx context.Context, items []SyncOperationsMenuItem) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	paths := make([]string, 0, len(items))
+	canonicalByPath := make(map[string]int64, len(items))
+
+	type normalizedItem struct {
+		Code      string
+		Name      string
+		Path      string
+		SortOrder int
+	}
+	normalizedItems := make([]normalizedItem, 0, len(items))
+
+	for _, item := range items {
+		path := normalizeOpsMenuPath(item.Path)
+		if path == "" || path == "/" {
+			continue
+		}
+		paths = append(paths, path)
+		normalizedItems = append(normalizedItems, normalizedItem{
+			Code:      item.Code,
+			Name:      item.Name,
+			Path:      path,
+			SortOrder: item.SortOrder,
+		})
+	}
+
+	for _, item := range normalizedItems {
+		var canonicalID int64
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM operations_menus
+			WHERE deleted_at IS NULL
+			  AND (path = $1 OR code = $2)
+			ORDER BY CASE WHEN path = $1 THEN 0 ELSE 1 END, id
+			LIMIT 1
+		`, item.Path, item.Code).Scan(&canonicalID)
+		if err != nil {
+			query := `
+				INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
+				VALUES ($1, $2, $3, NULL, $4, TRUE, NOW(), NOW())
+				RETURNING id
+			`
+			if scanErr := tx.QueryRow(ctx, query, item.Name, item.Code, item.Path, item.SortOrder).Scan(&canonicalID); scanErr != nil {
+				return fmt.Errorf("failed to insert operations menu %s: %w", item.Path, scanErr)
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				UPDATE operations_menus
+				SET code = code || '__legacy__' || id,
+				    updated_at = NOW()
+				WHERE deleted_at IS NULL
+				  AND path = $1
+				  AND id <> $2
+			`, item.Path, canonicalID); err != nil {
+				return fmt.Errorf("failed to release duplicate path conflict for %s: %w", item.Path, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE operations_menus
+				SET code = code || '__legacy__' || id,
+				    updated_at = NOW()
+				WHERE code = $1
+				  AND id <> $2
+			`, item.Code, canonicalID); err != nil {
+				return fmt.Errorf("failed to release legacy code conflict for %s: %w", item.Code, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE operations_menus
+				SET name = $2,
+				    code = $3,
+				    path = $4,
+				    parent_id = NULL,
+				    sort_order = $5,
+				    is_active = TRUE,
+				    deleted_at = NULL,
+				    updated_at = NOW()
+				WHERE id = $1
+			`, canonicalID, item.Name, item.Code, item.Path, item.SortOrder); err != nil {
+				return fmt.Errorf("failed to update operations menu %s: %w", item.Path, err)
+			}
+		}
+		canonicalByPath[item.Path] = canonicalID
+	}
+
+	for path, canonicalID := range canonicalByPath {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO operations_role_menus (role_id, menu_id, created_at)
+			SELECT DISTINCT rm.role_id, $2::bigint, NOW()
+			FROM operations_role_menus rm
+			JOIN operations_menus m ON m.id = rm.menu_id
+			WHERE m.path = $1
+			  AND m.id <> $2::bigint
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM operations_role_menus existing
+				WHERE existing.role_id = rm.role_id
+				  AND existing.menu_id = $2::bigint
+			  )
+		`, path, canonicalID); err != nil {
+			return fmt.Errorf("failed to migrate role menus for path %s: %w", path, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM operations_role_menus rm
+		USING operations_menus m
+		WHERE rm.menu_id = m.id
+		  AND (
+			COALESCE(m.path, '') = ''
+			OR NOT (m.path = ANY($1))
+			OR m.id <> (
+				SELECT c.id
+				FROM operations_menus c
+				WHERE c.deleted_at IS NULL
+				  AND c.path = m.path
+				ORDER BY c.id
+				LIMIT 1
+			)
+		  )
+	`, paths); err != nil {
+		return fmt.Errorf("failed to cleanup operations role menus: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO operations_role_menus (role_id, menu_id, created_at)
+		SELECT r.id, m.id, NOW()
+		FROM operations_roles r
+		JOIN operations_menus m ON m.deleted_at IS NULL AND m.path = ANY($1)
+		WHERE r.deleted_at IS NULL
+		  AND r.code = 'ops_super_admin'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM operations_role_menus existing
+			WHERE existing.role_id = r.id
+			  AND existing.menu_id = m.id
+		  )
+	`, paths); err != nil {
+		return fmt.Errorf("failed to ensure super admin menu access: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE operations_menus m
+		SET deleted_at = COALESCE(m.deleted_at, NOW()),
+		    updated_at = NOW()
+		WHERE m.deleted_at IS NULL
+		  AND (
+			COALESCE(m.path, '') = ''
+			OR NOT (m.path = ANY($1))
+			OR m.id <> (
+				SELECT c.id
+				FROM operations_menus c
+				WHERE c.deleted_at IS NULL
+				  AND c.path = m.path
+				ORDER BY c.id
+				LIMIT 1
+			)
+		  )
+	`, paths); err != nil {
+		return fmt.Errorf("failed to cleanup operations menus: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+func normalizeOpsMenuPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	if trimmed != "/" && strings.HasSuffix(trimmed, "/") {
+		trimmed = strings.TrimSuffix(trimmed, "/")
+	}
+	return trimmed
 }
 
 // GetRoleMenus retrieves menus for a role
