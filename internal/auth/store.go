@@ -225,6 +225,23 @@ func (s *Store) ListEmployeeTenantOptionsByLoginID(ctx context.Context, loginID 
 	return items, nil
 }
 
+func (s *Store) RecordEmployeeLoginEvent(ctx context.Context, tenantID, employeeID int64, loginSource, ip, userAgent string) error {
+	if tenantID <= 0 || employeeID <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(loginSource) == "" {
+		loginSource = "institution_web"
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO employee_login_events (tenant_id, employee_id, login_at, login_source, ip, user_agent, created_at)
+		VALUES ($1, $2, NOW(), $3, $4, $5, NOW())
+	`, tenantID, employeeID, loginSource, strings.TrimSpace(ip), strings.TrimSpace(userAgent))
+	if err != nil {
+		return fmt.Errorf("failed to record employee login event: %w", err)
+	}
+	return nil
+}
+
 // GetEmployeeByPhone retrieves an employee by phone
 func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee, error) {
 	query := `

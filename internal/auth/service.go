@@ -172,6 +172,10 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 
 	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
 
+	if err := s.store.RecordEmployeeLoginEvent(ctx, employee.TenantID, employee.ID, "institution_web", "", ""); err != nil {
+		return nil, fmt.Errorf("failed to persist login event: %w", err)
+	}
+
 	return &LoginResponse{
 		Token:       token,
 		AccessToken: token,
@@ -258,6 +262,10 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 
 	if !s.verifyPassword(password, employee.PasswordHash) {
 		return nil, newUnauthorizedError("INVALID_CREDENTIALS", "invalid credentials")
+	}
+
+	if err := s.store.RecordEmployeeLoginEvent(ctx, employee.TenantID, employee.ID, "mobile", "", ""); err != nil {
+		return nil, fmt.Errorf("failed to persist login event: %w", err)
 	}
 
 	token, expiresAt, err := auth.GenerateToken(
