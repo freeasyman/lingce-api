@@ -1564,8 +1564,143 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedTenantProductCatalog(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed tenant product catalog: %w", err)
 	}
+	if err := normalizeOperationsMenus(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration normalize operations menus: %w", err)
+	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
+	return nil
+}
+
+func normalizeOperationsMenus(ctx context.Context, pool *pgxpool.Pool) error {
+	type menuNormalization struct {
+		path        string
+		canonicalID int64
+		legacyIDs   []int64
+	}
+
+	targets := []menuNormalization{
+		{path: "/content/library", canonicalID: 125},
+		{path: "/content/topics", canonicalID: 126},
+		{path: "/customers", canonicalID: 50},
+		{path: "/llm/cost", canonicalID: 35},
+		{path: "/llm/models", canonicalID: 33},
+		{path: "/llm/records", canonicalID: 34},
+		{path: "/recordings", canonicalID: 46, legacyIDs: []int64{150}},
+		{path: "/recordings/dashboard", canonicalID: 141, legacyIDs: []int64{151}},
+		{path: "/recordings/stats", canonicalID: 47, legacyIDs: []int64{152}},
+		{path: "/recordings/team-ability", canonicalID: 142, legacyIDs: []int64{153}},
+		{path: "/subscription-plans", canonicalID: 144},
+		{path: "/tenants", canonicalID: 2},
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin operations menu normalization tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for _, target := range targets {
+		var canonicalExists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM operations_menus
+				WHERE id = $1
+				  AND deleted_at IS NULL
+				  AND path = $2
+			)
+		`, target.canonicalID, target.path).Scan(&canonicalExists); err != nil {
+			return fmt.Errorf("check canonical menu %s(%d): %w", target.path, target.canonicalID, err)
+		}
+		if !canonicalExists {
+			slog.Warn("skip operations menu normalization because canonical menu is missing", "path", target.path, "canonical_id", target.canonicalID)
+			continue
+		}
+
+		legacyIDs := target.legacyIDs
+		if len(legacyIDs) == 0 {
+			rows, err := tx.Query(ctx, `
+				SELECT id
+				FROM operations_menus
+				WHERE deleted_at IS NULL
+				  AND path = $1
+				  AND id <> $2
+				ORDER BY id
+			`, target.path, target.canonicalID)
+			if err != nil {
+				return fmt.Errorf("list duplicate menus for %s: %w", target.path, err)
+			}
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return fmt.Errorf("scan duplicate menu for %s: %w", target.path, err)
+				}
+				legacyIDs = append(legacyIDs, id)
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return fmt.Errorf("iterate duplicate menus for %s: %w", target.path, err)
+			}
+			rows.Close()
+		}
+
+		for _, legacyID := range legacyIDs {
+			if legacyID == target.canonicalID {
+				continue
+			}
+
+			var legacyExists bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					FROM operations_menus
+					WHERE id = $1
+					  AND deleted_at IS NULL
+					  AND path = $2
+				)
+			`, legacyID, target.path).Scan(&legacyExists); err != nil {
+				return fmt.Errorf("check legacy menu %s(%d): %w", target.path, legacyID, err)
+			}
+			if !legacyExists {
+				continue
+			}
+
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO operations_role_menus (role_id, menu_id, created_at)
+				SELECT rm.role_id, $2, NOW()
+				FROM operations_role_menus rm
+				WHERE rm.menu_id = $1
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM operations_role_menus existing
+					WHERE existing.role_id = rm.role_id
+					  AND existing.menu_id = $2
+				  )
+			`, legacyID, target.canonicalID); err != nil {
+				return fmt.Errorf("migrate role menus from %d to %d: %w", legacyID, target.canonicalID, err)
+			}
+
+			if _, err := tx.Exec(ctx, `DELETE FROM operations_role_menus WHERE menu_id = $1`, legacyID); err != nil {
+				return fmt.Errorf("delete legacy role menus for %d: %w", legacyID, err)
+			}
+
+			if _, err := tx.Exec(ctx, `
+				UPDATE operations_menus
+				SET deleted_at = COALESCE(deleted_at, NOW()),
+				    updated_at = NOW()
+				WHERE id = $1
+				  AND deleted_at IS NULL
+			`, legacyID); err != nil {
+				return fmt.Errorf("soft delete legacy menu %d: %w", legacyID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit operations menu normalization: %w", err)
+	}
 	return nil
 }
 

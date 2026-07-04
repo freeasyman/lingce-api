@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -172,6 +173,41 @@ func (s *Service) GetOperationsMenuTree(ctx context.Context) ([]*MenuResponse, e
 	return buildMenuTree(menus), nil
 }
 
+// GetAdminEffectiveOperationsMenus retrieves the final effective ops menus for an admin.
+func (s *Service) GetAdminEffectiveOperationsMenus(ctx context.Context, adminID int64) (*OperationsEffectiveMenuResponse, error) {
+	menus, roleCodes, err := s.store.GetAdminEffectiveMenus(ctx, adminID)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]*MenuResponse, 0, len(menus))
+	menuCodes := make([]string, 0, len(menus))
+	menuPaths := make([]string, 0, len(menus))
+	for _, menu := range menus {
+		resp := toMenuResponse(menu)
+		responses = append(responses, resp)
+		if resp.Code != "" {
+			menuCodes = append(menuCodes, resp.Code)
+		}
+		if resp.Path != nil && *resp.Path != "" {
+			menuPaths = append(menuPaths, *resp.Path)
+		}
+	}
+
+	sort.Strings(roleCodes)
+	sort.Strings(menuCodes)
+	sort.Strings(menuPaths)
+
+	return &OperationsEffectiveMenuResponse{
+		AdminID:      adminID,
+		RoleCodes:    roleCodes,
+		MenuCodes:    menuCodes,
+		MenuPaths:    menuPaths,
+		Menus:        buildMenuTree(menus),
+		IsFullAccess: hasOpsFullAccess(roleCodes),
+	}, nil
+}
+
 // GetOperationsMenu retrieves an operations menu by ID
 func (s *Service) GetOperationsMenu(ctx context.Context, id int64) (*MenuResponse, error) {
 	menu, err := s.store.GetOperationsMenuByID(ctx, id)
@@ -254,6 +290,15 @@ func toMenuResponse(m *OperationsMenu) *MenuResponse {
 		CreatedAt: m.CreatedAt,
 		UpdatedAt: m.UpdatedAt,
 	}
+}
+
+func hasOpsFullAccess(roleCodes []string) bool {
+	for _, code := range roleCodes {
+		if code == "ops_super_admin" {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMenuTree builds a tree structure from flat menu list

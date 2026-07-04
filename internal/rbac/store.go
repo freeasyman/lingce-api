@@ -479,6 +479,40 @@ func (s *Store) GetRoleMenus(ctx context.Context, roleID int64) ([]*OperationsMe
 	return menus, nil
 }
 
+// GetAdminEffectiveMenus retrieves the merged effective operations menus for an admin.
+func (s *Store) GetAdminEffectiveMenus(ctx context.Context, adminID int64) ([]*OperationsMenu, []string, error) {
+	roles, err := s.GetAdminRoles(ctx, adminID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(roles) == 0 {
+		return []*OperationsMenu{}, []string{}, nil
+	}
+
+	roleCodes := make([]string, 0, len(roles))
+	menuByID := make(map[int64]*OperationsMenu)
+
+	for _, role := range roles {
+		roleCodes = append(roleCodes, role.Code)
+		menus, err := s.GetRoleMenus(ctx, role.ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load role menus for role %d: %w", role.ID, err)
+		}
+		for _, menu := range menus {
+			if menu == nil {
+				continue
+			}
+			menuByID[menu.ID] = menu
+		}
+	}
+
+	merged := make([]*OperationsMenu, 0, len(menuByID))
+	for _, menu := range menuByID {
+		merged = append(merged, menu)
+	}
+	return merged, roleCodes, nil
+}
+
 // AssignMenusToRole assigns menus to a role
 func (s *Store) AssignMenusToRole(ctx context.Context, roleID int64, menuIDs []int64) error {
 	tx, err := s.pool.Begin(ctx)

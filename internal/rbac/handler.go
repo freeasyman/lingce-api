@@ -199,7 +199,7 @@ func (h *Handler) GetEffectiveMenusByScope(w http.ResponseWriter, r *http.Reques
 		h.GetCurrentEmployeeEffectiveMenus(w, r)
 		return
 	}
-	httputil.WriteBadRequest(w, "effective menus are only supported for institution scope")
+	h.GetCurrentAdminEffectiveMenus(w, r)
 }
 
 func (h *Handler) GetMenuTreeByScope(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +258,24 @@ func (h *Handler) getTenantID(r *http.Request) *int64 {
 		return claims.TenantID
 	}
 	return nil
+}
+
+func (h *Handler) GetCurrentAdminEffectiveMenus(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	resp, err := h.service.GetAdminEffectiveOperationsMenus(r.Context(), claims.UserID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 // Operations Role handlers
