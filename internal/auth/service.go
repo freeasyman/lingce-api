@@ -80,12 +80,13 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 		ExpiresAt:   expiresAt,
 		User: &LoginUser{
 			ID:       admin.ID,
-			Name:     admin.Username,
+			Name:     firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
 			Phone:    admin.Phone,
 			Role:     string(auth.UserTypeAdmin),
 			TenantID: nil,
 		},
 		UserInfo: map[string]interface{}{
+			"name":      firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
 			"real_name": admin.RealName,
 			"email":     admin.Email,
 			"phone":     admin.Phone,
@@ -345,6 +346,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 			UserType: string(auth.UserTypeAdmin),
 			Username: admin.Username,
 			UserInfo: map[string]interface{}{
+				"name":      firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
 				"real_name": admin.RealName,
 				"email":     admin.Email,
 				"phone":     admin.Phone,
