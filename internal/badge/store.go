@@ -486,17 +486,8 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		"source_file_url", core.OriginalFileURL,
 	)
 
-	var tenantID, employeeID int64
-	if err := s.pool.QueryRow(ctx, `
-		SELECT tenant_id, employee_id
-		FROM badge_devices
-		WHERE device_no = $1
-		  AND tenant_id IS NOT NULL
-		  AND employee_id IS NOT NULL
-		  AND deleted_at IS NULL
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, core.DeviceNo).Scan(&tenantID, &employeeID); err != nil {
+	tenantID, employeeID, err := s.resolveAudioCallbackBadgeBinding(ctx, core.DeviceNo)
+	if err != nil {
 		slog.Error("audio callback device mapping lookup failed",
 			"device_no", core.DeviceNo,
 			"app_id", core.AppID,
@@ -607,6 +598,43 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		TenantID:    tenantID,
 		Created:     created,
 	}, nil
+}
+
+func (s *Store) resolveAudioCallbackBadgeBinding(ctx context.Context, deviceNo string) (int64, int64, error) {
+	var tenantID int64
+	var employeeID int64
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT current_tenant_id, current_employee_id
+		FROM badge_devices_v2
+		WHERE device_no = $1
+		  AND badge_status = $2
+		  AND current_tenant_id IS NOT NULL
+		  AND current_employee_id IS NOT NULL
+		  AND deleted_at IS NULL
+		LIMIT 1
+	`, deviceNo, BadgeStatusAssigned).Scan(&tenantID, &employeeID)
+	if err == nil {
+		return tenantID, employeeID, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return 0, 0, fmt.Errorf("lookup badge_devices_v2 binding: %w", err)
+	}
+
+	err = s.pool.QueryRow(ctx, `
+		SELECT tenant_id, employee_id
+		FROM badge_devices
+		WHERE device_no = $1
+		  AND tenant_id IS NOT NULL
+		  AND employee_id IS NOT NULL
+		  AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, deviceNo).Scan(&tenantID, &employeeID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return tenantID, employeeID, nil
 }
 
 func (s *Store) UpsertAudioCallbackEvent(ctx context.Context, payload CallbackPayload) (*AudioCallbackEventRef, error) {
