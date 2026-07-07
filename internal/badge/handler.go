@@ -31,6 +31,7 @@ func (h *Handler) SetCallbackGatewayToken(token string) {
 // RegisterRoutes registers badge module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
+	h.registerRebuildRoutes(mux, authMw)
 
 	// Resource-oriented badge-device endpoints
 	mux.Handle("GET /api/v1/badge-devices", authMw(http.HandlerFunc(h.V2ListDevices)))
