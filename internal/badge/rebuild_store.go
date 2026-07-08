@@ -26,6 +26,52 @@ func normalizeBadgeStatus(raw string) string {
 	}
 }
 
+func reinterpretAsShanghai(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), shanghaiLocation)
+}
+
+func normalizeShanghaiTimePtr(value **time.Time) {
+	if value == nil || *value == nil {
+		return
+	}
+	t := reinterpretAsShanghai(**value)
+	*value = &t
+}
+
+func normalizeShanghaiTimeValue(value *time.Time) {
+	if value == nil {
+		return
+	}
+	*value = reinterpretAsShanghai(*value)
+}
+
+func normalizeBadgeDeviceV2Times(item *BadgeDeviceV2) {
+	if item == nil {
+		return
+	}
+	normalizeShanghaiTimePtr(&item.AssignedAt)
+	normalizeShanghaiTimePtr(&item.LastOnlineAt)
+	normalizeShanghaiTimePtr(&item.LastHealthCheckAt)
+	normalizeShanghaiTimePtr(&item.AcceptedAt)
+	normalizeShanghaiTimePtr(&item.DeletedAt)
+	normalizeShanghaiTimeValue(&item.CreatedAt)
+	normalizeShanghaiTimeValue(&item.UpdatedAt)
+}
+
+func normalizeBadgeDeviceLogV2Times(item *BadgeDeviceLogV2) {
+	if item == nil {
+		return
+	}
+	normalizeShanghaiTimeValue(&item.CreatedAt)
+}
+
+func normalizeBadgeAssignmentLogV2Times(item *BadgeAssignmentLogV2) {
+	if item == nil {
+		return
+	}
+	normalizeShanghaiTimeValue(&item.CreatedAt)
+}
+
 func (s *Store) RebuildListBadgeDevices(ctx context.Context, req RebuildBadgeDeviceListRequest) ([]*BadgeDeviceV2, int, error) {
 	conditions := []string{"deleted_at IS NULL"}
 	args := make([]interface{}, 0, 8)
@@ -118,6 +164,50 @@ func (s *Store) RebuildGetBadgeDeviceByID(ctx context.Context, id int64) (*Badge
 	return item, nil
 }
 
+func (s *Store) RebuildSetBadgeHealthSnapshot(ctx context.Context, id int64, healthStatus string, healthResult JSONObject, operatorID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if device.BadgeStatus != BadgeStatusPendingAcceptance {
+		return fmt.Errorf("only pending_acceptance badge can run acceptance")
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET health_status = $2,
+		    health_check_result = $3,
+		    last_check_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, id, healthStatus, healthResult)
+	if err != nil {
+		return fmt.Errorf("failed to update badge health snapshot: %w", err)
+	}
+
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   id,
+		Action:     "acceptance_check",
+		FromStatus: strPtr(BadgeStatusPendingAcceptance),
+		ToStatus:   strPtr(BadgeStatusPendingAcceptance),
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"health_status": healthStatus,
+			"passed":        healthStatus != BadgeHealthError,
+		},
+	}); err != nil {
+		return fmt.Errorf("failed to insert acceptance_check lifecycle log: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 func scanRebuildBadgeDevice(row pgx.Row) (*BadgeDeviceV2, error) {
 	var item BadgeDeviceV2
 	if err := row.Scan(
@@ -154,6 +244,7 @@ func scanRebuildBadgeDevice(row pgx.Row) (*BadgeDeviceV2, error) {
 	item.AcceptanceResult = nil
 	item.BadgeStatus = normalizeBadgeStatus(item.BadgeStatus)
 	item.HealthLevel = normalizeHealthStatus(item.HealthLevel)
+	normalizeBadgeDeviceV2Times(&item)
 	return &item, nil
 }
 
@@ -195,6 +286,7 @@ func (s *Store) RebuildListBadgeDeviceLogs(ctx context.Context, deviceID int64) 
 			value := normalizeBadgeStatus(*item.ToBadgeStatus)
 			item.ToBadgeStatus = &value
 		}
+		normalizeBadgeDeviceLogV2Times(&item)
 		items = append(items, &item)
 	}
 	return items, nil
@@ -233,6 +325,7 @@ func (s *Store) RebuildListBadgeAssignmentLogs(ctx context.Context, deviceID int
 		if legacyAction == "reclaim" {
 			item.Action = "reclaim"
 		}
+		normalizeBadgeAssignmentLogV2Times(&item)
 		if item.TenantID != nil {
 			_ = s.pool.QueryRow(ctx, `SELECT COALESCE(name, '') FROM tenants WHERE id = $1`, *item.TenantID).Scan(&item.TenantName)
 		}
@@ -301,14 +394,17 @@ func (s *Store) RebuildImportBadgeDevices(ctx context.Context, req RebuildBadgeI
 		}
 
 		resp.SuccessCount++
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, operator_id, notes, extra_data, created_at)
-			VALUES ($1, 'import', NULL, 'pending', $2, NULL, $3, NOW())
-		`, createdID, operatorID, JSONObject{
-			"import_batch_no":   batchNo,
-			"manufacturer_code": manufacturerCode,
-			"manufacturer_name": strings.TrimSpace(req.ManufacturerName),
-			"hardware_model":    strings.TrimSpace(device.HardwareModel),
+		if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+			DeviceID:   createdID,
+			Action:     "import",
+			ToStatus:   strPtr(BadgeStatusPendingAcceptance),
+			OperatorID: &operatorID,
+			ExtraData: JSONObject{
+				"import_batch_no":   batchNo,
+				"manufacturer_code": manufacturerCode,
+				"manufacturer_name": strings.TrimSpace(req.ManufacturerName),
+				"hardware_model":    strings.TrimSpace(device.HardwareModel),
+			},
 		}); err != nil {
 			return nil, fmt.Errorf("failed to insert import log: %w", err)
 		}
@@ -404,7 +500,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		return fmt.Errorf("failed to check employee badge occupancy: %w", err)
 	}
 
-		_, err = tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE badge_devices
 		SET status = 'assigned',
 		    tenant_id = $2,
@@ -420,12 +516,18 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		return fmt.Errorf("failed to assign badge: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, tenant_id, employee_id, operator_id, notes, extra_data, created_at)
-		VALUES ($1, 'assign_employee', 'in_stock', 'assigned', $2, $3, $4, NULL, $5, NOW())
-	`, id, tenantID, employeeID, operatorID, JSONObject{
-		"tenant_name":   tenantName,
-		"employee_name": employeeName,
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   id,
+		Action:     "assign_employee",
+		FromStatus: strPtr(BadgeStatusInStock),
+		ToStatus:   strPtr(BadgeStatusAssigned),
+		TenantID:   &tenantID,
+		EmployeeID: &employeeID,
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"tenant_name":   tenantName,
+			"employee_name": employeeName,
+		},
 	}); err != nil {
 		return fmt.Errorf("failed to insert assign lifecycle log: %w", err)
 	}
@@ -438,10 +540,10 @@ func (s *Store) RebuildReclaimBadgeDevice(ctx context.Context, id int64, reason 
 }
 
 func (s *Store) RebuildRestockBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	return s.rebuildChangeBadgeStatus(ctx, id, "restock", BadgeStatusReturned, BadgeStatusInStock, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
+	return s.rebuildChangeBadgeStatus(ctx, id, "restock", BadgeStatusReturned, BadgeStatusPendingAcceptance, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status = 'in_stock',
+			SET status = 'pending_acceptance',
 			    updated_at = NOW()
 			WHERE id = $1
 		`, id)
@@ -495,13 +597,69 @@ func (s *Store) rebuildChangeBadgeStatus(ctx context.Context, id int64, action, 
 	if err := updateFn(ctx, tx, device); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, operator_id, notes, extra_data, created_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), '{}'::jsonb, NOW())
-	`, id, action, fromStatus, toStatus, operatorID, reason); err != nil {
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   id,
+		Action:     action,
+		FromStatus: &fromStatus,
+		ToStatus:   &toStatus,
+		OperatorID: &operatorID,
+		Notes:      optionalString(reason),
+		ExtraData:  JSONObject{},
+	}); err != nil {
 		return fmt.Errorf("failed to insert lifecycle log: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+type rebuildLifecycleLogPayload struct {
+	DeviceID   int64
+	Action     string
+	FromStatus *string
+	ToStatus   *string
+	TenantID   *int64
+	EmployeeID *int64
+	OperatorID *int64
+	Notes      *string
+	ExtraData  JSONObject
+}
+
+func (s *Store) insertRebuildLifecycleLogTx(ctx context.Context, tx pgx.Tx, payload rebuildLifecycleLogPayload) error {
+	if payload.ExtraData == nil {
+		payload.ExtraData = JSONObject{}
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO badge_device_lifecycle_logs (
+			device_id, action, operation_type, from_status, to_status,
+			tenant_id, employee_id, operator_id, notes, extra_data, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10, NOW()
+		)
+	`, payload.DeviceID, payload.Action, payload.Action, payload.FromStatus, payload.ToStatus, payload.TenantID, payload.EmployeeID, payload.OperatorID, payload.Notes, payload.ExtraData)
+	if err == nil {
+		return nil
+	}
+	_, fallbackErr := tx.Exec(ctx, `
+		INSERT INTO badge_device_lifecycle_logs (
+			device_id, action, from_status, to_status,
+			tenant_id, employee_id, operator_id, notes, extra_data, created_at
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7, $8, $9, NOW()
+		)
+	`, payload.DeviceID, payload.Action, payload.FromStatus, payload.ToStatus, payload.TenantID, payload.EmployeeID, payload.OperatorID, payload.Notes, payload.ExtraData)
+	if fallbackErr != nil {
+		return fmt.Errorf("primary insert failed: %v; fallback failed: %w", err, fallbackErr)
+	}
+	return nil
+}
+
+func optionalString(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 func (s *Store) rebuildGetBadgeDeviceForUpdate(ctx context.Context, tx pgx.Tx, id int64) (*BadgeDeviceV2, error) {

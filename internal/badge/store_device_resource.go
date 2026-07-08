@@ -114,6 +114,11 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 			return nil, 0, fmt.Errorf("failed to scan device: %w", err)
 		}
 		d.HealthStatus = normalizeHealthStatus(d.HealthStatus)
+		normalizeShanghaiTimePtr(&d.AssignedAt)
+		normalizeShanghaiTimePtr(&d.LastCheckAt)
+		normalizeShanghaiTimePtr(&d.LastOnlineAt)
+		normalizeShanghaiTimeValue(&d.CreatedAt)
+		normalizeShanghaiTimeValue(&d.UpdatedAt)
 		devices = append(devices, &d)
 	}
 	return devices, total, nil
@@ -143,6 +148,11 @@ func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []
 		return nil, nil, fmt.Errorf("failed to get device: %w", err)
 	}
 	d.HealthStatus = normalizeHealthStatus(d.HealthStatus)
+	normalizeShanghaiTimePtr(&d.AssignedAt)
+	normalizeShanghaiTimePtr(&d.LastCheckAt)
+	normalizeShanghaiTimePtr(&d.LastOnlineAt)
+	normalizeShanghaiTimeValue(&d.CreatedAt)
+	normalizeShanghaiTimeValue(&d.UpdatedAt)
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, device_id, device_no, operation, from_status, to_status,
@@ -162,6 +172,7 @@ func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []
 		if err := rows.Scan(&l.ID, &l.DeviceID, &l.DeviceNo, &l.Operation, &l.FromStatus, &l.ToStatus, &l.OperatorID, &l.OperatorName, &l.OperatorType, &l.Detail, &l.CreatedAt); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan device log: %w", err)
 		}
+		normalizeShanghaiTimeValue(&l.CreatedAt)
 		logs = append(logs, &l)
 	}
 	return &d, logs, nil
@@ -318,6 +329,38 @@ func (s *Store) V2UpdateRealtimeSnapshot(ctx context.Context, deviceID int64, ba
 	_, err := s.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update realtime snapshot: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) V2UpdateRealtimeSnapshotWithCheckAt(ctx context.Context, deviceID int64, batteryLevel *int, lastOnlineAt *time.Time, hardwareModel *string) error {
+	setClauses := make([]string, 0, 5)
+	args := make([]interface{}, 0, 6)
+	argIndex := 1
+
+	if batteryLevel != nil {
+		setClauses = append(setClauses, fmt.Sprintf("battery_level = $%d", argIndex))
+		args = append(args, *batteryLevel)
+		argIndex++
+	}
+	if lastOnlineAt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("last_online_at = $%d", argIndex))
+		args = append(args, *lastOnlineAt)
+		argIndex++
+	}
+	if hardwareModel != nil && strings.TrimSpace(*hardwareModel) != "" {
+		setClauses = append(setClauses, fmt.Sprintf("hardware_model = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*hardwareModel))
+		argIndex++
+	}
+	setClauses = append(setClauses, "last_check_at = NOW()")
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, deviceID)
+
+	query := fmt.Sprintf("UPDATE badge_devices SET %s WHERE id = $%d AND deleted_at IS NULL", strings.Join(setClauses, ", "), argIndex)
+	_, err := s.pool.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update realtime snapshot with check time: %w", err)
 	}
 	return nil
 }

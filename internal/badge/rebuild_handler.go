@@ -16,17 +16,30 @@ func (h *Handler) registerRebuildRoutes(mux *http.ServeMux, authMw func(http.Han
 	mux.Handle("GET /api/v2/badge-devices", authMw(http.HandlerFunc(h.RebuildListBadgeDevices)))
 	mux.Handle("GET /api/v2/badge-devices/pending-acceptance", authMw(http.HandlerFunc(h.RebuildListPendingAcceptanceDevices)))
 	mux.Handle("GET /api/v2/badge-devices/monitoring", authMw(http.HandlerFunc(h.RebuildListMonitoringDevices)))
+	mux.Handle("GET /api/v2/badge-devices/manufacturers", authMw(http.HandlerFunc(h.V2Manufacturers)))
+	mux.Handle("POST /api/v2/badge-devices/manufacturers/{code}/actions/sync", authMw(http.HandlerFunc(h.V2SyncManufacturer)))
 	mux.Handle("GET /api/v2/badge-devices/{id}", authMw(http.HandlerFunc(h.RebuildGetBadgeDevice)))
 	mux.Handle("GET /api/v2/badge-devices/{id}/health", authMw(http.HandlerFunc(h.RebuildGetBadgeDeviceHealth)))
 	mux.Handle("GET /api/v2/badge-devices/{id}/logs", authMw(http.HandlerFunc(h.RebuildListBadgeDeviceLogs)))
 	mux.Handle("GET /api/v2/badge-devices/{id}/assignment-logs", authMw(http.HandlerFunc(h.RebuildListBadgeAssignmentLogs)))
 	mux.Handle("POST /api/v2/badge-devices/actions/import", authMw(http.HandlerFunc(h.RebuildImportBadgeDevices)))
+	mux.Handle("POST /api/v2/badge-devices/{id}/actions/run-acceptance", authMw(http.HandlerFunc(h.RebuildRunAcceptanceCheck)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/accept", authMw(http.HandlerFunc(h.RebuildAcceptBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/reject-acceptance", authMw(http.HandlerFunc(h.RebuildRejectAcceptance)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/assign", authMw(http.HandlerFunc(h.RebuildAssignBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/reclaim", authMw(http.HandlerFunc(h.RebuildReclaimBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/restock", authMw(http.HandlerFunc(h.RebuildRestockBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/retire", authMw(http.HandlerFunc(h.RebuildRetireBadgeDevice)))
+	mux.Handle("POST /api/v2/badge-devices/actions/refresh-status", authMw(http.HandlerFunc(h.RebuildRefreshAllBadgeStatus)))
+}
+
+func (h *Handler) RebuildRefreshAllBadgeStatus(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.service.V2RefreshAllRealtimeStatus(r.Context())
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 func (h *Handler) RebuildListBadgeDevices(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +157,25 @@ func (h *Handler) RebuildImportBadgeDevices(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) RebuildAcceptBadgeDevice(w http.ResponseWriter, r *http.Request) {
 	h.rebuildRunStatusAction(w, r, h.service.RebuildAcceptBadgeDevice)
+}
+
+func (h *Handler) RebuildRunAcceptanceCheck(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "only admin can operate badge devices")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	resp, err := h.service.RebuildRunAcceptanceCheck(r.Context(), id, claims.UserID, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 func (h *Handler) RebuildRejectAcceptance(w http.ResponseWriter, r *http.Request) {

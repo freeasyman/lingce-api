@@ -533,6 +533,90 @@ func (s *Service) hydrateRealtimeStatus(ctx context.Context, devices []*BadgeDev
 	wg.Wait()
 }
 
+func (s *Service) V2RefreshAllRealtimeStatus(ctx context.Context) (JSONObject, error) {
+	devices, _, err := s.store.V2ListDevices(ctx, V2DeviceListRequest{Page: 1, PageSize: 10000, Realtime: false})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) == 0 {
+		return JSONObject{"success": 0, "failed": 0, "total": 0, "errors": []string{}}, nil
+	}
+
+	type item struct {
+		deviceID int64
+		err      error
+	}
+
+	sem := make(chan struct{}, 10)
+	out := make(chan item, len(devices))
+	var wg sync.WaitGroup
+
+	for _, d := range devices {
+		if d == nil || strings.TrimSpace(d.DeviceNo) == "" {
+			continue
+		}
+		device := d
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			perCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+
+			adapter := s.getManufacturerAdapter(device.ManufacturerCode)
+			info, err := adapter.GetDeviceRealtimeInfo(perCtx, device.DeviceNo)
+			if err != nil {
+				out <- item{deviceID: device.ID, err: err}
+				return
+			}
+			if info == nil {
+				out <- item{deviceID: device.ID, err: fmt.Errorf("device not found from manufacturer")}
+				return
+			}
+			if info.Online && info.LastOnlineAt == nil {
+				now := time.Now()
+				info.LastOnlineAt = &now
+			}
+
+			var hardwareModelPtr *string
+			if info.HardwareModel != "" {
+				hardwareModelPtr = &info.HardwareModel
+			}
+			if err := s.store.V2UpdateRealtimeSnapshotWithCheckAt(perCtx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr); err != nil {
+				out <- item{deviceID: device.ID, err: err}
+				return
+			}
+			out <- item{deviceID: device.ID, err: nil}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	success := 0
+	failed := 0
+	errors := make([]string, 0)
+	for it := range out {
+		if it.err != nil {
+			failed++
+			errors = append(errors, fmt.Sprintf("device_id=%d: %v", it.deviceID, it.err))
+			continue
+		}
+		success++
+	}
+
+	return JSONObject{
+		"success": success,
+		"failed":  failed,
+		"total":   success + failed,
+		"errors":  errors,
+	}, nil
+}
+
 func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, operatorID int64, operatorName string) (JSONObject, error) {
 	if len(req.DeviceIDs) == 0 {
 		return nil, fmt.Errorf("device_ids is required")
@@ -919,14 +1003,6 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func isBadgeStatusConstraintViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "ck_badge_devices_status") && strings.Contains(msg, "sqlstate 23514")
-}
-
 func tryInsertVendorDevice(
 	ctx context.Context,
 	s *Service,
@@ -941,61 +1017,20 @@ func tryInsertVendorDevice(
 	batteryLevel *int,
 	lastOnlineAt *time.Time,
 ) error {
-	insertWithDBDefaults := func() error {
-		_, err := s.store.pool.Exec(ctx, `
-			INSERT INTO badge_devices (
-				manufacturer_id, app_id, device_no, device_uid,
-				manufacturer_code, manufacturer_name, hardware_model,
-				health_status, battery_level, last_online_at,
-				metadata, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4,
-				$5, $6, NULLIF($7, ''),
-				$8, $9, $10,
-				'{}'::jsonb, NOW(), NOW()
-			)
-		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
-		return err
-	}
-
-	insertWithStatus := func(currentStatus, status string) error {
-		_, err := s.store.pool.Exec(ctx, `
-			INSERT INTO badge_devices (
-				manufacturer_id, app_id, device_no, device_uid,
-				manufacturer_code, manufacturer_name, hardware_model,
-				status, health_status, battery_level, last_online_at,
-				metadata, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4,
-				$5, $6, NULLIF($7, ''),
-				$8, $9, $10, $11,
-				'{}'::jsonb, NOW(), NOW()
-			)
-		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
-		return err
-	}
-
-	// Retry matrix for status-constraint compatibility across mixed schemas:
-	// 1) new/new, 2) old/new, 3) old/old, 4) DB defaults.
-	if err := insertWithStatus("pending", "pending"); err != nil {
-		if !isBadgeStatusConstraintViolation(err) {
-			return err
-		}
-		if err2 := insertWithStatus("draft", "pending"); err2 != nil {
-			if !isBadgeStatusConstraintViolation(err2) {
-				return err2
-			}
-			if err3 := insertWithStatus("draft", "draft"); err3 != nil {
-				if !isBadgeStatusConstraintViolation(err3) {
-					return err3
-				}
-				if err4 := insertWithDBDefaults(); err4 != nil {
-					return err4
-				}
-			}
-		}
-	}
-	return nil
+	_, err := s.store.pool.Exec(ctx, `
+		INSERT INTO badge_devices (
+			manufacturer_id, app_id, device_no, device_uid,
+			manufacturer_code, manufacturer_name, hardware_model,
+			status, health_status, battery_level, last_online_at,
+			metadata, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, NULLIF($7, ''),
+			'pending_acceptance', $8, $9, $10,
+			'{}'::jsonb, NOW(), NOW()
+		)
+	`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
+	return err
 }
 
 func acquireManufacturerSync(code string) bool {
