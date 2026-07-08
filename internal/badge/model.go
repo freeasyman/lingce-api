@@ -10,10 +10,8 @@ import (
 type BadgeDevice struct {
 	ID                 int64      `json:"id"`
 	DeviceNo           string     `json:"device_no"`
-	DeviceID           *string    `json:"device_id,omitempty"`
 	ManufacturerCode   string     `json:"manufacturer_code"`
 	ManufacturerName   *string    `json:"manufacturer_name,omitempty"`
-	Model              *string    `json:"model,omitempty"`
 	HardwareModel      *string    `json:"hardware_model,omitempty"`
 	Status             string     `json:"status"` // "pending_acceptance", "in_stock", "assigned", "returned", "retired"
 	HealthStatus       string     `json:"health_status"`
@@ -27,8 +25,6 @@ type BadgeDevice struct {
 	DepartmentName     *string    `json:"department_name,omitempty"`
 	AssignedAt         *time.Time `json:"assigned_at,omitempty"`
 	AcceptedAt         *time.Time `json:"accepted_at,omitempty"`
-	AssignedToTenantAt *time.Time `json:"assigned_to_tenant_at,omitempty"`
-	AssignedToEmpAt    *time.Time `json:"assigned_to_emp_at,omitempty"`
 	LastOnlineAt       *time.Time `json:"last_online_at,omitempty"`
 	BatteryLevel       *int       `json:"battery_level,omitempty"`
 	LastCheckAt        *time.Time `json:"last_check_at,omitempty"`

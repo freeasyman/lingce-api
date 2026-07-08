@@ -114,8 +114,8 @@ func (s *Store) ListDevices(ctx context.Context, req DeviceListRequest) ([]*Badg
 	// Query devices
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, device_no, device_id, manufacturer_code, model, status, tenant_id, employee_id,
-		       accepted_at, assigned_to_tenant_at, assigned_to_emp_at, last_online_at,
+		SELECT id, device_no, manufacturer_code, hardware_model, status, tenant_id, employee_id,
+		       accepted_at, last_online_at,
 		       battery_level, firmware_version, extra_data, created_at, updated_at
 		FROM badge_devices
 		WHERE %s
@@ -134,9 +134,9 @@ func (s *Store) ListDevices(ctx context.Context, req DeviceListRequest) ([]*Badg
 	var devices []*BadgeDevice
 	for rows.Next() {
 		var d BadgeDevice
-		if err := rows.Scan(&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.Model,
-			&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt, &d.AssignedToTenantAt,
-			&d.AssignedToEmpAt, &d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
+		if err := rows.Scan(&d.ID, &d.DeviceNo, &d.ManufacturerCode, &d.HardwareModel,
+			&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt,
+			&d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
 			&d.ExtraData, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan device: %w", err)
 		}
@@ -149,8 +149,8 @@ func (s *Store) ListDevices(ctx context.Context, req DeviceListRequest) ([]*Badg
 // GetDeviceByID retrieves a device by ID
 func (s *Store) GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, error) {
 	query := `
-		SELECT id, device_no, device_id, manufacturer_code, model, status, tenant_id, employee_id,
-		       accepted_at, assigned_to_tenant_at, assigned_to_emp_at, last_online_at,
+		SELECT id, device_no, manufacturer_code, hardware_model, status, tenant_id, employee_id,
+		       accepted_at, last_online_at,
 		       battery_level, firmware_version, extra_data, created_at, updated_at
 		FROM badge_devices
 		WHERE id = $1 AND deleted_at IS NULL
@@ -158,9 +158,9 @@ func (s *Store) GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, erro
 
 	var d BadgeDevice
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.Model,
-		&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt, &d.AssignedToTenantAt,
-		&d.AssignedToEmpAt, &d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
+		&d.ID, &d.DeviceNo, &d.ManufacturerCode, &d.HardwareModel,
+		&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt,
+		&d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
 		&d.ExtraData, &d.CreatedAt, &d.UpdatedAt,
 	)
 
@@ -177,8 +177,8 @@ func (s *Store) GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, erro
 // GetDeviceByDeviceNo retrieves a device by device number
 func (s *Store) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*BadgeDevice, error) {
 	query := `
-		SELECT id, device_no, device_id, manufacturer_code, model, status, tenant_id, employee_id,
-		       accepted_at, assigned_to_tenant_at, assigned_to_emp_at, last_online_at,
+		SELECT id, device_no, manufacturer_code, hardware_model, status, tenant_id, employee_id,
+		       accepted_at, last_online_at,
 		       battery_level, firmware_version, extra_data, created_at, updated_at
 		FROM badge_devices
 		WHERE device_no = $1 AND deleted_at IS NULL
@@ -186,9 +186,9 @@ func (s *Store) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*Badg
 
 	var d BadgeDevice
 	err := s.pool.QueryRow(ctx, query, deviceNo).Scan(
-		&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.Model,
-		&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt, &d.AssignedToTenantAt,
-		&d.AssignedToEmpAt, &d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
+		&d.ID, &d.DeviceNo, &d.ManufacturerCode, &d.HardwareModel,
+		&d.Status, &d.TenantID, &d.EmployeeID, &d.AcceptedAt,
+		&d.LastOnlineAt, &d.BatteryLevel, &d.FirmwareVersion,
 		&d.ExtraData, &d.CreatedAt, &d.UpdatedAt,
 	)
 
@@ -212,7 +212,7 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 	for _, deviceID := range deviceIDs {
 		query := `
 			UPDATE badge_devices
-				SET tenant_id = $1, status = 'assigned', assigned_to_tenant_at = NOW(), updated_at = NOW()
+				SET tenant_id = $1, status = 'assigned', updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, tenantID, deviceID)
@@ -248,7 +248,7 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 	for _, deviceID := range deviceIDs {
 		query := `
 			UPDATE badge_devices
-				SET employee_id = $1, status = 'assigned', assigned_to_emp_at = NOW(), updated_at = NOW()
+				SET employee_id = $1, status = 'assigned', updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, employeeID, deviceID)
@@ -289,7 +289,6 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 			    employee_id = NULL,
 			    employee_name = NULL,
 			    employee_phone = NULL,
-			    assigned_to_emp_at = NULL,
 			    updated_at = NOW()
 			WHERE id = $1 AND deleted_at IS NULL
 		`
@@ -333,8 +332,6 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 			    employee_id = NULL,
 			    employee_name = NULL,
 			    employee_phone = NULL,
-			    assigned_to_tenant_at = NULL,
-			    assigned_to_emp_at = NULL,
 			    updated_at = NOW()
 			WHERE id = $1 AND deleted_at IS NULL
 		`

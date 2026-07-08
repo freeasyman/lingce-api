@@ -889,12 +889,12 @@ func tryInsertVendorDevice(
 				manufacturer_id, app_id, device_no, device_uid,
 				manufacturer_code, manufacturer_name, hardware_model,
 				health_status, battery_level, last_online_at,
-				metadata, ext_json, created_at, updated_at
+				metadata, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
 				$5, $6, NULLIF($7, ''),
 				$8, $9, $10,
-				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+				'{}'::jsonb, NOW(), NOW()
 			)
 		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, healthStatus, batteryLevel, lastOnlineAt)
 		return err
@@ -906,12 +906,12 @@ func tryInsertVendorDevice(
 				manufacturer_id, app_id, device_no, device_uid,
 				manufacturer_code, manufacturer_name, hardware_model,
 				status, health_status, battery_level, last_online_at,
-				metadata, ext_json, created_at, updated_at
+				metadata, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
 				$5, $6, NULLIF($7, ''),
 				$8, $9, $10, $11,
-				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+				'{}'::jsonb, NOW(), NOW()
 			)
 		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
 		return err

@@ -18,18 +18,15 @@ type DeviceListRequest struct {
 type DeviceResponse struct {
 	ID                 int64      `json:"id"`
 	DeviceNo           string     `json:"device_no"`
-	DeviceID           *string    `json:"device_id,omitempty"`
 	ManufacturerCode   string     `json:"manufacturer_code"`
 	ManufacturerName   string     `json:"manufacturer_name"`
-	Model              *string    `json:"model,omitempty"`
+	HardwareModel      *string    `json:"hardware_model,omitempty"`
 	Status             string     `json:"status"`
 	TenantID           *int64     `json:"tenant_id,omitempty"`
 	TenantName         *string    `json:"tenant_name,omitempty"`
 	EmployeeID         *int64     `json:"employee_id,omitempty"`
 	EmployeeName       *string    `json:"employee_name,omitempty"`
 	AcceptedAt         *string    `json:"accepted_at,omitempty"`
-	AssignedToTenantAt *string    `json:"assigned_to_tenant_at,omitempty"`
-	AssignedToEmpAt    *string    `json:"assigned_to_emp_at,omitempty"`
 	LastOnlineAt       *string    `json:"last_online_at,omitempty"`
 	BatteryLevel       *int       `json:"battery_level,omitempty"`
 	FirmwareVersion    *string    `json:"firmware_version,omitempty"`
@@ -47,7 +44,7 @@ type AcceptanceValidateRequest struct {
 type AcceptanceDeviceInput struct {
 	DeviceNo         string  `json:"device_no"`
 	ManufacturerCode string  `json:"manufacturer_code"`
-	Model            *string `json:"model,omitempty"`
+	HardwareModel    *string `json:"hardware_model,omitempty"`
 }
 
 // AcceptanceImportRequest represents acceptance import request

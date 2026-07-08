@@ -882,7 +882,7 @@ func (h *Handler) GetMyBadgeStatus(w http.ResponseWriter, r *http.Request) {
 		LastOnlineAt:             device.LastOnlineAt,
 	}
 
-	if assignedAt := firstNonEmptyTime(device.AssignedToEmpAt, device.AssignedToTenantAt, device.AcceptedAt, stringPtr(device.CreatedAt)); assignedAt != nil {
+	if assignedAt := firstNonEmptyTime(device.AcceptedAt, stringPtr(device.CreatedAt)); assignedAt != nil {
 		workDays := int(time.Since(*assignedAt).Hours()/24) + 1
 		if workDays < 1 {
 			workDays = 1

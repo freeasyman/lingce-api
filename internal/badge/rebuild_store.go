@@ -287,10 +287,10 @@ func (s *Store) RebuildImportBadgeDevices(ctx context.Context, req RebuildBadgeI
 		var createdID int64
 		err = tx.QueryRow(ctx, `
 			INSERT INTO badge_devices (
-				device_no, manufacturer_code, manufacturer_name, hardware_model, model,
+				device_no, manufacturer_code, manufacturer_name, hardware_model,
 				status, health_status, import_batch_no, metadata, created_at, updated_at
 			) VALUES (
-				$1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($4, ''),
+				$1, $2, NULLIF($3, ''), NULLIF($4, ''),
 				'pending_acceptance', 'unknown', $5, '{}'::jsonb, NOW(), NOW()
 			)
 			RETURNING id
@@ -404,7 +404,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		return fmt.Errorf("failed to check employee badge occupancy: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 		UPDATE badge_devices
 		SET status = 'assigned',
 		    tenant_id = $2,
@@ -413,8 +413,6 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		    employee_name = $5,
 		    employee_phone = $6,
 		    assigned_at = NOW(),
-		    assigned_to_tenant_at = NOW(),
-		    assigned_to_emp_at = NOW(),
 		    updated_at = NOW()
 		WHERE id = $1
 	`, id, tenantID, tenantName, employeeID, employeeName, employeePhone)
@@ -473,8 +471,6 @@ func (s *Store) rebuildTransitionWithReset(ctx context.Context, id int64, fromSt
 			    employee_id = NULL,
 			    employee_name = NULL,
 			    employee_phone = NULL,
-			    assigned_to_tenant_at = NULL,
-			    assigned_to_emp_at = NULL,
 			    updated_at = NOW()
 			WHERE id = $1
 		`, id)

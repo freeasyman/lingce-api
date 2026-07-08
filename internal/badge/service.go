@@ -558,10 +558,9 @@ func toDeviceResponse(d *BadgeDevice) *DeviceResponse {
 	resp := &DeviceResponse{
 		ID:               d.ID,
 		DeviceNo:         d.DeviceNo,
-		DeviceID:         d.DeviceID,
 		ManufacturerCode: d.ManufacturerCode,
 		ManufacturerName: "", // TODO: Join with manufacturers table
-		Model:            d.Model,
+		HardwareModel:    d.HardwareModel,
 		Status:           d.Status,
 		TenantID:         d.TenantID,
 		TenantName:       nil, // TODO: Join with tenants table
@@ -577,16 +576,6 @@ func toDeviceResponse(d *BadgeDevice) *DeviceResponse {
 	if d.AcceptedAt != nil {
 		formatted := d.AcceptedAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.AcceptedAt = &formatted
-	}
-
-	if d.AssignedToTenantAt != nil {
-		formatted := d.AssignedToTenantAt.Format("2006-01-02T15:04:05Z07:00")
-		resp.AssignedToTenantAt = &formatted
-	}
-
-	if d.AssignedToEmpAt != nil {
-		formatted := d.AssignedToEmpAt.Format("2006-01-02T15:04:05Z07:00")
-		resp.AssignedToEmpAt = &formatted
 	}
 
 	if d.LastOnlineAt != nil {

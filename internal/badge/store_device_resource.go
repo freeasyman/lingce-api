@@ -79,7 +79,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT bd.id, bd.device_no, bd.device_id, bd.manufacturer_code, bd.manufacturer_name, bd.hardware_model,
+		SELECT bd.id, bd.device_no, bd.manufacturer_code, bd.manufacturer_name, bd.hardware_model,
 		       bd.status, bd.health_status, bd.health_check_result,
 		       bd.tenant_id, bd.tenant_name, bd.employee_id, bd.employee_name, bd.employee_phone,
 		       e.department_id, d.name as department_name,
@@ -104,7 +104,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 	for rows.Next() {
 		var d BadgeDevice
 		if err := rows.Scan(
-			&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
+			&d.ID, &d.DeviceNo, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
 			&d.Status, &d.HealthStatus, &d.HealthCheckResult,
 			&d.TenantID, &d.TenantName, &d.EmployeeID, &d.EmployeeName, &d.EmployeePhone,
 			&d.DepartmentID, &d.DepartmentName,
@@ -122,7 +122,7 @@ func (s *Store) V2ListDevices(ctx context.Context, req V2DeviceListRequest) ([]*
 func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []*BadgeDeviceLog, error) {
 	var d BadgeDevice
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, device_no, device_id, manufacturer_code, manufacturer_name, hardware_model,
+		SELECT id, device_no, manufacturer_code, manufacturer_name, hardware_model,
 		       status, health_status, health_check_result,
 		       tenant_id, tenant_name, employee_id, employee_name, employee_phone,
 		       assigned_at, battery_level, last_check_at, last_online_at, import_batch_no,
@@ -130,7 +130,7 @@ func (s *Store) V2GetDeviceByID(ctx context.Context, id int64) (*BadgeDevice, []
 		FROM badge_devices
 		WHERE id = $1 AND deleted_at IS NULL
 	`, id).Scan(
-		&d.ID, &d.DeviceNo, &d.DeviceID, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
+		&d.ID, &d.DeviceNo, &d.ManufacturerCode, &d.ManufacturerName, &d.HardwareModel,
 		&d.Status, &d.HealthStatus, &d.HealthCheckResult,
 		&d.TenantID, &d.TenantName, &d.EmployeeID, &d.EmployeeName, &d.EmployeePhone,
 		&d.AssignedAt, &d.BatteryLevel, &d.LastCheckAt, &d.LastOnlineAt, &d.ImportBatchNo,
@@ -222,11 +222,11 @@ func (s *Store) V2ImportDevices(ctx context.Context, req V2BatchImportRequest, o
 			INSERT INTO badge_devices (
 				manufacturer_id, app_id, device_no, device_uid,
 				manufacturer_code, manufacturer_name, hardware_model,
-				status, health_status, import_batch_no, metadata, ext_json, created_at, updated_at
+				status, health_status, import_batch_no, metadata, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
 				$5, $6, NULLIF($7, ''),
-				'pending_acceptance', 'unknown', $8, '{}'::jsonb, '{}'::jsonb, NOW(), NOW()
+				'pending_acceptance', 'unknown', $8, '{}'::jsonb, NOW(), NOW()
 			)
 			RETURNING id
 		`, manufacturerID, appID, deviceNo, deviceUID, req.ManufacturerCode, req.ManufacturerName, item.HardwareModel, batchNo).Scan(&createdID); err != nil {
@@ -364,8 +364,6 @@ func (s *Store) V2BatchAssign(ctx context.Context, req V2BatchAssignRequest, ope
 			    employee_name=$5,
 			    employee_phone=NULLIF($6, ''),
 			    assigned_at=NOW(),
-			    assigned_to_tenant_at=NOW(),
-			    assigned_to_emp_at=NOW(),
 			    updated_at=NOW()
 			WHERE id=$1
 		`, deviceID, req.TenantID, req.TenantName, req.EmployeeID, req.EmployeeName, req.EmployeePhone); err != nil {
@@ -440,8 +438,6 @@ func (s *Store) V2BatchReclaim(ctx context.Context, req V2BatchReclaimRequest, o
 			    employee_name=NULL,
 			    employee_phone=NULL,
 			    assigned_at=NULL,
-			    assigned_to_tenant_at=NULL,
-			    assigned_to_emp_at=NULL,
 			    updated_at=NOW()
 			WHERE id=$1
 		`, deviceID); err != nil {
@@ -491,8 +487,6 @@ func (s *Store) V2Transfer(ctx context.Context, deviceID int64, req V2TransferRe
 		    employee_id=$4,
 		    employee_name=$5,
 		    assigned_at=NOW(),
-		    assigned_to_tenant_at=NOW(),
-		    assigned_to_emp_at=NOW(),
 		    updated_at=NOW()
 		WHERE id=$1
 	`, deviceID, req.ToTenantID, req.ToTenantName, req.ToEmployeeID, req.ToEmployeeName); err != nil {
