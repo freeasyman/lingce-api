@@ -7,7 +7,6 @@ const (
 	BadgeStatusInStock           = "in_stock"
 	BadgeStatusAssigned          = "assigned"
 	BadgeStatusReturned          = "returned"
-	BadgeStatusUnusable          = "unusable"
 	BadgeStatusRetired           = "retired"
 )
 

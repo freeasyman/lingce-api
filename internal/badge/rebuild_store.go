@@ -19,87 +19,10 @@ func normalizeBadgeStatus(raw string) string {
 		return BadgeStatusAssigned
 	case BadgeStatusReturned:
 		return BadgeStatusReturned
-	case BadgeStatusUnusable:
-		return BadgeStatusUnusable
 	case BadgeStatusRetired:
 		return BadgeStatusRetired
 	default:
 		return ""
-	}
-}
-
-func rebuildStatusFromLegacy(status string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "pending":
-		return BadgeStatusPendingAcceptance
-	case "ready":
-		return BadgeStatusInStock
-	case "in_use":
-		return BadgeStatusAssigned
-	case "blocked":
-		return BadgeStatusUnusable
-	case "retired":
-		return BadgeStatusRetired
-	default:
-		return BadgeStatusPendingAcceptance
-	}
-}
-
-func rebuildLegacyStatus(status string) string {
-	switch status {
-	case BadgeStatusPendingAcceptance:
-		return "pending"
-	case BadgeStatusInStock, BadgeStatusReturned:
-		return "ready"
-	case BadgeStatusAssigned:
-		return "in_use"
-	case BadgeStatusUnusable:
-		return "blocked"
-	case BadgeStatusRetired:
-		return "retired"
-	default:
-		return "pending"
-	}
-}
-
-func rebuildAssignmentStatus(status string, employeeID *int64, tenantID *int64) string {
-	if status != BadgeStatusAssigned {
-		return "unassigned"
-	}
-	if employeeID != nil && *employeeID > 0 {
-		return "employee"
-	}
-	if tenantID != nil && *tenantID > 0 {
-		return "tenant"
-	}
-	return "unassigned"
-}
-
-func rebuildCurrentStatus(status string) string {
-	switch status {
-	case BadgeStatusPendingAcceptance:
-		return "pending_acceptance"
-	case BadgeStatusInStock, BadgeStatusReturned:
-		return "in_stock"
-	case BadgeStatusAssigned:
-		return "assigned_employee"
-	case BadgeStatusUnusable:
-		return "repair_pending"
-	case BadgeStatusRetired:
-		return "scrapped"
-	default:
-		return "pending_acceptance"
-	}
-}
-
-func rebuildLifecycleStatus(status string) string {
-	switch status {
-	case BadgeStatusPendingAcceptance:
-		return "pending_acceptance"
-	case BadgeStatusRetired:
-		return "scrapped"
-	default:
-		return "active"
 	}
 }
 
@@ -118,9 +41,14 @@ func (s *Store) RebuildListBadgeDevices(ctx context.Context, req RebuildBadgeDev
 		args = append(args, *req.EmployeeID)
 		argIndex++
 	}
+	if req.EmployeeKey != nil {
+		conditions = append(conditions, fmt.Sprintf("(employee_name ILIKE $%d OR employee_phone ILIKE $%d)", argIndex, argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.EmployeeKey)+"%")
+		argIndex++
+	}
 	if req.BadgeStatus != nil {
 		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
-		args = append(args, rebuildLegacyStatus(*req.BadgeStatus))
+		args = append(args, normalizeBadgeStatus(*req.BadgeStatus))
 		argIndex++
 	}
 	if req.HealthLevel != nil {
@@ -224,7 +152,7 @@ func scanRebuildBadgeDevice(row pgx.Row) (*BadgeDeviceV2, error) {
 		return nil, err
 	}
 	item.AcceptanceResult = nil
-	item.BadgeStatus = rebuildStatusFromLegacy(item.BadgeStatus)
+	item.BadgeStatus = normalizeBadgeStatus(item.BadgeStatus)
 	item.HealthLevel = normalizeHealthStatus(item.HealthLevel)
 	return &item, nil
 }
@@ -260,11 +188,11 @@ func (s *Store) RebuildListBadgeDeviceLogs(ctx context.Context, deviceID int64) 
 		}
 		item.DeviceNo = ""
 		if item.FromBadgeStatus != nil {
-			value := rebuildStatusFromLegacy(*item.FromBadgeStatus)
+			value := normalizeBadgeStatus(*item.FromBadgeStatus)
 			item.FromBadgeStatus = &value
 		}
 		if item.ToBadgeStatus != nil {
-			value := rebuildStatusFromLegacy(*item.ToBadgeStatus)
+			value := normalizeBadgeStatus(*item.ToBadgeStatus)
 			item.ToBadgeStatus = &value
 		}
 		items = append(items, &item)
@@ -360,12 +288,10 @@ func (s *Store) RebuildImportBadgeDevices(ctx context.Context, req RebuildBadgeI
 		err = tx.QueryRow(ctx, `
 			INSERT INTO badge_devices (
 				device_no, manufacturer_code, manufacturer_name, hardware_model, model,
-				status, current_status, lifecycle_status, assignment_status,
-				health_status, import_batch_no, metadata, created_at, updated_at
+				status, health_status, import_batch_no, metadata, created_at, updated_at
 			) VALUES (
 				$1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($4, ''),
-				'pending', 'pending_acceptance', 'pending_acceptance', 'unassigned',
-				'unknown', $5, '{}'::jsonb, NOW(), NOW()
+				'pending_acceptance', 'unknown', $5, '{}'::jsonb, NOW(), NOW()
 			)
 			RETURNING id
 		`, deviceNo, manufacturerCode, strings.TrimSpace(req.ManufacturerName), strings.TrimSpace(device.HardwareModel), batchNo).Scan(&createdID)
@@ -398,10 +324,7 @@ func (s *Store) RebuildAcceptBadgeDevice(ctx context.Context, id int64, reason s
 	return s.rebuildChangeBadgeStatus(ctx, id, "acceptance", BadgeStatusPendingAcceptance, BadgeStatusInStock, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status = 'ready',
-			    current_status = 'in_stock',
-			    lifecycle_status = 'active',
-			    assignment_status = 'unassigned',
+			SET status = 'in_stock',
 			    accepted_at = NOW(),
 			    updated_at = NOW()
 			WHERE id = $1
@@ -411,13 +334,10 @@ func (s *Store) RebuildAcceptBadgeDevice(ctx context.Context, id int64, reason s
 }
 
 func (s *Store) RebuildRejectAcceptance(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	return s.rebuildChangeBadgeStatus(ctx, id, "reject_acceptance", BadgeStatusPendingAcceptance, BadgeStatusUnusable, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
+	return s.rebuildChangeBadgeStatus(ctx, id, "reject_acceptance", BadgeStatusPendingAcceptance, BadgeStatusReturned, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status = 'blocked',
-			    current_status = 'repair_pending',
-			    lifecycle_status = 'active',
-			    assignment_status = 'unassigned',
+			SET status = 'returned',
 			    updated_at = NOW()
 			WHERE id = $1
 		`, id)
@@ -472,7 +392,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		SELECT id
 		FROM badge_devices
 		WHERE employee_id = $1
-		  AND status = 'in_use'
+		  AND status = 'assigned'
 		  AND deleted_at IS NULL
 		  AND id <> $2
 		LIMIT 1
@@ -486,10 +406,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 
 	_, err = tx.Exec(ctx, `
 		UPDATE badge_devices
-		SET status = 'in_use',
-		    current_status = 'assigned_employee',
-		    lifecycle_status = 'active',
-		    assignment_status = 'employee',
+		SET status = 'assigned',
 		    tenant_id = $2,
 		    tenant_name = $3,
 		    employee_id = $4,
@@ -507,7 +424,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, tenant_id, employee_id, operator_id, notes, extra_data, created_at)
-		VALUES ($1, 'assign_employee', 'ready', 'in_use', $2, $3, $4, NULL, $5, NOW())
+		VALUES ($1, 'assign_employee', 'in_stock', 'assigned', $2, $3, $4, NULL, $5, NOW())
 	`, id, tenantID, employeeID, operatorID, JSONObject{
 		"tenant_name":   tenantName,
 		"employee_name": employeeName,
@@ -526,10 +443,7 @@ func (s *Store) RebuildRestockBadgeDevice(ctx context.Context, id int64, reason 
 	return s.rebuildChangeBadgeStatus(ctx, id, "restock", BadgeStatusReturned, BadgeStatusInStock, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status = 'ready',
-			    current_status = 'in_stock',
-			    lifecycle_status = 'active',
-			    assignment_status = 'unassigned',
+			SET status = 'in_stock',
 			    updated_at = NOW()
 			WHERE id = $1
 		`, id)
@@ -537,57 +451,11 @@ func (s *Store) RebuildRestockBadgeDevice(ctx context.Context, id int64, reason 
 	})
 }
 
-func (s *Store) RebuildMarkBadgeUnusable(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	if device.BadgeStatus != BadgeStatusPendingAcceptance && device.BadgeStatus != BadgeStatusReturned && device.BadgeStatus != BadgeStatusAssigned {
-		return fmt.Errorf("badge status does not allow mark unusable")
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE badge_devices
-		SET status = 'blocked',
-		    current_status = 'repair_pending',
-		    lifecycle_status = 'active',
-		    assignment_status = 'unassigned',
-		    tenant_id = NULL,
-		    tenant_name = NULL,
-		    employee_id = NULL,
-		    employee_name = NULL,
-		    employee_phone = NULL,
-		    updated_at = NOW()
-		WHERE id = $1
-	`, id)
-	if err != nil {
-		return fmt.Errorf("failed to mark badge unusable: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, operator_id, notes, extra_data, created_at)
-		VALUES ($1, 'mark_unusable', $2, 'blocked', $3, NULLIF($4, ''), '{}'::jsonb, NOW())
-	`, id, rebuildLegacyStatus(device.BadgeStatus), operatorID, reason); err != nil {
-		return fmt.Errorf("failed to insert unusable lifecycle log: %w", err)
-	}
-
-	return tx.Commit(ctx)
-}
-
 func (s *Store) RebuildRetireBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	return s.rebuildChangeBadgeStatus(ctx, id, "retire", BadgeStatusUnusable, BadgeStatusRetired, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
+	return s.rebuildChangeBadgeStatus(ctx, id, "retire", BadgeStatusReturned, BadgeStatusRetired, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
 			SET status = 'retired',
-			    current_status = 'scrapped',
-			    lifecycle_status = 'scrapped',
-			    assignment_status = 'unassigned',
 			    updated_at = NOW()
 			WHERE id = $1
 		`, id)
@@ -599,10 +467,7 @@ func (s *Store) rebuildTransitionWithReset(ctx context.Context, id int64, fromSt
 	return s.rebuildChangeBadgeStatus(ctx, id, action, fromStatus, toStatus, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE badge_devices
-			SET status = 'ready',
-			    current_status = 'in_stock',
-			    lifecycle_status = 'active',
-			    assignment_status = 'unassigned',
+			SET status = 'returned',
 			    tenant_id = NULL,
 			    tenant_name = NULL,
 			    employee_id = NULL,
@@ -637,7 +502,7 @@ func (s *Store) rebuildChangeBadgeStatus(ctx context.Context, id int64, action, 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO badge_device_lifecycle_logs (device_id, action, from_status, to_status, operator_id, notes, extra_data, created_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), '{}'::jsonb, NOW())
-	`, id, action, rebuildLegacyStatus(fromStatus), rebuildLegacyStatus(toStatus), operatorID, reason); err != nil {
+	`, id, action, fromStatus, toStatus, operatorID, reason); err != nil {
 		return fmt.Errorf("failed to insert lifecycle log: %w", err)
 	}
 	return tx.Commit(ctx)

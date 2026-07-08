@@ -342,51 +342,6 @@ Authorization: Bearer <your-token>
 }
 ```
 
----
-### `POST /api/v1/badge-control/assign/employee`
-
-**描述**: 执行 AssignToEmployee 操作
-
-**Handler**: `AssignToEmployee`
-
-**请求体示例**:
-```json
-{
-  "data": "请求数据"
-}
-```
-
-**响应示例**:
-```json
-{
-  "data": {
-    "message": "操作成功"
-  }
-}
-```
-
----
-### `POST /api/v1/badge-control/assign/tenant`
-
-**描述**: 执行 AssignToTenant 操作
-
-**Handler**: `AssignToTenant`
-
-**请求体示例**:
-```json
-{
-  "data": "请求数据"
-}
-```
-
-**响应示例**:
-```json
-{
-  "data": {
-    "message": "操作成功"
-  }
-}
-```
 
 ---
 ### `GET /api/v1/badge-control/dashboard/summary`
@@ -622,44 +577,6 @@ Authorization: Bearer <your-token>
 }
 ```
 
----
-### `POST /api/v1/badge-control/reclaim/employee`
-
-**描述**: 执行 ReclaimFromEmployee 操作
-
-**Handler**: `ReclaimFromEmployee`
-
-**请求体示例**:
-```json
-{
-  "data": "请求数据"
-}
-```
-
-**响应示例**:
-```json
-{
-  "data": {
-    "message": "操作成功"
-  }
-}
-```
-
----
-### `POST /api/v1/badge-control/reclaim/tenant`
-
-**描述**: 执行 ReclaimFromTenant 操作
-
-**Handler**: `ReclaimFromTenant`
-
-**请求体示例**:
-```json
-{
-  "data": "请求数据"
-}
-```
-
-**响应示例**:
 ```json
 {
   "data": {

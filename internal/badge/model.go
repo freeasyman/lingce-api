@@ -15,7 +15,7 @@ type BadgeDevice struct {
 	ManufacturerName   *string    `json:"manufacturer_name,omitempty"`
 	Model              *string    `json:"model,omitempty"`
 	HardwareModel      *string    `json:"hardware_model,omitempty"`
-	Status             string     `json:"status"` // "pending", "ready", "in_use", "blocked", "retired"
+	Status             string     `json:"status"` // "pending_acceptance", "in_stock", "assigned", "returned", "retired"
 	HealthStatus       string     `json:"health_status"`
 	HealthCheckResult  JSONObject `json:"health_check_result,omitempty"`
 	TenantID           *int64     `json:"tenant_id,omitempty"`

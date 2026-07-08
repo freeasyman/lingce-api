@@ -202,49 +202,6 @@ func (s *Store) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*Badg
 	return &d, nil
 }
 
-// AcceptDevices accepts devices
-func (s *Store) AcceptDevices(ctx context.Context, devices []AcceptanceDeviceInput, operatorID int64) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, device := range devices {
-		// Insert device
-		query := `
-			INSERT INTO badge_devices (
-				device_no, manufacturer_code, model,
-				status, current_status, lifecycle_status, assignment_status,
-				accepted_at, created_at, updated_at
-			)
-			VALUES ($1, $2, $3, 'ready', 'in_stock', 'active', 'unassigned', NOW(), NOW(), NOW())
-			RETURNING id
-		`
-		var deviceID int64
-		err := tx.QueryRow(ctx, query, device.DeviceNo, device.ManufacturerCode, device.Model).Scan(&deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to insert device: %w", err)
-		}
-
-		// Insert lifecycle log
-		logQuery := `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, created_at)
-			VALUES ($1, 'acceptance', 'ready', $2, NOW())
-		`
-		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID); err != nil {
-			return fmt.Errorf("failed to insert lifecycle log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
-
-// AssignToTenant assigns devices to tenant
 func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID, operatorID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -253,11 +210,9 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 	defer tx.Rollback(ctx)
 
 	for _, deviceID := range deviceIDs {
-		// Update device
 		query := `
 			UPDATE badge_devices
-				SET tenant_id = $1, status = 'in_use', current_status = 'assigned_tenant', lifecycle_status = 'active',
-				    assignment_status = 'tenant', assigned_to_tenant_at = NOW(), updated_at = NOW()
+				SET tenant_id = $1, status = 'assigned', assigned_to_tenant_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, tenantID, deviceID)
@@ -268,10 +223,9 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 			return fmt.Errorf("device not found: %d", deviceID)
 		}
 
-		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, tenant_id, operator_id, created_at)
-			VALUES ($1, 'assign_tenant', 'in_use', $2, $3, NOW())
+			VALUES ($1, 'assign_tenant', 'assigned', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, tenantID, operatorID); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -281,11 +235,9 @@ func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID,
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
 	return nil
 }
 
-// AssignToEmployee assigns devices to employee
 func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employeeID, operatorID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -294,11 +246,9 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 	defer tx.Rollback(ctx)
 
 	for _, deviceID := range deviceIDs {
-		// Update device
 		query := `
 			UPDATE badge_devices
-				SET employee_id = $1, status = 'in_use', current_status = 'assigned_employee', lifecycle_status = 'active',
-				    assignment_status = 'employee', assigned_to_emp_at = NOW(), updated_at = NOW()
+				SET employee_id = $1, status = 'assigned', assigned_to_emp_at = NOW(), updated_at = NOW()
 			WHERE id = $2 AND deleted_at IS NULL
 		`
 		result, err := tx.Exec(ctx, query, employeeID, deviceID)
@@ -309,10 +259,9 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 			return fmt.Errorf("device not found: %d", deviceID)
 		}
 
-		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, employee_id, operator_id, created_at)
-			VALUES ($1, 'assign_employee', 'in_use', $2, $3, NOW())
+			VALUES ($1, 'assign_employee', 'assigned', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, employeeID, operatorID); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -322,11 +271,9 @@ func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employe
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
 	return nil
 }
 
-// ReclaimFromEmployee reclaims devices from employee
 func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -335,13 +282,9 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 	defer tx.Rollback(ctx)
 
 	for _, deviceID := range deviceIDs {
-		// Update device
 		query := `
 			UPDATE badge_devices
-				SET status = 'ready',
-				    current_status = 'in_stock',
-			    lifecycle_status = 'active',
-			    assignment_status = CASE WHEN tenant_id IS NULL THEN 'unassigned' ELSE 'tenant' END,
+				SET status = 'returned',
 			    inspection_result = COALESCE(inspection_result, 'pass'),
 			    employee_id = NULL,
 			    employee_name = NULL,
@@ -358,10 +301,9 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 			return fmt.Errorf("device not found: %d", deviceID)
 		}
 
-		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_employee', 'ready', $2, $3, NOW())
+			VALUES ($1, 'reclaim_employee', 'returned', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -371,11 +313,9 @@ func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, oper
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
 	return nil
 }
 
-// ReclaimFromTenant reclaims devices from tenant
 func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -384,13 +324,9 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 	defer tx.Rollback(ctx)
 
 	for _, deviceID := range deviceIDs {
-		// Update device
 		query := `
 			UPDATE badge_devices
-				SET status = 'ready',
-				    current_status = 'in_stock',
-			    lifecycle_status = 'active',
-			    assignment_status = 'unassigned',
+				SET status = 'returned',
 			    inspection_result = COALESCE(inspection_result, 'pass'),
 			    tenant_id = NULL,
 			    tenant_name = NULL,
@@ -410,10 +346,9 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 			return fmt.Errorf("device not found: %d", deviceID)
 		}
 
-		// Insert lifecycle log
 		logQuery := `
 			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_tenant', 'ready', $2, $3, NOW())
+			VALUES ($1, 'reclaim_tenant', 'returned', $2, $3, NOW())
 		`
 		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
 			return fmt.Errorf("failed to insert lifecycle log: %w", err)
@@ -423,7 +358,6 @@ func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operat
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
 	return nil
 }
 
@@ -432,10 +366,10 @@ func (s *Store) GetDashboardSummary(ctx context.Context) (*DashboardSummaryRespo
 	query := `
 		SELECT
 			COUNT(*) as total_devices,
-			COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_acceptance,
-			COUNT(CASE WHEN status = 'ready' THEN 1 END) as pending_assignment,
-			COUNT(CASE WHEN status = 'in_use' THEN 1 END) as in_use,
-			COUNT(CASE WHEN status = 'blocked' THEN 1 END) as maintenance,
+			COUNT(CASE WHEN status = 'pending_acceptance' THEN 1 END) as pending_acceptance,
+			COUNT(CASE WHEN status = 'in_stock' THEN 1 END) as pending_assignment,
+			COUNT(CASE WHEN status = 'assigned' THEN 1 END) as in_use,
+			COUNT(CASE WHEN status = 'returned' THEN 1 END) as maintenance,
 			COUNT(CASE WHEN status = 'retired' THEN 1 END) as retired
 		FROM badge_devices
 		WHERE deleted_at IS NULL

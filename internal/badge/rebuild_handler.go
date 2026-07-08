@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -25,7 +26,6 @@ func (h *Handler) registerRebuildRoutes(mux *http.ServeMux, authMw func(http.Han
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/assign", authMw(http.HandlerFunc(h.RebuildAssignBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/reclaim", authMw(http.HandlerFunc(h.RebuildReclaimBadgeDevice)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/restock", authMw(http.HandlerFunc(h.RebuildRestockBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/mark-unusable", authMw(http.HandlerFunc(h.RebuildMarkBadgeUnusable)))
 	mux.Handle("POST /api/v2/badge-devices/{id}/actions/retire", authMw(http.HandlerFunc(h.RebuildRetireBadgeDevice)))
 }
 
@@ -158,10 +158,6 @@ func (h *Handler) RebuildRestockBadgeDevice(w http.ResponseWriter, r *http.Reque
 	h.rebuildRunStatusAction(w, r, h.service.RebuildRestockBadgeDevice)
 }
 
-func (h *Handler) RebuildMarkBadgeUnusable(w http.ResponseWriter, r *http.Request) {
-	h.rebuildRunStatusAction(w, r, h.service.RebuildMarkBadgeUnusable)
-}
-
 func (h *Handler) RebuildRetireBadgeDevice(w http.ResponseWriter, r *http.Request) {
 	h.rebuildRunStatusAction(w, r, h.service.RebuildRetireBadgeDevice)
 }
@@ -204,6 +200,9 @@ func (h *Handler) parseRebuildListRequest(r *http.Request) RebuildBadgeDeviceLis
 		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
 			req.EmployeeID = &parsed
 		}
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("employee_keyword")); v != "" {
+		req.EmployeeKey = &v
 	}
 	if v := r.URL.Query().Get("badge_status"); v != "" {
 		req.BadgeStatus = &v

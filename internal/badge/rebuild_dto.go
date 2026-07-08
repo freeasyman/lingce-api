@@ -3,6 +3,7 @@ package badge
 type RebuildBadgeDeviceListRequest struct {
 	TenantID    *int64
 	EmployeeID  *int64
+	EmployeeKey *string
 	BadgeStatus *string
 	HealthLevel *string
 	DeviceNo    *string

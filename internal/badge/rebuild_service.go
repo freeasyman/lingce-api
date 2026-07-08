@@ -91,10 +91,6 @@ func (s *Service) RebuildRestockBadgeDevice(ctx context.Context, id int64, reaso
 	return s.store.RebuildRestockBadgeDevice(ctx, id, reason, operatorID, operatorName)
 }
 
-func (s *Service) RebuildMarkBadgeUnusable(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	return s.store.RebuildMarkBadgeUnusable(ctx, id, reason, operatorID, operatorName)
-}
-
 func (s *Service) RebuildRetireBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
 	return s.store.RebuildRetireBadgeDevice(ctx, id, reason, operatorID, operatorName)
 }

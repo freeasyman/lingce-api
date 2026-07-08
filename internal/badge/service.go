@@ -124,58 +124,31 @@ func (s *Service) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*De
 	return toDeviceResponse(device), nil
 }
 
-// AcceptDevices accepts devices
-func (s *Service) AcceptDevices(ctx context.Context, devices []AcceptanceDeviceInput, operatorID int64) error {
-	// Validate request
-	if len(devices) == 0 {
-		return fmt.Errorf("no devices to accept")
-	}
-
-	for _, device := range devices {
-		if device.DeviceNo == "" {
-			return fmt.Errorf("device_no is required")
-		}
-		if device.ManufacturerCode == "" {
-			return fmt.Errorf("manufacturer_code is required")
-		}
-	}
-
-	return s.store.AcceptDevices(ctx, devices, operatorID)
-}
-
-// AssignToTenant assigns devices to tenant
 func (s *Service) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID, operatorID int64) error {
 	if len(deviceIDs) == 0 {
 		return fmt.Errorf("no devices to assign")
 	}
-
 	return s.store.AssignToTenant(ctx, deviceIDs, tenantID, operatorID)
 }
 
-// AssignToEmployee assigns devices to employee
 func (s *Service) AssignToEmployee(ctx context.Context, deviceIDs []int64, employeeID, operatorID int64) error {
 	if len(deviceIDs) == 0 {
 		return fmt.Errorf("no devices to assign")
 	}
-
 	return s.store.AssignToEmployee(ctx, deviceIDs, employeeID, operatorID)
 }
 
-// ReclaimFromEmployee reclaims devices from employee
 func (s *Service) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
 	if len(deviceIDs) == 0 {
 		return fmt.Errorf("no devices to reclaim")
 	}
-
 	return s.store.ReclaimFromEmployee(ctx, deviceIDs, operatorID, notes)
 }
 
-// ReclaimFromTenant reclaims devices from tenant
 func (s *Service) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
 	if len(deviceIDs) == 0 {
 		return fmt.Errorf("no devices to reclaim")
 	}
-
 	return s.store.ReclaimFromTenant(ctx, deviceIDs, operatorID, notes)
 }
 

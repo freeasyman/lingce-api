@@ -271,16 +271,18 @@ func (s *Service) V2HealthCheckAndPersist(ctx context.Context, deviceID int64, o
 
 func deriveStatusAfterHealthCheck(currentStatus string, passed bool) string {
 	current := strings.ToLower(strings.TrimSpace(currentStatus))
-	if current == "retired" {
+	switch current {
+	case "retired":
 		return "retired"
+	case "assigned", "in_use":
+		return "assigned"
+	case "returned":
+		return "returned"
+	case "pending_acceptance", "pending":
+		return "pending_acceptance"
+	default:
+		return "in_stock"
 	}
-	if !passed {
-		return "blocked"
-	}
-	if current == "in_use" {
-		return "in_use"
-	}
-	return "ready"
 }
 
 func (s *Service) waitForAudioCallback(ctx context.Context, deviceNo string, since time.Time, timeout time.Duration) bool {
@@ -351,7 +353,7 @@ func (s *Service) V2BatchHealthCheck(ctx context.Context, deviceIDs []int64) (JS
 			perCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 
-			result, err := s.V2HealthCheck(perCtx, deviceID)
+			result, err := s.V2HealthCheckAndPersist(perCtx, deviceID, 0, "")
 			out <- item{result: result, err: err}
 		}()
 	}
@@ -503,9 +505,9 @@ func (s *Service) V2BatchAccept(ctx context.Context, req V2BatchAcceptRequest, o
 				continue
 			}
 		}
-		toStatus := "ready"
+		toStatus := BadgeStatusInStock
 		if !health.Passed {
-			toStatus = "blocked"
+			toStatus = BadgeStatusReturned
 		}
 		if err := s.store.V2UpdateDeviceStatusWithHealth(ctx, id, toStatus, health.HealthStatus, health.HealthCheckResult, operatorID, operatorName, "accept", JSONObject{
 			"acceptance_batch_no": req.AcceptanceBatchNo,
@@ -885,13 +887,11 @@ func tryInsertVendorDevice(
 		_, err := s.store.pool.Exec(ctx, `
 			INSERT INTO badge_devices (
 				manufacturer_id, app_id, device_no, device_uid,
-				lifecycle_status, assignment_status, inspection_result,
 				manufacturer_code, manufacturer_name, hardware_model,
 				health_status, battery_level, last_online_at,
 				metadata, ext_json, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
-				'pending_acceptance', 'unassigned', 'unknown',
 				$5, $6, NULLIF($7, ''),
 				$8, $9, $10,
 				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
@@ -904,18 +904,16 @@ func tryInsertVendorDevice(
 		_, err := s.store.pool.Exec(ctx, `
 			INSERT INTO badge_devices (
 				manufacturer_id, app_id, device_no, device_uid,
-				current_status, lifecycle_status, assignment_status, inspection_result,
 				manufacturer_code, manufacturer_name, hardware_model,
 				status, health_status, battery_level, last_online_at,
 				metadata, ext_json, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4,
-				$5, 'pending_acceptance', 'unassigned', 'unknown',
-				$6, $7, NULLIF($8, ''),
-				$9, $10, $11, $12,
+				$5, $6, NULLIF($7, ''),
+				$8, $9, $10, $11,
 				'{}'::jsonb, '{}'::jsonb, NOW(), NOW()
 			)
-		`, manufacturerID, appID, deviceNo, deviceUID, currentStatus, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
+		`, manufacturerID, appID, deviceNo, deviceUID, code, manufacturerName, hardwareModel, status, healthStatus, batteryLevel, lastOnlineAt)
 		return err
 	}
 

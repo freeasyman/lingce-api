@@ -455,10 +455,6 @@
 | 6 | GET | `/api/v1/badge-control/inspection/devices` | 检测设备列表 | P0 |
 | 7 | GET | `/api/v1/badge-control/inspection/device/{device_id}/live-status` | 设备实时状态 | P1 |
 | 8 | POST | `/api/v1/badge-control/inspection/device/{device_id}/recording-test` | 录音测试 | P1 |
-| 9 | POST | `/api/v1/badge-control/assign/tenant` | 分配给租户 | P0 |
-| 10 | POST | `/api/v1/badge-control/assign/employee` | 分配给员工 | P0 |
-| 11 | POST | `/api/v1/badge-control/reclaim/employee` | 从员工回收 | P0 |
-| 12 | POST | `/api/v1/badge-control/reclaim/tenant` | 从租户回收 | P0 |
 | 13 | POST | `/api/v1/badge-control/tickets/submit` | 提交工单 | P0 |
 | 14 | POST | `/api/v1/badge-control/tickets/submit-by-device` | 按设备提交工单 | P0 |
 | 15 | GET | `/api/v1/badge-control/tickets/my` | 我的工单 | P0 |
