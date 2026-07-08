@@ -144,6 +144,13 @@ func (s *Service) V2HealthCheck(ctx context.Context, deviceID int64) (*V2HealthC
 	if err != nil {
 		return nil, err
 	}
+	return s.v2RunAcceptanceCheck(ctx, device)
+}
+
+func (s *Service) v2RunAcceptanceCheck(ctx context.Context, device *BadgeDevice) (*V2HealthCheckResult, error) {
+	if device == nil {
+		return nil, fmt.Errorf("device not found")
+	}
 	adapter := s.getManufacturerAdapter(device.ManufacturerCode)
 
 	result := JSONObject{
@@ -203,10 +210,12 @@ func (s *Service) V2HealthCheck(ctx context.Context, deviceID int64) (*V2HealthC
 	}
 	result["recording_duration_seconds"] = int(healthCheckRecordingDuration / time.Second)
 	if startRecordingOK && stopRecordingOK {
-		callbackOK := s.waitForAudioCallback(ctx, device.DeviceNo, checkStartedAt, healthCheckCallbackWaitTimeout)
+		callbackOK, analysisOK := s.waitForRecordingChainStatus(ctx, device.DeviceNo, checkStartedAt, healthCheckCallbackWaitTimeout)
 		result["callback_ok"] = callbackOK
+		result["analysis_ok"] = analysisOK
 		if recordingTest, ok := result["recording_test"].(JSONObject); ok {
 			recordingTest["callback"] = callbackOK
+			recordingTest["analysis"] = analysisOK
 			result["recording_test"] = recordingTest
 		}
 	}
@@ -269,6 +278,38 @@ func (s *Service) V2HealthCheckAndPersist(ctx context.Context, deviceID int64, o
 	return health, nil
 }
 
+func (s *Service) RebuildRunAcceptanceCheck(ctx context.Context, deviceID int64, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+	device, _, err := s.store.V2GetDeviceByID(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	health, err := s.v2RunAcceptanceCheck(ctx, device)
+	if err != nil {
+		return nil, err
+	}
+	if health.Passed {
+		if err := s.store.V2UpdateDeviceStatusWithHealth(
+			ctx,
+			deviceID,
+			"in_stock",
+			health.HealthStatus,
+			health.HealthCheckResult,
+			operatorID,
+			operatorName,
+			"accept",
+			JSONObject{
+				"trigger": "run_acceptance",
+				"passed":  true,
+			},
+		); err != nil {
+			return nil, err
+		}
+	} else if err := s.store.RebuildSetBadgeHealthSnapshot(ctx, deviceID, health.HealthStatus, health.HealthCheckResult, operatorID); err != nil {
+		return nil, err
+	}
+	return s.store.RebuildGetBadgeDeviceByID(ctx, deviceID)
+}
+
 func deriveStatusAfterHealthCheck(currentStatus string, passed bool) string {
 	current := strings.ToLower(strings.TrimSpace(currentStatus))
 	switch current {
@@ -286,6 +327,11 @@ func deriveStatusAfterHealthCheck(currentStatus string, passed bool) string {
 }
 
 func (s *Service) waitForAudioCallback(ctx context.Context, deviceNo string, since time.Time, timeout time.Duration) bool {
+	callbackOK, _ := s.waitForRecordingChainStatus(ctx, deviceNo, since, timeout)
+	return callbackOK
+}
+
+func (s *Service) waitForRecordingChainStatus(ctx context.Context, deviceNo string, since time.Time, timeout time.Duration) (bool, bool) {
 	deadline := time.Now().Add(timeout)
 	action := "callback"
 	status := "success"
@@ -298,6 +344,8 @@ func (s *Service) waitForAudioCallback(ctx context.Context, deviceNo string, sin
 			PageSize: 50,
 		})
 		if err == nil {
+			callbackOK := false
+			analysisOK := false
 			for _, log := range logs {
 				if log == nil {
 					continue
@@ -308,13 +356,23 @@ func (s *Service) waitForAudioCallback(ctx context.Context, deviceNo string, sin
 				source := strings.ToLower(strings.TrimSpace(anyToString(log.ExtraData["source"])))
 				eventType := strings.ToLower(strings.TrimSpace(anyToString(log.ExtraData["event_type"])))
 				if source == "audio" || strings.Contains(eventType, "audio") {
-					return true
+					callbackOK = true
+				}
+				if source == "analysis" || strings.Contains(eventType, "analysis") {
+					analysisOK = true
 				}
 			}
+			if callbackOK || analysisOK {
+				return callbackOK, analysisOK
+			}
+		}
+		audioCallbackOK, ingestOK, audioErr := s.GetLatestAudioEventStatus(ctx, deviceNo)
+		if audioErr == nil && (audioCallbackOK || ingestOK) {
+			return audioCallbackOK, ingestOK
 		}
 		time.Sleep(healthCheckCallbackPollInterval)
 	}
-	return false
+	return false, false
 }
 
 func anyToString(v interface{}) string {
