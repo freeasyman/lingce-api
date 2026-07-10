@@ -124,34 +124,6 @@ func (s *Service) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*De
 	return toDeviceResponse(device), nil
 }
 
-func (s *Service) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID, operatorID int64) error {
-	if len(deviceIDs) == 0 {
-		return fmt.Errorf("no devices to assign")
-	}
-	return s.store.AssignToTenant(ctx, deviceIDs, tenantID, operatorID)
-}
-
-func (s *Service) AssignToEmployee(ctx context.Context, deviceIDs []int64, employeeID, operatorID int64) error {
-	if len(deviceIDs) == 0 {
-		return fmt.Errorf("no devices to assign")
-	}
-	return s.store.AssignToEmployee(ctx, deviceIDs, employeeID, operatorID)
-}
-
-func (s *Service) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
-	if len(deviceIDs) == 0 {
-		return fmt.Errorf("no devices to reclaim")
-	}
-	return s.store.ReclaimFromEmployee(ctx, deviceIDs, operatorID, notes)
-}
-
-func (s *Service) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
-	if len(deviceIDs) == 0 {
-		return fmt.Errorf("no devices to reclaim")
-	}
-	return s.store.ReclaimFromTenant(ctx, deviceIDs, operatorID, notes)
-}
-
 // Ticket Services
 
 // CreateTicket creates a ticket
@@ -267,10 +239,6 @@ func (s *Service) notifyTicketCreated(ticket *BadgeTicket) {
 }
 
 // GetDashboardSummary retrieves dashboard summary
-func (s *Service) GetDashboardSummary(ctx context.Context) (*DashboardSummaryResponse, error) {
-	return s.store.GetDashboardSummary(ctx)
-}
-
 // Recording Control Services
 
 // StartRecording starts recording
@@ -502,53 +470,6 @@ func (s *Service) enqueueTranscribeJob(ctx context.Context, recordingID, tenantI
 		return fmt.Errorf("lingce-worker status=%d", resp.StatusCode)
 	}
 	return nil
-}
-
-// Manufacturer Services
-
-// ListManufacturers retrieves all manufacturers
-func (s *Service) ListManufacturers(ctx context.Context) ([]*ManufacturerResponse, error) {
-	manufacturers, err := s.store.ListManufacturers(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	responses := make([]*ManufacturerResponse, len(manufacturers))
-	for i, m := range manufacturers {
-		responses[i] = toManufacturerResponse(m)
-	}
-
-	return responses, nil
-}
-
-// GetManufacturerByCode retrieves a manufacturer by code
-func (s *Service) GetManufacturerByCode(ctx context.Context, code string) (*ManufacturerResponse, error) {
-	manufacturer, err := s.store.GetManufacturerByCode(ctx, code)
-	if err != nil {
-		return nil, err
-	}
-
-	return toManufacturerResponse(manufacturer), nil
-}
-
-// UpdateManufacturerConfig updates manufacturer config
-func (s *Service) UpdateManufacturerConfig(ctx context.Context, code string, config JSONObject) error {
-	return s.store.UpdateManufacturerConfig(ctx, code, config)
-}
-
-// GetLifecycleLogs retrieves lifecycle logs for a device
-func (s *Service) GetLifecycleLogs(ctx context.Context, deviceID int64) ([]*LifecycleLogResponse, error) {
-	logs, err := s.store.GetLifecycleLogs(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-
-	responses := make([]*LifecycleLogResponse, len(logs))
-	for i, l := range logs {
-		responses[i] = toLifecycleLogResponse(l)
-	}
-
-	return responses, nil
 }
 
 // Helper functions

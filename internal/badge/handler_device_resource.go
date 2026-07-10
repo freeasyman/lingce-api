@@ -31,6 +31,13 @@ func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
 	// For admin/operation users, allow viewing all devices
 	if claims != nil && claims.TenantID != nil && *claims.TenantID > 0 {
 		req.TenantID = claims.TenantID
+	} else if v := strings.TrimSpace(r.URL.Query().Get("tenant_id")); v != "" {
+		tenantID, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			httputil.WriteBadRequest(w, "invalid tenant_id")
+			return
+		}
+		req.TenantID = &tenantID
 	}
 
 	if v := r.URL.Query().Get("status"); v != "" {
@@ -55,6 +62,14 @@ func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
+	if req.PageSize <= 0 {
+		req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	}
+	if req.Page <= 0 {
+		if skip, err := strconv.Atoi(r.URL.Query().Get("skip")); err == nil && skip >= 0 && req.PageSize > 0 {
+			req.Page = (skip / req.PageSize) + 1
+		}
+	}
 	items, total, err := h.service.V2ListDevices(r.Context(), req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())

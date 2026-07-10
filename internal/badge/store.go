@@ -2,6 +2,7 @@ package badge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/recording"
 	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -202,188 +204,6 @@ func (s *Store) GetDeviceByDeviceNo(ctx context.Context, deviceNo string) (*Badg
 	return &d, nil
 }
 
-func (s *Store) AssignToTenant(ctx context.Context, deviceIDs []int64, tenantID, operatorID int64) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, deviceID := range deviceIDs {
-		query := `
-			UPDATE badge_devices
-				SET tenant_id = $1, status = 'assigned', updated_at = NOW()
-			WHERE id = $2 AND deleted_at IS NULL
-		`
-		result, err := tx.Exec(ctx, query, tenantID, deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to update device: %w", err)
-		}
-		if result.RowsAffected() == 0 {
-			return fmt.Errorf("device not found: %d", deviceID)
-		}
-
-		logQuery := `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, tenant_id, operator_id, created_at)
-			VALUES ($1, 'assign_tenant', 'assigned', $2, $3, NOW())
-		`
-		if _, err := tx.Exec(ctx, logQuery, deviceID, tenantID, operatorID); err != nil {
-			return fmt.Errorf("failed to insert lifecycle log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) AssignToEmployee(ctx context.Context, deviceIDs []int64, employeeID, operatorID int64) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, deviceID := range deviceIDs {
-		query := `
-			UPDATE badge_devices
-				SET employee_id = $1, status = 'assigned', updated_at = NOW()
-			WHERE id = $2 AND deleted_at IS NULL
-		`
-		result, err := tx.Exec(ctx, query, employeeID, deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to update device: %w", err)
-		}
-		if result.RowsAffected() == 0 {
-			return fmt.Errorf("device not found: %d", deviceID)
-		}
-
-		logQuery := `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, employee_id, operator_id, created_at)
-			VALUES ($1, 'assign_employee', 'assigned', $2, $3, NOW())
-		`
-		if _, err := tx.Exec(ctx, logQuery, deviceID, employeeID, operatorID); err != nil {
-			return fmt.Errorf("failed to insert lifecycle log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ReclaimFromEmployee(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, deviceID := range deviceIDs {
-		query := `
-			UPDATE badge_devices
-				SET status = 'returned',
-			    inspection_result = COALESCE(inspection_result, 'pass'),
-			    employee_id = NULL,
-			    employee_name = NULL,
-			    employee_phone = NULL,
-			    updated_at = NOW()
-			WHERE id = $1 AND deleted_at IS NULL
-		`
-		result, err := tx.Exec(ctx, query, deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to update device: %w", err)
-		}
-		if result.RowsAffected() == 0 {
-			return fmt.Errorf("device not found: %d", deviceID)
-		}
-
-		logQuery := `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_employee', 'returned', $2, $3, NOW())
-		`
-		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
-			return fmt.Errorf("failed to insert lifecycle log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) ReclaimFromTenant(ctx context.Context, deviceIDs []int64, operatorID int64, notes *string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, deviceID := range deviceIDs {
-		query := `
-			UPDATE badge_devices
-				SET status = 'returned',
-			    inspection_result = COALESCE(inspection_result, 'pass'),
-			    tenant_id = NULL,
-			    tenant_name = NULL,
-			    employee_id = NULL,
-			    employee_name = NULL,
-			    employee_phone = NULL,
-			    updated_at = NOW()
-			WHERE id = $1 AND deleted_at IS NULL
-		`
-		result, err := tx.Exec(ctx, query, deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to update device: %w", err)
-		}
-		if result.RowsAffected() == 0 {
-			return fmt.Errorf("device not found: %d", deviceID)
-		}
-
-		logQuery := `
-			INSERT INTO badge_device_lifecycle_logs (device_id, action, to_status, operator_id, notes, created_at)
-			VALUES ($1, 'reclaim_tenant', 'returned', $2, $3, NOW())
-		`
-		if _, err := tx.Exec(ctx, logQuery, deviceID, operatorID, notes); err != nil {
-			return fmt.Errorf("failed to insert lifecycle log: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
-// GetDashboardSummary retrieves dashboard summary
-func (s *Store) GetDashboardSummary(ctx context.Context) (*DashboardSummaryResponse, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_devices,
-			COUNT(CASE WHEN status = 'pending_acceptance' THEN 1 END) as pending_acceptance,
-			COUNT(CASE WHEN status = 'in_stock' THEN 1 END) as pending_assignment,
-			COUNT(CASE WHEN status = 'assigned' THEN 1 END) as in_use,
-			COUNT(CASE WHEN status = 'returned' THEN 1 END) as maintenance,
-			COUNT(CASE WHEN status = 'retired' THEN 1 END) as retired
-		FROM badge_devices
-		WHERE deleted_at IS NULL
-	`
-
-	var summary DashboardSummaryResponse
-	err := s.pool.QueryRow(ctx, query).Scan(
-		&summary.TotalDevices, &summary.PendingAcceptance, &summary.PendingAssignment,
-		&summary.InUse, &summary.Maintenance, &summary.Retired,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get dashboard summary: %w", err)
-	}
-
-	return &summary, nil
-}
-
 // Recording Control Methods
 
 // CreateRecordingControlLog creates a recording control log
@@ -395,6 +215,19 @@ func (s *Store) CreateRecordingControlLog(ctx context.Context, deviceNo string, 
 
 	_, err := s.pool.Exec(ctx, query, deviceNo, action, status, operatorID, errorMsg, extraData)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "badge_recording_control_logs_pkey" {
+			retryQuery := `
+				INSERT INTO badge_recording_control_logs (id, device_no, action, status, operator_id, error_msg, extra_data, created_at)
+				SELECT COALESCE(MAX(id), 0) + 1, $1, $2, $3, $4, $5, $6, NOW()
+				FROM badge_recording_control_logs
+			`
+			if _, retryErr := s.pool.Exec(ctx, retryQuery, deviceNo, action, status, operatorID, errorMsg, extraData); retryErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("failed to create recording control log after pkey retry: %w", retryErr)
+			}
+		}
 		return fmt.Errorf("failed to create recording control log: %w", err)
 	}
 
@@ -1047,55 +880,6 @@ func (s *Store) GetManufacturerByCode(ctx context.Context, code string) (*BadgeM
 	}
 
 	return &m, nil
-}
-
-// UpdateManufacturerConfig updates manufacturer config
-func (s *Store) UpdateManufacturerConfig(ctx context.Context, code string, config JSONObject) error {
-	query := `
-		UPDATE badge_manufacturers
-		SET config = $1, updated_at = NOW()
-		WHERE code = $2
-	`
-
-	result, err := s.pool.Exec(ctx, query, config, code)
-	if err != nil {
-		return fmt.Errorf("failed to update manufacturer config: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("manufacturer not found")
-	}
-
-	return nil
-}
-
-// GetLifecycleLogs retrieves lifecycle logs for a device
-func (s *Store) GetLifecycleLogs(ctx context.Context, deviceID int64) ([]*BadgeDeviceLifecycleLog, error) {
-	query := `
-		SELECT id, device_id, action, from_status, to_status, tenant_id, employee_id,
-		       operator_id, notes, extra_data, created_at
-		FROM badge_device_lifecycle_logs
-		WHERE device_id = $1
-		ORDER BY created_at DESC
-	`
-
-	rows, err := s.pool.Query(ctx, query, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query lifecycle logs: %w", err)
-	}
-	defer rows.Close()
-
-	var logs []*BadgeDeviceLifecycleLog
-	for rows.Next() {
-		var l BadgeDeviceLifecycleLog
-		if err := rows.Scan(&l.ID, &l.DeviceID, &l.Action, &l.FromStatus, &l.ToStatus,
-			&l.TenantID, &l.EmployeeID, &l.OperatorID, &l.Notes, &l.ExtraData, &l.CreatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan lifecycle log: %w", err)
-		}
-		logs = append(logs, &l)
-	}
-
-	return logs, nil
 }
 
 // GetRecordingStats retrieves recording statistics for a tenant

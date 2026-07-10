@@ -207,11 +207,19 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		       )
 		 WHERE COALESCE(platform, '') = ''
 		   AND extra_data IS NOT NULL`,
+		// 试用客户指标重算按 tenant_id 聚合 content_items / recording_tasks，补索引避免全表扫描。
+		// content_items 由本迁移建表，直接建索引；recording_tasks 由其他模块建表，
+		// 用 to_regclass 判断表存在才建索引，避免迁移在该表尚未创建时中断。
+		`CREATE INDEX IF NOT EXISTS idx_content_items_tenant ON content_items(tenant_id)`,
+		`DO $$
+		BEGIN
+			IF to_regclass('public.recording_tasks') IS NOT NULL THEN
+				CREATE INDEX IF NOT EXISTS idx_recording_tasks_tenant_recording ON recording_tasks(tenant_id, recording_id);
+			END IF;
+		END $$;`,
 
 		// Badge module compatibility (missing columns/table)
-		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS device_id TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS manufacturer_code TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS model TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'in_use'`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS tenant_id BIGINT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS employee_id BIGINT`,
@@ -220,8 +228,6 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS firmware_version TEXT`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS extra_data JSONB DEFAULT '{}'::jsonb`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMP`,
-		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS assigned_to_tenant_at TIMESTAMP`,
-		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS assigned_to_emp_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS last_online_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE IF EXISTS badge_devices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
@@ -500,6 +506,26 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN tenant_id SET DEFAULT 0`,
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN model_code SET DEFAULT ''`,
 		`ALTER TABLE IF EXISTS llm_model_configs ALTER COLUMN function_type SET DEFAULT 'general'`,
+		`UPDATE llm_model_configs
+		   SET model_params = jsonb_set(
+		         COALESCE(model_params, '{}'::json)::jsonb,
+		         '{timeout_seconds}',
+		         '120'::jsonb,
+		         true
+		       )::json
+		 WHERE deleted_at IS NULL
+		   AND function_type IN ('content_article', 'content_script', 'content_graphic_note', 'content_generation')
+		   AND COALESCE(NULLIF(model_params->>'timeout_seconds', ''), '0')::int < 120`,
+		`UPDATE llm_model_configs
+		   SET model_params = jsonb_set(
+		         COALESCE(model_params, '{}'::json)::jsonb,
+		         '{timeout_seconds}',
+		         '90'::jsonb,
+		         true
+		       )::json
+		 WHERE deleted_at IS NULL
+		   AND function_type IN ('content_topic', 'topic_generation')
+		   AND COALESCE(NULLIF(model_params->>'timeout_seconds', ''), '0')::int < 90`,
 		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
 		 SELECT 'learning_center_benchmarks', '标杆学习', '/learning-center/benchmarks', 901, true, NOW()
 		 WHERE NOT EXISTS (

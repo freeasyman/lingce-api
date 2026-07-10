@@ -4,7 +4,6 @@ import "net/http"
 
 func (h *Handler) registerTicketRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
 	mux.Handle("POST /api/v1/badge-tickets", authMw(http.HandlerFunc(h.SubmitTicket)))
-	mux.Handle("POST /api/v1/badge-tickets/by-device", authMw(http.HandlerFunc(h.SubmitTicketByDevice)))
 	mux.Handle("GET /api/v1/badge-tickets/my", authMw(http.HandlerFunc(h.GetMyTickets)))
 	mux.Handle("GET /api/v1/badge-tickets", authMw(http.HandlerFunc(h.ListTickets)))
 	mux.Handle("GET /api/v1/badge-tickets/{id}", authMw(http.HandlerFunc(h.GetTicket)))
