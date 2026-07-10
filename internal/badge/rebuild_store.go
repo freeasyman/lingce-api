@@ -636,20 +636,8 @@ func (s *Store) insertRebuildLifecycleLogTx(ctx context.Context, tx pgx.Tx, payl
 			$6, $7, $8, $9, $10, NOW()
 		)
 	`, payload.DeviceID, payload.Action, payload.Action, payload.FromStatus, payload.ToStatus, payload.TenantID, payload.EmployeeID, payload.OperatorID, payload.Notes, payload.ExtraData)
-	if err == nil {
-		return nil
-	}
-	_, fallbackErr := tx.Exec(ctx, `
-		INSERT INTO badge_device_lifecycle_logs (
-			device_id, action, from_status, to_status,
-			tenant_id, employee_id, operator_id, notes, extra_data, created_at
-		) VALUES (
-			$1, $2, $3, $4,
-			$5, $6, $7, $8, $9, NOW()
-		)
-	`, payload.DeviceID, payload.Action, payload.FromStatus, payload.ToStatus, payload.TenantID, payload.EmployeeID, payload.OperatorID, payload.Notes, payload.ExtraData)
-	if fallbackErr != nil {
-		return fmt.Errorf("primary insert failed: %v; fallback failed: %w", err, fallbackErr)
+	if err != nil {
+		return fmt.Errorf("failed to insert badge lifecycle log: %w", err)
 	}
 	return nil
 }
