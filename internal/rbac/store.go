@@ -28,8 +28,45 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+type adminOrgScope struct {
+	AdminID   int64
+	OrgID     *int64
+	OrgType   string
+	CanSeeAll bool
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) getAdminOrgScope(ctx context.Context, adminID int64) (*adminOrgScope, error) {
+	scope := &adminOrgScope{AdminID: adminID}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT a.id,
+		       a.org_id,
+		       COALESCE(o.type, '') AS org_type,
+		       EXISTS (
+		           SELECT 1
+		           FROM operations_admin_roles ar
+		           JOIN operations_roles r ON r.id = ar.role_id
+		           WHERE ar.admin_id = a.id
+		             AND r.deleted_at IS NULL
+		             AND r.code = 'ops_super_admin'
+		       ) AS is_super_admin
+		FROM operations_admins a
+		LEFT JOIN ops_organizations o ON o.id = a.org_id
+		WHERE a.id = $1
+		  AND a.deleted_at IS NULL
+	`, adminID).Scan(&scope.AdminID, &scope.OrgID, &scope.OrgType, &scope.CanSeeAll); err != nil {
+		return nil, fmt.Errorf("get operations admin org scope: %w", err)
+	}
+	if !scope.CanSeeAll && scope.OrgID != nil && *scope.OrgID > 0 {
+		scope.CanSeeAll = normalizeOpsOrgType(scope.OrgType) == "platform"
+	}
+	if scope.OrgID == nil || *scope.OrgID <= 0 {
+		scope.OrgType = ""
+	}
+	return scope, nil
 }
 
 func normalizeOpsOrgType(value string) string {
@@ -924,6 +961,11 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	if req.OrgID != nil && *req.OrgID > 0 {
 		query += fmt.Sprintf(" AND a.org_id = $%d", argPos)
 		args = append(args, *req.OrgID)
+		argPos++
+	}
+	if req.VisibleOrgID != nil && *req.VisibleOrgID > 0 {
+		query += fmt.Sprintf(" AND a.org_id = $%d", argPos)
+		args = append(args, *req.VisibleOrgID)
 		argPos++
 	}
 

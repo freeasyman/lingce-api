@@ -107,12 +107,14 @@ type MenuSortItem struct {
 
 // AdminListRequest represents a request to list admins
 type AdminListRequest struct {
-	Username string `json:"username,omitempty"`
-	Email    string `json:"email,omitempty"`
-	OrgID    *int64 `json:"org_id,omitempty"`
-	IsActive *bool  `json:"is_active,omitempty"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
+	Username       string `json:"username,omitempty"`
+	Email          string `json:"email,omitempty"`
+	OrgID          *int64 `json:"org_id,omitempty"`
+	VisibleOrgID   *int64 `json:"visible_org_id,omitempty"`
+	RequestAdminID int64  `json:"request_admin_id,omitempty"`
+	IsActive       *bool  `json:"is_active,omitempty"`
+	Page           int    `json:"page"`
+	PageSize       int    `json:"page_size"`
 }
 
 // CreateAdminRequest represents a request to create an admin

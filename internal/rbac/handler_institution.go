@@ -109,6 +109,9 @@ func (h *Handler) ListOperationsAdmins(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
 	req.PageSize = pageSize
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		req.RequestAdminID = claims.UserID
+	}
 
 	admins, total, err := h.service.ListOperationsAdmins(r.Context(), req)
 	if err != nil {

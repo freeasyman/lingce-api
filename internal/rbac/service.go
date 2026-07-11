@@ -387,6 +387,18 @@ func (s *Service) ListOperationsAdmins(ctx context.Context, req AdminListRequest
 	if req.PageSize > 100 {
 		req.PageSize = 100
 	}
+	if req.RequestAdminID > 0 {
+		scope, err := s.store.getAdminOrgScope(ctx, req.RequestAdminID)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !scope.CanSeeAll {
+			if scope.OrgID == nil || *scope.OrgID <= 0 {
+				return []*AdminResponse{}, 0, nil
+			}
+			req.VisibleOrgID = scope.OrgID
+		}
+	}
 
 	return s.store.ListOperationsAdmins(ctx, req)
 }
