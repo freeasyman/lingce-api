@@ -81,7 +81,7 @@ func (h *Handler) ListSeeds(w http.ResponseWriter, r *http.Request) {
 	startDateFilter := strings.TrimSpace(r.URL.Query().Get("start_date"))
 	endDateFilter := strings.TrimSpace(r.URL.Query().Get("end_date"))
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), req.TenantID, req.TenantIDs...)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), req.TenantID, req.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -127,7 +127,7 @@ func (h *Handler) GetSeedStats(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteSuccess(w, &SeedStatsResponse{})
 		return
 	}
-	seeds, err := h.buildSeedsFromTopics(r.Context(), scope.TenantID, scope.TenantIDs...)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), scope.TenantID, scope.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -172,7 +172,7 @@ func (h *Handler) GetClusters(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteSuccess(w, []map[string]interface{}{})
 		return
 	}
-	seeds, err := h.buildSeedsFromTopics(r.Context(), scope.TenantID, scope.TenantIDs...)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), scope.TenantID, scope.TenantIDs...)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -204,7 +204,7 @@ func (h *Handler) GetMyInspirations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), claims.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -387,7 +387,7 @@ func (h *Handler) GetHonorList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), claims.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -412,7 +412,7 @@ func (h *Handler) GetMyStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), claims.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -449,7 +449,7 @@ func (h *Handler) GetMyAdopted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromTopics(r.Context(), claims.TenantID)
+	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), claims.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -463,105 +463,6 @@ func (h *Handler) GetMyAdopted(w http.ResponseWriter, r *http.Request) {
 	}
 	seedStateMu.RUnlock()
 	httputil.WriteSuccess(w, out)
-}
-
-func (h *Handler) buildSeedsFromTopics(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
-	seedsFromRecording, err := h.buildSeedsFromRecordingTable(ctx, tenantID, tenantIDs...)
-	if err != nil {
-		return nil, err
-	}
-
-	topics, _, err := h.service.ListTopics(ctx, TopicListRequest{
-		TenantID:  tenantID,
-		TenantIDs: tenantIDs,
-		Page:      1,
-		PageSize:  500,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	employeeNameByID := map[int64]string{}
-	creatorIDs := make([]int64, 0, len(topics))
-	tenantIDSet := make(map[int64]struct{}, len(tenantIDs))
-	for _, id := range tenantIDs {
-		if id > 0 {
-			tenantIDSet[id] = struct{}{}
-		}
-	}
-	for _, topic := range topics {
-		if topic.CreatedBy > 0 {
-			creatorIDs = append(creatorIDs, topic.CreatedBy)
-		}
-		if topic.TenantID > 0 {
-			tenantIDSet[topic.TenantID] = struct{}{}
-		}
-	}
-	if len(creatorIDs) > 0 && len(tenantIDSet) > 0 {
-		tenantIDList := make([]int64, 0, len(tenantIDSet))
-		for tid := range tenantIDSet {
-			tenantIDList = append(tenantIDList, tid)
-		}
-		employeeNameByID, _ = h.loadEmployeeNames(ctx, creatorIDs, tenantIDList)
-	}
-
-	seedStateMu.RLock()
-	defer seedStateMu.RUnlock()
-	result := make([]SeedResponse, 0, len(topics))
-	for _, topic := range topics {
-		status := "pending"
-		switch topic.Status {
-		case "selected", "completed":
-			status = "used"
-		case "archived":
-			status = "ignored"
-		}
-		if override, ok := seedStatusOverrides[topic.ID]; ok {
-			status = normalizeFilterStatus(override)
-		}
-		seed := SeedResponse{
-			ID:        topic.ID,
-			TenantID:  topic.TenantID,
-			Topic:     topic.Title,
-			Title:     topic.Title,
-			Content:   valueOrEmpty(topic.Description),
-			Category:  topic.Category,
-			Tags:      topic.Tags,
-			Status:    status,
-			SeedData:  topic.ExtraData,
-			ExtraData: topic.ExtraData,
-			CreatedAt: topic.CreatedAt,
-			UpdatedAt: topic.UpdatedAt,
-		}
-		if seedType := inferSeedType(topic); seedType != "" {
-			seed.SeedType = &seedType
-		}
-		if contentAngle := inferContentAngle(topic); contentAngle != "" {
-			seed.ContentAngle = &contentAngle
-		}
-		seed.SuggestedPlatforms = inferSuggestedPlatforms(topic)
-		viral := inferViralPotential(topic)
-		seed.ViralPotential = &viral
-		if clusterID := inferConcernClusterID(topic); clusterID != nil {
-			seed.ConcernClusterID = clusterID
-			seed.ClusterID = clusterID
-		}
-		if topic.CreatedBy > 0 {
-			creatorID := topic.CreatedBy
-			seed.EmployeeID = &creatorID
-			if name := strings.TrimSpace(employeeNameByID[topic.CreatedBy]); name != "" {
-				seed.EmployeeName = &name
-			}
-		}
-		if uid, ok := seedAdoptedBy[topic.ID]; ok {
-			seed.AdoptedBy = &uid
-			seed.AdoptedAt = strPtr(time.Now().Format(time.RFC3339))
-		}
-		result = append(result, seed)
-	}
-	merged := mergeSeedResults(seedsFromRecording, result)
-	sort.Slice(merged, func(i, j int) bool { return merged[i].ID > merged[j].ID })
-	return merged, nil
 }
 
 func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
@@ -702,12 +603,6 @@ func (h *Handler) getSeedByID(ctx context.Context, tenantID *int64, id int64, te
 		return seed, nil
 	}
 
-	if seed, found, err := h.getSeedByIDFromTopicTable(ctx, id, scopeTenantIDs); err != nil {
-		return nil, err
-	} else if found {
-		return seed, nil
-	}
-
 	return nil, fmt.Errorf("seed not found")
 }
 
@@ -819,131 +714,6 @@ func (h *Handler) getSeedByIDFromRecordingTable(ctx context.Context, seedID int6
 		ExtraData:          seedData,
 		CreatedAt:          createdAt.Format(time.RFC3339),
 		UpdatedAt:          createdAt.Format(time.RFC3339),
-	}
-	return seed, true, nil
-}
-
-func (h *Handler) getSeedByIDFromTopicTable(ctx context.Context, topicID int64, tenantIDs []int64) (*SeedResponse, bool, error) {
-	query := `
-		SELECT
-			t.id,
-			t.tenant_id,
-			t.title,
-			t.description,
-			t.category,
-			t.status,
-			t.extra_data,
-			t.created_by,
-			t.created_at,
-			t.updated_at,
-			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), NULLIF(e.username, ''), '') AS employee_name
-		FROM content_topics t
-		LEFT JOIN employees e
-		  ON e.id = t.created_by
-		 AND e.tenant_id = t.tenant_id
-		 AND e.deleted_at IS NULL
-		WHERE t.deleted_at IS NULL
-		  AND t.id = $1
-		  AND t.tenant_id = ANY($2)
-		LIMIT 1
-	`
-	rows, err := h.service.store.pool.Query(ctx, query, topicID, tenantIDs)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return nil, false, nil
-	}
-
-	var (
-		id          int64
-		tid         int64
-		title       string
-		description *string
-		category    *string
-		statusRaw   string
-		extraData   JSONObject
-		createdBy   int64
-		createdAt   time.Time
-		updatedAt   time.Time
-		employee    string
-	)
-	if err := rows.Scan(
-		&id,
-		&tid,
-		&title,
-		&description,
-		&category,
-		&statusRaw,
-		&extraData,
-		&createdBy,
-		&createdAt,
-		&updatedAt,
-		&employee,
-	); err != nil {
-		return nil, false, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-
-	status := "pending"
-	switch strings.TrimSpace(strings.ToLower(statusRaw)) {
-	case "selected", "completed":
-		status = "used"
-	case "archived":
-		status = "ignored"
-	}
-	if override, ok := seedStatusOverrides[id]; ok {
-		status = normalizeFilterStatus(override)
-	}
-
-	topic := &TopicResponse{
-		ID:          id,
-		TenantID:    tid,
-		Title:       title,
-		Description: description,
-		Category:    category,
-		Status:      statusRaw,
-		ExtraData:   extraData,
-		CreatedBy:   createdBy,
-		CreatedAt:   createdAt.Format(time.RFC3339),
-		UpdatedAt:   updatedAt.Format(time.RFC3339),
-	}
-
-	seed := &SeedResponse{
-		ID:        id,
-		TenantID:  tid,
-		Topic:     title,
-		Title:     title,
-		Content:   valueOrEmpty(description),
-		Category:  category,
-		Status:    status,
-		SeedData:  extraData,
-		ExtraData: extraData,
-		CreatedAt: createdAt.Format(time.RFC3339),
-		UpdatedAt: updatedAt.Format(time.RFC3339),
-	}
-	if seedType := inferSeedType(topic); seedType != "" {
-		seed.SeedType = &seedType
-	}
-	if contentAngle := inferContentAngle(topic); contentAngle != "" {
-		seed.ContentAngle = &contentAngle
-	}
-	seed.SuggestedPlatforms = inferSuggestedPlatforms(topic)
-	viral := inferViralPotential(topic)
-	seed.ViralPotential = &viral
-	if clusterID := inferConcernClusterID(topic); clusterID != nil {
-		seed.ConcernClusterID = clusterID
-		seed.ClusterID = clusterID
-	}
-	if createdBy > 0 {
-		seed.EmployeeID = &createdBy
-		if strings.TrimSpace(employee) != "" {
-			name := strings.TrimSpace(employee)
-			seed.EmployeeName = &name
-		}
 	}
 	return seed, true, nil
 }

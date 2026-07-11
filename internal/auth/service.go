@@ -350,6 +350,9 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 				"real_name": admin.RealName,
 				"email":     admin.Email,
 				"phone":     admin.Phone,
+				"org_id":    admin.OrgID,
+				"org_name":  admin.OrgName,
+				"org_type":  admin.OrgType,
 				"is_active": admin.IsActive,
 			},
 		}, nil

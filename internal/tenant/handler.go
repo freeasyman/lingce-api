@@ -48,6 +48,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	// Tenant profile (tenant-scoped)
 	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
 	mux.Handle("GET /api/v1/tenants/{id}/trial-home", authMw(http.HandlerFunc(h.GetTrialHomeSummary)))
+	mux.Handle("POST /api/v1/tenants/{id}/trial-home/demo-view", authMw(http.HandlerFunc(h.MarkTrialDemoViewed)))
 	mux.Handle("POST /api/v1/tenants/{id}/actions/init-trial", authMw(http.HandlerFunc(h.InitTrialTenant)))
 	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
 	mux.Handle("PATCH /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
@@ -310,6 +311,15 @@ func (h *Handler) ListTrialCustomers(w http.ResponseWriter, r *http.Request) {
 		value := hasRealRecordingStr == "true" || hasRealRecordingStr == "1"
 		req.HasRealRecording = &value
 	}
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserID <= 0 {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	if err := h.service.applyTrialCustomerScope(r.Context(), claims.UserID, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 
 	resp, err := h.service.ListTrialCustomers(r.Context(), req)
 	if err != nil {
@@ -327,6 +337,15 @@ func (h *Handler) GetTrialCustomerDetail(w http.ResponseWriter, r *http.Request)
 	tenantID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || tenantID <= 0 {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserID <= 0 {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	if err := h.service.authorizeTrialCustomerAccess(r.Context(), claims.UserID, tenantID); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	resp, err := h.service.GetTrialCustomerDetail(r.Context(), tenantID)
@@ -359,6 +378,10 @@ func (h *Handler) AssignTrialCustomerOwner(w http.ResponseWriter, r *http.Reques
 	claims := middleware.GetUserClaims(r.Context())
 	var assignedBy *int64
 	if claims != nil && claims.UserID > 0 {
+		if err := h.service.authorizeTrialCustomerAccess(r.Context(), claims.UserID, tenantID); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		assignedBy = &claims.UserID
 	}
 	assignment, err := h.service.AssignTrialCustomerOwner(r.Context(), tenantID, req, assignedBy)
@@ -387,6 +410,10 @@ func (h *Handler) CreateTrialCustomerFollowUp(w http.ResponseWriter, r *http.Req
 	claims := middleware.GetUserClaims(r.Context())
 	var createdBy *int64
 	if claims != nil && claims.UserID > 0 {
+		if err := h.service.authorizeTrialCustomerAccess(r.Context(), claims.UserID, tenantID); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		createdBy = &claims.UserID
 	}
 	item, err := h.service.CreateTrialCustomerFollowUp(r.Context(), tenantID, req, createdBy)
@@ -409,6 +436,7 @@ func (h *Handler) GetTrialCustomerFunnel(w http.ResponseWriter, r *http.Request)
 	}
 	httputil.WriteSuccess(w, resp)
 }
+
 
 func (h *Handler) PerformSubscriptionAction(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
@@ -647,6 +675,39 @@ func (h *Handler) GetTrialHomeSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, httputil.Response{Data: summary})
+}
+
+func (h *Handler) MarkTrialDemoViewed(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid tenant ID")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+	var req struct {
+		RoleCode string `json:"role_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.WriteBadRequest(w, "invalid payload")
+		return
+	}
+	if strings.TrimSpace(req.RoleCode) == "" {
+		httputil.WriteBadRequest(w, "role_code is required")
+		return
+	}
+	if err := h.service.MarkTrialDemoViewed(r.Context(), id, req.RoleCode, claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }
 
 func (h *Handler) GetInstitutionStatistics(w http.ResponseWriter, r *http.Request) {

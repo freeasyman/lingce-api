@@ -10,6 +10,9 @@ type OperationsAdmin struct {
 	RealName       string
 	Email          string
 	Phone          string
+	OrgID          *int64
+	OrgName        string
+	OrgType        string
 	SessionVersion int
 	IsActive       bool
 	CreatedAt      time.Time

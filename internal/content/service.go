@@ -189,6 +189,7 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	ensureMinLLMTimeout(&llmReq, 90)
 
 	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
@@ -561,6 +562,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	ensureMinLLMTimeout(&llmReq, 120)
 
 	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
@@ -732,6 +734,18 @@ func applyModelParamsToLLMRequest(req *llmgateway.TextInferenceRequest, modelPar
 				req.Params.ResponseFormat = v
 			}
 		}
+	}
+}
+
+func ensureMinLLMTimeout(req *llmgateway.TextInferenceRequest, minSeconds int) {
+	if req == nil || minSeconds <= 0 {
+		return
+	}
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	if req.Params.TimeoutSeconds < minSeconds {
+		req.Params.TimeoutSeconds = minSeconds
 	}
 }
 
@@ -1015,6 +1029,7 @@ func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int6
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	ensureMinLLMTimeout(&llmReq, 120)
 	llmReq.Params.Temperature = 0.2
 	llmReq.Params.ResponseFormat = "json"
 
