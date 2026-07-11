@@ -928,16 +928,16 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		recording, recErr := h.service.GetRecording(r.Context(), id)
-		if recErr != nil {
-			httputil.WriteNotFound(w, recErr.Error())
+		accessRef, accessErr := h.service.store.GetRecordingAccessRef(r.Context(), id)
+		if accessErr != nil {
+			httputil.WriteNotFound(w, accessErr.Error())
 			return
 		}
-		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
+		if claims.TenantID == nil || *claims.TenantID != accessRef.TenantID {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
-		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, recording.BusinessScope); err != nil {
+		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, accessRef.BusinessScope); err != nil {
 			httputil.WriteForbidden(w, err.Error())
 			return
 		}
