@@ -138,6 +138,12 @@ func main() {
 	tenantStore := tenant.NewStore(pool)
 	sysconfigStore := sysconfig.NewStore(pool)
 	sysconfigService := sysconfig.NewService(sysconfigStore)
+	if fixedCount, err := tenantStore.RealignTrialTenantValidity(ctx); err != nil {
+		slog.Error("failed to realign trial tenant validity", "error", err)
+		os.Exit(1)
+	} else if fixedCount > 0 {
+		slog.Info("realigned trial tenant validity", "tenants", fixedCount)
+	}
 
 	tenantService := tenant.NewService(tenantStore, sysconfigService)
 	tenantHandler := tenant.NewHandler(tenantService)

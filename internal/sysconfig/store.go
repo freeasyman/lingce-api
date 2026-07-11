@@ -329,7 +329,11 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 			if err != nil {
 				return fmt.Errorf("plan not found: %w", err)
 			}
-			newEndDate = time.Now().Add(time.Duration(durationDays) * 24 * time.Hour)
+			startAt := currentSub.StartDate
+			if startAt.IsZero() {
+				startAt = time.Now()
+			}
+			newEndDate = startAt.Add(time.Duration(durationDays) * 24 * time.Hour)
 			currentSub.PlanID = req.PlanID
 			if planFeatureGroupID != nil {
 				_, err = tx.Exec(ctx, `

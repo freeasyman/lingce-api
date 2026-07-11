@@ -58,6 +58,23 @@ func (s *Store) tableExistsTx(ctx context.Context, tx pgx.Tx, tableName string) 
 	return exists, nil
 }
 
+func (s *Store) tableHasColumnTx(ctx context.Context, tx pgx.Tx, tableName, columnName string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public'
+			  AND table_name = $1
+			  AND column_name = $2
+		)
+	`, tableName, columnName).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect %s.%s: %w", tableName, columnName, err)
+	}
+	return exists, nil
+}
+
 func (s *Store) tenantIsActiveUsesInteger(ctx context.Context) (bool, error) {
 	var dataType string
 	err := s.pool.QueryRow(ctx, `
@@ -1430,6 +1447,156 @@ func (s *Store) EnsureTrialCustomerMetricsSeed(ctx context.Context) error {
 		return fmt.Errorf("seed trial customer metrics: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin realign trial tenant validity transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	hasStartedOn, err := s.tableHasColumnTx(ctx, tx, "tenant_subscriptions", "started_on")
+	if err != nil {
+		return 0, err
+	}
+	hasExpiredOn, err := s.tableHasColumnTx(ctx, tx, "tenant_subscriptions", "expired_on")
+	if err != nil {
+		return 0, err
+	}
+	hasServiceStartedOn, err := s.tableHasColumnTx(ctx, tx, "tenants", "service_started_on")
+	if err != nil {
+		return 0, err
+	}
+	hasServiceExpiredOn, err := s.tableHasColumnTx(ctx, tx, "tenants", "service_expired_on")
+	if err != nil {
+		return 0, err
+	}
+
+	subSetClauses := []string{
+		"start_date = aligned.start_at",
+		"end_date = aligned.end_at",
+		"updated_at = NOW()",
+	}
+	if hasStartedOn {
+		subSetClauses = append(subSetClauses, "started_on = aligned.start_at::date")
+	}
+	if hasExpiredOn {
+		subSetClauses = append(subSetClauses, "expired_on = aligned.end_at::date")
+	}
+
+	tenantIDs := make(map[int64]struct{})
+	subQuery := fmt.Sprintf(`
+		UPDATE tenant_subscriptions s
+		SET %s
+		FROM (
+			SELECT
+				s.id AS subscription_id,
+				t.id AS tenant_id,
+				COALESCE(s.start_date, t.valid_from, t.created_at, NOW()) AS start_at,
+				COALESCE(s.start_date, t.valid_from, t.created_at, NOW())
+					+ make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1)) AS end_at
+			FROM tenant_subscriptions s
+			JOIN tenants t ON t.id = s.tenant_id
+			JOIN tenant_subscription_plans p ON p.id = s.plan_id
+			WHERE t.deleted_at IS NULL
+			  AND lower(COALESCE(t.account_mode, 'formal')) = 'trial'
+			  AND lower(COALESCE(p.code, '')) = 'trial'
+		) aligned
+		WHERE s.id = aligned.subscription_id
+		  AND (
+			s.start_date IS DISTINCT FROM aligned.start_at
+			OR s.end_date IS DISTINCT FROM aligned.end_at
+		  )
+		RETURNING aligned.tenant_id
+	`, strings.Join(subSetClauses, ", "))
+	rows, err := tx.Query(ctx, subQuery)
+	if err != nil {
+		return 0, fmt.Errorf("realign trial subscriptions: %w", err)
+	}
+	for rows.Next() {
+		var tenantID int64
+		if err := rows.Scan(&tenantID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan realigned trial subscription tenant id: %w", err)
+		}
+		tenantIDs[tenantID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate realigned trial subscriptions: %w", err)
+	}
+	rows.Close()
+
+	tenantSetClauses := []string{
+		"valid_from = aligned.start_at",
+		"valid_to = aligned.end_at",
+		"updated_at = NOW()",
+	}
+	if hasServiceStartedOn {
+		tenantSetClauses = append(tenantSetClauses, "service_started_on = aligned.start_at::date")
+	}
+	if hasServiceExpiredOn {
+		tenantSetClauses = append(tenantSetClauses, "service_expired_on = aligned.end_at::date")
+	}
+
+	tenantQuery := fmt.Sprintf(`
+		UPDATE tenants t
+		SET %s
+		FROM (
+			SELECT DISTINCT ON (t.id)
+				t.id AS tenant_id,
+				COALESCE(s.start_date, t.valid_from, t.created_at, NOW()) AS start_at,
+				COALESCE(s.end_date,
+					COALESCE(s.start_date, t.valid_from, t.created_at, NOW())
+					+ make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1))
+				) AS end_at
+			FROM tenants t
+			JOIN tenant_subscriptions s ON s.tenant_id = t.id
+			JOIN tenant_subscription_plans p ON p.id = s.plan_id
+			WHERE t.deleted_at IS NULL
+			  AND lower(COALESCE(t.account_mode, 'formal')) = 'trial'
+			  AND lower(COALESCE(p.code, '')) = 'trial'
+			ORDER BY t.id, COALESCE(s.created_at, NOW()) DESC, s.id DESC
+		) aligned
+		WHERE t.id = aligned.tenant_id
+		  AND (
+			t.valid_from IS DISTINCT FROM aligned.start_at
+			OR t.valid_to IS DISTINCT FROM aligned.end_at
+		  )
+		RETURNING aligned.tenant_id
+	`, strings.Join(tenantSetClauses, ", "))
+	rows, err = tx.Query(ctx, tenantQuery)
+	if err != nil {
+		return 0, fmt.Errorf("realign trial tenant validity: %w", err)
+	}
+	for rows.Next() {
+		var tenantID int64
+		if err := rows.Scan(&tenantID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan realigned trial tenant id: %w", err)
+		}
+		tenantIDs[tenantID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate realigned trial tenants: %w", err)
+	}
+	rows.Close()
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit realign trial tenant validity transaction: %w", err)
+	}
+
+	if len(tenantIDs) == 0 {
+		return 0, nil
+	}
+	for tenantID := range tenantIDs {
+		if err := s.RecomputeTrialCustomerMetricsForTenant(ctx, tenantID); err != nil {
+			return 0, fmt.Errorf("recompute trial metrics for tenant %d: %w", tenantID, err)
+		}
+	}
+	return len(tenantIDs), nil
 }
 
 func (s *Store) RecomputeTrialCustomerMetricsForTenant(ctx context.Context, tenantID int64) error {
