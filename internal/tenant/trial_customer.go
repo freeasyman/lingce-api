@@ -5,6 +5,7 @@ import "time"
 type TrialCustomerListRequest struct {
 	Keyword          string `json:"keyword"`
 	OwnerAdminID     *int64 `json:"owner_admin_id,omitempty"`
+	VisibleOrgID     *int64 `json:"visible_org_id,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Stage            string `json:"stage,omitempty"`
 	ActivationStatus string `json:"activation_status,omitempty"`
@@ -17,6 +18,8 @@ type TrialCustomerAssignment struct {
 	TenantID               int64      `json:"tenant_id"`
 	SalesOwnerAdminID      *int64     `json:"sales_owner_admin_id,omitempty"`
 	SalesOwnerNameSnapshot string     `json:"sales_owner_name_snapshot,omitempty"`
+	OwnerOrgID             *int64     `json:"owner_org_id,omitempty"`
+	OwnerOrgName           string     `json:"owner_org_name,omitempty"`
 	Source                 string     `json:"source,omitempty"`
 	Notes                  string     `json:"notes,omitempty"`
 	AssignedAt             *time.Time `json:"assigned_at,omitempty"`
@@ -25,34 +28,34 @@ type TrialCustomerAssignment struct {
 }
 
 type TrialCustomerMetrics struct {
-	TenantID               int64      `json:"tenant_id"`
-	TrialStartedAt         *time.Time `json:"trial_started_at,omitempty"`
-	TrialExpiresAt         *time.Time `json:"trial_expires_at,omitempty"`
-	FirstLoginAt           *time.Time `json:"first_login_at,omitempty"`
-	LastLoginAt            *time.Time `json:"last_login_at,omitempty"`
-	LoginCount             int        `json:"login_count"`
-	DoctorDemoViewedAt     *time.Time `json:"doctor_demo_viewed_at,omitempty"`
-	ConsultantDemoViewedAt *time.Time `json:"consultant_demo_viewed_at,omitempty"`
-	FirstUploadAt          *time.Time `json:"first_upload_at,omitempty"`
-	LastUploadAt           *time.Time `json:"last_upload_at,omitempty"`
-	UploadCount            int        `json:"upload_count"`
-	AnalysisCount          int        `json:"analysis_count"`
-	DoctorUploadCount      int        `json:"doctor_upload_count"`
-	ConsultantUploadCount  int        `json:"consultant_upload_count"`
-	GeneratedCustomerCount int        `json:"generated_customer_count"`
-	GeneratedTaskCount     int        `json:"generated_task_count"`
-	GeneratedContentCount  int        `json:"generated_content_count"`
-	WechatContentCount     int        `json:"wechat_content_count"`
-	XiaohongshuContentCount int       `json:"xiaohongshu_content_count"`
-	VideoScriptContentCount int       `json:"video_script_content_count"`
-	LastActivityAt         *time.Time `json:"last_activity_at,omitempty"`
-	CurrentStage           string     `json:"current_stage,omitempty"`
-	PriorityLevel          string     `json:"priority_level,omitempty"`
-	BlockingReason         string     `json:"blocking_reason,omitempty"`
-	NextActionHint         string     `json:"next_action_hint,omitempty"`
-	UpdatedAt              *time.Time `json:"updated_at,omitempty"`
-	TrialMaxRecordings     int        `json:"trial_max_recordings"`
-	TrialRemainingUsage    int        `json:"trial_remaining_usage"`
+	TenantID                int64      `json:"tenant_id"`
+	TrialStartedAt          *time.Time `json:"trial_started_at,omitempty"`
+	TrialExpiresAt          *time.Time `json:"trial_expires_at,omitempty"`
+	FirstLoginAt            *time.Time `json:"first_login_at,omitempty"`
+	LastLoginAt             *time.Time `json:"last_login_at,omitempty"`
+	LoginCount              int        `json:"login_count"`
+	DoctorDemoViewedAt      *time.Time `json:"doctor_demo_viewed_at,omitempty"`
+	ConsultantDemoViewedAt  *time.Time `json:"consultant_demo_viewed_at,omitempty"`
+	FirstUploadAt           *time.Time `json:"first_upload_at,omitempty"`
+	LastUploadAt            *time.Time `json:"last_upload_at,omitempty"`
+	UploadCount             int        `json:"upload_count"`
+	AnalysisCount           int        `json:"analysis_count"`
+	DoctorUploadCount       int        `json:"doctor_upload_count"`
+	ConsultantUploadCount   int        `json:"consultant_upload_count"`
+	GeneratedCustomerCount  int        `json:"generated_customer_count"`
+	GeneratedTaskCount      int        `json:"generated_task_count"`
+	GeneratedContentCount   int        `json:"generated_content_count"`
+	WechatContentCount      int        `json:"wechat_content_count"`
+	XiaohongshuContentCount int        `json:"xiaohongshu_content_count"`
+	VideoScriptContentCount int        `json:"video_script_content_count"`
+	LastActivityAt          *time.Time `json:"last_activity_at,omitempty"`
+	CurrentStage            string     `json:"current_stage,omitempty"`
+	PriorityLevel           string     `json:"priority_level,omitempty"`
+	BlockingReason          string     `json:"blocking_reason,omitempty"`
+	NextActionHint          string     `json:"next_action_hint,omitempty"`
+	UpdatedAt               *time.Time `json:"updated_at,omitempty"`
+	TrialMaxRecordings      int        `json:"trial_max_recordings"`
+	TrialRemainingUsage     int        `json:"trial_remaining_usage"`
 }
 
 type TrialCustomerListItem struct {
@@ -66,6 +69,8 @@ type TrialCustomerListItem struct {
 	ActivationStatus         string     `json:"activation_status"`
 	SalesOwnerAdminID        *int64     `json:"sales_owner_admin_id,omitempty"`
 	SalesOwnerName           string     `json:"sales_owner_name,omitempty"`
+	OwnerOrgID               *int64     `json:"owner_org_id,omitempty"`
+	OwnerOrgName             string     `json:"owner_org_name,omitempty"`
 	TrialStartedAt           *time.Time `json:"trial_started_at,omitempty"`
 	TrialExpiresAt           *time.Time `json:"trial_expires_at,omitempty"`
 	FirstLoginAt             *time.Time `json:"first_login_at,omitempty"`

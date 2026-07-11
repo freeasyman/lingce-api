@@ -8,12 +8,178 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func (s *Store) operationsAdminIsActiveUsesInteger(ctx context.Context) (bool, error) {
+	var dataType string
+	err := s.pool.QueryRow(ctx, `
+		SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'operations_admins'
+		  AND column_name = 'is_active'
+		LIMIT 1
+	`).Scan(&dataType)
+	if err != nil {
+		return false, fmt.Errorf("detect operations_admins.is_active type: %w", err)
+	}
+	return strings.EqualFold(strings.TrimSpace(dataType), "integer"), nil
+}
+
 type Store struct {
 	pool *pgxpool.Pool
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func normalizeOpsOrgType(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "platform") {
+		return "platform"
+	}
+	return "agency"
+}
+
+func normalizeOpsOrgStatus(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "active"
+	}
+	return v
+}
+
+func (s *Store) ListOpsOrganizations(ctx context.Context) ([]*OpsOrganizationResponse, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, COALESCE(type, 'agency') AS type, parent_id, COALESCE(status, 'active') AS status, created_at, updated_at
+		FROM ops_organizations
+		ORDER BY CASE WHEN COALESCE(type, 'agency') = 'platform' THEN 0 ELSE 1 END, id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list ops organizations: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*OpsOrganizationResponse, 0)
+	for rows.Next() {
+		item := &OpsOrganizationResponse{}
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.ParentID, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan ops organization: %w", err)
+		}
+		item.Type = normalizeOpsOrgType(item.Type)
+		item.Status = normalizeOpsOrgStatus(item.Status)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ops organizations: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) CreateOpsOrganization(ctx context.Context, req CreateOpsOrganizationRequest) (*OpsOrganizationResponse, error) {
+	item := &OpsOrganizationResponse{}
+	status := "active"
+	if req.Status != nil && strings.TrimSpace(*req.Status) != "" {
+		status = strings.TrimSpace(*req.Status)
+	}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO ops_organizations (name, type, status, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		RETURNING id, name, COALESCE(type, 'agency') AS type, parent_id, COALESCE(status, 'active') AS status, created_at, updated_at
+	`, strings.TrimSpace(req.Name), normalizeOpsOrgType(req.Type), status).Scan(
+		&item.ID, &item.Name, &item.Type, &item.ParentID, &item.Status, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create ops organization: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateOpsOrganization(ctx context.Context, id int64, req UpdateOpsOrganizationRequest) (*OpsOrganizationResponse, error) {
+	query := "UPDATE ops_organizations SET updated_at = NOW()"
+	args := []interface{}{}
+	argPos := 1
+
+	if req.Name != nil {
+		query += fmt.Sprintf(", name = $%d", argPos)
+		args = append(args, strings.TrimSpace(*req.Name))
+		argPos++
+	}
+	if req.Type != nil {
+		query += fmt.Sprintf(", type = $%d", argPos)
+		args = append(args, normalizeOpsOrgType(*req.Type))
+		argPos++
+	}
+	if req.Status != nil {
+		query += fmt.Sprintf(", status = $%d", argPos)
+		args = append(args, normalizeOpsOrgStatus(*req.Status))
+		argPos++
+	}
+	query += fmt.Sprintf(" WHERE id = $%d", argPos)
+	args = append(args, id)
+	query += " RETURNING id, name, COALESCE(type, 'agency') AS type, parent_id, COALESCE(status, 'active') AS status, created_at, updated_at"
+
+	item := &OpsOrganizationResponse{}
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(
+		&item.ID, &item.Name, &item.Type, &item.ParentID, &item.Status, &item.CreatedAt, &item.UpdatedAt,
+	); err != nil {
+		return nil, fmt.Errorf("update ops organization: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) DeleteOpsOrganization(ctx context.Context, id int64) (*DeleteOpsOrganizationResponse, error) {
+	var orgType string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(type, 'agency')
+		FROM ops_organizations
+		WHERE id = $1
+	`, id).Scan(&orgType); err != nil {
+		return nil, fmt.Errorf("load ops organization: %w", err)
+	}
+	if normalizeOpsOrgType(orgType) == "platform" {
+		return nil, fmt.Errorf("platform organization cannot be deleted")
+	}
+
+	var adminRefCount int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM operations_admins
+		WHERE deleted_at IS NULL
+		  AND org_id = $1
+	`, id).Scan(&adminRefCount); err != nil {
+		return nil, fmt.Errorf("count admin organization references: %w", err)
+	}
+	if adminRefCount > 0 {
+		return nil, fmt.Errorf("organization is still used by %d admins", adminRefCount)
+	}
+
+	var ownershipRefCount int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM trial_customer_ownerships
+		WHERE owner_org_id = $1
+	`, id).Scan(&ownershipRefCount); err != nil {
+		return nil, fmt.Errorf("count trial customer organization references: %w", err)
+	}
+	if ownershipRefCount > 0 {
+		return nil, fmt.Errorf("organization is still used by %d trial customers", ownershipRefCount)
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM ops_organizations
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("delete ops organization: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, fmt.Errorf("organization not found")
+	}
+
+	return &DeleteOpsOrganizationResponse{
+		ID:      id,
+		Deleted: true,
+		Message: "Organization deleted successfully",
+	}, nil
 }
 
 // Operations Role operations
@@ -731,13 +897,14 @@ func (s *Store) AssignMenusToRole(ctx context.Context, roleID int64, menuIDs []i
 // ListOperationsAdmins retrieves a paginated list of operations admins
 func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) ([]*AdminResponse, int, error) {
 	query := `
-		SELECT a.id, COALESCE(a.name, ''), COALESCE(a.phone, ''), COALESCE(a.username, ''), COALESCE(a.email, ''),
+		SELECT a.id, COALESCE(a.name, ''), COALESCE(a.phone, ''), COALESCE(a.username, ''), COALESCE(a.email, ''), a.org_id, COALESCE(o.name, '') AS org_name,
 		       CASE
 		           WHEN a.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
 		       a.created_at, a.updated_at
 		FROM operations_admins a
+		LEFT JOIN ops_organizations o ON o.id = a.org_id
 		WHERE a.deleted_at IS NULL
 	`
 	args := []interface{}{}
@@ -752,6 +919,11 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	if req.Email != "" {
 		query += fmt.Sprintf(" AND a.email ILIKE $%d", argPos)
 		args = append(args, "%"+req.Email+"%")
+		argPos++
+	}
+	if req.OrgID != nil && *req.OrgID > 0 {
+		query += fmt.Sprintf(" AND a.org_id = $%d", argPos)
+		args = append(args, *req.OrgID)
 		argPos++
 	}
 
@@ -784,23 +956,67 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	defer rows.Close()
 
 	var admins []*AdminResponse
+	adminIDs := make([]int64, 0)
 	for rows.Next() {
 		var admin AdminResponse
-		err := rows.Scan(&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt)
+		err := rows.Scan(&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan admin: %w", err)
 		}
-
-		// Get roles for this admin
-		roles, err := s.GetAdminRoles(ctx, admin.ID)
-		if err == nil {
-			admin.Roles = roles
-		}
-
 		admins = append(admins, &admin)
+		adminIDs = append(adminIDs, admin.ID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate admins: %w", err)
+	}
+
+	roleMap, err := s.GetAdminRolesBatch(ctx, adminIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, admin := range admins {
+		if admin == nil {
+			continue
+		}
+		admin.Roles = roleMap[admin.ID]
 	}
 
 	return admins, total, nil
+}
+
+func (s *Store) GetAdminRolesBatch(ctx context.Context, adminIDs []int64) (map[int64][]RoleResponse, error) {
+	result := make(map[int64][]RoleResponse, len(adminIDs))
+	if len(adminIDs) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT ar.admin_id, r.id, r.name, r.code, r.description, r.is_active, r.created_at, r.updated_at
+		FROM operations_admin_roles ar
+		JOIN operations_roles r ON r.id = ar.role_id
+		WHERE ar.admin_id = ANY($1)
+		  AND r.deleted_at IS NULL
+		ORDER BY ar.admin_id, r.name
+	`, adminIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch query admin roles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var adminID int64
+		var role RoleResponse
+		if err := rows.Scan(&adminID, &role.ID, &role.Name, &role.Code, &role.Description, &role.IsActive, &role.CreatedAt, &role.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan batch admin role: %w", err)
+		}
+		result[adminID] = append(result[adminID], role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate batch admin roles: %w", err)
+	}
+
+	return result, nil
 }
 
 // GetAdminRoles retrieves roles for an admin
@@ -835,19 +1051,20 @@ func (s *Store) GetAdminRoles(ctx context.Context, adminID int64) ([]RoleRespons
 // GetOperationsAdminByID retrieves an operations admin by ID
 func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminResponse, error) {
 	query := `
-		SELECT id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''),
+		SELECT a.id, COALESCE(a.name, ''), COALESCE(a.phone, ''), COALESCE(a.username, ''), COALESCE(a.email, ''), a.org_id, COALESCE(o.name, '') AS org_name,
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
-		       created_at, updated_at
-		FROM operations_admins
-		WHERE id = $1 AND deleted_at IS NULL
+		       a.created_at, a.updated_at
+		FROM operations_admins a
+		LEFT JOIN ops_organizations o ON o.id = a.org_id
+		WHERE a.id = $1 AND a.deleted_at IS NULL
 	`
 
 	var admin AdminResponse
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("admin not found: %w", err)
@@ -870,16 +1087,30 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 	}
 	defer tx.Rollback(ctx)
 
+	usesInteger, err := s.operationsAdminIsActiveUsesInteger(ctx)
+	if err != nil {
+		return nil, err
+	}
+	isActiveValue := any(true)
+	if usesInteger {
+		isActiveValue = 1
+	}
+
 	// Create admin
 	query := `
-		INSERT INTO operations_admins (name, phone, username, password_hash, email, is_active, session_version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, true, 1, NOW(), NOW())
-		RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), username, email, is_active, created_at, updated_at
+		INSERT INTO operations_admins (name, phone, username, password_hash, email, org_id, is_active, session_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NOW(), NOW())
+		RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
+		          CASE
+		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              ELSE false
+		          END AS is_active,
+		          created_at, updated_at
 	`
 
 	var admin AdminResponse
-	err = tx.QueryRow(ctx, query, req.Name, req.Phone, req.Username, hashedPassword, req.Email).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+	err = tx.QueryRow(ctx, query, req.Name, req.Phone, req.Username, hashedPassword, req.Email, req.OrgID, isActiveValue).Scan(
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create admin: %w", err)
@@ -903,10 +1134,11 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Get roles
+	if refreshed, refreshErr := s.GetOperationsAdminByID(ctx, admin.ID); refreshErr == nil {
+		return refreshed, nil
+	}
 	roles, _ := s.GetAdminRoles(ctx, admin.ID)
 	admin.Roles = roles
-
 	return &admin, nil
 }
 
@@ -917,6 +1149,11 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	usesInteger, err := s.operationsAdminIsActiveUsesInteger(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	query := "UPDATE operations_admins SET updated_at = NOW()"
 	args := []interface{}{}
@@ -939,20 +1176,42 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 		args = append(args, *req.Email)
 		argPos++
 	}
+	if req.OrgID != nil {
+		query += fmt.Sprintf(", org_id = $%d", argPos)
+		if *req.OrgID <= 0 {
+			args = append(args, nil)
+		} else {
+			args = append(args, *req.OrgID)
+		}
+		argPos++
+	}
 
 	if req.IsActive != nil {
 		query += fmt.Sprintf(", is_active = $%d", argPos)
-		args = append(args, *req.IsActive)
+		if usesInteger {
+			if *req.IsActive {
+				args = append(args, 1)
+			} else {
+				args = append(args, 0)
+			}
+		} else {
+			args = append(args, *req.IsActive)
+		}
 		argPos++
 	}
 
 	query += fmt.Sprintf(" WHERE id = $%d AND deleted_at IS NULL", argPos)
 	args = append(args, id)
-	query += " RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), username, email, is_active, created_at, updated_at"
+	query += ` RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
+		          CASE
+		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              ELSE false
+		          END AS is_active,
+		          created_at, updated_at`
 
 	var admin AdminResponse
 	err = tx.QueryRow(ctx, query, args...).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update admin: %w", err)
@@ -983,10 +1242,11 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Get roles
+	if refreshed, refreshErr := s.GetOperationsAdminByID(ctx, id); refreshErr == nil {
+		return refreshed, nil
+	}
 	roles, _ := s.GetAdminRoles(ctx, id)
 	admin.Roles = roles
-
 	return &admin, nil
 }
 

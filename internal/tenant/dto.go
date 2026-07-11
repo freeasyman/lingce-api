@@ -66,6 +66,7 @@ type CreateTenantRequest struct {
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
 	Industry                 *string       `json:"industry,omitempty"`
+	OwnerOrgID               *int64        `json:"owner_org_id,omitempty"`
 	TrialSalesOwnerAdminID   *int64        `json:"trial_sales_owner_admin_id,omitempty"`
 	TrialSource              *string       `json:"trial_source,omitempty"`
 	TrialNotes               *string       `json:"trial_notes,omitempty"`
@@ -87,6 +88,10 @@ type UpdateTenantRequest struct {
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
 	Industry                 *string       `json:"industry,omitempty"`
+	OwnerOrgID               *int64        `json:"owner_org_id,omitempty"`
+	TrialSalesOwnerAdminID   *int64        `json:"trial_sales_owner_admin_id,omitempty"`
+	TrialSource              *string       `json:"trial_source,omitempty"`
+	TrialNotes               *string       `json:"trial_notes,omitempty"`
 	IsActive                 *bool         `json:"is_active"`
 	ValidFrom                *time.Time    `json:"valid_from"`
 	ValidTo                  *time.Time    `json:"valid_to"`
@@ -178,9 +183,10 @@ type TrialHomeTenantSummary struct {
 }
 
 type TrialHomeDemoRecording struct {
-	RecordingID int64  `json:"recording_id"`
-	RoleCode    string `json:"role_code"`
-	Title       string `json:"title"`
+	RecordingID int64      `json:"recording_id"`
+	RoleCode    string     `json:"role_code"`
+	Title       string     `json:"title"`
+	ViewedAt    *time.Time `json:"viewed_at,omitempty"`
 }
 
 type TrialHomeResponse struct {

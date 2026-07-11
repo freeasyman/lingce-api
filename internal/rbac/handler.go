@@ -56,6 +56,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("PUT /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
 	mux.Handle("DELETE /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
 	mux.Handle("POST /api/v1/roles/admins/id/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
+	mux.Handle("GET /api/v1/ops/organizations", authMw(http.HandlerFunc(h.ListOpsOrganizations)))
+	mux.Handle("POST /api/v1/ops/organizations", authMw(http.HandlerFunc(h.CreateOpsOrganization)))
+	mux.Handle("PUT /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.UpdateOpsOrganization)))
+	mux.Handle("DELETE /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.DeleteOpsOrganization)))
 
 	// Institution employee/department role routes
 	mux.Handle("GET /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))

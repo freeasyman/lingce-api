@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -20,13 +21,21 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // GetAdminByUsername retrieves an operations admin by username
 func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, name AS username, password_hash, name AS real_name,
-		       COALESCE(email, '') AS email, COALESCE(phone, '') AS phone,
-		       COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
-		FROM operations_admins
-		WHERE name = $1 OR phone = $1
+		SELECT a.id,
+		       COALESCE(NULLIF(a.username, ''), a.name, a.phone) AS username,
+		       COALESCE(a.password_hash, '') AS password_hash,
+		       COALESCE(a.name, '') AS real_name,
+		       COALESCE(a.email, '') AS email,
+		       COALESCE(a.phone, '') AS phone,
+		       a.org_id,
+		       COALESCE(o.name, '') AS org_name,
+		       COALESCE(o.type, '') AS org_type,
+		       COALESCE(a.session_version, 1) AS session_version,
+		       (COALESCE(a.is_active, 1) <> 0) AS is_active,
+		       a.created_at, COALESCE(a.updated_at, a.created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
+		FROM operations_admins a
+		LEFT JOIN ops_organizations o ON o.id = a.org_id
+		WHERE a.name = $1 OR a.phone = $1 OR a.username = $1
 	`
 
 	var admin OperationsAdmin
@@ -37,6 +46,9 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 		&admin.RealName,
 		&admin.Email,
 		&admin.Phone,
+		&admin.OrgID,
+		&admin.OrgName,
+		&admin.OrgType,
 		&admin.SessionVersion,
 		&admin.IsActive,
 		&admin.CreatedAt,
@@ -45,11 +57,23 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 	)
 
 	if err == pgx.ErrNoRows {
+		slog.Warn("admin login lookup missed", "login_id", username)
 		return nil, fmt.Errorf("admin not found")
 	}
 	if err != nil {
+		slog.Error("admin login lookup failed", "login_id", username, "error", err)
 		return nil, fmt.Errorf("failed to query admin: %w", err)
 	}
+
+	slog.Info("admin login lookup hit",
+		"login_id", username,
+		"admin_id", admin.ID,
+		"resolved_username", admin.Username,
+		"phone", admin.Phone,
+		"is_active", admin.IsActive,
+		"session_version", admin.SessionVersion,
+		"password_hash_len", len(admin.PasswordHash),
+	)
 
 	return &admin, nil
 }
@@ -57,13 +81,21 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 // GetAdminByID retrieves an operations admin by ID
 func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdmin, error) {
 	query := `
-		SELECT id, name AS username, password_hash, name AS real_name,
-		       COALESCE(email, '') AS email, COALESCE(phone, '') AS phone,
-		       COALESCE(session_version, 1) AS session_version,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
-		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
-		FROM operations_admins
-		WHERE id = $1
+		SELECT a.id,
+		       COALESCE(NULLIF(a.username, ''), a.name, a.phone) AS username,
+		       COALESCE(a.password_hash, '') AS password_hash,
+		       COALESCE(a.name, '') AS real_name,
+		       COALESCE(a.email, '') AS email,
+		       COALESCE(a.phone, '') AS phone,
+		       a.org_id,
+		       COALESCE(o.name, '') AS org_name,
+		       COALESCE(o.type, '') AS org_type,
+		       COALESCE(a.session_version, 1) AS session_version,
+		       (COALESCE(a.is_active, 1) <> 0) AS is_active,
+		       a.created_at, COALESCE(a.updated_at, a.created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
+		FROM operations_admins a
+		LEFT JOIN ops_organizations o ON o.id = a.org_id
+		WHERE a.id = $1
 	`
 
 	var admin OperationsAdmin
@@ -74,6 +106,9 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 		&admin.RealName,
 		&admin.Email,
 		&admin.Phone,
+		&admin.OrgID,
+		&admin.OrgName,
+		&admin.OrgType,
 		&admin.SessionVersion,
 		&admin.IsActive,
 		&admin.CreatedAt,
@@ -160,7 +195,7 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 		  AND e.deleted_at IS NULL
 		  AND t.deleted_at IS NULL
 		  AND t.is_active::text IN ('1','t','true','TRUE')
-		ORDER BY id ASC
+		ORDER BY e.id ASC
 		LIMIT 1
 	`
 

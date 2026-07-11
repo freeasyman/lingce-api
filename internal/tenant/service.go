@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/recording"
-	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 )
 
@@ -59,6 +58,66 @@ func NewService(store *Store, sysconfigService *sysconfig.Service) *Service {
 	}
 }
 
+func (s *Service) ensureAdminBelongsToOrg(ctx context.Context, adminID, orgID int64) error {
+	if adminID <= 0 || orgID <= 0 {
+		return fmt.Errorf("admin_id and org_id are required")
+	}
+	adminScope, err := s.store.GetAdminOrgScope(ctx, adminID)
+	if err != nil {
+		return err
+	}
+	if adminScope.OrgID == nil || *adminScope.OrgID != orgID {
+		return fmt.Errorf("selected owner does not belong to target organization")
+	}
+	return nil
+}
+
+func (s *Service) inferAdminOrgID(ctx context.Context, adminID int64) (*int64, error) {
+	if adminID <= 0 {
+		return nil, nil
+	}
+	adminScope, err := s.store.GetAdminOrgScope(ctx, adminID)
+	if err != nil {
+		return nil, err
+	}
+	return adminScope.OrgID, nil
+}
+
+func (s *Service) applyTrialCustomerScope(ctx context.Context, adminID int64, req *TrialCustomerListRequest) error {
+	scope, err := s.store.GetAdminOrgScope(ctx, adminID)
+	if err != nil {
+		return err
+	}
+	if !scope.CanSeeAll {
+		if scope.OrgID == nil || *scope.OrgID <= 0 {
+			return fmt.Errorf("org scope is required")
+		}
+		req.VisibleOrgID = scope.OrgID
+	}
+	return nil
+}
+
+func (s *Service) authorizeTrialCustomerAccess(ctx context.Context, adminID, tenantID int64) error {
+	scope, err := s.store.GetAdminOrgScope(ctx, adminID)
+	if err != nil {
+		return err
+	}
+	if scope.CanSeeAll {
+		return nil
+	}
+	if scope.OrgID == nil || *scope.OrgID <= 0 {
+		return fmt.Errorf("org scope is required")
+	}
+	ownership, err := s.store.GetTrialCustomerOwnership(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if ownership.OwnerOrgID == nil || *ownership.OwnerOrgID != *scope.OrgID {
+		return fmt.Errorf("no permission to access this trial customer")
+	}
+	return nil
+}
+
 // ListTenants retrieves a paginated list of tenants
 func (s *Service) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tenant, int, error) {
 	// Set default pagination
@@ -89,6 +148,24 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 	if req.Code == "" {
 		return nil, fmt.Errorf("code is required")
 	}
+	if normalizeAccountMode(req.AccountMode) == "trial" {
+		if req.TrialSalesOwnerAdminID == nil || *req.TrialSalesOwnerAdminID <= 0 {
+			return nil, fmt.Errorf("trial_sales_owner_admin_id is required for trial tenant")
+		}
+		if (req.OwnerOrgID == nil || *req.OwnerOrgID <= 0) && req.TrialSalesOwnerAdminID != nil && *req.TrialSalesOwnerAdminID > 0 {
+			inferredOrgID, err := s.inferAdminOrgID(ctx, *req.TrialSalesOwnerAdminID)
+			if err != nil {
+				return nil, err
+			}
+			req.OwnerOrgID = inferredOrgID
+		}
+		if req.OwnerOrgID == nil || *req.OwnerOrgID <= 0 {
+			return nil, fmt.Errorf("owner_org_id is required for trial tenant")
+		}
+		if err := s.ensureAdminBelongsToOrg(ctx, *req.TrialSalesOwnerAdminID, *req.OwnerOrgID); err != nil {
+			return nil, err
+		}
+	}
 
 	tenant, err := s.store.CreateTenant(ctx, req)
 	if err != nil {
@@ -101,7 +178,11 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 		if _, err := s.store.EnsureTrialDemoRecordings(ctx, tenant.ID, defaultTrialTemplateCode); err != nil {
 			return nil, err
 		}
+		if err := s.store.UpsertTrialCustomerOwnership(ctx, tenant.ID, *req.OwnerOrgID, req.TrialSalesOwnerAdminID, req.TrialSource, nil); err != nil {
+			return nil, err
+		}
 		if _, err := s.store.UpsertTrialCustomerAssignment(ctx, tenant.ID, TrialCustomerUpsertAssignmentRequest{
+			OwnerOrgID:        req.OwnerOrgID,
 			SalesOwnerAdminID: req.TrialSalesOwnerAdminID,
 			Source:            req.TrialSource,
 			Notes:             req.TrialNotes,
@@ -126,12 +207,80 @@ func (s *Service) CreateTenant(ctx context.Context, req CreateTenantRequest) (*T
 
 // UpdateTenant updates a tenant
 func (s *Service) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequest) (*Tenant, error) {
+	existing, err := s.store.GetTenantByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	accountMode := existing.AccountMode
+	if req.AccountMode != nil {
+		accountMode = normalizeAccountMode(req.AccountMode)
+	}
+
+	var ownerOrgID *int64
+	var ownerAdminID *int64
+	var trialSource *string
+	var trialNotes *string
+	if accountMode == "trial" {
+		ownerAdminID = existing.TrialSalesOwnerAdminID
+		if req.TrialSalesOwnerAdminID != nil && *req.TrialSalesOwnerAdminID > 0 {
+			ownerAdminID = req.TrialSalesOwnerAdminID
+		}
+		if ownerAdminID == nil || *ownerAdminID <= 0 {
+			return nil, fmt.Errorf("trial_sales_owner_admin_id is required for trial tenant")
+		}
+
+		ownerOrgID = req.OwnerOrgID
+		if ownerOrgID == nil || *ownerOrgID <= 0 {
+			inferredOrgID, inferErr := s.inferAdminOrgID(ctx, *ownerAdminID)
+			if inferErr != nil {
+				return nil, inferErr
+			}
+			ownerOrgID = inferredOrgID
+		}
+		if ownerOrgID == nil || *ownerOrgID <= 0 {
+			return nil, fmt.Errorf("owner_org_id is required for trial tenant")
+		}
+		if err := s.ensureAdminBelongsToOrg(ctx, *ownerAdminID, *ownerOrgID); err != nil {
+			return nil, err
+		}
+
+		if req.TrialSource != nil {
+			trialSource = req.TrialSource
+		} else {
+			trialSource = stringPtr(existing.TrialSource)
+		}
+		if req.TrialNotes != nil {
+			trialNotes = req.TrialNotes
+		} else {
+			trialNotes = stringPtr(existing.TrialNotes)
+		}
+	}
+
 	tenant, err := s.store.UpdateTenant(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.syncTenantPlanAndFeatureGroup(ctx, id, req.SubscriptionPlanID.Ptr(), req.SubscriptionPlanName); err != nil {
 		return nil, err
+	}
+
+	if accountMode == "trial" && ownerOrgID != nil && *ownerOrgID > 0 {
+		if err := s.store.UpsertTrialCustomerOwnership(ctx, id, *ownerOrgID, ownerAdminID, trialSource, nil); err != nil {
+			return nil, err
+		}
+		if _, err := s.store.UpsertTrialCustomerAssignment(ctx, id, TrialCustomerUpsertAssignmentRequest{
+			OwnerOrgID:        ownerOrgID,
+			SalesOwnerAdminID: ownerAdminID,
+			Source:            trialSource,
+			Notes:             trialNotes,
+		}, nil); err != nil {
+			return nil, err
+		}
+		refreshed, refreshErr := s.store.GetTenantByID(ctx, id)
+		if refreshErr == nil {
+			return refreshed, nil
+		}
 	}
 	return tenant, nil
 }
@@ -271,20 +420,9 @@ func (s *Service) AssignTrialCustomerOwner(ctx context.Context, tenantID int64, 
 	if assignedBy == nil || *assignedBy <= 0 {
 		return nil, fmt.Errorf("admin access required")
 	}
-	admin, err := rbac.NewService(rbac.NewStore(s.store.pool)).GetOperationsAdmin(ctx, *assignedBy)
+	scope, err := s.store.GetAdminOrgScope(ctx, *assignedBy)
 	if err != nil {
-		return nil, fmt.Errorf("load admin roles: %w", err)
-	}
-	canAssign := false
-	for _, role := range admin.Roles {
-		code := strings.ToLower(strings.TrimSpace(role.Code))
-		if code == "ops_super_admin" || code == "ops_admin" {
-			canAssign = true
-			break
-		}
-	}
-	if !canAssign {
-		return nil, fmt.Errorf("no permission to change trial customer owner")
+		return nil, err
 	}
 	if _, err := s.store.GetTenantByID(ctx, tenantID); err != nil {
 		return nil, err
@@ -293,10 +431,56 @@ func (s *Service) AssignTrialCustomerOwner(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return nil, err
 	}
+	currentOrgID := int64(0)
+	if current.Item.OwnerOrgID != nil {
+		currentOrgID = *current.Item.OwnerOrgID
+	}
+	if !scope.CanSeeAll {
+		if scope.OrgID == nil || *scope.OrgID <= 0 {
+			return nil, fmt.Errorf("org scope is required")
+		}
+		if currentOrgID <= 0 || currentOrgID != *scope.OrgID {
+			return nil, fmt.Errorf("no permission to change trial customer owner")
+		}
+	}
+	ownerOrgID := current.Item.OwnerOrgID
+	if (ownerOrgID == nil || *ownerOrgID <= 0) && req.SalesOwnerAdminID != nil && *req.SalesOwnerAdminID > 0 {
+		inferredOrgID, err := s.inferAdminOrgID(ctx, *req.SalesOwnerAdminID)
+		if err != nil {
+			return nil, err
+		}
+		ownerOrgID = inferredOrgID
+	}
+	if req.OwnerOrgID != nil && *req.OwnerOrgID > 0 {
+		if !scope.CanSeeAll {
+			return nil, fmt.Errorf("no permission to change trial customer organization")
+		}
+		ownerOrgID = req.OwnerOrgID
+	}
+	if ownerOrgID == nil || *ownerOrgID <= 0 {
+		return nil, fmt.Errorf("owner org is required")
+	}
+	if req.SalesOwnerAdminID != nil && *req.SalesOwnerAdminID > 0 {
+		if err := s.ensureAdminBelongsToOrg(ctx, *req.SalesOwnerAdminID, *ownerOrgID); err != nil {
+			return nil, err
+		}
+	}
+	source := req.Source
+	if source == nil {
+		source = stringPtr(current.Assignment.Source)
+	}
+	notes := req.Notes
+	if notes == nil {
+		notes = stringPtr(current.Assignment.Notes)
+	}
+	if err := s.store.UpsertTrialCustomerOwnership(ctx, tenantID, *ownerOrgID, req.SalesOwnerAdminID, source, assignedBy); err != nil {
+		return nil, err
+	}
 	return s.store.UpsertTrialCustomerAssignment(ctx, tenantID, TrialCustomerUpsertAssignmentRequest{
+		OwnerOrgID:        ownerOrgID,
 		SalesOwnerAdminID: req.SalesOwnerAdminID,
-		Source:            stringPtr(current.Assignment.Source),
-		Notes:             stringPtr(current.Assignment.Notes),
+		Source:            source,
+		Notes:             notes,
 	}, assignedBy)
 }
 
@@ -442,9 +626,17 @@ func (s *Service) GetTrialHomeSummary(ctx context.Context, tenantID int64) (*Tri
 			RecordingID: item.RecordingID,
 			RoleCode:    item.RoleCode,
 			Title:       item.Title,
+			ViewedAt:    item.ViewedAt,
 		})
 	}
 	return resp, nil
+}
+
+func (s *Service) MarkTrialDemoViewed(ctx context.Context, tenantID int64, roleCode string, viewedByEmployeeID int64) error {
+	if err := s.store.MarkTrialDemoViewed(ctx, tenantID, roleCode, viewedByEmployeeID); err != nil {
+		return err
+	}
+	return s.store.RecomputeTrialCustomerMetricsForTenant(ctx, tenantID)
 }
 
 func (s *Service) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialtyResponse, error) {

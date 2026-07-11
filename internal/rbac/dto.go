@@ -109,6 +109,7 @@ type MenuSortItem struct {
 type AdminListRequest struct {
 	Username string `json:"username,omitempty"`
 	Email    string `json:"email,omitempty"`
+	OrgID    *int64 `json:"org_id,omitempty"`
 	IsActive *bool  `json:"is_active,omitempty"`
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
@@ -121,6 +122,7 @@ type CreateAdminRequest struct {
 	Username string  `json:"username"`
 	Password string  `json:"password"`
 	Email    *string `json:"email,omitempty"`
+	OrgID    *int64  `json:"org_id,omitempty"`
 	RoleIDs  []int64 `json:"role_ids,omitempty"`
 }
 
@@ -129,6 +131,7 @@ type UpdateAdminRequest struct {
 	Name     *string `json:"name,omitempty"`
 	Phone    *string `json:"phone,omitempty"`
 	Email    *string `json:"email,omitempty"`
+	OrgID    *int64  `json:"org_id,omitempty"`
 	IsActive *bool   `json:"is_active,omitempty"`
 	RoleIDs  []int64 `json:"role_ids,omitempty"`
 }
@@ -140,10 +143,40 @@ type AdminResponse struct {
 	Phone     string         `json:"phone"`
 	Username  string         `json:"username"`
 	Email     *string        `json:"email,omitempty"`
+	OrgID     *int64         `json:"org_id,omitempty"`
+	OrgName   string         `json:"org_name,omitempty"`
 	IsActive  bool           `json:"is_active"`
 	Roles     []RoleResponse `json:"roles,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+type OpsOrganizationResponse struct {
+	ID        int64      `json:"id"`
+	Name      string     `json:"name"`
+	Type      string     `json:"type"`
+	ParentID  *int64     `json:"parent_id,omitempty"`
+	Status    string     `json:"status"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+type CreateOpsOrganizationRequest struct {
+	Name   string  `json:"name"`
+	Type   string  `json:"type"`
+	Status *string `json:"status,omitempty"`
+}
+
+type UpdateOpsOrganizationRequest struct {
+	Name   *string `json:"name,omitempty"`
+	Type   *string `json:"type,omitempty"`
+	Status *string `json:"status,omitempty"`
+}
+
+type DeleteOpsOrganizationResponse struct {
+	ID      int64  `json:"id"`
+	Deleted bool   `json:"deleted"`
+	Message string `json:"message,omitempty"`
 }
 
 // ResetPasswordRequest represents a request to reset password

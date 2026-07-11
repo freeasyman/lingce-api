@@ -10,6 +10,78 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
+func (h *Handler) ListOpsOrganizations(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	items, err := h.service.ListOpsOrganizations(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items})
+}
+
+func (h *Handler) CreateOpsOrganization(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	var req CreateOpsOrganizationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	item, err := h.service.CreateOpsOrganization(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) UpdateOpsOrganization(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid org ID")
+		return
+	}
+	var req UpdateOpsOrganizationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	item, err := h.service.UpdateOpsOrganization(r.Context(), id, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) DeleteOpsOrganization(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid org ID")
+		return
+	}
+	resp, err := h.service.DeleteOpsOrganization(r.Context(), id)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 // Operations Admin handlers
 
 // ListOperationsAdmins handles listing operations admins
@@ -22,6 +94,11 @@ func (h *Handler) ListOperationsAdmins(w http.ResponseWriter, r *http.Request) {
 	var req AdminListRequest
 	req.Username = r.URL.Query().Get("username")
 	req.Email = r.URL.Query().Get("email")
+	if orgIDStr := r.URL.Query().Get("org_id"); orgIDStr != "" {
+		if orgID, err := strconv.ParseInt(orgIDStr, 10, 64); err == nil && orgID > 0 {
+			req.OrgID = &orgID
+		}
+	}
 
 	if isActiveStr := r.URL.Query().Get("is_active"); isActiveStr != "" {
 		isActive := isActiveStr == "true"

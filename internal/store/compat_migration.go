@@ -1066,12 +1066,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			password_hash TEXT NOT NULL DEFAULT '',
 			email VARCHAR(255),
 			is_active INTEGER DEFAULT 1,
+			org_id BIGINT,
 			tenant_id INTEGER,
 			last_login_at TIMESTAMP,
 			session_version INTEGER NOT NULL DEFAULT 1,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP,
 			deleted_at TIMESTAMP
+		)`,
+		`ALTER TABLE IF EXISTS operations_admins ADD COLUMN IF NOT EXISTS org_id BIGINT`,
+		`CREATE TABLE IF NOT EXISTS ops_organizations (
+			id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'agency',
+			parent_id BIGINT,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS operations_admin_roles (
 			admin_id BIGINT NOT NULL,
@@ -1311,8 +1322,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			employee_id BIGINT NOT NULL,
 			customer_id BIGINT,
 			title TEXT NOT NULL,
+			viewed_at TIMESTAMP,
+			viewed_by_employee_id BIGINT,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE IF EXISTS tenant_trial_demo_recordings ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS tenant_trial_demo_recordings ADD COLUMN IF NOT EXISTS viewed_by_employee_id BIGINT`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_tenant_trial_demo_recordings_tenant_template_role ON tenant_trial_demo_recordings(tenant_id, template_code, role_code)`,
 		`CREATE INDEX IF NOT EXISTS idx_tenant_trial_demo_recordings_tenant ON tenant_trial_demo_recordings(tenant_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS employee_login_events (
@@ -1342,6 +1357,18 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS trial_customer_assignments ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE IF EXISTS trial_customer_assignments ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_trial_customer_assignments_owner ON trial_customer_assignments(sales_owner_admin_id, updated_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS trial_customer_ownerships (
+			tenant_id BIGINT PRIMARY KEY,
+			owner_org_id BIGINT,
+			sales_owner_user_id BIGINT,
+			created_source TEXT NOT NULL DEFAULT '',
+			assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			assigned_by BIGINT,
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE IF EXISTS trial_customer_ownerships ALTER COLUMN owner_org_id DROP NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_ownerships_owner_org ON trial_customer_ownerships(owner_org_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_trial_customer_ownerships_sales_owner ON trial_customer_ownerships(sales_owner_user_id, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS trial_customer_metrics (
 			tenant_id BIGINT PRIMARY KEY,
 			trial_started_at TIMESTAMP,
@@ -1590,6 +1617,9 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedTenantProductCatalog(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration seed tenant product catalog: %w", err)
 	}
+	if err := backfillTrialCustomerOrgOwnership(ctx, pool); err != nil {
+		return fmt.Errorf("compat migration backfill trial customer org ownership: %w", err)
+	}
 	if err := normalizeOperationsMenus(ctx, pool); err != nil {
 		return fmt.Errorf("compat migration normalize operations menus: %w", err)
 	}
@@ -1598,6 +1628,14 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	slog.Info("compatibility migrations applied", "steps", len(stmts))
+	return nil
+}
+
+func backfillTrialCustomerOrgOwnership(ctx context.Context, pool *pgxpool.Pool) error {
+	// 不再在兼容迁移阶段自动创建组织、绑定管理员或回填组织归属。
+	// 组织及绑定关系由产品界面显式维护，避免系统替用户做隐式决策。
+	_ = ctx
+	_ = pool
 	return nil
 }
 

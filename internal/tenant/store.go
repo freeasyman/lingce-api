@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,10 @@ import (
 
 type Store struct {
 	pool *pgxpool.Pool
+
+	// columnExistCache 缓存 information_schema 探测结果。列是否存在在运行期不会变，
+	// 无需每次列表/重算都查一遍 information_schema。key = "table.column"。
+	columnExistCache sync.Map
 }
 
 const defaultTenantAdminPassword = "123456"
@@ -70,6 +75,10 @@ func (s *Store) tenantIsActiveUsesInteger(ctx context.Context) (bool, error) {
 }
 
 func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string) (bool, error) {
+	cacheKey := tableName + "." + columnName
+	if cached, ok := s.columnExistCache.Load(cacheKey); ok {
+		return cached.(bool), nil
+	}
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -83,6 +92,7 @@ func (s *Store) tableHasColumn(ctx context.Context, tableName, columnName string
 	if err != nil {
 		return false, fmt.Errorf("failed to inspect %s.%s: %w", tableName, columnName, err)
 	}
+	s.columnExistCache.Store(cacheKey, exists)
 	return exists, nil
 }
 
@@ -208,8 +218,13 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		       '' AS service_status,
 		       NULL::timestamp AS expires_at,
 		       NULL::bigint AS feature_group_id,
+		       a.sales_owner_admin_id,
+		       COALESCE(a.sales_owner_name_snapshot, '') AS trial_sales_owner_name,
+		       COALESCE(a.source, '') AS trial_source,
+		       COALESCE(a.notes, '') AS trial_notes,
 		       t.created_at, t.updated_at, t.deleted_at
 		FROM tenants t
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		WHERE t.id = $1 AND t.deleted_at IS NULL
 	`
 
@@ -230,6 +245,10 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		&t.SubscriptionState,
 		&t.SubscriptionEndAt,
 		&t.FeatureGroupID,
+		&t.TrialSalesOwnerAdminID,
+		&t.TrialSalesOwnerName,
+		&t.TrialSource,
+		&t.TrialNotes,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 		&t.DeletedAt,
@@ -657,6 +676,20 @@ func derefString(v *string) string {
 	return *v
 }
 
+func chooseStringPtr(primary *string, fallback string) *string {
+	if primary != nil {
+		return primary
+	}
+	return &fallback
+}
+
+func chooseInt64Ptr(primary *int64, fallback *int64) *int64 {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
 func normalizeAccountMode(v *string) string {
 	mode := strings.ToLower(strings.TrimSpace(derefString(v)))
 	switch mode {
@@ -1056,6 +1089,7 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		          END AS is_active,
 		          valid_from, valid_to,
 		          '' AS plan_name, '' AS service_status, NULL::timestamp AS expires_at, NULL::bigint AS feature_group_id,
+		          NULL::bigint AS trial_sales_owner_admin_id, '' AS trial_sales_owner_name, '' AS trial_source, '' AS trial_notes,
 		          created_at, updated_at, deleted_at
 	`, strings.Join(setClauses, ", "), argIndex)
 
@@ -1076,6 +1110,10 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		&t.SubscriptionState,
 		&t.SubscriptionEndAt,
 		&t.FeatureGroupID,
+		&t.TrialSalesOwnerAdminID,
+		&t.TrialSalesOwnerName,
+		&t.TrialSource,
+		&t.TrialNotes,
 		&t.CreatedAt,
 		&t.UpdatedAt,
 		&t.DeletedAt,
@@ -1225,7 +1263,7 @@ type trialDemoAssetSource struct {
 
 func (s *Store) ListTenantTrialDemoRecordings(ctx context.Context, tenantID int64) ([]TenantTrialDemoRecording, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT tenant_id, template_code, role_code, asset_id, recording_id, employee_id, customer_id, title
+		SELECT tenant_id, template_code, role_code, asset_id, recording_id, employee_id, customer_id, title, viewed_at, viewed_by_employee_id
 		FROM tenant_trial_demo_recordings
 		WHERE tenant_id = $1
 		ORDER BY role_code ASC, id ASC
@@ -1237,7 +1275,7 @@ func (s *Store) ListTenantTrialDemoRecordings(ctx context.Context, tenantID int6
 	items := make([]TenantTrialDemoRecording, 0)
 	for rows.Next() {
 		var item TenantTrialDemoRecording
-		if err := rows.Scan(&item.TenantID, &item.TemplateCode, &item.RoleCode, &item.AssetID, &item.RecordingID, &item.EmployeeID, &item.CustomerID, &item.Title); err != nil {
+		if err := rows.Scan(&item.TenantID, &item.TemplateCode, &item.RoleCode, &item.AssetID, &item.RecordingID, &item.EmployeeID, &item.CustomerID, &item.Title, &item.ViewedAt, &item.ViewedByEmployeeID); err != nil {
 			return nil, fmt.Errorf("scan tenant trial demo recording: %w", err)
 		}
 		items = append(items, item)
@@ -1294,6 +1332,48 @@ func (s *Store) EnsureTrialDemoRecordings(ctx context.Context, tenantID int64, t
 		}
 	}
 	return out, nil
+}
+
+// trialMetricsFreshness 指标缓存的有效期。列表页只重算超过该时长未刷新的租户，
+// 兼顾列表速度与数据新鲜度：常态下秒开，数据最多滞后该时长（详情页仍每次实时重算）。
+const trialMetricsFreshness = 5 * time.Minute
+
+// filterStaleTrialTenants 用一条查询批量筛出指标已过期（或从未计算）的租户，
+// 避免对本页每个租户逐个判断新鲜度导致的 N+1。
+func (s *Store) filterStaleTrialTenants(ctx context.Context, items []*TrialCustomerListItem) ([]int64, error) {
+	tenantIDs := make([]int64, 0, len(items))
+	for _, item := range items {
+		if item != nil && item.TenantID > 0 {
+			tenantIDs = append(tenantIDs, item.TenantID)
+		}
+	}
+	if len(tenantIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id
+		FROM unnest($1::bigint[]) AS t(id)
+		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
+		WHERE m.tenant_id IS NULL
+		   OR m.updated_at IS NULL
+		   OR m.updated_at < NOW() - $2::interval
+	`, tenantIDs, trialMetricsFreshness.String())
+	if err != nil {
+		return nil, fmt.Errorf("filter stale trial tenants: %w", err)
+	}
+	defer rows.Close()
+	stale := make([]int64, 0, len(tenantIDs))
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan stale trial tenant id: %w", err)
+		}
+		stale = append(stale, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale trial tenants: %w", err)
+	}
+	return stale, nil
 }
 
 func (s *Store) RecomputeTrialCustomerMetrics(ctx context.Context) error {
@@ -1385,40 +1465,17 @@ func (s *Store) RecomputeTrialCustomerMetricsForTenant(ctx context.Context, tena
 	}
 
 	var doctorDemoViewedAt, consultantDemoViewedAt *time.Time
-	if len(demoRecordingIDs) > 0 {
-		rows, err := s.pool.Query(ctx, `
-			SELECT recording_id, MIN(created_at)
-			FROM recording_tasks
-			WHERE tenant_id = $1
-			  AND recording_id = ANY($2)
-			GROUP BY recording_id
-		`, tenantID, demoRecordingIDs)
-		if err != nil {
-			return fmt.Errorf("query trial demo viewed tasks: %w", err)
-		}
-		for rows.Next() {
-			var recordingID int64
-			var occurredAt *time.Time
-			if err := rows.Scan(&recordingID, &occurredAt); err != nil {
-				rows.Close()
-				return fmt.Errorf("scan trial demo viewed task: %w", err)
+	for _, item := range demoItems {
+		switch roleByRecordingID[item.RecordingID] {
+		case "doctor":
+			if doctorDemoViewedAt == nil || (item.ViewedAt != nil && item.ViewedAt.Before(*doctorDemoViewedAt)) {
+				doctorDemoViewedAt = item.ViewedAt
 			}
-			switch roleByRecordingID[recordingID] {
-			case "doctor":
-				if doctorDemoViewedAt == nil || (occurredAt != nil && occurredAt.Before(*doctorDemoViewedAt)) {
-					doctorDemoViewedAt = occurredAt
-				}
-			case "consultant":
-				if consultantDemoViewedAt == nil || (occurredAt != nil && occurredAt.Before(*consultantDemoViewedAt)) {
-					consultantDemoViewedAt = occurredAt
-				}
+		case "consultant":
+			if consultantDemoViewedAt == nil || (item.ViewedAt != nil && item.ViewedAt.Before(*consultantDemoViewedAt)) {
+				consultantDemoViewedAt = item.ViewedAt
 			}
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("iterate trial demo viewed tasks: %w", err)
-		}
-		rows.Close()
 	}
 
 	var firstUploadAt, lastUploadAt *time.Time
@@ -1433,32 +1490,32 @@ func (s *Store) RecomputeTrialCustomerMetricsForTenant(ctx context.Context, tena
 		recordingsDeletedCondition = "r.deleted_at IS NULL"
 	}
 
+	// 用 LEFT JOIN 预聚合替代逐行相关子查询：is_demo 由 demo 表命中判断，
+	// task_count 由 recording_tasks 按 recording_id 预聚合，避免每行录音各跑一次子查询。
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT
 			r.id,
 			COALESCE(r.created_at, NOW()) AS created_at,
 			lower(COALESCE(NULLIF(r.business_scope, ''), 'unknown')) AS business_scope,
-			CASE
-				WHEN EXISTS (
-					SELECT 1
-					FROM tenant_trial_demo_recordings d
-					WHERE d.tenant_id = r.tenant_id
-					  AND d.recording_id = r.id
-				) THEN true
-				ELSE false
-			END AS is_demo,
+			CASE WHEN d.recording_id IS NOT NULL THEN true ELSE false END AS is_demo,
 			CASE
 				WHEN COALESCE(NULLIF(r.analysis_status, ''), '') IN ('completed', 'done', 'success') THEN true
 				ELSE false
 			END AS analysis_completed,
 			CASE WHEN r.customer_id IS NOT NULL THEN 1 ELSE 0 END AS customer_generated,
-			(
-				SELECT COUNT(*)
-				FROM recording_tasks rt
-				WHERE rt.tenant_id = r.tenant_id
-				  AND rt.recording_id = r.id
-			) AS task_count
+			COALESCE(rt.task_count, 0) AS task_count
 		FROM recordings r
+		LEFT JOIN (
+			SELECT DISTINCT recording_id
+			FROM tenant_trial_demo_recordings
+			WHERE tenant_id = $1
+		) d ON d.recording_id = r.id
+		LEFT JOIN (
+			SELECT recording_id, COUNT(*) AS task_count
+			FROM recording_tasks
+			WHERE tenant_id = $1
+			GROUP BY recording_id
+		) rt ON rt.recording_id = r.id
 		WHERE r.tenant_id = $1
 		  AND %s
 	`, recordingsDeletedCondition), tenantID)
@@ -1621,6 +1678,11 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 		args = append(args, *req.OwnerAdminID)
 		argIndex++
 	}
+	if req.VisibleOrgID != nil && *req.VisibleOrgID > 0 {
+		conditions = append(conditions, fmt.Sprintf("o.owner_org_id = $%d", argIndex))
+		args = append(args, *req.VisibleOrgID)
+		argIndex++
+	}
 	if source := strings.TrimSpace(req.Source); source != "" {
 		conditions = append(conditions, fmt.Sprintf("lower(COALESCE(a.source, '')) = lower($%d)", argIndex))
 		args = append(args, source)
@@ -1662,6 +1724,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
 			a.sales_owner_admin_id,
 			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			o.owner_org_id,
+			COALESCE(org.name, '') AS owner_org_name,
 			COALESCE(a.source, '') AS source,
 			COALESCE(a.notes, '') AS notes,
 			m.trial_started_at,
@@ -1704,6 +1768,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				LIMIT 1
 			) AS next_follow_up_at
 		FROM tenants t
+		LEFT JOIN trial_customer_ownerships o ON o.tenant_id = t.id
+		LEFT JOIN ops_organizations org ON org.id = o.owner_org_id
 		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
 		WHERE %s
@@ -1732,6 +1798,8 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 				&item.ActivationStatus,
 				&item.SalesOwnerAdminID,
 				&item.SalesOwnerName,
+				&item.OwnerOrgID,
+				&item.OwnerOrgName,
 				&item.Source,
 				&item.Notes,
 				&item.TrialStartedAt,
@@ -1769,23 +1837,32 @@ func (s *Store) ListTrialCustomers(ctx context.Context, req TrialCustomerListReq
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range items {
-		if item == nil || item.TenantID <= 0 {
-			continue
-		}
-		if err := s.RecomputeTrialCustomerMetricsForTenant(ctx, item.TenantID); err != nil {
-			return nil, err
-		}
-	}
-	items, err = loadItems(listArgs)
+
+	// 只对指标已过期的租户重算，避免每次打开列表都对全部租户做昂贵的同步重算。
+	// 指标由重算写入 trial_customer_metrics.updated_at；超过 trialMetricsFreshness
+	// 或从未算过的租户才需要刷新。常态下列表几乎零重算开销。
+	staleTenantIDs, err := s.filterStaleTrialTenants(ctx, items)
 	if err != nil {
 		return nil, err
+	}
+	if len(staleTenantIDs) > 0 {
+		for _, tenantID := range staleTenantIDs {
+			if err := s.RecomputeTrialCustomerMetricsForTenant(ctx, tenantID); err != nil {
+				return nil, err
+			}
+		}
+		// 有指标被刷新，重新加载以反映最新值
+		items, err = loadItems(listArgs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var total int64
 	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM tenants t
+		LEFT JOIN trial_customer_ownerships o ON o.tenant_id = t.id
 		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
 		WHERE %s
@@ -1815,6 +1892,8 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 			CASE WHEN (COALESCE(m.login_count, 0) > 0 OR COALESCE(m.upload_count, 0) > 0) THEN 'activated' ELSE 'not_activated' END AS activation_status,
 			a.sales_owner_admin_id,
 			COALESCE(a.sales_owner_name_snapshot, '') AS sales_owner_name,
+			o.owner_org_id,
+			COALESCE(org.name, '') AS owner_org_name,
 			COALESCE(a.source, '') AS source,
 			COALESCE(a.notes, '') AS notes,
 			m.trial_started_at,
@@ -1835,6 +1914,8 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 			COALESCE(m.blocking_reason, '') AS blocking_reason,
 			COALESCE(m.next_action_hint, '') AS next_action_hint
 		FROM tenants t
+		LEFT JOIN trial_customer_ownerships o ON o.tenant_id = t.id
+		LEFT JOIN ops_organizations org ON org.id = o.owner_org_id
 		LEFT JOIN trial_customer_assignments a ON a.tenant_id = t.id
 		LEFT JOIN trial_customer_metrics m ON m.tenant_id = t.id
 		WHERE t.id = $1
@@ -1851,6 +1932,8 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 		&selected.ActivationStatus,
 		&selected.SalesOwnerAdminID,
 		&selected.SalesOwnerName,
+		&selected.OwnerOrgID,
+		&selected.OwnerOrgName,
 		&selected.Source,
 		&selected.Notes,
 		&selected.TrialStartedAt,
@@ -1900,10 +1983,21 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 
 	assignment := TrialCustomerAssignment{TenantID: tenantID}
 	_ = s.pool.QueryRow(ctx, `
-		SELECT tenant_id, sales_owner_admin_id, COALESCE(sales_owner_name_snapshot, ''), COALESCE(source, ''), COALESCE(notes, ''), assigned_at, assigned_by, updated_at
-		FROM trial_customer_assignments
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&assignment.TenantID, &assignment.SalesOwnerAdminID, &assignment.SalesOwnerNameSnapshot, &assignment.Source, &assignment.Notes, &assignment.AssignedAt, &assignment.AssignedBy, &assignment.UpdatedAt)
+		SELECT a.tenant_id,
+		       a.sales_owner_admin_id,
+		       COALESCE(a.sales_owner_name_snapshot, ''),
+		       o.owner_org_id,
+		       COALESCE(org.name, '') AS owner_org_name,
+		       COALESCE(a.source, ''),
+		       COALESCE(a.notes, ''),
+		       a.assigned_at,
+		       a.assigned_by,
+		       a.updated_at
+		FROM trial_customer_assignments a
+		LEFT JOIN trial_customer_ownerships o ON o.tenant_id = a.tenant_id
+		LEFT JOIN ops_organizations org ON org.id = o.owner_org_id
+		WHERE a.tenant_id = $1
+	`, tenantID).Scan(&assignment.TenantID, &assignment.SalesOwnerAdminID, &assignment.SalesOwnerNameSnapshot, &assignment.OwnerOrgID, &assignment.OwnerOrgName, &assignment.Source, &assignment.Notes, &assignment.AssignedAt, &assignment.AssignedBy, &assignment.UpdatedAt)
 
 	roleUsage := []TrialCustomerRoleUsage{
 		{
@@ -1947,6 +2041,27 @@ func (s *Store) GetTrialCustomerDetail(ctx context.Context, tenantID int64) (*Tr
 	}, nil
 }
 
+func (s *Store) MarkTrialDemoViewed(ctx context.Context, tenantID int64, roleCode string, viewedByEmployeeID int64) error {
+	roleCode = strings.ToLower(strings.TrimSpace(roleCode))
+	if roleCode != "doctor" && roleCode != "consultant" {
+		return fmt.Errorf("invalid role code")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tenant_trial_demo_recordings
+		SET viewed_at = COALESCE(viewed_at, NOW()),
+		    viewed_by_employee_id = CASE WHEN viewed_by_employee_id IS NULL AND $3 > 0 THEN $3 ELSE viewed_by_employee_id END
+		WHERE tenant_id = $1
+		  AND lower(role_code) = $2
+	`, tenantID, roleCode, viewedByEmployeeID)
+	if err != nil {
+		return fmt.Errorf("mark trial demo viewed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("trial demo recording not found")
+	}
+	return nil
+}
+
 func (s *Store) UpsertTrialCustomerAssignment(ctx context.Context, tenantID int64, req TrialCustomerUpsertAssignmentRequest, assignedBy *int64) (*TrialCustomerAssignment, error) {
 	var snapshot string
 	if req.SalesOwnerAdminID != nil && *req.SalesOwnerAdminID > 0 {
@@ -1984,6 +2099,56 @@ func (s *Store) UpsertTrialCustomerAssignment(ctx context.Context, tenantID int6
 	)
 	if err != nil {
 		return nil, fmt.Errorf("upsert trial customer assignment: %w", err)
+	}
+	if ownership, ownErr := s.GetTrialCustomerOwnership(ctx, tenantID); ownErr == nil && ownership != nil {
+		item.OwnerOrgID = ownership.OwnerOrgID
+		item.OwnerOrgName = ownership.OwnerOrgName
+	}
+	return item, nil
+}
+
+func (s *Store) UpsertTrialCustomerOwnership(ctx context.Context, tenantID int64, ownerOrgID int64, salesOwnerUserID *int64, createdSource *string, assignedBy *int64) error {
+	if tenantID <= 0 || ownerOrgID <= 0 {
+		return fmt.Errorf("tenant_id and owner_org_id are required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO trial_customer_ownerships (
+			tenant_id, owner_org_id, sales_owner_user_id, created_source, assigned_at, assigned_by, updated_at
+		)
+		VALUES ($1, $2, $3, $4, NOW(), $5, NOW())
+		ON CONFLICT (tenant_id) DO UPDATE
+		SET owner_org_id = EXCLUDED.owner_org_id,
+		    sales_owner_user_id = EXCLUDED.sales_owner_user_id,
+		    created_source = EXCLUDED.created_source,
+		    assigned_at = NOW(),
+		    assigned_by = EXCLUDED.assigned_by,
+		    updated_at = NOW()
+	`, tenantID, ownerOrgID, salesOwnerUserID, strings.TrimSpace(derefString(createdSource)), assignedBy)
+	if err != nil {
+		return fmt.Errorf("upsert trial customer ownership: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetTrialCustomerOwnership(ctx context.Context, tenantID int64) (*TrialCustomerAssignment, error) {
+	item := &TrialCustomerAssignment{}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT o.tenant_id,
+		       o.sales_owner_user_id,
+		       COALESCE(a.sales_owner_name_snapshot, ''),
+		       o.owner_org_id,
+		       COALESCE(org.name, '') AS owner_org_name,
+		       COALESCE(a.source, ''),
+		       COALESCE(a.notes, ''),
+		       o.assigned_at,
+		       o.assigned_by,
+		       o.updated_at
+		FROM trial_customer_ownerships o
+		LEFT JOIN trial_customer_assignments a ON a.tenant_id = o.tenant_id
+		LEFT JOIN ops_organizations org ON org.id = o.owner_org_id
+		WHERE o.tenant_id = $1
+	`, tenantID).Scan(&item.TenantID, &item.SalesOwnerAdminID, &item.SalesOwnerNameSnapshot, &item.OwnerOrgID, &item.OwnerOrgName, &item.Source, &item.Notes, &item.AssignedAt, &item.AssignedBy, &item.UpdatedAt); err != nil {
+		return nil, fmt.Errorf("get trial customer ownership: %w", err)
 	}
 	return item, nil
 }

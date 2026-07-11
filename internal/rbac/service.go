@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -14,6 +15,31 @@ type Service struct {
 
 func NewService(store *Store) *Service {
 	return &Service{store: store}
+}
+
+func (s *Service) ListOpsOrganizations(ctx context.Context) ([]*OpsOrganizationResponse, error) {
+	return s.store.ListOpsOrganizations(ctx)
+}
+
+func (s *Service) CreateOpsOrganization(ctx context.Context, req CreateOpsOrganizationRequest) (*OpsOrganizationResponse, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	return s.store.CreateOpsOrganization(ctx, req)
+}
+
+func (s *Service) UpdateOpsOrganization(ctx context.Context, id int64, req UpdateOpsOrganizationRequest) (*OpsOrganizationResponse, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid org id")
+	}
+	return s.store.UpdateOpsOrganization(ctx, id, req)
+}
+
+func (s *Service) DeleteOpsOrganization(ctx context.Context, id int64) (*DeleteOpsOrganizationResponse, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid org id")
+	}
+	return s.store.DeleteOpsOrganization(ctx, id)
 }
 
 // Operations Role operations

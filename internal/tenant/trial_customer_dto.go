@@ -1,13 +1,17 @@
 package tenant
 
 type TrialCustomerAssignOwnerRequest struct {
-	SalesOwnerAdminID *int64 `json:"sales_owner_admin_id"`
+	SalesOwnerAdminID *int64  `json:"sales_owner_admin_id"`
+	OwnerOrgID        *int64  `json:"owner_org_id,omitempty"`
+	Source            *string `json:"source,omitempty"`
+	Notes             *string `json:"notes,omitempty"`
 }
 
 type TrialCustomerUpsertAssignmentRequest struct {
 	SalesOwnerAdminID *int64  `json:"sales_owner_admin_id"`
-	Source           *string `json:"source,omitempty"`
-	Notes            *string `json:"notes,omitempty"`
+	OwnerOrgID        *int64  `json:"owner_org_id,omitempty"`
+	Source            *string `json:"source,omitempty"`
+	Notes             *string `json:"notes,omitempty"`
 }
 
 type TrialCustomerFollowUpCreateRequest struct {
