@@ -65,6 +65,7 @@ type ExternalConfig struct {
 	LingceWorkerURL           string             `toml:"lingce_worker_url"`
 	LingceWorkerToken         string             `toml:"lingce_worker_token"`
 	InternalWorkerToken       string             `toml:"internal_worker_token"`
+	EmployeeWebBaseURL        string             `toml:"employee_web_base_url"`
 	TicketNotify              TicketNotifyConfig `toml:"ticket_notify"`
 }
 
@@ -125,6 +126,7 @@ type ExternalSecrets struct {
 	RecordingWorkerToken      string             `toml:"recording_worker_token"`
 	LingceWorkerToken         string             `toml:"lingce_worker_token"`
 	InternalWorkerToken       string             `toml:"internal_worker_token"`
+	EmployeeWebBaseURL        string             `toml:"employee_web_base_url"`
 	TicketNotify              TicketNotifyConfig `toml:"ticket_notify"`
 }
 
@@ -243,6 +245,13 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.WeCom.InstallAuthType == 0 {
 		cfg.WeCom.InstallAuthType = 1
+	}
+	if cfg.External.EmployeeWebBaseURL == "" {
+		if strings.EqualFold(cfg.App.Env, "development") || strings.EqualFold(cfg.App.Env, "dev") {
+			cfg.External.EmployeeWebBaseURL = "http://localhost:3000"
+		} else {
+			cfg.External.EmployeeWebBaseURL = "https://employee.khgl.xyz"
+		}
 	}
 	if cfg.External.TicketNotify.SMTPPort == 0 {
 		cfg.External.TicketNotify.SMTPPort = 25

@@ -50,6 +50,7 @@ func (f *FlexibleInt64) UnmarshalJSON(data []byte) error {
 
 // TenantListRequest represents tenant list query parameters
 type TenantListRequest struct {
+	Keyword  string `json:"keyword"`
 	Name     string `json:"name"`
 	Code     string `json:"code"`
 	IsActive *bool  `json:"is_active"`

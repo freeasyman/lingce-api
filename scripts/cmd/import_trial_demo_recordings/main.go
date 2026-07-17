@@ -88,6 +88,7 @@ func main() {
 		strings.TrimSpace(apiCfg.External.LingceWorkerToken),
 		strings.TrimSpace(apiCfg.Recording.ResetCodeDictionaryPath),
 		nil,
+		nil,
 	)
 	tenantStore := tenant.NewStore(pool)
 

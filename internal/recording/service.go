@@ -23,16 +23,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type OpportunityAlertDispatcher interface {
+	CreateFromRecording(ctx context.Context, recordingID int64, triggerSource string) error
+}
+
 type Service struct {
-	store                   *Store
-	employeeStore           *employee.Store
-	workerURL               string
-	workerToken             string
-	lingceWorkerURL         string
-	lingceWorkerToken       string
-	resetCodeDictionaryPath string
-	httpClient              *http.Client
-	llmClient               *llmgateway.Client
+	store                      *Store
+	employeeStore              *employee.Store
+	workerURL                  string
+	workerToken                string
+	lingceWorkerURL            string
+	lingceWorkerToken          string
+	resetCodeDictionaryPath    string
+	httpClient                 *http.Client
+	llmClient                  *llmgateway.Client
+	opportunityAlertDispatcher OpportunityAlertDispatcher
 }
 
 type workerUnavailableError struct {
@@ -83,16 +88,17 @@ func IsWorkerUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
-func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken, resetCodeDictionaryPath string, llmClient *llmgateway.Client) *Service {
+func NewService(store *Store, employeeStore *employee.Store, workerURL, workerToken, lingceWorkerURL, lingceWorkerToken, resetCodeDictionaryPath string, llmClient *llmgateway.Client, opportunityAlertDispatcher OpportunityAlertDispatcher) *Service {
 	return &Service{
-		store:                   store,
-		employeeStore:           employeeStore,
-		workerURL:               strings.TrimRight(workerURL, "/"),
-		workerToken:             workerToken,
-		lingceWorkerURL:         strings.TrimRight(lingceWorkerURL, "/"),
-		lingceWorkerToken:       lingceWorkerToken,
-		resetCodeDictionaryPath: strings.TrimSpace(resetCodeDictionaryPath),
-		llmClient:               llmClient,
+		store:                      store,
+		employeeStore:              employeeStore,
+		workerURL:                  strings.TrimRight(workerURL, "/"),
+		workerToken:                workerToken,
+		lingceWorkerURL:            strings.TrimRight(lingceWorkerURL, "/"),
+		lingceWorkerToken:          lingceWorkerToken,
+		resetCodeDictionaryPath:    strings.TrimSpace(resetCodeDictionaryPath),
+		llmClient:                  llmClient,
+		opportunityAlertDispatcher: opportunityAlertDispatcher,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -2809,6 +2815,10 @@ func (s *Service) UpdateRecording(ctx context.Context, id int64, req UpdateRecor
 	recording, err := s.store.UpdateRecording(ctx, id, req)
 	if err != nil {
 		return nil, err
+	}
+
+	if req.Status != nil && *req.Status == StatusCompleted && s.opportunityAlertDispatcher != nil {
+		_ = s.opportunityAlertDispatcher.CreateFromRecording(ctx, id, "recording_completed")
 	}
 
 	if req.CustomerID != nil && recording.CustomerID != nil && customerChanged(before.CustomerID, recording.CustomerID) {

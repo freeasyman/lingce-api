@@ -75,6 +75,7 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 // ListTenants handles listing tenants
 func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	var req TenantListRequest
+	req.Keyword = strings.TrimSpace(r.URL.Query().Get("keyword"))
 	req.Name = r.URL.Query().Get("name")
 	req.Code = r.URL.Query().Get("code")
 
@@ -109,6 +110,20 @@ func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
 		}
 
 		matched := true
+		keyword := strings.ToLower(strings.TrimSpace(req.Keyword))
+		if keyword != "" {
+			haystack := strings.ToLower(strings.Join([]string{
+				tenant.Name,
+				tenant.Code,
+				tenant.ContactName,
+				tenant.ContactPhone,
+				tenant.ContactEmail,
+				tenant.Industry,
+			}, " "))
+			if !strings.Contains(haystack, keyword) {
+				matched = false
+			}
+		}
 		if name := strings.TrimSpace(req.Name); name != "" && !strings.Contains(strings.ToLower(tenant.Name), strings.ToLower(name)) {
 			matched = false
 		}
@@ -436,7 +451,6 @@ func (h *Handler) GetTrialCustomerFunnel(w http.ResponseWriter, r *http.Request)
 	}
 	httputil.WriteSuccess(w, resp)
 }
-
 
 func (h *Handler) PerformSubscriptionAction(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {

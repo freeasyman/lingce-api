@@ -23,6 +23,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
+	"github.com/freeasyman/lingce-api/internal/opportunityalert"
 	"github.com/freeasyman/lingce-api/internal/organization"
 	"github.com/freeasyman/lingce-api/internal/product"
 	"github.com/freeasyman/lingce-api/internal/rbac"
@@ -181,6 +182,11 @@ func main() {
 	// Create LLM gateway client
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 
+	opportunityAlertStore := opportunityalert.NewStore(pool)
+	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, wecomService, cfg.External.EmployeeWebBaseURL)
+	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService)
+	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)
+
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
 	recService := recording.NewService(
@@ -192,6 +198,7 @@ func main() {
 		cfg.External.LingceWorkerToken,
 		cfg.Recording.ResetCodeDictionaryPath,
 		llmClient,
+		opportunityAlertService,
 	)
 	recHandler := recording.NewHandler(recService, cfg.Recording.PlayURLRequireOwnedMedia, recording.RecordingOSSConfig{
 		Endpoint:        cfg.Aliyun.OSSEndpoint,

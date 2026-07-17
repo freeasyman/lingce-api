@@ -134,6 +134,19 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 		argIndex++
 	}
 
+	if keyword := strings.TrimSpace(req.Keyword); keyword != "" {
+		conditions = append(conditions, fmt.Sprintf(`(
+			name ILIKE $%d
+			OR COALESCE(code, '') ILIKE $%d
+			OR COALESCE(contact_name, '') ILIKE $%d
+			OR COALESCE(contact_phone, '') ILIKE $%d
+			OR COALESCE(contact_email, '') ILIKE $%d
+			OR COALESCE(industry, '') ILIKE $%d
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, "%"+keyword+"%")
+		argIndex++
+	}
+
 	if req.IsActive != nil {
 		if *req.IsActive {
 			conditions = append(conditions, "is_active::text IN ('1','t','true','TRUE')")
