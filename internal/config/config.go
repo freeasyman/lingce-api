@@ -89,14 +89,7 @@ type AliyunConfig struct {
 }
 
 type WeComConfig struct {
-	SuiteID            string `toml:"suite_id"`
-	SuiteSecret        string `toml:"suite_secret"`
-	Token              string `toml:"token"`
-	EncodingAESKey     string `toml:"encoding_aes_key"`
-	CallbackBaseURL    string `toml:"callback_base_url"`
-	APIBaseURL         string `toml:"api_base_url"`
-	InstallRedirectURL string `toml:"install_redirect_url"`
-	InstallAuthType    int    `toml:"install_auth_type"`
+	APIBaseURL string `toml:"api_base_url"`
 }
 
 type LogConfig struct {
@@ -108,7 +101,6 @@ type secretsConfig struct {
 	JWT      JWTSecrets      `toml:"jwt"`
 	External ExternalSecrets `toml:"external"`
 	Aliyun   AliyunSecrets   `toml:"aliyun"`
-	WeCom    WeComSecrets    `toml:"wecom"`
 }
 
 type DatabaseSecrets struct {
@@ -133,12 +125,6 @@ type ExternalSecrets struct {
 type AliyunSecrets struct {
 	AccessKeyID     string `toml:"access_key_id"`
 	AccessKeySecret string `toml:"access_key_secret"`
-}
-
-type WeComSecrets struct {
-	SuiteSecret    string `toml:"suite_secret"`
-	Token          string `toml:"token"`
-	EncodingAESKey string `toml:"encoding_aes_key"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -243,9 +229,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.WeCom.APIBaseURL == "" {
 		cfg.WeCom.APIBaseURL = "https://qyapi.weixin.qq.com"
 	}
-	if cfg.WeCom.InstallAuthType == 0 {
-		cfg.WeCom.InstallAuthType = 1
-	}
 	if cfg.External.EmployeeWebBaseURL == "" {
 		if strings.EqualFold(cfg.App.Env, "development") || strings.EqualFold(cfg.App.Env, "dev") {
 			cfg.External.EmployeeWebBaseURL = "http://localhost:3000"
@@ -309,15 +292,6 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	if secrets.Aliyun.AccessKeySecret != "" {
 		cfg.Aliyun.AccessKeySecret = secrets.Aliyun.AccessKeySecret
-	}
-	if secrets.WeCom.SuiteSecret != "" {
-		cfg.WeCom.SuiteSecret = secrets.WeCom.SuiteSecret
-	}
-	if secrets.WeCom.Token != "" {
-		cfg.WeCom.Token = secrets.WeCom.Token
-	}
-	if secrets.WeCom.EncodingAESKey != "" {
-		cfg.WeCom.EncodingAESKey = secrets.WeCom.EncodingAESKey
 	}
 }
 

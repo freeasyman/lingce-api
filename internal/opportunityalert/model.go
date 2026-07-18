@@ -92,7 +92,6 @@ type RecordingAlertSource struct {
 	AnalysisDisplay JSONObject
 }
 
-
 type CCRule struct {
 	ID             int64
 	TenantID       int64

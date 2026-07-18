@@ -8,10 +8,10 @@ port = "18080"
 host = "0.0.0.0"
 
 [database]
-host = "127.0.0.1"
+host = "pgm-2ze5k275270fch1pmo.pg.rds.aliyuncs.com"
 port = 5432
 name = "lingce_dev"
-user = "lingce_api"
+user = "freeasyman"
 sslmode = "disable"
 max_conns = 2
 min_conns = 1
@@ -40,11 +40,7 @@ oss_bucket = "lince"
 oss_public_base_url = "https://lince.oss-cn-beijing.aliyuncs.com"
 
 [wecom]
-suite_id = ""
-callback_base_url = ""
 api_base_url = "https://qyapi.weixin.qq.com"
-install_redirect_url = ""
-install_auth_type = 1
 
 [log]
 level = "debug"

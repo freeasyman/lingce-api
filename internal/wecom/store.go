@@ -3,6 +3,7 @@ package wecom
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,59 +17,153 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-func (s *Store) SaveSuiteTicket(ctx context.Context, record SuiteTicketRecord) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO wecom_suite_tickets (suite_id, suite_ticket, created_at) VALUES ($1, $2, NOW())`, record.SuiteID, record.SuiteTicket)
-	return err
-}
-
-func (s *Store) GetLatestSuiteTicket(ctx context.Context, suiteID string) (string, error) {
-	var ticket string
-	err := s.pool.QueryRow(ctx, `SELECT suite_ticket FROM wecom_suite_tickets WHERE suite_id = $1 ORDER BY id DESC LIMIT 1`, suiteID).Scan(&ticket)
-	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("suite ticket not found")
+func (s *Store) ListTenantApps(ctx context.Context, tenantID *int64) ([]*TenantWeComAppRecord, error) {
+	where := "1=1"
+	args := []interface{}{}
+	if tenantID != nil && *tenantID > 0 {
+		where = "tenant_id = $1"
+		args = append(args, *tenantID)
 	}
-	if err != nil {
-		return "", err
-	}
-	return ticket, nil
-}
-
-func (s *Store) UpsertCorpInstall(ctx context.Context, record CorpInstallRecord) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO wecom_corp_installs (corp_id, corp_name, permanent_code, agent_id, status, created_at, updated_at, cancelled_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NULL)
-		ON CONFLICT (corp_id)
-		DO UPDATE SET
-			corp_name = EXCLUDED.corp_name,
-			permanent_code = EXCLUDED.permanent_code,
-			agent_id = EXCLUDED.agent_id,
-			status = EXCLUDED.status,
-			updated_at = NOW(),
-			cancelled_at = NULL
-	`, record.CorpID, record.CorpName, record.PermanentCode, record.AgentID, record.Status)
-	return err
-}
-
-func (s *Store) GetCorpInstallByCorpID(ctx context.Context, corpID string) (*CorpInstallRecord, error) {
-	var item CorpInstallRecord
-	err := s.pool.QueryRow(ctx, `SELECT corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active') FROM wecom_corp_installs WHERE corp_id = $1 AND COALESCE(status, 'active') = 'active'`, corpID).Scan(
-		&item.CorpID,
-		&item.CorpName,
-		&item.PermanentCode,
-		&item.AgentID,
-		&item.Status,
-	)
-	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("corp install not found")
-	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, corp_id, COALESCE(corp_name, ''), COALESCE(agent_id, 0),
+		       COALESCE(secret_ciphertext, ''), COALESCE(token, ''), COALESCE(encoding_aes_key, ''),
+		       COALESCE(home_url, ''), COALESCE(trusted_domain, ''), COALESCE(jsapi_domain, ''),
+		       COALESCE(enabled, false), access_token, access_token_expired_at, last_sync_at,
+		       created_at, updated_at
+		FROM tenant_wecom_apps
+		WHERE `+where+`
+		ORDER BY updated_at DESC, id DESC
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
-	return &item, nil
+	defer rows.Close()
+	items := make([]*TenantWeComAppRecord, 0)
+	for rows.Next() {
+		item, err := scanTenantApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
-func (s *Store) MarkCorpInstallCancelled(ctx context.Context, corpID string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE wecom_corp_installs SET status = 'cancelled', updated_at = NOW(), cancelled_at = NOW() WHERE corp_id = $1`, corpID)
+func (s *Store) GetTenantAppByID(ctx context.Context, id int64) (*TenantWeComAppRecord, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, corp_id, COALESCE(corp_name, ''), COALESCE(agent_id, 0),
+		       COALESCE(secret_ciphertext, ''), COALESCE(token, ''), COALESCE(encoding_aes_key, ''),
+		       COALESCE(home_url, ''), COALESCE(trusted_domain, ''), COALESCE(jsapi_domain, ''),
+		       COALESCE(enabled, false), access_token, access_token_expired_at, last_sync_at,
+		       created_at, updated_at
+		FROM tenant_wecom_apps
+		WHERE id = $1
+	`, id)
+	return scanTenantApp(row)
+}
+
+func (s *Store) GetTenantAppByCorpID(ctx context.Context, corpID string) (*TenantWeComAppRecord, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, corp_id, COALESCE(corp_name, ''), COALESCE(agent_id, 0),
+		       COALESCE(secret_ciphertext, ''), COALESCE(token, ''), COALESCE(encoding_aes_key, ''),
+		       COALESCE(home_url, ''), COALESCE(trusted_domain, ''), COALESCE(jsapi_domain, ''),
+		       COALESCE(enabled, false), access_token, access_token_expired_at, last_sync_at,
+		       created_at, updated_at
+		FROM tenant_wecom_apps
+		WHERE corp_id = $1
+	`, corpID)
+	return scanTenantApp(row)
+}
+
+func (s *Store) GetTenantAppByTenantID(ctx context.Context, tenantID int64) (*TenantWeComAppRecord, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, corp_id, COALESCE(corp_name, ''), COALESCE(agent_id, 0),
+		       COALESCE(secret_ciphertext, ''), COALESCE(token, ''), COALESCE(encoding_aes_key, ''),
+		       COALESCE(home_url, ''), COALESCE(trusted_domain, ''), COALESCE(jsapi_domain, ''),
+		       COALESCE(enabled, false), access_token, access_token_expired_at, last_sync_at,
+		       created_at, updated_at
+		FROM tenant_wecom_apps
+		WHERE tenant_id = $1
+	`, tenantID)
+	return scanTenantApp(row)
+}
+
+func (s *Store) ListEnabledTenantCallbackApps(ctx context.Context) ([]*TenantWeComAppRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, corp_id, COALESCE(corp_name, ''), COALESCE(agent_id, 0),
+		       COALESCE(secret_ciphertext, ''), COALESCE(token, ''), COALESCE(encoding_aes_key, ''),
+		       COALESCE(home_url, ''), COALESCE(trusted_domain, ''), COALESCE(jsapi_domain, ''),
+		       COALESCE(enabled, false), access_token, access_token_expired_at, last_sync_at,
+		       created_at, updated_at
+		FROM tenant_wecom_apps
+		WHERE COALESCE(enabled, false) = TRUE
+		  AND COALESCE(token, '') <> ''
+		  AND COALESCE(encoding_aes_key, '') <> ''
+		ORDER BY updated_at DESC, id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*TenantWeComAppRecord, 0)
+	for rows.Next() {
+		item, err := scanTenantApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) UpsertTenantApp(ctx context.Context, item TenantWeComAppRecord) (*TenantWeComAppRecord, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO tenant_wecom_apps (
+			tenant_id, corp_id, corp_name, agent_id, secret_ciphertext, token, encoding_aes_key,
+			home_url, trusted_domain, jsapi_domain, enabled, access_token, access_token_expired_at,
+			last_sync_at, created_at, updated_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW()
+		)
+		ON CONFLICT (tenant_id)
+		DO UPDATE SET
+			corp_id = EXCLUDED.corp_id,
+			corp_name = EXCLUDED.corp_name,
+			agent_id = EXCLUDED.agent_id,
+			secret_ciphertext = EXCLUDED.secret_ciphertext,
+			token = EXCLUDED.token,
+			encoding_aes_key = EXCLUDED.encoding_aes_key,
+			home_url = EXCLUDED.home_url,
+			trusted_domain = EXCLUDED.trusted_domain,
+			jsapi_domain = EXCLUDED.jsapi_domain,
+			enabled = EXCLUDED.enabled,
+			updated_at = NOW()
+		RETURNING id
+	`, item.TenantID, item.CorpID, item.CorpName, item.AgentID, item.SecretCiphertext, item.Token, item.EncodingAESKey, item.HomeURL, item.TrustedDomain, item.JSAPIDomain, item.Enabled, item.AccessToken, item.AccessTokenExpiredAt, item.LastSyncAt).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetTenantAppByID(ctx, id)
+}
+
+func (s *Store) DeleteTenantApp(ctx context.Context, id int64) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM tenant_wecom_apps WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("tenant wecom app not found")
+	}
+	return nil
+}
+
+func (s *Store) UpdateTenantAppAccessToken(ctx context.Context, id int64, accessToken string, expiredAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tenant_wecom_apps
+		SET access_token = $2, access_token_expired_at = $3, last_sync_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, id, accessToken, expiredAt)
 	return err
 }
 
@@ -105,6 +200,10 @@ func (s *Store) GetUserBinding(ctx context.Context, corpID, wecomUserID string) 
 }
 
 func (s *Store) FindUniqueEmployeeIDByPhone(ctx context.Context, phone string) (*int64, error) {
+	return s.FindUniqueEmployeeIDByPhoneAndTenant(ctx, phone, 0)
+}
+
+func (s *Store) FindUniqueEmployeeIDByPhoneAndTenant(ctx context.Context, phone string, tenantID int64) (*int64, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.id
 		FROM employees e
@@ -113,9 +212,10 @@ func (s *Store) FindUniqueEmployeeIDByPhone(ctx context.Context, phone string) (
 		  AND e.deleted_at IS NULL
 		  AND t.deleted_at IS NULL
 		  AND t.is_active::text IN ('1','t','true','TRUE')
+		  AND ($2::bigint <= 0 OR e.tenant_id = $2)
 		ORDER BY e.id ASC
 		LIMIT 2
-	`, phone)
+	`, phone, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,16 +254,15 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			wub.corp_id,
-			COALESCE(wci.corp_name, ''),
+			COALESCE(wta.corp_name, ''),
 			wub.wecom_user_id,
 			wub.employee_id,
 			wub.tenant_id,
-			wci.permanent_code,
-			COALESCE(wci.agent_id, 0)
+			COALESCE(wta.agent_id, 0)
 		FROM wecom_user_bindings wub
-		INNER JOIN wecom_corp_installs wci
-		  ON wci.corp_id = wub.corp_id
-		 AND COALESCE(wci.status, 'active') = 'active'
+		INNER JOIN tenant_wecom_apps wta
+		  ON wta.corp_id = wub.corp_id
+		 AND COALESCE(wta.enabled, false) = true
 		WHERE wub.employee_id = $1
 		ORDER BY wub.updated_at DESC, wub.id DESC
 		LIMIT 1
@@ -173,7 +272,6 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 		&item.WeComUserID,
 		&item.EmployeeID,
 		&item.TenantID,
-		&item.PermanentCode,
 		&item.AgentID,
 	)
 	if err == pgx.ErrNoRows {
@@ -242,4 +340,32 @@ func nilIfEmptyString(value *string) *string {
 		return nil
 	}
 	return value
+}
+
+func scanTenantApp(row interface {
+	Scan(dest ...interface{}) error
+}) (*TenantWeComAppRecord, error) {
+	var item TenantWeComAppRecord
+	if err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.CorpID,
+		&item.CorpName,
+		&item.AgentID,
+		&item.SecretCiphertext,
+		&item.Token,
+		&item.EncodingAESKey,
+		&item.HomeURL,
+		&item.TrustedDomain,
+		&item.JSAPIDomain,
+		&item.Enabled,
+		&item.AccessToken,
+		&item.AccessTokenExpiredAt,
+		&item.LastSyncAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &item, nil
 }

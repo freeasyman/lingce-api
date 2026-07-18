@@ -1,6 +1,7 @@
 package wecom
 
 import "encoding/xml"
+import "time"
 
 type EncryptedCallbackEnvelope struct {
 	XMLName xml.Name `xml:"xml"`
@@ -11,26 +12,9 @@ type EncryptedCallbackEnvelope struct {
 
 type CallbackEvent struct {
 	XMLName       xml.Name `xml:"xml"`
-	SuiteID       string   `xml:"SuiteId"`
 	InfoType      string   `xml:"InfoType"`
 	TimeStamp     string   `xml:"TimeStamp"`
-	SuiteTicket   string   `xml:"SuiteTicket"`
 	AuthCorpID    string   `xml:"AuthCorpId"`
-	AuthCode      string   `xml:"AuthCode"`
-	PermanentCode string   `xml:"PermanentCode"`
-}
-
-type SuiteTicketRecord struct {
-	SuiteID     string
-	SuiteTicket string
-}
-
-type CorpInstallRecord struct {
-	CorpID        string
-	CorpName      string
-	PermanentCode string
-	AgentID       int64
-	Status        string
 }
 
 type UserBindingRecord struct {
@@ -51,13 +35,32 @@ type OAuthUserProfile struct {
 }
 
 type EmployeeBindingRecord struct {
-	CorpID        string
-	CorpName      string
-	WeComUserID   string
-	EmployeeID    int64
-	TenantID      int64
-	PermanentCode string
-	AgentID       int64
+	CorpID      string
+	CorpName    string
+	WeComUserID string
+	EmployeeID  int64
+	TenantID    int64
+	AgentID     int64
+}
+
+type TenantWeComAppRecord struct {
+	ID                    int64
+	TenantID              int64
+	CorpID                string
+	CorpName              string
+	AgentID               int64
+	SecretCiphertext      string
+	Token                 string
+	EncodingAESKey        string
+	HomeURL               string
+	TrustedDomain         string
+	JSAPIDomain           string
+	Enabled               bool
+	AccessToken           string
+	AccessTokenExpiredAt  *time.Time
+	LastSyncAt            *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type MessageLogRecord struct {

@@ -82,6 +82,64 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_read ON notifications(user_id, user_type, is_read)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created_at ON notifications(user_id, user_type, created_at DESC)`,
 
+		// Opportunity alert module compatibility
+		`CREATE TABLE IF NOT EXISTS opportunity_alerts (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			customer_id BIGINT,
+			customer_name TEXT NOT NULL DEFAULT '',
+			alert_type TEXT NOT NULL,
+			title TEXT NOT NULL,
+			summary TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			customer_objection TEXT NOT NULL DEFAULT '',
+			evidence TEXT NOT NULL DEFAULT '',
+			suggested_action TEXT NOT NULL DEFAULT '',
+			suggested_script TEXT NOT NULL DEFAULT '',
+			priority TEXT NOT NULL DEFAULT 'medium',
+			status TEXT NOT NULL DEFAULT 'pending',
+			viewed_at TIMESTAMP,
+			handled_at TIMESTAMP,
+			ignored_at TIMESTAMP,
+			dedupe_key TEXT NOT NULL,
+			raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (dedupe_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alerts_tenant_created ON opportunity_alerts(tenant_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alerts_employee_status ON opportunity_alerts(employee_id, status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alerts_recording ON opportunity_alerts(recording_id)`,
+		`CREATE TABLE IF NOT EXISTS opportunity_alert_recipients (
+			id BIGSERIAL PRIMARY KEY,
+			alert_id BIGINT NOT NULL REFERENCES opportunity_alerts(id) ON DELETE CASCADE,
+			tenant_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			recipient_type TEXT NOT NULL,
+			delivery_status TEXT NOT NULL DEFAULT 'pending',
+			wecom_message_log_id BIGINT,
+			sent_at TIMESTAMP,
+			read_at TIMESTAMP,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (alert_id, employee_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alert_recipients_employee ON opportunity_alert_recipients(employee_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alert_recipients_alert ON opportunity_alert_recipients(alert_id)`,
+		`CREATE TABLE IF NOT EXISTS opportunity_alert_cc_rules (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			employee_id BIGINT NOT NULL,
+			cc_employee_id BIGINT NOT NULL,
+			is_active BOOLEAN NOT NULL DEFAULT true,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (tenant_id, employee_id, cc_employee_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_opportunity_alert_cc_rules_employee ON opportunity_alert_cc_rules(tenant_id, employee_id) WHERE is_active = true`,
+
 		// Recording business scope compatibility
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
 		`UPDATE recordings SET business_scope = 'unknown' WHERE business_scope IS NULL OR trim(business_scope) = ''`,
@@ -1542,25 +1600,29 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS morning_meeting_materials ADD COLUMN IF NOT EXISTS used_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS morning_meeting_materials ADD COLUMN IF NOT EXISTS used_by BIGINT`,
 
-		// WeCom third-party integration
-		`CREATE TABLE IF NOT EXISTS wecom_suite_tickets (
+		`CREATE TABLE IF NOT EXISTS tenant_wecom_apps (
 			id BIGSERIAL PRIMARY KEY,
-			suite_id TEXT NOT NULL,
-			suite_ticket TEXT NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_wecom_suite_tickets_suite_created_at ON wecom_suite_tickets(suite_id, created_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS wecom_corp_installs (
-			corp_id TEXT PRIMARY KEY,
-			corp_name TEXT,
-			permanent_code TEXT NOT NULL,
+			tenant_id BIGINT NOT NULL,
+			corp_id TEXT NOT NULL,
+			corp_name TEXT NOT NULL DEFAULT '',
 			agent_id BIGINT NOT NULL DEFAULT 0,
-			status TEXT NOT NULL DEFAULT 'active',
+			secret_ciphertext TEXT NOT NULL DEFAULT '',
+			token TEXT NOT NULL DEFAULT '',
+			encoding_aes_key TEXT NOT NULL DEFAULT '',
+			home_url TEXT NOT NULL DEFAULT '',
+			trusted_domain TEXT NOT NULL DEFAULT '',
+			jsapi_domain TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT TRUE,
+			access_token TEXT NOT NULL DEFAULT '',
+			access_token_expired_at TIMESTAMP,
+			last_sync_at TIMESTAMP,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			cancelled_at TIMESTAMP
+			UNIQUE (tenant_id),
+			UNIQUE (corp_id)
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_wecom_corp_installs_status ON wecom_corp_installs(status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_tenant_wecom_apps_tenant_id ON tenant_wecom_apps(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tenant_wecom_apps_corp_id ON tenant_wecom_apps(corp_id)`,
 		`CREATE TABLE IF NOT EXISTS wecom_user_bindings (
 			id BIGSERIAL PRIMARY KEY,
 			corp_id TEXT NOT NULL,

@@ -109,7 +109,6 @@ func formatTime(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
-
 type CCRuleResponse struct {
 	ID             int64  `json:"id"`
 	TenantID       int64  `json:"tenant_id"`
@@ -123,7 +122,7 @@ type CCRuleResponse struct {
 }
 
 type CreateCCRuleRequest struct {
-	TenantID      int64 `json:"tenant_id"`
-	EmployeeID    int64 `json:"employee_id"`
-	CCEmployeeID  int64 `json:"cc_employee_id"`
+	TenantID     int64 `json:"tenant_id"`
+	EmployeeID   int64 `json:"employee_id"`
+	CCEmployeeID int64 `json:"cc_employee_id"`
 }

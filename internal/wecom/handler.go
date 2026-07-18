@@ -2,8 +2,6 @@ package wecom
 
 import (
 	"encoding/json"
-	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -28,9 +26,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/wecom/callback", Handler: h.VerifyURL},
 		{Method: "POST", Path: "/api/v1/wecom/callback", Handler: h.Callback},
-		{Method: "GET", Path: "/api/v1/wecom/install-url", Handler: h.InstallURL},
-		{Method: "GET", Path: "/api/v1/wecom/install", Handler: h.InstallRedirect},
-		{Method: "GET", Path: "/api/v1/wecom/install/callback", Handler: h.InstallCallback},
 		{Method: "POST", Path: "/api/v1/wecom/oauth/login", Handler: h.OAuthLogin},
 		{Method: "POST", Path: "/api/v1/wecom/internal/send", Handler: h.InternalSend},
 		{
@@ -40,12 +35,24 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Auth:             true,
 			AllowedUserTypes: []string{"employee", "mobile"},
 		},
+		{Method: "GET", Path: "/api/v1/ops/wecom/apps", Handler: h.ListTenantApps, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.GetTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/ops/wecom/apps", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "PUT", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "DELETE", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.DeleteTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/ops/wecom/apps/{id}/test-token", Handler: h.TestTenantAppToken, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, Pool: pool})
 }
 
+func (h *Handler) isAdmin(r *http.Request) bool {
+	claims := middleware.GetUserClaims(r.Context())
+	return claims != nil && claims.UserType == "admin"
+}
+
 func (h *Handler) VerifyURL(w http.ResponseWriter, r *http.Request) {
 	plain, err := h.service.VerifyURL(
+		r.Context(),
 		r.URL.Query().Get("msg_signature"),
 		r.URL.Query().Get("timestamp"),
 		r.URL.Query().Get("nonce"),
@@ -80,56 +87,6 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("success"))
-}
-
-func (h *Handler) InstallURL(w http.ResponseWriter, r *http.Request) {
-	authType := -1
-	if value := strings.TrimSpace(r.URL.Query().Get("auth_type")); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			httputil.WriteBadRequest(w, "auth_type must be an integer")
-			return
-		}
-		authType = parsed
-	}
-	resp, err := h.service.BuildInstallURL(r.Context(), r.URL.Query().Get("state"), authType)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	httputil.WriteSuccess(w, resp)
-}
-
-func (h *Handler) InstallRedirect(w http.ResponseWriter, r *http.Request) {
-	authType := -1
-	if value := strings.TrimSpace(r.URL.Query().Get("auth_type")); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			httputil.WriteBadRequest(w, "auth_type must be an integer")
-			return
-		}
-		authType = parsed
-	}
-	resp, err := h.service.BuildInstallURL(r.Context(), r.URL.Query().Get("state"), authType)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	http.Redirect(w, r, resp.InstallURL, http.StatusFound)
-}
-
-func (h *Handler) InstallCallback(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.HandleInstallCallback(r.Context(), r.URL.Query().Get("auth_code"))
-	if err != nil {
-		writeInstallHTML(w, http.StatusBadRequest, "授权失败", err.Error(), "请返回企业微信后台重试，或联系灵策技术支持。")
-		return
-	}
-	corpName := strings.TrimSpace(result.CorpName)
-	if corpName == "" {
-		corpName = result.CorpID
-	}
-	writeInstallHTML(w, http.StatusOK, "授权成功", fmt.Sprintf("企业 %s 已完成授权。", corpName), "现在可以回到企业微信继续配置应用可见范围，随后再测试员工免登录。")
 }
 
 func (h *Handler) OAuthLogin(w http.ResponseWriter, r *http.Request) {
@@ -194,8 +151,97 @@ func (h *Handler) InternalSend(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, resp)
 }
 
-func writeInstallHTML(w http.ResponseWriter, status int, title, message, hint string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + html.EscapeString(title) + "</title><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Hiragino Sans GB,Microsoft YaHei,sans-serif;background:#f5f7fb;color:#1f2937}main{max-width:520px;margin:0 auto;padding:48px 20px}section{background:#fff;border-radius:20px;padding:28px 24px;box-shadow:0 16px 40px rgba(15,23,42,.08)}h1{margin:0 0 12px;font-size:28px}p{margin:0 0 10px;line-height:1.7}small{display:block;color:#6b7280;line-height:1.6}</style></head><body><main><section><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p><small>" + html.EscapeString(hint) + "</small></section></main></body></html>"))
+func (h *Handler) ListTenantApps(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	var tenantID *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httputil.WriteBadRequest(w, "tenant_id must be an integer")
+			return
+		}
+		if parsed > 0 {
+			tenantID = &parsed
+		}
+	}
+	items, err := h.service.ListTenantApps(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) GetTenantApp(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid app ID")
+		return
+	}
+	item, err := h.service.GetTenantApp(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) UpsertTenantApp(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	var req TenantWeComAppRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.service.UpsertTenantApp(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) DeleteTenantApp(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid app ID")
+		return
+	}
+	if err := h.service.DeleteTenantApp(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "tenant wecom app deleted"})
+}
+
+func (h *Handler) TestTenantAppToken(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid app ID")
+		return
+	}
+	item, err := h.service.TestTenantAppToken(r.Context(), id)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }

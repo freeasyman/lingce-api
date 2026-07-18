@@ -40,11 +40,7 @@ oss_bucket = "lince"
 oss_public_base_url = "https://lince.oss-cn-beijing.aliyuncs.com"
 
 [wecom]
-suite_id = ""
-callback_base_url = ""
 api_base_url = "https://qyapi.weixin.qq.com"
-install_redirect_url = ""
-install_auth_type = 1
 
 [log]
 level = "info"

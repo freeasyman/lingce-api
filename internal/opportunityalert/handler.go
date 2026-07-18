@@ -13,11 +13,19 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service       *Service
+	internalToken string
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, internalToken string) *Handler {
+	return &Handler{service: service, internalToken: strings.TrimSpace(internalToken)}
+}
+
+func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
+	authMw := middleware.Auth(jwtSecret)
+	mux.Handle("GET /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.ListCCRules)))
+	mux.Handle("POST /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.CreateCCRule)))
+	mux.Handle("DELETE /api/v1/opportunity-alert-cc-rules/{id}", authMw(http.HandlerFunc(h.DeleteCCRule)))
 }
 
 func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -27,6 +35,100 @@ func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/view", authMw(http.HandlerFunc(h.MarkViewed)))
 	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/handle", authMw(http.HandlerFunc(h.MarkHandled)))
 	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/ignore", authMw(http.HandlerFunc(h.MarkIgnored)))
+}
+
+func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/v1/internal/opportunity-alerts/from-recording", http.HandlerFunc(h.CreateFromRecordingInternal))
+}
+
+func (h *Handler) CreateFromRecordingInternal(w http.ResponseWriter, r *http.Request) {
+	if h.internalToken != "" && strings.TrimSpace(r.Header.Get("X-Internal-Token")) != h.internalToken {
+		httputil.WriteUnauthorized(w, "invalid internal token")
+		return
+	}
+	var req struct {
+		RecordingID   int64  `json:"recording_id"`
+		TriggerSource string `json:"trigger_source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if req.RecordingID <= 0 {
+		httputil.WriteBadRequest(w, "recording_id is required")
+		return
+	}
+	triggerSource := strings.TrimSpace(req.TriggerSource)
+	if triggerSource == "" {
+		triggerSource = "internal"
+	}
+	if err := h.service.CreateFromRecording(r.Context(), req.RecordingID, triggerSource); err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"recording_id": req.RecordingID, "status": "processed"})
+}
+
+func (h *Handler) ListCCRules(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
+	var employeeID *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("employee_id")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			httputil.WriteBadRequest(w, "invalid employee_id")
+			return
+		}
+		employeeID = &parsed
+	}
+	items, err := h.service.ListCCRules(r.Context(), claims, tenantID, employeeID)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) CreateCCRule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	var req CreateCCRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.service.CreateCCRule(r.Context(), claims, req)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) DeleteCCRule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid cc rule id")
+		return
+	}
+	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
+	if err := h.service.DeleteCCRule(r.Context(), claims, tenantID, id); err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "cc rule deleted"})
 }
 
 func (h *Handler) ListMobileAlerts(w http.ResponseWriter, r *http.Request) {

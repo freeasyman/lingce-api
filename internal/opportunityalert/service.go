@@ -367,7 +367,6 @@ func firstText(values ...interface{}) string {
 	return ""
 }
 
-
 func (s *Service) ListCCRules(ctx context.Context, claims *auth.Claims, tenantID int64, employeeID *int64) ([]*CCRuleResponse, error) {
 	tid, err := resolveConfigTenantID(claims, tenantID)
 	if err != nil {

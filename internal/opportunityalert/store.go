@@ -227,7 +227,6 @@ func (s *Store) GetRecordingAlertSource(ctx context.Context, recordingID int64) 
 	return &item, nil
 }
 
-
 func (s *Store) ListCCRules(ctx context.Context, tenantID int64, employeeID *int64) ([]*CCRule, error) {
 	where := []string{"r.tenant_id = $1", "COALESCE(r.is_active, true) = true"}
 	args := []interface{}{tenantID}

@@ -121,17 +121,9 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
-	var wecomCrypto *wecom.Crypto
-	if strings.TrimSpace(cfg.WeCom.Token) != "" && strings.TrimSpace(cfg.WeCom.EncodingAESKey) != "" && strings.TrimSpace(cfg.WeCom.SuiteID) != "" {
-		wecomCrypto, err = wecom.NewCrypto(cfg.WeCom.Token, cfg.WeCom.EncodingAESKey, cfg.WeCom.SuiteID)
-		if err != nil {
-			slog.Error("failed to initialize wecom crypto", "error", err)
-			os.Exit(1)
-		}
-	}
 	wecomStore := wecom.NewStore(pool)
-	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL, cfg.WeCom.SuiteID, cfg.WeCom.SuiteSecret)
-	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, wecomCrypto, cfg.WeCom.SuiteID, cfg.JWT.Secret, cfg.JWT.ExpiryHours, cfg.WeCom.CallbackBaseURL, cfg.WeCom.InstallRedirectURL, cfg.WeCom.InstallAuthType)
+	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
+	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	wecomHandler := wecom.NewHandler(wecomService, cfg.External.LingceWorkerToken)
 	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
@@ -184,8 +176,10 @@ func main() {
 
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, wecomService, cfg.External.EmployeeWebBaseURL)
-	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService)
+	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService, cfg.External.InternalWorkerToken)
+	opportunityAlertHandler.RegisterConfigRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)
+	opportunityAlertHandler.RegisterInternalRoutes(mux)
 
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
