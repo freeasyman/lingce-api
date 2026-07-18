@@ -17,22 +17,22 @@ import (
 )
 
 type Service struct {
-	store              *Store
-	authStore          *internalauth.Store
-	client             *Client
-	secretProtector    *SecretProtector
-	jwtSecret          string
-	jwtExpiryHours     int
+	store           *Store
+	authStore       *internalauth.Store
+	client          *Client
+	secretProtector *SecretProtector
+	jwtSecret       string
+	jwtExpiryHours  int
 }
 
 func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int) *Service {
 	return &Service{
-		store:              store,
-		authStore:          authStore,
-		client:             client,
-		secretProtector:    NewSecretProtector(jwtSecret),
-		jwtSecret:          jwtSecret,
-		jwtExpiryHours:     jwtExpiryHours,
+		store:           store,
+		authStore:       authStore,
+		client:          client,
+		secretProtector: NewSecretProtector(jwtSecret),
+		jwtSecret:       jwtSecret,
+		jwtExpiryHours:  jwtExpiryHours,
 	}
 }
 
@@ -233,8 +233,8 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 		slog.Info("wecom oauth login succeeded", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", binding.EmployeeID, "source", binding.Source)
 		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
 	}
-	slog.Info("wecom oauth login needs bind", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "mobile_suffix", maskPhone(userDetail.Mobile))
-	return &OAuthLoginResponse{Status: "needs_bind", Profile: profile}, nil
+	slog.Info("wecom oauth login rejected: no employee phone match", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "mobile_suffix", maskPhone(userDetail.Mobile))
+	return nil, fmt.Errorf("未找到与当前企业微信手机号匹配的灵策员工，请联系管理员检查企业微信通讯录手机号和灵策员工手机号")
 }
 
 func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64) error {
@@ -251,6 +251,20 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	}
 	if employee.TenantID != app.TenantID {
 		return fmt.Errorf("tenant mismatch")
+	}
+	corpAccessToken, err := s.resolveTenantAppAccessToken(ctx, app)
+	if err != nil {
+		return err
+	}
+	userDetail, err := s.client.GetUserDetail(ctx, corpAccessToken, strings.TrimSpace(wecomUserID))
+	if err != nil {
+		return err
+	}
+	if normalizePhone(userDetail.Mobile) == "" {
+		return fmt.Errorf("当前企业微信账号未返回手机号，请联系管理员检查企业微信通讯录")
+	}
+	if normalizePhone(employee.Phone) != normalizePhone(userDetail.Mobile) {
+		return fmt.Errorf("当前登录手机号与企业微信通讯录手机号不一致，请使用本人账号或联系管理员")
 	}
 	existing, err := s.store.GetUserBinding(ctx, corpID, wecomUserID)
 	if err != nil {
@@ -270,6 +284,16 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	}
 	slog.Info("wecom manual binding created", "corp_id", corpID, "wecom_user_id", wecomUserID, "employee_id", employee.ID)
 	return nil
+}
+
+func normalizePhone(phone string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(phone) {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessageRequest) (*InternalSendMessageResponse, error) {

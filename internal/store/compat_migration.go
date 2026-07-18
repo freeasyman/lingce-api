@@ -716,12 +716,23 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		 WHERE NOT EXISTS (
 		 	SELECT 1 FROM inst_menus WHERE code = 'knowledge'
 		 )`,
+		`INSERT INTO inst_menus (code, name, path, order_index, is_active, created_at)
+		 SELECT 'settings_opportunity_alerts', '成交机会提醒配置', '/settings/opportunity-alerts', 1510, true, NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM inst_menus WHERE code = 'settings_opportunity_alerts'
+		 )`,
 		`UPDATE inst_menus
 		    SET name = '知识条目',
 		        path = '/knowledge',
 		        order_index = COALESCE(order_index, 1450),
 		        is_active = true
 		  WHERE code = 'knowledge'`,
+		`UPDATE inst_menus
+		    SET name = '成交机会提醒配置',
+		        path = '/settings/opportunity-alerts',
+		        order_index = COALESCE(order_index, 1510),
+		        is_active = true
+		  WHERE code = 'settings_opportunity_alerts'`,
 		`UPDATE inst_menus
 		    SET is_feature_assignable = false,
 		        is_default_for_admin = false,
@@ -806,7 +817,7 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		        is_default_for_admin = true,
 		        feature_code = 'system_management',
 		        feature_name = '系统管理'
-		  WHERE code IN ('departments', 'roles', 'menus')`,
+		  WHERE code IN ('departments', 'settings_opportunity_alerts', 'roles', 'menus')`,
 		`UPDATE tenant_feature_group_items
 		    SET item_code = CASE item_code
 		      WHEN 'knowledge-list' THEN 'knowledge'
@@ -1076,6 +1087,71 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 					WHERE rm.tenant_id = r.tenant_id
 					  AND lower(rm.role_code) = 'admin'
 					  AND lower(rm.menu_code) = lower(m.code)
+				  );
+			END IF;
+		END $$`,
+		`DO $$
+		DECLARE
+			v_parent_id BIGINT;
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_menus'
+			) THEN
+				SELECT id INTO v_parent_id
+				FROM institution_menus
+				WHERE tenant_id IS NULL
+				  AND lower(code) IN ('system_management', 'system')
+				  AND deleted_at IS NULL
+				ORDER BY id ASC
+				LIMIT 1;
+
+				INSERT INTO institution_menus (
+					tenant_id, name, code, path, icon, parent_id, sort_order, is_active,
+					is_feature_assignable, is_default_for_admin, feature_code, feature_name, created_at, updated_at
+				)
+				SELECT NULL, '成交机会提醒配置', 'settings_opportunity_alerts', '/settings/opportunity-alerts', NULL, v_parent_id, 1510, true,
+				       true, true, 'system_management', '系统管理', NOW(), NOW()
+				WHERE NOT EXISTS (
+					SELECT 1 FROM institution_menus
+					WHERE tenant_id IS NULL AND lower(code) = 'settings_opportunity_alerts' AND deleted_at IS NULL
+				);
+
+				UPDATE institution_menus
+				SET name = '成交机会提醒配置',
+				    path = '/settings/opportunity-alerts',
+				    parent_id = v_parent_id,
+				    sort_order = 1510,
+				    is_active = true,
+				    is_feature_assignable = true,
+				    is_default_for_admin = true,
+				    feature_code = 'system_management',
+				    feature_name = '系统管理',
+				    updated_at = NOW()
+				WHERE tenant_id IS NULL
+				  AND lower(code) = 'settings_opportunity_alerts'
+				  AND deleted_at IS NULL;
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_role_menus'
+			) AND EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_roles'
+			) AND EXISTS (
+				SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'institution_menus'
+			) THEN
+				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+				SELECT DISTINCT r.tenant_id, 'admin', 'settings_opportunity_alerts', NOW(), NOW()
+				FROM institution_roles r
+				WHERE lower(r.code) = 'admin'
+				  AND r.deleted_at IS NULL
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM institution_role_menus rm
+					WHERE rm.tenant_id = r.tenant_id
+					  AND lower(rm.role_code) = 'admin'
+					  AND lower(rm.menu_code) = 'settings_opportunity_alerts'
 				  );
 			END IF;
 		END $$`,
