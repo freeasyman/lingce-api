@@ -218,33 +218,166 @@ type LLMCallRecordListRequest struct {
 	Size          int     `json:"size"`
 }
 
+// AIUsageListRequest represents unified AI usage query filters.
+type AIUsageListRequest struct {
+	TenantID           *int64  `json:"tenant_id,omitempty"`
+	BusinessDomain     *string `json:"business_domain,omitempty"`
+	BusinessObjectType *string `json:"business_object_type,omitempty"`
+	BusinessObjectID   *int64  `json:"business_object_id,omitempty"`
+	BillingSubject     *string `json:"billing_subject,omitempty"`
+	BillingScene       *string `json:"billing_scene,omitempty"`
+	RecordingID        *int64  `json:"recording_id,omitempty"`
+	ContentID          *int64  `json:"content_id,omitempty"`
+	GenerationTaskID   *int64  `json:"generation_task_id,omitempty"`
+	Provider           *string `json:"provider,omitempty"`
+	ModelCode          *string `json:"model_code,omitempty"`
+	Success            *bool   `json:"success,omitempty"`
+	StartDate          *string `json:"start_date,omitempty"`
+	EndDate            *string `json:"end_date,omitempty"`
+	Page               int     `json:"page"`
+	PageSize           int     `json:"page_size"`
+}
+
+// AIUsageRecordItem represents a single AI usage record.
+type AIUsageRecordItem struct {
+	ID                   int64   `json:"id"`
+	RequestID            string  `json:"request_id"`
+	TraceID              string  `json:"trace_id"`
+	TenantID             int64   `json:"tenant_id"`
+	TenantName           string  `json:"tenant_name,omitempty"`
+	BusinessDomain       string  `json:"business_domain,omitempty"`
+	BusinessObjectType   string  `json:"business_object_type,omitempty"`
+	BusinessObjectID     int64   `json:"business_object_id,omitempty"`
+	BillingSubject       string  `json:"billing_subject,omitempty"`
+	BillingScene         string  `json:"billing_scene,omitempty"`
+	BillingRuleVersion   string  `json:"billing_rule_version,omitempty"`
+	RecordingID          int64   `json:"recording_id,omitempty"`
+	ContentID            int64   `json:"content_id,omitempty"`
+	TopicID              int64   `json:"topic_id,omitempty"`
+	CustomerID           int64   `json:"customer_id,omitempty"`
+	AnalysisRunID        int64   `json:"analysis_run_id,omitempty"`
+	AnalysisStepRunID    int64   `json:"analysis_step_run_id,omitempty"`
+	GenerationTaskID     int64   `json:"generation_task_id,omitempty"`
+	FunctionType         string  `json:"function_type"`
+	Module               string  `json:"module"`
+	Provider             string  `json:"provider"`
+	ModelCode            string  `json:"model_code"`
+	Success              bool    `json:"success"`
+	InputTokens          int64   `json:"input_tokens"`
+	OutputTokens         int64   `json:"output_tokens"`
+	TotalTokens          int64   `json:"total_tokens"`
+	InputCost            float64 `json:"input_cost"`
+	OutputCost           float64 `json:"output_cost"`
+	TotalCost            float64 `json:"total_cost"`
+	AudioDurationSeconds float64 `json:"audio_duration_seconds,omitempty"`
+	LatencyMS            int64   `json:"latency_ms"`
+	CreatedAt            string  `json:"created_at"`
+}
+
+// AIUsageGroupItem represents grouped AI usage data.
+type AIUsageGroupItem struct {
+	Key               string  `json:"key"`
+	TenantID          *int64  `json:"tenant_id,omitempty"`
+	TenantName        *string `json:"tenant_name,omitempty"`
+	CallCount         int64   `json:"call_count"`
+	TotalTokens       int64   `json:"total_tokens"`
+	TotalAudioSeconds float64 `json:"total_audio_seconds"`
+	TotalCostCNY      float64 `json:"total_cost_cny"`
+	EstimatedPoints   int64   `json:"estimated_points"`
+}
+
+// AIUsageTrendItem represents daily usage trend.
+type AIUsageTrendItem struct {
+	Date              string  `json:"date"`
+	CallCount         int64   `json:"call_count"`
+	TotalTokens       int64   `json:"total_tokens"`
+	TotalAudioSeconds float64 `json:"total_audio_seconds"`
+	TotalCostCNY      float64 `json:"total_cost_cny"`
+	EstimatedPoints   int64   `json:"estimated_points"`
+}
+
+// AIUsageSummaryResponse represents AI usage summary.
+type AIUsageSummaryResponse struct {
+	TotalCalls               int64              `json:"total_calls"`
+	SuccessCalls             int64              `json:"success_calls"`
+	FailedCalls              int64              `json:"failed_calls"`
+	TotalTokens              int64              `json:"total_tokens"`
+	TotalInputTokens         int64              `json:"total_input_tokens"`
+	TotalOutputTokens        int64              `json:"total_output_tokens"`
+	TotalAudioSeconds        float64            `json:"total_audio_seconds"`
+	TotalCostCNY             float64            `json:"total_cost_cny"`
+	EstimatedPoints          int64              `json:"estimated_points"`
+	AvgCostPerCall           float64            `json:"avg_cost_per_call"`
+	AvgCostPerBusinessObject float64            `json:"avg_cost_per_business_object"`
+	ByTenant                 []AIUsageGroupItem `json:"by_tenant"`
+	ByBusinessDomain         []AIUsageGroupItem `json:"by_business_domain"`
+	ByBillingSubject         []AIUsageGroupItem `json:"by_billing_subject"`
+	ByModel                  []AIUsageGroupItem `json:"by_model"`
+	Trend                    []AIUsageTrendItem `json:"trend"`
+}
+
+// AIUsageObjectResponse represents business object usage detail.
+type AIUsageObjectResponse struct {
+	BusinessDomain     string              `json:"business_domain,omitempty"`
+	BusinessObjectType string              `json:"business_object_type,omitempty"`
+	BusinessObjectID   int64               `json:"business_object_id,omitempty"`
+	BusinessObjectName string              `json:"business_object_name,omitempty"`
+	TenantID           int64               `json:"tenant_id"`
+	TenantName         string              `json:"tenant_name,omitempty"`
+	BillingSubject     string              `json:"billing_subject,omitempty"`
+	BillingScene       string              `json:"billing_scene,omitempty"`
+	TotalCalls         int64               `json:"total_calls"`
+	SuccessCalls       int64               `json:"success_calls"`
+	FailedCalls        int64               `json:"failed_calls"`
+	TotalTokens        int64               `json:"total_tokens"`
+	TotalAudioSeconds  float64             `json:"total_audio_seconds"`
+	TotalCostCNY       float64             `json:"total_cost_cny"`
+	EstimatedPoints    int64               `json:"estimated_points"`
+	FirstCallAt        string              `json:"first_call_at,omitempty"`
+	LastCallAt         string              `json:"last_call_at,omitempty"`
+	Records            []AIUsageRecordItem `json:"records"`
+}
+
 // LLMCallRecordResponse represents an LLM call record response
 type LLMCallRecordResponse struct {
-	ID               int64    `json:"id"`
-	RequestID        string   `json:"request_id"`
-	TenantID         *int64   `json:"tenant_id,omitempty"`
-	TenantName       *string  `json:"tenant_name,omitempty"`
-	UserID           *int64   `json:"user_id,omitempty"`
-	ModelName        string   `json:"model_name"`
-	FunctionType     *string  `json:"function_type,omitempty"`
-	Module           *string  `json:"module,omitempty"`
-	TraceID          *string  `json:"trace_id,omitempty"`
-	ModelCode        *string  `json:"model_code,omitempty"`
-	Provider         string   `json:"provider"`
-	PromptTokens     int      `json:"prompt_tokens"`
-	CompletionTokens int      `json:"completion_tokens"`
-	TotalTokens      int      `json:"total_tokens"`
-	Cost             float64  `json:"cost"`
-	Duration         int      `json:"duration"`
-	Status           string   `json:"status"`
-	Success          *bool    `json:"success,omitempty"`
-	InputCost        *float64 `json:"input_cost,omitempty"`
-	OutputCost       *float64 `json:"output_cost,omitempty"`
-	ErrorMessage     *string  `json:"error_message,omitempty"`
-	Purpose          *string  `json:"purpose,omitempty"`
-	RelatedID        *int64   `json:"related_id,omitempty"`
-	RelatedType      *string  `json:"related_type,omitempty"`
-	CreatedAt        string   `json:"created_at"`
+	ID                 int64    `json:"id"`
+	RequestID          string   `json:"request_id"`
+	TenantID           *int64   `json:"tenant_id,omitempty"`
+	TenantName         *string  `json:"tenant_name,omitempty"`
+	UserID             *int64   `json:"user_id,omitempty"`
+	BusinessDomain     *string  `json:"business_domain,omitempty"`
+	BusinessObjectType *string  `json:"business_object_type,omitempty"`
+	BusinessObjectID   *int64   `json:"business_object_id,omitempty"`
+	BillingSubject     *string  `json:"billing_subject,omitempty"`
+	BillingScene       *string  `json:"billing_scene,omitempty"`
+	BillingRuleVersion *string  `json:"billing_rule_version,omitempty"`
+	RecordingID        *int64   `json:"recording_id,omitempty"`
+	ContentID          *int64   `json:"content_id,omitempty"`
+	TopicID            *int64   `json:"topic_id,omitempty"`
+	CustomerID         *int64   `json:"customer_id,omitempty"`
+	AnalysisRunID      *int64   `json:"analysis_run_id,omitempty"`
+	AnalysisStepRunID  *int64   `json:"analysis_step_run_id,omitempty"`
+	GenerationTaskID   *int64   `json:"generation_task_id,omitempty"`
+	ModelName          string   `json:"model_name"`
+	FunctionType       *string  `json:"function_type,omitempty"`
+	Module             *string  `json:"module,omitempty"`
+	TraceID            *string  `json:"trace_id,omitempty"`
+	ModelCode          *string  `json:"model_code,omitempty"`
+	Provider           string   `json:"provider"`
+	PromptTokens       int      `json:"prompt_tokens"`
+	CompletionTokens   int      `json:"completion_tokens"`
+	TotalTokens        int      `json:"total_tokens"`
+	Cost               float64  `json:"cost"`
+	Duration           int      `json:"duration"`
+	Status             string   `json:"status"`
+	Success            *bool    `json:"success,omitempty"`
+	InputCost          *float64 `json:"input_cost,omitempty"`
+	OutputCost         *float64 `json:"output_cost,omitempty"`
+	ErrorMessage       *string  `json:"error_message,omitempty"`
+	Purpose            *string  `json:"purpose,omitempty"`
+	RelatedID          *int64   `json:"related_id,omitempty"`
+	RelatedType        *string  `json:"related_type,omitempty"`
+	CreatedAt          string   `json:"created_at"`
 }
 
 // LLMCallRecordStatsResponse represents LLM call record statistics

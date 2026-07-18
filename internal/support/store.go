@@ -1288,6 +1288,45 @@ func (s *Store) GetLLMCostSummary(ctx context.Context, startDate, endDate *strin
 	return &response, nil
 }
 
+// GetRecordingDisplayName retrieves a human-readable recording name.
+func (s *Store) GetRecordingDisplayName(ctx context.Context, recordingID int64) (string, error) {
+	var title, employeeName, sceneName string
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(NULLIF(r.title, ''), CONCAT('录音#', r.id::text)) AS title,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') AS employee_name,
+			COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene, ''), '') AS scene_name
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.id = $1
+	`, recordingID).Scan(&title, &employeeName, &sceneName)
+	if err != nil {
+		return fmt.Sprintf("录音#%d", recordingID), nil
+	}
+	parts := []string{strings.TrimSpace(title)}
+	if employeeName != "" {
+		parts = append(parts, strings.TrimSpace(employeeName))
+	}
+	if sceneName != "" {
+		parts = append(parts, strings.TrimSpace(sceneName))
+	}
+	return strings.Join(parts, " · "), nil
+}
+
+// GetContentDisplayName retrieves a human-readable content name.
+func (s *Store) GetContentDisplayName(ctx context.Context, contentID int64) (string, error) {
+	var title string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(title, ''), CONCAT('内容#', id::text))
+		FROM content_items
+		WHERE id = $1 AND deleted_at IS NULL
+	`, contentID).Scan(&title)
+	if err != nil {
+		return fmt.Sprintf("内容#%d", contentID), nil
+	}
+	return strings.TrimSpace(title), nil
+}
+
 func validateTableName(tableName string) error {
 	if tableName == "" {
 		return fmt.Errorf("table name is required")

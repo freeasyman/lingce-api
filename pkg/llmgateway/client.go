@@ -34,15 +34,35 @@ func NewClient(baseURL, apiKey string) *Client {
 
 // TextInferenceRequest represents a text inference request
 type TextInferenceRequest struct {
-	TenantID      int64     `json:"tenant_id"`
-	CallerService string    `json:"caller_service"`
-	CallerModule  string    `json:"caller_module"`
-	TraceID       string    `json:"trace_id"`
-	FunctionType  string    `json:"function_type"`
-	Provider      string    `json:"provider,omitempty"`
-	ModelCode     string    `json:"model_code,omitempty"`
-	Messages      []Message `json:"messages"`
-	Params        *Params   `json:"params,omitempty"`
+	TenantID      int64            `json:"tenant_id"`
+	CallerService string           `json:"caller_service"`
+	CallerModule  string           `json:"caller_module"`
+	TraceID       string           `json:"trace_id"`
+	FunctionType  string           `json:"function_type"`
+	Provider      string           `json:"provider,omitempty"`
+	ModelCode     string           `json:"model_code,omitempty"`
+	Billing       *BillingMetadata `json:"billing,omitempty"`
+	Messages      []Message        `json:"messages"`
+	Params        *Params          `json:"params,omitempty"`
+}
+
+// BillingMetadata represents business attribution for AI calls.
+type BillingMetadata struct {
+	BusinessDomain     string `json:"business_domain,omitempty"`
+	BusinessObjectType string `json:"business_object_type,omitempty"`
+	BusinessObjectID   int64  `json:"business_object_id,omitempty"`
+
+	BillingSubject     string `json:"billing_subject,omitempty"`
+	BillingScene       string `json:"billing_scene,omitempty"`
+	BillingRuleVersion string `json:"billing_rule_version,omitempty"`
+
+	RecordingID       int64 `json:"recording_id,omitempty"`
+	ContentID         int64 `json:"content_id,omitempty"`
+	TopicID           int64 `json:"topic_id,omitempty"`
+	CustomerID        int64 `json:"customer_id,omitempty"`
+	AnalysisRunID     int64 `json:"analysis_run_id,omitempty"`
+	AnalysisStepRunID int64 `json:"analysis_step_run_id,omitempty"`
+	GenerationTaskID  int64 `json:"generation_task_id,omitempty"`
 }
 
 // Message represents a chat message
@@ -97,22 +117,37 @@ type ErrorResponse struct {
 
 // AuditRecordItem represents a gateway audit record in list response.
 type AuditRecordItem struct {
-	ID           int64   `json:"id"`
-	RequestID    string  `json:"request_id"`
-	TenantID     int64   `json:"tenant_id"`
-	FunctionType string  `json:"function_type"`
-	Module       string  `json:"module"`
-	Provider     string  `json:"provider"`
-	ModelCode    string  `json:"model_code"`
-	Success      bool    `json:"success"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	TotalTokens  int64   `json:"total_tokens"`
-	InputCost    float64 `json:"input_cost"`
-	OutputCost   float64 `json:"output_cost"`
-	TotalCost    float64 `json:"total_cost"`
-	LatencyMS    int64   `json:"latency_ms"`
-	CreatedAt    string  `json:"created_at"`
+	ID                 int64                  `json:"id"`
+	RequestID          string                 `json:"request_id"`
+	TraceID            string                 `json:"trace_id"`
+	TenantID           int64                  `json:"tenant_id"`
+	BusinessDomain     string                 `json:"business_domain,omitempty"`
+	BusinessObjectType string                 `json:"business_object_type,omitempty"`
+	BusinessObjectID   int64                  `json:"business_object_id,omitempty"`
+	BillingSubject     string                 `json:"billing_subject,omitempty"`
+	BillingScene       string                 `json:"billing_scene,omitempty"`
+	BillingRuleVersion string                 `json:"billing_rule_version,omitempty"`
+	RecordingID        int64                  `json:"recording_id,omitempty"`
+	ContentID          int64                  `json:"content_id,omitempty"`
+	TopicID            int64                  `json:"topic_id,omitempty"`
+	CustomerID         int64                  `json:"customer_id,omitempty"`
+	AnalysisRunID      int64                  `json:"analysis_run_id,omitempty"`
+	AnalysisStepRunID  int64                  `json:"analysis_step_run_id,omitempty"`
+	GenerationTaskID   int64                  `json:"generation_task_id,omitempty"`
+	FunctionType       string                 `json:"function_type"`
+	Module             string                 `json:"module"`
+	Provider           string                 `json:"provider"`
+	ModelCode          string                 `json:"model_code"`
+	Success            bool                   `json:"success"`
+	InputTokens        int64                  `json:"input_tokens"`
+	OutputTokens       int64                  `json:"output_tokens"`
+	TotalTokens        int64                  `json:"total_tokens"`
+	InputCost          float64                `json:"input_cost"`
+	OutputCost         float64                `json:"output_cost"`
+	TotalCost          float64                `json:"total_cost"`
+	UsageMetadata      map[string]interface{} `json:"usage_metadata,omitempty"`
+	LatencyMS          int64                  `json:"latency_ms"`
+	CreatedAt          string                 `json:"created_at"`
 }
 
 // AuditRecordDetail represents a gateway audit record detail.

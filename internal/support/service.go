@@ -3,6 +3,7 @@ package support
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -394,27 +395,39 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 		success := item.Success
 		inCost := item.InputCost
 		outCost := item.OutputCost
+		businessDomain := item.BusinessDomain
+		businessObjectType := item.BusinessObjectType
+		businessObjectID := item.BusinessObjectID
+		billingSubject := item.BillingSubject
+		billingScene := item.BillingScene
+		billingRuleVersion := item.BillingRuleVersion
 		out = append(out, &LLMCallRecordResponse{
-			ID:               item.ID,
-			RequestID:        item.RequestID,
-			TenantID:         &tenantID,
-			TenantName:       &tenantName,
-			ModelName:        item.ModelCode,
-			FunctionType:     &functionType,
-			Module:           &module,
-			TraceID:          &traceID,
-			ModelCode:        &modelCode,
-			Provider:         item.Provider,
-			PromptTokens:     int(item.InputTokens),
-			CompletionTokens: int(item.OutputTokens),
-			TotalTokens:      int(item.TotalTokens),
-			Cost:             item.TotalCost,
-			Duration:         int(item.LatencyMS),
-			Status:           boolToStatus(item.Success),
-			Success:          &success,
-			InputCost:        &inCost,
-			OutputCost:       &outCost,
-			CreatedAt:        item.CreatedAt,
+			ID:                 item.ID,
+			RequestID:          item.RequestID,
+			TenantID:           &tenantID,
+			TenantName:         &tenantName,
+			BusinessDomain:     &businessDomain,
+			BusinessObjectType: &businessObjectType,
+			BusinessObjectID:   &businessObjectID,
+			BillingSubject:     &billingSubject,
+			BillingScene:       &billingScene,
+			BillingRuleVersion: &billingRuleVersion,
+			ModelName:          item.ModelCode,
+			FunctionType:       &functionType,
+			Module:             &module,
+			TraceID:            &traceID,
+			ModelCode:          &modelCode,
+			Provider:           item.Provider,
+			PromptTokens:       int(item.InputTokens),
+			CompletionTokens:   int(item.OutputTokens),
+			TotalTokens:        int(item.TotalTokens),
+			Cost:               item.TotalCost,
+			Duration:           int(item.LatencyMS),
+			Status:             boolToStatus(item.Success),
+			Success:            &success,
+			InputCost:          &inCost,
+			OutputCost:         &outCost,
+			CreatedAt:          item.CreatedAt,
 		})
 	}
 
@@ -479,28 +492,40 @@ func (s *Service) GetLLMCallRecordByRequestID(ctx context.Context, requestID str
 	inCost := record.InputCost
 	outCost := record.OutputCost
 	errMessage := record.ErrorMessage
+	businessDomain := record.BusinessDomain
+	businessObjectType := record.BusinessObjectType
+	businessObjectID := record.BusinessObjectID
+	billingSubject := record.BillingSubject
+	billingScene := record.BillingScene
+	billingRuleVersion := record.BillingRuleVersion
 	return &LLMCallRecordResponse{
-		ID:               record.ID,
-		RequestID:        record.RequestID,
-		TenantID:         &tenantID,
-		TenantName:       &tenantName,
-		ModelName:        record.ModelCode,
-		FunctionType:     &functionType,
-		Module:           &module,
-		TraceID:          &traceID,
-		ModelCode:        &modelCode,
-		Provider:         record.Provider,
-		PromptTokens:     int(record.InputTokens),
-		CompletionTokens: int(record.OutputTokens),
-		TotalTokens:      int(record.TotalTokens),
-		Cost:             record.TotalCost,
-		Duration:         int(record.LatencyMS),
-		Status:           boolToStatus(record.Success),
-		Success:          &success,
-		InputCost:        &inCost,
-		OutputCost:       &outCost,
-		ErrorMessage:     &errMessage,
-		CreatedAt:        record.CreatedAt,
+		ID:                 record.ID,
+		RequestID:          record.RequestID,
+		TenantID:           &tenantID,
+		TenantName:         &tenantName,
+		BusinessDomain:     &businessDomain,
+		BusinessObjectType: &businessObjectType,
+		BusinessObjectID:   &businessObjectID,
+		BillingSubject:     &billingSubject,
+		BillingScene:       &billingScene,
+		BillingRuleVersion: &billingRuleVersion,
+		ModelName:          record.ModelCode,
+		FunctionType:       &functionType,
+		Module:             &module,
+		TraceID:            &traceID,
+		ModelCode:          &modelCode,
+		Provider:           record.Provider,
+		PromptTokens:       int(record.InputTokens),
+		CompletionTokens:   int(record.OutputTokens),
+		TotalTokens:        int(record.TotalTokens),
+		Cost:               record.TotalCost,
+		Duration:           int(record.LatencyMS),
+		Status:             boolToStatus(record.Success),
+		Success:            &success,
+		InputCost:          &inCost,
+		OutputCost:         &outCost,
+		ErrorMessage:       &errMessage,
+		CreatedAt:          record.CreatedAt,
 	}, nil
 }
 
@@ -573,6 +598,248 @@ func (s *Service) GetLLMCostSummary(ctx context.Context, startDate, endDate *str
 		CostByModule:       toCostBreakdown(resp.CostByModule),
 		CostByModel:        toCostBreakdown(resp.CostByModel),
 	}, nil
+}
+
+// AI usage services
+
+func (s *Service) ListAIUsageRecords(ctx context.Context, req AIUsageListRequest) ([]*AIUsageRecordItem, int, error) {
+	if s.llmClient == nil {
+		return nil, 0, fmt.Errorf("LLM gateway is not configured")
+	}
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	resp, err := s.llmClient.ListAuditRecords(ctx, buildAIUsageParams(req, page, pageSize))
+	if err != nil {
+		return nil, 0, err
+	}
+	tenantNames, err := s.store.GetTenantNameMap(ctx, uniqueTenantIDsFromAudit(resp.Items))
+	if err != nil {
+		return nil, 0, err
+	}
+	items := make([]*AIUsageRecordItem, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		items = append(items, toAIUsageRecordItem(item, tenantNames[item.TenantID]))
+	}
+	return items, int(resp.Total), nil
+}
+
+func (s *Service) GetAIUsageSummary(ctx context.Context, req AIUsageListRequest) (*AIUsageSummaryResponse, error) {
+	records, err := s.fetchAllAIUsageRecords(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	tenantNames, err := s.store.GetTenantNameMap(ctx, uniqueTenantIDsFromUsage(records))
+	if err != nil {
+		return nil, err
+	}
+	return buildAIUsageSummary(records, tenantNames), nil
+}
+
+func (s *Service) GetAIUsageTrend(ctx context.Context, req AIUsageListRequest) ([]AIUsageTrendItem, error) {
+	summary, err := s.GetAIUsageSummary(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return summary.Trend, nil
+}
+
+func (s *Service) GetAIUsageByTenant(ctx context.Context, req AIUsageListRequest) ([]AIUsageGroupItem, error) {
+	summary, err := s.GetAIUsageSummary(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return summary.ByTenant, nil
+}
+
+func (s *Service) GetAIUsageByBusinessDomain(ctx context.Context, req AIUsageListRequest) ([]AIUsageGroupItem, error) {
+	summary, err := s.GetAIUsageSummary(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return summary.ByBusinessDomain, nil
+}
+
+func (s *Service) GetAIUsageByBillingSubject(ctx context.Context, req AIUsageListRequest) ([]AIUsageGroupItem, error) {
+	summary, err := s.GetAIUsageSummary(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return summary.ByBillingSubject, nil
+}
+
+func (s *Service) GetAIUsageByModel(ctx context.Context, req AIUsageListRequest) ([]AIUsageGroupItem, error) {
+	summary, err := s.GetAIUsageSummary(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return summary.ByModel, nil
+}
+
+func (s *Service) GetAIUsageByRecording(ctx context.Context, recordingID int64, req AIUsageListRequest) (*AIUsageObjectResponse, error) {
+	req.RecordingID = &recordingID
+	req.BusinessDomain = stringPtr("recording")
+	records, err := s.fetchAllAIUsageRecords(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	summary := buildAIUsageSummary(records, nil)
+	name, _ := s.store.GetRecordingDisplayName(ctx, recordingID)
+	tenantID := int64(0)
+	tenantName := ""
+	if len(records) > 0 {
+		tenantID = records[0].TenantID
+	}
+	if tenantID > 0 {
+		if tenantNames, err := s.store.GetTenantNameMap(ctx, []int64{tenantID}); err == nil {
+			tenantName = tenantNames[tenantID]
+		}
+	}
+	return &AIUsageObjectResponse{
+		BusinessDomain:     "recording",
+		BusinessObjectType: "recording",
+		BusinessObjectID:   recordingID,
+		BusinessObjectName: name,
+		TenantID:           tenantID,
+		TenantName:         tenantName,
+		BillingSubject:     firstBillingSubject(records),
+		BillingScene:       firstBillingScene(records),
+		TotalCalls:         summary.TotalCalls,
+		SuccessCalls:       summary.SuccessCalls,
+		FailedCalls:        summary.FailedCalls,
+		TotalTokens:        summary.TotalTokens,
+		TotalAudioSeconds:  summary.TotalAudioSeconds,
+		TotalCostCNY:       summary.TotalCostCNY,
+		EstimatedPoints:    summary.EstimatedPoints,
+		FirstCallAt:        firstCallAt(records),
+		LastCallAt:         lastCallAt(records),
+		Records:            records,
+	}, nil
+}
+
+func (s *Service) GetAIUsageByContent(ctx context.Context, contentID int64, req AIUsageListRequest) (*AIUsageObjectResponse, error) {
+	req.ContentID = &contentID
+	req.BusinessDomain = stringPtr("content")
+	records, err := s.fetchAllAIUsageRecords(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	summary := buildAIUsageSummary(records, nil)
+	name, _ := s.store.GetContentDisplayName(ctx, contentID)
+	tenantID := int64(0)
+	tenantName := ""
+	if len(records) > 0 {
+		tenantID = records[0].TenantID
+	}
+	if tenantID > 0 {
+		if tenantNames, err := s.store.GetTenantNameMap(ctx, []int64{tenantID}); err == nil {
+			tenantName = tenantNames[tenantID]
+		}
+	}
+	return &AIUsageObjectResponse{
+		BusinessDomain:     "content",
+		BusinessObjectType: "content_item",
+		BusinessObjectID:   contentID,
+		BusinessObjectName: name,
+		TenantID:           tenantID,
+		TenantName:         tenantName,
+		BillingSubject:     firstBillingSubject(records),
+		BillingScene:       firstBillingScene(records),
+		TotalCalls:         summary.TotalCalls,
+		SuccessCalls:       summary.SuccessCalls,
+		FailedCalls:        summary.FailedCalls,
+		TotalTokens:        summary.TotalTokens,
+		TotalAudioSeconds:  summary.TotalAudioSeconds,
+		TotalCostCNY:       summary.TotalCostCNY,
+		EstimatedPoints:    summary.EstimatedPoints,
+		FirstCallAt:        firstCallAt(records),
+		LastCallAt:         lastCallAt(records),
+		Records:            records,
+	}, nil
+}
+
+func (s *Service) GetAIUsageByGenerationTask(ctx context.Context, generationTaskID int64, req AIUsageListRequest) (*AIUsageObjectResponse, error) {
+	req.GenerationTaskID = &generationTaskID
+	records, err := s.fetchAllAIUsageRecords(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	summary := buildAIUsageSummary(records, nil)
+	tenantID := int64(0)
+	tenantName := ""
+	if len(records) > 0 {
+		tenantID = records[0].TenantID
+	}
+	if tenantID > 0 {
+		if tenantNames, err := s.store.GetTenantNameMap(ctx, []int64{tenantID}); err == nil {
+			tenantName = tenantNames[tenantID]
+		}
+	}
+	return &AIUsageObjectResponse{
+		BusinessDomain:     firstBusinessDomain(records),
+		BusinessObjectType: firstBusinessObjectType(records),
+		BusinessObjectID:   generationTaskID,
+		BusinessObjectName: fmt.Sprintf("生成任务#%d", generationTaskID),
+		TenantID:           tenantID,
+		TenantName:         tenantName,
+		BillingSubject:     firstBillingSubject(records),
+		BillingScene:       firstBillingScene(records),
+		TotalCalls:         summary.TotalCalls,
+		SuccessCalls:       summary.SuccessCalls,
+		FailedCalls:        summary.FailedCalls,
+		TotalTokens:        summary.TotalTokens,
+		TotalAudioSeconds:  summary.TotalAudioSeconds,
+		TotalCostCNY:       summary.TotalCostCNY,
+		EstimatedPoints:    summary.EstimatedPoints,
+		FirstCallAt:        firstCallAt(records),
+		LastCallAt:         lastCallAt(records),
+		Records:            records,
+	}, nil
+}
+
+func (s *Service) fetchAllAIUsageRecords(ctx context.Context, req AIUsageListRequest) ([]AIUsageRecordItem, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	var all []AIUsageRecordItem
+	for page := 1; ; page++ {
+		resp, err := s.llmClient.ListAuditRecords(ctx, buildAIUsageParams(req, page, pageSize))
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range resp.Items {
+			all = append(all, *toAIUsageRecordItem(item, ""))
+		}
+		if page >= resp.Pages || len(resp.Items) == 0 {
+			break
+		}
+	}
+
+	tenantNames, err := s.store.GetTenantNameMap(ctx, uniqueTenantIDsFromUsage(all))
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		all[i].TenantName = tenantNames[all[i].TenantID]
+	}
+	return all, nil
 }
 
 // Metadata Services
@@ -917,6 +1184,371 @@ func toCostTrend(items []llmgateway.AuditCostByGroupItem) []CostTrendItem {
 		})
 	}
 	return out
+}
+
+func buildAIUsageParams(req AIUsageListRequest, page, pageSize int) map[string]string {
+	params := map[string]string{
+		"page":       strconv.Itoa(page),
+		"page_size":  strconv.Itoa(pageSize),
+		"start_date": valueOrEmpty(req.StartDate),
+		"end_date":   valueOrEmpty(req.EndDate),
+	}
+	if req.TenantID != nil {
+		params["tenant_id"] = strconv.FormatInt(*req.TenantID, 10)
+	}
+	if req.BusinessDomain != nil {
+		params["business_domain"] = *req.BusinessDomain
+	}
+	if req.BusinessObjectType != nil {
+		params["business_object_type"] = *req.BusinessObjectType
+	}
+	if req.BusinessObjectID != nil {
+		params["business_object_id"] = strconv.FormatInt(*req.BusinessObjectID, 10)
+	}
+	if req.BillingSubject != nil {
+		params["billing_subject"] = *req.BillingSubject
+	}
+	if req.BillingScene != nil {
+		params["billing_scene"] = *req.BillingScene
+	}
+	if req.RecordingID != nil {
+		params["recording_id"] = strconv.FormatInt(*req.RecordingID, 10)
+	}
+	if req.ContentID != nil {
+		params["content_id"] = strconv.FormatInt(*req.ContentID, 10)
+	}
+	if req.GenerationTaskID != nil {
+		params["generation_task_id"] = strconv.FormatInt(*req.GenerationTaskID, 10)
+	}
+	if req.Provider != nil {
+		params["provider"] = *req.Provider
+	}
+	if req.ModelCode != nil {
+		params["model_code"] = *req.ModelCode
+	}
+	if req.Success != nil {
+		params["success"] = strconv.FormatBool(*req.Success)
+	}
+	return params
+}
+
+func toAIUsageRecordItem(item llmgateway.AuditRecordItem, tenantName string) *AIUsageRecordItem {
+	return &AIUsageRecordItem{
+		ID:                   item.ID,
+		RequestID:            item.RequestID,
+		TraceID:              item.TraceID,
+		TenantID:             item.TenantID,
+		TenantName:           tenantName,
+		BusinessDomain:       item.BusinessDomain,
+		BusinessObjectType:   item.BusinessObjectType,
+		BusinessObjectID:     item.BusinessObjectID,
+		BillingSubject:       item.BillingSubject,
+		BillingScene:         item.BillingScene,
+		BillingRuleVersion:   item.BillingRuleVersion,
+		RecordingID:          item.RecordingID,
+		ContentID:            item.ContentID,
+		TopicID:              item.TopicID,
+		CustomerID:           item.CustomerID,
+		AnalysisRunID:        item.AnalysisRunID,
+		AnalysisStepRunID:    item.AnalysisStepRunID,
+		GenerationTaskID:     item.GenerationTaskID,
+		FunctionType:         item.FunctionType,
+		Module:               item.Module,
+		Provider:             item.Provider,
+		ModelCode:            item.ModelCode,
+		Success:              item.Success,
+		InputTokens:          item.InputTokens,
+		OutputTokens:         item.OutputTokens,
+		TotalTokens:          item.TotalTokens,
+		InputCost:            item.InputCost,
+		OutputCost:           item.OutputCost,
+		TotalCost:            item.TotalCost,
+		AudioDurationSeconds: extractAudioDuration(item.UsageMetadata),
+		LatencyMS:            item.LatencyMS,
+		CreatedAt:            item.CreatedAt,
+	}
+}
+
+func buildAIUsageSummary(records []AIUsageRecordItem, tenantNames map[int64]string) *AIUsageSummaryResponse {
+	summary := &AIUsageSummaryResponse{}
+	tenantAgg := map[int64]*AIUsageGroupItem{}
+	domainAgg := map[string]*AIUsageGroupItem{}
+	subjectAgg := map[string]*AIUsageGroupItem{}
+	modelAgg := map[string]*AIUsageGroupItem{}
+	dayAgg := map[string]*AIUsageTrendItem{}
+	bizObjects := map[string]struct{}{}
+
+	for _, record := range records {
+		summary.TotalCalls++
+		if record.Success {
+			summary.SuccessCalls++
+		} else {
+			summary.FailedCalls++
+		}
+		summary.TotalTokens += record.TotalTokens
+		summary.TotalInputTokens += record.InputTokens
+		summary.TotalOutputTokens += record.OutputTokens
+		summary.TotalAudioSeconds += record.AudioDurationSeconds
+		summary.TotalCostCNY += record.TotalCost
+
+		dayKey := strings.TrimSpace(record.CreatedAt)
+		if len(dayKey) >= 10 {
+			dayKey = dayKey[:10]
+		}
+		addUsageTrend(dayAgg, dayKey, record)
+
+		addUsageGroup(domainAgg, defaultUsageKey(record.BusinessDomain, "未分类"), record)
+		addUsageGroup(subjectAgg, defaultUsageKey(record.BillingSubject, "未命名"), record)
+		addUsageGroup(modelAgg, defaultUsageKey(record.ModelCode, "unknown"), record)
+		addTenantUsageGroup(tenantAgg, record, tenantNames)
+
+		if record.BusinessObjectID > 0 && record.BusinessDomain != "" {
+			key := fmt.Sprintf("%s:%s:%d", record.BusinessDomain, record.BusinessObjectType, record.BusinessObjectID)
+			bizObjects[key] = struct{}{}
+		} else if record.RecordingID > 0 {
+			bizObjects[fmt.Sprintf("recording:%d", record.RecordingID)] = struct{}{}
+		} else if record.ContentID > 0 {
+			bizObjects[fmt.Sprintf("content:%d", record.ContentID)] = struct{}{}
+		} else if record.GenerationTaskID > 0 {
+			bizObjects[fmt.Sprintf("task:%d", record.GenerationTaskID)] = struct{}{}
+		}
+	}
+
+	summary.EstimatedPoints = estimatePoints(summary.TotalCostCNY)
+	if summary.TotalCalls > 0 {
+		summary.AvgCostPerCall = summary.TotalCostCNY / float64(summary.TotalCalls)
+	}
+	if len(bizObjects) > 0 {
+		summary.AvgCostPerBusinessObject = summary.TotalCostCNY / float64(len(bizObjects))
+	}
+
+	summary.ByTenant = sortedTenantUsage(tenantAgg)
+	summary.ByBusinessDomain = sortedUsageGroups(domainAgg)
+	summary.ByBillingSubject = sortedUsageGroups(subjectAgg)
+	summary.ByModel = sortedUsageGroups(modelAgg)
+	summary.Trend = sortedTrend(dayAgg)
+	return summary
+}
+
+func addUsageGroup(groups map[string]*AIUsageGroupItem, key string, record AIUsageRecordItem) {
+	item, ok := groups[key]
+	if !ok {
+		item = &AIUsageGroupItem{Key: key}
+		groups[key] = item
+	}
+	item.CallCount++
+	item.TotalTokens += record.TotalTokens
+	item.TotalAudioSeconds += record.AudioDurationSeconds
+	item.TotalCostCNY += record.TotalCost
+	item.EstimatedPoints = estimatePoints(item.TotalCostCNY)
+}
+
+func addTenantUsageGroup(groups map[int64]*AIUsageGroupItem, record AIUsageRecordItem, tenantNames map[int64]string) {
+	item, ok := groups[record.TenantID]
+	if !ok {
+		key := strconv.FormatInt(record.TenantID, 10)
+		item = &AIUsageGroupItem{Key: key}
+		groups[record.TenantID] = item
+	}
+	tenantID := record.TenantID
+	tenantName := tenantNames[tenantID]
+	item.TenantID = &tenantID
+	item.TenantName = &tenantName
+	item.CallCount++
+	item.TotalTokens += record.TotalTokens
+	item.TotalAudioSeconds += record.AudioDurationSeconds
+	item.TotalCostCNY += record.TotalCost
+	item.EstimatedPoints = estimatePoints(item.TotalCostCNY)
+}
+
+func addUsageTrend(groups map[string]*AIUsageTrendItem, key string, record AIUsageRecordItem) {
+	if key == "" {
+		key = "unknown"
+	}
+	item, ok := groups[key]
+	if !ok {
+		item = &AIUsageTrendItem{Date: key}
+		groups[key] = item
+	}
+	item.CallCount++
+	item.TotalTokens += record.TotalTokens
+	item.TotalAudioSeconds += record.AudioDurationSeconds
+	item.TotalCostCNY += record.TotalCost
+	item.EstimatedPoints = estimatePoints(item.TotalCostCNY)
+}
+
+func sortedUsageGroups(groups map[string]*AIUsageGroupItem) []AIUsageGroupItem {
+	items := make([]AIUsageGroupItem, 0, len(groups))
+	for _, item := range groups {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalCostCNY == items[j].TotalCostCNY {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].TotalCostCNY > items[j].TotalCostCNY
+	})
+	return items
+}
+
+func sortedTenantUsage(groups map[int64]*AIUsageGroupItem) []AIUsageGroupItem {
+	items := make([]AIUsageGroupItem, 0, len(groups))
+	for _, item := range groups {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalCostCNY == items[j].TotalCostCNY {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].TotalCostCNY > items[j].TotalCostCNY
+	})
+	return items
+}
+
+func sortedTrend(groups map[string]*AIUsageTrendItem) []AIUsageTrendItem {
+	items := make([]AIUsageTrendItem, 0, len(groups))
+	for _, item := range groups {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Date < items[j].Date
+	})
+	return items
+}
+
+func estimatePoints(cost float64) int64 {
+	if cost <= 0 {
+		return 0
+	}
+	return int64(math.Round(cost * 100))
+}
+
+func extractAudioDuration(meta map[string]interface{}) float64 {
+	if len(meta) == 0 {
+		return 0
+	}
+	raw, ok := meta["audio_duration_seconds"]
+	if !ok {
+		return 0
+	}
+	switch v := raw.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case jsonNumber:
+		f, _ := v.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+type jsonNumber interface {
+	Float64() (float64, error)
+}
+
+func defaultUsageKey(v, fallback string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+func uniqueTenantIDsFromAudit(items []llmgateway.AuditRecordItem) []int64 {
+	return uniqueTenantIDsFromUsageItems(func() []AIUsageRecordItem {
+		out := make([]AIUsageRecordItem, 0, len(items))
+		for _, item := range items {
+			out = append(out, AIUsageRecordItem{TenantID: item.TenantID})
+		}
+		return out
+	}())
+}
+
+func uniqueTenantIDsFromUsage(items []AIUsageRecordItem) []int64 {
+	return uniqueTenantIDsFromUsageItems(items)
+}
+
+func uniqueTenantIDsFromUsageItems(items []AIUsageRecordItem) []int64 {
+	seen := make(map[int64]struct{}, len(items))
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		if item.TenantID == 0 {
+			continue
+		}
+		if _, ok := seen[item.TenantID]; ok {
+			continue
+		}
+		seen[item.TenantID] = struct{}{}
+		ids = append(ids, item.TenantID)
+	}
+	return ids
+}
+
+func firstBillingSubject(records []AIUsageRecordItem) string {
+	for _, record := range records {
+		if v := strings.TrimSpace(record.BillingSubject); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstBillingScene(records []AIUsageRecordItem) string {
+	for _, record := range records {
+		if v := strings.TrimSpace(record.BillingScene); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstBusinessDomain(records []AIUsageRecordItem) string {
+	for _, record := range records {
+		if v := strings.TrimSpace(record.BusinessDomain); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstBusinessObjectType(records []AIUsageRecordItem) string {
+	for _, record := range records {
+		if v := strings.TrimSpace(record.BusinessObjectType); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstCallAt(records []AIUsageRecordItem) string {
+	if len(records) == 0 {
+		return ""
+	}
+	return records[len(records)-1].CreatedAt
+}
+
+func lastCallAt(records []AIUsageRecordItem) string {
+	if len(records) == 0 {
+		return ""
+	}
+	return records[0].CreatedAt
+}
+
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v)
+}
+
+func stringPtr(v string) *string {
+	return &v
 }
 
 func normalizeMetadataFieldType(dataType string) string {

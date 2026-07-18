@@ -2,8 +2,10 @@ package support
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -54,6 +56,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/llm/costs/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
 	mux.Handle("GET /api/v1/llm/cost/tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
 	mux.Handle("GET /api/v1/llm/cost/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
+
+	// AI usage endpoints
+	mux.Handle("GET /api/v1/ai-usage/summary", authMw(http.HandlerFunc(h.GetAIUsageSummary)))
+	mux.Handle("GET /api/v1/ai-usage/trend", authMw(http.HandlerFunc(h.GetAIUsageTrend)))
+	mux.Handle("GET /api/v1/ai-usage/by-tenant", authMw(http.HandlerFunc(h.GetAIUsageByTenant)))
+	mux.Handle("GET /api/v1/ai-usage/by-business-domain", authMw(http.HandlerFunc(h.GetAIUsageByBusinessDomain)))
+	mux.Handle("GET /api/v1/ai-usage/by-billing-subject", authMw(http.HandlerFunc(h.GetAIUsageByBillingSubject)))
+	mux.Handle("GET /api/v1/ai-usage/by-model", authMw(http.HandlerFunc(h.GetAIUsageByModel)))
+	mux.Handle("GET /api/v1/ai-usage/records", authMw(http.HandlerFunc(h.ListAIUsageRecords)))
+	mux.Handle("GET /api/v1/ai-usage/recordings/{recording_id}", authMw(http.HandlerFunc(h.GetAIUsageByRecording)))
+	mux.Handle("GET /api/v1/ai-usage/contents/{content_id}", authMw(http.HandlerFunc(h.GetAIUsageByContent)))
+	mux.Handle("GET /api/v1/ai-usage/generation-tasks/{generation_task_id}", authMw(http.HandlerFunc(h.GetAIUsageByGenerationTask)))
 
 	// Data browser endpoints
 	mux.Handle("GET /api/v1/operation-logs/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
@@ -867,6 +881,276 @@ func (h *Handler) GetLLMCostSummary(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, summary)
 }
 
+// AI Usage Handlers
+
+func (h *Handler) GetAIUsageSummary(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	summary, err := h.service.GetAIUsageSummary(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, summary)
+}
+
+func (h *Handler) GetAIUsageTrend(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	trend, err := h.service.GetAIUsageTrend(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": trend, "count": len(trend)})
+}
+
+func (h *Handler) GetAIUsageByTenant(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, err := h.service.GetAIUsageByTenant(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
+func (h *Handler) GetAIUsageByBusinessDomain(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, err := h.service.GetAIUsageByBusinessDomain(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
+func (h *Handler) GetAIUsageByBillingSubject(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, err := h.service.GetAIUsageByBillingSubject(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
+func (h *Handler) GetAIUsageByModel(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, err := h.service.GetAIUsageByModel(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
+func (h *Handler) ListAIUsageRecords(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, total, err := h.service.ListAIUsageRecords(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, int64(total), req.Page, req.PageSize)
+}
+
+func (h *Handler) GetAIUsageByRecording(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	recordingID, err := strconv.ParseInt(r.PathValue("recording_id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid recording_id")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	resp, err := h.service.GetAIUsageByRecording(r.Context(), recordingID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetAIUsageByContent(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	contentID, err := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	if err != nil || contentID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid content_id")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	resp, err := h.service.GetAIUsageByContent(r.Context(), contentID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetAIUsageByGenerationTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	taskID, err := strconv.ParseInt(r.PathValue("generation_task_id"), 10, 64)
+	if err != nil || taskID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid generation_task_id")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	resp, err := h.service.GetAIUsageByGenerationTask(r.Context(), taskID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 // Metadata Handlers
 
 // GetMetadataFields handles getting metadata fields
@@ -1235,4 +1519,81 @@ func (h *Handler) GetVisitByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httputil.WriteSuccess(w, visit)
+}
+
+func (h *Handler) parseAIUsageRequest(r *http.Request) (AIUsageListRequest, error) {
+	query := r.URL.Query()
+	req := AIUsageListRequest{
+		TenantID:           parseQueryInt64Ptr(query.Get("tenant_id")),
+		BusinessDomain:     parseQueryStringPtr(query.Get("business_domain")),
+		BusinessObjectType: parseQueryStringPtr(query.Get("business_object_type")),
+		BusinessObjectID:   parseQueryInt64Ptr(query.Get("business_object_id")),
+		BillingSubject:     parseQueryStringPtr(query.Get("billing_subject")),
+		BillingScene:       parseQueryStringPtr(query.Get("billing_scene")),
+		RecordingID:        parseQueryInt64Ptr(query.Get("recording_id")),
+		ContentID:          parseQueryInt64Ptr(query.Get("content_id")),
+		GenerationTaskID:   parseQueryInt64Ptr(query.Get("generation_task_id")),
+		Provider:           parseQueryStringPtr(query.Get("provider")),
+		ModelCode:          parseQueryStringPtr(query.Get("model_code")),
+		Success:            parseQueryBoolPtr(query.Get("success")),
+		StartDate:          parseQueryStringPtr(query.Get("start_date")),
+		EndDate:            parseQueryStringPtr(query.Get("end_date")),
+		Page:               parseIntDefault(query.Get("page"), 1),
+		PageSize:           parseIntDefault(query.Get("page_size"), 50),
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+	return req, nil
+}
+
+func (h *Handler) applyAIUsageScope(claims *auth.Claims, req *AIUsageListRequest) error {
+	if claims == nil {
+		return fmt.Errorf("invalid token")
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil {
+			return fmt.Errorf("tenant scope required")
+		}
+		req.TenantID = claims.TenantID
+	}
+	return nil
+}
+
+func parseQueryStringPtr(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value)
+	return &trimmed
+}
+
+func parseQueryInt64Ptr(value string) *int64 {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func parseQueryBoolPtr(value string) *bool {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func parseIntDefault(value string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

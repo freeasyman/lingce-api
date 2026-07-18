@@ -2003,6 +2003,18 @@ const (
 	morningMeetingPromptCode  = "morning_meeting_review_v1"
 )
 
+func newRecordingBillingMetadata(recordingID int64, subject, scene string) *llmgateway.BillingMetadata {
+	return &llmgateway.BillingMetadata{
+		BusinessDomain:     "recording",
+		BusinessObjectType: "recording",
+		BusinessObjectID:   recordingID,
+		BillingSubject:     subject,
+		BillingScene:       scene,
+		BillingRuleVersion: "v1",
+		RecordingID:        recordingID,
+	}
+}
+
 func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantID int64, item *BenchmarkClip) (string, []string) {
 	// 兜底策略：任一步失败都回退模板，保证收录流程可用。
 	fallbackComment, fallbackPoints := buildBenchmarkCommentAndPoints(item)
@@ -2032,6 +2044,7 @@ func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantI
 		FunctionType:  model.FunctionType,
 		Provider:      model.Provider,
 		ModelCode:     model.ModelCode,
+		Billing:       newRecordingBillingMetadata(item.RecordingID, "benchmark_review", "recording_benchmark"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: renderedUserPrompt},
@@ -8121,6 +8134,7 @@ func (s *Service) generateMorningMeetingContent(ctx context.Context, tenantID in
 		FunctionType:  model.FunctionType,
 		Provider:      model.Provider,
 		ModelCode:     model.ModelCode,
+		Billing:       newRecordingBillingMetadata(candidate.RecordingID, "morning_meeting_generation", "morning_meeting"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: renderedUserPrompt},

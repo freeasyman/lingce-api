@@ -63,6 +63,50 @@ type llmModelSelection struct {
 	ModelParams  JSONObject
 }
 
+const aiBillingRuleVersionV1 = "v1"
+
+func newBillingMetadata(domain, objectType string, objectID int64, subject, scene string) *llmgateway.BillingMetadata {
+	return &llmgateway.BillingMetadata{
+		BusinessDomain:     domain,
+		BusinessObjectType: objectType,
+		BusinessObjectID:   objectID,
+		BillingSubject:     subject,
+		BillingScene:       scene,
+		BillingRuleVersion: aiBillingRuleVersionV1,
+	}
+}
+
+func newContentBillingMetadata(req GenerateContentRequest, subject, scene string) *llmgateway.BillingMetadata {
+	billing := newBillingMetadata("content", contentBusinessObjectType(req), contentBusinessObjectID(req), subject, scene)
+	if req.ContentID != nil && *req.ContentID > 0 {
+		billing.ContentID = *req.ContentID
+	}
+	if req.TopicID != nil && *req.TopicID > 0 {
+		billing.TopicID = *req.TopicID
+	}
+	return billing
+}
+
+func contentBusinessObjectID(req GenerateContentRequest) int64 {
+	if req.ContentID != nil && *req.ContentID > 0 {
+		return *req.ContentID
+	}
+	if req.TopicID != nil && *req.TopicID > 0 {
+		return *req.TopicID
+	}
+	return 0
+}
+
+func contentBusinessObjectType(req GenerateContentRequest) string {
+	if req.ContentID != nil && *req.ContentID > 0 {
+		return "content_item"
+	}
+	if req.TopicID != nil && *req.TopicID > 0 {
+		return "topic"
+	}
+	return "content_item"
+}
+
 // Topic Services
 
 // ListTopics retrieves a paginated list of topics
@@ -178,6 +222,7 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
+		Billing:       newBillingMetadata("content", "topic_batch", 0, "topic_generation", "content_topic"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -552,6 +597,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
+		Billing:       newContentBillingMetadata(req, "content_generation", valueOrDefaultStringPtr(req.ContentType, "content")),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -1018,6 +1064,7 @@ func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int6
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
+		Billing:       newContentBillingMetadata(req, "graphic_note_repair", valueOrDefaultStringPtr(req.ContentType, "content")),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: rewritePrompt},
