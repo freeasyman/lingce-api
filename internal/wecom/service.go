@@ -160,6 +160,14 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	}
 	userInfo, err := s.client.GetCorpUserInfo(ctx, corpAccessToken, code)
 	if err != nil {
+		if isWeComAccessTokenExpired(err) {
+			corpAccessToken, err = s.forceResolveTenantAppAccessToken(ctx, app)
+			if err == nil {
+				userInfo, err = s.client.GetCorpUserInfo(ctx, corpAccessToken, code)
+			}
+		}
+	}
+	if err != nil {
 		slog.Warn("wecom oauth login failed: get user info", "corp_id", corpID, "code_prefix", truncateToken(code, 12), "error", err)
 		return nil, err
 	}
@@ -169,7 +177,7 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	if strings.TrimSpace(userInfo.UserID) == "" {
 		return nil, fmt.Errorf("wecom returned empty user id")
 	}
-	userDetail, err := s.client.GetUserDetail(ctx, corpAccessToken, userInfo.UserID)
+	userDetail, corpAccessToken, err := s.getOAuthUserDetail(ctx, app, corpAccessToken, userInfo.UserID, userInfo.UserTicket)
 	if err != nil {
 		slog.Warn("wecom oauth login failed: get user detail", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "error", err)
 		return nil, err
@@ -257,6 +265,14 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 		return err
 	}
 	userDetail, err := s.client.GetUserDetail(ctx, corpAccessToken, strings.TrimSpace(wecomUserID))
+	if err != nil {
+		if isWeComAccessTokenExpired(err) {
+			corpAccessToken, err = s.forceResolveTenantAppAccessToken(ctx, app)
+			if err == nil {
+				userDetail, err = s.client.GetUserDetail(ctx, corpAccessToken, strings.TrimSpace(wecomUserID))
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -446,6 +462,15 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 
 		sendResp, err := s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, req.TargetURL, req.ButtonText)
 		if err != nil {
+			if isWeComAccessTokenExpired(err) {
+				corpToken, err = s.forceResolveTenantAppAccessToken(ctx, app)
+				if err == nil {
+					tokenCache[binding.CorpID] = corpToken
+					sendResp, err = s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, req.TargetURL, req.ButtonText)
+				}
+			}
+		}
+		if err != nil {
 			_ = s.store.UpdateMessageLogStatus(ctx, logID, "failed", err.Error(), "")
 			resp.Failed++
 			continue
@@ -546,10 +571,71 @@ func (s *Service) TestTenantAppToken(ctx context.Context, id int64) (*TenantWeCo
 }
 
 func (s *Service) resolveTenantAppAccessToken(ctx context.Context, app *TenantWeComAppRecord) (string, error) {
+	return s.resolveTenantAppAccessTokenWithForce(ctx, app, false)
+}
+
+func (s *Service) forceResolveTenantAppAccessToken(ctx context.Context, app *TenantWeComAppRecord) (string, error) {
+	return s.resolveTenantAppAccessTokenWithForce(ctx, app, true)
+}
+
+func (s *Service) getOAuthUserDetail(ctx context.Context, app *TenantWeComAppRecord, corpAccessToken, userID, userTicket string) (*userDetailResponse, string, error) {
+	userID = strings.TrimSpace(userID)
+	userTicket = strings.TrimSpace(userTicket)
+	if userTicket != "" {
+		detail, token, err := s.getAuthUserDetailWithRetry(ctx, app, corpAccessToken, userTicket)
+		if err == nil && normalizePhone(detail.Mobile) != "" {
+			if strings.TrimSpace(detail.UserID) == "" {
+				detail.UserID = userID
+			}
+			return detail, token, nil
+		}
+		if err != nil {
+			slog.Warn("wecom oauth private user detail unavailable, fallback to directory detail", "corp_id", app.CorpID, "wecom_user_id", userID, "error", err)
+		}
+	}
+
+	detail, token, err := s.getDirectoryUserDetailWithRetry(ctx, app, corpAccessToken, userID)
+	if err != nil {
+		return nil, token, err
+	}
+	return detail, token, nil
+}
+
+func (s *Service) getAuthUserDetailWithRetry(ctx context.Context, app *TenantWeComAppRecord, corpAccessToken, userTicket string) (*userDetailResponse, string, error) {
+	detail, err := s.client.GetAuthUserDetail(ctx, corpAccessToken, userTicket)
+	if err != nil {
+		if isWeComAccessTokenExpired(err) {
+			refreshedToken, refreshErr := s.forceResolveTenantAppAccessToken(ctx, app)
+			if refreshErr != nil {
+				return nil, corpAccessToken, refreshErr
+			}
+			corpAccessToken = refreshedToken
+			detail, err = s.client.GetAuthUserDetail(ctx, corpAccessToken, userTicket)
+		}
+	}
+	return detail, corpAccessToken, err
+}
+
+func (s *Service) getDirectoryUserDetailWithRetry(ctx context.Context, app *TenantWeComAppRecord, corpAccessToken, userID string) (*userDetailResponse, string, error) {
+	detail, err := s.client.GetUserDetail(ctx, corpAccessToken, userID)
+	if err != nil {
+		if isWeComAccessTokenExpired(err) {
+			refreshedToken, refreshErr := s.forceResolveTenantAppAccessToken(ctx, app)
+			if refreshErr != nil {
+				return nil, corpAccessToken, refreshErr
+			}
+			corpAccessToken = refreshedToken
+			detail, err = s.client.GetUserDetail(ctx, corpAccessToken, userID)
+		}
+	}
+	return detail, corpAccessToken, err
+}
+
+func (s *Service) resolveTenantAppAccessTokenWithForce(ctx context.Context, app *TenantWeComAppRecord, force bool) (string, error) {
 	if app == nil {
 		return "", fmt.Errorf("tenant wecom app not found")
 	}
-	if strings.TrimSpace(app.AccessToken) != "" && app.AccessTokenExpiredAt != nil && time.Until(*app.AccessTokenExpiredAt) > 5*time.Minute {
+	if !force && strings.TrimSpace(app.AccessToken) != "" && app.AccessTokenExpiredAt != nil && time.Until(*app.AccessTokenExpiredAt) > 5*time.Minute {
 		return app.AccessToken, nil
 	}
 	secret, err := s.secretProtector.Decrypt(app.SecretCiphertext)
@@ -567,6 +653,14 @@ func (s *Service) resolveTenantAppAccessToken(ctx context.Context, app *TenantWe
 	app.AccessToken = token
 	app.AccessTokenExpiredAt = &expiredAt
 	return token, nil
+}
+
+func isWeComAccessTokenExpired(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == 42001 || apiErr.Code == 40014
 }
 
 func (s *Service) toTenantAppResponse(ctx context.Context, item *TenantWeComAppRecord) *TenantWeComAppResponse {

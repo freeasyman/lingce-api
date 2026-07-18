@@ -21,6 +21,15 @@ type apiErrorResponse struct {
 	ErrMsg  string `json:"errmsg"`
 }
 
+type APIError struct {
+	Code    int
+	Message string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("wecom api error: %d %s", e.Code, e.Message)
+}
+
 type corpTokenResponse struct {
 	apiErrorResponse
 	AccessToken string `json:"access_token"`
@@ -85,6 +94,16 @@ func (c *Client) GetUserDetail(ctx context.Context, corpAccessToken, userID stri
 	var resp userDetailResponse
 	path := "/cgi-bin/user/get?access_token=" + url.QueryEscape(corpAccessToken) + "&userid=" + url.QueryEscape(userID)
 	err := c.getJSON(ctx, path, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetAuthUserDetail(ctx context.Context, corpAccessToken, userTicket string) (*userDetailResponse, error) {
+	var resp userDetailResponse
+	path := "/cgi-bin/auth/getuserdetail?access_token=" + url.QueryEscape(corpAccessToken)
+	err := c.postJSON(ctx, path, map[string]string{"user_ticket": userTicket}, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +187,7 @@ func checkAPIError(v any) error {
 		return nil
 	}
 	if apiErr.ErrCode != 0 {
-		return fmt.Errorf("wecom api error: %d %s", apiErr.ErrCode, apiErr.ErrMsg)
+		return &APIError{Code: apiErr.ErrCode, Message: apiErr.ErrMsg}
 	}
 	return nil
 }
