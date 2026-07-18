@@ -20,11 +20,6 @@ func (h *Handler) TestDeviceRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "Admin access required")
-		return
-	}
-
 	deviceIDStr := r.PathValue("device_id")
 	if deviceIDStr == "" {
 		httputil.WriteBadRequest(w, "Device ID is required")
@@ -38,6 +33,10 @@ func (h *Handler) TestDeviceRecording(w http.ResponseWriter, r *http.Request) {
 	device, err := h.service.GetDeviceByID(r.Context(), deviceID)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !canControlDeviceRecording(claims, device.TenantID) {
+		httputil.WriteForbidden(w, "Device access denied")
 		return
 	}
 
@@ -89,6 +88,19 @@ func (h *Handler) TestDeviceRecording(w http.ResponseWriter, r *http.Request) {
 		"analysis_ok":  analysisOK,
 		"chain_status": map[string]bool{"stop": true, "callback": callbackOK, "analysis": analysisOK},
 	})
+}
+
+func canControlDeviceRecording(claims *auth.Claims, deviceTenantID *int64) bool {
+	if claims == nil {
+		return false
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return true
+	}
+	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		return false
+	}
+	return claims.TenantID != nil && deviceTenantID != nil && *claims.TenantID == *deviceTenantID
 }
 
 func (h *Handler) waitRecordingChainStatus(r *http.Request, deviceNo string, timeout time.Duration) (bool, bool) {
