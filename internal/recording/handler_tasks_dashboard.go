@@ -246,7 +246,7 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 			NULLIF(e.role, '') AS role
 		FROM employees e
 		WHERE e.tenant_id = ANY($1)
-		  AND COALESCE(e.is_active, 1) = 1
+		  AND lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 		  AND e.deleted_at IS NULL
 		ORDER BY e.id DESC
 	`, scope.TenantIDs)
@@ -331,7 +331,7 @@ func (h *Handler) ListEmployeePartnerships(w http.ResponseWriter, r *http.Reques
 	rows, err := h.service.store.pool.Query(r.Context(), `
 		SELECT id, tenant_id, primary_employee_id AS employee_id, partner_employee_id AS partner_id, COALESCE(relationship_type, 'assistant') AS relationship, created_at
 		FROM employee_partnerships
-		WHERE tenant_id = $1 AND COALESCE(is_active, true) = true
+		WHERE tenant_id = $1 AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 		ORDER BY created_at DESC
 	`, tenantID)
 	if err != nil {
@@ -436,7 +436,7 @@ func (h *Handler) DeleteEmployeePartnership(w http.ResponseWriter, r *http.Reque
 	if _, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE employee_partnerships
 		SET is_active = false, updated_at = NOW()
-		WHERE id = $1 AND COALESCE(is_active, true) = true
+		WHERE id = $1 AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 	`, id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

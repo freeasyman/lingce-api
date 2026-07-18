@@ -413,11 +413,11 @@ func resolveConfigTenantID(claims *auth.Claims, requestedTenantID int64) (int64,
 	if claims == nil {
 		return 0, fmt.Errorf("invalid token")
 	}
-	if claims.UserType == auth.UserTypeEmployee || claims.UserType == auth.UserTypeMobile {
-		if claims.TenantID == nil || *claims.TenantID <= 0 {
-			return 0, fmt.Errorf("tenant_id missing in token")
-		}
+	if claims.TenantID != nil && *claims.TenantID > 0 {
 		return *claims.TenantID, nil
+	}
+	if claims.UserType == auth.UserTypeEmployee || claims.UserType == auth.UserTypeMobile {
+		return 0, fmt.Errorf("tenant_id missing in token")
 	}
 	if requestedTenantID <= 0 {
 		return 0, fmt.Errorf("tenant_id is required")

@@ -228,7 +228,7 @@ func (s *Store) GetRecordingAlertSource(ctx context.Context, recordingID int64) 
 }
 
 func (s *Store) ListCCRules(ctx context.Context, tenantID int64, employeeID *int64) ([]*CCRule, error) {
-	where := []string{"r.tenant_id = $1", "COALESCE(r.is_active, true) = true"}
+	where := []string{"r.tenant_id = $1", "lower(COALESCE(r.is_active::text, 'true')) IN ('1', 't', 'true', 'yes')"}
 	args := []interface{}{tenantID}
 	if employeeID != nil && *employeeID > 0 {
 		args = append(args, *employeeID)
@@ -239,7 +239,7 @@ func (s *Store) ListCCRules(ctx context.Context, tenantID int64, employeeID *int
 		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '员工#' || e.id::text) AS employee_name,
 		       r.cc_employee_id,
 		       COALESCE(NULLIF(cc.full_name, ''), NULLIF(cc.name, ''), cc.phone, '员工#' || cc.id::text) AS cc_employee_name,
-		       COALESCE(r.is_active, true), r.created_at, r.updated_at
+		       lower(COALESCE(r.is_active::text, 'true')) IN ('1', 't', 'true', 'yes'), r.created_at, r.updated_at
 		FROM opportunity_alert_cc_rules r
 		JOIN employees e ON e.id = r.employee_id AND e.tenant_id = r.tenant_id AND e.deleted_at IS NULL
 		JOIN employees cc ON cc.id = r.cc_employee_id AND cc.tenant_id = r.tenant_id AND cc.deleted_at IS NULL
@@ -266,7 +266,10 @@ func (s *Store) UpsertCCRule(ctx context.Context, tenantID, employeeID, ccEmploy
 	if err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM employees
-		WHERE tenant_id = $1 AND id = ANY($2::bigint[]) AND deleted_at IS NULL AND COALESCE(is_active, true) = true
+		WHERE tenant_id = $1
+		  AND id = ANY($2::bigint[])
+		  AND deleted_at IS NULL
+		  AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 	`, tenantID, []int64{employeeID, ccEmployeeID}).Scan(&sameTenantCount); err != nil {
 		return nil, err
 	}
@@ -299,7 +302,9 @@ func (s *Store) DeleteCCRule(ctx context.Context, tenantID, ruleID int64) error 
 	result, err := s.pool.Exec(ctx, `
 		UPDATE opportunity_alert_cc_rules
 		SET is_active = false, updated_at = NOW()
-		WHERE tenant_id = $1 AND id = $2 AND COALESCE(is_active, true) = true
+		WHERE tenant_id = $1
+		  AND id = $2
+		  AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 	`, tenantID, ruleID)
 	if err != nil {
 		return err
@@ -314,7 +319,9 @@ func (s *Store) ListActiveCCEmployeeIDs(ctx context.Context, tenantID, employeeI
 	rows, err := s.pool.Query(ctx, `
 		SELECT cc_employee_id
 		FROM opportunity_alert_cc_rules
-		WHERE tenant_id = $1 AND employee_id = $2 AND COALESCE(is_active, true) = true
+		WHERE tenant_id = $1
+		  AND employee_id = $2
+		  AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
 		ORDER BY id ASC
 	`, tenantID, employeeID)
 	if err != nil {

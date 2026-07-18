@@ -76,7 +76,7 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 		var isActive bool
 		err := authValidationPool.QueryRow(ctx, `
 			SELECT COALESCE(session_version, 1) AS session_version,
-			       CASE WHEN COALESCE(is_active, 1) <> 0 THEN true ELSE false END AS is_active
+			       CASE WHEN lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN true ELSE false END AS is_active
 			FROM operations_admins
 			WHERE id = $1
 		`, claims.UserID).Scan(&sessionVersion, &isActive)
@@ -98,7 +98,7 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 		var tenantValidTo *time.Time
 		err := authValidationPool.QueryRow(ctx, `
 			SELECT COALESCE(e.session_version, 1) AS session_version,
-			       CASE WHEN COALESCE(e.is_active, 1) <> 0 THEN true ELSE false END AS employee_active,
+			       CASE WHEN lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN true ELSE false END AS employee_active,
 			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active,
 			       COALESCE(t.valid_to, t.service_expired_on) AS tenant_valid_to
 			FROM employees e

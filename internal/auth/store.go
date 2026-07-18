@@ -31,7 +31,7 @@ func (s *Store) GetAdminByUsername(ctx context.Context, username string) (*Opera
 		       COALESCE(o.name, '') AS org_name,
 		       COALESCE(o.type, '') AS org_type,
 		       COALESCE(a.session_version, 1) AS session_version,
-		       (COALESCE(a.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(a.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       a.created_at, COALESCE(a.updated_at, a.created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins a
 		LEFT JOIN ops_organizations o ON o.id = a.org_id
@@ -91,7 +91,7 @@ func (s *Store) GetAdminByID(ctx context.Context, adminID int64) (*OperationsAdm
 		       COALESCE(o.name, '') AS org_name,
 		       COALESCE(o.type, '') AS org_type,
 		       COALESCE(a.session_version, 1) AS session_version,
-		       (COALESCE(a.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(a.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       a.created_at, COALESCE(a.updated_at, a.created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM operations_admins a
 		LEFT JOIN ops_organizations o ON o.id = a.org_id
@@ -137,7 +137,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
-		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
 		JOIN tenants t ON t.id = e.tenant_id
@@ -187,7 +187,7 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
-		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
 		JOIN tenants t ON t.id = e.tenant_id
@@ -288,7 +288,7 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
-		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
 		JOIN tenants t ON t.id = e.tenant_id
@@ -338,7 +338,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
-		       (COALESCE(e.is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
 		JOIN tenants t ON t.id = e.tenant_id
@@ -400,7 +400,7 @@ func (s *Store) GetLatestEmployeeRoleCode(ctx context.Context, tenantID, employe
 func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, error) {
 	query := `
 		SELECT id, name, COALESCE(code, '') AS code,
-		       (COALESCE(is_active, 1) <> 0) AS is_active,
+		       lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       COALESCE(valid_from, service_started_on) AS valid_from,
 		       COALESCE(valid_to, service_expired_on) AS valid_to,
 		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
