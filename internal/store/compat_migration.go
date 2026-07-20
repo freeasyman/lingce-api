@@ -1927,8 +1927,33 @@ func normalizeOperationsMenus(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func ensureOperationsNavigationMenus(ctx context.Context, pool *pgxpool.Pool) error {
-	_ = ctx
-	_ = pool
+	statements := []string{
+		`INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
+		 SELECT '工牌台账', 'badges_ledger', '/badges/ledger', NULL, 1501, TRUE, NOW(), NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM operations_menus WHERE deleted_at IS NULL AND path = '/badges/ledger'
+		 )`,
+		`INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
+		 SELECT '入库验收', 'badges_acceptance', '/badges/acceptance', NULL, 1502, TRUE, NOW(), NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM operations_menus WHERE deleted_at IS NULL AND path = '/badges/acceptance'
+		 )`,
+		`INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
+		 SELECT '运行监控', 'badges_monitoring', '/badges/monitoring', NULL, 1503, TRUE, NOW(), NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM operations_menus WHERE deleted_at IS NULL AND path = '/badges/monitoring'
+		 )`,
+		`INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
+		 SELECT '工单处理', 'badges_exceptions', '/badges/exceptions', NULL, 1504, TRUE, NOW(), NOW()
+		 WHERE NOT EXISTS (
+		 	SELECT 1 FROM operations_menus WHERE deleted_at IS NULL AND path = '/badges/exceptions'
+		 )`,
+	}
+	for _, stmt := range statements {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("ensure operations navigation menus: %w", err)
+		}
+	}
 	return nil
 }
 
