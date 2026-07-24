@@ -22,3 +22,18 @@ func TestNewContentBillingMetadataSetsDedicatedIDs(t *testing.T) {
 		t.Fatalf("unexpected billing fields: %#v", billing)
 	}
 }
+
+func TestContentCallerModuleMapsSubjects(t *testing.T) {
+	cases := map[string]string{
+		"topic_generation":    "content.topic_generation",
+		"content_generation":  "content.content_generation",
+		"graphic_note_repair": "content.graphic_note_repair",
+		"unexpected_subject":  "content",
+	}
+
+	for subject, want := range cases {
+		if got := contentCallerModule(subject); got != want {
+			t.Fatalf("contentCallerModule(%q) = %q, want %q", subject, got, want)
+		}
+	}
+}

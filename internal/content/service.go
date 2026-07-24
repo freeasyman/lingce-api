@@ -87,6 +87,19 @@ func newContentBillingMetadata(req GenerateContentRequest, subject, scene string
 	return billing
 }
 
+func contentCallerModule(subject string) string {
+	switch strings.TrimSpace(subject) {
+	case "topic_generation":
+		return "content.topic_generation"
+	case "content_generation":
+		return "content.content_generation"
+	case "graphic_note_repair":
+		return "content.graphic_note_repair"
+	default:
+		return "content"
+	}
+}
+
 func contentBusinessObjectID(req GenerateContentRequest) int64 {
 	if req.ContentID != nil && *req.ContentID > 0 {
 		return *req.ContentID
@@ -218,7 +231,7 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
-		CallerModule:  "content",
+		CallerModule:  contentCallerModule("topic_generation"),
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
@@ -593,7 +606,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
-		CallerModule:  "content",
+		CallerModule:  contentCallerModule("content_generation"),
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
@@ -1060,7 +1073,7 @@ func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int6
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
-		CallerModule:  "content",
+		CallerModule:  contentCallerModule("graphic_note_repair"),
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
