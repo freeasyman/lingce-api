@@ -3,6 +3,7 @@ package wecom
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -183,7 +184,8 @@ func (s *Store) UpsertUserBinding(ctx context.Context, record UserBindingRecord)
 
 func (s *Store) GetUserBinding(ctx context.Context, corpID, wecomUserID string) (*UserBindingRecord, error) {
 	var item UserBindingRecord
-	err := s.pool.QueryRow(ctx, `SELECT corp_id, wecom_user_id, employee_id, tenant_id, source FROM wecom_user_bindings WHERE corp_id = $1 AND wecom_user_id = $2`, corpID, wecomUserID).Scan(
+	err := s.pool.QueryRow(ctx, `SELECT id, corp_id, wecom_user_id, employee_id, tenant_id, source FROM wecom_user_bindings WHERE corp_id = $1 AND wecom_user_id = $2`, corpID, wecomUserID).Scan(
+		&item.ID,
 		&item.CorpID,
 		&item.WeComUserID,
 		&item.EmployeeID,
@@ -197,6 +199,141 @@ func (s *Store) GetUserBinding(ctx context.Context, corpID, wecomUserID string) 
 		return nil, err
 	}
 	return &item, nil
+}
+
+func (s *Store) ListBindingStatuses(ctx context.Context, tenantID *int64, keyword, status string, page, pageSize int) ([]*BindingStatusRecord, int, error) {
+	where := []string{"e.deleted_at IS NULL"}
+	args := []interface{}{}
+	if tenantID != nil && *tenantID > 0 {
+		args = append(args, *tenantID)
+		where = append(where, fmt.Sprintf("e.tenant_id = $%d", len(args)))
+	}
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		args = append(args, "%"+keyword+"%")
+		where = append(where, fmt.Sprintf(`(
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') ILIKE $%d
+			OR COALESCE(e.phone, '') ILIKE $%d
+			OR COALESCE(wub.wecom_user_id, '') ILIKE $%d
+			OR COALESCE(wta.corp_name, '') ILIKE $%d
+			OR COALESCE(wta.corp_id, '') ILIKE $%d
+		)`, len(args), len(args), len(args), len(args), len(args)))
+	}
+	switch strings.TrimSpace(status) {
+	case "bound":
+		where = append(where, "wub.id IS NOT NULL")
+	case "unbound":
+		where = append(where, "wub.id IS NULL")
+	}
+	whereClause := strings.Join(where, " AND ")
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	countSQL := `
+		SELECT COUNT(*)
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id AND t.deleted_at IS NULL
+		LEFT JOIN wecom_user_bindings wub ON wub.employee_id = e.id
+		LEFT JOIN tenant_wecom_apps wta ON wta.tenant_id = e.tenant_id
+		WHERE ` + whereClause
+	var total int
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	args = append(args, pageSize, offset)
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			wub.id,
+			e.tenant_id,
+			COALESCE(t.name, ''),
+			e.id,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '员工#' || e.id::text) AS employee_name,
+			COALESCE(e.phone, ''),
+			COALESCE(wub.corp_id, wta.corp_id, ''),
+			COALESCE(wta.corp_name, ''),
+			COALESCE(wub.wecom_user_id, ''),
+			COALESCE(wub.source, ''),
+			COALESCE(wta.enabled, false),
+			(wub.id IS NOT NULL) AS is_bound,
+			wub.created_at,
+			wub.updated_at
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id AND t.deleted_at IS NULL
+		LEFT JOIN wecom_user_bindings wub ON wub.employee_id = e.id
+		LEFT JOIN tenant_wecom_apps wta ON wta.tenant_id = e.tenant_id
+		WHERE `+whereClause+`
+		ORDER BY e.tenant_id ASC, e.id ASC
+		LIMIT $`+fmt.Sprintf("%d", len(args)-1)+` OFFSET $`+fmt.Sprintf("%d", len(args))+`
+	`, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := make([]*BindingStatusRecord, 0)
+	for rows.Next() {
+		var item BindingStatusRecord
+		if err := rows.Scan(
+			&item.BindingID,
+			&item.TenantID,
+			&item.TenantName,
+			&item.EmployeeID,
+			&item.EmployeeName,
+			&item.EmployeePhone,
+			&item.CorpID,
+			&item.CorpName,
+			&item.WeComUserID,
+			&item.Source,
+			&item.AppEnabled,
+			&item.IsBound,
+			&item.BoundAt,
+			&item.BindingUpdated,
+		); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, &item)
+	}
+	return items, total, rows.Err()
+}
+
+func (s *Store) GetBindingByID(ctx context.Context, id int64) (*UserBindingRecord, error) {
+	var item UserBindingRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, corp_id, wecom_user_id, employee_id, tenant_id, source
+		FROM wecom_user_bindings
+		WHERE id = $1
+	`, id).Scan(
+		&item.ID,
+		&item.CorpID,
+		&item.WeComUserID,
+		&item.EmployeeID,
+		&item.TenantID,
+		&item.Source,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (s *Store) DeleteBinding(ctx context.Context, id int64) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM wecom_user_bindings WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("binding not found")
+	}
+	return nil
 }
 
 func (s *Store) FindUniqueEmployeeIDByPhone(ctx context.Context, phone string) (*int64, error) {

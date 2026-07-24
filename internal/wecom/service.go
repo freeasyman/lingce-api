@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -246,6 +247,10 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 }
 
 func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64) error {
+	return s.bindEmployee(ctx, corpID, wecomUserID, employeeID, true)
+}
+
+func (s *Service) bindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64, enforcePhoneMatch bool) error {
 	app, err := s.store.GetTenantAppByCorpID(ctx, strings.TrimSpace(corpID))
 	if err != nil {
 		return err
@@ -279,7 +284,7 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	if normalizePhone(userDetail.Mobile) == "" {
 		return fmt.Errorf("当前企业微信账号未返回手机号，请联系管理员检查企业微信通讯录")
 	}
-	if normalizePhone(employee.Phone) != normalizePhone(userDetail.Mobile) {
+	if enforcePhoneMatch && normalizePhone(employee.Phone) != normalizePhone(userDetail.Mobile) {
 		return fmt.Errorf("当前登录手机号与企业微信通讯录手机号不一致，请使用本人账号或联系管理员")
 	}
 	existing, err := s.store.GetUserBinding(ctx, corpID, wecomUserID)
@@ -310,6 +315,26 @@ func normalizePhone(phone string) string {
 		}
 	}
 	return b.String()
+}
+
+func attachWeComEntryParams(targetURL string, corpID string, agentID int64) string {
+	target := strings.TrimSpace(targetURL)
+	if target == "" || strings.TrimSpace(corpID) == "" || agentID <= 0 {
+		return target
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	query := parsed.Query()
+	if query.Get("corp_id") == "" && query.Get("corpid") == "" {
+		query.Set("corp_id", strings.TrimSpace(corpID))
+	}
+	if query.Get("agent_id") == "" && query.Get("agentid") == "" {
+		query.Set("agent_id", fmt.Sprintf("%d", agentID))
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessageRequest) (*InternalSendMessageResponse, error) {
@@ -363,6 +388,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			}
 			continue
 		}
+		targetURL := attachWeComEntryParams(req.TargetURL, binding.CorpID, binding.AgentID)
 		app, ok := appCache[binding.CorpID]
 		if !ok {
 			app, err = s.store.GetTenantAppByCorpID(ctx, binding.CorpID)
@@ -376,7 +402,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 					DedupeKey:      perRecipientKey,
 					Title:          req.Title,
 					Content:        req.Content,
-					TargetURL:      req.TargetURL,
+					TargetURL:      targetURL,
 					Status:         "failed",
 					ErrorMessage:   err.Error(),
 					RequestPayload: mustJSON(map[string]any{"message_scene": req.MessageScene, "employee_id": employeeID}),
@@ -402,7 +428,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 				DedupeKey:      perRecipientKey,
 				Title:          req.Title,
 				Content:        req.Content,
-				TargetURL:      req.TargetURL,
+				TargetURL:      targetURL,
 				Status:         "skipped_unbound",
 				RequestPayload: mustJSON(map[string]any{"message_scene": req.MessageScene, "employee_id": employeeID}),
 				BizDate:        req.BizDate,
@@ -423,7 +449,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			"wecom_user_id": binding.WeComUserID,
 			"title":         req.Title,
 			"content":       req.Content,
-			"target_url":    req.TargetURL,
+			"target_url":    targetURL,
 			"button_text":   req.ButtonText,
 			"extra":         req.Extra,
 		})
@@ -436,7 +462,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			DedupeKey:      perRecipientKey,
 			Title:          req.Title,
 			Content:        req.Content,
-			TargetURL:      req.TargetURL,
+			TargetURL:      targetURL,
 			Status:         "pending",
 			RequestPayload: requestPayload,
 			BizDate:        req.BizDate,
@@ -460,13 +486,13 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			tokenCache[binding.CorpID] = corpToken
 		}
 
-		sendResp, err := s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, req.TargetURL, req.ButtonText)
+		sendResp, err := s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, targetURL, req.ButtonText)
 		if err != nil {
 			if isWeComAccessTokenExpired(err) {
 				corpToken, err = s.forceResolveTenantAppAccessToken(ctx, app)
 				if err == nil {
 					tokenCache[binding.CorpID] = corpToken
-					sendResp, err = s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, req.TargetURL, req.ButtonText)
+					sendResp, err = s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, targetURL, req.ButtonText)
 				}
 			}
 		}
@@ -492,6 +518,54 @@ func (s *Service) ListTenantApps(ctx context.Context, tenantID *int64) ([]*Tenan
 		out = append(out, s.toTenantAppResponse(ctx, item))
 	}
 	return out, nil
+}
+
+func (s *Service) ListBindingStatuses(ctx context.Context, tenantID *int64, keyword, status string, page, pageSize int) ([]*BindingStatusResponse, int, error) {
+	items, total, err := s.store.ListBindingStatuses(ctx, tenantID, keyword, status, page, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp := make([]*BindingStatusResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, toBindingStatusResponse(item))
+	}
+	return resp, total, nil
+}
+
+func (s *Service) AdminBindEmployee(ctx context.Context, req AdminBindingRequest) error {
+	if req.TenantID <= 0 {
+		return fmt.Errorf("tenant_id is required")
+	}
+	if req.EmployeeID <= 0 {
+		return fmt.Errorf("employee_id is required")
+	}
+	wecomUserID := strings.TrimSpace(req.WeComUserID)
+	if wecomUserID == "" {
+		return fmt.Errorf("wecom_user_id is required")
+	}
+	corpID := strings.TrimSpace(req.CorpID)
+	if corpID == "" {
+		app, err := s.store.GetTenantAppByTenantID(ctx, req.TenantID)
+		if err != nil {
+			return err
+		}
+		corpID = strings.TrimSpace(app.CorpID)
+	}
+	if corpID == "" {
+		return fmt.Errorf("corp_id is required")
+	}
+	return s.bindEmployee(ctx, corpID, wecomUserID, req.EmployeeID, false)
+}
+
+func (s *Service) DeleteBinding(ctx context.Context, id int64) error {
+	item, err := s.store.GetBindingByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if item == nil {
+		return fmt.Errorf("binding not found")
+	}
+	return s.store.DeleteBinding(ctx, id)
 }
 
 func (s *Service) GetTenantApp(ctx context.Context, id int64) (*TenantWeComAppResponse, error) {
@@ -528,14 +602,22 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	if strings.TrimSpace(secretCiphertext) == "" {
 		return nil, fmt.Errorf("secret is required")
 	}
+	token := strings.TrimSpace(req.Token)
+	if token == "" && current != nil {
+		token = current.Token
+	}
+	encodingAESKey := strings.TrimSpace(req.EncodingAESKey)
+	if encodingAESKey == "" && current != nil {
+		encodingAESKey = current.EncodingAESKey
+	}
 	item, err := s.store.UpsertTenantApp(ctx, TenantWeComAppRecord{
 		TenantID:         req.TenantID,
 		CorpID:           strings.TrimSpace(req.CorpID),
 		CorpName:         strings.TrimSpace(req.CorpName),
 		AgentID:          req.AgentID,
 		SecretCiphertext: secretCiphertext,
-		Token:            strings.TrimSpace(req.Token),
-		EncodingAESKey:   strings.TrimSpace(req.EncodingAESKey),
+		Token:            token,
+		EncodingAESKey:   encodingAESKey,
 		HomeURL:          strings.TrimSpace(req.HomeURL),
 		TrustedDomain:    strings.TrimSpace(req.TrustedDomain),
 		JSAPIDomain:      strings.TrimSpace(req.JSAPIDomain),
@@ -698,6 +780,35 @@ func (s *Service) toTenantAppResponse(ctx context.Context, item *TenantWeComAppR
 	if item.LastSyncAt != nil {
 		v := formatTime(*item.LastSyncAt)
 		resp.LastSyncAt = &v
+	}
+	return resp
+}
+
+func toBindingStatusResponse(item *BindingStatusRecord) *BindingStatusResponse {
+	if item == nil {
+		return nil
+	}
+	resp := &BindingStatusResponse{
+		BindingID:      item.BindingID,
+		TenantID:       item.TenantID,
+		TenantName:     item.TenantName,
+		EmployeeID:     item.EmployeeID,
+		EmployeeName:   item.EmployeeName,
+		EmployeePhone:  item.EmployeePhone,
+		CorpID:         item.CorpID,
+		CorpName:       item.CorpName,
+		WeComUserID:    item.WeComUserID,
+		Source:         item.Source,
+		AppEnabled:     item.AppEnabled,
+		IsBound:        item.IsBound,
+	}
+	if item.BoundAt != nil {
+		v := formatTime(*item.BoundAt)
+		resp.BoundAt = &v
+	}
+	if item.BindingUpdated != nil {
+		v := formatTime(*item.BindingUpdated)
+		resp.BindingUpdated = &v
 	}
 	return resp
 }

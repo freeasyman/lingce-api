@@ -17,6 +17,66 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func (s *Store) ListForAdmin(ctx context.Context, req AdminListRequest) ([]*Alert, int, error) {
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+	where := []string{"1=1"}
+	args := []interface{}{}
+	if req.TenantID != nil && *req.TenantID > 0 {
+		args = append(args, *req.TenantID)
+		where = append(where, fmt.Sprintf("a.tenant_id = $%d", len(args)))
+	}
+	if status := strings.TrimSpace(req.Status); status != "" {
+		args = append(args, status)
+		where = append(where, fmt.Sprintf("a.status = $%d", len(args)))
+	}
+	if keyword := strings.TrimSpace(req.Keyword); keyword != "" {
+		args = append(args, "%"+keyword+"%")
+		where = append(where, fmt.Sprintf(`(
+			COALESCE(a.title, '') ILIKE $%d
+			OR COALESCE(a.summary, '') ILIKE $%d
+			OR COALESCE(a.reason, '') ILIKE $%d
+			OR COALESCE(a.customer_name, '') ILIKE $%d
+			OR a.recording_id::text ILIKE $%d
+			OR a.employee_id::text ILIKE $%d
+		)`, len(args), len(args), len(args), len(args), len(args), len(args)))
+	}
+	whereClause := strings.Join(where, " AND ")
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM opportunity_alerts a WHERE "+whereClause, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, req.PageSize, (req.Page-1)*req.PageSize)
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id, a.tenant_id, a.recording_id, a.employee_id, a.customer_id, COALESCE(a.customer_name, ''),
+		       a.alert_type, a.title, COALESCE(a.summary, ''), COALESCE(a.reason, ''), COALESCE(a.customer_objection, ''),
+		       COALESCE(a.evidence, ''), COALESCE(a.suggested_action, ''), COALESCE(a.suggested_script, ''),
+		       COALESCE(a.priority, 'medium'), a.status, a.viewed_at, a.handled_at, a.ignored_at,
+		       a.dedupe_key, a.raw_payload, a.created_at, a.updated_at,
+		       NULL::text, NULL::timestamp
+		FROM opportunity_alerts a
+		WHERE `+whereClause+`
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items, err := scanAlerts(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (s *Store) ListForEmployee(ctx context.Context, tenantID, employeeID int64, req ListRequest) ([]*Alert, int, error) {
 	if req.Page <= 0 {
 		req.Page = 1
@@ -201,13 +261,13 @@ func (s *Store) GetRecordingAlertSource(ctx context.Context, recordingID int64) 
 		       r.tenant_id,
 		       r.employee_id,
 		       r.customer_id,
-		       COALESCE(NULLIF(c.name, ''), NULLIF(r.patient_name, ''), '') AS customer_name,
-		       COALESCE(NULLIF(r.business_scope, ''), 'unknown') AS business_scope,
-		       COALESCE(r.analysis_result, '{}'::jsonb),
-		       COALESCE(r.analysis_display, '{}'::jsonb)
-		FROM recordings r
-		LEFT JOIN customers c ON c.id = r.customer_id
-		WHERE r.id = $1 AND r.deleted_at IS NULL
+	       COALESCE(NULLIF(c.name, ''), '') AS customer_name,
+	       COALESCE(NULLIF(r.business_scope, ''), 'unknown') AS business_scope,
+	       COALESCE(r.analysis_result::jsonb, '{}'::jsonb),
+	       COALESCE(r.analysis_display, '{}'::jsonb)
+	FROM recordings r
+	LEFT JOIN customers c ON c.id = r.customer_id
+	WHERE r.id = $1
 	`, recordingID).Scan(
 		&item.ID,
 		&item.TenantID,
@@ -381,6 +441,26 @@ func (s *Store) SyncWeComDeliveryStatuses(ctx context.Context, alertID int64, de
 	return err
 }
 
+func (s *Store) SyncWeComDeliveryStatusesForEmployees(ctx context.Context, alertID int64, dedupeKey string, employeeIDs []int64) error {
+	if len(employeeIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE opportunity_alert_recipients r
+		SET delivery_status = COALESCE(w.status, r.delivery_status),
+		    wecom_message_log_id = w.id,
+		    sent_at = CASE WHEN w.status = 'sent' THEN COALESCE(r.sent_at, w.updated_at, NOW()) ELSE r.sent_at END,
+		    updated_at = NOW()
+		FROM wecom_message_logs w
+		WHERE r.alert_id = $1
+		  AND r.employee_id = ANY($3::bigint[])
+		  AND w.message_scene = 'opportunity_alert'
+		  AND w.employee_id = r.employee_id
+		  AND w.dedupe_key = $2 || ':' || r.employee_id::text
+	`, alertID, dedupeKey, employeeIDs)
+	return err
+}
+
 func (s *Store) GetByID(ctx context.Context, alertID int64) (*Alert, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, recording_id, employee_id, customer_id, COALESCE(customer_name, ''),
@@ -392,6 +472,113 @@ func (s *Store) GetByID(ctx context.Context, alertID int64) (*Alert, error) {
 		FROM opportunity_alerts WHERE id = $1
 	`, alertID)
 	return scanAlert(row)
+}
+
+func (s *Store) ListRecipients(ctx context.Context, alertID int64) ([]*AlertRecipient, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.alert_id,
+		       r.tenant_id,
+		       r.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '员工#' || e.id::text) AS employee_name,
+		       COALESCE(e.phone, ''),
+		       COALESCE(r.recipient_type, ''),
+		       COALESCE(r.delivery_status, ''),
+		       r.wecom_message_log_id,
+		       COALESCE(w.wecom_user_id, ''),
+		       r.sent_at,
+		       r.read_at,
+		       r.updated_at
+		FROM opportunity_alert_recipients r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN wecom_message_logs w ON w.id = r.wecom_message_log_id
+		WHERE r.alert_id = $1
+		ORDER BY CASE WHEN r.recipient_type = 'owner' THEN 0 ELSE 1 END, r.id ASC
+	`, alertID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*AlertRecipient, 0)
+	for rows.Next() {
+		var item AlertRecipient
+		if err := rows.Scan(
+			&item.AlertID,
+			&item.TenantID,
+			&item.EmployeeID,
+			&item.EmployeeName,
+			&item.EmployeePhone,
+			&item.RecipientType,
+			&item.DeliveryStatus,
+			&item.WeComMessageLogID,
+			&item.WeComUserID,
+			&item.SentAt,
+			&item.ReadAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ListDeliveryLogs(ctx context.Context, alertID int64) ([]*AlertDeliveryLog, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT w.id,
+		       w.tenant_id,
+		       w.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '员工#' || e.id::text) AS employee_name,
+		       COALESCE(w.wecom_user_id, ''),
+		       COALESCE(w.message_scene, ''),
+		       COALESCE(w.dedupe_key, ''),
+		       COALESCE(w.title, ''),
+		       COALESCE(w.content, ''),
+		       COALESCE(w.target_url, ''),
+		       COALESCE(w.status, ''),
+		       COALESCE(w.error_message, ''),
+		       COALESCE(w.request_payload, '{}'::jsonb),
+		       COALESCE(w.response_payload, '{}'::jsonb),
+		       w.created_at,
+		       w.updated_at
+		FROM wecom_message_logs w
+		LEFT JOIN employees e ON e.id = w.employee_id
+		WHERE w.message_scene = 'opportunity_alert'
+		  AND (
+		    w.dedupe_key LIKE 'opportunity_alert:' || $1::text || ':%'
+		    OR w.dedupe_key = 'opportunity_alert:' || $1::text
+		  )
+		ORDER BY w.created_at DESC, w.id DESC
+	`, alertID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*AlertDeliveryLog, 0)
+	for rows.Next() {
+		var item AlertDeliveryLog
+		if err := rows.Scan(
+			&item.ID,
+			&item.TenantID,
+			&item.EmployeeID,
+			&item.EmployeeName,
+			&item.WeComUserID,
+			&item.MessageScene,
+			&item.DedupeKey,
+			&item.Title,
+			&item.Content,
+			&item.TargetURL,
+			&item.Status,
+			&item.ErrorMessage,
+			&item.RequestPayload,
+			&item.ResponsePayload,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
 }
 
 type alertScanner interface {

@@ -26,6 +26,13 @@ func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.ListCCRules)))
 	mux.Handle("POST /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.CreateCCRule)))
 	mux.Handle("DELETE /api/v1/opportunity-alert-cc-rules/{id}", authMw(http.HandlerFunc(h.DeleteCCRule)))
+	mux.Handle("GET /api/v1/ops/opportunity-alerts", authMw(http.HandlerFunc(h.ListAdminAlerts)))
+	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}", authMw(http.HandlerFunc(h.GetAdminAlert)))
+	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/recipients", authMw(http.HandlerFunc(h.ListAdminAlertRecipients)))
+	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/deliveries", authMw(http.HandlerFunc(h.ListAdminAlertDeliveries)))
+	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/logs", authMw(http.HandlerFunc(h.ListAdminAlertLogs)))
+	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/resend", authMw(http.HandlerFunc(h.ResendAlert)))
+	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/recipients/{employee_id}/resend", authMw(http.HandlerFunc(h.ResendAlertRecipient)))
 }
 
 func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -129,6 +136,157 @@ func (h *Handler) DeleteCCRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"message": "cc rule deleted"})
+}
+
+func (h *Handler) ResendAlert(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "admin access required")
+		return
+	}
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	var req ResendAlertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if err := h.service.ResendWeCom(r.Context(), alertID, req.EmployeeIDs); err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"alert_id": alertID, "status": "resent"})
+}
+
+func (h *Handler) ListAdminAlerts(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "admin access required")
+		return
+	}
+	var tenantID *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			httputil.WriteBadRequest(w, "invalid tenant_id")
+			return
+		}
+		tenantID = &parsed
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	items, total, err := h.service.ListForAdmin(r.Context(), claims, AdminListRequest{
+		TenantID: tenantID,
+		Status:   normalizeStatus(r.URL.Query().Get("status")),
+		Keyword:  strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Page:     page,
+		PageSize: pageSize,
+	})
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	httputil.WritePaginated(w, items, int64(total), page, pageSize)
+}
+
+func (h *Handler) GetAdminAlert(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.service.GetForAdmin(r.Context(), claims, alertID)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) ListAdminAlertRecipients(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListRecipientsForAdmin(r.Context(), claims, alertID)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ListAdminAlertDeliveries(w http.ResponseWriter, r *http.Request) {
+	h.ListAdminAlertRecipients(w, r)
+}
+
+func (h *Handler) ListAdminAlertLogs(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListDeliveryLogsForAdmin(r.Context(), claims, alertID)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ResendAlertRecipient(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "admin access required")
+		return
+	}
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
+	if err != nil || employeeID <= 0 {
+		httputil.WriteBadRequest(w, "invalid employee_id")
+		return
+	}
+	if err := h.service.ResendWeCom(r.Context(), alertID, []int64{employeeID}); err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"alert_id": alertID, "employee_id": employeeID, "status": "resent"})
 }
 
 func (h *Handler) ListMobileAlerts(w http.ResponseWriter, r *http.Request) {

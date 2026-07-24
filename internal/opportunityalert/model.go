@@ -81,6 +81,40 @@ type Alert struct {
 	RecipientReadAt   *time.Time
 }
 
+type AlertRecipient struct {
+	AlertID            int64
+	TenantID           int64
+	EmployeeID         int64
+	EmployeeName       string
+	EmployeePhone      string
+	RecipientType      string
+	DeliveryStatus     string
+	WeComMessageLogID  *int64
+	WeComUserID        string
+	SentAt             *time.Time
+	ReadAt             *time.Time
+	UpdatedAt          time.Time
+}
+
+type AlertDeliveryLog struct {
+	ID              int64
+	TenantID        int64
+	EmployeeID      int64
+	EmployeeName    string
+	WeComUserID     string
+	MessageScene    string
+	DedupeKey       string
+	Title           string
+	Content         string
+	TargetURL       string
+	Status          string
+	ErrorMessage    string
+	RequestPayload  JSONObject
+	ResponsePayload JSONObject
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
 type RecordingAlertSource struct {
 	ID              int64
 	TenantID        int64

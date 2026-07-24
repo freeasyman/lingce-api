@@ -290,7 +290,9 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		MIMEType:        "audio/mpeg",
 		DurationSeconds: core.Seconds,
 		RecordedAt:      core.StartTime,
-		OrderNo:         core.OrderNo,
+		// Use event_id as the recording dedupe key so callback ingest and worker pull
+		// resolve to the same recording when they see the same badge audio.
+		OrderNo:         core.EventID,
 		OSSKey:          ossKey,
 		Source:          "smart_badge",
 		BusinessScope:   businessScope,

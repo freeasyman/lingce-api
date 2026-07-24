@@ -18,11 +18,29 @@ type CallbackEvent struct {
 }
 
 type UserBindingRecord struct {
+	ID          int64
 	CorpID      string
 	WeComUserID string
 	EmployeeID  int64
 	TenantID    int64
 	Source      string
+}
+
+type BindingStatusRecord struct {
+	BindingID      *int64
+	TenantID       int64
+	TenantName     string
+	EmployeeID     int64
+	EmployeeName   string
+	EmployeePhone  string
+	CorpID         string
+	CorpName       string
+	WeComUserID    string
+	Source         string
+	AppEnabled     bool
+	IsBound        bool
+	BoundAt        *time.Time
+	BindingUpdated *time.Time
 }
 
 type OAuthUserProfile struct {

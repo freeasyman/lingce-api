@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/wecom"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -17,6 +18,62 @@ type Service struct {
 
 func NewService(store *Store, wecomService *wecom.Service, employeeWebBaseURL string) *Service {
 	return &Service{store: store, wecomService: wecomService, employeeWebBaseURL: strings.TrimRight(strings.TrimSpace(employeeWebBaseURL), "/")}
+}
+
+func (s *Service) ListForAdmin(ctx context.Context, claims *auth.Claims, req AdminListRequest) ([]*AlertResponse, int, error) {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		return nil, 0, fmt.Errorf("forbidden")
+	}
+	items, total, err := s.store.ListForAdmin(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp := make([]*AlertResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, ToResponse(item))
+	}
+	return resp, total, nil
+}
+
+func (s *Service) GetForAdmin(ctx context.Context, claims *auth.Claims, alertID int64) (*AlertResponse, error) {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		return nil, fmt.Errorf("forbidden")
+	}
+	item, err := s.store.GetByID(ctx, alertID)
+	if err != nil {
+		return nil, err
+	}
+	return ToResponse(item), nil
+}
+
+func (s *Service) ListRecipientsForAdmin(ctx context.Context, claims *auth.Claims, alertID int64) ([]*AlertRecipientResponse, error) {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		return nil, fmt.Errorf("forbidden")
+	}
+	items, err := s.store.ListRecipients(ctx, alertID)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*AlertRecipientResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, ToRecipientResponse(item))
+	}
+	return resp, nil
+}
+
+func (s *Service) ListDeliveryLogsForAdmin(ctx context.Context, claims *auth.Claims, alertID int64) ([]*AlertDeliveryLogResponse, error) {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		return nil, fmt.Errorf("forbidden")
+	}
+	items, err := s.store.ListDeliveryLogs(ctx, alertID)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*AlertDeliveryLogResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, ToDeliveryLogResponse(item))
+	}
+	return resp, nil
 }
 
 func (s *Service) ListForEmployee(ctx context.Context, claims *auth.Claims, req ListRequest) ([]*AlertResponse, int, error) {
@@ -185,6 +242,73 @@ func (s *Service) SendWeCom(ctx context.Context, alertID int64) error {
 		},
 	})
 	if syncErr := s.store.SyncWeComDeliveryStatuses(ctx, item.ID, dedupeKey); syncErr != nil && err == nil {
+		err = syncErr
+	}
+	return err
+}
+
+func (s *Service) ResendWeCom(ctx context.Context, alertID int64, employeeIDs []int64) error {
+	if s.wecomService == nil || !s.wecomService.IsEnabled() {
+		return nil
+	}
+	item, err := s.store.GetByID(ctx, alertID)
+	if err != nil {
+		return err
+	}
+	recipientIDs, err := s.store.ListRecipientEmployeeIDs(ctx, alertID)
+	if err != nil {
+		return err
+	}
+	if len(recipientIDs) == 0 || strings.TrimSpace(s.employeeWebBaseURL) == "" {
+		return nil
+	}
+	targetIDs := recipientIDs
+	if len(employeeIDs) > 0 {
+		allowed := make(map[int64]struct{}, len(recipientIDs))
+		for _, id := range recipientIDs {
+			allowed[id] = struct{}{}
+		}
+		filtered := make([]int64, 0, len(employeeIDs))
+		seen := make(map[int64]struct{}, len(employeeIDs))
+		for _, id := range employeeIDs {
+			if _, ok := allowed[id]; !ok || id <= 0 {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			filtered = append(filtered, id)
+		}
+		targetIDs = filtered
+	}
+	if len(targetIDs) == 0 {
+		return fmt.Errorf("no eligible recipients to resend")
+	}
+	content := strings.TrimSpace(item.Summary)
+	if content == "" {
+		content = strings.TrimSpace(item.Reason)
+	}
+	if content == "" {
+		content = "这通沟通里发现一条疑似可补救机会，请及时查看建议。"
+	}
+	dedupeKey := fmt.Sprintf("opportunity_alert:%d:resend:%d", item.ID, time.Now().UnixNano())
+	_, err = s.wecomService.SendInternalMessage(ctx, wecom.InternalSendMessageRequest{
+		MessageScene: "opportunity_alert",
+		DedupeKey:    dedupeKey,
+		EmployeeIDs:  targetIDs,
+		Title:        item.Title,
+		Content:      content,
+		TargetURL:    fmt.Sprintf("%s/opportunity-alerts/%d", s.employeeWebBaseURL, item.ID),
+		ButtonText:   "查看补救建议",
+		Extra: map[string]any{
+			"alert_id":     item.ID,
+			"recording_id": item.RecordingID,
+			"alert_type":   item.AlertType,
+			"resend":       true,
+		},
+	})
+	if syncErr := s.store.SyncWeComDeliveryStatusesForEmployees(ctx, item.ID, dedupeKey, targetIDs); syncErr != nil && err == nil {
 		err = syncErr
 	}
 	return err

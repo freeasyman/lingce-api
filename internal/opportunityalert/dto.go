@@ -8,6 +8,14 @@ type ListRequest struct {
 	PageSize int
 }
 
+type AdminListRequest struct {
+	TenantID *int64
+	Status   string
+	Keyword  string
+	Page     int
+	PageSize int
+}
+
 type ActionRequest struct {
 	Note   string `json:"note,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -125,4 +133,93 @@ type CreateCCRuleRequest struct {
 	TenantID     int64 `json:"tenant_id"`
 	EmployeeID   int64 `json:"employee_id"`
 	CCEmployeeID int64 `json:"cc_employee_id"`
+}
+
+type ResendAlertRequest struct {
+	EmployeeIDs []int64 `json:"employee_ids,omitempty"`
+}
+
+type AlertRecipientResponse struct {
+	AlertID           int64   `json:"alert_id"`
+	TenantID          int64   `json:"tenant_id"`
+	EmployeeID        int64   `json:"employee_id"`
+	EmployeeName      string  `json:"employee_name"`
+	EmployeePhone     string  `json:"employee_phone,omitempty"`
+	RecipientType     string  `json:"recipient_type"`
+	DeliveryStatus    string  `json:"delivery_status,omitempty"`
+	WeComMessageLogID *int64  `json:"wecom_message_log_id,omitempty"`
+	WeComUserID       string  `json:"wecom_user_id,omitempty"`
+	SentAt            *string `json:"sent_at,omitempty"`
+	ReadAt            *string `json:"read_at,omitempty"`
+	UpdatedAt         string  `json:"updated_at"`
+}
+
+type AlertDeliveryLogResponse struct {
+	ID              int64  `json:"id"`
+	TenantID        int64  `json:"tenant_id"`
+	EmployeeID      int64  `json:"employee_id"`
+	EmployeeName    string `json:"employee_name"`
+	WeComUserID     string `json:"wecom_user_id,omitempty"`
+	MessageScene    string `json:"message_scene"`
+	DedupeKey       string `json:"dedupe_key"`
+	Title           string `json:"title"`
+	Content         string `json:"content"`
+	TargetURL       string `json:"target_url,omitempty"`
+	Status          string `json:"status"`
+	ErrorMessage    string `json:"error_message,omitempty"`
+	RequestPayload  JSONObject `json:"request_payload"`
+	ResponsePayload JSONObject `json:"response_payload"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+func ToRecipientResponse(item *AlertRecipient) *AlertRecipientResponse {
+	if item == nil {
+		return nil
+	}
+	resp := &AlertRecipientResponse{
+		AlertID:           item.AlertID,
+		TenantID:          item.TenantID,
+		EmployeeID:        item.EmployeeID,
+		EmployeeName:      item.EmployeeName,
+		EmployeePhone:     item.EmployeePhone,
+		RecipientType:     item.RecipientType,
+		DeliveryStatus:    item.DeliveryStatus,
+		WeComMessageLogID: item.WeComMessageLogID,
+		WeComUserID:       item.WeComUserID,
+		UpdatedAt:         formatTime(item.UpdatedAt),
+	}
+	if item.SentAt != nil {
+		v := formatTime(*item.SentAt)
+		resp.SentAt = &v
+	}
+	if item.ReadAt != nil {
+		v := formatTime(*item.ReadAt)
+		resp.ReadAt = &v
+	}
+	return resp
+}
+
+func ToDeliveryLogResponse(item *AlertDeliveryLog) *AlertDeliveryLogResponse {
+	if item == nil {
+		return nil
+	}
+	return &AlertDeliveryLogResponse{
+		ID:              item.ID,
+		TenantID:        item.TenantID,
+		EmployeeID:      item.EmployeeID,
+		EmployeeName:    item.EmployeeName,
+		WeComUserID:     item.WeComUserID,
+		MessageScene:    item.MessageScene,
+		DedupeKey:       item.DedupeKey,
+		Title:           item.Title,
+		Content:         item.Content,
+		TargetURL:       item.TargetURL,
+		Status:          item.Status,
+		ErrorMessage:    item.ErrorMessage,
+		RequestPayload:  item.RequestPayload,
+		ResponsePayload: item.ResponsePayload,
+		CreatedAt:       formatTime(item.CreatedAt),
+		UpdatedAt:       formatTime(item.UpdatedAt),
+	}
 }

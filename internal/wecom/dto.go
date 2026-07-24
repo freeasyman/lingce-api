@@ -19,6 +19,30 @@ type BindRequest struct {
 	WeComUserID string `json:"wecom_user_id"`
 }
 
+type AdminBindingRequest struct {
+	TenantID    int64  `json:"tenant_id"`
+	EmployeeID  int64  `json:"employee_id"`
+	CorpID      string `json:"corp_id,omitempty"`
+	WeComUserID string `json:"wecom_user_id"`
+}
+
+type BindingStatusResponse struct {
+	BindingID      *int64  `json:"binding_id,omitempty"`
+	TenantID       int64   `json:"tenant_id"`
+	TenantName     string  `json:"tenant_name,omitempty"`
+	EmployeeID     int64   `json:"employee_id"`
+	EmployeeName   string  `json:"employee_name"`
+	EmployeePhone  string  `json:"employee_phone"`
+	CorpID         string  `json:"corp_id,omitempty"`
+	CorpName       string  `json:"corp_name,omitempty"`
+	WeComUserID    string  `json:"wecom_user_id,omitempty"`
+	Source         string  `json:"source,omitempty"`
+	AppEnabled     bool    `json:"app_enabled"`
+	IsBound        bool    `json:"is_bound"`
+	BoundAt        *string `json:"bound_at,omitempty"`
+	BindingUpdated *string `json:"binding_updated_at,omitempty"`
+}
+
 type InternalSendMessageRequest struct {
 	MessageScene string  `json:"message_scene"`
 	DedupeKey    string  `json:"dedupe_key"`

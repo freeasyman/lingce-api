@@ -41,6 +41,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 		{Method: "PUT", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "DELETE", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.DeleteTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/ops/wecom/apps/{id}/test-token", Handler: h.TestTenantAppToken, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/wecom/bindings", Handler: h.ListBindings, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/ops/wecom/bindings", Handler: h.CreateBinding, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "DELETE", Path: "/api/v1/ops/wecom/bindings/{id}", Handler: h.DeleteBinding, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, Pool: pool})
 }
@@ -244,4 +247,77 @@ func (h *Handler) TestTenantAppToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) ListBindings(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	var tenantID *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httputil.WriteBadRequest(w, "tenant_id must be an integer")
+			return
+		}
+		if parsed > 0 {
+			tenantID = &parsed
+		}
+	}
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	pageSize, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size")))
+	items, total, err := h.service.ListBindingStatuses(
+		r.Context(),
+		tenantID,
+		r.URL.Query().Get("keyword"),
+		r.URL.Query().Get("status"),
+		page,
+		pageSize,
+	)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	httputil.WritePaginated(w, items, int64(total), page, pageSize)
+}
+
+func (h *Handler) CreateBinding(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	var req AdminBindingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if err := h.service.AdminBindEmployee(r.Context(), req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"message": "binding created"})
+}
+
+func (h *Handler) DeleteBinding(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid binding id")
+		return
+	}
+	if err := h.service.DeleteBinding(r.Context(), id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"message": "binding deleted"})
 }
