@@ -76,6 +76,21 @@ func (s *Service) ListDeliveryLogsForAdmin(ctx context.Context, claims *auth.Cla
 	return resp, nil
 }
 
+func (s *Service) ListRecentDeliveriesForAdmin(ctx context.Context, claims *auth.Claims, req RecentDeliveriesRequest) ([]*RecentDeliveryResponse, error) {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		return nil, fmt.Errorf("forbidden")
+	}
+	items, err := s.store.ListRecentDeliveries(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*RecentDeliveryResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, ToRecentDeliveryResponse(item))
+	}
+	return resp, nil
+}
+
 func (s *Service) ListForEmployee(ctx context.Context, claims *auth.Claims, req ListRequest) ([]*AlertResponse, int, error) {
 	tenantID, employeeID, err := employeeScope(claims)
 	if err != nil {
@@ -312,6 +327,22 @@ func (s *Service) ResendWeCom(ctx context.Context, alertID int64, employeeIDs []
 		err = syncErr
 	}
 	return err
+}
+
+func (s *Service) AutoResendSkippedUnboundForEmployee(ctx context.Context, tenantID, employeeID int64) error {
+	if tenantID <= 0 || employeeID <= 0 {
+		return nil
+	}
+	alertIDs, err := s.store.ListSkippedUnboundAlertIDsByEmployee(ctx, tenantID, employeeID, 20)
+	if err != nil {
+		return err
+	}
+	for _, alertID := range alertIDs {
+		if err := s.ResendWeCom(ctx, alertID, []int64{employeeID}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) CreateFromRecording(ctx context.Context, recordingID int64, triggerSource string) error {

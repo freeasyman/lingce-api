@@ -581,6 +581,116 @@ func (s *Store) ListDeliveryLogs(ctx context.Context, alertID int64) ([]*AlertDe
 	return items, rows.Err()
 }
 
+func (s *Store) ListRecentDeliveries(ctx context.Context, req RecentDeliveriesRequest) ([]*RecentDelivery, error) {
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	where := []string{"1=1"}
+	args := []interface{}{}
+	if req.TenantID != nil && *req.TenantID > 0 {
+		args = append(args, *req.TenantID)
+		where = append(where, fmt.Sprintf("r.tenant_id = $%d", len(args)))
+	}
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.alert_id,
+		       r.tenant_id,
+		       a.recording_id,
+		       r.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), e.phone, '员工#' || e.id::text) AS employee_name,
+		       COALESCE(a.customer_name, ''),
+		       COALESCE(a.title, ''),
+		       COALESCE(a.status, ''),
+		       COALESCE(r.recipient_type, ''),
+		       COALESCE(r.delivery_status, ''),
+		       COALESCE(w.wecom_user_id, ''),
+		       r.sent_at,
+		       a.created_at
+		FROM opportunity_alert_recipients r
+		JOIN opportunity_alerts a ON a.id = r.alert_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN wecom_message_logs w ON w.id = r.wecom_message_log_id
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY COALESCE(r.sent_at, a.created_at) DESC, r.updated_at DESC, r.alert_id DESC
+		LIMIT $`+fmt.Sprintf("%d", len(args))+`
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*RecentDelivery, 0, limit)
+	for rows.Next() {
+		var item RecentDelivery
+		if err := rows.Scan(
+			&item.AlertID,
+			&item.TenantID,
+			&item.RecordingID,
+			&item.EmployeeID,
+			&item.EmployeeName,
+			&item.CustomerName,
+			&item.Title,
+			&item.Status,
+			&item.RecipientType,
+			&item.DeliveryStatus,
+			&item.WeComUserID,
+			&item.SentAt,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ListSkippedUnboundAlertIDsByEmployee(ctx context.Context, tenantID, employeeID int64, limit int) ([]int64, error) {
+	if tenantID <= 0 || employeeID <= 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.alert_id
+		FROM opportunity_alert_recipients r
+		JOIN opportunity_alerts a ON a.id = r.alert_id
+		WHERE r.tenant_id = $1
+		  AND r.employee_id = $2
+		  AND COALESCE(r.delivery_status, '') = 'skipped_unbound'
+		  AND COALESCE(a.status, '') <> 'handled'
+		ORDER BY a.created_at DESC, r.alert_id DESC
+		LIMIT $3
+	`, tenantID, employeeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, limit)
+	seen := make(map[int64]struct{}, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 type alertScanner interface {
 	Scan(dest ...interface{}) error
 }

@@ -24,6 +24,7 @@ type Service struct {
 	secretProtector *SecretProtector
 	jwtSecret       string
 	jwtExpiryHours  int
+	onBindingUpsert func(context.Context, int64, int64) error
 }
 
 func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int) *Service {
@@ -35,6 +36,10 @@ func NewService(store *Store, authStore *internalauth.Store, client *Client, jwt
 		jwtSecret:       jwtSecret,
 		jwtExpiryHours:  jwtExpiryHours,
 	}
+}
+
+func (s *Service) SetBindingUpsertHook(fn func(context.Context, int64, int64) error) {
+	s.onBindingUpsert = fn
 }
 
 func (s *Service) IsEnabled() bool {
@@ -224,6 +229,7 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 				slog.Warn("wecom oauth login failed: upsert auto binding", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "employee_id", employee.ID, "error", err)
 				return nil, err
 			}
+			s.runBindingUpsertHook(ctx, employee.TenantID, employee.ID)
 			binding = &UserBindingRecord{
 				CorpID:      corpID,
 				WeComUserID: userInfo.UserID,
@@ -303,8 +309,18 @@ func (s *Service) bindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	}); err != nil {
 		return err
 	}
+	s.runBindingUpsertHook(ctx, employee.TenantID, employee.ID)
 	slog.Info("wecom manual binding created", "corp_id", corpID, "wecom_user_id", wecomUserID, "employee_id", employee.ID)
 	return nil
+}
+
+func (s *Service) runBindingUpsertHook(ctx context.Context, tenantID, employeeID int64) {
+	if s.onBindingUpsert == nil || tenantID <= 0 || employeeID <= 0 {
+		return
+	}
+	if err := s.onBindingUpsert(ctx, tenantID, employeeID); err != nil {
+		slog.Warn("wecom binding post hook failed", "tenant_id", tenantID, "employee_id", employeeID, "error", err)
+	}
 }
 
 func normalizePhone(phone string) string {
@@ -789,18 +805,18 @@ func toBindingStatusResponse(item *BindingStatusRecord) *BindingStatusResponse {
 		return nil
 	}
 	resp := &BindingStatusResponse{
-		BindingID:      item.BindingID,
-		TenantID:       item.TenantID,
-		TenantName:     item.TenantName,
-		EmployeeID:     item.EmployeeID,
-		EmployeeName:   item.EmployeeName,
-		EmployeePhone:  item.EmployeePhone,
-		CorpID:         item.CorpID,
-		CorpName:       item.CorpName,
-		WeComUserID:    item.WeComUserID,
-		Source:         item.Source,
-		AppEnabled:     item.AppEnabled,
-		IsBound:        item.IsBound,
+		BindingID:     item.BindingID,
+		TenantID:      item.TenantID,
+		TenantName:    item.TenantName,
+		EmployeeID:    item.EmployeeID,
+		EmployeeName:  item.EmployeeName,
+		EmployeePhone: item.EmployeePhone,
+		CorpID:        item.CorpID,
+		CorpName:      item.CorpName,
+		WeComUserID:   item.WeComUserID,
+		Source:        item.Source,
+		AppEnabled:    item.AppEnabled,
+		IsBound:       item.IsBound,
 	}
 	if item.BoundAt != nil {
 		v := formatTime(*item.BoundAt)

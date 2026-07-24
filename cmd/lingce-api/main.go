@@ -176,6 +176,7 @@ func main() {
 
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, wecomService, cfg.External.EmployeeWebBaseURL)
+	wecomService.SetBindingUpsertHook(opportunityAlertService.AutoResendSkippedUnboundForEmployee)
 	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService, cfg.External.InternalWorkerToken)
 	opportunityAlertHandler.RegisterConfigRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)

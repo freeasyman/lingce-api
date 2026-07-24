@@ -26,6 +26,7 @@ func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.ListCCRules)))
 	mux.Handle("POST /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.CreateCCRule)))
 	mux.Handle("DELETE /api/v1/opportunity-alert-cc-rules/{id}", authMw(http.HandlerFunc(h.DeleteCCRule)))
+	mux.Handle("GET /api/v1/opportunity-alert-deliveries/recent", authMw(http.HandlerFunc(h.ListRecentDeliveries)))
 	mux.Handle("GET /api/v1/ops/opportunity-alerts", authMw(http.HandlerFunc(h.ListAdminAlerts)))
 	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}", authMw(http.HandlerFunc(h.GetAdminAlert)))
 	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/recipients", authMw(http.HandlerFunc(h.ListAdminAlertRecipients)))
@@ -33,6 +34,29 @@ func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/logs", authMw(http.HandlerFunc(h.ListAdminAlertLogs)))
 	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/resend", authMw(http.HandlerFunc(h.ResendAlert)))
 	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/recipients/{employee_id}/resend", authMw(http.HandlerFunc(h.ResendAlertRecipient)))
+}
+
+func (h *Handler) ListRecentDeliveries(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	var scopedTenantID *int64
+	if tenantID > 0 {
+		scopedTenantID = &tenantID
+	}
+	items, err := h.service.ListRecentDeliveriesForAdmin(r.Context(), claims, RecentDeliveriesRequest{
+		TenantID: scopedTenantID,
+		Limit:    limit,
+	})
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 
 func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {

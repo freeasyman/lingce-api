@@ -82,18 +82,18 @@ type Alert struct {
 }
 
 type AlertRecipient struct {
-	AlertID            int64
-	TenantID           int64
-	EmployeeID         int64
-	EmployeeName       string
-	EmployeePhone      string
-	RecipientType      string
-	DeliveryStatus     string
-	WeComMessageLogID  *int64
-	WeComUserID        string
-	SentAt             *time.Time
-	ReadAt             *time.Time
-	UpdatedAt          time.Time
+	AlertID           int64
+	TenantID          int64
+	EmployeeID        int64
+	EmployeeName      string
+	EmployeePhone     string
+	RecipientType     string
+	DeliveryStatus    string
+	WeComMessageLogID *int64
+	WeComUserID       string
+	SentAt            *time.Time
+	ReadAt            *time.Time
+	UpdatedAt         time.Time
 }
 
 type AlertDeliveryLog struct {
@@ -113,6 +113,22 @@ type AlertDeliveryLog struct {
 	ResponsePayload JSONObject
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+type RecentDelivery struct {
+	AlertID        int64
+	TenantID       int64
+	RecordingID    int64
+	EmployeeID     int64
+	EmployeeName   string
+	CustomerName   string
+	Title          string
+	Status         string
+	RecipientType  string
+	DeliveryStatus string
+	WeComUserID    string
+	SentAt         *time.Time
+	CreatedAt      time.Time
 }
 
 type RecordingAlertSource struct {
