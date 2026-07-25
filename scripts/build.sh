@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="lingce-api"
 OUTPUT_DIR="bin"
 OUTPUT_BIN="${OUTPUT_DIR}/${APP_NAME}"
-VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+VERSION="${VERSION:-$(cat VERSION 2>/dev/null || echo "1.0.6")}"
 GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 BUILD_TIME="${BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 

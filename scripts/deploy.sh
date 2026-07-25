@@ -19,7 +19,7 @@ DEPLOY_LOG_PATH="${DEPLOY_LOG_PATH:-/var/log/lingce-deploy.log}"
 DEPLOY_ACTOR="${DEPLOY_ACTOR:-${USER:-unknown}}"
 LOCAL_BIN="bin/${SERVICE_NAME}"
 
-VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
+VERSION="${VERSION:-$(cat VERSION 2>/dev/null || echo "1.0.6")}"
 GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 BUILD_TIME="${BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 
