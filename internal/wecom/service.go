@@ -790,6 +790,13 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
+	existingByCorp, err := s.store.GetTenantAppByCorpID(ctx, corpID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if existingByCorp != nil && (current == nil || existingByCorp.ID != current.ID) {
+		return nil, fmt.Errorf("corp_id already exists in another tenant")
+	}
 	secretCiphertext := ""
 	if strings.TrimSpace(req.Secret) != "" {
 		secret := strings.TrimSpace(req.Secret)
