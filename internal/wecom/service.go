@@ -795,7 +795,7 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 		return nil, err
 	}
 	if existingByCorp != nil && (current == nil || existingByCorp.ID != current.ID) {
-		return nil, fmt.Errorf("corp_id already exists in another tenant")
+		return nil, fmt.Errorf("企业ID %s 已被其他企业微信配置占用，请确认是否重复录入或先删除原配置后再保存", corpID)
 	}
 	secretCiphertext := ""
 	if strings.TrimSpace(req.Secret) != "" {
