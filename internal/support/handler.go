@@ -63,7 +63,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/ai-usage/by-tenant", authMw(http.HandlerFunc(h.GetAIUsageByTenant)))
 	mux.Handle("GET /api/v1/ai-usage/by-business-domain", authMw(http.HandlerFunc(h.GetAIUsageByBusinessDomain)))
 	mux.Handle("GET /api/v1/ai-usage/by-billing-subject", authMw(http.HandlerFunc(h.GetAIUsageByBillingSubject)))
+	mux.Handle("GET /api/v1/ai-usage/by-caller-module", authMw(http.HandlerFunc(h.GetAIUsageByCallerModule)))
 	mux.Handle("GET /api/v1/ai-usage/by-model", authMw(http.HandlerFunc(h.GetAIUsageByModel)))
+	mux.Handle("GET /api/v1/ai-usage/top-objects", authMw(http.HandlerFunc(h.GetAIUsageTopObjects)))
+	mux.Handle("GET /api/v1/ai-usage/object-costs", authMw(http.HandlerFunc(h.GetAIUsageObjectCosts)))
+	mux.Handle("GET /api/v1/ai-usage/anomalies", authMw(http.HandlerFunc(h.GetAIUsageAnomalies)))
 	mux.Handle("GET /api/v1/ai-usage/records", authMw(http.HandlerFunc(h.ListAIUsageRecords)))
 	mux.Handle("GET /api/v1/ai-usage/recordings/{recording_id}", authMw(http.HandlerFunc(h.GetAIUsageByRecording)))
 	mux.Handle("GET /api/v1/ai-usage/contents/{content_id}", authMw(http.HandlerFunc(h.GetAIUsageByContent)))
@@ -1008,6 +1012,31 @@ func (h *Handler) GetAIUsageByBillingSubject(w http.ResponseWriter, r *http.Requ
 	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
 }
 
+func (h *Handler) GetAIUsageByCallerModule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	items, err := h.service.GetAIUsageByCallerModule(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
 func (h *Handler) GetAIUsageByModel(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
@@ -1031,6 +1060,75 @@ func (h *Handler) GetAIUsageByModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]interface{}{"items": items, "count": len(items)})
+}
+
+func (h *Handler) GetAIUsageTopObjects(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	resp, err := h.service.GetAIUsageTopObjects(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetAIUsageObjectCosts(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	resp, err := h.service.GetAIUsageObjectCosts(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) GetAIUsageAnomalies(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	req, err := h.parseAIUsageRequest(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.applyAIUsageScope(claims, &req); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	resp, err := h.service.GetAIUsageAnomalies(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 func (h *Handler) ListAIUsageRecords(w http.ResponseWriter, r *http.Request) {
@@ -1535,6 +1633,9 @@ func (h *Handler) parseAIUsageRequest(r *http.Request) (AIUsageListRequest, erro
 		GenerationTaskID:   parseQueryInt64Ptr(query.Get("generation_task_id")),
 		Provider:           parseQueryStringPtr(query.Get("provider")),
 		ModelCode:          parseQueryStringPtr(query.Get("model_code")),
+		Search:             parseQueryStringPtr(query.Get("search")),
+		ObjectType:         parseQueryStringPtr(query.Get("type")),
+		Sort:               parseQueryStringPtr(query.Get("sort")),
 		Success:            parseQueryBoolPtr(query.Get("success")),
 		StartDate:          parseQueryStringPtr(query.Get("start_date")),
 		EndDate:            parseQueryStringPtr(query.Get("end_date")),
@@ -1552,10 +1653,7 @@ func (h *Handler) applyAIUsageScope(claims *auth.Claims, req *AIUsageListRequest
 		return fmt.Errorf("invalid token")
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil {
-			return fmt.Errorf("tenant scope required")
-		}
-		req.TenantID = claims.TenantID
+		return fmt.Errorf("ai cost endpoints are restricted to operation admins")
 	}
 	return nil
 }

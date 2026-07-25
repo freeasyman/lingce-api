@@ -231,6 +231,9 @@ type AIUsageListRequest struct {
 	GenerationTaskID   *int64  `json:"generation_task_id,omitempty"`
 	Provider           *string `json:"provider,omitempty"`
 	ModelCode          *string `json:"model_code,omitempty"`
+	Search             *string `json:"search,omitempty"`
+	ObjectType         *string `json:"type,omitempty"`
+	Sort               *string `json:"sort,omitempty"`
 	Success            *bool   `json:"success,omitempty"`
 	StartDate          *string `json:"start_date,omitempty"`
 	EndDate            *string `json:"end_date,omitempty"`
@@ -283,7 +286,6 @@ type AIUsageGroupItem struct {
 	TotalTokens       int64   `json:"total_tokens"`
 	TotalAudioSeconds float64 `json:"total_audio_seconds"`
 	TotalCostCNY      float64 `json:"total_cost_cny"`
-	EstimatedPoints   int64   `json:"estimated_points"`
 }
 
 // AIUsageTrendItem represents daily usage trend.
@@ -293,7 +295,6 @@ type AIUsageTrendItem struct {
 	TotalTokens       int64   `json:"total_tokens"`
 	TotalAudioSeconds float64 `json:"total_audio_seconds"`
 	TotalCostCNY      float64 `json:"total_cost_cny"`
-	EstimatedPoints   int64   `json:"estimated_points"`
 }
 
 // AIUsageSummaryResponse represents AI usage summary.
@@ -306,7 +307,6 @@ type AIUsageSummaryResponse struct {
 	TotalOutputTokens        int64              `json:"total_output_tokens"`
 	TotalAudioSeconds        float64            `json:"total_audio_seconds"`
 	TotalCostCNY             float64            `json:"total_cost_cny"`
-	EstimatedPoints          int64              `json:"estimated_points"`
 	AvgCostPerCall           float64            `json:"avg_cost_per_call"`
 	AvgCostPerBusinessObject float64            `json:"avg_cost_per_business_object"`
 	ByTenant                 []AIUsageGroupItem `json:"by_tenant"`
@@ -332,10 +332,29 @@ type AIUsageObjectResponse struct {
 	TotalTokens        int64               `json:"total_tokens"`
 	TotalAudioSeconds  float64             `json:"total_audio_seconds"`
 	TotalCostCNY       float64             `json:"total_cost_cny"`
-	EstimatedPoints    int64               `json:"estimated_points"`
+	Role               string              `json:"role,omitempty"`
+	Scene              string              `json:"scene,omitempty"`
 	FirstCallAt        string              `json:"first_call_at,omitempty"`
 	LastCallAt         string              `json:"last_call_at,omitempty"`
 	Records            []AIUsageRecordItem `json:"records"`
+}
+
+type AIUsageTopObjectsResponse struct {
+	Items []AIUsageTopObjectItem `json:"items"`
+}
+
+type AIUsageObjectCostPageResponse struct {
+	Items                       []AIUsageObjectCostRow `json:"items"`
+	Total                       int                    `json:"total"`
+	Page                        int                    `json:"page"`
+	PageSize                    int                    `json:"page_size"`
+	Pages                       int                    `json:"pages"`
+	AveragesByRole              []AIUsageRoleAverage   `json:"averages_by_role"`
+	ContentAttributionSupported bool                   `json:"content_attribution_supported"`
+}
+
+type AIUsageAnomaliesResponse struct {
+	Items []AIUsageAnomalyItem `json:"items"`
 }
 
 // LLMCallRecordResponse represents an LLM call record response
