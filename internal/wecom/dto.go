@@ -43,6 +43,45 @@ type BindingStatusResponse struct {
 	BindingUpdated *string `json:"binding_updated_at,omitempty"`
 }
 
+type DirectoryMemberListParams struct {
+	TenantID *int64
+	Keyword  string
+	Status   string
+	Page     int
+	PageSize int
+}
+
+type DirectoryMemberResponse struct {
+	ID                  int64   `json:"id"`
+	TenantID            int64   `json:"tenant_id"`
+	TenantName          string  `json:"tenant_name,omitempty"`
+	CorpID              string  `json:"corp_id"`
+	CorpName            string  `json:"corp_name,omitempty"`
+	WeComUserID         string  `json:"wecom_user_id"`
+	Name                string  `json:"name"`
+	Mobile              string  `json:"mobile,omitempty"`
+	MatchStatus         string  `json:"match_status"`
+	MatchedEmployeeID   *int64  `json:"matched_employee_id,omitempty"`
+	MatchedEmployeeName string  `json:"matched_employee_name,omitempty"`
+	BindingEmployeeID   *int64  `json:"binding_employee_id,omitempty"`
+	BindingSource       string  `json:"binding_source,omitempty"`
+	LastSyncedAt        *string `json:"last_synced_at,omitempty"`
+}
+
+type DirectorySyncRequest struct {
+	TenantID int64 `json:"tenant_id"`
+}
+
+type DirectorySyncResponse struct {
+	TenantID       int64  `json:"tenant_id"`
+	CorpID         string `json:"corp_id"`
+	SyncedCount    int    `json:"synced_count"`
+	PreboundCount  int    `json:"prebound_count"`
+	MatchedCount   int    `json:"matched_count"`
+	ConflictCount  int    `json:"conflict_count"`
+	UnmatchedCount int    `json:"unmatched_count"`
+}
+
 type InternalSendMessageRequest struct {
 	MessageScene string  `json:"message_scene"`
 	DedupeKey    string  `json:"dedupe_key"`
@@ -63,17 +102,18 @@ type InternalSendMessageResponse struct {
 }
 
 type TenantWeComAppRequest struct {
-	TenantID       int64  `json:"tenant_id"`
-	CorpID         string `json:"corp_id"`
-	CorpName       string `json:"corp_name,omitempty"`
-	AgentID        int64  `json:"agent_id"`
-	Secret         string `json:"secret,omitempty"`
-	Token          string `json:"token,omitempty"`
-	EncodingAESKey string `json:"encoding_aes_key,omitempty"`
-	HomeURL        string `json:"home_url,omitempty"`
-	TrustedDomain  string `json:"trusted_domain,omitempty"`
-	JSAPIDomain    string `json:"jsapi_domain,omitempty"`
-	Enabled        bool   `json:"enabled"`
+	TenantID        int64  `json:"tenant_id"`
+	CorpID          string `json:"corp_id"`
+	CorpName        string `json:"corp_name,omitempty"`
+	AgentID         int64  `json:"agent_id"`
+	Secret          string `json:"secret,omitempty"`
+	Token           string `json:"token,omitempty"`
+	EncodingAESKey  string `json:"encoding_aes_key,omitempty"`
+	HomeURL         string `json:"home_url,omitempty"`
+	TrustedDomain   string `json:"trusted_domain,omitempty"`
+	JSAPIDomain     string `json:"jsapi_domain,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	ConfigConfirmed bool   `json:"config_confirmed"`
 }
 
 type TenantWeComAppResponse struct {
@@ -87,10 +127,13 @@ type TenantWeComAppResponse struct {
 	HasSecret            bool    `json:"has_secret"`
 	HasToken             bool    `json:"has_token"`
 	HasEncodingAESKey    bool    `json:"has_encoding_aes_key"`
+	Token                string  `json:"token,omitempty"`
+	EncodingAESKey       string  `json:"encoding_aes_key,omitempty"`
 	HomeURL              string  `json:"home_url,omitempty"`
 	TrustedDomain        string  `json:"trusted_domain,omitempty"`
 	JSAPIDomain          string  `json:"jsapi_domain,omitempty"`
 	Enabled              bool    `json:"enabled"`
+	ConfigConfirmed      bool    `json:"config_confirmed"`
 	AccessTokenExpiredAt *string `json:"access_token_expired_at,omitempty"`
 	LastSyncAt           *string `json:"last_sync_at,omitempty"`
 	CreatedAt            string  `json:"created_at"`

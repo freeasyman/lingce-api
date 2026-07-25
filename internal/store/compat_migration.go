@@ -140,6 +140,9 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_opportunity_alert_cc_rules_employee ON opportunity_alert_cc_rules(tenant_id, employee_id) WHERE is_active = true`,
 
+		// WeCom app config compatibility
+		`ALTER TABLE IF EXISTS tenant_wecom_apps ADD COLUMN IF NOT EXISTS config_confirmed BOOLEAN NOT NULL DEFAULT FALSE`,
+
 		// Recording business scope compatibility
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
 		`UPDATE recordings SET business_scope = 'unknown' WHERE business_scope IS NULL OR trim(business_scope) = ''`,
@@ -1711,6 +1714,25 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			UNIQUE (corp_id, wecom_user_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_wecom_user_bindings_employee_id ON wecom_user_bindings(employee_id)`,
+		`CREATE TABLE IF NOT EXISTS wecom_directory_members (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			corp_id TEXT NOT NULL,
+			wecom_user_id TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			mobile TEXT NOT NULL DEFAULT '',
+			department_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+			wecom_status INTEGER NOT NULL DEFAULT 1,
+			match_status TEXT NOT NULL DEFAULT 'unmatched',
+			matched_employee_id BIGINT,
+			last_synced_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			UNIQUE (corp_id, wecom_user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_directory_members_tenant_id ON wecom_directory_members(tenant_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_directory_members_mobile ON wecom_directory_members(tenant_id, mobile)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_directory_members_match_status ON wecom_directory_members(tenant_id, match_status)`,
 		`CREATE TABLE IF NOT EXISTS wecom_event_logs (
 			id BIGSERIAL PRIMARY KEY,
 			corp_id TEXT,

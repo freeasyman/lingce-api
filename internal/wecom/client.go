@@ -52,6 +52,19 @@ type userDetailResponse struct {
 	Avatar string `json:"avatar"`
 }
 
+type departmentUserRecord struct {
+	UserID     string  `json:"userid"`
+	Name       string  `json:"name"`
+	Mobile     string  `json:"mobile"`
+	Department []int64 `json:"department"`
+	Status     int     `json:"status"`
+}
+
+type departmentUsersResponse struct {
+	apiErrorResponse
+	UserList []departmentUserRecord `json:"userlist"`
+}
+
 type sendMessageResponse struct {
 	apiErrorResponse
 	InvalidUser string `json:"invaliduser"`
@@ -108,6 +121,21 @@ func (c *Client) GetAuthUserDetail(ctx context.Context, corpAccessToken, userTic
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) ListDepartmentUsers(ctx context.Context, corpAccessToken string, departmentID int64, fetchChild bool) ([]departmentUserRecord, error) {
+	var resp departmentUsersResponse
+	childFlag := "0"
+	if fetchChild {
+		childFlag = "1"
+	}
+	path := "/cgi-bin/user/list?access_token=" + url.QueryEscape(corpAccessToken) +
+		"&department_id=" + url.QueryEscape(fmt.Sprintf("%d", departmentID)) +
+		"&fetch_child=" + childFlag
+	if err := c.getJSON(ctx, path, &resp); err != nil {
+		return nil, err
+	}
+	return resp.UserList, nil
 }
 
 func (c *Client) SendTextCardMessage(ctx context.Context, corpAccessToken string, agentID int64, toUser, title, description, targetURL, buttonText string) (*sendMessageResponse, error) {

@@ -11,10 +11,10 @@ type EncryptedCallbackEnvelope struct {
 }
 
 type CallbackEvent struct {
-	XMLName       xml.Name `xml:"xml"`
-	InfoType      string   `xml:"InfoType"`
-	TimeStamp     string   `xml:"TimeStamp"`
-	AuthCorpID    string   `xml:"AuthCorpId"`
+	XMLName    xml.Name `xml:"xml"`
+	InfoType   string   `xml:"InfoType"`
+	TimeStamp  string   `xml:"TimeStamp"`
+	AuthCorpID string   `xml:"AuthCorpId"`
 }
 
 type UserBindingRecord struct {
@@ -62,23 +62,24 @@ type EmployeeBindingRecord struct {
 }
 
 type TenantWeComAppRecord struct {
-	ID                    int64
-	TenantID              int64
-	CorpID                string
-	CorpName              string
-	AgentID               int64
-	SecretCiphertext      string
-	Token                 string
-	EncodingAESKey        string
-	HomeURL               string
-	TrustedDomain         string
-	JSAPIDomain           string
-	Enabled               bool
-	AccessToken           string
-	AccessTokenExpiredAt  *time.Time
-	LastSyncAt            *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                   int64
+	TenantID             int64
+	CorpID               string
+	CorpName             string
+	AgentID              int64
+	SecretCiphertext     string
+	Token                string
+	EncodingAESKey       string
+	HomeURL              string
+	TrustedDomain        string
+	JSAPIDomain          string
+	Enabled              bool
+	ConfigConfirmed      bool
+	AccessToken          string
+	AccessTokenExpiredAt *time.Time
+	LastSyncAt           *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type MessageLogRecord struct {
@@ -97,4 +98,47 @@ type MessageLogRecord struct {
 	RequestPayload  string
 	ResponsePayload string
 	BizDate         *string
+}
+
+type DirectoryMemberRecord struct {
+	ID                int64
+	TenantID          int64
+	CorpID            string
+	WeComUserID       string
+	Name              string
+	Mobile            string
+	DepartmentIDsJSON string
+	WeComStatus       int
+	MatchStatus       string
+	MatchedEmployeeID *int64
+	LastSyncedAt      time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type DirectoryMemberListRecord struct {
+	ID                  int64
+	TenantID            int64
+	TenantName          string
+	CorpID              string
+	CorpName            string
+	WeComUserID         string
+	Name                string
+	Mobile              string
+	MatchStatus         string
+	MatchedEmployeeID   *int64
+	MatchedEmployeeName string
+	BindingEmployeeID   *int64
+	BindingSource       string
+	LastSyncedAt        time.Time
+}
+
+type DirectorySyncSummary struct {
+	TenantID       int64
+	CorpID         string
+	SyncedCount    int
+	PreboundCount  int
+	MatchedCount   int
+	ConflictCount  int
+	UnmatchedCount int
 }

@@ -2,6 +2,8 @@ package wecom
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -15,6 +17,14 @@ import (
 	internalauth "github.com/freeasyman/lingce-api/internal/auth"
 	jwtauth "github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/jackc/pgx/v5"
+)
+
+const defaultWeComEmployeeHost = "employee.khgl.xyz"
+const (
+	minWeComCorpIDLength = 8
+	maxWeComCorpIDLength = 64
+	minWeComSecretLength = 8
+	maxWeComSecretLength = 256
 )
 
 type Service struct {
@@ -333,6 +343,60 @@ func normalizePhone(phone string) string {
 	return b.String()
 }
 
+func defaultWeComHomeURL(corpID string, agentID int64) string {
+	values := url.Values{}
+	if strings.TrimSpace(corpID) != "" {
+		values.Set("corp_id", strings.TrimSpace(corpID))
+	}
+	if agentID > 0 {
+		values.Set("agent_id", fmt.Sprintf("%d", agentID))
+	}
+	target := url.URL{
+		Scheme:   "https",
+		Host:     defaultWeComEmployeeHost,
+		Path:     "/login",
+		RawQuery: values.Encode(),
+	}
+	return target.String()
+}
+
+func generateRandomToken(length int) (string, error) {
+	if length <= 0 {
+		length = 32
+	}
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	buf := make([]byte, length)
+	random := make([]byte, length)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	for i := range buf {
+		buf[i] = alphabet[int(random[i])%len(alphabet)]
+	}
+	return string(buf), nil
+}
+
+func generateEncodingAESKey() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(base64.StdEncoding.EncodeToString(buf), "="), nil
+}
+
+func isAlphaNumeric(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func attachWeComEntryParams(targetURL string, corpID string, agentID int64) string {
 	target := strings.TrimSpace(targetURL)
 	if target == "" || strings.TrimSpace(corpID) == "" || agentID <= 0 {
@@ -548,6 +612,122 @@ func (s *Service) ListBindingStatuses(ctx context.Context, tenantID *int64, keyw
 	return resp, total, nil
 }
 
+func (s *Service) ListDirectoryMembers(ctx context.Context, params DirectoryMemberListParams) ([]*DirectoryMemberResponse, int, error) {
+	items, total, err := s.store.ListDirectoryMembers(ctx, params)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp := make([]*DirectoryMemberResponse, 0, len(items))
+	for _, item := range items {
+		resp = append(resp, toDirectoryMemberResponse(item))
+	}
+	return resp, total, nil
+}
+
+func (s *Service) SyncDirectoryAndPrebind(ctx context.Context, tenantID int64) (*DirectorySyncResponse, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	app, err := s.store.GetTenantAppByTenantID(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil || !app.Enabled {
+		return nil, fmt.Errorf("tenant wecom app is not enabled")
+	}
+	corpAccessToken, err := s.resolveTenantAppAccessToken(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	users, err := s.client.ListDepartmentUsers(ctx, corpAccessToken, 1, true)
+	if err != nil {
+		if isWeComAccessTokenExpired(err) {
+			corpAccessToken, err = s.forceResolveTenantAppAccessToken(ctx, app)
+			if err == nil {
+				users, err = s.client.ListDepartmentUsers(ctx, corpAccessToken, 1, true)
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &DirectorySyncResponse{TenantID: tenantID, CorpID: app.CorpID}
+	for _, user := range users {
+		if strings.TrimSpace(user.UserID) == "" {
+			continue
+		}
+		summary.SyncedCount++
+		normalizedMobile := normalizePhone(user.Mobile)
+		matchStatus := "unmatched"
+		var matchedEmployeeID *int64
+		if user.Status != 1 {
+			matchStatus = "inactive"
+		} else if normalizedMobile != "" {
+			matches, matchErr := s.store.FindActiveEmployeesByNormalizedPhoneAndTenant(ctx, normalizedMobile, tenantID)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			if len(matches) == 1 {
+				id := matches[0].EmployeeID
+				matchedEmployeeID = &id
+				binding, bindErr := s.store.GetUserBinding(ctx, app.CorpID, strings.TrimSpace(user.UserID))
+				if bindErr != nil {
+					return nil, bindErr
+				}
+				if binding == nil || binding.EmployeeID == id {
+					if upsertErr := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+						CorpID:      app.CorpID,
+						WeComUserID: strings.TrimSpace(user.UserID),
+						EmployeeID:  id,
+						TenantID:    tenantID,
+						Source:      "directory_sync",
+					}); upsertErr != nil {
+						return nil, upsertErr
+					}
+					s.runBindingUpsertHook(ctx, tenantID, id)
+					matchStatus = "prebound"
+					summary.PreboundCount++
+				} else {
+					matchStatus = "conflict"
+					summary.ConflictCount++
+				}
+			} else if len(matches) > 1 {
+				matchStatus = "conflict"
+				summary.ConflictCount++
+			} else {
+				summary.UnmatchedCount++
+			}
+			if matchStatus == "unmatched" && matchedEmployeeID != nil {
+				matchStatus = "matched"
+			}
+		} else {
+			matchStatus = "no_mobile"
+			summary.UnmatchedCount++
+		}
+		if matchStatus == "matched" {
+			summary.MatchedCount++
+		}
+		if matchStatus == "inactive" {
+			summary.UnmatchedCount++
+		}
+		if err := s.store.UpsertDirectoryMember(ctx, DirectoryMemberRecord{
+			TenantID:          tenantID,
+			CorpID:            app.CorpID,
+			WeComUserID:       strings.TrimSpace(user.UserID),
+			Name:              strings.TrimSpace(user.Name),
+			Mobile:            normalizedMobile,
+			DepartmentIDsJSON: marshalDepartmentIDs(user.Department),
+			WeComStatus:       user.Status,
+			MatchStatus:       matchStatus,
+			MatchedEmployeeID: matchedEmployeeID,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return summary, nil
+}
+
 func (s *Service) AdminBindEmployee(ctx context.Context, req AdminBindingRequest) error {
 	if req.TenantID <= 0 {
 		return fmt.Errorf("tenant_id is required")
@@ -596,8 +776,12 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	if req.TenantID <= 0 {
 		return nil, fmt.Errorf("tenant_id is required")
 	}
-	if strings.TrimSpace(req.CorpID) == "" {
+	corpID := strings.TrimSpace(req.CorpID)
+	if corpID == "" {
 		return nil, fmt.Errorf("corp_id is required")
+	}
+	if len(corpID) < minWeComCorpIDLength || len(corpID) > maxWeComCorpIDLength || !isAlphaNumeric(corpID) {
+		return nil, fmt.Errorf("corp_id format is invalid")
 	}
 	if req.AgentID <= 0 {
 		return nil, fmt.Errorf("agent_id is required")
@@ -608,7 +792,11 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	}
 	secretCiphertext := ""
 	if strings.TrimSpace(req.Secret) != "" {
-		secretCiphertext, err = s.secretProtector.Encrypt(strings.TrimSpace(req.Secret))
+		secret := strings.TrimSpace(req.Secret)
+		if len(secret) < minWeComSecretLength || len(secret) > maxWeComSecretLength {
+			return nil, fmt.Errorf("secret length is invalid")
+		}
+		secretCiphertext, err = s.secretProtector.Encrypt(secret)
 		if err != nil {
 			return nil, err
 		}
@@ -622,22 +810,47 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	if token == "" && current != nil {
 		token = current.Token
 	}
+	if token == "" {
+		token, err = generateRandomToken(32)
+		if err != nil {
+			return nil, err
+		}
+	}
 	encodingAESKey := strings.TrimSpace(req.EncodingAESKey)
 	if encodingAESKey == "" && current != nil {
 		encodingAESKey = current.EncodingAESKey
 	}
+	if encodingAESKey == "" {
+		encodingAESKey, err = generateEncodingAESKey()
+		if err != nil {
+			return nil, err
+		}
+	}
+	homeURL := strings.TrimSpace(req.HomeURL)
+	if homeURL == "" {
+		homeURL = defaultWeComHomeURL(req.CorpID, req.AgentID)
+	}
+	trustedDomain := strings.TrimSpace(req.TrustedDomain)
+	if trustedDomain == "" {
+		trustedDomain = defaultWeComEmployeeHost
+	}
+	jsapiDomain := strings.TrimSpace(req.JSAPIDomain)
+	if jsapiDomain == "" {
+		jsapiDomain = defaultWeComEmployeeHost
+	}
 	item, err := s.store.UpsertTenantApp(ctx, TenantWeComAppRecord{
 		TenantID:         req.TenantID,
-		CorpID:           strings.TrimSpace(req.CorpID),
+		CorpID:           corpID,
 		CorpName:         strings.TrimSpace(req.CorpName),
 		AgentID:          req.AgentID,
 		SecretCiphertext: secretCiphertext,
 		Token:            token,
 		EncodingAESKey:   encodingAESKey,
-		HomeURL:          strings.TrimSpace(req.HomeURL),
-		TrustedDomain:    strings.TrimSpace(req.TrustedDomain),
-		JSAPIDomain:      strings.TrimSpace(req.JSAPIDomain),
+		HomeURL:          homeURL,
+		TrustedDomain:    trustedDomain,
+		JSAPIDomain:      jsapiDomain,
 		Enabled:          req.Enabled,
+		ConfigConfirmed:  req.ConfigConfirmed,
 	})
 	if err != nil {
 		return nil, err
@@ -782,10 +995,13 @@ func (s *Service) toTenantAppResponse(ctx context.Context, item *TenantWeComAppR
 		HasSecret:         strings.TrimSpace(item.SecretCiphertext) != "",
 		HasToken:          strings.TrimSpace(item.Token) != "",
 		HasEncodingAESKey: strings.TrimSpace(item.EncodingAESKey) != "",
+		Token:             item.Token,
+		EncodingAESKey:    item.EncodingAESKey,
 		HomeURL:           item.HomeURL,
 		TrustedDomain:     item.TrustedDomain,
 		JSAPIDomain:       item.JSAPIDomain,
 		Enabled:           item.Enabled,
+		ConfigConfirmed:   item.ConfigConfirmed,
 		CreatedAt:         formatTime(item.CreatedAt),
 		UpdatedAt:         formatTime(item.UpdatedAt),
 	}
@@ -826,6 +1042,30 @@ func toBindingStatusResponse(item *BindingStatusRecord) *BindingStatusResponse {
 		v := formatTime(*item.BindingUpdated)
 		resp.BindingUpdated = &v
 	}
+	return resp
+}
+
+func toDirectoryMemberResponse(item *DirectoryMemberListRecord) *DirectoryMemberResponse {
+	if item == nil {
+		return nil
+	}
+	resp := &DirectoryMemberResponse{
+		ID:                  item.ID,
+		TenantID:            item.TenantID,
+		TenantName:          item.TenantName,
+		CorpID:              item.CorpID,
+		CorpName:            item.CorpName,
+		WeComUserID:         item.WeComUserID,
+		Name:                item.Name,
+		Mobile:              item.Mobile,
+		MatchStatus:         item.MatchStatus,
+		MatchedEmployeeID:   item.MatchedEmployeeID,
+		MatchedEmployeeName: item.MatchedEmployeeName,
+		BindingEmployeeID:   item.BindingEmployeeID,
+		BindingSource:       item.BindingSource,
+	}
+	v := formatTime(item.LastSyncedAt)
+	resp.LastSyncedAt = &v
 	return resp
 }
 
