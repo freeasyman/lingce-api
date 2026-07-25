@@ -447,6 +447,7 @@ func (s *Store) UpsertDirectoryMember(ctx context.Context, record DirectoryMembe
 		)
 		ON CONFLICT (corp_id, wecom_user_id)
 		DO UPDATE SET
+			tenant_id = EXCLUDED.tenant_id,
 			name = EXCLUDED.name,
 			mobile = EXCLUDED.mobile,
 			department_ids = EXCLUDED.department_ids,
