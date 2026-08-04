@@ -17,6 +17,7 @@ type Config struct {
 	JWT       JWTConfig       `toml:"jwt"`
 	Recording RecordingConfig `toml:"recording"`
 	External  ExternalConfig  `toml:"external"`
+	DashScope DashScopeConfig `toml:"dashscope"`
 	Aliyun    AliyunConfig    `toml:"aliyun"`
 	WeCom     WeComConfig     `toml:"wecom"`
 	Log       LogConfig       `toml:"log"`
@@ -78,6 +79,12 @@ type TicketNotifyConfig struct {
 	To       string `toml:"to"`
 }
 
+type DashScopeConfig struct {
+	APIKey  string `toml:"api_key"`
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"`
+}
+
 type AliyunConfig struct {
 	AccessKeyID      string `toml:"access_key_id"`
 	AccessKeySecret  string `toml:"access_key_secret"`
@@ -97,10 +104,11 @@ type LogConfig struct {
 }
 
 type secretsConfig struct {
-	Database DatabaseSecrets `toml:"database"`
-	JWT      JWTSecrets      `toml:"jwt"`
-	External ExternalSecrets `toml:"external"`
-	Aliyun   AliyunSecrets   `toml:"aliyun"`
+	Database  DatabaseSecrets  `toml:"database"`
+	JWT       JWTSecrets       `toml:"jwt"`
+	External  ExternalSecrets  `toml:"external"`
+	DashScope DashScopeSecrets `toml:"dashscope"`
+	Aliyun    AliyunSecrets    `toml:"aliyun"`
 }
 
 type DatabaseSecrets struct {
@@ -120,6 +128,12 @@ type ExternalSecrets struct {
 	InternalWorkerToken       string             `toml:"internal_worker_token"`
 	EmployeeWebBaseURL        string             `toml:"employee_web_base_url"`
 	TicketNotify              TicketNotifyConfig `toml:"ticket_notify"`
+}
+
+type DashScopeSecrets struct {
+	APIKey  string `toml:"api_key"`
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"`
 }
 
 type AliyunSecrets struct {
@@ -239,6 +253,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.External.TicketNotify.SMTPPort == 0 {
 		cfg.External.TicketNotify.SMTPPort = 25
 	}
+	if cfg.DashScope.Model == "" {
+		cfg.DashScope.Model = "qwen-max"
+	}
+	if cfg.DashScope.BaseURL == "" {
+		cfg.DashScope.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
 	}
@@ -286,6 +306,15 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	if secrets.External.TicketNotify.To != "" {
 		cfg.External.TicketNotify.To = secrets.External.TicketNotify.To
+	}
+	if secrets.DashScope.APIKey != "" {
+		cfg.DashScope.APIKey = secrets.DashScope.APIKey
+	}
+	if secrets.DashScope.Model != "" {
+		cfg.DashScope.Model = secrets.DashScope.Model
+	}
+	if secrets.DashScope.BaseURL != "" {
+		cfg.DashScope.BaseURL = secrets.DashScope.BaseURL
 	}
 	if secrets.Aliyun.AccessKeyID != "" {
 		cfg.Aliyun.AccessKeyID = secrets.Aliyun.AccessKeyID

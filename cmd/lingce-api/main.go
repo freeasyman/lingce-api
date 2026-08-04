@@ -29,6 +29,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/sandbox"
+	"github.com/freeasyman/lingce-api/internal/splitdemo"
 	"github.com/freeasyman/lingce-api/internal/store"
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
@@ -222,6 +223,12 @@ func main() {
 	supportService := support.NewService(supportStore, llmClient)
 	supportHandler := support.NewHandler(supportService)
 	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	splitDemoStore := splitdemo.NewStore(pool)
+	splitDemoClient := splitdemo.NewClient(cfg.DashScope.BaseURL, cfg.DashScope.APIKey)
+	splitDemoService := splitdemo.NewService(splitDemoStore, splitDemoClient)
+	splitDemoHandler := splitdemo.NewHandler(splitDemoService)
+	splitDemoHandler.RegisterRoutes(mux)
 
 	// Register customer module
 	customerStore := customer.NewStore(pool)

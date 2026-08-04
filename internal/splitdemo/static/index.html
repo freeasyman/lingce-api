@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>录音切分 Demo</title>
+  <style>
+    :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--green:#2ea043;--blue:#58a6ff;--yellow:#d29922;--gray:#6e7681;--red:#f85149}
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0b1020 0%,#0d1117 100%);color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .wrap{max-width:1400px;margin:0 auto;padding:20px}
+    h1{font-size:22px;margin:0 0 16px}
+    .grid{display:grid;grid-template-columns:320px 1fr;gap:16px}
+    .card{background:rgba(22,27,34,.92);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.22)}
+    .card h2{font-size:15px;margin:0 0 12px}
+    label{display:block;color:var(--muted);margin:10px 0 6px}
+    select,textarea,input,button{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);padding:10px}
+    textarea{min-height:140px;resize:vertical;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+    button{background:#238636;border-color:#2ea043;font-weight:600;cursor:pointer}
+    button.secondary{background:#21262d;border-color:#30363d}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .row{display:flex;gap:10px}
+    .row > *{flex:1}
+    .muted{color:var(--muted)}
+    .small{font-size:12px}
+    .timeline{display:flex;height:28px;border-radius:999px;overflow:hidden;background:#111;border:1px solid var(--line)}
+    .seg{height:100%;position:relative;cursor:pointer;transition:opacity .16s ease}
+    .seg:hover{opacity:.82}
+    .seg.encounter{background:var(--green)}
+    .seg.non_encounter_talk{background:var(--blue)}
+    .seg.idle{background:var(--gray)}
+    .seg.uncertain{background:var(--yellow)}
+    .seg.review{outline:2px solid var(--red);outline-offset:-2px}
+    .list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+    .item{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
+    .item header{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}
+    .pill{padding:2px 8px;border-radius:999px;background:#21262d;color:var(--muted);font-size:12px}
+    .pill.encounter{background:rgba(46,160,67,.18);color:#7ee787}
+    .pill.non_encounter_talk{background:rgba(88,166,255,.18);color:#79c0ff}
+    .pill.idle{background:rgba(110,118,129,.24);color:#c9d1d9}
+    .pill.uncertain{background:rgba(210,153,34,.2);color:#e3b341}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;border:1px solid var(--line);padding:12px;border-radius:10px;overflow:auto}
+    .transcript{background:#0b1020;border:1px solid var(--line);padding:12px;border-radius:10px;max-height:360px;overflow:auto}
+    .utt{padding:4px 0;border-bottom:1px dashed rgba(255,255,255,.06)}
+    .utt:last-child{border-bottom:none}
+    .utt-time{color:#7d8590;margin-right:8px;font-variant-numeric:tabular-nums}
+    .utt-speaker{color:#a5d6ff;margin-right:6px}
+    .boundary{border:1px dashed #5b6571;background:#0d1521}
+    .boundary-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .boundary-title{font-weight:700;margin-bottom:8px}
+    .silence{color:#e3b341;font-weight:600}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .actions button{width:auto;padding:8px 12px}
+    .actions button.active{outline:2px solid #fff}
+    .summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .summary .card{padding:10px}
+    .meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+    .meta-box{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
+    .meta-box strong{display:block;font-size:13px}
+    .status-bar{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0f141a}
+    .progress{height:8px;border-radius:999px;background:#111;border:1px solid var(--line);overflow:hidden;margin-top:8px}
+    .progress > div{height:100%;background:linear-gradient(90deg,#238636,#58a6ff);width:0%}
+    .headline{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0f141a;margin:12px 0}
+    .headline strong{font-size:18px}
+    .headline .muted{margin-top:4px}
+    .encounter-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0f141a;transition:border-color .15s ease, box-shadow .15s ease, background .15s ease}
+    .encounter-card header{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px}
+    .encounter-title{font-size:16px;font-weight:700}
+    .clue{color:#7ee787;font-weight:600}
+    .summary-lines{display:grid;gap:8px;margin:10px 0}
+    .summary-line{font-size:16px;line-height:1.4}
+    .summary-line strong{display:inline-block;min-width:74px}
+    .meta-row{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+    .encounter-card.focused{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.2)}
+    .encounter-card.done-ok{border-color:#2ea043;background:rgba(46,160,67,.1)}
+    .encounter-card.done-issue{border-color:#d29922;background:rgba(210,153,34,.08)}
+    .status-mark{font-size:18px;font-weight:700}
+    .toggle-link{background:none;border:none;padding:0;color:#79c0ff;text-align:left;width:auto}
+    .gap-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+    .gap-item{border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 10px;background:#0b1020}
+    .gap-item .label{font-weight:600}
+    .spacer{height:8px}
+    .validation-progress{height:10px;border-radius:999px;background:#111;border:1px solid var(--line);overflow:hidden;margin-top:10px}
+    .validation-progress > div{height:100%;background:linear-gradient(90deg,#58a6ff,#2ea043);width:0%}
+    details{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
+    summary{cursor:pointer;color:var(--muted)}
+    .table{width:100%;border-collapse:collapse}
+    .table th,.table td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+    .table tr:hover{background:#11161d;cursor:pointer}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width: 1100px){.grid,.split{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>录音切分 Demo</h1>
+    <div class="grid">
+      <div class="card">
+        <h2>录音</h2>
+        <label>租户</label>
+        <input id="tenantId" value="1" />
+        <label>最小时长（秒）</label>
+        <input id="minDuration" value="600" />
+        <button id="loadBtn" class="secondary" style="margin-top:10px">刷新录音列表</button>
+        <label>长录音列表</label>
+        <select id="recordingSelect" size="14"></select>
+        <div id="recordingMeta" class="muted" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
+        <h2>切分配置</h2>
+        <div class="row">
+          <div>
+            <label>模型</label>
+            <input id="model" value="qwen-max" />
+          </div>
+          <div>
+            <label>提示词版本</label>
+            <input id="promptVersion" value="v0.1" />
+          </div>
+        </div>
+        <label>System Prompt</label>
+        <textarea id="systemPrompt"></textarea>
+        <label>User Prompt</label>
+        <textarea id="userPrompt"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="splitBtn">执行切分</button>
+          <button id="reloadDetailBtn" class="secondary">重新加载录音详情</button>
+        </div>
+        <div id="statusBox" class="status-bar" style="display:none">
+          <div id="status" class="muted"></div>
+          <div id="statusExtra" class="muted small" style="margin-top:4px"></div>
+          <div class="progress"><div id="statusProgress"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="split" style="margin-top:16px">
+      <div class="card">
+        <h2>录音详情</h2>
+        <div id="detailMeta" class="muted"></div>
+        <div id="detailText" class="transcript">请选择录音</div>
+        <details style="margin-top:12px">
+          <summary>查看原始转写结构</summary>
+          <pre id="detailRaw"></pre>
+        </details>
+      </div>
+      <div class="card">
+        <h2>切分结果</h2>
+        <div id="runMeta" class="muted"></div>
+        <div id="validation" class="muted" style="margin-top:8px"></div>
+        <div id="resultMetaGrid" class="meta-grid"></div>
+        <div id="headlineSummary" class="headline" style="display:none"></div>
+        <div id="timeline" class="timeline"></div>
+        <div class="muted small" style="margin-top:10px">快捷键：`Y`/`→` 正确，`N`/`←` 有问题并展开，空格 展开/收起，`↑`/`↓` 切换焦点</div>
+        <div id="annotationSummary" class="summary" style="margin-top:12px"></div>
+        <div id="encounters" class="list"></div>
+        <details style="margin-top:12px">
+          <summary>查看完整时间轴</summary>
+          <div id="timelineTable"></div>
+        </details>
+        <details style="margin-top:12px">
+          <summary>查看原始 JSON</summary>
+          <pre id="rawOutput"></pre>
+        </details>
+      </div>
+    </div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const defaultSystem = `你是一个医疗录音结构化助手。你的唯一任务是把一段连续的门诊录音转写文本,按时间轴切分成连续的片段,并判断每个片段的类型。
+
+## 你要做的事
+
+把整条时间轴切成连续、不重叠、完整覆盖的片段。每个片段判断两件事:
+1. 它的类型(是一次就诊,还是非就诊内容)
+2. 它的起止位置
+
+## 你不要做的事
+
+- 不要识别患者姓名、年龄、性别、电话
+- 不要生成主诉、诊断、病历、处方
+- 不要评价医生表现
+- 不要总结对话内容
+- 不要提取任何可用于宣传的片段
+
+以上都由后续环节处理。你只回答"边界在哪里、这段是什么类型"。
+
+## 片段类型定义
+
+- encounter:一次就诊。一个患者(含陪同家属)与医生的连续诊疗交互,包含问诊、查体、解释、开方、医嘱中至少一项。
+- non_encounter_talk:非就诊对话。医生与同事讨论排班/器械、接电话、闲聊。即使内容涉及某位患者的病情,只要患者不在场,也归此类。
+- idle:静默或无有效内容。
+- uncertain:无法判断类型,需人工复核。
+
+## 就诊边界的裁定规则
+
+判定为同一次就诊(不切开):
+- 同一患者连续讲多个不相关的问题
+- 家属代述,患者本人不在场
+- 患者中途离开做检查后返回
+- 医生短暂离开,患者留在诊室
+- 内部短静默(30 秒以内)
+- 医生查阅资料、书写记录时的静默
+- 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
+
+判定为不是就诊:
+- 患者只是问路、拿报告、取药,没有诊疗内容
+- 医生与同事的任何交流
+
+## 边界信号(按可靠性排序)
+
+强信号:
+- 叫号或点名:"下一个"、"张三"、"李阿姨来了"
+- 明确的结束语:"没什么问题了"、"回去吃药"、"下周再来"、"好,就这样"
+- 明确的开场语:"哪里不舒服"、"什么时候开始的"、"坐吧"
+- 长静默(超过 90 秒)
+
+中等信号:
+- 主诉突变且与前文无关联
+- 称谓变化:"阿姨"变成"小伙子"
+- 中等静默(30 到 90 秒)
+- 寒暄模式重现
+
+弱信号:
+- 固定问诊句式重复出现
+- 语气回到问诊开场状态
+
+## 最重要的原则:宁可多切,不要漏切
+
+把两个不同患者错误地合并成一段,是严重错误。它会导致 A 患者的主诉和 B 患者的诊断混进同一份病历,产生临床安全风险,而且很难被发现。
+
+把一次就诊错误地切成两段,是轻微错误。人工合并即可修复。
+
+因此:
+- 遇到疑似不同患者时,优先切开
+- 拿不准的边界,切开并标记低置信度
+- 不要为了让片段"看起来完整"而合并可疑区域
+
+## 输出格式
+
+只输出 JSON,不要任何解释文字、不要 markdown 代码块标记。
+
+{
+  "segments": [
+    {
+      "index": 1,
+      "segment_type": "encounter",
+      "start_seconds": 0,
+      "end_seconds": 412,
+      "boundary_confidence": 0.93,
+      "boundary_reasons": ["closing_phrase:没问题了回去吧", "silence_38s"],
+      "silence_gap_seconds": 38,
+      "needs_review": false,
+      "multi_patient": false,
+      "contains_clinical_info": null,
+      "text_preview": "医生:坐吧,哪里不舒服? 患者:最近胃一直疼..."
+    }
+  ]
+}
+
+字段说明:
+- index: 从 1 开始的连续序号
+- segment_type: encounter | non_encounter_talk | idle | uncertain
+- start_seconds / end_seconds: 相对录音开始的偏移秒数
+- boundary_confidence: 0.0 到 1.0,你对这个片段边界判定的可信程度
+- boundary_reasons: 你依据了哪些信号,写成 "信号类型:具体证据" 的形式
+- silence_gap_seconds: 该片段与下一片段之间的静默秒数,不确定时填 null
+- needs_review: boundary_confidence 低于 0.75 时必须为 true
+- multi_patient: 仅 encounter 类型有意义,疑似多位患者同时就诊时为 true,否则 false
+- contains_clinical_info: 仅 non_encounter_talk 类型有意义,该段是否涉及患者病情。其他类型填 null
+- text_preview: 该片段开头约 100 字,用于人工识别这段在讲什么
+
+## 硬性约束
+
+1. 第一个片段的 start_seconds 必须是 0
+2. 最后一个片段的 end_seconds 必须等于录音总时长
+3. 相邻片段必须首尾相接:segments[i].end_seconds == segments[i+1].start_seconds
+4. 不允许有间隙,不允许重叠
+5. 每个片段的 end_seconds 必须大于 start_seconds`;
+    const defaultUser = `录音总时长:{{duration_seconds}} 秒
+
+转写文本:
+
+{{transcript}}
+
+请按 system prompt 的要求切分这条录音的时间轴,输出 JSON。`;
+    $('systemPrompt').value = defaultSystem;
+    $('userPrompt').value = defaultUser;
+    let currentRecording = null;
+    let activeJobId = null;
+    let activePollTimer = null;
+    let activeStatusTimer = null;
+    let activeJobCreatedAt = null;
+    let encounterAnnotations = {};
+    let expandedEncounters = {};
+    let focusedEncounter = 1;
+    async function api(url, options={}) {
+      const resp = await fetch(url, {
+        headers: {'Content-Type':'application/json'},
+        ...options,
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.code) {
+        throw new Error(data.message || resp.statusText);
+      }
+      return data.data ?? data;
+    }
+    function fmtSeconds(s) {
+      const total = Math.floor(Number(s || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60).toString().padStart(2, '0');
+      const r = Math.floor(total % 60).toString().padStart(2, '0');
+      return h > 0 ? `${String(h).padStart(2, '0')}:${m}:${r}` : `${m}:${r}`;
+    }
+    function fmtDurationLabel(totalSeconds) {
+      const value = Number(totalSeconds || 0);
+      const hours = Math.floor(value / 3600);
+      const minutes = Math.floor((value % 3600) / 60);
+      const seconds = Math.floor(value % 60);
+      const parts = [];
+      if (hours > 0) parts.push(`${hours}小时`);
+      if (minutes > 0 || hours > 0) parts.push(`${minutes}分`);
+      parts.push(`${seconds}秒`);
+      return parts.join('');
+    }
+    function segmentTypeLabel(type) {
+      return ({
+        encounter: '就诊',
+        non_encounter_talk: '非就诊对话',
+        idle: '静默',
+        uncertain: '待复核',
+      })[type] || type || '未知';
+    }
+    function boolLabel(value, yes, no='否') {
+      return value ? yes : no;
+    }
+    function escapeHtml(value) {
+      return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    }
+    function formatConfidence(value) {
+      const num = Number(value ?? 0);
+      return Number.isFinite(num) ? num.toFixed(2) : '--';
+    }
+    function pickUtteranceStart(item) {
+      if (item.start_seconds != null) return Number(item.start_seconds) || 0;
+      if (item.start_time != null) return Number(item.start_time) || 0;
+      if (item.start_ms != null) return Math.floor((Number(item.start_ms) || 0) / 1000);
+      if (item.start != null) return Number(item.start) || 0;
+      return 0;
+    }
+    function showStatusBox(show = true) {
+      $('statusBox').style.display = show ? 'block' : 'none';
+    }
+    function renderResultMeta(result) {
+      $('resultMetaGrid').innerHTML = `
+        <div class="meta-box"><strong>模型</strong><div class="muted">${escapeHtml(result.split_model || '-')} / ${escapeHtml(result.split_prompt_version || '-')}</div></div>
+        <div class="meta-box"><strong>耗时</strong><div class="muted">${fmtDurationLabel(Math.round((result.elapsed_ms || 0) / 1000))}</div></div>
+        <div class="meta-box"><strong>Token</strong><div class="muted">输入 ${result.usage?.prompt_tokens || 0} / 输出 ${result.usage?.completion_tokens || 0} / 总计 ${result.usage?.total_tokens || 0}</div></div>
+        <div class="meta-box"><strong>分块</strong><div class="muted">${result.chunk_count || 0} 块 | 输入源 ${escapeHtml(result.input_kind || '-')}</div></div>
+      `;
+    }
+    function renderTimeline(segments, total) {
+      const el = $('timeline');
+      el.innerHTML = '';
+      segments.forEach(seg => {
+        const div = document.createElement('div');
+        div.className = `seg ${seg.segment_type}`;
+        if (seg.needs_review) div.classList.add('review');
+        div.style.width = `${Math.max(0.5, ((seg.end_seconds - seg.start_seconds) / Math.max(total, 1)) * 100)}%`;
+        div.title = `第${seg.index}段 ${segmentTypeLabel(seg.segment_type)} ${fmtSeconds(seg.start_seconds)}-${fmtSeconds(seg.end_seconds)}`;
+        div.addEventListener('click', () => {
+          const target = document.querySelector(`[data-segment-index="${seg.index}"]`);
+          target?.scrollIntoView({behavior:'smooth', block:'center'});
+          const encounterNumber = Number(target?.dataset?.encounterNumber || 0);
+          if (encounterNumber) {
+            focusedEncounter = encounterNumber;
+            renderEncounters(window.__lastResult || {});
+          }
+        });
+        el.appendChild(div);
+      });
+    }
+    function confidenceTag(seg) {
+      return `置信度 ${formatConfidence(seg.boundary_confidence)}（${seg.confidence_label || ''}）${seg.needs_review ? ' ⚠️需复核' : ''}`;
+    }
+    function renderUtterances(utterances) {
+      if (!utterances?.length) return '<div class="muted">无可展示对话</div>';
+      return utterances.map(item => `
+        <div class="utt">
+          <span class="utt-time">[${fmtSeconds(item.start_seconds)}]</span>
+          <span class="utt-speaker">${item.speaker_role || item.speaker || 'unknown'}:</span>
+          <span>${item.text || ''}</span>
+        </div>
+      `).join('');
+    }
+    function updateAnnotationSummary(result) {
+      const counts = {correct:0, merge_prev:0, merge_next:0, split_inner:0};
+      Object.values(encounterAnnotations).forEach(v => { if (counts[v] !== undefined) counts[v] += 1; });
+      const reviewed = Object.keys(encounterAnnotations).length;
+      const problemCount = counts.merge_prev + counts.merge_next + counts.split_inner;
+      const progress = result.summary?.encounter_count ? Math.round((reviewed / result.summary.encounter_count) * 100) : 0;
+      $('annotationSummary').innerHTML = `
+        <div class="card"><strong>切分结果</strong><div class="muted">识别出 ${result.summary?.encounter_count || 0} 次就诊，共 ${result.summary?.total_segment_count || 0} 段</div></div>
+        <div class="card"><strong>人工判定</strong><div class="muted">已验证 ${reviewed}/${result.summary?.encounter_count || 0}，正确 ${counts.correct}，有问题 ${problemCount}</div></div>
+        <div class="card"><strong>契约校验</strong><div class="muted">${result.validation?.is_valid ? '通过' : '未通过'}</div></div>
+      `;
+      $('headlineSummary').style.display = 'block';
+      $('headlineSummary').innerHTML = `
+        <strong>识别出 ${result.summary?.encounter_count || 0} 次就诊</strong>
+        <div class="muted">时间轴${result.validation?.is_valid ? '完整覆盖，无间隙' : '存在问题'}（共 ${result.summary?.total_segment_count || 0} 段：就诊 ${result.summary?.encounter_count || 0}、非就诊对话 ${result.summary?.non_encounter_talk_count || 0}、静默 ${result.summary?.idle_count || 0}、待确认 ${result.summary?.uncertain_count || 0}）</div>
+        <div class="muted">人工验证：${reviewed}/${result.summary?.encounter_count || 0} 已验证${reviewed ? `（${counts.correct} 正确，${problemCount} 有问题）` : ''}</div>
+        <div class="validation-progress"><div style="width:${progress}%"></div></div>
+      `;
+    }
+    function renderValidation(result) {
+      const validation = result.validation || {};
+      $('validation').textContent = (validation.messages || []).join(' | ');
+    }
+    function setEncounterAnnotation(encounterNumber, verdict, result) {
+      encounterAnnotations[encounterNumber] = verdict;
+      if (verdict !== 'correct') {
+        expandedEncounters[encounterNumber] = true;
+      }
+      updateAnnotationSummary(result);
+      renderEncounters(result);
+      focusEncounter(Number(encounterNumber) + 1);
+    }
+    function toggleEncounter(encounterNumber) {
+      expandedEncounters[encounterNumber] = !expandedEncounters[encounterNumber];
+      renderEncounters(window.__lastResult || {});
+      focusEncounter(Number(encounterNumber));
+    }
+    function focusEncounter(encounterNumber) {
+      const total = (window.__lastResult?.encounters || []).length;
+      if (!total) return;
+      focusedEncounter = Math.min(Math.max(encounterNumber, 1), total);
+      renderEncounters(window.__lastResult || {});
+      document.querySelector(`#encounter-${focusedEncounter}`)?.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    function verdictMark(verdict) {
+      if (verdict === 'correct') return '✓';
+      if (verdict) return '?';
+      return '';
+    }
+    function verdictClass(verdict) {
+      if (verdict === 'correct') return 'done-ok';
+      if (verdict) return 'done-issue';
+      return '';
+    }
+    function renderTimelineTable(result) {
+      const segments = result.segments || [];
+      $('timelineTable').innerHTML = `
+        <table class="table">
+          <thead><tr><th>序号</th><th>类型</th><th>时间</th><th>时长</th></tr></thead>
+          <tbody>
+            ${segments.map(seg => `<tr>
+              <td>${seg.index}</td>
+              <td><span class="pill ${seg.segment_type}">${segmentTypeLabel(seg.segment_type)}</span></td>
+              <td>${fmtSeconds(seg.start_seconds)} - ${fmtSeconds(seg.end_seconds)}</td>
+              <td>${fmtDurationLabel(seg.duration_seconds)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    function renderGapItems(items) {
+      if (!items?.length) return '<div class="muted">两次就诊直接相连</div>';
+      return items.map(item => `
+        <div class="gap-item">
+          <div><span class="label">${escapeHtml(item.label)}</span> · ${fmtSeconds(item.start_seconds)} - ${fmtSeconds(item.end_seconds)}（${fmtDurationLabel(item.duration_seconds)}）</div>
+          ${item.text_preview ? `<div class="muted">${escapeHtml(item.text_preview)}</div>` : ''}
+        </div>
+      `).join('');
+    }
+    function renderEncounters(result) {
+      window.__lastResult = result;
+      const encounters = result.encounters || [];
+      const el = $('encounters');
+      el.innerHTML = '';
+      if (!encounters.length) {
+        el.innerHTML = '<div class="item"><div class="muted">本次没有识别出 encounter，可先查看完整时间轴和原始 JSON。</div></div>';
+        return;
+      }
+      if (focusedEncounter < 1) focusedEncounter = 1;
+      if (focusedEncounter > encounters.length) focusedEncounter = encounters.length;
+      encounters.forEach((encounter) => {
+        if (encounter.boundary_from_prev) {
+          const boundary = encounter.boundary_from_prev;
+          const boundaryCard = document.createElement('div');
+          boundaryCard.className = 'item boundary';
+          boundaryCard.innerHTML = `
+            <details>
+              <summary>检查此处边界：就诊 #${boundary.previous_encounter_number} 与 就诊 #${boundary.next_encounter_number}</summary>
+              <div class="muted" style="margin-top:8px">中间间隙 ${fmtSeconds(boundary.start_seconds)} - ${fmtSeconds(boundary.end_seconds)}（共 ${fmtDurationLabel(boundary.duration_seconds)}）</div>
+              <div class="boundary-columns" style="margin-top:10px">
+                <div>
+                  <div class="muted">就诊 #${boundary.previous_encounter_number} 结尾</div>
+                  <div class="transcript">${renderUtterances(boundary.left_utterances)}</div>
+                </div>
+                <div>
+                  <div class="muted">就诊 #${boundary.next_encounter_number} 开头</div>
+                  <div class="transcript">${renderUtterances(boundary.right_utterances)}</div>
+                </div>
+              </div>
+              <div class="silence" style="margin-top:10px">${escapeHtml(boundary.gap_summary || '')}</div>
+              <div class="gap-list">${renderGapItems(boundary.gap_items)}</div>
+            </details>
+          `;
+          el.appendChild(boundaryCard);
+        }
+        const item = document.createElement('div');
+        const verdict = encounterAnnotations[String(encounter.encounter_number)] || '';
+        const expanded = !!expandedEncounters[String(encounter.encounter_number)];
+        item.className = `encounter-card ${verdictClass(verdict)} ${focusedEncounter === encounter.encounter_number ? 'focused' : ''}`.trim();
+        item.id = `encounter-${encounter.encounter_number}`;
+        item.dataset.segmentIndex = encounter.segment_index;
+        item.dataset.encounterNumber = encounter.encounter_number;
+        item.innerHTML = `
+          <header>
+            <div>
+              <div class="encounter-title">就诊 #${encounter.encounter_number}</div>
+              <div class="muted">${fmtSeconds(encounter.start_seconds)} - ${fmtSeconds(encounter.end_seconds)}（${fmtDurationLabel(encounter.duration_seconds)}）</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px"><span class="pill encounter">就诊</span><span class="status-mark">${verdictMark(verdict)}</span></div>
+          </header>
+          <div class="summary-lines">
+            <div class="summary-line"><strong>👤 患者</strong>${escapeHtml(encounter.patient_hint || encounter.patient_clue || '—')}</div>
+            <div class="summary-line"><strong>🗣️ 主诉</strong>${escapeHtml(encounter.chief_complaint || '—')}</div>
+            <div class="summary-line"><strong>💊 处置</strong>${escapeHtml(encounter.disposition || '—')}</div>
+          </div>
+          <div class="meta-row">
+            <span>📊 ${confidenceTag(encounter)}</span>
+            ${encounter.multi_patient ? '<span>多患者同诊</span>' : ''}
+          </div>
+          <div class="muted" style="margin-top:8px">开场：“${escapeHtml(encounter.opening_line || '—')}”</div>
+          <div class="muted">结束：“${escapeHtml(encounter.closing_line || '—')}”</div>
+          <div class="muted" style="margin-top:6px">判定依据：${(encounter.reason_labels || []).join(' / ') || '无明显判定依据'}</div>
+          <div class="actions">
+            <button class="${verdict === 'correct' ? 'active' : ''}" data-encounter="${encounter.encounter_number}" data-verdict="correct">切分正确</button>
+            <button class="${verdict && verdict !== 'correct' ? 'active' : ''}" data-encounter="${encounter.encounter_number}" data-verdict="split_inner">有问题，需查看</button>
+          </div>
+          <button class="toggle-link" data-toggle-encounter="${encounter.encounter_number}">${expanded ? '▼ 收起对话' : '▶ 展开完整对话'}</button>
+          ${expanded ? `<div class="transcript" style="margin-top:8px">${renderUtterances(encounter.utterances)}</div>` : ''}`;
+        el.appendChild(item);
+      });
+      el.querySelectorAll('[data-encounter]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const verdict = btn.dataset.verdict === 'split_inner' ? 'split_inner' : btn.dataset.verdict;
+          setEncounterAnnotation(btn.dataset.encounter, verdict, result);
+        });
+      });
+      el.querySelectorAll('[data-toggle-encounter]').forEach(btn => {
+        btn.addEventListener('click', () => toggleEncounter(btn.dataset.toggleEncounter));
+      });
+      el.querySelectorAll('.encounter-card').forEach(card => {
+        card.addEventListener('click', () => {
+          focusedEncounter = Number(card.dataset.encounterNumber || focusedEncounter);
+          renderEncounters(result);
+        });
+      });
+    }
+    function renderJobStatus(job) {
+      const parts = [job.message || '处理中'];
+      if (job.stage === 'summary') {
+        parts.push(`摘要进度 ${job.summary_done || 0}/${job.summary_total || 0}`);
+      } else if (job.total_chunks > 0) {
+        parts.push(`块进度 ${job.completed_chunks || 0}/${job.total_chunks}`);
+      }
+      showStatusBox(true);
+      $('status').textContent = parts.join(' | ');
+      let progress = 12;
+      if (job.stage === 'summary' && job.summary_total > 0) {
+        progress = 50 + Math.round(((job.summary_done || 0) / job.summary_total) * 50);
+      } else if (job.total_chunks > 0) {
+        progress = Math.max(3, Math.min(50, Math.round(((job.completed_chunks || 0) / job.total_chunks) * 50)));
+      } else if (job.status === 'completed') {
+        progress = 100;
+      }
+      $('statusProgress').style.width = `${progress}%`;
+      const extras = [];
+      if (activeJobCreatedAt) {
+        const elapsed = Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000));
+        extras.push(`已运行 ${fmtDurationLabel(elapsed)}`);
+      }
+      if (job.status === 'running' && job.current_chunk > 0) {
+        extras.push('任务仍在执行中');
+      }
+      if (job.updated_at) {
+        extras.push(`最近状态更新时间 ${job.updated_at}`);
+      }
+      $('statusExtra').textContent = extras.join(' | ');
+    }
+    function stopStatusTimer() {
+      if (activeStatusTimer) {
+        clearInterval(activeStatusTimer);
+        activeStatusTimer = null;
+      }
+    }
+    function startStatusTimer() {
+      stopStatusTimer();
+      activeStatusTimer = setInterval(() => {
+        if (!activeJobCreatedAt) return;
+        const current = $('status').textContent;
+        if (current) {
+          const elapsed = Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000));
+          $('statusExtra').textContent = `已运行 ${fmtDurationLabel(elapsed)} | 页面仍在等待任务返回`;
+        }
+      }, 1000);
+    }
+    function stopPolling() {
+      if (activePollTimer) {
+        clearTimeout(activePollTimer);
+        activePollTimer = null;
+      }
+      stopStatusTimer();
+    }
+    async function pollJob(jobId) {
+      try {
+        const job = await api(`/internal/split-demo/split-jobs/${jobId}`);
+        renderJobStatus(job);
+        if (job.status === 'completed' && job.result) {
+          $('runMeta').textContent = `${job.result.split_model} | ${job.result.split_prompt_version} | ${job.result.elapsed_ms}ms | tokens ${job.result.usage.total_tokens || 0} | chunks ${job.result.chunk_count} | input ${job.result.input_kind}`;
+          $('rawOutput').textContent = job.result.raw_output || '';
+          encounterAnnotations = {};
+          expandedEncounters = {};
+          focusedEncounter = 1;
+          renderValidation(job.result);
+          renderResultMeta(job.result);
+          renderTimeline(job.result.segments || [], job.result.recording_duration_seconds || 1);
+          renderTimelineTable(job.result);
+          renderEncounters(job.result);
+          updateAnnotationSummary(job.result);
+          $('statusProgress').style.width = '100%';
+          $('splitBtn').disabled = false;
+          activeJobId = null;
+          activeJobCreatedAt = null;
+          stopPolling();
+          return;
+        }
+        if (job.status === 'failed') {
+          $('status').textContent = `错误: ${job.error_message || job.message || '切分失败'}`;
+          $('statusExtra').textContent = '';
+          $('statusProgress').style.width = '100%';
+          $('splitBtn').disabled = false;
+          activeJobId = null;
+          activeJobCreatedAt = null;
+          stopPolling();
+          return;
+        }
+        activePollTimer = setTimeout(() => pollJob(jobId), 1500);
+      } catch (err) {
+        $('status').textContent = `轮询失败: ${err.message}`;
+        $('splitBtn').disabled = false;
+        activeJobId = null;
+        stopPolling();
+      }
+    }
+    async function loadRecordings() {
+      $('status').textContent = '加载录音列表中...';
+      const tenantId = $('tenantId').value.trim() || '1';
+      const minDuration = $('minDuration').value.trim() || '600';
+      const data = await api(`/internal/split-demo/recordings?tenant_id=${encodeURIComponent(tenantId)}&min_duration_seconds=${encodeURIComponent(minDuration)}&page=1&page_size=50`);
+      const select = $('recordingSelect');
+      select.innerHTML = '';
+      data.items.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item.id;
+        opt.textContent = `#${item.id} | ${fmtDurationLabel(item.recording_duration)} | ${item.employee_name} | ${item.recorded_at || ''} | ${item.transcript_chars || 0}字`;
+        opt.dataset.item = JSON.stringify(item);
+        select.appendChild(opt);
+      });
+      showStatusBox(true);
+      $('status').textContent = `已加载 ${data.items.length} 条`;
+      $('statusExtra').textContent = '';
+      $('statusProgress').style.width = '100%';
+      if (data.items.length) {
+        select.selectedIndex = 0;
+        await loadDetail();
+      }
+    }
+    function summarizeTranscript(detail) {
+      const utterances = detail.transcription_segments || detail.cleaned_transcription || detail.timeline_transcript || detail.structured_transcript || [];
+      if (!utterances.length) {
+        return detail.transcript_text || '暂无可用转写';
+      }
+      return utterances.slice(0, 120).map(item => {
+        const start = Math.floor(pickUtteranceStart(item));
+        const speaker = item.speaker_role || item.speaker || item.role || 'unknown';
+        return `<div class="utt"><span class="utt-time">[${fmtSeconds(start)}]</span><span class="utt-speaker">${escapeHtml(speaker)}:</span><span>${escapeHtml(item.text || item.content || item.transcript || item.utterance || '')}</span></div>`;
+      }).join('');
+    }
+    async function loadDetail() {
+      const select = $('recordingSelect');
+      if (!select.value) return;
+      const id = select.value;
+      const data = await api(`/internal/split-demo/recordings/${id}`);
+      currentRecording = data;
+      const segs = data.transcription_segments?.length || data.cleaned_transcription?.length || data.timeline_transcript?.length || data.structured_transcript?.length || 0;
+      $('detailMeta').textContent = `录音 #${data.id} | ${data.employee_name} | ${data.recorded_at || ''} | 来源: ${data.transcript_source} | 时长: ${fmtDurationLabel(data.recording_duration)} | 结构化片段 ${segs} 条`;
+      $('detailText').innerHTML = summarizeTranscript(data);
+      $('detailRaw').textContent = JSON.stringify({
+        transcript_source: data.transcript_source,
+        transcript_text: data.transcript_text,
+        transcription_segments: data.transcription_segments,
+        cleaned_transcription: data.cleaned_transcription,
+        timeline_transcript: data.timeline_transcript,
+        structured_transcript: data.structured_transcript,
+      }, null, 2);
+      $('recordingMeta').textContent = `当前选择: #${data.id}`;
+    }
+    async function runSplit() {
+      if (!currentRecording) return;
+      stopPolling();
+      $('status').textContent = '正在创建切分任务...';
+      $('statusExtra').textContent = '';
+      $('statusProgress').style.width = '8%';
+      showStatusBox(true);
+      $('splitBtn').disabled = true;
+      try {
+        const payload = {
+          recording_id: currentRecording.id,
+          model: $('model').value.trim(),
+          prompt_version: $('promptVersion').value.trim(),
+          system_prompt: $('systemPrompt').value,
+          user_prompt: $('userPrompt').value,
+        };
+        const job = await api('/internal/split-demo/split', {method:'POST', body: JSON.stringify(payload)});
+        activeJobId = job.id;
+        activeJobCreatedAt = Date.now();
+        startStatusTimer();
+        $('runMeta').textContent = `任务 ${job.id} 已启动`;
+        $('rawOutput').textContent = '';
+        $('validation').textContent = '';
+        $('resultMetaGrid').innerHTML = '';
+        $('headlineSummary').style.display = 'none';
+        $('headlineSummary').innerHTML = '';
+        $('annotationSummary').innerHTML = '';
+        encounterAnnotations = {};
+        expandedEncounters = {};
+        focusedEncounter = 1;
+        renderTimeline([], 1);
+        $('timelineTable').innerHTML = '';
+        renderEncounters({encounters: [], summary: {}, validation: {}});
+        renderJobStatus(job);
+        pollJob(job.id);
+      } catch (err) {
+        $('status').textContent = `错误: ${err.message}`;
+        $('splitBtn').disabled = false;
+      }
+    }
+    $('loadBtn').addEventListener('click', loadRecordings);
+    $('reloadDetailBtn').addEventListener('click', loadDetail);
+    $('recordingSelect').addEventListener('change', loadDetail);
+    $('splitBtn').addEventListener('click', runSplit);
+    document.addEventListener('keydown', (event) => {
+      const result = window.__lastResult;
+      const total = result?.encounters?.length || 0;
+      if (!total) return;
+      const tag = document.activeElement?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusEncounter(focusedEncounter + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusEncounter(focusedEncounter - 1);
+      } else if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        setEncounterAnnotation(String(focusedEncounter), 'correct', result);
+      } else if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        expandedEncounters[String(focusedEncounter)] = true;
+        setEncounterAnnotation(String(focusedEncounter), 'split_inner', result);
+      } else if (event.key === ' ') {
+        event.preventDefault();
+        toggleEncounter(String(focusedEncounter));
+      }
+    });
+    loadRecordings().catch(err => $('status').textContent = `加载失败: ${err.message}`);
+  </script>
+</body>
+</html>
