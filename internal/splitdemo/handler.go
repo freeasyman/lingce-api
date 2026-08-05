@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -32,6 +33,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /internal/split-demo/recordings/{id}", h.GetRecording)
 	mux.HandleFunc("POST /internal/split-demo/split", h.SplitRecording)
 	mux.HandleFunc("GET /internal/split-demo/split-jobs/{id}", h.GetSplitJob)
+	mux.HandleFunc("POST /internal/split-demo/save-annotation", h.SaveAnnotation)
+	mux.HandleFunc("POST /internal/split-demo/encounter-summary", h.SummarizeEncounter)
 }
 
 func (h *Handler) ServePage(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +104,53 @@ func (h *Handler) GetSplitJob(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, job)
 }
 
+func (h *Handler) SaveAnnotation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
+		return
+	}
+	var record AnnotationRecord
+	if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if record.RecordingID <= 0 {
+		httputil.WriteBadRequest(w, "recording_id is required")
+		return
+	}
+	if strings.TrimSpace(record.AnnotatedAt) == "" {
+		record.AnnotatedAt = time.Now().Format(time.RFC3339)
+	}
+	if err := h.service.SaveAnnotation(r.Context(), &record); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, record)
+}
+
+func (h *Handler) SummarizeEncounter(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
+		return
+	}
+	var req struct {
+		Model         string `json:"model"`
+		EncounterText string `json:"encounter_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	summary, err := h.service.SummarizeEncounterText(r.Context(), req.Model, req.EncounterText)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, summary)
+}
+
 func (h *Handler) runSplitJob(jobID string, req SplitRequest) {
 	h.jobs.Update(jobID, func(job *SplitJob) {
 		job.Status = SplitJobRunning
@@ -142,6 +192,21 @@ func (h *Handler) runSplitJob(jobID string, req SplitRequest) {
 		job.PartialSegments = len(result.Segments)
 		job.Result = result
 	})
+	if err := h.service.store.SaveRun(context.Background(), &SplitRunRecord{
+		RecordingID:   req.RecordingID,
+		Model:         req.Model,
+		PromptVersion: req.PromptVersion,
+		Status:        string(SplitJobCompleted),
+		Result:        result,
+		RawOutput:     result.RawOutput,
+	}); err != nil {
+		h.jobs.Update(jobID, func(job *SplitJob) {
+			job.Status = SplitJobFailed
+			job.Message = "切分完成但保存失败"
+			job.ErrorMessage = err.Error()
+		})
+		return
+	}
 }
 
 func parsePathID(w http.ResponseWriter, raw string) (int64, bool) {

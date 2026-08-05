@@ -162,6 +162,37 @@ func (s *Service) GetRecording(ctx context.Context, recordingID int64) (*Recordi
 	return s.store.GetRecording(ctx, recordingID)
 }
 
+func (s *Service) SaveAnnotation(ctx context.Context, record *AnnotationRecord) error {
+	return s.store.SaveAnnotation(ctx, record)
+}
+
+func (s *Service) LoadAnnotation(ctx context.Context, recordingID int64) (*AnnotationRecord, error) {
+	return s.store.LoadAnnotation(ctx, recordingID)
+}
+
+func (s *Service) SummarizeEncounterText(ctx context.Context, model, encounterText string) (*EncounterSummary, error) {
+	if strings.TrimSpace(model) == "" {
+		model = defaultModelName
+	}
+	temp := 0.1
+	content, _, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+		Model: model,
+		Messages: []llmMessage{
+			{Role: "system", Content: encounterSummarySystemPrompt},
+			{Role: "user", Content: strings.ReplaceAll(encounterSummaryUserPrompt, "{{encounter_text}}", encounterText)},
+		},
+		Temperature: &temp,
+	})
+	if err != nil {
+		return nil, err
+	}
+	summary, err := parseEncounterSummaryOutput(content)
+	if err != nil {
+		return nil, err
+	}
+	return &summary, nil
+}
+
 func (s *Service) SplitRecording(ctx context.Context, req SplitRequest) (*SplitResponse, error) {
 	return s.splitRecording(ctx, req, nil)
 }
@@ -508,10 +539,8 @@ func extractDurationFromTranscriptHeader(transcript string) string {
 
 func parseSegmentsOutput(content string) ([]SplitSegment, error) {
 	cleaned := stripCodeFence(strings.TrimSpace(content))
-	start := strings.Index(cleaned, "{")
-	end := strings.LastIndex(cleaned, "}")
-	if start >= 0 && end > start {
-		cleaned = cleaned[start : end+1]
+	if extracted, ok := extractFirstJSONObject(cleaned); ok {
+		cleaned = extracted
 	}
 	var raw struct {
 		Segments []map[string]interface{} `json:"segments"`
@@ -552,6 +581,45 @@ func (s *Service) repairSegmentsOutput(ctx context.Context, model, raw string) (
 		Temperature: &temp,
 	})
 	return content, err
+}
+
+func extractFirstJSONObject(content string) (string, bool) {
+	start := strings.Index(content, "{")
+	if start < 0 {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for idx := start; idx < len(content); idx++ {
+		ch := content[idx]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return content[start : idx+1], true
+			}
+		}
+	}
+	return "", false
 }
 
 func normalizeSegments(input []SplitSegment, totalSeconds int) []SplitSegment {

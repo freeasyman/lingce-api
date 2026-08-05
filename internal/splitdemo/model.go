@@ -11,6 +11,10 @@ type RecordingListItem struct {
 	HasTranscript      bool    `json:"has_transcript"`
 	HasStructuredInput bool    `json:"has_structured_input"`
 	TranscriptChars    int     `json:"transcript_chars"`
+	HasSavedRun        bool    `json:"has_saved_run"`
+	SavedRunAt         *string `json:"saved_run_at,omitempty"`
+	HasSavedAnnotation bool    `json:"has_saved_annotation"`
+	SavedAnnotationAt  *string `json:"saved_annotation_at,omitempty"`
 }
 
 type RecordingDetail struct {
@@ -28,6 +32,8 @@ type RecordingDetail struct {
 	StructuredTranscript []map[string]interface{} `json:"structured_transcript,omitempty"`
 	TimelineTranscript   []map[string]interface{} `json:"timeline_transcript,omitempty"`
 	TranscriptSource     string                   `json:"transcript_source"`
+	LatestRun            *SplitRunRecord          `json:"latest_run,omitempty"`
+	LatestAnnotation     *AnnotationRecord        `json:"latest_annotation,omitempty"`
 	CreatedAt            time.Time                `json:"created_at"`
 	UpdatedAt            time.Time                `json:"updated_at"`
 }
@@ -40,6 +46,18 @@ type SplitRequest struct {
 	PromptVersion string   `json:"prompt_version"`
 	Temperature   *float64 `json:"temperature,omitempty"`
 	MaxChunkChars *int     `json:"max_chunk_chars,omitempty"`
+}
+
+type SplitRunRecord struct {
+	ID            int64          `json:"id"`
+	RecordingID   int64          `json:"recording_id"`
+	Model         string         `json:"model"`
+	PromptVersion string         `json:"prompt_version"`
+	Status        string         `json:"status"`
+	Result        *SplitResponse `json:"result,omitempty"`
+	RawOutput     string         `json:"raw_output,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
 type SplitSegment struct {
@@ -211,6 +229,38 @@ type EncounterSummary struct {
 	PatientHint    string `json:"patient_hint"`
 	ChiefComplaint string `json:"chief_complaint"`
 	Disposition    string `json:"disposition"`
+}
+
+type AnnotationRecord struct {
+	RecordingID     int64                  `json:"recording_id"`
+	DurationSeconds int                    `json:"duration_seconds"`
+	AnnotatedAt     string                 `json:"annotated_at"`
+	AnnotatedBy     string                 `json:"annotated_by,omitempty"`
+	SourceRunID     string                 `json:"source_run_id,omitempty"`
+	Encounters      []AnnotationEncounter  `json:"encounters"`
+	Corrections     []AnnotationCorrection `json:"corrections"`
+}
+
+type AnnotationEncounter struct {
+	Seq            int    `json:"seq"`
+	StartSeconds   int    `json:"start_seconds"`
+	EndSeconds     int    `json:"end_seconds"`
+	PatientHint    string `json:"patient_hint,omitempty"`
+	Source         string `json:"source"`
+	ChiefComplaint string `json:"chief_complaint,omitempty"`
+	Disposition    string `json:"disposition,omitempty"`
+	OpeningLine    string `json:"opening_line,omitempty"`
+	ClosingLine    string `json:"closing_line,omitempty"`
+}
+
+type AnnotationCorrection struct {
+	Type                 string `json:"type"`
+	OriginalEncounterSeq int    `json:"original_encounter_seq,omitempty"`
+	MergedSeqs           []int  `json:"merged_seqs,omitempty"`
+	SplitAtSeconds       int    `json:"split_at_seconds,omitempty"`
+	FromSegmentIndex     int    `json:"from_segment_index,omitempty"`
+	EncounterSeq         int    `json:"encounter_seq,omitempty"`
+	Notes                string `json:"notes,omitempty"`
 }
 
 type Usage struct {

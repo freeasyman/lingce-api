@@ -11,6 +11,7 @@
     .wrap{max-width:1400px;margin:0 auto;padding:20px}
     h1{font-size:22px;margin:0 0 16px}
     .grid{display:grid;grid-template-columns:320px 1fr;gap:16px}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .card{background:rgba(22,27,34,.92);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.22)}
     .card h2{font-size:15px;margin:0 0 12px}
     label{display:block;color:var(--muted);margin:10px 0 6px}
@@ -23,72 +24,59 @@
     .row > *{flex:1}
     .muted{color:var(--muted)}
     .small{font-size:12px}
+    .status-bar{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0f141a}
+    .progress,.validation-progress{height:8px;border-radius:999px;background:#111;border:1px solid var(--line);overflow:hidden;margin-top:8px}
+    .progress > div,.validation-progress > div{height:100%;background:linear-gradient(90deg,#238636,#58a6ff);width:0%}
     .timeline{display:flex;height:28px;border-radius:999px;overflow:hidden;background:#111;border:1px solid var(--line)}
-    .seg{height:100%;position:relative;cursor:pointer;transition:opacity .16s ease}
-    .seg:hover{opacity:.82}
+    .seg{height:100%}
     .seg.encounter{background:var(--green)}
     .seg.non_encounter_talk{background:var(--blue)}
     .seg.idle{background:var(--gray)}
     .seg.uncertain{background:var(--yellow)}
     .seg.review{outline:2px solid var(--red);outline-offset:-2px}
+    .summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+    .meta-box{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
+    .meta-box strong{display:block;font-size:13px}
+    .headline{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0f141a;margin:12px 0}
     .list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
     .item{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
-    .item header{display:flex;justify-content:space-between;gap:8px;margin-bottom:6px}
-    .pill{padding:2px 8px;border-radius:999px;background:#21262d;color:var(--muted);font-size:12px}
-    .pill.encounter{background:rgba(46,160,67,.18);color:#7ee787}
-    .pill.non_encounter_talk{background:rgba(88,166,255,.18);color:#79c0ff}
-    .pill.idle{background:rgba(110,118,129,.24);color:#c9d1d9}
-    .pill.uncertain{background:rgba(210,153,34,.2);color:#e3b341}
-    pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;border:1px solid var(--line);padding:12px;border-radius:10px;overflow:auto}
+    .boundary{border:1px dashed #5b6571;background:#0d1521}
+    .boundary-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .transcript{background:#0b1020;border:1px solid var(--line);padding:12px;border-radius:10px;max-height:360px;overflow:auto}
     .utt{padding:4px 0;border-bottom:1px dashed rgba(255,255,255,.06)}
     .utt:last-child{border-bottom:none}
     .utt-time{color:#7d8590;margin-right:8px;font-variant-numeric:tabular-nums}
     .utt-speaker{color:#a5d6ff;margin-right:6px}
-    .boundary{border:1px dashed #5b6571;background:#0d1521}
-    .boundary-columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .boundary-title{font-weight:700;margin-bottom:8px}
     .silence{color:#e3b341;font-weight:600}
-    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-    .actions button{width:auto;padding:8px 12px}
-    .actions button.active{outline:2px solid #fff}
-    .summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-    .summary .card{padding:10px}
-    .meta-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
-    .meta-box{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
-    .meta-box strong{display:block;font-size:13px}
-    .status-bar{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0f141a}
-    .progress{height:8px;border-radius:999px;background:#111;border:1px solid var(--line);overflow:hidden;margin-top:8px}
-    .progress > div{height:100%;background:linear-gradient(90deg,#238636,#58a6ff);width:0%}
-    .headline{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0f141a;margin:12px 0}
-    .headline strong{font-size:18px}
-    .headline .muted{margin-top:4px}
+    .gap-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+    .gap-item{border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 10px;background:#0b1020}
+    .gap-item .label{font-weight:600}
+    .pill{padding:2px 8px;border-radius:999px;background:#21262d;color:var(--muted);font-size:12px}
+    .pill.encounter{background:rgba(46,160,67,.18);color:#7ee787}
+    .pill.non_encounter_talk{background:rgba(88,166,255,.18);color:#79c0ff}
+    .pill.idle{background:rgba(110,118,129,.24);color:#c9d1d9}
+    .pill.uncertain{background:rgba(210,153,34,.2);color:#e3b341}
     .encounter-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0f141a;transition:border-color .15s ease, box-shadow .15s ease, background .15s ease}
     .encounter-card header{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px}
     .encounter-title{font-size:16px;font-weight:700}
-    .clue{color:#7ee787;font-weight:600}
     .summary-lines{display:grid;gap:8px;margin:10px 0}
     .summary-line{font-size:16px;line-height:1.4}
     .summary-line strong{display:inline-block;min-width:74px}
     .meta-row{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px}
-    .encounter-card.focused{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.2)}
+    .encounter-card.focused{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.2);border-left:4px solid var(--blue);padding-left:8px}
     .encounter-card.done-ok{border-color:#2ea043;background:rgba(46,160,67,.1)}
-    .encounter-card.done-issue{border-color:#d29922;background:rgba(210,153,34,.08)}
+    .encounter-card.done-merge{border-color:#d29922;background:rgba(210,153,34,.08)}
     .status-mark{font-size:18px;font-weight:700}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .actions button{width:auto;padding:8px 12px}
     .toggle-link{background:none;border:none;padding:0;color:#79c0ff;text-align:left;width:auto}
-    .gap-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
-    .gap-item{border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 10px;background:#0b1020}
-    .gap-item .label{font-weight:600}
-    .spacer{height:8px}
-    .validation-progress{height:10px;border-radius:999px;background:#111;border:1px solid var(--line);overflow:hidden;margin-top:10px}
-    .validation-progress > div{height:100%;background:linear-gradient(90deg,#58a6ff,#2ea043);width:0%}
     details{border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f141a}
     summary{cursor:pointer;color:var(--muted)}
     .table{width:100%;border-collapse:collapse}
     .table th,.table td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
-    .table tr:hover{background:#11161d;cursor:pointer}
-    .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    @media (max-width: 1100px){.grid,.split{grid-template-columns:1fr}}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;border:1px solid var(--line);padding:12px;border-radius:10px;overflow:auto}
+    @media (max-width:1100px){.grid,.split{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -151,8 +139,9 @@
         <div id="resultMetaGrid" class="meta-grid"></div>
         <div id="headlineSummary" class="headline" style="display:none"></div>
         <div id="timeline" class="timeline"></div>
-        <div class="muted small" style="margin-top:10px">快捷键：`Y`/`→` 正确，`N`/`←` 有问题并展开，空格 展开/收起，`↑`/`↓` 切换焦点</div>
+        <div class="muted small" style="margin-top:10px">快捷键：`Y`/`→` 确认，`M` 合并上一段，`D` 删除为非就诊，空格 展开/收起，`↑`/`↓` 切换焦点</div>
         <div id="annotationSummary" class="summary" style="margin-top:12px"></div>
+        <button id="saveAnnotationBtn" class="secondary" style="margin-top:12px;display:none">保存为基准</button>
         <div id="encounters" class="list"></div>
         <details style="margin-top:12px">
           <summary>查看完整时间轴</summary>
@@ -165,6 +154,7 @@
       </div>
     </div>
   </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const defaultSystem = `你是一个医疗录音结构化助手。你的唯一任务是把一段连续的门诊录音转写文本,按时间轴切分成连续的片段,并判断每个片段的类型。
@@ -286,71 +276,403 @@
 请按 system prompt 的要求切分这条录音的时间轴,输出 JSON。`;
     $('systemPrompt').value = defaultSystem;
     $('userPrompt').value = defaultUser;
+
     let currentRecording = null;
+    let currentDetail = null;
+    let currentResult = null;
+    let sourceUtterances = [];
+    let workingEncounters = [];
+    let correctionsLog = [];
+    let expandedEncounters = {};
+    let focusedEncounter = 1;
+    let baselineEncounterTotal = 0;
+    let currentSaving = false;
     let activeJobId = null;
     let activePollTimer = null;
     let activeStatusTimer = null;
     let activeJobCreatedAt = null;
-    let encounterAnnotations = {};
-    let expandedEncounters = {};
-    let focusedEncounter = 1;
-    async function api(url, options={}) {
-      const resp = await fetch(url, {
-        headers: {'Content-Type':'application/json'},
-        ...options,
-      });
+
+    async function api(url, options = {}) {
+      const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...options});
       const data = await resp.json();
-      if (!resp.ok || data.code) {
-        throw new Error(data.message || resp.statusText);
-      }
+      if (!resp.ok || data.code) throw new Error(data.message || resp.statusText);
       return data.data ?? data;
     }
-    function fmtSeconds(s) {
-      const total = Math.floor(Number(s || 0));
+
+    function fmtSeconds(value) {
+      const total = Math.max(0, Math.floor(Number(value || 0)));
       const h = Math.floor(total / 3600);
       const m = Math.floor((total % 3600) / 60).toString().padStart(2, '0');
-      const r = Math.floor(total % 60).toString().padStart(2, '0');
-      return h > 0 ? `${String(h).padStart(2, '0')}:${m}:${r}` : `${m}:${r}`;
+      const s = Math.floor(total % 60).toString().padStart(2, '0');
+      return h > 0 ? `${String(h).padStart(2, '0')}:${m}:${s}` : `${m}:${s}`;
     }
+
     function fmtDurationLabel(totalSeconds) {
-      const value = Number(totalSeconds || 0);
-      const hours = Math.floor(value / 3600);
-      const minutes = Math.floor((value % 3600) / 60);
-      const seconds = Math.floor(value % 60);
+      const value = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+      const h = Math.floor(value / 3600);
+      const m = Math.floor((value % 3600) / 60);
+      const s = Math.floor(value % 60);
       const parts = [];
-      if (hours > 0) parts.push(`${hours}小时`);
-      if (minutes > 0 || hours > 0) parts.push(`${minutes}分`);
-      parts.push(`${seconds}秒`);
+      if (h > 0) parts.push(`${h}小时`);
+      if (m > 0 || h > 0) parts.push(`${m}分`);
+      parts.push(`${s}秒`);
       return parts.join('');
     }
+
     function segmentTypeLabel(type) {
-      return ({
-        encounter: '就诊',
-        non_encounter_talk: '非就诊对话',
-        idle: '静默',
-        uncertain: '待复核',
-      })[type] || type || '未知';
+      return ({encounter: '就诊', non_encounter_talk: '非就诊对话', idle: '静默', uncertain: '待复核'})[type] || type || '未知';
     }
-    function boolLabel(value, yes, no='否') {
-      return value ? yes : no;
-    }
+
     function escapeHtml(value) {
       return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     }
+
     function formatConfidence(value) {
       const num = Number(value ?? 0);
       return Number.isFinite(num) ? num.toFixed(2) : '--';
     }
-    function pickUtteranceStart(item) {
-      if (item.start_seconds != null) return Number(item.start_seconds) || 0;
-      if (item.start_time != null) return Number(item.start_time) || 0;
-      if (item.start_ms != null) return Math.floor((Number(item.start_ms) || 0) / 1000);
-      if (item.start != null) return Number(item.start) || 0;
-      return 0;
+
+    function shortenText(value, limit) {
+      const text = String(value || '').trim();
+      return text.length <= limit ? text : `${text.slice(0, limit)}...`;
     }
+
     function showStatusBox(show = true) {
       $('statusBox').style.display = show ? 'block' : 'none';
     }
+
+    function showStatus(message, extra = '') {
+      showStatusBox(true);
+      $('status').textContent = message;
+      $('statusExtra').textContent = extra;
+    }
+
+    function normalizeUtterance(item) {
+      return {
+        start_seconds: Number(item.start_seconds ?? item.start_time ?? item.start ?? item.offset ?? Math.floor((Number(item.start_ms || 0)) / 1000)) || 0,
+        end_seconds: Number(item.end_seconds ?? item.end_time ?? item.end ?? item.start_seconds ?? item.start_time ?? item.start ?? item.offset ?? Math.floor((Number(item.end_ms || 0)) / 1000)) || 0,
+        speaker: item.speaker || item.role || 'unknown',
+        speaker_role: item.speaker_role || '',
+        text: item.text || item.content || item.transcript || item.utterance || '',
+      };
+    }
+
+    function extractSourceUtterances(detail) {
+      const raw = detail?.transcription_segments || detail?.cleaned_transcription || detail?.timeline_transcript || detail?.structured_transcript || [];
+      return raw.map(normalizeUtterance).filter(item => String(item.text || '').trim());
+    }
+
+    function sliceUtterances(start, end) {
+      return sourceUtterances.filter(item => item.end_seconds >= start && item.start_seconds <= end);
+    }
+
+    function joinUtterances(utterances) {
+      return utterances.map(item => `[${fmtSeconds(item.start_seconds)}] ${item.speaker_role || item.speaker || 'unknown'}: ${item.text || ''}`).join('\n');
+    }
+
+    function openingLine(utterances) {
+      return utterances?.length ? shortenText(utterances[0].text || '', 30) : '';
+    }
+
+    function closingLine(utterances) {
+      return utterances?.length ? shortenText(utterances[utterances.length - 1].text || '', 30) : '';
+    }
+
+    function firstMatch(source, items) {
+      for (const item of items) if (source.includes(item)) return item;
+      return '';
+    }
+
+    function extractPatientClue(text) {
+      const source = String(text || '').replace(/\n/g, ' ').slice(0, 200);
+      const title = firstMatch(source, ['阿姨', '大爷', '小伙子', '师傅', '姑娘', '大姐', '阿叔', '阿伯', '小朋友']);
+      const symptom = firstMatch(source, ['胃疼', '头晕', '咳嗽', '发烧', '牙痛', '肚子痛', '胸闷', '流鼻涕', '出血', '胀', '麻', '痛', '疼']);
+      if (title && symptom) return `${title}、${symptom}`;
+      if (title) return title;
+      if (symptom) return symptom;
+      return '—';
+    }
+
+    function matchBaseEncounter(startSeconds, endSeconds) {
+      if (!currentResult?.encounters?.length) return null;
+      let best = null;
+      let bestOverlap = -1;
+      currentResult.encounters.forEach(item => {
+        const overlap = Math.max(0, Math.min(endSeconds, item.end_seconds) - Math.max(startSeconds, item.start_seconds));
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          best = item;
+        }
+      });
+      return best;
+    }
+
+    function buildEncounterFromAi(item, seq) {
+      const utterances = Array.isArray(item.utterances) && item.utterances.length ? item.utterances.map(normalizeUtterance) : sliceUtterances(item.start_seconds, item.end_seconds);
+      const fullText = item.full_text || joinUtterances(utterances);
+      return {
+        seq,
+        segment_index: item.segment_index || seq,
+        start_seconds: Number(item.start_seconds || 0),
+        end_seconds: Number(item.end_seconds || 0),
+        duration_seconds: Number(item.duration_seconds || Math.max(0, Number(item.end_seconds || 0) - Number(item.start_seconds || 0))),
+        patient_hint: item.patient_hint || item.patient_clue || extractPatientClue(fullText),
+        chief_complaint: item.chief_complaint || '',
+        disposition: item.disposition || '',
+        opening_line: item.opening_line || openingLine(utterances),
+        closing_line: item.closing_line || closingLine(utterances),
+        full_text: fullText,
+        boundary_confidence: Number(item.boundary_confidence || 0),
+        confidence_label: item.confidence_label || '',
+        needs_review: !!item.needs_review,
+        multi_patient: !!item.multi_patient,
+        utterances,
+        source: 'ai_confirmed',
+        reviewed: false,
+        action: '',
+      };
+    }
+
+    function buildEncounterFromAnnotation(item, seq) {
+      const base = matchBaseEncounter(Number(item.start_seconds || 0), Number(item.end_seconds || 0)) || {};
+      const utterances = sliceUtterances(Number(item.start_seconds || 0), Number(item.end_seconds || 0));
+      const fullText = joinUtterances(utterances);
+      return {
+        seq,
+        segment_index: base.segment_index || seq,
+        start_seconds: Number(item.start_seconds || 0),
+        end_seconds: Number(item.end_seconds || 0),
+        duration_seconds: Math.max(0, Number(item.end_seconds || 0) - Number(item.start_seconds || 0)),
+        patient_hint: item.patient_hint || base.patient_hint || base.patient_clue || extractPatientClue(fullText),
+        chief_complaint: item.chief_complaint || base.chief_complaint || '',
+        disposition: item.disposition || base.disposition || '',
+        opening_line: item.opening_line || base.opening_line || openingLine(utterances),
+        closing_line: item.closing_line || base.closing_line || closingLine(utterances),
+        full_text: fullText,
+        boundary_confidence: Number(base.boundary_confidence || 0),
+        confidence_label: base.confidence_label || '',
+        needs_review: !!base.needs_review,
+        multi_patient: !!base.multi_patient,
+        utterances,
+        source: item.source || 'ai_confirmed',
+        reviewed: true,
+        action: item.source === 'human_merged' ? 'merge' : 'correct',
+      };
+    }
+
+    function rebuildWorkingEncounters() {
+      workingEncounters.forEach((item, idx) => {
+        item.seq = idx + 1;
+        item.start_seconds = Number(item.start_seconds || 0);
+        item.end_seconds = Number(item.end_seconds || 0);
+        item.duration_seconds = Math.max(0, item.end_seconds - item.start_seconds);
+        item.utterances = sliceUtterances(item.start_seconds, item.end_seconds);
+        item.full_text = joinUtterances(item.utterances);
+        item.opening_line = openingLine(item.utterances);
+        item.closing_line = closingLine(item.utterances);
+        if (!item.patient_hint || item.patient_hint === '—') item.patient_hint = extractPatientClue(item.full_text);
+      });
+    }
+
+    function currentReviewedCount() {
+      return workingEncounters.filter(item => item.reviewed).length;
+    }
+
+    function currentActionCount() {
+      return currentReviewedCount() + correctionsLog.length;
+    }
+
+    function currentStats() {
+      return {
+        correct: workingEncounters.filter(item => item.action === 'correct').length,
+        merge: correctionsLog.filter(item => item.type === 'merge').length,
+        delete: correctionsLog.filter(item => item.type === 'delete').length,
+      };
+    }
+
+    function buildAnnotationRecord() {
+      return {
+        recording_id: currentRecording.id,
+        duration_seconds: Number(currentResult?.recording_duration_seconds || currentRecording.recording_duration || 0),
+        annotated_at: new Date().toISOString(),
+        annotated_by: 'demo',
+        source_run_id: String(currentRecording?.latest_run?.id || ''),
+        encounters: workingEncounters.map(item => ({
+          seq: item.seq,
+          start_seconds: item.start_seconds,
+          end_seconds: item.end_seconds,
+          patient_hint: item.patient_hint || '',
+          source: item.source || 'ai_confirmed',
+          chief_complaint: item.chief_complaint || '',
+          disposition: item.disposition || '',
+          opening_line: item.opening_line || '',
+          closing_line: item.closing_line || '',
+        })),
+        corrections: correctionsLog.map(item => ({...item})),
+      };
+    }
+
+    function setWorkingState(result, detail, annotation) {
+      currentResult = result || null;
+      currentDetail = detail || null;
+      sourceUtterances = extractSourceUtterances(detail);
+      baselineEncounterTotal = result?.encounters?.length || 0;
+      correctionsLog = annotation?.corrections ? annotation.corrections.map(item => ({...item})) : [];
+      workingEncounters = annotation?.encounters?.length
+        ? annotation.encounters.map((item, idx) => buildEncounterFromAnnotation(item, idx + 1))
+        : (result?.encounters || []).map((item, idx) => buildEncounterFromAi(item, idx + 1));
+      expandedEncounters = {};
+      focusedEncounter = workingEncounters.length ? 1 : 0;
+      rebuildWorkingEncounters();
+    }
+
+    function updateAnnotationSummary() {
+      const original = baselineEncounterTotal || 0;
+      const done = currentActionCount();
+      const progress = original ? Math.min(100, Math.round((done / original) * 100)) : 0;
+      const stats = currentStats();
+      const allDone = original > 0 && done >= original;
+      $('annotationSummary').innerHTML = `
+        <div class="card"><strong>切分结果</strong><div class="muted">AI 切出 ${original} 次，当前保留 ${workingEncounters.length} 次</div></div>
+        <div class="card"><strong>人工判定</strong><div class="muted">已验证 ${done}/${original}（${stats.correct} 正确，${stats.merge} 合并，${stats.delete} 删除）</div></div>
+        <div class="card"><strong>保存状态</strong><div class="muted">${allDone ? '可保存为基准' : '继续验证中'}</div></div>
+      `;
+      $('headlineSummary').style.display = original ? 'block' : 'none';
+      $('headlineSummary').innerHTML = original ? `
+        <strong>识别出 ${original} 次就诊</strong>
+        <div class="muted">当前保留 ${workingEncounters.length} 次就诊，人工验证 ${done}/${original}</div>
+        <div class="validation-progress"><div style="width:${progress}%"></div></div>
+      ` : '';
+      $('saveAnnotationBtn').style.display = allDone ? 'block' : 'none';
+      $('saveAnnotationBtn').disabled = !allDone || currentSaving;
+    }
+
+    function renderTranscriptLines(utterances) {
+      if (!utterances?.length) return '<div class="muted">无可展示对话</div>';
+      return utterances.map(item => `
+        <div class="utt" data-seconds="${item.start_seconds}">
+          <span class="utt-time">[${fmtSeconds(item.start_seconds)}]</span>
+          <span class="utt-speaker">${escapeHtml(item.speaker_role || item.speaker || 'unknown')}:</span>
+          <span>${escapeHtml(item.text || '')}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderGapItems(prev, next) {
+      const items = sourceUtterances.filter(item => item.start_seconds >= prev.end_seconds && item.end_seconds <= next.start_seconds);
+      if (!items.length) return '<div class="muted">两次就诊之间无额外对话</div>';
+      return items.map(item => `
+        <div class="gap-item">
+          <div><span class="label">间隙</span> · [${fmtSeconds(item.start_seconds)}] ${escapeHtml(item.speaker_role || item.speaker || 'unknown')}: ${escapeHtml(item.text || '')}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderBoundaryCard(prev, next) {
+      const gapDuration = Math.max(0, next.start_seconds - prev.end_seconds);
+      return `
+        <div class="item boundary">
+          <details>
+            <summary>检查此处边界：就诊 #${prev.seq} 与 就诊 #${next.seq}</summary>
+            <div class="muted" style="margin-top:8px">中间间隙 ${fmtSeconds(prev.end_seconds)} - ${fmtSeconds(next.start_seconds)}（共 ${fmtDurationLabel(gapDuration)}）</div>
+            <div class="boundary-columns" style="margin-top:10px">
+              <div>
+                <div class="muted">就诊 #${prev.seq} 结尾</div>
+                <div class="transcript">${renderTranscriptLines(prev.utterances.slice(-5))}</div>
+              </div>
+              <div>
+                <div class="muted">就诊 #${next.seq} 开头</div>
+                <div class="transcript">${renderTranscriptLines(next.utterances.slice(0, 5))}</div>
+              </div>
+            </div>
+            <div class="silence" style="margin-top:10px">${gapDuration > 0 ? `间隙 ${fmtDurationLabel(gapDuration)}` : '无明显间隙'}</div>
+            <div class="gap-list">${renderGapItems(prev, next)}</div>
+          </details>
+        </div>
+      `;
+    }
+
+    function renderEncounters() {
+      const el = $('encounters');
+      el.innerHTML = '';
+      if (!workingEncounters.length) {
+        el.innerHTML = '<div class="item"><div class="muted">本次没有可展示的就诊卡片。</div></div>';
+        return;
+      }
+      if (focusedEncounter < 1) focusedEncounter = 1;
+      if (focusedEncounter > workingEncounters.length) focusedEncounter = workingEncounters.length;
+      workingEncounters.forEach((encounter, index) => {
+        if (index > 0) el.insertAdjacentHTML('beforeend', renderBoundaryCard(workingEncounters[index - 1], encounter));
+        const expanded = !!expandedEncounters[String(encounter.seq)];
+        const card = document.createElement('div');
+        card.className = `encounter-card ${encounter.action === 'correct' ? 'done-ok' : ''} ${encounter.action === 'merge' ? 'done-merge' : ''} ${focusedEncounter === encounter.seq ? 'focused' : ''}`.trim();
+        card.id = `encounter-${encounter.seq}`;
+        card.dataset.encounterNumber = encounter.seq;
+        card.dataset.segmentIndex = encounter.segment_index || encounter.seq;
+        card.innerHTML = `
+          <header>
+            <div>
+              <div class="encounter-title">就诊 #${encounter.seq}</div>
+              <div class="muted">${fmtSeconds(encounter.start_seconds)} - ${fmtSeconds(encounter.end_seconds)}（${fmtDurationLabel(encounter.duration_seconds)}）</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px"><span class="pill encounter">就诊</span><span class="status-mark">${encounter.action === 'merge' ? 'M' : (encounter.reviewed ? '✓' : '')}</span></div>
+          </header>
+          <div class="summary-lines">
+            <div class="summary-line"><strong>👤 患者</strong>${escapeHtml(encounter.patient_hint || '—')}</div>
+            <div class="summary-line"><strong>🗣️ 主诉</strong>${escapeHtml(encounter.chief_complaint || '—')}</div>
+            <div class="summary-line"><strong>💊 处置</strong>${escapeHtml(encounter.disposition || '—')}</div>
+          </div>
+          <div class="meta-row">
+            <span>📊 ${formatConfidence(encounter.boundary_confidence)}（${encounter.confidence_label || '—'}）${encounter.needs_review ? ' ⚠️需复核' : ''}</span>
+            ${encounter.multi_patient ? '<span>多患者同诊</span>' : ''}
+          </div>
+          <div class="muted" style="margin-top:8px">开场：“${escapeHtml(encounter.opening_line || '—')}”</div>
+          <div class="muted">结束：“${escapeHtml(encounter.closing_line || '—')}”</div>
+          <div class="actions">
+            <button data-action="correct" data-encounter="${encounter.seq}" ${encounter.reviewed ? 'disabled' : ''}>切分正确</button>
+            <button data-action="merge" data-encounter="${encounter.seq}" ${encounter.seq === 1 || encounter.reviewed ? 'disabled' : ''}>与上一段合并</button>
+            <button data-action="delete" data-encounter="${encounter.seq}" ${encounter.reviewed ? 'disabled' : ''}>不是就诊</button>
+          </div>
+          <button class="toggle-link" data-toggle-encounter="${encounter.seq}">${expanded ? '▼ 收起对话' : '▶ 展开完整对话'}</button>
+          ${expanded ? `<div class="transcript" style="margin-top:8px">${renderTranscriptLines(encounter.utterances)}</div>` : ''}`;
+        el.appendChild(card);
+      });
+
+      el.querySelectorAll('[data-action]').forEach(button => {
+        button.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          const seq = Number(button.dataset.encounter || 0);
+          const action = button.dataset.action;
+          if (action === 'correct') confirmEncounter(seq);
+          if (action === 'merge') await mergeWithPrevious(seq);
+          if (action === 'delete') deleteEncounter(seq);
+        });
+      });
+      el.querySelectorAll('[data-toggle-encounter]').forEach(button => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          toggleEncounter(Number(button.dataset.toggleEncounter || 0));
+        });
+      });
+      el.querySelectorAll('.encounter-card').forEach(card => {
+        card.addEventListener('click', () => focusEncounter(Number(card.dataset.encounterNumber || 0)));
+      });
+    }
+
+    function focusEncounter(encounterNumber) {
+      if (!workingEncounters.length) return;
+      focusedEncounter = Math.min(Math.max(encounterNumber, 1), workingEncounters.length);
+      renderEncounters();
+      document.querySelector(`#encounter-${focusedEncounter}`)?.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+
+    function toggleEncounter(encounterNumber) {
+      if (!encounterNumber) return;
+      expandedEncounters[String(encounterNumber)] = !expandedEncounters[String(encounterNumber)];
+      renderEncounters();
+      focusEncounter(encounterNumber);
+    }
+
     function renderResultMeta(result) {
       $('resultMetaGrid').innerHTML = `
         <div class="meta-box"><strong>模型</strong><div class="muted">${escapeHtml(result.split_model || '-')} / ${escapeHtml(result.split_prompt_version || '-')}</div></div>
@@ -359,6 +681,11 @@
         <div class="meta-box"><strong>分块</strong><div class="muted">${result.chunk_count || 0} 块 | 输入源 ${escapeHtml(result.input_kind || '-')}</div></div>
       `;
     }
+
+    function renderValidation(result) {
+      $('validation').textContent = (result.validation?.messages || []).join(' | ');
+    }
+
     function renderTimeline(segments, total) {
       const el = $('timeline');
       el.innerHTML = '';
@@ -368,85 +695,10 @@
         if (seg.needs_review) div.classList.add('review');
         div.style.width = `${Math.max(0.5, ((seg.end_seconds - seg.start_seconds) / Math.max(total, 1)) * 100)}%`;
         div.title = `第${seg.index}段 ${segmentTypeLabel(seg.segment_type)} ${fmtSeconds(seg.start_seconds)}-${fmtSeconds(seg.end_seconds)}`;
-        div.addEventListener('click', () => {
-          const target = document.querySelector(`[data-segment-index="${seg.index}"]`);
-          target?.scrollIntoView({behavior:'smooth', block:'center'});
-          const encounterNumber = Number(target?.dataset?.encounterNumber || 0);
-          if (encounterNumber) {
-            focusedEncounter = encounterNumber;
-            renderEncounters(window.__lastResult || {});
-          }
-        });
         el.appendChild(div);
       });
     }
-    function confidenceTag(seg) {
-      return `置信度 ${formatConfidence(seg.boundary_confidence)}（${seg.confidence_label || ''}）${seg.needs_review ? ' ⚠️需复核' : ''}`;
-    }
-    function renderUtterances(utterances) {
-      if (!utterances?.length) return '<div class="muted">无可展示对话</div>';
-      return utterances.map(item => `
-        <div class="utt">
-          <span class="utt-time">[${fmtSeconds(item.start_seconds)}]</span>
-          <span class="utt-speaker">${item.speaker_role || item.speaker || 'unknown'}:</span>
-          <span>${item.text || ''}</span>
-        </div>
-      `).join('');
-    }
-    function updateAnnotationSummary(result) {
-      const counts = {correct:0, merge_prev:0, merge_next:0, split_inner:0};
-      Object.values(encounterAnnotations).forEach(v => { if (counts[v] !== undefined) counts[v] += 1; });
-      const reviewed = Object.keys(encounterAnnotations).length;
-      const problemCount = counts.merge_prev + counts.merge_next + counts.split_inner;
-      const progress = result.summary?.encounter_count ? Math.round((reviewed / result.summary.encounter_count) * 100) : 0;
-      $('annotationSummary').innerHTML = `
-        <div class="card"><strong>切分结果</strong><div class="muted">识别出 ${result.summary?.encounter_count || 0} 次就诊，共 ${result.summary?.total_segment_count || 0} 段</div></div>
-        <div class="card"><strong>人工判定</strong><div class="muted">已验证 ${reviewed}/${result.summary?.encounter_count || 0}，正确 ${counts.correct}，有问题 ${problemCount}</div></div>
-        <div class="card"><strong>契约校验</strong><div class="muted">${result.validation?.is_valid ? '通过' : '未通过'}</div></div>
-      `;
-      $('headlineSummary').style.display = 'block';
-      $('headlineSummary').innerHTML = `
-        <strong>识别出 ${result.summary?.encounter_count || 0} 次就诊</strong>
-        <div class="muted">时间轴${result.validation?.is_valid ? '完整覆盖，无间隙' : '存在问题'}（共 ${result.summary?.total_segment_count || 0} 段：就诊 ${result.summary?.encounter_count || 0}、非就诊对话 ${result.summary?.non_encounter_talk_count || 0}、静默 ${result.summary?.idle_count || 0}、待确认 ${result.summary?.uncertain_count || 0}）</div>
-        <div class="muted">人工验证：${reviewed}/${result.summary?.encounter_count || 0} 已验证${reviewed ? `（${counts.correct} 正确，${problemCount} 有问题）` : ''}</div>
-        <div class="validation-progress"><div style="width:${progress}%"></div></div>
-      `;
-    }
-    function renderValidation(result) {
-      const validation = result.validation || {};
-      $('validation').textContent = (validation.messages || []).join(' | ');
-    }
-    function setEncounterAnnotation(encounterNumber, verdict, result) {
-      encounterAnnotations[encounterNumber] = verdict;
-      if (verdict !== 'correct') {
-        expandedEncounters[encounterNumber] = true;
-      }
-      updateAnnotationSummary(result);
-      renderEncounters(result);
-      focusEncounter(Number(encounterNumber) + 1);
-    }
-    function toggleEncounter(encounterNumber) {
-      expandedEncounters[encounterNumber] = !expandedEncounters[encounterNumber];
-      renderEncounters(window.__lastResult || {});
-      focusEncounter(Number(encounterNumber));
-    }
-    function focusEncounter(encounterNumber) {
-      const total = (window.__lastResult?.encounters || []).length;
-      if (!total) return;
-      focusedEncounter = Math.min(Math.max(encounterNumber, 1), total);
-      renderEncounters(window.__lastResult || {});
-      document.querySelector(`#encounter-${focusedEncounter}`)?.scrollIntoView({behavior:'smooth', block:'center'});
-    }
-    function verdictMark(verdict) {
-      if (verdict === 'correct') return '✓';
-      if (verdict) return '?';
-      return '';
-    }
-    function verdictClass(verdict) {
-      if (verdict === 'correct') return 'done-ok';
-      if (verdict) return 'done-issue';
-      return '';
-    }
+
     function renderTimelineTable(result) {
       const segments = result.segments || [];
       $('timelineTable').innerHTML = `
@@ -463,102 +715,112 @@
         </table>
       `;
     }
-    function renderGapItems(items) {
-      if (!items?.length) return '<div class="muted">两次就诊直接相连</div>';
-      return items.map(item => `
-        <div class="gap-item">
-          <div><span class="label">${escapeHtml(item.label)}</span> · ${fmtSeconds(item.start_seconds)} - ${fmtSeconds(item.end_seconds)}（${fmtDurationLabel(item.duration_seconds)}）</div>
-          ${item.text_preview ? `<div class="muted">${escapeHtml(item.text_preview)}</div>` : ''}
-        </div>
-      `).join('');
+
+    function confirmEncounter(seq) {
+      const encounter = workingEncounters.find(item => item.seq === seq);
+      if (!encounter || encounter.reviewed) return;
+      encounter.reviewed = true;
+      encounter.action = 'correct';
+      rebuildWorkingEncounters();
+      updateAnnotationSummary();
+      renderEncounters();
+      showStatus(`已确认 就诊 #${seq}`);
+      focusEncounter(Math.min(seq + 1, workingEncounters.length));
     }
-    function renderEncounters(result) {
-      window.__lastResult = result;
-      const encounters = result.encounters || [];
-      const el = $('encounters');
-      el.innerHTML = '';
-      if (!encounters.length) {
-        el.innerHTML = '<div class="item"><div class="muted">本次没有识别出 encounter，可先查看完整时间轴和原始 JSON。</div></div>';
+
+    async function refreshEncounterSummary(encounter) {
+      if (!encounter) return;
+      showStatus('正在更新摘要...');
+      $('statusProgress').style.width = '60%';
+      const data = await api('/internal/split-demo/encounter-summary', {
+        method: 'POST',
+        body: JSON.stringify({model: $('model').value.trim() || 'qwen-max', encounter_text: encounter.full_text || ''}),
+      });
+      encounter.patient_hint = data.patient_hint || encounter.patient_hint;
+      encounter.chief_complaint = data.chief_complaint || encounter.chief_complaint;
+      encounter.disposition = data.disposition || encounter.disposition;
+      showStatus('摘要更新完成');
+    }
+
+    async function mergeWithPrevious(seq) {
+      const index = workingEncounters.findIndex(item => item.seq === seq);
+      if (index <= 0) {
+        showStatus('第一张卡不能合并上一段');
         return;
       }
-      if (focusedEncounter < 1) focusedEncounter = 1;
-      if (focusedEncounter > encounters.length) focusedEncounter = encounters.length;
-      encounters.forEach((encounter) => {
-        if (encounter.boundary_from_prev) {
-          const boundary = encounter.boundary_from_prev;
-          const boundaryCard = document.createElement('div');
-          boundaryCard.className = 'item boundary';
-          boundaryCard.innerHTML = `
-            <details>
-              <summary>检查此处边界：就诊 #${boundary.previous_encounter_number} 与 就诊 #${boundary.next_encounter_number}</summary>
-              <div class="muted" style="margin-top:8px">中间间隙 ${fmtSeconds(boundary.start_seconds)} - ${fmtSeconds(boundary.end_seconds)}（共 ${fmtDurationLabel(boundary.duration_seconds)}）</div>
-              <div class="boundary-columns" style="margin-top:10px">
-                <div>
-                  <div class="muted">就诊 #${boundary.previous_encounter_number} 结尾</div>
-                  <div class="transcript">${renderUtterances(boundary.left_utterances)}</div>
-                </div>
-                <div>
-                  <div class="muted">就诊 #${boundary.next_encounter_number} 开头</div>
-                  <div class="transcript">${renderUtterances(boundary.right_utterances)}</div>
-                </div>
-              </div>
-              <div class="silence" style="margin-top:10px">${escapeHtml(boundary.gap_summary || '')}</div>
-              <div class="gap-list">${renderGapItems(boundary.gap_items)}</div>
-            </details>
-          `;
-          el.appendChild(boundaryCard);
-        }
-        const item = document.createElement('div');
-        const verdict = encounterAnnotations[String(encounter.encounter_number)] || '';
-        const expanded = !!expandedEncounters[String(encounter.encounter_number)];
-        item.className = `encounter-card ${verdictClass(verdict)} ${focusedEncounter === encounter.encounter_number ? 'focused' : ''}`.trim();
-        item.id = `encounter-${encounter.encounter_number}`;
-        item.dataset.segmentIndex = encounter.segment_index;
-        item.dataset.encounterNumber = encounter.encounter_number;
-        item.innerHTML = `
-          <header>
-            <div>
-              <div class="encounter-title">就诊 #${encounter.encounter_number}</div>
-              <div class="muted">${fmtSeconds(encounter.start_seconds)} - ${fmtSeconds(encounter.end_seconds)}（${fmtDurationLabel(encounter.duration_seconds)}）</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:10px"><span class="pill encounter">就诊</span><span class="status-mark">${verdictMark(verdict)}</span></div>
-          </header>
-          <div class="summary-lines">
-            <div class="summary-line"><strong>👤 患者</strong>${escapeHtml(encounter.patient_hint || encounter.patient_clue || '—')}</div>
-            <div class="summary-line"><strong>🗣️ 主诉</strong>${escapeHtml(encounter.chief_complaint || '—')}</div>
-            <div class="summary-line"><strong>💊 处置</strong>${escapeHtml(encounter.disposition || '—')}</div>
-          </div>
-          <div class="meta-row">
-            <span>📊 ${confidenceTag(encounter)}</span>
-            ${encounter.multi_patient ? '<span>多患者同诊</span>' : ''}
-          </div>
-          <div class="muted" style="margin-top:8px">开场：“${escapeHtml(encounter.opening_line || '—')}”</div>
-          <div class="muted">结束：“${escapeHtml(encounter.closing_line || '—')}”</div>
-          <div class="muted" style="margin-top:6px">判定依据：${(encounter.reason_labels || []).join(' / ') || '无明显判定依据'}</div>
-          <div class="actions">
-            <button class="${verdict === 'correct' ? 'active' : ''}" data-encounter="${encounter.encounter_number}" data-verdict="correct">切分正确</button>
-            <button class="${verdict && verdict !== 'correct' ? 'active' : ''}" data-encounter="${encounter.encounter_number}" data-verdict="split_inner">有问题，需查看</button>
-          </div>
-          <button class="toggle-link" data-toggle-encounter="${encounter.encounter_number}">${expanded ? '▼ 收起对话' : '▶ 展开完整对话'}</button>
-          ${expanded ? `<div class="transcript" style="margin-top:8px">${renderUtterances(encounter.utterances)}</div>` : ''}`;
-        el.appendChild(item);
-      });
-      el.querySelectorAll('[data-encounter]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const verdict = btn.dataset.verdict === 'split_inner' ? 'split_inner' : btn.dataset.verdict;
-          setEncounterAnnotation(btn.dataset.encounter, verdict, result);
-        });
-      });
-      el.querySelectorAll('[data-toggle-encounter]').forEach(btn => {
-        btn.addEventListener('click', () => toggleEncounter(btn.dataset.toggleEncounter));
-      });
-      el.querySelectorAll('.encounter-card').forEach(card => {
-        card.addEventListener('click', () => {
-          focusedEncounter = Number(card.dataset.encounterNumber || focusedEncounter);
-          renderEncounters(result);
-        });
-      });
+      const prev = workingEncounters[index - 1];
+      const current = workingEncounters[index];
+      if (current.reviewed) return;
+      prev.start_seconds = Math.min(prev.start_seconds, current.start_seconds);
+      prev.end_seconds = Math.max(prev.end_seconds, current.end_seconds);
+      prev.reviewed = true;
+      prev.action = 'merge';
+      prev.source = 'human_merged';
+      correctionsLog.push({type: 'merge', merged_seqs: [prev.seq, current.seq]});
+      workingEncounters.splice(index, 1);
+      rebuildWorkingEncounters();
+      updateAnnotationSummary();
+      renderEncounters();
+      focusEncounter(Math.min(index + 1, workingEncounters.length));
+      try {
+        await refreshEncounterSummary(workingEncounters[index - 1]);
+        renderEncounters();
+      } catch (err) {
+        showStatus(`摘要更新失败: ${err.message}`);
+      }
     }
+
+    function deleteEncounter(seq) {
+      const index = workingEncounters.findIndex(item => item.seq === seq);
+      if (index < 0) return;
+      correctionsLog.push({type: 'delete', encounter_seq: seq});
+      workingEncounters.splice(index, 1);
+      rebuildWorkingEncounters();
+      updateAnnotationSummary();
+      renderEncounters();
+      showStatus(`已标记 就诊 #${seq} 不是就诊`);
+      if (workingEncounters.length) focusEncounter(Math.min(index + 1, workingEncounters.length));
+    }
+
+    async function saveAnnotation() {
+      if (currentSaving || !currentRecording) return;
+      currentSaving = true;
+      $('saveAnnotationBtn').disabled = true;
+      try {
+        const saved = await api('/internal/split-demo/save-annotation', {method: 'POST', body: JSON.stringify(buildAnnotationRecord())});
+        showStatus(`已保存基准：录音 #${saved.recording_id}`);
+      } catch (err) {
+        showStatus(`保存失败: ${err.message}`);
+      } finally {
+        currentSaving = false;
+        updateAnnotationSummary();
+      }
+    }
+
+    function stopStatusTimer() {
+      if (activeStatusTimer) {
+        clearInterval(activeStatusTimer);
+        activeStatusTimer = null;
+      }
+    }
+
+    function startStatusTimer() {
+      stopStatusTimer();
+      activeStatusTimer = setInterval(() => {
+        if (!activeJobCreatedAt) return;
+        const elapsed = Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000));
+        $('statusExtra').textContent = `已运行 ${fmtDurationLabel(elapsed)} | 页面仍在等待任务返回`;
+      }, 1000);
+    }
+
+    function stopPolling() {
+      if (activePollTimer) {
+        clearTimeout(activePollTimer);
+        activePollTimer = null;
+      }
+      stopStatusTimer();
+    }
+
     function renderJobStatus(job) {
       const parts = [job.message || '处理中'];
       if (job.stage === 'summary') {
@@ -579,41 +841,12 @@
       $('statusProgress').style.width = `${progress}%`;
       const extras = [];
       if (activeJobCreatedAt) {
-        const elapsed = Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000));
-        extras.push(`已运行 ${fmtDurationLabel(elapsed)}`);
+        extras.push(`已运行 ${fmtDurationLabel(Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000)))}`);
       }
-      if (job.status === 'running' && job.current_chunk > 0) {
-        extras.push('任务仍在执行中');
-      }
-      if (job.updated_at) {
-        extras.push(`最近状态更新时间 ${job.updated_at}`);
-      }
+      if (job.updated_at) extras.push(`最近状态更新时间 ${job.updated_at}`);
       $('statusExtra').textContent = extras.join(' | ');
     }
-    function stopStatusTimer() {
-      if (activeStatusTimer) {
-        clearInterval(activeStatusTimer);
-        activeStatusTimer = null;
-      }
-    }
-    function startStatusTimer() {
-      stopStatusTimer();
-      activeStatusTimer = setInterval(() => {
-        if (!activeJobCreatedAt) return;
-        const current = $('status').textContent;
-        if (current) {
-          const elapsed = Math.max(0, Math.floor((Date.now() - activeJobCreatedAt) / 1000));
-          $('statusExtra').textContent = `已运行 ${fmtDurationLabel(elapsed)} | 页面仍在等待任务返回`;
-        }
-      }, 1000);
-    }
-    function stopPolling() {
-      if (activePollTimer) {
-        clearTimeout(activePollTimer);
-        activePollTimer = null;
-      }
-      stopStatusTimer();
-    }
+
     async function pollJob(jobId) {
       try {
         const job = await api(`/internal/split-demo/split-jobs/${jobId}`);
@@ -621,15 +854,13 @@
         if (job.status === 'completed' && job.result) {
           $('runMeta').textContent = `${job.result.split_model} | ${job.result.split_prompt_version} | ${job.result.elapsed_ms}ms | tokens ${job.result.usage.total_tokens || 0} | chunks ${job.result.chunk_count} | input ${job.result.input_kind}`;
           $('rawOutput').textContent = job.result.raw_output || '';
-          encounterAnnotations = {};
-          expandedEncounters = {};
-          focusedEncounter = 1;
+          setWorkingState(job.result, currentDetail, null);
           renderValidation(job.result);
           renderResultMeta(job.result);
           renderTimeline(job.result.segments || [], job.result.recording_duration_seconds || 1);
           renderTimelineTable(job.result);
-          renderEncounters(job.result);
-          updateAnnotationSummary(job.result);
+          renderEncounters();
+          updateAnnotationSummary();
           $('statusProgress').style.width = '100%';
           $('splitBtn').disabled = false;
           activeJobId = null;
@@ -638,8 +869,7 @@
           return;
         }
         if (job.status === 'failed') {
-          $('status').textContent = `错误: ${job.error_message || job.message || '切分失败'}`;
-          $('statusExtra').textContent = '';
+          showStatus(`错误: ${job.error_message || job.message || '切分失败'}`);
           $('statusProgress').style.width = '100%';
           $('splitBtn').disabled = false;
           activeJobId = null;
@@ -649,52 +879,48 @@
         }
         activePollTimer = setTimeout(() => pollJob(jobId), 1500);
       } catch (err) {
-        $('status').textContent = `轮询失败: ${err.message}`;
+        showStatus(`轮询失败: ${err.message}`);
         $('splitBtn').disabled = false;
         activeJobId = null;
         stopPolling();
       }
     }
+
+    function summarizeTranscript(detail) {
+      const utterances = extractSourceUtterances(detail);
+      if (!utterances.length) return escapeHtml(detail.transcript_text || '暂无可用转写');
+      return utterances.slice(0, 120).map(item => `<div class="utt"><span class="utt-time">[${fmtSeconds(item.start_seconds)}]</span><span class="utt-speaker">${escapeHtml(item.speaker_role || item.speaker || 'unknown')}:</span><span>${escapeHtml(item.text || '')}</span></div>`).join('');
+    }
+
     async function loadRecordings() {
-      $('status').textContent = '加载录音列表中...';
       const tenantId = $('tenantId').value.trim() || '1';
       const minDuration = $('minDuration').value.trim() || '600';
+      showStatus('加载录音列表中...');
       const data = await api(`/internal/split-demo/recordings?tenant_id=${encodeURIComponent(tenantId)}&min_duration_seconds=${encodeURIComponent(minDuration)}&page=1&page_size=50`);
       const select = $('recordingSelect');
       select.innerHTML = '';
       data.items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = item.id;
-        opt.textContent = `#${item.id} | ${fmtDurationLabel(item.recording_duration)} | ${item.employee_name} | ${item.recorded_at || ''} | ${item.transcript_chars || 0}字`;
-        opt.dataset.item = JSON.stringify(item);
+        const savedRun = item.has_saved_run ? ' | 已保存结果' : '';
+        const savedAnnotation = item.has_saved_annotation ? ' | 已保存基准' : '';
+        opt.textContent = `#${item.id} | ${fmtDurationLabel(item.recording_duration)} | ${item.employee_name} | ${item.recorded_at || ''}${savedRun}${savedAnnotation}`;
         select.appendChild(opt);
       });
-      showStatusBox(true);
-      $('status').textContent = `已加载 ${data.items.length} 条`;
-      $('statusExtra').textContent = '';
       $('statusProgress').style.width = '100%';
+      showStatus(`已加载 ${data.items.length} 条录音`);
       if (data.items.length) {
         select.selectedIndex = 0;
         await loadDetail();
       }
     }
-    function summarizeTranscript(detail) {
-      const utterances = detail.transcription_segments || detail.cleaned_transcription || detail.timeline_transcript || detail.structured_transcript || [];
-      if (!utterances.length) {
-        return detail.transcript_text || '暂无可用转写';
-      }
-      return utterances.slice(0, 120).map(item => {
-        const start = Math.floor(pickUtteranceStart(item));
-        const speaker = item.speaker_role || item.speaker || item.role || 'unknown';
-        return `<div class="utt"><span class="utt-time">[${fmtSeconds(start)}]</span><span class="utt-speaker">${escapeHtml(speaker)}:</span><span>${escapeHtml(item.text || item.content || item.transcript || item.utterance || '')}</span></div>`;
-      }).join('');
-    }
+
     async function loadDetail() {
-      const select = $('recordingSelect');
-      if (!select.value) return;
-      const id = select.value;
+      const id = $('recordingSelect').value;
+      if (!id) return;
       const data = await api(`/internal/split-demo/recordings/${id}`);
       currentRecording = data;
+      currentDetail = data;
       const segs = data.transcription_segments?.length || data.cleaned_transcription?.length || data.timeline_transcript?.length || data.structured_transcript?.length || 0;
       $('detailMeta').textContent = `录音 #${data.id} | ${data.employee_name} | ${data.recorded_at || ''} | 来源: ${data.transcript_source} | 时长: ${fmtDurationLabel(data.recording_duration)} | 结构化片段 ${segs} 条`;
       $('detailText').innerHTML = summarizeTranscript(data);
@@ -705,26 +931,60 @@
         cleaned_transcription: data.cleaned_transcription,
         timeline_transcript: data.timeline_transcript,
         structured_transcript: data.structured_transcript,
+        latest_run: data.latest_run,
+        latest_annotation: data.latest_annotation,
       }, null, 2);
       $('recordingMeta').textContent = `当前选择: #${data.id}`;
+
+      if (data.latest_run?.result) {
+        const result = data.latest_run.result;
+        $('runMeta').textContent = `已加载上次结果 | ${result.split_model} | ${result.split_prompt_version} | ${result.elapsed_ms}ms | tokens ${result.usage.total_tokens || 0} | chunks ${result.chunk_count} | input ${result.input_kind}`;
+        $('rawOutput').textContent = data.latest_run.raw_output || result.raw_output || '';
+        setWorkingState(result, data, data.latest_annotation || null);
+        renderValidation(result);
+        renderResultMeta(result);
+        renderTimeline(result.segments || [], result.recording_duration_seconds || 1);
+        renderTimelineTable(result);
+        renderEncounters();
+        updateAnnotationSummary();
+        showStatus(data.latest_annotation ? '已恢复保存的基准' : '已加载上次保存结果');
+        $('statusProgress').style.width = '100%';
+      } else {
+        currentResult = null;
+        sourceUtterances = extractSourceUtterances(data);
+        workingEncounters = [];
+        correctionsLog = [];
+        baselineEncounterTotal = 0;
+        expandedEncounters = {};
+        $('runMeta').textContent = '尚无切分结果';
+        $('rawOutput').textContent = '';
+        $('validation').textContent = '';
+        $('resultMetaGrid').innerHTML = '';
+        $('headlineSummary').style.display = 'none';
+        $('timeline').innerHTML = '';
+        $('timelineTable').innerHTML = '';
+        renderEncounters();
+        updateAnnotationSummary();
+      }
     }
+
     async function runSplit() {
       if (!currentRecording) return;
       stopPolling();
-      $('status').textContent = '正在创建切分任务...';
-      $('statusExtra').textContent = '';
+      showStatus('正在创建切分任务...');
       $('statusProgress').style.width = '8%';
-      showStatusBox(true);
       $('splitBtn').disabled = true;
       try {
-        const payload = {
-          recording_id: currentRecording.id,
-          model: $('model').value.trim(),
-          prompt_version: $('promptVersion').value.trim(),
-          system_prompt: $('systemPrompt').value,
-          user_prompt: $('userPrompt').value,
-        };
-        const job = await api('/internal/split-demo/split', {method:'POST', body: JSON.stringify(payload)});
+        const job = await api('/internal/split-demo/split', {
+          method: 'POST',
+          body: JSON.stringify({
+            recording_id: currentRecording.id,
+            model: $('model').value.trim(),
+            prompt_version: $('promptVersion').value.trim(),
+            system_prompt: $('systemPrompt').value,
+            user_prompt: $('userPrompt').value,
+          }),
+        });
         activeJobId = job.id;
         activeJobCreatedAt = Date.now();
         startStatusTimer();
@@ -733,29 +993,28 @@
         $('validation').textContent = '';
         $('resultMetaGrid').innerHTML = '';
         $('headlineSummary').style.display = 'none';
-        $('headlineSummary').innerHTML = '';
         $('annotationSummary').innerHTML = '';
-        encounterAnnotations = {};
+        $('saveAnnotationBtn').style.display = 'none';
+        workingEncounters = [];
+        correctionsLog = [];
         expandedEncounters = {};
-        focusedEncounter = 1;
-        renderTimeline([], 1);
-        $('timelineTable').innerHTML = '';
-        renderEncounters({encounters: [], summary: {}, validation: {}});
+        renderEncounters();
         renderJobStatus(job);
         pollJob(job.id);
       } catch (err) {
-        $('status').textContent = `错误: ${err.message}`;
+        showStatus(`错误: ${err.message}`);
         $('splitBtn').disabled = false;
       }
     }
+
     $('loadBtn').addEventListener('click', loadRecordings);
     $('reloadDetailBtn').addEventListener('click', loadDetail);
     $('recordingSelect').addEventListener('change', loadDetail);
     $('splitBtn').addEventListener('click', runSplit);
+    $('saveAnnotationBtn').addEventListener('click', saveAnnotation);
+
     document.addEventListener('keydown', (event) => {
-      const result = window.__lastResult;
-      const total = result?.encounters?.length || 0;
-      if (!total) return;
+      if (!workingEncounters.length) return;
       const tag = document.activeElement?.tagName;
       if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return;
       if (event.key === 'ArrowDown') {
@@ -766,17 +1025,20 @@
         focusEncounter(focusedEncounter - 1);
       } else if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'y') {
         event.preventDefault();
-        setEncounterAnnotation(String(focusedEncounter), 'correct', result);
-      } else if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'n') {
+        confirmEncounter(focusedEncounter);
+      } else if (event.key.toLowerCase() === 'm') {
         event.preventDefault();
-        expandedEncounters[String(focusedEncounter)] = true;
-        setEncounterAnnotation(String(focusedEncounter), 'split_inner', result);
+        mergeWithPrevious(focusedEncounter);
+      } else if (event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        deleteEncounter(focusedEncounter);
       } else if (event.key === ' ') {
         event.preventDefault();
-        toggleEncounter(String(focusedEncounter));
+        toggleEncounter(focusedEncounter);
       }
     });
-    loadRecordings().catch(err => $('status').textContent = `加载失败: ${err.message}`);
+
+    loadRecordings().catch(err => showStatus(`加载失败: ${err.message}`));
   </script>
 </body>
 </html>

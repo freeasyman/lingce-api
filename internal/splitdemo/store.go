@@ -12,11 +12,19 @@ import (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool            *pgxpool.Pool
+	runStore        *RunStore
+	annotationStore *AnnotationStore
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func NewStore(pool *pgxpool.Pool, runStore *RunStore, annotationStore *AnnotationStore) *Store {
+	if runStore == nil {
+		runStore = NewRunStore("")
+	}
+	if annotationStore == nil {
+		annotationStore = NewAnnotationStore("")
+	}
+	return &Store{pool: pool, runStore: runStore, annotationStore: annotationStore}
 }
 
 func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int) ([]RecordingListItem, int64, error) {
@@ -97,6 +105,16 @@ func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationS
 		if recordedAt.Valid {
 			v := recordedAt.Time.Format(time.RFC3339)
 			item.RecordedAt = &v
+		}
+		if latest, err := s.runStore.LatestByRecording(ctx, item.ID); err == nil && latest != nil {
+			item.HasSavedRun = true
+			ts := latest.UpdatedAt.Format(time.RFC3339)
+			item.SavedRunAt = &ts
+		}
+		if latest, err := s.annotationStore.Load(ctx, item.ID); err == nil && latest != nil {
+			item.HasSavedAnnotation = true
+			ts := latest.AnnotatedAt
+			item.SavedAnnotationAt = &ts
 		}
 		items = append(items, item)
 	}
@@ -179,7 +197,34 @@ func (s *Store) GetRecording(ctx context.Context, recordingID int64) (*Recording
 	item.StructuredTranscript = decodeSegmentsJSON([]byte(structuredRaw))
 	item.TimelineTranscript = decodeSegmentsJSON([]byte(timelineRaw))
 	item.TranscriptSource = chooseTranscriptSource(item)
+	if latest, err := s.runStore.LatestByRecording(ctx, recordingID); err == nil && latest != nil {
+		item.LatestRun = latest
+	}
+	if latest, err := s.annotationStore.Load(ctx, recordingID); err == nil && latest != nil {
+		item.LatestAnnotation = latest
+	}
 	return &item, nil
+}
+
+func (s *Store) SaveRun(ctx context.Context, record *SplitRunRecord) error {
+	if s.runStore == nil {
+		return nil
+	}
+	return s.runStore.Save(ctx, record)
+}
+
+func (s *Store) SaveAnnotation(ctx context.Context, record *AnnotationRecord) error {
+	if s.annotationStore == nil {
+		return nil
+	}
+	return s.annotationStore.Save(ctx, record)
+}
+
+func (s *Store) LoadAnnotation(ctx context.Context, recordingID int64) (*AnnotationRecord, error) {
+	if s.annotationStore == nil {
+		return nil, nil
+	}
+	return s.annotationStore.Load(ctx, recordingID)
 }
 
 func chooseTranscriptSource(item RecordingDetail) string {
