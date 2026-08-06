@@ -78,12 +78,12 @@ func main() {
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
 
-	slog.Info("applying compatibility migrations")
+	slog.Info("checking compatibility migrations")
 	if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
 		slog.Error("failed to apply compatibility migrations", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("compatibility migrations applied")
+	slog.Info("compatibility migrations ready")
 
 	// Setup HTTP router
 	mux := http.NewServeMux()
@@ -224,7 +224,9 @@ func main() {
 	supportHandler := support.NewHandler(supportService)
 	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	splitDemoStore := splitdemo.NewStore(pool)
+	splitDemoRunStore := splitdemo.NewRunStore("")
+	splitDemoAnnotationStore := splitdemo.NewAnnotationStore("")
+	splitDemoStore := splitdemo.NewStore(pool, splitDemoRunStore, splitDemoAnnotationStore)
 	splitDemoClient := splitdemo.NewClient(cfg.DashScope.BaseURL, cfg.DashScope.APIKey)
 	splitDemoService := splitdemo.NewService(splitDemoStore, splitDemoClient)
 	splitDemoHandler := splitdemo.NewHandler(splitDemoService)

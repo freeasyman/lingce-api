@@ -2,15 +2,74 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	compatMigrationKey        = "startup_compat"
+	compatMigrationVersion    = 1
+	compatMigrationLockKey    = int64(2026080601)
+	compatMigrationStateTable = "api_migration_state"
 )
 
 // ApplyCompatMigrations applies minimal schema compatibility fixes for 18080 API integration.
 // All statements are idempotent.
 func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	if err := ensureCompatMigrationStateTable(ctx, pool); err != nil {
+		return fmt.Errorf("ensure compat migration state table: %w", err)
+	}
+
+	appliedVersion, err := loadCompatMigrationVersion(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("load compat migration version: %w", err)
+	}
+	if appliedVersion >= compatMigrationVersion {
+		slog.Info("compatibility migrations already applied", "version", appliedVersion)
+		return nil
+	}
+
+	ready, err := compatMigrationAlreadySatisfied(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("check compat migration readiness: %w", err)
+	}
+	if ready {
+		if err := storeCompatMigrationVersion(ctx, pool, compatMigrationVersion); err != nil {
+			return fmt.Errorf("record compat migration version from readiness check: %w", err)
+		}
+		slog.Info("compatibility migrations already satisfied", "version", compatMigrationVersion)
+		return nil
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire compat migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, compatMigrationLockKey); err != nil {
+		return fmt.Errorf("acquire compat migration lock: %w", err)
+	}
+	defer func() {
+		if _, unlockErr := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, compatMigrationLockKey); unlockErr != nil {
+			slog.Warn("failed to release compat migration lock", "error", unlockErr)
+		}
+	}()
+
+	appliedVersion, err = loadCompatMigrationVersion(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("reload compat migration version: %w", err)
+	}
+	if appliedVersion >= compatMigrationVersion {
+		slog.Info("compatibility migrations already applied", "version", appliedVersion)
+		return nil
+	}
+
 	stmts := []string{
 		// Customer module soft-delete compatibility
 		`ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
@@ -81,6 +140,44 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system'`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_read ON notifications(user_id, user_type, is_read)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created_at ON notifications(user_id, user_type, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS system_action_logs (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT,
+			tenant_name TEXT,
+			actor_id BIGINT,
+			actor_name TEXT,
+			actor_role_code TEXT,
+			actor_role_name TEXT,
+			log_type TEXT NOT NULL,
+			action_code TEXT NOT NULL,
+			action_name TEXT NOT NULL,
+			route_path TEXT,
+			result TEXT NOT NULL DEFAULT 'success',
+			error_message TEXT,
+			object_type TEXT,
+			object_id TEXT,
+			object_name TEXT,
+			request_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+			before_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+			after_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+			ip_address TEXT,
+			user_agent TEXT,
+			device_type TEXT,
+			trace_id TEXT,
+			request_id TEXT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS tenant_name TEXT`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS actor_role_code TEXT`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS actor_role_name TEXT`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS request_summary JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS before_summary JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`ALTER TABLE IF EXISTS system_action_logs ADD COLUMN IF NOT EXISTS after_summary JSONB NOT NULL DEFAULT '{}'::jsonb`,
+		`CREATE INDEX IF NOT EXISTS idx_system_action_logs_created_at ON system_action_logs(created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_action_logs_tenant_created_at ON system_action_logs(tenant_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_action_logs_actor_created_at ON system_action_logs(actor_id, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_action_logs_action_created_at ON system_action_logs(action_code, created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_action_logs_type_result_created_at ON system_action_logs(log_type, result, created_at DESC)`,
 
 		// Opportunity alert module compatibility
 		`CREATE TABLE IF NOT EXISTS opportunity_alerts (
@@ -145,6 +242,7 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 
 		// Recording business scope compatibility
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS business_scope TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
 		`UPDATE recordings SET business_scope = 'unknown' WHERE business_scope IS NULL OR trim(business_scope) = ''`,
 		`CREATE INDEX IF NOT EXISTS idx_recordings_tenant_business_scope_created_at ON recordings(tenant_id, business_scope, created_at DESC)`,
 		`DO $$
@@ -1431,6 +1529,53 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS step_name VARCHAR(255)`,
 		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP`,
 		`ALTER TABLE IF EXISTS analysis_step_runs ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP`,
+		`CREATE TABLE IF NOT EXISTS op_encounters (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			recording_id BIGINT NOT NULL,
+			analysis_run_id BIGINT,
+			sequence_no INTEGER NOT NULL,
+			title VARCHAR(255) NOT NULL DEFAULT '',
+			summary TEXT,
+			patient_name VARCHAR(255),
+			patient_age INTEGER,
+			patient_gender VARCHAR(32),
+			patient_phone VARCHAR(64),
+			employee_id BIGINT,
+			employee_name VARCHAR(255),
+			scene VARCHAR(64),
+			start_seconds INTEGER,
+			end_seconds INTEGER,
+			start_at TIMESTAMP,
+			end_at TIMESTAMP,
+			source_prompt_code VARCHAR(128),
+			source_prompt_version VARCHAR(64),
+			source_type VARCHAR(64) NOT NULL DEFAULT 'analysis',
+			analysis_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_op_encounters_recording_sequence ON op_encounters (recording_id, sequence_no)`,
+		`CREATE INDEX IF NOT EXISTS idx_op_encounters_tenant_created ON op_encounters (tenant_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_op_encounters_recording_created ON op_encounters (recording_id, created_at DESC)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS analysis_run_id BIGINT`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS title VARCHAR(255) NOT NULL DEFAULT ''`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS summary TEXT`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS patient_name VARCHAR(255)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS patient_age INTEGER`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS patient_gender VARCHAR(32)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS patient_phone VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS employee_id BIGINT`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS scene VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS start_seconds INTEGER`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS end_seconds INTEGER`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS start_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS end_at TIMESTAMP`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS source_prompt_code VARCHAR(128)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS source_prompt_version VARCHAR(64)`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS source_type VARCHAR(64) NOT NULL DEFAULT 'analysis'`,
+		`ALTER TABLE IF EXISTS op_encounters ADD COLUMN IF NOT EXISTS analysis_payload JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_role_id BIGINT`,
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_role_code VARCHAR(128)`,
 		`ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS resolved_scene_scope VARCHAR(64)`,
@@ -1765,50 +1910,171 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	for i, stmt := range stmts {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("compat migration failed at step %d: %w", i+1, err)
 		}
 	}
 
-	if err := seedBuiltinAnalysisPipelines(ctx, pool); err != nil {
+	if err := seedBuiltinAnalysisPipelines(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed builtin analysis pipelines: %w", err)
 	}
-	if err := seedDefaultAnalysisRoutes(ctx, pool); err != nil {
+	if err := seedDefaultAnalysisRoutes(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed default analysis routes: %w", err)
 	}
-	if err := seedBenchmarkReviewPrompt(ctx, pool); err != nil {
+	if err := seedBenchmarkReviewPrompt(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed benchmark review prompt: %w", err)
 	}
-	if err := seedBenchmarkCommentModelConfig(ctx, pool); err != nil {
+	if err := seedBenchmarkCommentModelConfig(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed benchmark model config: %w", err)
 	}
-	if err := seedMorningMeetingPrompt(ctx, pool); err != nil {
+	if err := seedMorningMeetingPrompt(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed morning meeting prompt: %w", err)
 	}
-	if err := seedMorningMeetingModelConfig(ctx, pool); err != nil {
+	if err := seedMorningMeetingModelConfig(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed morning meeting model config: %w", err)
 	}
-	if err := ensureProductLibrarySchema(ctx, pool); err != nil {
+	if err := ensureProductLibrarySchema(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration ensure product library schema: %w", err)
 	}
-	if err := seedTenantProductCatalog(ctx, pool); err != nil {
+	if err := seedTenantProductCatalog(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed tenant product catalog: %w", err)
 	}
-	if err := backfillTrialCustomerOrgOwnership(ctx, pool); err != nil {
+	if err := backfillTrialCustomerOrgOwnership(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration backfill trial customer org ownership: %w", err)
 	}
-	if err := normalizeOperationsMenus(ctx, pool); err != nil {
+	if err := normalizeOperationsMenus(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration normalize operations menus: %w", err)
 	}
-	if err := ensureOperationsNavigationMenus(ctx, pool); err != nil {
+	if err := ensureOperationsNavigationMenus(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration ensure operations navigation menus: %w", err)
 	}
 
-	slog.Info("compatibility migrations applied", "steps", len(stmts))
+	if err := storeCompatMigrationVersion(ctx, conn, compatMigrationVersion); err != nil {
+		return fmt.Errorf("record compat migration version: %w", err)
+	}
+
+	slog.Info("compatibility migrations applied", "version", compatMigrationVersion, "steps", len(stmts))
 	return nil
 }
 
-func backfillTrialCustomerOrgOwnership(ctx context.Context, pool *pgxpool.Pool) error {
+type compatExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Begin(context.Context) (pgx.Tx, error)
+}
+
+func ensureCompatMigrationStateTable(ctx context.Context, db compatExecutor) error {
+	_, err := db.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			migration_key TEXT PRIMARY KEY,
+			applied_version INTEGER NOT NULL DEFAULT 0,
+			applied_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)
+	`, compatMigrationStateTable))
+	return err
+}
+
+func compatMigrationAlreadySatisfied(ctx context.Context, db compatExecutor) (bool, error) {
+	var ready bool
+	if err := db.QueryRow(ctx, `
+		SELECT
+			to_regclass('public.system_action_logs') IS NOT NULL
+			AND to_regclass('public.analysis_runs') IS NOT NULL
+			AND to_regclass('public.op_encounters') IS NOT NULL
+			AND to_regclass('public.tenant_feature_groups') IS NOT NULL
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'recordings'
+				  AND column_name = 'business_scope'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'recordings'
+				  AND column_name = 'deleted_at'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'llm_model_configs'
+				  AND column_name = 'created_by'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'analysis_role_routes'
+				  AND column_name = 'status'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'tenant_feature_group_items'
+				  AND column_name = 'item_type'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'tenant_feature_overrides'
+				  AND column_name = 'item_type'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'inst_menus'
+				  AND column_name = 'is_feature_assignable'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'institution_menus'
+				  AND column_name = 'is_feature_assignable'
+			)
+	`).Scan(&ready); err != nil {
+		return false, err
+	}
+	return ready, nil
+}
+
+func loadCompatMigrationVersion(ctx context.Context, db compatExecutor) (int, error) {
+	var version int
+	err := db.QueryRow(ctx, fmt.Sprintf(`
+		SELECT applied_version
+		FROM %s
+		WHERE migration_key = $1
+	`, compatMigrationStateTable), compatMigrationKey).Scan(&version)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return version, nil
+}
+
+func storeCompatMigrationVersion(ctx context.Context, db compatExecutor, version int) error {
+	_, err := db.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s (migration_key, applied_version, applied_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (migration_key) DO UPDATE
+		SET applied_version = EXCLUDED.applied_version,
+		    applied_at = EXCLUDED.applied_at,
+		    updated_at = EXCLUDED.updated_at
+	`, compatMigrationStateTable), compatMigrationKey, version)
+	return err
+}
+
+func backfillTrialCustomerOrgOwnership(ctx context.Context, pool compatExecutor) error {
 	// 不再在兼容迁移阶段自动创建组织、绑定管理员或回填组织归属。
 	// 组织及绑定关系由产品界面显式维护，避免系统替用户做隐式决策。
 	_ = ctx
@@ -1816,7 +2082,7 @@ func backfillTrialCustomerOrgOwnership(ctx context.Context, pool *pgxpool.Pool) 
 	return nil
 }
 
-func normalizeOperationsMenus(ctx context.Context, pool *pgxpool.Pool) error {
+func normalizeOperationsMenus(ctx context.Context, pool compatExecutor) error {
 	type menuNormalization struct {
 		path        string
 		canonicalID int64
@@ -1948,7 +2214,7 @@ func normalizeOperationsMenus(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func ensureOperationsNavigationMenus(ctx context.Context, pool *pgxpool.Pool) error {
+func ensureOperationsNavigationMenus(ctx context.Context, pool compatExecutor) error {
 	statements := []string{
 		`INSERT INTO operations_menus (name, code, path, parent_id, sort_order, is_active, created_at, updated_at)
 		 SELECT '工牌台账', 'badges_ledger', '/badges/ledger', NULL, 1501, TRUE, NOW(), NOW()
@@ -1979,7 +2245,7 @@ func ensureOperationsNavigationMenus(ctx context.Context, pool *pgxpool.Pool) er
 	return nil
 }
 
-func ensureProductLibrarySchema(ctx context.Context, pool *pgxpool.Pool) error {
+func ensureProductLibrarySchema(ctx context.Context, pool compatExecutor) error {
 	statements := []string{
 		`DO $$
 		BEGIN
@@ -2076,7 +2342,7 @@ func ensureProductLibrarySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func seedTenantProductCatalog(ctx context.Context, pool *pgxpool.Pool) error {
+func seedTenantProductCatalog(ctx context.Context, pool compatExecutor) error {
 	seedSQL := `
 	WITH seed_rows AS (
 		SELECT *
@@ -2116,7 +2382,7 @@ func seedTenantProductCatalog(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func seedBenchmarkReviewPrompt(ctx context.Context, pool *pgxpool.Pool) error {
+func seedBenchmarkReviewPrompt(ctx context.Context, pool compatExecutor) error {
 	const promptCode = "benchmark_clip_review_v1"
 	const systemPrompt = "你是一名医疗管理培训教练。请仅根据提供的证据生成可复用、可执行的点评，不得杜撰事实。"
 	const userPrompt = `请基于以下标杆收录上下文生成点评，返回严格 JSON：
@@ -2152,7 +2418,7 @@ func seedBenchmarkReviewPrompt(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-func seedBenchmarkCommentModelConfig(ctx context.Context, pool *pgxpool.Pool) error {
+func seedBenchmarkCommentModelConfig(ctx context.Context, pool compatExecutor) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO llm_model_configs (
 			tenant_id, model_code, function_type, model_name, provider,
@@ -2183,7 +2449,7 @@ func seedBenchmarkCommentModelConfig(ctx context.Context, pool *pgxpool.Pool) er
 	return err
 }
 
-func seedMorningMeetingPrompt(ctx context.Context, pool *pgxpool.Pool) error {
+func seedMorningMeetingPrompt(ctx context.Context, pool compatExecutor) error {
 	const promptCode = "morning_meeting_review_v1"
 	const systemPrompt = "你是一名医疗场景晨会带教主管。请基于提供的评分、证据和分析摘要，为管理者生成可直接拿去讲评的内容。不得编造事实。"
 	const userPrompt = `请基于以下早会讲评上下文输出严格 JSON：
@@ -2217,7 +2483,7 @@ func seedMorningMeetingPrompt(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-func seedMorningMeetingModelConfig(ctx context.Context, pool *pgxpool.Pool) error {
+func seedMorningMeetingModelConfig(ctx context.Context, pool compatExecutor) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO llm_model_configs (
 			tenant_id, model_code, function_type, model_name, provider,
@@ -2257,7 +2523,7 @@ type builtinAnalysisPipelineSeed struct {
 	ReleaseNote string
 }
 
-func seedBuiltinAnalysisPipelines(ctx context.Context, pool *pgxpool.Pool) error {
+func seedBuiltinAnalysisPipelines(ctx context.Context, pool compatExecutor) error {
 	seeds := []builtinAnalysisPipelineSeed{
 		{Code: "doctor", Version: "v1", Name: "医生录音分析 v1", SceneScope: "post_call_analysis", Description: "legacy doctor pipeline", ReleaseNote: "builtin pipeline"},
 		{Code: "doctor_patient", Version: "v1", Name: "医生我与患者分析 v1", SceneScope: "recording", Description: "default doctor patient pipeline", ReleaseNote: "builtin pipeline"},
@@ -2292,7 +2558,7 @@ func seedBuiltinAnalysisPipelines(ctx context.Context, pool *pgxpool.Pool) error
 	return nil
 }
 
-func seedDefaultAnalysisRoutes(ctx context.Context, pool *pgxpool.Pool) error {
+func seedDefaultAnalysisRoutes(ctx context.Context, pool compatExecutor) error {
 	_, err := pool.Exec(ctx, `
 		WITH role_candidates AS (
 			SELECT tenant_id, id, lower(code) AS role_code
