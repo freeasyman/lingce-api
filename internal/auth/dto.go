@@ -2,10 +2,12 @@ package auth
 
 // LoginRequest represents a login request
 type LoginRequest struct {
-	Username string `json:"username"`
-	Phone    string `json:"phone,omitempty"`
-	Password string `json:"password"`
-	Captcha  string `json:"captcha,omitempty"`
+	Username    string `json:"username"`
+	Phone       string `json:"phone,omitempty"`
+	Password    string `json:"password"`
+	CaptchaID   string `json:"captcha_id,omitempty"`
+	CaptchaCode string `json:"captcha_code,omitempty"`
+	Captcha     string `json:"captcha,omitempty"` // backward compatibility
 }
 
 // LoginResponse represents a login response
@@ -43,8 +45,10 @@ type MeResponse struct {
 
 // ChangePasswordRequest represents a password change request
 type ChangePasswordRequest struct {
-	OldPassword string `json:"old_password"`
-	NewPassword string `json:"new_password"`
+	OldPassword    string `json:"old_password"`
+	NewPassword    string `json:"new_password"`
+	OldPasswordAlt string `json:"oldPassword,omitempty"`
+	NewPasswordAlt string `json:"newPassword,omitempty"`
 }
 
 // SendSMSRequest represents a SMS send request

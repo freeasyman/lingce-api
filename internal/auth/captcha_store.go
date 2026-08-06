@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"time"
+	"strings"
 )
 
 // CaptchaStore stores captcha codes in memory with expiration
@@ -61,7 +62,7 @@ func (s *CaptchaStore) Verify(captchaID, code string) bool {
 	}
 
 	// Case-insensitive comparison
-	return entry.code == code
+	return strings.EqualFold(entry.code, code)
 }
 
 // cleanupExpired removes expired captcha codes
