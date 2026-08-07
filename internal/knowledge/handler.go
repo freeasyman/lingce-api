@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -19,14 +20,16 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/knowledge-items", authMw(http.HandlerFunc(h.List)))
-	mux.Handle("GET /api/v1/knowledge-items/{id}", authMw(http.HandlerFunc(h.Get)))
-	mux.Handle("POST /api/v1/knowledge-items", authMw(http.HandlerFunc(h.Create)))
-	mux.Handle("PUT /api/v1/knowledge-items/{id}", authMw(http.HandlerFunc(h.Update)))
-	mux.Handle("PATCH /api/v1/knowledge-items/{id}/status", authMw(http.HandlerFunc(h.UpdateStatus)))
-	mux.Handle("POST /api/v1/knowledge-items/batch-status", authMw(http.HandlerFunc(h.BatchUpdateStatus)))
-	mux.Handle("DELETE /api/v1/knowledge-items/{id}", authMw(http.HandlerFunc(h.Delete)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/knowledge-items", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/knowledge-items/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/knowledge-items", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "PUT", Path: "/api/v1/knowledge-items/{id}", Handler: h.Update, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "PATCH", Path: "/api/v1/knowledge-items/{id}/status", Handler: h.UpdateStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/knowledge-items/batch-status", Handler: h.BatchUpdateStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/knowledge-items/{id}", Handler: h.Delete, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {

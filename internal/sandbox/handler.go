@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -21,17 +22,19 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/sandbox/recordings/search", authMw(http.HandlerFunc(h.SearchRecordings)))
-	mux.Handle("GET /api/v1/sandbox/recordings/estimate", authMw(http.HandlerFunc(h.EstimateTransfer)))
-	mux.Handle("POST /api/v1/sandbox/recordings/tasks", authMw(http.HandlerFunc(h.CreateTask)))
-	mux.Handle("GET /api/v1/sandbox/recordings/tasks", authMw(http.HandlerFunc(h.ListTasks)))
-	mux.Handle("GET /api/v1/sandbox/recordings/tasks/{taskId}", authMw(http.HandlerFunc(h.GetTask)))
-	mux.Handle("GET /api/v1/sandbox/recordings/tasks/{taskId}/items", authMw(http.HandlerFunc(h.ListTaskItems)))
-	mux.Handle("POST /api/v1/sandbox/recordings/tasks/{taskId}/rollback", authMw(http.HandlerFunc(h.RollbackTask)))
-	mux.Handle("GET /api/v1/sandbox/recordings/employee-mappings", authMw(http.HandlerFunc(h.ListEmployeeMappings)))
-	mux.Handle("POST /api/v1/sandbox/recordings/employee-mappings", authMw(http.HandlerFunc(h.CreateEmployeeMapping)))
-	mux.Handle("DELETE /api/v1/sandbox/recordings/employee-mappings/{id}", authMw(http.HandlerFunc(h.DeleteEmployeeMapping)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/search", Handler: h.SearchRecordings, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/estimate", Handler: h.EstimateTransfer, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/sandbox/recordings/tasks", Handler: h.CreateTask, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/tasks", Handler: h.ListTasks, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/tasks/{taskId}", Handler: h.GetTask, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/tasks/{taskId}/items", Handler: h.ListTaskItems, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/sandbox/recordings/tasks/{taskId}/rollback", Handler: h.RollbackTask, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/sandbox/recordings/employee-mappings", Handler: h.ListEmployeeMappings, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/sandbox/recordings/employee-mappings", Handler: h.CreateEmployeeMapping, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "DELETE", Path: "/api/v1/sandbox/recordings/employee-mappings/{id}", Handler: h.DeleteEmployeeMapping, Auth: true, AllowedUserTypes: []string{"admin"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) ensureAdmin(w http.ResponseWriter, r *http.Request) (*auth.Claims, bool) {

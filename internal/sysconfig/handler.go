@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -20,20 +21,18 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers sysconfig routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Subscription plan management (admin only)
-	mux.Handle("GET /api/v1/subscription-plans", authMw(http.HandlerFunc(h.ListSubscriptionPlans)))
-	mux.Handle("POST /api/v1/subscription-plans", authMw(http.HandlerFunc(h.CreateSubscriptionPlan)))
-	mux.Handle("PUT /api/v1/subscription-plans/{id}", authMw(http.HandlerFunc(h.UpdateSubscriptionPlan)))
-
-	// Feature group management (admin only)
-	mux.Handle("GET /api/v1/feature-groups", authMw(http.HandlerFunc(h.ListFeatureGroups)))
-	mux.Handle("GET /api/v1/feature-groups/{id}", authMw(http.HandlerFunc(h.GetFeatureGroup)))
-	mux.Handle("POST /api/v1/feature-groups", authMw(http.HandlerFunc(h.CreateFeatureGroup)))
-	mux.Handle("PUT /api/v1/feature-groups/{id}", authMw(http.HandlerFunc(h.UpdateFeatureGroup)))
-	mux.Handle("DELETE /api/v1/feature-groups/{id}", authMw(http.HandlerFunc(h.DeleteFeatureGroup)))
-	mux.Handle("GET /api/v1/feature-groups/options", authMw(http.HandlerFunc(h.GetFeatureOptions)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/subscription-plans", Handler: h.ListSubscriptionPlans, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/subscription-plans", Handler: h.CreateSubscriptionPlan, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "PUT", Path: "/api/v1/subscription-plans/{id}", Handler: h.UpdateSubscriptionPlan, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/feature-groups", Handler: h.ListFeatureGroups, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/feature-groups/{id}", Handler: h.GetFeatureGroup, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/feature-groups", Handler: h.CreateFeatureGroup, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "PUT", Path: "/api/v1/feature-groups/{id}", Handler: h.UpdateFeatureGroup, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "DELETE", Path: "/api/v1/feature-groups/{id}", Handler: h.DeleteFeatureGroup, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/feature-groups/options", Handler: h.GetFeatureOptions, Auth: true, AllowedUserTypes: []string{"admin"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // isAdmin checks if the current user is an admin

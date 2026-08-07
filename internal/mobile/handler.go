@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/recording"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -22,14 +23,16 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/mobile/me", authMw(http.HandlerFunc(h.GetMe)))
-	mux.Handle("GET /api/v1/mobile/home", authMw(http.HandlerFunc(h.GetHome)))
-	mux.Handle("GET /api/v1/mobile/tasks", authMw(http.HandlerFunc(h.ListTasks)))
-	mux.Handle("GET /api/v1/mobile/tasks/{id}", authMw(http.HandlerFunc(h.GetTask)))
-	mux.Handle("POST /api/v1/mobile/tasks/{id}/actions/complete", authMw(http.HandlerFunc(h.CompleteTask)))
-	mux.Handle("GET /api/v1/mobile/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
-	mux.Handle("GET /api/v1/mobile/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/mobile/me", Handler: h.GetMe, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/home", Handler: h.GetHome, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/tasks", Handler: h.ListTasks, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/tasks/{id}", Handler: h.GetTask, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/mobile/tasks/{id}/actions/complete", Handler: h.CompleteTask, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/recordings", Handler: h.ListRecordings, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/recordings/{id}", Handler: h.GetRecording, Auth: true, AllowedUserTypes: []string{"employee", "mobile"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {

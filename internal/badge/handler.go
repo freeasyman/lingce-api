@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -30,35 +31,50 @@ func (h *Handler) SetCallbackGatewayToken(token string) {
 
 // RegisterRoutes registers badge module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	h.registerRebuildRoutes(mux, authMw)
-
-	// V1 endpoints still kept only for institution-side badge usage.
-	mux.Handle("GET /api/v1/badge-devices", authMw(http.HandlerFunc(h.V2ListDevices)))
-	mux.Handle("GET /api/v1/badge-devices/{id}", authMw(http.HandlerFunc(h.V2GetDevice)))
-	mux.Handle("POST /api/v1/badge-devices/{device_id}/actions/recording-test", authMw(http.HandlerFunc(h.TestDeviceRecording)))
-	mux.Handle("GET /api/v1/badge-devices/recording-control", authMw(http.HandlerFunc(h.GetRecordingControlDevices)))
-	mux.Handle("POST /api/v1/badge-devices/{device_no}/actions/start-recording", authMw(http.HandlerFunc(h.StartRecording)))
-	mux.Handle("POST /api/v1/badge-devices/{device_no}/actions/stop-recording", authMw(http.HandlerFunc(h.StopRecording)))
-	mux.Handle("GET /api/v1/badge-devices/recording-control/logs", authMw(http.HandlerFunc(h.GetRecordingControlLogs)))
-	mux.Handle("GET /api/v1/badge-devices/{device_no}/history", authMw(http.HandlerFunc(h.GetDeviceHistory)))
-
-	mux.Handle("GET /api/v1/badge-devices/me", authMw(http.HandlerFunc(h.GetMyBadgeStatus)))
-	mux.Handle("POST /api/v1/badge-devices/me/actions/start-recording", authMw(http.HandlerFunc(h.StartMyRecording)))
-	mux.Handle("POST /api/v1/badge-devices/me/actions/stop-recording", authMw(http.HandlerFunc(h.StopMyRecording)))
-
-	mux.Handle("POST /api/v1/badge-devices/callbacks/developer", authMw(http.HandlerFunc(h.DeveloperCallback)))
-	mux.Handle("POST /api/v1/badge-devices/callbacks/audio", authMw(http.HandlerFunc(h.AudioCallback)))
-	mux.Handle("POST /api/v1/badge-devices/actions/process-pending", authMw(http.HandlerFunc(h.ProcessPendingEvents)))
-
-	// Internal callback endpoints for badge-middleware dispatch worker.
-	// These endpoints are token-protected (X-Gateway-Token) and do not require JWT.
-	mux.Handle("POST /api/v1/smart-badge/callback/developer", http.HandlerFunc(h.InternalDeveloperCallback))
-	mux.Handle("POST /api/v1/smart-badge/callback/audio", http.HandlerFunc(h.InternalAudioCallback))
-
-	mux.Handle("GET /api/v1/badge-devices/recording-stats", authMw(http.HandlerFunc(h.GetRecordingStats)))
-
-	h.registerTicketRoutes(mux, authMw)
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v2/badge-devices", Handler: h.RebuildListBadgeDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/pending-acceptance", Handler: h.RebuildListPendingAcceptanceDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/monitoring", Handler: h.RebuildListMonitoringDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/manufacturers", Handler: h.V2Manufacturers, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/manufacturers/{code}/actions/sync", Handler: h.V2SyncManufacturer, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/{id}", Handler: h.RebuildGetBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/{id}/health", Handler: h.RebuildGetBadgeDeviceHealth, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/{id}/logs", Handler: h.RebuildListBadgeDeviceLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/{id}/assignment-logs", Handler: h.RebuildListBadgeAssignmentLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/actions/import", Handler: h.RebuildImportBadgeDevices, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/run-acceptance", Handler: h.RebuildRunAcceptanceCheck, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/accept", Handler: h.RebuildAcceptBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/reject-acceptance", Handler: h.RebuildRejectAcceptance, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/assign", Handler: h.RebuildAssignBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/reclaim", Handler: h.RebuildReclaimBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/restock", Handler: h.RebuildRestockBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/retire", Handler: h.RebuildRetireBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v2/badge-devices/actions/refresh-status", Handler: h.RebuildRefreshAllBadgeStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices", Handler: h.V2ListDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/{id}", Handler: h.V2GetDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/{device_id}/actions/recording-test", Handler: h.TestDeviceRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/recording-control", Handler: h.GetRecordingControlDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/{device_no}/actions/start-recording", Handler: h.StartRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/{device_no}/actions/stop-recording", Handler: h.StopRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/recording-control/logs", Handler: h.GetRecordingControlLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/{device_no}/history", Handler: h.GetDeviceHistory, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/me", Handler: h.GetMyBadgeStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/me/actions/start-recording", Handler: h.StartMyRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/me/actions/stop-recording", Handler: h.StopMyRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/callbacks/developer", Handler: h.DeveloperCallback, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/callbacks/audio", Handler: h.AudioCallback, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-devices/actions/process-pending", Handler: h.ProcessPendingEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-devices/recording-stats", Handler: h.GetRecordingStats, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-tickets", Handler: h.SubmitTicket, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-tickets/my", Handler: h.GetMyTickets, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-tickets", Handler: h.ListTickets, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/badge-tickets/{id}", Handler: h.GetTicket, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/actions/review", Handler: h.ReviewTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/actions/execute", Handler: h.ExecuteTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/smart-badge/callback/developer", Handler: h.InternalDeveloperCallback},
+		{Method: "POST", Path: "/api/v1/smart-badge/callback/audio", Handler: h.InternalAudioCallback},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // Ticket Handlers

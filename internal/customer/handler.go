@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -22,57 +23,46 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers customer module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Customer endpoints
-	mux.Handle("GET /api/v1/customers", authMw(http.HandlerFunc(h.ListCustomers)))
-	mux.Handle("GET /api/v1/customers/stats/overview", authMw(http.HandlerFunc(h.GetCustomerStats)))
-	mux.Handle("GET /api/v1/customers/{id}", authMw(http.HandlerFunc(h.GetCustomerByID)))
-	mux.Handle("POST /api/v1/customers", authMw(http.HandlerFunc(h.CreateCustomer)))
-	mux.Handle("PUT /api/v1/customers/{id}", authMw(http.HandlerFunc(h.UpdateCustomer)))
-	mux.Handle("DELETE /api/v1/customers/{id}", authMw(http.HandlerFunc(h.DeleteCustomer)))
-	mux.Handle("PUT /api/v1/customers/{id}/actions/convert", authMw(http.HandlerFunc(h.MarkCustomerConverted)))
-	mux.Handle("POST /api/v1/customers/actions/merge", authMw(http.HandlerFunc(h.MergeCustomers)))
-	mux.Handle("POST /api/v1/customers/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncCustomersFromVisits)))
-	mux.Handle("GET /api/v1/customers/{id}/360", authMw(http.HandlerFunc(h.GetCustomer360View)))
-	mux.Handle("POST /api/v1/customers/{id}/identities", authMw(http.HandlerFunc(h.AddCustomerIdentity)))
-	mux.Handle("GET /api/v1/customers/{id}/interactions", authMw(http.HandlerFunc(h.ListCustomerInteractions)))
-	mux.Handle("POST /api/v1/customers/{id}/interactions", authMw(http.HandlerFunc(h.CreateCustomerInteraction)))
-	mux.Handle("GET /api/v1/customers/{id}/follow-ups", authMw(http.HandlerFunc(h.ListCustomerFollowUps)))
-	mux.Handle("POST /api/v1/customers/{id}/follow-ups", authMw(http.HandlerFunc(h.CreateCustomerFollowUp)))
-	mux.Handle("GET /api/v1/customers/{id}/membership", authMw(http.HandlerFunc(h.GetCustomerMembership)))
-
-	// Tag endpoints
-	mux.Handle("GET /api/v1/customers/tags", authMw(http.HandlerFunc(h.ListCustomerTags)))
-	mux.Handle("POST /api/v1/customers/tags", authMw(http.HandlerFunc(h.CreateCustomerTag)))
-	mux.Handle("PUT /api/v1/customers/tags/{id}", authMw(http.HandlerFunc(h.UpdateCustomerTag)))
-	mux.Handle("DELETE /api/v1/customers/tags/{id}", authMw(http.HandlerFunc(h.DeleteCustomerTag)))
-
-	// Group endpoints
-	mux.Handle("GET /api/v1/customers/groups", authMw(http.HandlerFunc(h.ListCustomerGroups)))
-	mux.Handle("POST /api/v1/customers/groups", authMw(http.HandlerFunc(h.CreateCustomerGroup)))
-	mux.Handle("PUT /api/v1/customers/groups/{id}", authMw(http.HandlerFunc(h.UpdateCustomerGroup)))
-	mux.Handle("DELETE /api/v1/customers/groups/{id}", authMw(http.HandlerFunc(h.DeleteCustomerGroup)))
-
-	// Advanced customer endpoints
-	mux.Handle("GET /api/v1/customers/{id}/momentum-history", authMw(http.HandlerFunc(h.GetCustomerMomentumHistory)))
-	mux.Handle("GET /api/v1/customers/duplicates", authMw(http.HandlerFunc(h.CheckDuplicates)))
-	mux.Handle("GET /api/v1/customers/{id}/consultation-records", authMw(http.HandlerFunc(h.GetConsultationRecords)))
-	mux.Handle("GET /api/v1/customers/{id}/emr-records", authMw(http.HandlerFunc(h.GetEMRRecords)))
-
-	// Advanced tag endpoints
-	mux.Handle("POST /api/v1/customers/tags/batch", authMw(http.HandlerFunc(h.BatchTagCustomers)))
-	mux.Handle("GET /api/v1/customers/tags/stats", authMw(http.HandlerFunc(h.GetTagStats)))
-
-	// Advanced group endpoints
-	mux.Handle("GET /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.GetGroupMembers)))
-	mux.Handle("POST /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.AddGroupMembers)))
-	mux.Handle("DELETE /api/v1/customers/groups/{id}/members", authMw(http.HandlerFunc(h.RemoveGroupMembers)))
-	mux.Handle("POST /api/v1/customers/groups/rules/preview", authMw(http.HandlerFunc(h.PreviewGroupRules)))
-	mux.Handle("POST /api/v1/customers/groups/rules/validate", authMw(http.HandlerFunc(h.ValidateGroupRules)))
-	mux.Handle("GET /api/v1/customers/groups/rules/fields", authMw(http.HandlerFunc(h.GetRuleFields)))
-	mux.Handle("GET /api/v1/customers/groups/rules/operators", authMw(http.HandlerFunc(h.GetRuleOperators)))
-
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/customers", Handler: h.ListCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/stats/overview", Handler: h.GetCustomerStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}", Handler: h.GetCustomerByID, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers", Handler: h.CreateCustomer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/customers/{id}", Handler: h.UpdateCustomer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/customers/{id}", Handler: h.DeleteCustomer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/customers/{id}/actions/convert", Handler: h.MarkCustomerConverted, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/actions/merge", Handler: h.MergeCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/actions/sync-from-visits", Handler: h.SyncCustomersFromVisits, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/360", Handler: h.GetCustomer360View, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/{id}/identities", Handler: h.AddCustomerIdentity, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/interactions", Handler: h.ListCustomerInteractions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/{id}/interactions", Handler: h.CreateCustomerInteraction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/follow-ups", Handler: h.ListCustomerFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/{id}/follow-ups", Handler: h.CreateCustomerFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/membership", Handler: h.GetCustomerMembership, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/tags", Handler: h.ListCustomerTags, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/tags", Handler: h.CreateCustomerTag, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/customers/tags/{id}", Handler: h.UpdateCustomerTag, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/customers/tags/{id}", Handler: h.DeleteCustomerTag, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/groups", Handler: h.ListCustomerGroups, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/groups", Handler: h.CreateCustomerGroup, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/customers/groups/{id}", Handler: h.UpdateCustomerGroup, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/customers/groups/{id}", Handler: h.DeleteCustomerGroup, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/momentum-history", Handler: h.GetCustomerMomentumHistory, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/duplicates", Handler: h.CheckDuplicates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/consultation-records", Handler: h.GetConsultationRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.GetEMRRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/tags/batch", Handler: h.BatchTagCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/tags/stats", Handler: h.GetTagStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/groups/{id}/members", Handler: h.GetGroupMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/groups/{id}/members", Handler: h.AddGroupMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/customers/groups/{id}/members", Handler: h.RemoveGroupMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/groups/rules/preview", Handler: h.PreviewGroupRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/customers/groups/rules/validate", Handler: h.ValidateGroupRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/groups/rules/fields", Handler: h.GetRuleFields, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/groups/rules/operators", Handler: h.GetRuleOperators, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // Customer Handlers

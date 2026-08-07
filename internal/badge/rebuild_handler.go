@@ -12,27 +12,6 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-func (h *Handler) registerRebuildRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
-	mux.Handle("GET /api/v2/badge-devices", authMw(http.HandlerFunc(h.RebuildListBadgeDevices)))
-	mux.Handle("GET /api/v2/badge-devices/pending-acceptance", authMw(http.HandlerFunc(h.RebuildListPendingAcceptanceDevices)))
-	mux.Handle("GET /api/v2/badge-devices/monitoring", authMw(http.HandlerFunc(h.RebuildListMonitoringDevices)))
-	mux.Handle("GET /api/v2/badge-devices/manufacturers", authMw(http.HandlerFunc(h.V2Manufacturers)))
-	mux.Handle("POST /api/v2/badge-devices/manufacturers/{code}/actions/sync", authMw(http.HandlerFunc(h.V2SyncManufacturer)))
-	mux.Handle("GET /api/v2/badge-devices/{id}", authMw(http.HandlerFunc(h.RebuildGetBadgeDevice)))
-	mux.Handle("GET /api/v2/badge-devices/{id}/health", authMw(http.HandlerFunc(h.RebuildGetBadgeDeviceHealth)))
-	mux.Handle("GET /api/v2/badge-devices/{id}/logs", authMw(http.HandlerFunc(h.RebuildListBadgeDeviceLogs)))
-	mux.Handle("GET /api/v2/badge-devices/{id}/assignment-logs", authMw(http.HandlerFunc(h.RebuildListBadgeAssignmentLogs)))
-	mux.Handle("POST /api/v2/badge-devices/actions/import", authMw(http.HandlerFunc(h.RebuildImportBadgeDevices)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/run-acceptance", authMw(http.HandlerFunc(h.RebuildRunAcceptanceCheck)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/accept", authMw(http.HandlerFunc(h.RebuildAcceptBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/reject-acceptance", authMw(http.HandlerFunc(h.RebuildRejectAcceptance)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/assign", authMw(http.HandlerFunc(h.RebuildAssignBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/reclaim", authMw(http.HandlerFunc(h.RebuildReclaimBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/restock", authMw(http.HandlerFunc(h.RebuildRestockBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/{id}/actions/retire", authMw(http.HandlerFunc(h.RebuildRetireBadgeDevice)))
-	mux.Handle("POST /api/v2/badge-devices/actions/refresh-status", authMw(http.HandlerFunc(h.RebuildRefreshAllBadgeStatus)))
-}
-
 func (h *Handler) RebuildRefreshAllBadgeStatus(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.service.V2RefreshAllRealtimeStatus(r.Context())
 	if err != nil {
