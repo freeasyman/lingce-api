@@ -25,7 +25,6 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
-	// Role resource routes
 	mux.Handle("GET /api/v1/roles", authMw(http.HandlerFunc(h.ListRoles)))
 	mux.Handle("POST /api/v1/roles", authMw(http.HandlerFunc(h.CreateRole)))
 	mux.Handle("GET /api/v1/roles/{id}", authMw(http.HandlerFunc(h.GetRole)))
@@ -37,8 +36,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.GetRoleMenusByScope)))
 	mux.Handle("PUT /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
 	mux.Handle("POST /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
-
-	// Menu resource routes
 	mux.Handle("GET /api/v1/menus", authMw(http.HandlerFunc(h.ListMenus)))
 	mux.Handle("GET /api/v1/menus/effective", authMw(http.HandlerFunc(h.GetEffectiveMenusByScope)))
 	mux.Handle("POST /api/v1/menus/sync", authMw(http.HandlerFunc(h.SyncMenusByScope)))
@@ -48,8 +45,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("DELETE /api/v1/menus/{id}", authMw(http.HandlerFunc(h.DeleteMenu)))
 	mux.Handle("GET /api/v1/menus/tree", authMw(http.HandlerFunc(h.GetMenuTreeByScope)))
 	mux.Handle("PUT /api/v1/menus/sort", authMw(http.HandlerFunc(h.UpdateMenuSortByScope)))
-
-	// Operations admin routes
 	mux.Handle("GET /api/v1/roles/admins", authMw(http.HandlerFunc(h.ListOperationsAdmins)))
 	mux.Handle("POST /api/v1/roles/admins", authMw(http.HandlerFunc(h.CreateOperationsAdmin)))
 	mux.Handle("GET /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
@@ -60,15 +55,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/ops/organizations", authMw(http.HandlerFunc(h.CreateOpsOrganization)))
 	mux.Handle("PUT /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.UpdateOpsOrganization)))
 	mux.Handle("DELETE /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.DeleteOpsOrganization)))
-
-	// Institution employee/department role routes
 	mux.Handle("GET /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
 	mux.Handle("PUT /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.SetEmployeeRole)))
 	mux.Handle("DELETE /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.RemoveEmployeeRole)))
 	mux.Handle("GET /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.GetDepartmentRole)))
 	mux.Handle("PUT /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.SetDepartmentRole)))
 	mux.Handle("DELETE /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.RemoveDepartmentRole)))
-
 }
 
 func (h *Handler) roleScope(r *http.Request) string {

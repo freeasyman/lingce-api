@@ -26,82 +26,64 @@ func NewHandler(service *Service) *Handler {
 // RegisterRoutes registers support module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	h.jwtSecret = jwtSecret
-	authMw := middleware.Auth(jwtSecret)
-
-	// Notification endpoints
-	mux.Handle("POST /api/v1/notifications/device-tokens", authMw(http.HandlerFunc(h.RegisterDeviceToken)))
-	mux.Handle("DELETE /api/v1/notifications/device-tokens/{id}", authMw(http.HandlerFunc(h.DeleteDeviceTokenByID)))
-	mux.Handle("GET /api/v1/notifications", authMw(http.HandlerFunc(h.ListNotifications)))
-	mux.Handle("GET /api/v1/notifications/{id}", authMw(http.HandlerFunc(h.GetNotificationByID)))
-	mux.Handle("POST /api/v1/notifications/{id}/actions/read", authMw(http.HandlerFunc(h.MarkNotificationAsRead)))
-	mux.Handle("POST /api/v1/notifications/actions/read-all", authMw(http.HandlerFunc(h.MarkAllNotificationsAsRead)))
-
-	// Operation log endpoints
-	mux.Handle("GET /api/v1/operation-logs", authMw(http.HandlerFunc(h.ListOperationLogs)))
-	mux.Handle("GET /api/v1/operation-logs/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
-	mux.Handle("GET /api/v1/operation-logs/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
-
-	// Institution-side system action logs.
-	mux.Handle("POST /api/v1/inst/system-logs", authMw(http.HandlerFunc(h.CreateInstitutionSystemActionLog)))
-	mux.Handle("GET /api/v1/ops/system-logs", authMw(http.HandlerFunc(h.ListSystemActionLogs)))
-	mux.Handle("GET /api/v1/ops/system-logs/{id}", authMw(http.HandlerFunc(h.GetSystemActionLogByID)))
-
-	// LLM model config endpoints
-	mux.Handle("GET /api/v1/llm/models", authMw(http.HandlerFunc(h.ListLLMModelConfigs)))
-	mux.Handle("POST /api/v1/llm/models", authMw(http.HandlerFunc(h.CreateLLMModelConfig)))
-	mux.Handle("GET /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.GetLLMModelConfig)))
-	mux.Handle("PUT /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.UpdateLLMModelConfig)))
-	mux.Handle("DELETE /api/v1/llm/models/{id}", authMw(http.HandlerFunc(h.DeleteLLMModelConfig)))
-	mux.Handle("POST /api/v1/llm/models/{id}/actions/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
-	mux.Handle("POST /api/v1/llm/models/{id}/set-default", authMw(http.HandlerFunc(h.SetDefaultLLMModelConfig)))
-
-	// LLM call record endpoints
-	mux.Handle("GET /api/v1/llm/records", authMw(http.HandlerFunc(h.ListLLMCallRecords)))
-	mux.Handle("GET /api/v1/llm/records/stats", authMw(http.HandlerFunc(h.GetLLMCallRecordStats)))
-	mux.Handle("GET /api/v1/llm/records/{request_id}", authMw(http.HandlerFunc(h.GetLLMCallRecordByRequestID)))
-
-	// LLM cost endpoints
-	mux.Handle("GET /api/v1/llm/costs/by-tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
-	mux.Handle("GET /api/v1/llm/costs/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
-	mux.Handle("GET /api/v1/llm/cost/tenant/{tenant_id}", authMw(http.HandlerFunc(h.GetLLMCostByTenant)))
-	mux.Handle("GET /api/v1/llm/cost/summary", authMw(http.HandlerFunc(h.GetLLMCostSummary)))
-
-	// AI usage endpoints
-	mux.Handle("GET /api/v1/ai-usage/summary", authMw(http.HandlerFunc(h.GetAIUsageSummary)))
-	mux.Handle("GET /api/v1/ai-usage/trend", authMw(http.HandlerFunc(h.GetAIUsageTrend)))
-	mux.Handle("GET /api/v1/ai-usage/by-tenant", authMw(http.HandlerFunc(h.GetAIUsageByTenant)))
-	mux.Handle("GET /api/v1/ai-usage/by-business-domain", authMw(http.HandlerFunc(h.GetAIUsageByBusinessDomain)))
-	mux.Handle("GET /api/v1/ai-usage/by-billing-subject", authMw(http.HandlerFunc(h.GetAIUsageByBillingSubject)))
-	mux.Handle("GET /api/v1/ai-usage/by-caller-module", authMw(http.HandlerFunc(h.GetAIUsageByCallerModule)))
-	mux.Handle("GET /api/v1/ai-usage/by-model", authMw(http.HandlerFunc(h.GetAIUsageByModel)))
-	mux.Handle("GET /api/v1/ai-usage/top-objects", authMw(http.HandlerFunc(h.GetAIUsageTopObjects)))
-	mux.Handle("GET /api/v1/ai-usage/object-costs", authMw(http.HandlerFunc(h.GetAIUsageObjectCosts)))
-	mux.Handle("GET /api/v1/ai-usage/anomalies", authMw(http.HandlerFunc(h.GetAIUsageAnomalies)))
-	mux.Handle("GET /api/v1/ai-usage/records", authMw(http.HandlerFunc(h.ListAIUsageRecords)))
-	mux.Handle("GET /api/v1/ai-usage/recordings/{recording_id}", authMw(http.HandlerFunc(h.GetAIUsageByRecording)))
-	mux.Handle("GET /api/v1/ai-usage/contents/{content_id}", authMw(http.HandlerFunc(h.GetAIUsageByContent)))
-	mux.Handle("GET /api/v1/ai-usage/generation-tasks/{generation_task_id}", authMw(http.HandlerFunc(h.GetAIUsageByGenerationTask)))
-
-	// Data browser endpoints
-	mux.Handle("GET /api/v1/operation-logs/data-browser/tables", authMw(http.HandlerFunc(h.ListTables)))
-	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/structure", authMw(http.HandlerFunc(h.GetTableStructure)))
-	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/data", authMw(http.HandlerFunc(h.GetTableData)))
-	mux.Handle("GET /api/v1/operation-logs/data-browser/tables/{table_name}/export", authMw(http.HandlerFunc(h.ExportTableData)))
-	mux.Handle("GET /api/v1/operation-logs/data-browser/statistics", authMw(http.HandlerFunc(h.GetDatabaseStatistics)))
-	mux.Handle("DELETE /api/v1/operation-logs/data-browser/tables/{table_name}/truncate", authMw(http.HandlerFunc(h.TruncateTable)))
-	mux.Handle("POST /api/v1/operation-logs/data-browser/clear-import-data", authMw(http.HandlerFunc(h.ClearImportData)))
-
-	// Visit management endpoints
-	mux.Handle("GET /api/v1/visits/health", authMw(http.HandlerFunc(h.VisitsHealthCheck)))
-	mux.Handle("GET /api/v1/visits", authMw(http.HandlerFunc(h.ListVisits)))
-	mux.Handle("GET /api/v1/visits/statistics", authMw(http.HandlerFunc(h.GetVisitStatistics)))
-	mux.Handle("GET /api/v1/visits/filters", authMw(http.HandlerFunc(h.GetVisitFilters)))
-	mux.Handle("GET /api/v1/visits/{id}", authMw(http.HandlerFunc(h.GetVisitByID)))
-
-	// Encounter endpoints (ops MVP)
-	mux.Handle("GET /api/v1/ops/encounters", authMw(http.HandlerFunc(h.ListEncounters)))
-	mux.Handle("GET /api/v1/ops/encounters/{id}", authMw(http.HandlerFunc(h.GetEncounterByID)))
-	mux.Handle("POST /api/v1/ops/recordings/{id}/actions/project-encounters", authMw(http.HandlerFunc(h.ProjectEncounterFromRecording)))
+	routes := []router.Route{
+		{Method: "POST", Path: "/api/v1/notifications/device-tokens", Handler: h.RegisterDeviceToken, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/notifications/device-tokens/{id}", Handler: h.DeleteDeviceTokenByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/notifications", Handler: h.ListNotifications, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/notifications/{id}", Handler: h.GetNotificationByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/notifications/{id}/actions/read", Handler: h.MarkNotificationAsRead, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/notifications/actions/read-all", Handler: h.MarkAllNotificationsAsRead, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs", Handler: h.ListOperationLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/stats", Handler: h.GetOperationLogStats, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/{id}", Handler: h.GetOperationLogByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/inst/system-logs", Handler: h.CreateInstitutionSystemActionLog, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/system-logs", Handler: h.ListSystemActionLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/system-logs/{id}", Handler: h.GetSystemActionLogByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/models", Handler: h.ListLLMModelConfigs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/llm/models", Handler: h.CreateLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/models/{id}", Handler: h.GetLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "PUT", Path: "/api/v1/llm/models/{id}", Handler: h.UpdateLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/llm/models/{id}", Handler: h.DeleteLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/llm/models/{id}/actions/set-default", Handler: h.SetDefaultLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/llm/models/{id}/set-default", Handler: h.SetDefaultLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/records", Handler: h.ListLLMCallRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/records/stats", Handler: h.GetLLMCallRecordStats, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/records/{request_id}", Handler: h.GetLLMCallRecordByRequestID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/costs/by-tenant/{tenant_id}", Handler: h.GetLLMCostByTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/costs/summary", Handler: h.GetLLMCostSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/cost/tenant/{tenant_id}", Handler: h.GetLLMCostByTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/cost/summary", Handler: h.GetLLMCostSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/summary", Handler: h.GetAIUsageSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/trend", Handler: h.GetAIUsageTrend, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/by-tenant", Handler: h.GetAIUsageByTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/by-business-domain", Handler: h.GetAIUsageByBusinessDomain, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/by-billing-subject", Handler: h.GetAIUsageByBillingSubject, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/by-caller-module", Handler: h.GetAIUsageByCallerModule, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/by-model", Handler: h.GetAIUsageByModel, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/top-objects", Handler: h.GetAIUsageTopObjects, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/object-costs", Handler: h.GetAIUsageObjectCosts, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/anomalies", Handler: h.GetAIUsageAnomalies, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/records", Handler: h.ListAIUsageRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/recordings/{recording_id}", Handler: h.GetAIUsageByRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/contents/{content_id}", Handler: h.GetAIUsageByContent, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ai-usage/generation-tasks/{generation_task_id}", Handler: h.GetAIUsageByGenerationTask, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/data-browser/tables", Handler: h.ListTables, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/data-browser/tables/{table_name}/structure", Handler: h.GetTableStructure, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/data-browser/tables/{table_name}/data", Handler: h.GetTableData, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/data-browser/tables/{table_name}/export", Handler: h.ExportTableData, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/operation-logs/data-browser/statistics", Handler: h.GetDatabaseStatistics, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/operation-logs/data-browser/tables/{table_name}/truncate", Handler: h.TruncateTable, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/operation-logs/data-browser/clear-import-data", Handler: h.ClearImportData, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/visits/health", Handler: h.VisitsHealthCheck, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/visits", Handler: h.ListVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/visits/statistics", Handler: h.GetVisitStatistics, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/visits/filters", Handler: h.GetVisitFilters, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/visits/{id}", Handler: h.GetVisitByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/encounters", Handler: h.ListEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/encounters/{id}", Handler: h.GetEncounterByID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/ops/recordings/{id}/actions/project-encounters", Handler: h.ProjectEncounterFromRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {

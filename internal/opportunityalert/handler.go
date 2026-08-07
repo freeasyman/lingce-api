@@ -22,18 +22,19 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.ListCCRules)))
-	mux.Handle("POST /api/v1/opportunity-alert-cc-rules", authMw(http.HandlerFunc(h.CreateCCRule)))
-	mux.Handle("DELETE /api/v1/opportunity-alert-cc-rules/{id}", authMw(http.HandlerFunc(h.DeleteCCRule)))
-	mux.Handle("GET /api/v1/opportunity-alert-deliveries/recent", authMw(http.HandlerFunc(h.ListRecentDeliveries)))
-	mux.Handle("GET /api/v1/ops/opportunity-alerts", authMw(http.HandlerFunc(h.ListAdminAlerts)))
-	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}", authMw(http.HandlerFunc(h.GetAdminAlert)))
-	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/recipients", authMw(http.HandlerFunc(h.ListAdminAlertRecipients)))
-	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/deliveries", authMw(http.HandlerFunc(h.ListAdminAlertDeliveries)))
-	mux.Handle("GET /api/v1/ops/opportunity-alerts/{id}/logs", authMw(http.HandlerFunc(h.ListAdminAlertLogs)))
-	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/resend", authMw(http.HandlerFunc(h.ResendAlert)))
-	mux.Handle("POST /api/v1/ops/opportunity-alerts/{id}/recipients/{employee_id}/resend", authMw(http.HandlerFunc(h.ResendAlertRecipient)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/opportunity-alert-cc-rules", Handler: h.ListCCRules, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/opportunity-alert-cc-rules", Handler: h.CreateCCRule, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/opportunity-alert-cc-rules/{id}", Handler: h.DeleteCCRule, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/opportunity-alert-deliveries/recent", Handler: h.ListRecentDeliveries, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts", Handler: h.ListAdminAlerts, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}", Handler: h.GetAdminAlert, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/recipients", Handler: h.ListAdminAlertRecipients, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/deliveries", Handler: h.ListAdminAlertDeliveries, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/logs", Handler: h.ListAdminAlertLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/ops/opportunity-alerts/{id}/resend", Handler: h.ResendAlert, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/ops/opportunity-alerts/{id}/recipients/{employee_id}/resend", Handler: h.ResendAlertRecipient, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) ListRecentDeliveries(w http.ResponseWriter, r *http.Request) {
@@ -60,12 +61,13 @@ func (h *Handler) ListRecentDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/mobile/opportunity-alerts", authMw(http.HandlerFunc(h.ListMobileAlerts)))
-	mux.Handle("GET /api/v1/mobile/opportunity-alerts/{id}", authMw(http.HandlerFunc(h.GetMobileAlert)))
-	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/view", authMw(http.HandlerFunc(h.MarkViewed)))
-	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/handle", authMw(http.HandlerFunc(h.MarkHandled)))
-	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/ignore", authMw(http.HandlerFunc(h.MarkIgnored)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/mobile/opportunity-alerts", Handler: h.ListMobileAlerts, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/mobile/opportunity-alerts/{id}", Handler: h.GetMobileAlert, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/mobile/opportunity-alerts/{id}/actions/view", Handler: h.MarkViewed, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/mobile/opportunity-alerts/{id}/actions/handle", Handler: h.MarkHandled, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/mobile/opportunity-alerts/{id}/actions/ignore", Handler: h.MarkIgnored, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
