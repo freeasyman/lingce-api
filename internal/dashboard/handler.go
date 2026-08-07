@@ -21,6 +21,14 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+func resolveDashboardTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
+}
+
 // RegisterRoutes registers dashboard routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgxpool.Pool) {
 	routes := []router.Route{
@@ -88,18 +96,13 @@ func (h *Handler) GetAdminDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantIDStr := r.URL.Query().Get("tenant_id")
-	tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
-	if err != nil || tenantID == 0 {
-		if claims.TenantID != nil {
-			tenantID = *claims.TenantID
-		} else {
-			httputil.WriteBadRequest(w, "tenant_id is required")
-			return
-		}
+	tenantID, err := resolveDashboardTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
-	data, err := h.service.GetAdminDashboard(r.Context(), tenantID)
+	data, err := h.service.GetAdminDashboard(r.Context(), *tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -116,15 +119,10 @@ func (h *Handler) GetConsultantDashboard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tenantIDStr := r.URL.Query().Get("tenant_id")
-	tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
-	if err != nil || tenantID == 0 {
-		if claims.TenantID != nil {
-			tenantID = *claims.TenantID
-		} else {
-			httputil.WriteBadRequest(w, "tenant_id is required")
-			return
-		}
+	tenantID, err := resolveDashboardTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	var employeeID *int64
@@ -140,7 +138,7 @@ func (h *Handler) GetConsultantDashboard(w http.ResponseWriter, r *http.Request)
 		employeeID = &claims.UserID
 	}
 
-	data, err := h.service.GetConsultantDashboard(r.Context(), tenantID, employeeID)
+	data, err := h.service.GetConsultantDashboard(r.Context(), *tenantID, employeeID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -157,15 +155,10 @@ func (h *Handler) GetDoctorDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantIDStr := r.URL.Query().Get("tenant_id")
-	tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
-	if err != nil || tenantID == 0 {
-		if claims.TenantID != nil {
-			tenantID = *claims.TenantID
-		} else {
-			httputil.WriteBadRequest(w, "tenant_id is required")
-			return
-		}
+	tenantID, err := resolveDashboardTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	var employeeID *int64
@@ -181,7 +174,7 @@ func (h *Handler) GetDoctorDashboard(w http.ResponseWriter, r *http.Request) {
 		employeeID = &claims.UserID
 	}
 
-	data, err := h.service.GetDoctorDashboard(r.Context(), tenantID, employeeID)
+	data, err := h.service.GetDoctorDashboard(r.Context(), *tenantID, employeeID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
