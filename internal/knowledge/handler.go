@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -17,6 +19,23 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func resolveKnowledgeTenantID(claims *auth.Claims, tenantIDParam string, allowAllOnAdmin bool) (int64, error) {
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims == nil {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return 0, err
+		}
+		return tenantID, nil
+	}
+
+	if claims.UserType == auth.UserTypeAdmin && allowAllOnAdmin && tenantIDParam == "" {
+		return 0, nil
+	}
+
+	return tenancy.RequireTenantID(claims, tenantIDParam)
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -33,24 +52,16 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	// For List, admin can pass tenant_id=0 to query all tenants
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
 
-	var tenantID int64
-	if claims.UserType == auth.UserTypeAdmin {
-		tidStr := r.URL.Query().Get("tenant_id")
-		if tidStr != "" {
-			tid, _ := strconv.ParseInt(tidStr, 10, 64)
-			tenantID = tid // 0 means all tenants
-		}
-	} else {
-		if claims.TenantID != nil {
-			tenantID = *claims.TenantID
-		}
+	tenantID, err := resolveKnowledgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	q := r.URL.Query()
@@ -97,8 +108,14 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Tenant isolation check
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, err := resolveKnowledgeTenantID(claims, r.URL.Query().Get("tenant_id"), false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	if item.TenantID != tenantID {
@@ -110,8 +127,14 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, err := resolveKnowledgeTenantID(claims, r.URL.Query().Get("tenant_id"), false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -135,8 +158,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, err := resolveKnowledgeTenantID(claims, r.URL.Query().Get("tenant_id"), false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -172,8 +201,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, err := resolveKnowledgeTenantID(claims, "", false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -210,8 +245,14 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) BatchUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	_, err := resolveKnowledgeTenantID(claims, "", false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -230,8 +271,14 @@ func (h *Handler) BatchUpdateStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	tenantID := h.resolveTenantID(w, r)
-	if tenantID == 0 {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	tenantID, err := resolveKnowledgeTenantID(claims, "", false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -257,33 +304,4 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"status": "deleted"})
-}
-
-// resolveTenantID extracts tenant_id from JWT claims or query param (admin)
-func (h *Handler) resolveTenantID(w http.ResponseWriter, r *http.Request) int64 {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "invalid token")
-		return 0
-	}
-
-	if claims.UserType == auth.UserTypeAdmin {
-		tidStr := r.URL.Query().Get("tenant_id")
-		if tidStr == "" {
-			httputil.WriteBadRequest(w, "tenant_id is required for admin")
-			return 0
-		}
-		tid, _ := strconv.ParseInt(tidStr, 10, 64)
-		if tid <= 0 {
-			httputil.WriteBadRequest(w, "invalid tenant_id")
-			return 0
-		}
-		return tid
-	}
-
-	if claims.TenantID == nil {
-		httputil.WriteForbidden(w, "no tenant access")
-		return 0
-	}
-	return *claims.TenantID
 }
