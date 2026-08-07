@@ -131,7 +131,7 @@ func usageRecordingIDExpr() string {
 }
 
 func usageContentIDExpr() string {
-	return usageJSONInt("content_id")
+	return "COALESCE(" + usageJSONInt("content_id") + ", NULLIF(substring(g.trace_id from '^doctor_content_gen_(\\d+)_'), '')::bigint)"
 }
 
 func (s *Store) HasGatewayCallRecordColumn(ctx context.Context, column string) (bool, error) {
@@ -226,14 +226,14 @@ func usageObjectColumn(objectType string) string {
 
 func usageObjectJoin(objectType string) string {
 	if objectType == "content" {
-		return "LEFT JOIN contents c ON c.id = " + usageContentIDExpr()
+		return "LEFT JOIN content_items ci ON ci.id = " + usageContentIDExpr() + " AND ci.deleted_at IS NULL"
 	}
 	return "LEFT JOIN recordings r ON r.id = " + usageRecordingIDExpr()
 }
 
 func usageObjectNameSQL(objectType string) string {
 	if objectType == "content" {
-		return "COALESCE(NULLIF(c.title, ''), CONCAT('内容#', (" + usageContentIDExpr() + ")::text))"
+		return "COALESCE(NULLIF(ci.title, ''), CONCAT('内容#', (" + usageContentIDExpr() + ")::text))"
 	}
 	return "COALESCE(NULLIF(r.scene_name, ''), NULLIF(r.scene::text, ''), CONCAT('录音#', (" + usageRecordingIDExpr() + ")::text))"
 }
@@ -263,8 +263,15 @@ func usageAudioDurationSecondsSQL() string {
 	return "COALESCE(NULLIF(g.usage_metadata->>'audio_duration_seconds', '')::double precision, 0)"
 }
 
-func usageASRDurationSQL() string {
-	return "CASE WHEN COALESCE(" + usageJSONText("billing_subject") + ", NULLIF(g.function_type, '')) = 'transcription' THEN COALESCE(" + usageObjectDurationSQL("recording") + ", " + usageAudioDurationSecondsSQL() + ") ELSE 0 END"
+func usageASRDurationSQL(objectType string) string {
+	return "CASE WHEN COALESCE(" + usageJSONText("billing_subject") + ", NULLIF(g.function_type, '')) = 'transcription' THEN COALESCE(" + usageObjectDurationSQL(objectType) + ", " + usageAudioDurationSecondsSQL() + ") ELSE 0 END"
+}
+
+func usageASRDurationObjectType(req AIUsageListRequest) string {
+	if req.ContentID != nil && *req.ContentID > 0 {
+		return "content"
+	}
+	return "recording"
 }
 
 func (s *Store) GetAIUsageSummaryAggregate(ctx context.Context, filter AIUsageFilter) (*AIUsageSummaryAggregate, error) {
@@ -283,7 +290,7 @@ func (s *Store) GetAIUsageSummaryAggregate(ctx context.Context, filter AIUsageFi
 			COALESCE(SUM(g.total_tokens) FILTER (WHERE g.success), 0) AS total_tokens,
 			COALESCE(SUM(g.input_tokens) FILTER (WHERE g.success), 0) AS total_input_tokens,
 			COALESCE(SUM(g.output_tokens) FILTER (WHERE g.success), 0) AS total_output_tokens,
-			COALESCE(SUM(` + usageASRDurationSQL() + `) FILTER (WHERE g.success), 0) AS total_audio_seconds,
+			COALESCE(SUM(` + usageASRDurationSQL("recording") + `) FILTER (WHERE g.success), 0) AS total_audio_seconds,
 			COUNT(DISTINCT COALESCE(
 				NULLIF(CONCAT('recording:', (` + usageRecordingIDExpr() + `)::text), 'recording:'),
 				NULLIF(CONCAT('content:', (` + usageContentIDExpr() + `)::text), 'content:'),
@@ -331,7 +338,7 @@ func (s *Store) GetAIUsageTrendDaily(ctx context.Context, filter AIUsageFilter) 
 			date_trunc('day', g.created_at)::date::text AS day,
 			COUNT(*) AS call_count,
 			COALESCE(SUM(g.total_tokens), 0) AS total_tokens,
-			COALESCE(SUM(` + usageASRDurationSQL() + `), 0) AS total_audio_seconds,
+			COALESCE(SUM(` + usageASRDurationSQL("recording") + `), 0) AS total_audio_seconds,
 			COALESCE(SUM(g.total_cost), 0) AS total_cost_cny
 		FROM gateway_call_records g
 		LEFT JOIN recordings r ON r.id = ` + usageRecordingIDExpr() + `
@@ -369,7 +376,7 @@ func (s *Store) queryAIUsageGroup(ctx context.Context, filter AIUsageFilter, gro
 		       COUNT(*) AS call_count,
 		       COALESCE(SUM(g.total_cost), 0) AS total_cost_cny,
 		       COALESCE(SUM(g.total_tokens), 0) AS total_tokens,
-		       COALESCE(SUM(` + usageASRDurationSQL() + `), 0) AS total_audio_seconds
+		       COALESCE(SUM(` + usageASRDurationSQL("recording") + `), 0) AS total_audio_seconds
 		FROM gateway_call_records g
 		LEFT JOIN recordings r ON r.id = ` + usageRecordingIDExpr() + `
 		WHERE g.created_at >= $1 AND g.created_at < $2` + whereSQL + `
@@ -462,7 +469,7 @@ func (s *Store) GetAIUsageTopObjects(ctx context.Context, objectType string, fil
 		       COUNT(*) AS call_count,
 		       COALESCE(SUM(g.total_cost), 0) AS total_cost_cny,
 		       COALESCE(SUM(g.total_tokens), 0) AS total_tokens,
-		       COALESCE(SUM(` + usageASRDurationSQL() + `), 0) AS total_audio_seconds,
+		       COALESCE(SUM(` + usageASRDurationSQL(objectType) + `), 0) AS total_audio_seconds,
 		       MAX(` + usageObjectDurationSQL(objectType) + `) AS recording_duration_seconds,
 		       COUNT(*) FILTER (WHERE NOT g.success) AS failed_calls,
 		       MAX(g.created_at)::text AS last_at,
@@ -809,7 +816,7 @@ func (s *Store) ListAIUsageRecordRows(ctx context.Context, filter AIUsageFilter,
 		       COALESCE(g.function_type, ''), COALESCE(g.caller_module, ''), COALESCE(g.provider, ''), COALESCE(g.model_code, ''),
 		       g.success, COALESCE(g.input_tokens, 0), COALESCE(g.output_tokens, 0), COALESCE(g.total_tokens, 0),
 		       COALESCE(g.input_cost, 0), COALESCE(g.output_cost, 0), COALESCE(g.total_cost, 0),
-		       COALESCE(` + usageASRDurationSQL() + `, 0), COALESCE(g.latency_ms, 0),
+		       COALESCE(` + usageASRDurationSQL(usageASRDurationObjectType(req)) + `, 0), COALESCE(g.latency_ms, 0),
 		       g.created_at::text
 		FROM gateway_call_records g
 		LEFT JOIN recordings r ON r.id = ` + usageRecordingIDExpr() + `
@@ -867,20 +874,20 @@ func (s *Store) GetAIUsageObjectAggregate(ctx context.Context, objectType string
 	whereSQL, args := buildUsageFilter(filter, 4)
 	args = append([]any{startAt, endAt, objectID}, args...)
 	query := `
-		SELECT MAX(g.tenant_id) AS tenant_id,
+		SELECT COALESCE(MAX(g.tenant_id), 0) AS tenant_id,
 		       COUNT(*) AS total_calls,
 		       COUNT(*) FILTER (WHERE g.success) AS success_calls,
 		       COUNT(*) FILTER (WHERE NOT g.success) AS failed_calls,
 		       COALESCE(SUM(g.total_tokens), 0) AS total_tokens,
-		       COALESCE(SUM(` + usageASRDurationSQL() + `), 0) AS total_audio_seconds,
+		       COALESCE(SUM(` + usageASRDurationSQL(objectType) + `), 0) AS total_audio_seconds,
 		       COALESCE(SUM(g.total_cost) FILTER (WHERE g.success), 0) AS total_cost_cny,
-		       MIN(g.created_at)::text AS first_call_at,
-		       MAX(g.created_at)::text AS last_call_at,
-		       MAX(` + usageObjectNameSQL(objectType) + `) AS object_name,
-			       MAX(COALESCE(` + usageJSONText("billing_subject") + `, '')) AS billing_subject,
-			       MAX(COALESCE(` + usageJSONText("billing_scene") + `, '')) AS billing_scene,
-		       MAX(` + usageObjectRoleSQL(objectType) + `) AS role,
-		       MAX(` + usageObjectSceneSQL(objectType) + `) AS scene
+		       COALESCE(MIN(g.created_at)::text, '') AS first_call_at,
+		       COALESCE(MAX(g.created_at)::text, '') AS last_call_at,
+		       COALESCE(MAX(` + usageObjectNameSQL(objectType) + `), '') AS object_name,
+		       COALESCE(MAX(COALESCE(` + usageJSONText("billing_subject") + `, '')), '') AS billing_subject,
+		       COALESCE(MAX(COALESCE(` + usageJSONText("billing_scene") + `, '')), '') AS billing_scene,
+		       COALESCE(MAX(` + usageObjectRoleSQL(objectType) + `), '') AS role,
+		       COALESCE(MAX(` + usageObjectSceneSQL(objectType) + `), '') AS scene
 		FROM gateway_call_records g
 		` + usageObjectJoin(objectType) + `
 		WHERE ` + objectColumn + ` = $3
@@ -909,6 +916,9 @@ func (s *Store) GetAIUsageObjectAggregate(ctx context.Context, objectType string
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to query ai usage object aggregate: %w", err)
+	}
+	if agg.TotalCalls == 0 {
+		return nil, nil
 	}
 	nameMap, err := s.GetTenantNameMap(ctx, []int64{agg.TenantID})
 	if err != nil {

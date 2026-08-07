@@ -910,13 +910,6 @@ func (s *Service) GetAIUsageTopObjects(ctx context.Context, req AIUsageListReque
 	objectType := "recording"
 	if req.ObjectType != nil && strings.TrimSpace(*req.ObjectType) == "content" {
 		objectType = "content"
-		supported, err := s.store.HasGatewayCallRecordColumn(ctx, "content_id")
-		if err != nil {
-			return nil, err
-		}
-		if !supported {
-			return &AIUsageTopObjectsResponse{Items: []AIUsageTopObjectItem{}}, nil
-		}
 	}
 	items, err := s.store.GetAIUsageTopObjects(ctx, objectType, buildAIUsageFilterFromRequest(req), req.PageSize)
 	if err != nil {
@@ -930,30 +923,7 @@ func (s *Service) GetAIUsageObjectCosts(ctx context.Context, req AIUsageListRequ
 	contentSupported := true
 	if req.ObjectType != nil && strings.TrimSpace(*req.ObjectType) == "content" {
 		objectType = "content"
-		supported, err := s.store.HasGatewayCallRecordColumn(ctx, "content_id")
-		if err != nil {
-			return nil, err
-		}
-		contentSupported = supported
-		if !supported {
-			page := req.Page
-			if page <= 0 {
-				page = 1
-			}
-			pageSize := req.PageSize
-			if pageSize <= 0 {
-				pageSize = 20
-			}
-			return &AIUsageObjectCostPageResponse{
-				Items:                       []AIUsageObjectCostRow{},
-				Total:                       0,
-				Page:                        page,
-				PageSize:                    pageSize,
-				Pages:                       1,
-				AveragesByRole:              []AIUsageRoleAverage{},
-				ContentAttributionSupported: false,
-			}, nil
-		}
+		contentSupported = true
 	}
 	sortKey := "cost"
 	if req.Sort != nil && strings.TrimSpace(*req.Sort) != "" {
