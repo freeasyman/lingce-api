@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -19,6 +20,14 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func resolveDepartmentTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
 }
 
 func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth.Claims, menuCode string) error {
@@ -71,21 +80,12 @@ func (h *Handler) ListDepartments(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	var req DepartmentListRequest
 
-	// Admin can query any tenant, employees can only query their own tenant
-	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		if tenantID == 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required for admin")
-			return
-		}
-		req.TenantID = tenantID
-	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+	tenantID, err := resolveDepartmentTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
+	req.TenantID = *tenantID
 
 	req.Name = r.URL.Query().Get("name")
 	req.Code = r.URL.Query().Get("code")
@@ -138,12 +138,9 @@ func (h *Handler) GetDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check tenant access for non-admin users
-	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil || *claims.TenantID != department.TenantID {
-			httputil.WriteForbidden(w, "Access denied")
-			return
-		}
+	if err := tenancy.RequireSameTenant(claims, department.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
 	}
 
 	httputil.WriteSuccess(w, department)
@@ -166,17 +163,13 @@ func (h *Handler) CreateDepartment(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	if claims.UserType == auth.UserTypeAdmin {
-		if req.TenantID == 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required")
+	if req.TenantID == 0 {
+		tenantID, err := resolveDepartmentTenantID(claims, "")
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
 			return
 		}
-	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+		req.TenantID = *tenantID
 	}
 
 	department, err := h.service.CreateDepartment(r.Context(), req)
@@ -215,7 +208,7 @@ func (h *Handler) UpdateDepartment(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteNotFound(w, err.Error())
 			return
 		}
-		if existing.TenantID != *claims.TenantID {
+		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
@@ -263,7 +256,7 @@ func (h *Handler) DeleteDepartment(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteNotFound(w, err.Error())
 			return
 		}
-		if existing.TenantID != *claims.TenantID {
+		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
