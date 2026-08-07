@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -21,6 +22,10 @@ type Service struct {
 	smsClient      *sms.AliyunClient
 	jwtSecret      string
 	jwtExpiryHours int
+}
+
+func (s *Service) RecordInstitutionSystemActionLog(ctx context.Context, input InstitutionSystemActionLogInput) error {
+	return s.store.RecordInstitutionSystemActionLog(ctx, input)
 }
 
 func NewService(store *Store, smsClient *sms.AliyunClient, jwtSecret string, jwtExpiryHours int) *Service {
@@ -141,6 +146,9 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	// Get employee
 	employee, err := s.store.GetEmployeeByUsername(ctx, username, tenantID)
 	if err != nil {
+		if errors.Is(err, errAmbiguousEmployeeLogin) {
+			return nil, newAuthError(409, "AMBIGUOUS_LOGIN_ID", "multiple employees match this login identifier in the selected tenant", nil)
+		}
 		// Distinguish tenant mismatch from credential errors for better troubleshooting.
 		anyTenantEmployee, anyErr := s.store.GetEmployeeByLoginAnyTenant(ctx, username)
 		if anyErr == nil && anyTenantEmployee != nil && anyTenantEmployee.TenantID != tenantID {
@@ -250,6 +258,9 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 
 	employee, err := s.store.GetEmployeeByUsername(ctx, username, tenantID)
 	if err != nil {
+		if errors.Is(err, errAmbiguousEmployeeLogin) {
+			return nil, newAuthError(409, "AMBIGUOUS_LOGIN_ID", "multiple employees match this login identifier in the selected tenant", nil)
+		}
 		anyTenantEmployee, anyErr := s.store.GetEmployeeByLoginAnyTenant(ctx, username)
 		if anyErr == nil && anyTenantEmployee != nil && anyTenantEmployee.TenantID != tenantID {
 			return nil, newUnauthorizedError("TENANT_MISMATCH", "tenant mismatch")

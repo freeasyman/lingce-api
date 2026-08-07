@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -138,7 +139,13 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
 		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
 		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
-		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
+		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at,
+		       CASE
+		           WHEN e.username = $1 THEN 0
+		           WHEN e.phone = $1 THEN 1
+		           WHEN e.name = $1 THEN 2
+		           ELSE 3
+		       END AS login_priority
 		FROM employees e
 		JOIN tenants t ON t.id = e.tenant_id
 		WHERE (e.name = $1 OR e.phone = $1 OR e.username = $1)
@@ -146,34 +153,64 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 		  AND e.deleted_at IS NULL
 		  AND t.deleted_at IS NULL
 		  AND t.is_active::text IN ('1','t','true','TRUE')
+		ORDER BY login_priority ASC, COALESCE(e.updated_at, e.created_at, NOW()) DESC, e.id DESC
+		LIMIT 2
 	`
 
-	var emp Employee
-	err := s.pool.QueryRow(ctx, query, username, tenantID).Scan(
-		&emp.ID,
-		&emp.TenantID,
-		&emp.Username,
-		&emp.Name,
-		&emp.PasswordHash,
-		&emp.FullName,
-		&emp.Phone,
-		&emp.Email,
-		&emp.DepartmentID,
-		&emp.SessionVersion,
-		&emp.IsActive,
-		&emp.CreatedAt,
-		&emp.UpdatedAt,
-		&emp.DeletedAt,
-	)
-
-	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("employee not found")
-	}
+	rows, err := s.pool.Query(ctx, query, username, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query employee: %w", err)
 	}
+	defer rows.Close()
 
-	return &emp, nil
+	type employeeLoginMatch struct {
+		employee Employee
+		priority int
+	}
+
+	matches := make([]employeeLoginMatch, 0, 2)
+	for rows.Next() {
+		var match employeeLoginMatch
+		if err := rows.Scan(
+			&match.employee.ID,
+			&match.employee.TenantID,
+			&match.employee.Username,
+			&match.employee.Name,
+			&match.employee.PasswordHash,
+			&match.employee.FullName,
+			&match.employee.Phone,
+			&match.employee.Email,
+			&match.employee.DepartmentID,
+			&match.employee.SessionVersion,
+			&match.employee.IsActive,
+			&match.employee.CreatedAt,
+			&match.employee.UpdatedAt,
+			&match.employee.DeletedAt,
+			&match.priority,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan employee: %w", err)
+		}
+		matches = append(matches, match)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("failed to iterate employee matches: %w", rows.Err())
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("employee not found")
+	}
+	if len(matches) > 1 && matches[0].priority == matches[1].priority {
+		slog.Warn("employee login lookup ambiguous",
+			"login_id", username,
+			"tenant_id", tenantID,
+			"match_priority", matches[0].priority,
+			"first_employee_id", matches[0].employee.ID,
+			"second_employee_id", matches[1].employee.ID,
+		)
+		return nil, errAmbiguousEmployeeLogin
+	}
+
+	return &matches[0].employee, nil
 }
 
 // GetEmployeeByLoginAnyTenant retrieves an employee by login id without tenant restriction.
@@ -275,6 +312,56 @@ func (s *Store) RecordEmployeeLoginEvent(ctx context.Context, tenantID, employee
 		return fmt.Errorf("failed to record employee login event: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) RecordInstitutionSystemActionLog(ctx context.Context, input InstitutionSystemActionLogInput) error {
+	if strings.TrimSpace(input.LogType) == "" || strings.TrimSpace(input.ActionCode) == "" {
+		return nil
+	}
+	if strings.TrimSpace(input.ActionName) == "" {
+		input.ActionName = input.ActionCode
+	}
+	if strings.TrimSpace(input.Result) == "" {
+		input.Result = "success"
+	}
+	requestSummary := input.RequestSummary
+	if requestSummary == nil {
+		requestSummary = map[string]interface{}{}
+	}
+	requestSummaryJSON, err := json.Marshal(requestSummary)
+	if err != nil {
+		return fmt.Errorf("marshal request summary: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO system_action_logs (
+			tenant_id, tenant_name, actor_id, actor_name, actor_role_code, actor_role_name,
+			log_type, action_code, action_name, route_path, result, error_message,
+			object_type, object_id, object_name, request_summary, before_summary, after_summary,
+			ip_address, user_agent, device_type, request_id, created_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15, $16::jsonb, '{}'::jsonb, '{}'::jsonb,
+			$17, $18, $19, $20, NOW()
+		)
+	`, input.TenantID, emptyToNil(input.TenantName), input.ActorID, emptyToNil(input.ActorName), emptyToNil(input.ActorRoleCode), emptyToNil(input.ActorRoleName),
+		strings.TrimSpace(input.LogType), strings.TrimSpace(input.ActionCode), strings.TrimSpace(input.ActionName), emptyToNil(input.RoutePath),
+		strings.TrimSpace(input.Result), emptyToNil(input.ErrorMessage), emptyToNil(input.ObjectType), emptyToNil(input.ObjectID), emptyToNil(input.ObjectName),
+		string(requestSummaryJSON), emptyToNil(input.IPAddress), emptyToNil(input.UserAgent), emptyToNil(input.DeviceType), emptyToNil(input.RequestID))
+	if err != nil {
+		return fmt.Errorf("record institution system action log: %w", err)
+	}
+	return nil
+}
+
+func emptyToNil(value string) interface{} {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 // GetEmployeeByPhone retrieves an employee by phone
@@ -462,8 +549,14 @@ func (s *Store) UpdateAdminPassword(ctx context.Context, adminID int64, hashedPa
 		WHERE id = $1
 	`
 
-	_, err := s.pool.Exec(ctx, query, adminID, hashedPassword)
-	return err
+	result, err := s.pool.Exec(ctx, query, adminID, hashedPassword)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("admin not found")
+	}
+	return nil
 }
 
 // UpdateEmployeePassword updates employee password and increments session version
@@ -474,8 +567,14 @@ func (s *Store) UpdateEmployeePassword(ctx context.Context, employeeID int64, ha
 		WHERE id = $1
 	`
 
-	_, err := s.pool.Exec(ctx, query, employeeID, hashedPassword)
-	return err
+	result, err := s.pool.Exec(ctx, query, employeeID, hashedPassword)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("employee not found")
+	}
+	return nil
 }
 
 // SaveSMSCode saves a SMS verification code

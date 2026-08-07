@@ -1,6 +1,11 @@
 package auth
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
+
+var errAmbiguousEmployeeLogin = errors.New("ambiguous employee login")
 
 // AuthError represents a structured auth failure that can be mapped to API response codes.
 type AuthError struct {
@@ -32,4 +37,3 @@ func newTenantSelectionRequiredError(options []TenantOption) *AuthError {
 		"tenant_options": options,
 	})
 }
-

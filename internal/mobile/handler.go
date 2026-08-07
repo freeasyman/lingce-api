@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -124,6 +125,12 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.CompleteTask(r.Context(), claims, taskID, req); err != nil {
+		slog.Error("mobile complete task failed",
+			"task_id", taskID,
+			"user_id", claims.UserID,
+			"tenant_id", claims.TenantID,
+			"error", err.Error(),
+		)
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}

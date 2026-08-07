@@ -67,3 +67,35 @@ type TenantOption struct {
 	TenantName string `json:"tenant_name"`
 	IsActive   bool   `json:"is_active"`
 }
+
+// LoginRequestMeta carries request metadata used for institution system logs.
+type LoginRequestMeta struct {
+	IPAddress  string
+	UserAgent  string
+	DeviceType string
+	RequestID  string
+}
+
+// InstitutionSystemActionLogInput represents a backend-created institution system log.
+type InstitutionSystemActionLogInput struct {
+	TenantID       *int64
+	TenantName     string
+	ActorID        *int64
+	ActorName      string
+	ActorRoleCode  string
+	ActorRoleName  string
+	LogType        string
+	ActionCode     string
+	ActionName     string
+	RoutePath      string
+	Result         string
+	ErrorMessage   string
+	ObjectType     string
+	ObjectID       string
+	ObjectName     string
+	RequestSummary map[string]interface{}
+	IPAddress      string
+	UserAgent      string
+	DeviceType     string
+	RequestID      string
+}
