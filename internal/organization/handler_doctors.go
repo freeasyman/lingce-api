@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -38,12 +39,14 @@ func (h *Handler) ListDoctors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			tenantID = &parsed
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if tenantIDParam != "" || claims.TenantID != nil {
+		tid, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
 		}
+		tenantID = &tid
 	}
 	var name *string
 	if n := r.URL.Query().Get("name"); n != "" {
@@ -89,7 +92,7 @@ func (h *Handler) GetDoctor(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && doctor.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, doctor.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -123,15 +126,13 @@ func (h *Handler) CreateDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if req.TenantID != nil {
-		tenantID = *req.TenantID
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if req.TenantID != nil && *req.TenantID > 0 {
+		tenantIDParam = strconv.FormatInt(*req.TenantID, 10)
 	}
-	if tenantID == 0 && claims.TenantID != nil {
-		tenantID = *claims.TenantID
-	}
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	phone := ""
@@ -273,13 +274,13 @@ func (h *Handler) GetDoctorPerformance(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = patients
 	httputil.WriteSuccess(w, map[string]interface{}{
-		"doctor_id":        id,
-		"total_visits":     0,
-		"total_revenue":    0.0,
-		"avg_visit_value":  0.0,
-		"patient_count":    0,
-		"satisfaction":     0.0,
-		"period":           "month",
+		"doctor_id":       id,
+		"total_visits":    0,
+		"total_revenue":   0.0,
+		"avg_visit_value": 0.0,
+		"patient_count":   0,
+		"satisfaction":    0.0,
+		"period":          "month",
 	})
 }
 
@@ -333,8 +334,8 @@ func (h *Handler) GetDoctorEmployees(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, []map[string]interface{}{
 		{
-			"doctor_id":   doctor.ID,
-			"employee_id": doctor.ID,
+			"doctor_id":     doctor.ID,
+			"employee_id":   doctor.ID,
 			"employee_name": doctor.Name,
 		},
 	})
