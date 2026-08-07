@@ -170,6 +170,11 @@ func (s *Service) MarkIgnored(ctx context.Context, claims *auth.Claims, alertID 
 	return ToResponse(updated), nil
 }
 
+// employeeScope resolves the tenant and employee identity for employee/mobile callers.
+//
+// Opportunity alerts are strictly employee-scoped. This helper rejects admin tokens
+// and tokens without both tenant_id and employee_id, so the rest of the service can
+// assume the returned pair is valid.
 func employeeScope(claims *auth.Claims) (int64, int64, error) {
 	if claims == nil {
 		return 0, 0, fmt.Errorf("invalid token")
@@ -581,6 +586,11 @@ func (s *Service) DeleteCCRule(ctx context.Context, claims *auth.Claims, tenantI
 	return s.store.DeleteCCRule(ctx, tid, ruleID)
 }
 
+// resolveConfigTenantID resolves the tenant used by admin config operations.
+//
+// Tenant-bound admin tokens use their embedded tenant directly. Otherwise, the
+// caller must provide an explicit tenant_id so the operation never runs against
+// an ambiguous tenant context.
 func resolveConfigTenantID(claims *auth.Claims, requestedTenantID int64) (int64, error) {
 	if claims == nil {
 		return 0, fmt.Errorf("invalid token")

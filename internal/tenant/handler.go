@@ -23,6 +23,9 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+// resolveTenantScopeID is the tenant module's thin wrapper around the shared
+// tenancy resolver. It preserves the module's admin-list behavior where a blank
+// tenant_id can mean "show the admin's visible scope" rather than an error.
 func resolveTenantScopeID(claims *auth.Claims, tenantIDParam string, allowAllOnAdmin bool) (int64, error) {
 	tenantIDParam = strings.TrimSpace(tenantIDParam)
 	if claims != nil && claims.UserType == auth.UserTypeAdmin && allowAllOnAdmin && tenantIDParam == "" {

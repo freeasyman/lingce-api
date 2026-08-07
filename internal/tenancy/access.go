@@ -15,7 +15,12 @@ var (
 	errAccessDenied    = fmt.Errorf("access denied")
 )
 
-// RequireTenantID resolves a concrete tenant ID for tenant-bound operations.
+// RequireTenantID resolves the concrete tenant ID for a tenant-bound operation.
+//
+// Rules:
+// - admin may explicitly select a tenant with tenant_id
+// - admin without tenant_id falls back to the tenant bound to the token, if any
+// - non-admin users must already be bound to a tenant and may not cross tenant boundaries
 func RequireTenantID(claims *auth.Claims, tenantIDParam string) (int64, error) {
 	if claims == nil {
 		return 0, errInvalidToken
@@ -51,9 +56,11 @@ func RequireTenantID(claims *auth.Claims, tenantIDParam string) (int64, error) {
 	return *claims.TenantID, nil
 }
 
-// ResolveOptionalTenantID resolves an optional tenant filter for admin list endpoints.
-// When allowAdminAll is true and an admin does not provide tenant_id, nil is returned
-// unless the token is already bound to a tenant.
+// ResolveOptionalTenantID resolves an optional tenant filter for list-style endpoints.
+//
+// This is for admin-visible query filters where "no tenant_id" can mean
+// "all tenants" instead of an error. If the token itself is tenant-bound,
+// the bound tenant still wins to keep the response scoped.
 func ResolveOptionalTenantID(claims *auth.Claims, tenantIDParam string, allowAdminAll bool) (*int64, error) {
 	if claims == nil {
 		return nil, errInvalidToken
@@ -75,7 +82,7 @@ func ResolveOptionalTenantID(claims *auth.Claims, tenantIDParam string, allowAdm
 	return &tenantID, nil
 }
 
-// RequireSameTenant ensures the target tenant matches the caller tenant unless caller is admin.
+// RequireSameTenant enforces that a non-admin caller can only touch data from its own tenant.
 func RequireSameTenant(claims *auth.Claims, targetTenantID int64) error {
 	if claims == nil {
 		return errInvalidToken
@@ -92,7 +99,8 @@ func RequireSameTenant(claims *auth.Claims, targetTenantID int64) error {
 	return nil
 }
 
-// RequirePositiveID ensures a numeric identifier is positive.
+// RequirePositiveID is the common guard for identifiers that must be present
+// and greater than zero before a service/store call is allowed to proceed.
 func RequirePositiveID(field string, value int64) error {
 	if value <= 0 {
 		return fmt.Errorf("%s is required", field)

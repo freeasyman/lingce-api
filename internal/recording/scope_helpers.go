@@ -10,6 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// resolveRecordingScope centralizes tenant scope parsing for recording HTTP handlers.
+//
+// It keeps the HTTP layer responsible for:
+// - reading the authenticated claims
+// - translating tenant scope errors into HTTP status codes
+// - letting downstream handlers focus on business logic only
 func resolveRecordingScope(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool) (*tenancy.Scope, bool) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
