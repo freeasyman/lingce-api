@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -17,6 +18,21 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func resolveEmployeeTenantID(claims *auth.Claims, tenantIDParam string, allowLegacyFallback bool) (*int64, error) {
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		if allowLegacyFallback && claims != nil && claims.UserType == auth.UserTypeAdmin && tenantIDParam == "" {
+			fallback := int64(1)
+			if claims.TenantID != nil && *claims.TenantID > 0 {
+				fallback = *claims.TenantID
+			}
+			return &fallback, nil
+		}
+		return nil, err
+	}
+	return &tenantID, nil
 }
 
 // RegisterRoutes registers employee routes
@@ -44,25 +60,12 @@ func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	var req EmployeeListRequest
 
-	// Admin can query any tenant, employees can only query their own tenant
-	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		if tenantID == 0 {
-			// Compatibility fallback: allow legacy requests without tenant_id.
-			if claims.TenantID != nil && *claims.TenantID > 0 {
-				tenantID = *claims.TenantID
-			} else {
-				tenantID = 1
-			}
-		}
-		req.TenantID = tenantID
-	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+	tenantID, err := resolveEmployeeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
+	req.TenantID = *tenantID
 
 	req.Username = r.URL.Query().Get("username")
 	req.FullName = r.URL.Query().Get("full_name")
@@ -113,12 +116,9 @@ func (h *Handler) GetEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check tenant access for non-admin users
-	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil || *claims.TenantID != employee.TenantID {
-			httputil.WriteForbidden(w, "Access denied")
-			return
-		}
+	if err := tenancy.RequireSameTenant(claims, employee.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
 	}
 
 	httputil.WriteSuccess(w, employee)
@@ -137,17 +137,13 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	if claims.UserType == auth.UserTypeAdmin {
-		if req.TenantID == 0 {
-			httputil.WriteBadRequest(w, "tenant_id is required")
+	if req.TenantID == 0 {
+		tenantID, err := resolveEmployeeTenantID(claims, "", false)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
 			return
 		}
-	} else {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
-		req.TenantID = *claims.TenantID
+		req.TenantID = *tenantID
 	}
 
 	employee, err := h.service.CreateEmployee(r.Context(), req)
@@ -173,16 +169,12 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
 		existing, err := h.service.GetEmployee(r.Context(), id)
 		if err != nil {
 			httputil.WriteNotFound(w, err.Error())
 			return
 		}
-		if existing.TenantID != *claims.TenantID {
+		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
@@ -251,16 +243,12 @@ func (h *Handler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
-			return
-		}
 		existing, err := h.service.GetEmployee(r.Context(), id)
 		if err != nil {
 			httputil.WriteNotFound(w, err.Error())
 			return
 		}
-		if existing.TenantID != *claims.TenantID {
+		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
