@@ -3,6 +3,8 @@ package department
 import (
 	"context"
 	"fmt"
+
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 )
 
 type Service struct {
@@ -52,8 +54,8 @@ func (s *Service) GetDepartment(ctx context.Context, id int64) (*DepartmentRespo
 // CreateDepartment creates a new department
 func (s *Service) CreateDepartment(ctx context.Context, req CreateDepartmentRequest) (*DepartmentResponse, error) {
 	// Validate request
-	if req.TenantID == 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return nil, err
 	}
 	if req.Name == "" {
 		return nil, fmt.Errorf("name is required")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 )
 
 type Service struct {
@@ -145,8 +146,11 @@ func (s *Service) CreateTicket(
 		return nil, fmt.Errorf("description is required")
 	}
 	if enforceTenantMatch {
-		if requesterTenantID == nil || *requesterTenantID <= 0 {
+		if requesterTenantID == nil {
 			return nil, fmt.Errorf("tenant_id is required")
+		}
+		if err := tenancy.RequirePositiveID("tenant_id", *requesterTenantID); err != nil {
+			return nil, err
 		}
 		if req.DeviceID != nil {
 			device, err := s.store.GetDeviceByID(ctx, *req.DeviceID)
@@ -448,7 +452,10 @@ func (s *Service) processAudioCallbackAsync(eventRef AudioCallbackEventRef, payl
 }
 
 func (s *Service) enqueueTranscribeJob(ctx context.Context, recordingID, tenantID int64) error {
-	if recordingID <= 0 || tenantID <= 0 {
+	if err := tenancy.RequirePositiveID("recording_id", recordingID); err != nil {
+		return nil
+	}
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
 		return nil
 	}
 	if s.workerURL == "" {

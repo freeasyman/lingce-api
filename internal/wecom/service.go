@@ -15,6 +15,7 @@ import (
 	"time"
 
 	internalauth "github.com/freeasyman/lingce-api/internal/auth"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	jwtauth "github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/jackc/pgx/v5"
 )
@@ -325,7 +326,13 @@ func (s *Service) bindEmployee(ctx context.Context, corpID, wecomUserID string, 
 }
 
 func (s *Service) runBindingUpsertHook(ctx context.Context, tenantID, employeeID int64) {
-	if s.onBindingUpsert == nil || tenantID <= 0 || employeeID <= 0 {
+	if s.onBindingUpsert == nil {
+		return
+	}
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return
+	}
+	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
 		return
 	}
 	if err := s.onBindingUpsert(ctx, tenantID, employeeID); err != nil {
@@ -625,8 +632,8 @@ func (s *Service) ListDirectoryMembers(ctx context.Context, params DirectoryMemb
 }
 
 func (s *Service) SyncDirectoryAndPrebind(ctx context.Context, tenantID int64) (*DirectorySyncResponse, error) {
-	if tenantID <= 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
 	}
 	app, err := s.store.GetTenantAppByTenantID(ctx, tenantID)
 	if err != nil {
@@ -729,11 +736,11 @@ func (s *Service) SyncDirectoryAndPrebind(ctx context.Context, tenantID int64) (
 }
 
 func (s *Service) AdminBindEmployee(ctx context.Context, req AdminBindingRequest) error {
-	if req.TenantID <= 0 {
-		return fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return err
 	}
-	if req.EmployeeID <= 0 {
-		return fmt.Errorf("employee_id is required")
+	if err := tenancy.RequirePositiveID("employee_id", req.EmployeeID); err != nil {
+		return err
 	}
 	wecomUserID := strings.TrimSpace(req.WeComUserID)
 	if wecomUserID == "" {
@@ -773,8 +780,8 @@ func (s *Service) GetTenantApp(ctx context.Context, id int64) (*TenantWeComAppRe
 }
 
 func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest) (*TenantWeComAppResponse, error) {
-	if req.TenantID <= 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return nil, err
 	}
 	corpID := strings.TrimSpace(req.CorpID)
 	if corpID == "" {
@@ -783,8 +790,8 @@ func (s *Service) UpsertTenantApp(ctx context.Context, req TenantWeComAppRequest
 	if len(corpID) < minWeComCorpIDLength || len(corpID) > maxWeComCorpIDLength || !isAlphaNumeric(corpID) {
 		return nil, fmt.Errorf("corp_id format is invalid")
 	}
-	if req.AgentID <= 0 {
-		return nil, fmt.Errorf("agent_id is required")
+	if err := tenancy.RequirePositiveID("agent_id", req.AgentID); err != nil {
+		return nil, err
 	}
 	current, err := s.store.GetTenantAppByTenantID(ctx, req.TenantID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {

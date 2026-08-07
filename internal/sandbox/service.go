@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/oss"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -169,8 +170,8 @@ func (s *Service) SearchRecordings(ctx context.Context, req SearchRequest) ([]Se
 }
 
 func (s *Service) Estimate(ctx context.Context, sourceTenantID int64, recordingIDs []int64) (*EstimateResponse, error) {
-	if sourceTenantID <= 0 {
-		return nil, fmt.Errorf("source_tenant_id is required")
+	if err := tenancy.RequirePositiveID("source_tenant_id", sourceTenantID); err != nil {
+		return nil, err
 	}
 	where := []string{"tenant_id = $1"}
 	args := []interface{}{sourceTenantID}
@@ -219,8 +220,11 @@ type sourceRecording struct {
 }
 
 func (s *Service) CreateTask(ctx context.Context, operatorID int64, req CreateTaskRequest) (*Task, error) {
-	if req.SourceTenantID <= 0 || req.TargetTenantID <= 0 {
-		return nil, newValidationError("source_tenant_id and target_tenant_id are required")
+	if err := tenancy.RequirePositiveID("source_tenant_id", req.SourceTenantID); err != nil {
+		return nil, newValidationError(err.Error())
+	}
+	if err := tenancy.RequirePositiveID("target_tenant_id", req.TargetTenantID); err != nil {
+		return nil, newValidationError(err.Error())
 	}
 	if len(req.RecordingIDs) == 0 {
 		return nil, newValidationError("recording_ids is required")

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -55,8 +56,8 @@ func (s *Service) GetEmployee(ctx context.Context, id int64) (*EmployeeResponse,
 // CreateEmployee creates a new employee
 func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest) (*EmployeeResponse, error) {
 	// Validate request
-	if req.TenantID == 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return nil, err
 	}
 	if req.Password == "" {
 		return nil, fmt.Errorf("password is required")

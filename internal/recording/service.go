@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	authpkg "github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
@@ -106,11 +107,11 @@ func NewService(store *Store, employeeStore *employee.Store, workerURL, workerTo
 }
 
 func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudioIngestRequest) (*RecordingResponse, bool, error) {
-	if req.TenantID <= 0 {
-		return nil, false, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return nil, false, err
 	}
-	if req.EmployeeID <= 0 {
-		return nil, false, fmt.Errorf("employee_id is required")
+	if err := tenancy.RequirePositiveID("employee_id", req.EmployeeID); err != nil {
+		return nil, false, err
 	}
 	if strings.TrimSpace(req.FileURL) == "" {
 		return nil, false, fmt.Errorf("file_url is required")
@@ -443,8 +444,8 @@ func (s *Service) ListManagementEvents(
 }
 
 func (s *Service) CreateManagementEvent(ctx context.Context, tenantID int64, createdBy int64, req CreateManagementEventRequest) (*ManagementEvent, error) {
-	if tenantID <= 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(req.EventDate) == "" {
 		return nil, fmt.Errorf("event_date is required")
@@ -1703,21 +1704,21 @@ func (s *Service) CreateManualBenchmarkClip(ctx context.Context, tenantID int64,
 }
 
 func (s *Service) MarkBenchmarkUsedInMeeting(ctx context.Context, tenantID int64, req MarkBenchmarkMeetingUsedRequest) (*BenchmarkClip, error) {
-	if tenantID <= 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
 	}
-	if req.RecordingID <= 0 {
-		return nil, fmt.Errorf("recording_id is required")
+	if err := tenancy.RequirePositiveID("recording_id", req.RecordingID); err != nil {
+		return nil, err
 	}
 	return s.store.MarkBenchmarkUsedInMeeting(ctx, tenantID, req.RecordingID, req.RoleCode)
 }
 
 func (s *Service) PushBenchmarkClip(ctx context.Context, tenantID int64, clipID int64, pushedBy int64, req PushBenchmarkClipRequest) (int64, error) {
-	if tenantID <= 0 {
-		return 0, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return 0, err
 	}
-	if clipID <= 0 {
-		return 0, fmt.Errorf("clip_id is required")
+	if err := tenancy.RequirePositiveID("clip_id", clipID); err != nil {
+		return 0, err
 	}
 	if len(req.TargetEmployeeIDs) == 0 {
 		return 0, fmt.Errorf("target_employee_ids is required")
@@ -1726,29 +1727,41 @@ func (s *Service) PushBenchmarkClip(ctx context.Context, tenantID int64, clipID 
 }
 
 func (s *Service) ListBenchmarkClipPushes(ctx context.Context, tenantID int64, clipID int64) ([]BenchmarkClipPushRecord, error) {
-	if tenantID <= 0 || clipID <= 0 {
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return []BenchmarkClipPushRecord{}, nil
+	}
+	if err := tenancy.RequirePositiveID("clip_id", clipID); err != nil {
 		return []BenchmarkClipPushRecord{}, nil
 	}
 	return s.store.ListBenchmarkClipPushes(ctx, tenantID, clipID)
 }
 
 func (s *Service) GetBenchmarkClipPushStatistics(ctx context.Context, tenantID int64, clipID int64) (BenchmarkClipPushStatistics, error) {
-	if tenantID <= 0 || clipID <= 0 {
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return BenchmarkClipPushStatistics{}, nil
+	}
+	if err := tenancy.RequirePositiveID("clip_id", clipID); err != nil {
 		return BenchmarkClipPushStatistics{}, nil
 	}
 	return s.store.GetBenchmarkClipPushStatistics(ctx, tenantID, clipID)
 }
 
 func (s *Service) AckBenchmarkClipPush(ctx context.Context, tenantID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
-	if tenantID <= 0 || pushID <= 0 {
-		return nil, fmt.Errorf("invalid request")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.RequirePositiveID("push_id", pushID); err != nil {
+		return nil, err
 	}
 	return s.store.AckBenchmarkClipPush(ctx, tenantID, pushID)
 }
 
 func (s *Service) ListMyLearningTasks(ctx context.Context, tenantID int64, employeeID int64, status string, page int, pageSize int) (*EmployeeLearningTaskListResponse, error) {
-	if tenantID <= 0 || employeeID <= 0 {
-		return nil, fmt.Errorf("invalid request")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
+		return nil, err
 	}
 	items, total, err := s.store.ListEmployeeLearningTasks(ctx, tenantID, employeeID, status, page, pageSize)
 	if err != nil {
@@ -1769,8 +1782,14 @@ func (s *Service) ListMyLearningTasks(ctx context.Context, tenantID int64, emplo
 }
 
 func (s *Service) AckMyLearningTask(ctx context.Context, tenantID int64, employeeID int64, pushID int64) (*BenchmarkClipPushRecord, error) {
-	if tenantID <= 0 || employeeID <= 0 || pushID <= 0 {
-		return nil, fmt.Errorf("invalid request")
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.RequirePositiveID("push_id", pushID); err != nil {
+		return nil, err
 	}
 	return s.store.AckEmployeeLearningTask(ctx, tenantID, employeeID, pushID)
 }
@@ -2784,11 +2803,11 @@ func valueOrFalseBool(v *bool) bool {
 // CreateRecording creates a new medical recording
 func (s *Service) CreateRecording(ctx context.Context, req CreateRecordingRequest) (*RecordingResponse, error) {
 	// Validate request
-	if req.TenantID == 0 {
-		return nil, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
+		return nil, err
 	}
-	if req.EmployeeID == 0 {
-		return nil, fmt.Errorf("employee_id is required")
+	if err := tenancy.RequirePositiveID("employee_id", req.EmployeeID); err != nil {
+		return nil, err
 	}
 	if req.PatientName == "" {
 		return nil, fmt.Errorf("patient_name is required")
@@ -3038,7 +3057,10 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 }
 
 func (s *Service) resolveRecordingTaskAssignee(ctx context.Context, tenantID, ownerEmployeeID int64) *int64 {
-	if tenantID <= 0 || ownerEmployeeID <= 0 {
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil
+	}
+	if err := tenancy.RequirePositiveID("employee_id", ownerEmployeeID); err != nil {
 		return nil
 	}
 
@@ -4839,7 +4861,16 @@ func (s *Service) appendTaskInteraction(ctx context.Context, task *RecordingTask
 }
 
 func (s *Service) appendCustomerInteraction(ctx context.Context, tenantID, customerID, employeeID int64, typ, direction string, recordingID int64, content string) error {
-	if tenantID <= 0 || customerID <= 0 || employeeID <= 0 || strings.TrimSpace(typ) == "" {
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil
+	}
+	if err := tenancy.RequirePositiveID("customer_id", customerID); err != nil {
+		return nil
+	}
+	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(typ) == "" {
 		return nil
 	}
 	_, err := s.store.pool.Exec(ctx, `

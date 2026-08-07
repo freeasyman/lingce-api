@@ -91,3 +91,11 @@ func RequireSameTenant(claims *auth.Claims, targetTenantID int64) error {
 	}
 	return nil
 }
+
+// RequirePositiveID ensures a numeric identifier is positive.
+func RequirePositiveID(field string, value int64) error {
+	if value <= 0 {
+		return fmt.Errorf("%s is required", field)
+	}
+	return nil
+}

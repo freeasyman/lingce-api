@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/internal/wecom"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 )
@@ -340,7 +341,10 @@ func (s *Service) ResendWeCom(ctx context.Context, alertID int64, employeeIDs []
 }
 
 func (s *Service) AutoResendSkippedUnboundForEmployee(ctx context.Context, tenantID, employeeID int64) error {
-	if tenantID <= 0 || employeeID <= 0 {
+	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+		return nil
+	}
+	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
 		return nil
 	}
 	alertIDs, err := s.store.ListSkippedUnboundAlertIDsByEmployee(ctx, tenantID, employeeID, 20)
@@ -553,8 +557,11 @@ func (s *Service) CreateCCRule(ctx context.Context, claims *auth.Claims, req Cre
 	if err != nil {
 		return nil, err
 	}
-	if req.EmployeeID <= 0 || req.CCEmployeeID <= 0 {
-		return nil, fmt.Errorf("employee_id and cc_employee_id are required")
+	if err := tenancy.RequirePositiveID("employee_id", req.EmployeeID); err != nil {
+		return nil, err
+	}
+	if err := tenancy.RequirePositiveID("cc_employee_id", req.CCEmployeeID); err != nil {
+		return nil, err
 	}
 	if req.EmployeeID == req.CCEmployeeID {
 		return nil, fmt.Errorf("employee and cc employee cannot be the same")
@@ -584,8 +591,8 @@ func resolveConfigTenantID(claims *auth.Claims, requestedTenantID int64) (int64,
 	if claims.UserType == auth.UserTypeEmployee || claims.UserType == auth.UserTypeMobile {
 		return 0, fmt.Errorf("tenant_id missing in token")
 	}
-	if requestedTenantID <= 0 {
-		return 0, fmt.Errorf("tenant_id is required")
+	if err := tenancy.RequirePositiveID("tenant_id", requestedTenantID); err != nil {
+		return 0, err
 	}
 	return requestedTenantID, nil
 }
