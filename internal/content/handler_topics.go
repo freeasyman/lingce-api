@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -33,9 +34,10 @@ func (h *Handler) RefreshHotTopics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	count, err := h.service.RefreshHotTopics(r.Context(), tenantID, claims.UserID)
@@ -93,9 +95,10 @@ func (h *Handler) IdeaTopicStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	resp, err := h.service.StartIdeaTopicSession(r.Context(), claims.UserID, tenantID, req)

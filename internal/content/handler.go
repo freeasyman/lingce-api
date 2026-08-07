@@ -7,7 +7,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
-	"github.com/freeasyman/lingce-api/pkg/auth"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -120,7 +120,7 @@ func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check tenant access
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && topic.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, topic.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -142,10 +142,10 @@ func (h *Handler) CreateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	topic, err := h.service.CreateTopic(r.Context(), tenantID, claims.UserID, req)
@@ -178,7 +178,7 @@ func (h *Handler) UpdateTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingTopic.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingTopic.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -219,7 +219,7 @@ func (h *Handler) DeleteTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingTopic.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingTopic.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -255,9 +255,10 @@ func (h *Handler) GenerateTopics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	topics, err := h.service.GenerateTopics(r.Context(), tenantID, claims.UserID, req)

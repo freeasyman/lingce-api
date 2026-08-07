@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -21,12 +22,14 @@ func (h *Handler) GetPublishDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			tenantID = &parsed
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if tenantIDParam != "" || claims.TenantID != nil {
+		parsed, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
 		}
+		tenantID = &parsed
 	}
 
 	resp, err := h.service.GetPublishDashboard(r.Context(), tenantID)
@@ -47,12 +50,14 @@ func (h *Handler) ListPublishTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req PublishTaskListRequest
-	if claims.UserType != auth.UserTypeAdmin {
-		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			req.TenantID = &parsed
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if tenantIDParam != "" || claims.TenantID != nil {
+		parsed, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
 		}
+		req.TenantID = &parsed
 	}
 
 	if contentIDStr := r.URL.Query().Get("content_id"); contentIDStr != "" {
@@ -108,7 +113,7 @@ func (h *Handler) GetPublishTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && task.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, task.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -130,9 +135,10 @@ func (h *Handler) CreatePublishTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	task, err := h.service.CreatePublishTask(r.Context(), tenantID, claims.UserID, req)
@@ -158,9 +164,10 @@ func (h *Handler) BatchCreatePublishTasks(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	tasks, err := h.service.BatchCreatePublishTasks(r.Context(), tenantID, claims.UserID, req)
@@ -201,7 +208,7 @@ func (h *Handler) UpdatePublishTaskStatus(w http.ResponseWriter, r *http.Request
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -233,7 +240,7 @@ func (h *Handler) CancelPublishTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -265,7 +272,7 @@ func (h *Handler) RetryPublishTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}

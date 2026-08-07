@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/pkg/auth"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -96,7 +96,7 @@ func (h *Handler) GetContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && content.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, content.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -118,19 +118,9 @@ func (h *Handler) GenerateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
-	}
-	if claims.UserType == auth.UserTypeAdmin && tenantID == 0 {
-		if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-			if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-				tenantID = parsed
-			}
-		}
-	}
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -157,19 +147,9 @@ func (h *Handler) CreateContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
-	}
-	if claims.UserType == auth.UserTypeAdmin && tenantID == 0 {
-		if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-			if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-				tenantID = parsed
-			}
-		}
-	}
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -207,7 +187,7 @@ func (h *Handler) UpdateContent(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -240,7 +220,7 @@ func (h *Handler) DeleteContent(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -278,7 +258,7 @@ func (h *Handler) GenerateImages(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -316,7 +296,7 @@ func (h *Handler) GenerateSingleImage(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -354,7 +334,7 @@ func (h *Handler) SaveComposedImages(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -386,7 +366,7 @@ func (h *Handler) PublishContent(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -418,7 +398,7 @@ func (h *Handler) UnpublishContent(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existing.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}

@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/pkg/auth"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -77,10 +77,13 @@ func (h *Handler) CreateContentTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if tenantIDParam != "" || claims.TenantID != nil {
+		tid, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
 		tenantID = &tid
 	}
 	template, err := h.service.CreatePromptTemplate(r.Context(), tenantID, claims.UserID, req, true)
@@ -245,10 +248,13 @@ func (h *Handler) InitializeDefaultTemplates(w http.ResponseWriter, r *http.Requ
 	}
 
 	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+	tenantIDParam := r.URL.Query().Get("tenant_id")
+	if tenantIDParam != "" || claims.TenantID != nil {
+		tid, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
 		tenantID = &tid
 	}
 	created, err := h.service.InitializeDefaultContentTemplates(r.Context(), tenantID, claims.UserID)
