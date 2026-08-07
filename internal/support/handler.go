@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -342,9 +343,11 @@ func (h *Handler) ListOperationLogs(w http.ResponseWriter, r *http.Request) {
 
 	var req OperationLogListRequest
 
-	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	if tenantID, err := resolveSupportOptionalTenantID(claims, r.URL.Query().Get("tenant_id")); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	} else {
+		req.TenantID = tenantID
 	}
 
 	if userIDStr := r.URL.Query().Get("user_id"); userIDStr != "" {
@@ -396,10 +399,10 @@ func (h *Handler) GetOperationLogStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveSupportOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	var startDate, endDate *string
@@ -706,6 +709,35 @@ func detectDeviceType(userAgent string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func resolveSupportOptionalTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	if claims == nil {
+		return nil, nil
+	}
+
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return nil, err
+		}
+		return &tenantID, nil
+	}
+
+	if tenantIDParam != "" {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return nil, err
+		}
+		return &tenantID, nil
+	}
+
+	if claims.TenantID != nil && *claims.TenantID > 0 {
+		return claims.TenantID, nil
+	}
+
+	return nil, nil
 }
 
 // LLM Model Config Handlers
@@ -1789,13 +1821,10 @@ func (h *Handler) ListVisits(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			tenantID = &parsed
-		}
+	tenantID, err := resolveSupportOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	items, total, err := h.service.ListVisits(r.Context(), tenantID, page, pageSize)
 	if err != nil {
@@ -1813,13 +1842,10 @@ func (h *Handler) GetVisitStatistics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			tenantID = &parsed
-		}
+	tenantID, err := resolveSupportOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	stats, err := h.service.GetVisitStatistics(r.Context(), tenantID)
 	if err != nil {
@@ -1837,13 +1863,10 @@ func (h *Handler) GetVisitFilters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		if parsed, err := strconv.ParseInt(tenantIDStr, 10, 64); err == nil {
-			tenantID = &parsed
-		}
+	tenantID, err := resolveSupportOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	filters, err := h.service.GetVisitFilters(r.Context(), tenantID)
 	if err != nil {
