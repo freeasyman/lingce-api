@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -23,47 +24,37 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers tenant routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Tenant CRUD (admin only)
-	mux.Handle("GET /api/v1/tenants", authMw(http.HandlerFunc(h.ListTenants)))
-	mux.Handle("GET /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.GetTenant)))
-	mux.Handle("POST /api/v1/tenants", authMw(http.HandlerFunc(h.CreateTenant)))
-	mux.Handle("PUT /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
-	mux.Handle("PATCH /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.UpdateTenant)))
-	mux.Handle("DELETE /api/v1/tenants/{id}", authMw(http.HandlerFunc(h.DeleteTenant)))
-
-	// Tenant subscription actions (admin only)
-	mux.Handle("GET /api/v1/tenants/{id}/subscription", authMw(http.HandlerFunc(h.GetTenantSubscription)))
-	mux.Handle("POST /api/v1/tenants/{id}/subscription/actions/{action}", authMw(http.HandlerFunc(h.PerformSubscriptionAction)))
-	mux.Handle("GET /api/v1/tenants/{id}/subscription/events", authMw(http.HandlerFunc(h.GetSubscriptionEvents)))
-
-	// Tenant features (admin only)
-	mux.Handle("GET /api/v1/tenants/{id}/features", authMw(http.HandlerFunc(h.GetTenantFeatures)))
-	mux.Handle("POST /api/v1/tenants/{id}/feature-group", authMw(http.HandlerFunc(h.AssignFeatureGroup)))
-	mux.Handle("GET /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.GetFeatureOverrides)))
-	mux.Handle("PUT /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
-	mux.Handle("PATCH /api/v1/tenants/{id}/feature-overrides", authMw(http.HandlerFunc(h.SetFeatureOverrides)))
-
-	// Tenant profile (tenant-scoped)
-	mux.Handle("GET /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.GetTenantProfile)))
-	mux.Handle("GET /api/v1/tenants/{id}/trial-home", authMw(http.HandlerFunc(h.GetTrialHomeSummary)))
-	mux.Handle("POST /api/v1/tenants/{id}/trial-home/demo-view", authMw(http.HandlerFunc(h.MarkTrialDemoViewed)))
-	mux.Handle("POST /api/v1/tenants/{id}/actions/init-trial", authMw(http.HandlerFunc(h.InitTrialTenant)))
-	mux.Handle("PUT /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
-	mux.Handle("PATCH /api/v1/tenants/{id}/profile", authMw(http.HandlerFunc(h.UpdateTenantProfile)))
-	mux.Handle("GET /api/v1/tenants/{id}/statistics", authMw(http.HandlerFunc(h.GetInstitutionStatistics)))
-	mux.Handle("GET /api/v1/tenants/{id}/medical-specialties", authMw(http.HandlerFunc(h.ListMedicalSpecialties)))
-
-	// Tenant validity logs (admin only)
-	mux.Handle("GET /api/v1/tenants/{id}/validity-logs", authMw(http.HandlerFunc(h.GetValidityChangeLogs)))
-
-	// Trial customer management (operation/admin only)
-	mux.Handle("GET /api/v1/ops/trial-customers", authMw(http.HandlerFunc(h.ListTrialCustomers)))
-	mux.Handle("GET /api/v1/ops/trial-customers/{id}", authMw(http.HandlerFunc(h.GetTrialCustomerDetail)))
-	mux.Handle("POST /api/v1/ops/trial-customers/{id}/assign-owner", authMw(http.HandlerFunc(h.AssignTrialCustomerOwner)))
-	mux.Handle("POST /api/v1/ops/trial-customers/{id}/follow-ups", authMw(http.HandlerFunc(h.CreateTrialCustomerFollowUp)))
-	mux.Handle("GET /api/v1/ops/trial-funnel", authMw(http.HandlerFunc(h.GetTrialCustomerFunnel)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/tenants", Handler: h.ListTenants, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}", Handler: h.GetTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/tenants", Handler: h.CreateTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/tenants/{id}", Handler: h.UpdateTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/tenants/{id}", Handler: h.UpdateTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/tenants/{id}", Handler: h.DeleteTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/subscription", Handler: h.GetTenantSubscription, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/tenants/{id}/subscription/actions/{action}", Handler: h.PerformSubscriptionAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/subscription/events", Handler: h.GetSubscriptionEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/features", Handler: h.GetTenantFeatures, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/tenants/{id}/feature-group", Handler: h.AssignFeatureGroup, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.GetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.SetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.SetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/profile", Handler: h.GetTenantProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/trial-home", Handler: h.GetTrialHomeSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/tenants/{id}/trial-home/demo-view", Handler: h.MarkTrialDemoViewed, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/tenants/{id}/actions/init-trial", Handler: h.InitTrialTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/tenants/{id}/profile", Handler: h.UpdateTenantProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/tenants/{id}/profile", Handler: h.UpdateTenantProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/statistics", Handler: h.GetInstitutionStatistics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/medical-specialties", Handler: h.ListMedicalSpecialties, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/validity-logs", Handler: h.GetValidityChangeLogs, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/trial-customers", Handler: h.ListTrialCustomers, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/trial-customers/{id}", Handler: h.GetTrialCustomerDetail, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/ops/trial-customers/{id}/assign-owner", Handler: h.AssignTrialCustomerOwner, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/ops/trial-customers/{id}/follow-ups", Handler: h.CreateTrialCustomerFollowUp, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/trial-funnel", Handler: h.GetTrialCustomerFunnel, Auth: true, AllowedUserTypes: []string{"admin"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // isAdmin checks if the current user is an admin

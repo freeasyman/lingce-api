@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -20,16 +21,16 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers employee routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Employee endpoints require authentication
-	mux.Handle("GET /api/v1/employees", authMw(http.HandlerFunc(h.ListEmployees)))
-	mux.Handle("GET /api/v1/employees/{id}", authMw(http.HandlerFunc(h.GetEmployee)))
-	mux.Handle("POST /api/v1/employees", authMw(http.HandlerFunc(h.CreateEmployee)))
-	mux.Handle("PUT /api/v1/employees/{id}", authMw(http.HandlerFunc(h.UpdateEmployee)))
-	mux.Handle("POST /api/v1/employees/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetPassword)))
-	mux.Handle("POST /api/v1/employees/{id}/reset-password", authMw(http.HandlerFunc(h.ResetPassword)))
-	mux.Handle("DELETE /api/v1/employees/{id}", authMw(http.HandlerFunc(h.DeleteEmployee)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/employees", Handler: h.ListEmployees, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/employees/{id}", Handler: h.GetEmployee, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/employees", Handler: h.CreateEmployee, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/employees/{id}", Handler: h.UpdateEmployee, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/employees/{id}/actions/reset-password", Handler: h.ResetPassword, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/employees/{id}/reset-password", Handler: h.ResetPassword, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "DELETE", Path: "/api/v1/employees/{id}", Handler: h.DeleteEmployee, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // ListEmployees handles listing employees
