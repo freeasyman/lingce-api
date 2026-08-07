@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -42,17 +43,17 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 
 // RegisterRoutes registers department routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Department endpoints require authentication
-	mux.Handle("GET /api/v1/departments", authMw(http.HandlerFunc(h.ListDepartments)))
-	mux.Handle("GET /api/v1/departments/{id}", authMw(http.HandlerFunc(h.GetDepartment)))
-	mux.Handle("POST /api/v1/departments", authMw(http.HandlerFunc(h.CreateDepartment)))
-	mux.Handle("PUT /api/v1/departments/{id}", authMw(http.HandlerFunc(h.UpdateDepartment)))
-	mux.Handle("DELETE /api/v1/departments/{id}", authMw(http.HandlerFunc(h.DeleteDepartment)))
-	mux.Handle("GET /api/v1/departments/health", authMw(http.HandlerFunc(h.DepartmentHealthCheck)))
-	mux.Handle("POST /api/v1/departments/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncDepartmentsFromVisits)))
-	mux.Handle("GET /api/v1/departments/{id}/performance", authMw(http.HandlerFunc(h.GetDepartmentPerformance)))
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/departments", Handler: h.ListDepartments, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/departments/{id}", Handler: h.GetDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/departments", Handler: h.CreateDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "PUT", Path: "/api/v1/departments/{id}", Handler: h.UpdateDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/departments/{id}", Handler: h.DeleteDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/departments/health", Handler: h.DepartmentHealthCheck, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/departments/actions/sync-from-visits", Handler: h.SyncDepartmentsFromVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/departments/{id}/performance", Handler: h.GetDepartmentPerformance, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // ListDepartments handles listing departments
