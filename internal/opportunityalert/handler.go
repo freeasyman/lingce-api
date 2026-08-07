@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -19,6 +20,25 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func resolveOpportunityAlertTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims == nil {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return nil, err
+		}
+		return &tenantID, nil
+	}
+	if claims.UserType == auth.UserTypeAdmin && tenantIDParam == "" {
+		return nil, nil
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
 }
 
 func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -43,14 +63,14 @@ func (h *Handler) ListRecentDeliveries(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
-	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	var scopedTenantID *int64
-	if tenantID > 0 {
-		scopedTenantID = &tenantID
+	tenantID, err := resolveOpportunityAlertTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	items, err := h.service.ListRecentDeliveriesForAdmin(r.Context(), claims, RecentDeliveriesRequest{
-		TenantID: scopedTenantID,
+		TenantID: tenantID,
 		Limit:    limit,
 	})
 	if err != nil {
@@ -111,7 +131,11 @@ func (h *Handler) ListCCRules(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
-	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
+	tenantID, err := resolveOpportunityAlertTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	var employeeID *int64
 	if raw := strings.TrimSpace(r.URL.Query().Get("employee_id")); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
@@ -121,7 +145,11 @@ func (h *Handler) ListCCRules(w http.ResponseWriter, r *http.Request) {
 		}
 		employeeID = &parsed
 	}
-	items, err := h.service.ListCCRules(r.Context(), claims, tenantID, employeeID)
+	tenantValue := int64(0)
+	if tenantID != nil {
+		tenantValue = *tenantID
+	}
+	items, err := h.service.ListCCRules(r.Context(), claims, tenantValue, employeeID)
 	if err != nil {
 		httpError(w, err)
 		return
@@ -159,8 +187,16 @@ func (h *Handler) DeleteCCRule(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid cc rule id")
 		return
 	}
-	tenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("tenant_id")), 10, 64)
-	if err := h.service.DeleteCCRule(r.Context(), claims, tenantID, id); err != nil {
+	tenantID, err := resolveOpportunityAlertTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var tenantValue int64
+	if tenantID != nil {
+		tenantValue = *tenantID
+	}
+	if err := h.service.DeleteCCRule(r.Context(), claims, tenantValue, id); err != nil {
 		httpError(w, err)
 		return
 	}
