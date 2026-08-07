@@ -402,12 +402,11 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check tenant access for non-admin users
+	if err := tenancy.RequireSameTenant(claims, recording.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
-			httputil.WriteForbidden(w, "Access denied")
-			return
-		}
 		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, recording.BusinessScope); err != nil {
 			httputil.WriteForbidden(w, err.Error())
 			return
@@ -439,7 +438,7 @@ func (h *Handler) GetTherapistReset(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteNotFound(w, recErr.Error())
 			return
 		}
-		if claims.TenantID == nil || *claims.TenantID != recording.TenantID {
+		if err := tenancy.RequireSameTenant(claims, recording.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
 		}
@@ -473,12 +472,12 @@ func (h *Handler) CreateRecording(w http.ResponseWriter, r *http.Request) {
 
 	// For non-admin users, enforce tenant and employee constraints
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil {
-			httputil.WriteForbidden(w, "No tenant access")
+		tenantID, err := tenancy.RequireTenantID(claims, "")
+		if err != nil {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
-		// Force tenant_id to user's tenant
-		req.TenantID = *claims.TenantID
+		req.TenantID = tenantID
 		// Force employee_id to current user
 		req.EmployeeID = claims.UserID
 	}
@@ -520,17 +519,16 @@ func (h *Handler) UpdateRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check tenant access for non-admin users
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if claims.TenantID == nil || *claims.TenantID != existing.TenantID {
-			httputil.WriteForbidden(w, "Access denied")
-			return
-		}
-
 		// Employees can update their own recordings.
 		if claims.UserID != existing.EmployeeID {
 			// Tenant admins can link customer for any recording in tenant.
 			canLinkCustomer := isLinkCustomerOnly(req)
-			if !canLinkCustomer || !h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID) {
+			if !canLinkCustomer || claims.TenantID == nil || !h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID) {
 				httputil.WriteForbidden(w, "Can only update own recordings")
 				return
 			}
@@ -1077,12 +1075,9 @@ func (h *Handler) DeleteBestPractice(w http.ResponseWriter, r *http.Request) {
 
 // getTenantID gets the tenant ID from claims or query parameter
 func (h *Handler) getTenantID(claims *auth.Claims, r *http.Request) int64 {
-	if claims.UserType == auth.UserTypeAdmin {
-		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err == nil {
 		return tenantID
-	}
-	if claims.TenantID != nil {
-		return *claims.TenantID
 	}
 	return 0
 }
