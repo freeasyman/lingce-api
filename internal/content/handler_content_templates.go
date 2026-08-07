@@ -76,17 +76,13 @@ func (h *Handler) CreateContentTemplate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var tenantID *int64
 	tenantIDParam := r.URL.Query().Get("tenant_id")
-	if tenantIDParam != "" || claims.TenantID != nil {
-		tid, err := tenancy.RequireTenantID(claims, tenantIDParam)
-		if err != nil {
-			httputil.WriteBadRequest(w, err.Error())
-			return
-		}
-		tenantID = &tid
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
-	template, err := h.service.CreatePromptTemplate(r.Context(), tenantID, claims.UserID, req, true)
+	template, err := h.service.CreatePromptTemplate(r.Context(), &tenantID, claims.UserID, req, true)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -247,17 +243,12 @@ func (h *Handler) InitializeDefaultTemplates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var tenantID *int64
-	tenantIDParam := r.URL.Query().Get("tenant_id")
-	if tenantIDParam != "" || claims.TenantID != nil {
-		tid, err := tenancy.RequireTenantID(claims, tenantIDParam)
-		if err != nil {
-			httputil.WriteBadRequest(w, err.Error())
-			return
-		}
-		tenantID = &tid
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
-	created, err := h.service.InitializeDefaultContentTemplates(r.Context(), tenantID, claims.UserID)
+	created, err := h.service.InitializeDefaultContentTemplates(r.Context(), &tenantID, claims.UserID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
