@@ -21,6 +21,43 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+func resolveCustomerTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
+}
+
+func resolveCustomerOptionalTenantID(claims *auth.Claims, tenantIDParam string) (*int64, error) {
+	if claims == nil {
+		return nil, nil
+	}
+
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return nil, err
+		}
+		return &tenantID, nil
+	}
+
+	if tenantIDParam != "" {
+		tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+		if err != nil {
+			return nil, err
+		}
+		return &tenantID, nil
+	}
+
+	if claims.TenantID != nil && *claims.TenantID > 0 {
+		return claims.TenantID, nil
+	}
+
+	return nil, nil
+}
+
 // RegisterRoutes registers customer module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
@@ -190,13 +227,10 @@ func (h *Handler) GetCustomerStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveCustomerOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	stats, err := h.service.GetCustomerStats(r.Context(), tenantID)
@@ -229,7 +263,7 @@ func (h *Handler) GetCustomerByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check tenant access
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && customer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, customer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -251,24 +285,13 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
-	} else if tenantIDStr := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantIDStr != "" {
-		parsedTenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
-		if err != nil || parsedTenantID <= 0 {
-			httputil.WriteBadRequest(w, "Invalid tenant_id")
-			return
-		}
-		tenantID = parsedTenantID
-	}
-	if tenantID <= 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := resolveCustomerTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
-	customer, err := h.service.CreateCustomer(r.Context(), tenantID, claims.UserID, req)
+	customer, err := h.service.CreateCustomer(r.Context(), *tenantID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -298,7 +321,7 @@ func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -337,7 +360,7 @@ func (h *Handler) DeleteCustomer(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -371,7 +394,7 @@ func (h *Handler) MarkCustomerConverted(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -423,7 +446,7 @@ func (h *Handler) GetCustomer360View(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && customer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, customer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -462,7 +485,7 @@ func (h *Handler) AddCustomerIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -527,7 +550,7 @@ func (h *Handler) ListCustomerInteractions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -591,7 +614,7 @@ func (h *Handler) CreateCustomerInteraction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -602,13 +625,13 @@ func (h *Handler) CreateCustomerInteraction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := resolveCustomerTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
-	interaction, err := h.service.CreateCustomerInteraction(r.Context(), id, tenantID, claims.UserID, req)
+	interaction, err := h.service.CreateCustomerInteraction(r.Context(), id, *tenantID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -638,7 +661,7 @@ func (h *Handler) ListCustomerFollowUps(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -702,7 +725,7 @@ func (h *Handler) CreateCustomerFollowUp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -713,13 +736,13 @@ func (h *Handler) CreateCustomerFollowUp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := resolveCustomerTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
-	followUp, err := h.service.CreateCustomerFollowUp(r.Context(), id, tenantID, claims.UserID, req)
+	followUp, err := h.service.CreateCustomerFollowUp(r.Context(), id, *tenantID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -749,7 +772,7 @@ func (h *Handler) GetCustomerMembership(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -830,13 +853,13 @@ func (h *Handler) CreateCustomerTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := resolveCustomerTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
-	tag, err := h.service.CreateCustomerTag(r.Context(), tenantID, claims.UserID, req)
+	tag, err := h.service.CreateCustomerTag(r.Context(), *tenantID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -866,7 +889,7 @@ func (h *Handler) UpdateCustomerTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingTag.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingTag.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -907,7 +930,7 @@ func (h *Handler) DeleteCustomerTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingTag.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingTag.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -987,13 +1010,13 @@ func (h *Handler) CreateCustomerGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, err := resolveCustomerTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
-	group, err := h.service.CreateCustomerGroup(r.Context(), tenantID, claims.UserID, req)
+	group, err := h.service.CreateCustomerGroup(r.Context(), *tenantID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -1023,7 +1046,7 @@ func (h *Handler) UpdateCustomerGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingGroup.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1064,7 +1087,7 @@ func (h *Handler) DeleteCustomerGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingGroup.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1100,7 +1123,7 @@ func (h *Handler) GetCustomerMomentumHistory(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1138,12 +1161,10 @@ func (h *Handler) CheckDuplicates(w http.ResponseWriter, r *http.Request) {
 		emailPtr = &email
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveCustomerOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	duplicates, err := h.service.FindDuplicateCustomers(r.Context(), tenantID, phonePtr, emailPtr)
@@ -1184,7 +1205,7 @@ func (h *Handler) MergeCustomers(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && targetCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, targetCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1222,7 +1243,7 @@ func (h *Handler) GetConsultationRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1266,7 +1287,7 @@ func (h *Handler) GetEMRRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingCustomer.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1320,12 +1341,10 @@ func (h *Handler) BatchTagCustomers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveCustomerOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	affected, err := h.service.BatchTagCustomers(r.Context(), tenantID, req)
@@ -1348,13 +1367,10 @@ func (h *Handler) GetTagStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	// Admin can view all tenants, employees can only view their own tenant
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveCustomerOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	stats, err := h.service.GetTagStats(r.Context(), tenantID)
@@ -1389,7 +1405,7 @@ func (h *Handler) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingGroup.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1433,7 +1449,7 @@ func (h *Handler) AddGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingGroup.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1482,7 +1498,7 @@ func (h *Handler) RemoveGroupMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil && existingGroup.TenantID != *claims.TenantID {
+	if err := tenancy.RequireSameTenant(claims, existingGroup.TenantID); err != nil {
 		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
@@ -1524,12 +1540,10 @@ func (h *Handler) PreviewGroupRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		tenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
+	tenantID, err := resolveCustomerOptionalTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 
 	resp, err := h.service.PreviewGroupRules(r.Context(), tenantID, req)
