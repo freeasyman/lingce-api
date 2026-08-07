@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,6 +51,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchOverview,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
+			TenantScoped:     true,
 		},
 		{
 			Method:           "GET",
@@ -57,6 +59,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchTrends,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
+			TenantScoped:     true,
 		},
 		{
 			Method:           "GET",
@@ -64,6 +67,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchTable,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
+			TenantScoped:     true,
 		},
 	}
 
@@ -253,20 +257,27 @@ func parseWorkbenchScope(r *http.Request) (*int64, string, string, error) {
 		return nil, "", "", errBadRequest("date_from and date_to are required")
 	}
 
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		return nil, "", "", errBadRequest("invalid token")
-	}
-
-	if claims.UserType == auth.UserTypeEmployee {
-		if claims.TenantID == nil {
-			return nil, "", "", errBadRequest("tenant_id is required for employee")
-		}
-		return claims.TenantID, dateFrom, dateTo, nil
-	}
-
 	tenantIDRaw := strings.TrimSpace(q.Get("tenant_id"))
 	if tenantIDRaw == "" {
+		if scope := tenancy.GetScope(r.Context()); scope != nil {
+			if scope.TenantID != nil {
+				return scope.TenantID, dateFrom, dateTo, nil
+			}
+			return nil, dateFrom, dateTo, nil
+		}
+		claims := middleware.GetUserClaims(r.Context())
+		if claims == nil {
+			return nil, "", "", errBadRequest("invalid token")
+		}
+		if claims.UserType == auth.UserTypeEmployee {
+			if claims.TenantID == nil {
+				return nil, "", "", errBadRequest("tenant_id is required for employee")
+			}
+			return claims.TenantID, dateFrom, dateTo, nil
+		}
+		if claims.TenantID != nil {
+			return claims.TenantID, dateFrom, dateTo, nil
+		}
 		return nil, dateFrom, dateTo, nil
 	}
 	tenantID, err := strconv.ParseInt(tenantIDRaw, 10, 64)
