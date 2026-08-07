@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -20,15 +21,14 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers organization routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Employee sub-resources (authenticated users)
-	mux.Handle("GET /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.GetEmployeeAssistants)))
-	mux.Handle("PUT /api/v1/employees/{id}/assistants", authMw(http.HandlerFunc(h.UpdateEmployeeAssistants)))
-	mux.Handle("POST /api/v1/employees/actions/sync-from-visits", authMw(http.HandlerFunc(h.SyncDoctorsFromVisits)))
-	mux.Handle("GET /api/v1/employees/{id}/performance", authMw(http.HandlerFunc(h.GetDoctorPerformance)))
-	mux.Handle("GET /api/v1/employees/performance/summary", authMw(http.HandlerFunc(h.GetDoctorPerformanceSummary)))
-
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/employees/{id}/assistants", Handler: h.GetEmployeeAssistants, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/employees/{id}/assistants", Handler: h.UpdateEmployeeAssistants, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/employees/actions/sync-from-visits", Handler: h.SyncDoctorsFromVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/employees/{id}/performance", Handler: h.GetDoctorPerformance, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/employees/performance/summary", Handler: h.GetDoctorPerformanceSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // ListTenants handles listing tenants
