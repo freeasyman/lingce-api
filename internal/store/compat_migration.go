@@ -1957,6 +1957,19 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+// CheckCompatMigrations verifies that the compatibility baseline is already satisfied.
+func CheckCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	ready, err := compatMigrationAlreadySatisfied(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("check compat migration readiness: %w", err)
+	}
+	if !ready {
+		return fmt.Errorf("compatibility migration baseline is not satisfied; run lingce-api --migrate-only before starting the API")
+	}
+	slog.Info("compatibility migrations verified")
+	return nil
+}
+
 type compatExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)

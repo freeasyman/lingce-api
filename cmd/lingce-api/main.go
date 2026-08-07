@@ -51,6 +51,7 @@ func main() {
 	setupLogger("info")
 
 	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
+	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations and exit")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -78,12 +79,32 @@ func main() {
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
 
-	slog.Info("checking compatibility migrations")
-	if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
-		slog.Error("failed to apply compatibility migrations", "error", err)
+	if *migrateOnly {
+		slog.Info("applying schema migrations")
+		if err := store.ApplySchemaMigrations(ctx, pool); err != nil {
+			slog.Error("failed to apply schema migrations", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("applying compatibility migrations")
+		if err := store.ApplyCompatMigrations(ctx, pool); err != nil {
+			slog.Error("failed to apply compatibility migrations", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("database migrations complete")
+		return
+	}
+
+	slog.Info("checking schema migrations")
+	if err := store.CheckSchemaMigrations(ctx, pool); err != nil {
+		slog.Error("failed to verify schema migrations", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("compatibility migrations ready")
+	slog.Info("checking compatibility migrations")
+	if err := store.CheckCompatMigrations(ctx, pool); err != nil {
+		slog.Error("failed to verify compatibility migrations", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("database migrations ready")
 
 	// Setup HTTP router
 	mux := http.NewServeMux()

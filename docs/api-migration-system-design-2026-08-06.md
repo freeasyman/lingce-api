@@ -123,7 +123,7 @@ CREATE TABLE api_migration_state (
 API 启动时：
 
 1. 连接数据库
-2. 读取 `api_migration_state`
+2. 读取 `api_schema_migrations`
 3. 对比代码要求版本
 4. 如果版本不足，退出
 5. 如果版本足够，继续启动 HTTP 服务
@@ -135,6 +135,14 @@ API 启动时：
 - `--migrate-only`
 
 这个模式只在部署时运行一次，不进入常驻服务流程。
+
+当前实现已经接入：
+
+```bash
+./bin/lingce-api --config ./configs/dev.toml --migrate-only
+```
+
+普通启动会先校验 `api_schema_migrations`，再校验兼容迁移基线。如果校验不通过，API 不会自动补写数据库，而是退出并提示先执行迁移模式。
 
 ## 8. 与现有兼容迁移的关系
 
