@@ -1,11 +1,11 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -26,8 +26,13 @@ type Route struct {
 type RouteDeps struct {
 	JWTSecret     string
 	InternalToken string
-	PermChecker   *rbac.PermissionChecker
+	PermChecker   PermissionChecker
 	Pool          *pgxpool.Pool // For tenant scope resolution
+}
+
+// PermissionChecker checks whether a user has a permission.
+type PermissionChecker interface {
+	HasPermission(ctx context.Context, userID int64, userType, permission string) (bool, error)
 }
 
 // Register registers routes with declarative authentication and authorization
@@ -115,7 +120,7 @@ func userTypeMiddleware(next http.HandlerFunc, allowedTypes []string) http.Handl
 }
 
 // permissionMiddleware checks if the user has the required permission
-func permissionMiddleware(next http.HandlerFunc, permission string, checker *rbac.PermissionChecker) http.HandlerFunc {
+func permissionMiddleware(next http.HandlerFunc, permission string, checker PermissionChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.GetUserClaims(r.Context())
 		if claims == nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -23,45 +24,44 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers rbac routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Role resource routes
-	mux.Handle("GET /api/v1/roles", authMw(http.HandlerFunc(h.ListRoles)))
-	mux.Handle("POST /api/v1/roles", authMw(http.HandlerFunc(h.CreateRole)))
-	mux.Handle("GET /api/v1/roles/{id}", authMw(http.HandlerFunc(h.GetRole)))
-	mux.Handle("PUT /api/v1/roles/{id}", authMw(http.HandlerFunc(h.UpdateRole)))
-	mux.Handle("DELETE /api/v1/roles/{id}", authMw(http.HandlerFunc(h.DeleteRole)))
-	mux.Handle("GET /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.GetRolePermissionsByScope)))
-	mux.Handle("POST /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.AssignPermissionsToRoleByScope)))
-	mux.Handle("DELETE /api/v1/roles/{id}/permissions", authMw(http.HandlerFunc(h.RemovePermissionsFromRoleByScope)))
-	mux.Handle("GET /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.GetRoleMenusByScope)))
-	mux.Handle("PUT /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
-	mux.Handle("POST /api/v1/roles/{id}/menus", authMw(http.HandlerFunc(h.AssignMenusToRoleByScope)))
-	mux.Handle("GET /api/v1/menus", authMw(http.HandlerFunc(h.ListMenus)))
-	mux.Handle("GET /api/v1/menus/effective", authMw(http.HandlerFunc(h.GetEffectiveMenusByScope)))
-	mux.Handle("POST /api/v1/menus/sync", authMw(http.HandlerFunc(h.SyncMenusByScope)))
-	mux.Handle("POST /api/v1/menus", authMw(http.HandlerFunc(h.CreateMenu)))
-	mux.Handle("GET /api/v1/menus/{id}", authMw(http.HandlerFunc(h.GetMenu)))
-	mux.Handle("PUT /api/v1/menus/{id}", authMw(http.HandlerFunc(h.UpdateMenu)))
-	mux.Handle("DELETE /api/v1/menus/{id}", authMw(http.HandlerFunc(h.DeleteMenu)))
-	mux.Handle("GET /api/v1/menus/tree", authMw(http.HandlerFunc(h.GetMenuTreeByScope)))
-	mux.Handle("PUT /api/v1/menus/sort", authMw(http.HandlerFunc(h.UpdateMenuSortByScope)))
-	mux.Handle("GET /api/v1/roles/admins", authMw(http.HandlerFunc(h.ListOperationsAdmins)))
-	mux.Handle("POST /api/v1/roles/admins", authMw(http.HandlerFunc(h.CreateOperationsAdmin)))
-	mux.Handle("GET /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.GetOperationsAdmin)))
-	mux.Handle("PUT /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.UpdateOperationsAdmin)))
-	mux.Handle("DELETE /api/v1/roles/admins/id/{id}", authMw(http.HandlerFunc(h.DeleteOperationsAdmin)))
-	mux.Handle("POST /api/v1/roles/admins/id/{id}/actions/reset-password", authMw(http.HandlerFunc(h.ResetAdminPassword)))
-	mux.Handle("GET /api/v1/ops/organizations", authMw(http.HandlerFunc(h.ListOpsOrganizations)))
-	mux.Handle("POST /api/v1/ops/organizations", authMw(http.HandlerFunc(h.CreateOpsOrganization)))
-	mux.Handle("PUT /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.UpdateOpsOrganization)))
-	mux.Handle("DELETE /api/v1/ops/organizations/{id}", authMw(http.HandlerFunc(h.DeleteOpsOrganization)))
-	mux.Handle("GET /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.GetEmployeeRole)))
-	mux.Handle("PUT /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.SetEmployeeRole)))
-	mux.Handle("DELETE /api/v1/employees/{id}/role", authMw(http.HandlerFunc(h.RemoveEmployeeRole)))
-	mux.Handle("GET /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.GetDepartmentRole)))
-	mux.Handle("PUT /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.SetDepartmentRole)))
-	mux.Handle("DELETE /api/v1/departments/{id}/role", authMw(http.HandlerFunc(h.RemoveDepartmentRole)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/roles", Handler: h.ListRoles, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles", Handler: h.CreateRole, Auth: true},
+		{Method: "GET", Path: "/api/v1/roles/{id}", Handler: h.GetRole, Auth: true},
+		{Method: "PUT", Path: "/api/v1/roles/{id}", Handler: h.UpdateRole, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/roles/{id}", Handler: h.DeleteRole, Auth: true},
+		{Method: "GET", Path: "/api/v1/roles/{id}/permissions", Handler: h.GetRolePermissionsByScope, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles/{id}/permissions", Handler: h.AssignPermissionsToRoleByScope, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/roles/{id}/permissions", Handler: h.RemovePermissionsFromRoleByScope, Auth: true},
+		{Method: "GET", Path: "/api/v1/roles/{id}/menus", Handler: h.GetRoleMenusByScope, Auth: true},
+		{Method: "PUT", Path: "/api/v1/roles/{id}/menus", Handler: h.AssignMenusToRoleByScope, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles/{id}/menus", Handler: h.AssignMenusToRoleByScope, Auth: true},
+		{Method: "GET", Path: "/api/v1/menus", Handler: h.ListMenus, Auth: true},
+		{Method: "GET", Path: "/api/v1/menus/effective", Handler: h.GetEffectiveMenusByScope, Auth: true},
+		{Method: "POST", Path: "/api/v1/menus/sync", Handler: h.SyncMenusByScope, Auth: true},
+		{Method: "POST", Path: "/api/v1/menus", Handler: h.CreateMenu, Auth: true},
+		{Method: "GET", Path: "/api/v1/menus/{id}", Handler: h.GetMenu, Auth: true},
+		{Method: "PUT", Path: "/api/v1/menus/{id}", Handler: h.UpdateMenu, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/menus/{id}", Handler: h.DeleteMenu, Auth: true},
+		{Method: "GET", Path: "/api/v1/menus/tree", Handler: h.GetMenuTreeByScope, Auth: true},
+		{Method: "PUT", Path: "/api/v1/menus/sort", Handler: h.UpdateMenuSortByScope, Auth: true},
+		{Method: "GET", Path: "/api/v1/roles/admins", Handler: h.ListOperationsAdmins, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles/admins", Handler: h.CreateOperationsAdmin, Auth: true},
+		{Method: "GET", Path: "/api/v1/roles/admins/id/{id}", Handler: h.GetOperationsAdmin, Auth: true},
+		{Method: "PUT", Path: "/api/v1/roles/admins/id/{id}", Handler: h.UpdateOperationsAdmin, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/roles/admins/id/{id}", Handler: h.DeleteOperationsAdmin, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles/admins/id/{id}/actions/reset-password", Handler: h.ResetAdminPassword, Auth: true},
+		{Method: "GET", Path: "/api/v1/ops/organizations", Handler: h.ListOpsOrganizations, Auth: true},
+		{Method: "POST", Path: "/api/v1/ops/organizations", Handler: h.CreateOpsOrganization, Auth: true},
+		{Method: "PUT", Path: "/api/v1/ops/organizations/{id}", Handler: h.UpdateOpsOrganization, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/ops/organizations/{id}", Handler: h.DeleteOpsOrganization, Auth: true},
+		{Method: "GET", Path: "/api/v1/employees/{id}/role", Handler: h.GetEmployeeRole, Auth: true},
+		{Method: "PUT", Path: "/api/v1/employees/{id}/role", Handler: h.SetEmployeeRole, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/employees/{id}/role", Handler: h.RemoveEmployeeRole, Auth: true},
+		{Method: "GET", Path: "/api/v1/departments/{id}/role", Handler: h.GetDepartmentRole, Auth: true},
+		{Method: "PUT", Path: "/api/v1/departments/{id}/role", Handler: h.SetDepartmentRole, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/departments/{id}/role", Handler: h.RemoveDepartmentRole, Auth: true},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) roleScope(r *http.Request) string {
