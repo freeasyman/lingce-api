@@ -1,0 +1,24 @@
+name: Migration Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+      - main
+
+jobs:
+  migration-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check migration files
+        run: make check-migrations
+
+      - name: Test migration loader
+        run: go test ./internal/store -run TestLoadEmbeddedSchemaMigrations

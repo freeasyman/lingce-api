@@ -96,6 +96,19 @@ CREATE TABLE api_migration_state (
 
 ## 6. 开发流程
 
+新增迁移文件：
+
+```bash
+make migration name=add_customer_source_channel
+```
+
+提交前检查：
+
+```bash
+make check-migrations
+go test ./internal/store -run TestLoadEmbeddedSchemaMigrations
+```
+
 ### 6.1 新增字段
 
 例如新增 `customers.source_channel`：
@@ -169,6 +182,8 @@ API 启动时：
 - 有代码引用更新
 - 有自检说明
 
+当前仓库已新增 `.github/pull_request_template.md`，PR 中必须明确是否涉及数据库变更，并列出 migration 文件与验证命令。
+
 ### 9.2 CI 检查
 
 CI 至少检查：
@@ -177,6 +192,11 @@ CI 至少检查：
 - migration 文件未被修改后复用旧版本号
 - 代码里声明的最低 schema 版本与 migration 账本一致
 - 新增数据库对象是否有对应 migration
+
+当前仓库已新增 `.github/workflows/migration-check.yml`，会执行：
+
+- `make check-migrations`
+- `go test ./internal/store -run TestLoadEmbeddedSchemaMigrations`
 
 ### 9.3 启动失败策略
 

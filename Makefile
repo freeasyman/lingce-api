@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean build-linux docs help
+.PHONY: build run test lint clean build-linux docs help migration check-migrations
 
 APP_NAME := lingce-api
 BUILD_DIR := bin
@@ -13,6 +13,8 @@ help:
 	@echo "  clean        - Remove build artifacts"
 	@echo "  build-linux  - Cross-compile for Linux amd64"
 	@echo "  docs         - Start API documentation server"
+	@echo "  migration    - Create a new versioned schema migration file"
+	@echo "  check-migrations - Validate migration filenames and order"
 
 build:
 	@echo "Building $(APP_NAME)..."
@@ -49,3 +51,9 @@ docs:
 	fi
 	@echo "Documentation will be available at http://localhost:8000"
 	@swagger-ui-watcher docs/openapi_complete.yaml
+
+migration:
+	@./scripts/new_migration.sh $(name)
+
+check-migrations:
+	@./scripts/check_migrations.sh
