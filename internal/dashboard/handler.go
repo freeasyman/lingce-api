@@ -51,7 +51,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchOverview,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
-			TenantScoped:     true,
+			TenantMode:       "scope",
 		},
 		{
 			Method:           "GET",
@@ -59,7 +59,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchTrends,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
-			TenantScoped:     true,
+			TenantMode:       "scope",
 		},
 		{
 			Method:           "GET",
@@ -67,7 +67,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler:          h.GetOpsWorkbenchTable,
 			Auth:             true,
 			AllowedUserTypes: []string{"admin", "employee"},
-			TenantScoped:     true,
+			TenantMode:       "scope",
 		},
 	}
 

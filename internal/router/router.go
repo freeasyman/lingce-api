@@ -19,7 +19,8 @@ type Route struct {
 	AuthMode         string   // public, jwt, internal
 	AllowedUserTypes []string // Allowed user types: admin, employee, mobile
 	Permission       string   // Permission code (e.g., "recording:write"), empty string skips permission check
-	TenantScoped     bool     // Whether tenant isolation is required
+	TenantMode       string   // none, scope, required
+	TenantScoped     bool     // Deprecated: use TenantMode
 }
 
 // RouteDeps contains dependencies for route registration
@@ -40,8 +41,12 @@ func Register(mux *http.ServeMux, routes []Route, deps RouteDeps) {
 	for _, route := range routes {
 		handler := route.Handler
 		authMode := strings.TrimSpace(route.AuthMode)
+		tenantMode := strings.ToLower(strings.TrimSpace(route.TenantMode))
 		if authMode == "" && route.Auth {
 			authMode = "jwt"
+		}
+		if tenantMode == "" && route.TenantScoped {
+			tenantMode = "scope"
 		}
 
 		// Apply middleware chain (innermost to outermost)
@@ -52,9 +57,14 @@ func Register(mux *http.ServeMux, routes []Route, deps RouteDeps) {
 			handler = internalTokenMiddleware(handler, deps.InternalToken)
 		default:
 			// 1. Tenant scope (if required)
-			if route.TenantScoped && deps.Pool != nil {
-				tenantScopeMw := tenancy.TenantScopeMiddleware(deps.Pool)
-				handler = wrapHandler(tenantScopeMw(http.HandlerFunc(handler)))
+			if tenantMode == "scope" || tenantMode == "required" {
+				if deps.Pool != nil {
+					tenantScopeMw := tenancy.TenantScopeMiddleware(deps.Pool)
+					handler = wrapHandler(tenantScopeMw(http.HandlerFunc(handler)))
+					if tenantMode == "required" {
+						handler = requireSingleTenantScopeMiddleware(handler)
+					}
+				}
 			}
 
 			// 2. Permission check (if specified)
@@ -86,6 +96,17 @@ func internalTokenMiddleware(next http.HandlerFunc, expectedToken string) http.H
 		}
 		if strings.TrimSpace(r.Header.Get("X-Internal-Token")) != expectedToken {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func requireSingleTenantScopeMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope := tenancy.GetScope(r.Context())
+		if scope == nil || scope.TenantID == nil || *scope.TenantID <= 0 {
+			http.Error(w, "tenant_id is required", http.StatusBadRequest)
 			return
 		}
 		next(w, r)
