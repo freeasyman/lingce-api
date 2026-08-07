@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -27,6 +28,18 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) SetCallbackGatewayToken(token string) {
 	h.callbackGatewayToken = token
+}
+
+func resolveBadgeTenantID(claims *auth.Claims, tenantIDParam string, allowAllOnAdmin bool) (*int64, error) {
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims != nil && claims.UserType == auth.UserTypeAdmin && allowAllOnAdmin && tenantIDParam == "" {
+		return nil, nil
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
 }
 
 // RegisterRoutes registers badge module routes
@@ -166,17 +179,19 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 		req.SubmitterID = &submitterID
 	}
 
-	// Admin can view all tickets, employees can only view their tenant's tickets
 	if claims.UserType != auth.UserTypeAdmin {
 		if claims.TenantID != nil && *claims.TenantID > 0 {
 			req.TenantID = claims.TenantID
 		} else {
-			// Fallback for tokens without effective tenant_id.
 			req.SubmitterID = &claims.UserID
 		}
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	} else {
+		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		req.TenantID = tenantID
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -325,12 +340,15 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 
 	var req DeviceListRequest
 
-	// Admin can view all devices, employees can only view their tenant's devices
 	if claims.UserType != auth.UserTypeAdmin {
 		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	} else {
+		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		req.TenantID = tenantID
 	}
 
 	if employeeIDStr := r.URL.Query().Get("employee_id"); employeeIDStr != "" {
@@ -372,14 +390,8 @@ func (h *Handler) GetRecordingControlDevices(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Get tenant ID
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
-	}
-
 	var req DeviceListRequest
-	req.TenantID = &tenantID
+	req.TenantID = claims.TenantID
 	req.Status = stringPtr("in_use")
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -454,12 +466,15 @@ func (h *Handler) GetRecordingControlLogs(w http.ResponseWriter, r *http.Request
 
 	var req RecordingControlLogListRequest
 
-	// Admin can view all logs, employees can only view their tenant's logs
 	if claims.UserType != auth.UserTypeAdmin {
 		req.TenantID = claims.TenantID
-	} else if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
+	} else {
+		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		req.TenantID = tenantID
 	}
 
 	if employeeIDStr := r.URL.Query().Get("employee_id"); employeeIDStr != "" {
