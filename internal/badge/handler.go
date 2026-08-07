@@ -30,18 +30,6 @@ func (h *Handler) SetCallbackGatewayToken(token string) {
 	h.callbackGatewayToken = token
 }
 
-func resolveBadgeTenantID(claims *auth.Claims, tenantIDParam string, allowAllOnAdmin bool) (*int64, error) {
-	tenantIDParam = strings.TrimSpace(tenantIDParam)
-	if claims != nil && claims.UserType == auth.UserTypeAdmin && allowAllOnAdmin && tenantIDParam == "" {
-		return nil, nil
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
-	if err != nil {
-		return nil, err
-	}
-	return &tenantID, nil
-}
-
 // RegisterRoutes registers badge module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
@@ -186,7 +174,7 @@ func (h *Handler) ListTickets(w http.ResponseWriter, r *http.Request) {
 			req.SubmitterID = &claims.UserID
 		}
 	} else {
-		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
 		if err != nil {
 			httputil.WriteBadRequest(w, err.Error())
 			return
@@ -343,7 +331,7 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 	if claims.UserType != auth.UserTypeAdmin {
 		req.TenantID = claims.TenantID
 	} else {
-		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
 		if err != nil {
 			httputil.WriteBadRequest(w, err.Error())
 			return
@@ -469,7 +457,7 @@ func (h *Handler) GetRecordingControlLogs(w http.ResponseWriter, r *http.Request
 	if claims.UserType != auth.UserTypeAdmin {
 		req.TenantID = claims.TenantID
 	} else {
-		tenantID, err := resolveBadgeTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+		tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
 		if err != nil {
 			httputil.WriteBadRequest(w, err.Error())
 			return

@@ -51,6 +51,30 @@ func RequireTenantID(claims *auth.Claims, tenantIDParam string) (int64, error) {
 	return *claims.TenantID, nil
 }
 
+// ResolveOptionalTenantID resolves an optional tenant filter for admin list endpoints.
+// When allowAdminAll is true and an admin does not provide tenant_id, nil is returned
+// unless the token is already bound to a tenant.
+func ResolveOptionalTenantID(claims *auth.Claims, tenantIDParam string, allowAdminAll bool) (*int64, error) {
+	if claims == nil {
+		return nil, errInvalidToken
+	}
+
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims.UserType == auth.UserTypeAdmin && allowAdminAll && tenantIDParam == "" {
+		if claims.TenantID != nil && *claims.TenantID > 0 {
+			tenantID := *claims.TenantID
+			return &tenantID, nil
+		}
+		return nil, nil
+	}
+
+	tenantID, err := RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		return nil, err
+	}
+	return &tenantID, nil
+}
+
 // RequireSameTenant ensures the target tenant matches the caller tenant unless caller is admin.
 func RequireSameTenant(claims *auth.Claims, targetTenantID int64) error {
 	if claims == nil {

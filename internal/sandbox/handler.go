@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,9 +55,9 @@ func (h *Handler) SearchRecordings(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.ensureAdmin(w, r); !ok {
 		return
 	}
-	sourceTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("source_tenant_id")), 10, 64)
-	if sourceTenantID <= 0 {
-		httputil.WriteBadRequest(w, "source_tenant_id is required")
+	sourceTenantID, err := parseRequiredPositiveInt64(r.URL.Query().Get("source_tenant_id"), "source_tenant_id")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	page := parseIntDefault(r.URL.Query().Get("page"), 1)
@@ -102,7 +103,11 @@ func (h *Handler) EstimateTransfer(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.ensureAdmin(w, r); !ok {
 		return
 	}
-	sourceTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("source_tenant_id")), 10, 64)
+	sourceTenantID, err := parseRequiredPositiveInt64(r.URL.Query().Get("source_tenant_id"), "source_tenant_id")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	recordingIDs := parseInt64ListFromQuery(r.URL.Query()["recording_ids"], r.URL.Query().Get("recording_ids"))
 	data, err := h.service.Estimate(r.Context(), sourceTenantID, recordingIDs)
 	if err != nil {
@@ -138,8 +143,16 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.ensureAdmin(w, r); !ok {
 		return
 	}
-	sourceTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("source_tenant_id")), 10, 64)
-	targetTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("target_tenant_id")), 10, 64)
+	sourceTenantID, err := parseOptionalPositiveInt64(r.URL.Query().Get("source_tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	targetTenantID, err := parseOptionalPositiveInt64(r.URL.Query().Get("target_tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	page := parseIntDefault(r.URL.Query().Get("page"), 1)
 	pageSize := parseIntDefault(r.URL.Query().Get("page_size"), 20)
@@ -209,8 +222,16 @@ func (h *Handler) ListEmployeeMappings(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.ensureAdmin(w, r); !ok {
 		return
 	}
-	sourceTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("source_tenant_id")), 10, 64)
-	targetTenantID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("target_tenant_id")), 10, 64)
+	sourceTenantID, err := parseOptionalPositiveInt64(r.URL.Query().Get("source_tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	targetTenantID, err := parseRequiredPositiveInt64(r.URL.Query().Get("target_tenant_id"), "target_tenant_id")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
 	if targetTenantID <= 0 {
 		httputil.WriteBadRequest(w, "target_tenant_id is required")
 		return
@@ -258,6 +279,26 @@ func (h *Handler) DeleteEmployeeMapping(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"ok": true})
+}
+
+func parseRequiredPositiveInt64(raw, field string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s is required", field)
+	}
+	return value, nil
+}
+
+func parseOptionalPositiveInt64(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("invalid tenant_id")
+	}
+	return value, nil
 }
 
 func parseIntDefault(raw string, fallback int) int {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -156,16 +157,11 @@ func (h *Handler) ListTenantApps(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	var tenantID *int64
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteBadRequest(w, "tenant_id must be an integer")
-			return
-		}
-		if parsed > 0 {
-			tenantID = &parsed
-		}
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	items, err := h.service.ListTenantApps(r.Context(), tenantID)
 	if err != nil {
@@ -251,16 +247,11 @@ func (h *Handler) ListBindings(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	var tenantID *int64
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteBadRequest(w, "tenant_id must be an integer")
-			return
-		}
-		if parsed > 0 {
-			tenantID = &parsed
-		}
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
 	pageSize, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size")))
@@ -307,16 +298,11 @@ func (h *Handler) ListDirectoryMembers(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
-	var tenantID *int64
-	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteBadRequest(w, "tenant_id must be an integer")
-			return
-		}
-		if parsed > 0 {
-			tenantID = &parsed
-		}
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
 	pageSize, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size")))

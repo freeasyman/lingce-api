@@ -610,9 +610,12 @@ func (h *Handler) GetStatsOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := h.getTenantID(claims, r)
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := h.getTenantID(claims, r)
+	if err != nil {
+		if writeTenantIDError(w, err) {
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -644,9 +647,12 @@ func (h *Handler) GetStatsByScene(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := h.getTenantID(claims, r)
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := h.getTenantID(claims, r)
+	if err != nil {
+		if writeTenantIDError(w, err) {
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -667,9 +673,12 @@ func (h *Handler) GetStatsBySource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := h.getTenantID(claims, r)
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := h.getTenantID(claims, r)
+	if err != nil {
+		if writeTenantIDError(w, err) {
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -999,9 +1008,12 @@ func (h *Handler) ListBestPractices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := h.getTenantID(claims, r)
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := h.getTenantID(claims, r)
+	if err != nil {
+		if writeTenantIDError(w, err) {
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -1028,9 +1040,12 @@ func (h *Handler) AddBestPractice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := h.getTenantID(claims, r)
-	if tenantID == 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
+	tenantID, err := h.getTenantID(claims, r)
+	if err != nil {
+		if writeTenantIDError(w, err) {
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 
@@ -1074,10 +1089,19 @@ func (h *Handler) DeleteBestPractice(w http.ResponseWriter, r *http.Request) {
 // Helper methods
 
 // getTenantID gets the tenant ID from claims or query parameter
-func (h *Handler) getTenantID(claims *auth.Claims, r *http.Request) int64 {
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+func writeTenantIDError(w http.ResponseWriter, err error) bool {
 	if err == nil {
-		return tenantID
+		return false
 	}
-	return 0
+	switch err.Error() {
+	case "no tenant access", "access denied":
+		httputil.WriteForbidden(w, err.Error())
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) getTenantID(claims *auth.Claims, r *http.Request) (int64, error) {
+	return tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 }

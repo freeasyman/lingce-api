@@ -46,17 +46,13 @@ func (h *Handler) CreateSalesProspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
-		return
-	}
 
-	prospect, err := h.service.CreateLingceSalesProspect(r.Context(), *scope.TenantID, req)
+	prospect, err := h.service.CreateLingceSalesProspect(r.Context(), tenantID, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -73,13 +69,9 @@ func (h *Handler) ListSalesProspects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
 
@@ -93,7 +85,7 @@ func (h *Handler) ListSalesProspects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	listReq := LingceSalesProspectListRequest{
-		TenantID: *scope.TenantID,
+		TenantID: tenantID,
 		Page:     page,
 		PageSize: pageSize,
 	}
@@ -136,17 +128,13 @@ func (h *Handler) GetSalesProspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
-		return
-	}
 
-	prospect, err := h.service.GetLingceSalesProspect(r.Context(), *scope.TenantID, id)
+	prospect, err := h.service.GetLingceSalesProspect(r.Context(), tenantID, id)
 	if err != nil {
 		httputil.WriteNotFound(w, "prospect not found")
 		return
@@ -169,13 +157,9 @@ func (h *Handler) UpdateSalesProspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
 
@@ -185,7 +169,7 @@ func (h *Handler) UpdateSalesProspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.UpdateLingceSalesProspect(r.Context(), *scope.TenantID, id, req); err != nil {
+	if err := h.service.UpdateLingceSalesProspect(r.Context(), tenantID, id, req); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -207,13 +191,9 @@ func (h *Handler) ConfirmSalesStageChange(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
 
@@ -237,7 +217,7 @@ func (h *Handler) ConfirmSalesStageChange(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	sc, err := h.service.ConfirmStageChange(r.Context(), *scope.TenantID, prospectID, recordingID, claims.UserID, req)
+	sc, err := h.service.ConfirmStageChange(r.Context(), tenantID, prospectID, recordingID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -290,13 +270,9 @@ func (h *Handler) AssociateSalesRecordingToProspect(w http.ResponseWriter, r *ht
 		return
 	}
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	if scope.TenantID == nil {
-		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
 
@@ -311,7 +287,7 @@ func (h *Handler) AssociateSalesRecordingToProspect(w http.ResponseWriter, r *ht
 		return
 	}
 
-	id, err := h.service.AssociateRecordingToProspect(r.Context(), *scope.TenantID, recordingID, req)
+	id, err := h.service.AssociateRecordingToProspect(r.Context(), tenantID, recordingID, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

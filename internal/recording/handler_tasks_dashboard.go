@@ -63,8 +63,12 @@ func (h *Handler) GetDailyBriefing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -112,6 +116,10 @@ func (h *Handler) GetMyTasks(w http.ResponseWriter, r *http.Request) {
 
 	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
 	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -181,39 +189,11 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 }
 
 func getTaskTenantIDFromClaimsOrQuery(claims *auth.Claims, r *http.Request) (int64, error) {
-	if claims.UserType == auth.UserTypeAdmin {
-		if tenantIDStr := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantIDStr != "" {
-			tenantID, err := strconv.ParseInt(tenantIDStr, 10, 64)
-			if err != nil || tenantID <= 0 {
-				return 0, fmt.Errorf("invalid tenant_id")
-			}
-			return tenantID, nil
-		}
-		if claims.TenantID != nil && *claims.TenantID > 0 {
-			return *claims.TenantID, nil
-		}
-		return 0, fmt.Errorf("tenant_id is required")
-	}
-	if claims.TenantID == nil || *claims.TenantID <= 0 {
-		return 0, errTenantAccessDenied
-	}
-	return *claims.TenantID, nil
+	return tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 }
 
 func getTaskTenantScope(claims *auth.Claims, r *http.Request, h *Handler) (*tenancy.Scope, error) {
 	return tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
-}
-
-var (
-	errTenantAccessDenied = &tenantError{msg: "No tenant access"}
-)
-
-type tenantError struct {
-	msg string
-}
-
-func (e *tenantError) Error() string {
-	return e.msg
 }
 
 // ListTaskEmployees handles listing task employees
