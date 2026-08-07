@@ -377,13 +377,6 @@ func compactRecordingListAnalysisResult(source map[string]interface{}) map[strin
 	copyStringField("scene_type_label")
 	copyStringField("intent_amount")
 	copyStringField("intent_project")
-
-	if dealOutcome := pickMap(source, "deal_outcome"); len(dealOutcome) > 0 {
-		out["deal_outcome"] = dealOutcome
-	}
-	if persuasive := pickMap(source, "persuasive"); len(persuasive) > 0 {
-		out["persuasive"] = persuasive
-	}
 	if doctorPatientView := pickMap(source, "doctor_patient_view"); len(doctorPatientView) > 0 {
 		slimDoctorPatientView := make(map[string]interface{})
 		if value := pickString(doctorPatientView, "relationship_frame"); value != "" {
@@ -4799,7 +4792,7 @@ func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64,
 	if err != nil {
 		return err
 	}
-	if err := s.store.CompleteTask(ctx, id, completedBy); err != nil {
+	if err := s.store.CompleteTask(ctx, id, completedBy, req.Notes); err != nil {
 		return err
 	}
 	_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")

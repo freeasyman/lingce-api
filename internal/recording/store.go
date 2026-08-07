@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +27,9 @@ type RecordingMediaRef struct {
 }
 
 type RecordingAccessRef struct {
-	RecordingID    int64
-	TenantID       int64
-	BusinessScope  string
+	RecordingID   int64
+	TenantID      int64
+	BusinessScope string
 }
 
 type TrialTenantProfile struct {
@@ -693,7 +694,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			ORDER BY sae.updated_at DESC NULLS LAST, sae.created_at DESC NULLS LAST, sae.id DESC
 			LIMIT 1
 		) sbe ON TRUE
-		WHERE %s
+		WHERE r.deleted_at IS NULL AND %s
 	`, whereClause)
 	var total int
 	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
@@ -774,7 +775,7 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			LIMIT 1
 		) sbe ON TRUE
 		LEFT JOIN tenants t ON t.id = r.tenant_id
-		WHERE %s
+		WHERE r.deleted_at IS NULL AND %s
 		ORDER BY %s
 		LIMIT $%d OFFSET $%d
 	`, whereClause, orderBy, argIndex, argIndex+1)
@@ -1689,6 +1690,7 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		) sbe ON TRUE
 		LEFT JOIN tenants t ON t.id = r.tenant_id
 		WHERE r.id = $1
+		  AND r.deleted_at IS NULL
 	`
 
 	var r MedicalRecording
@@ -1740,6 +1742,7 @@ func (s *Store) GetRecordingMediaRef(ctx context.Context, id int64) (*RecordingM
 		SELECT id, tenant_id, COALESCE(file_url, ''), COALESCE(file_name, ''), COALESCE(oss_key, '')
 		FROM recordings
 		WHERE id = $1
+		  AND deleted_at IS NULL
 		LIMIT 1
 	`
 	var ref RecordingMediaRef
@@ -1757,6 +1760,7 @@ func (s *Store) GetRecordingAccessRef(ctx context.Context, id int64) (*Recording
 		SELECT id, tenant_id, COALESCE(business_scope, '')
 		FROM recordings
 		WHERE id = $1
+		  AND deleted_at IS NULL
 		LIMIT 1
 	`
 	var ref RecordingAccessRef
@@ -1969,6 +1973,7 @@ func (s *Store) UpdateRecording(ctx context.Context, id int64, req UpdateRecordi
 		UPDATE recordings
 		SET %s
 		WHERE id = $%d
+		  AND deleted_at IS NULL
 	`, strings.Join(setClauses, ", "), argIndex)
 	_, err := s.pool.Exec(ctx, query, args...)
 
@@ -1980,7 +1985,7 @@ func (s *Store) UpdateRecording(ctx context.Context, id int64, req UpdateRecordi
 
 // DeleteRecording deletes a recording
 func (s *Store) DeleteRecording(ctx context.Context, id int64) error {
-	query := `DELETE FROM recordings WHERE id = $1`
+	query := `UPDATE recordings SET deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`
 
 	result, err := s.pool.Exec(ctx, query, id)
 	if err != nil {
@@ -2279,14 +2284,34 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, erro
 }
 
 // CompleteTask marks a task as completed
-func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64) error {
+func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, notes *string) error {
+	completionNote := ""
+	completedByText := strconv.FormatInt(completedBy, 10)
+	if notes != nil {
+		completionNote = strings.TrimSpace(*notes)
+	}
 	query := `
 		UPDATE recording_tasks
-		SET status = $1, completed_at = NOW(), feedback = CONCAT(COALESCE(feedback, ''), CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END, 'completed_by=', $2::text), updated_at = NOW()
-		WHERE id = $3 AND status != $4
+		SET status = $1,
+			completed_at = NOW(),
+			description = CASE
+				WHEN NULLIF($3, '') IS NULL THEN description
+				ELSE $3
+			END,
+			feedback = CONCAT(
+				COALESCE(feedback, ''),
+				CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END,
+				'completed_by=', $2::text,
+				CASE
+					WHEN NULLIF($3, '') IS NULL THEN ''
+					ELSE E'\ncompletion_note=' || $3
+				END
+			),
+			updated_at = NOW()
+		WHERE id = $4 AND status != $5
 	`
 
-	result, err := s.pool.Exec(ctx, query, TaskStatusCompleted, completedBy, id, TaskStatusCompleted)
+	result, err := s.pool.Exec(ctx, query, TaskStatusCompleted, completedByText, completionNote, id, TaskStatusCompleted)
 	if err != nil {
 		return fmt.Errorf("failed to complete task: %w", err)
 	}

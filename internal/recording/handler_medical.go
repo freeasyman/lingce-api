@@ -1084,7 +1084,7 @@ func (h *Handler) ConfirmFollowUpTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	var failedTaskIDs []int64
 	for _, taskID := range req.TaskIDs {
-		if err := h.service.store.CompleteTask(r.Context(), taskID, claims.UserID); err != nil {
+		if err := h.service.store.CompleteTask(r.Context(), taskID, claims.UserID, nil); err != nil {
 			failedTaskIDs = append(failedTaskIDs, taskID)
 		}
 	}
