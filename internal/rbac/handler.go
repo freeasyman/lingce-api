@@ -25,6 +25,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	authMw := middleware.Auth(jwtSecret)
 
+	// Role resource routes
 	mux.Handle("GET /api/v1/roles", authMw(http.HandlerFunc(h.ListRoles)))
 	mux.Handle("POST /api/v1/roles", authMw(http.HandlerFunc(h.CreateRole)))
 	mux.Handle("GET /api/v1/roles/{id}", authMw(http.HandlerFunc(h.GetRole)))
