@@ -3,6 +3,7 @@ package support
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +14,9 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service       *Service
+	jwtSecret     string
+	internalToken string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -22,6 +25,7 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers support module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
+	h.jwtSecret = jwtSecret
 	authMw := middleware.Auth(jwtSecret)
 
 	// Notification endpoints
@@ -36,6 +40,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/operation-logs", authMw(http.HandlerFunc(h.ListOperationLogs)))
 	mux.Handle("GET /api/v1/operation-logs/stats", authMw(http.HandlerFunc(h.GetOperationLogStats)))
 	mux.Handle("GET /api/v1/operation-logs/{id}", authMw(http.HandlerFunc(h.GetOperationLogByID)))
+
+	// Institution-side system action logs.
+	mux.Handle("POST /api/v1/inst/system-logs", authMw(http.HandlerFunc(h.CreateInstitutionSystemActionLog)))
+	mux.Handle("GET /api/v1/ops/system-logs", authMw(http.HandlerFunc(h.ListSystemActionLogs)))
+	mux.Handle("GET /api/v1/ops/system-logs/{id}", authMw(http.HandlerFunc(h.GetSystemActionLogByID)))
 
 	// LLM model config endpoints
 	mux.Handle("GET /api/v1/llm/models", authMw(http.HandlerFunc(h.ListLLMModelConfigs)))
@@ -88,6 +97,16 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("GET /api/v1/visits/statistics", authMw(http.HandlerFunc(h.GetVisitStatistics)))
 	mux.Handle("GET /api/v1/visits/filters", authMw(http.HandlerFunc(h.GetVisitFilters)))
 	mux.Handle("GET /api/v1/visits/{id}", authMw(http.HandlerFunc(h.GetVisitByID)))
+
+	// Encounter endpoints (ops MVP)
+	mux.Handle("GET /api/v1/ops/encounters", authMw(http.HandlerFunc(h.ListEncounters)))
+	mux.Handle("GET /api/v1/ops/encounters/{id}", authMw(http.HandlerFunc(h.GetEncounterByID)))
+	mux.Handle("POST /api/v1/ops/recordings/{id}/actions/project-encounters", authMw(http.HandlerFunc(h.ProjectEncounterFromRecording)))
+}
+
+func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
+	h.internalToken = strings.TrimSpace(internalToken)
+	mux.Handle("POST /api/v1/internal/system-logs", http.HandlerFunc(h.CreateInternalSystemActionLog))
 }
 
 // Notification Handlers

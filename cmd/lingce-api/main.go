@@ -247,6 +247,7 @@ func main() {
 	supportService := support.NewService(supportStore, llmClient)
 	supportHandler := support.NewHandler(supportService)
 	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	supportHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
 	splitDemoRunStore := splitdemo.NewRunStore("")
 	splitDemoAnnotationStore := splitdemo.NewAnnotationStore("")

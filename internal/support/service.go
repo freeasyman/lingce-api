@@ -17,6 +17,8 @@ type Service struct {
 	llmClient *llmgateway.Client
 }
 
+var systemActionLogCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_:-]*$`)
+
 func NewService(store *Store, llmClient *llmgateway.Client) *Service {
 	return &Service{store: store, llmClient: llmClient}
 }
@@ -192,6 +194,119 @@ func (s *Service) GetOperationLogByID(ctx context.Context, id int64) (*Operation
 	}
 
 	return toOperationLogResponse(log), nil
+}
+
+// CreateSystemActionLog creates an institution-side system action log.
+func (s *Service) CreateSystemActionLog(ctx context.Context, req SystemActionLogWriteRequest, ipAddress, userAgent, deviceType string) (*SystemActionLogResponse, error) {
+	normalizeSystemActionLogWriteRequest(&req)
+	if req.LogType == "" {
+		return nil, fmt.Errorf("log_type is required")
+	}
+	if req.ActionCode == "" {
+		return nil, fmt.Errorf("action_code is required")
+	}
+	if !isValidSystemActionLogCode(req.LogType) {
+		return nil, fmt.Errorf("log_type is invalid")
+	}
+	if !isValidSystemActionLogCode(req.ActionCode) {
+		return nil, fmt.Errorf("action_code is invalid")
+	}
+	if req.ActionName == "" {
+		req.ActionName = req.ActionCode
+	}
+	if req.Result == "" {
+		req.Result = "success"
+	}
+	if req.Result != "success" && req.Result != "failure" {
+		return nil, fmt.Errorf("result must be success or failure")
+	}
+	req.RequestSummary = sanitizeJSONObject(req.RequestSummary)
+	req.BeforeSummary = sanitizeJSONObject(req.BeforeSummary)
+	req.AfterSummary = sanitizeJSONObject(req.AfterSummary)
+	if req.TenantID != nil && req.ActorID != nil {
+		if req.TenantName == nil || strings.TrimSpace(*req.TenantName) == "" ||
+			req.ActorName == nil || strings.TrimSpace(*req.ActorName) == "" ||
+			req.ActorRoleCode == nil || strings.TrimSpace(*req.ActorRoleCode) == "" ||
+			req.ActorRoleName == nil || strings.TrimSpace(*req.ActorRoleName) == "" {
+			tenantName, actorName, roleCode, roleName, err := s.store.GetSystemActionActorSnapshot(ctx, *req.TenantID, *req.ActorID)
+			if err == nil {
+				if req.TenantName == nil || strings.TrimSpace(*req.TenantName) == "" {
+					req.TenantName = &tenantName
+				}
+				if req.ActorName == nil || strings.TrimSpace(*req.ActorName) == "" {
+					req.ActorName = &actorName
+				}
+				if req.ActorRoleCode == nil || strings.TrimSpace(*req.ActorRoleCode) == "" {
+					req.ActorRoleCode = stringPtrIfNotBlank(roleCode)
+				}
+				if req.ActorRoleName == nil || strings.TrimSpace(*req.ActorRoleName) == "" {
+					req.ActorRoleName = stringPtrIfNotBlank(roleName)
+				}
+			}
+		}
+	}
+
+	log := &SystemActionLog{
+		TenantID:       req.TenantID,
+		TenantName:     trimStringPtr(req.TenantName),
+		ActorID:        req.ActorID,
+		ActorName:      trimStringPtr(req.ActorName),
+		ActorRoleCode:  trimStringPtr(req.ActorRoleCode),
+		ActorRoleName:  trimStringPtr(req.ActorRoleName),
+		LogType:        req.LogType,
+		ActionCode:     req.ActionCode,
+		ActionName:     req.ActionName,
+		RoutePath:      trimStringPtr(req.RoutePath),
+		Result:         req.Result,
+		ErrorMessage:   trimStringPtr(req.ErrorMessage),
+		ObjectType:     trimStringPtr(req.ObjectType),
+		ObjectID:       anyToStringPtr(req.ObjectID),
+		ObjectName:     trimStringPtr(req.ObjectName),
+		RequestSummary: ensureJSONObject(req.RequestSummary),
+		BeforeSummary:  ensureJSONObject(req.BeforeSummary),
+		AfterSummary:   ensureJSONObject(req.AfterSummary),
+		IPAddress:      stringPtrIfNotBlank(ipAddress),
+		UserAgent:      stringPtrIfNotBlank(userAgent),
+		DeviceType:     stringPtrIfNotBlank(deviceType),
+		TraceID:        trimStringPtr(req.TraceID),
+		RequestID:      trimStringPtr(req.RequestID),
+	}
+	if err := s.store.CreateSystemActionLog(ctx, log); err != nil {
+		return nil, err
+	}
+	return toSystemActionLogResponse(log), nil
+}
+
+// ListSystemActionLogs retrieves a paginated list of institution-side system action logs.
+func (s *Service) ListSystemActionLogs(ctx context.Context, req SystemActionLogListRequest) ([]*SystemActionLogResponse, int, error) {
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+
+	logs, total, err := s.store.ListSystemActionLogs(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+	responses := make([]*SystemActionLogResponse, 0, len(logs))
+	for _, l := range logs {
+		responses = append(responses, toSystemActionLogResponse(l))
+	}
+	return responses, total, nil
+}
+
+// GetSystemActionLogByID retrieves a system action log by ID.
+func (s *Service) GetSystemActionLogByID(ctx context.Context, id int64) (*SystemActionLogResponse, error) {
+	log, err := s.store.GetSystemActionLogByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toSystemActionLogResponse(log), nil
 }
 
 // LLM Model Config Services
