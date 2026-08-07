@@ -12,8 +12,10 @@ type AdminListRequest struct {
 	TenantID *int64
 	Status   string
 	Keyword  string
-	Page     int
-	PageSize int
+	// 投递结果筛选：""/"all" 不过滤，"delivered" 全部送达，"undelivered" 有人未送达
+	DeliveryResult string
+	Page           int
+	PageSize       int
 }
 
 type RecentDeliveriesRequest struct {
@@ -48,6 +50,8 @@ type AlertResponse struct {
 	IgnoredAt         *string     `json:"ignored_at,omitempty"`
 	RecipientType     *string     `json:"recipient_type,omitempty"`
 	RecipientReadAt   *string     `json:"recipient_read_at,omitempty"`
+	DeliveredCount    int         `json:"delivered_count"`
+	TotalRecipients   int         `json:"total_recipients"`
 	CreatedAt         string      `json:"created_at"`
 	UpdatedAt         string      `json:"updated_at"`
 }
@@ -92,6 +96,8 @@ func ToResponse(item *Alert) *AlertResponse {
 		SuggestedScript:   item.SuggestedScript,
 		Priority:          item.Priority,
 		Status:            item.Status,
+		DeliveredCount:    item.DeliveredCount,
+		TotalRecipients:   item.TotalRecipients,
 		CreatedAt:         formatTime(item.CreatedAt),
 		UpdatedAt:         formatTime(item.UpdatedAt),
 	}

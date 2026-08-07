@@ -195,6 +195,16 @@ func normalizeStatus(status string) string {
 	}
 }
 
+func normalizeDeliveryResult(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "delivered", "undelivered":
+		return value
+	default:
+		return ""
+	}
+}
+
 func (s *Service) CreateAlert(ctx context.Context, input CreateAlertInput) (*AlertResponse, bool, error) {
 	if strings.TrimSpace(input.DedupeKey) == "" {
 		input.DedupeKey = fmt.Sprintf("tenant:%d:recording:%d:type:%s", input.TenantID, input.RecordingID, input.AlertType)

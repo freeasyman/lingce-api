@@ -50,10 +50,38 @@ func (s *Store) ListForAdmin(ctx context.Context, req AdminListRequest) ([]*Aler
 	}
 	whereClause := strings.Join(where, " AND ")
 
+	// 投递汇总：LEFT JOIN 收件人表做每条提醒的聚合。
+	// delivered = delivery_status = 'sent' 的收件人数；total = 收件人总数。
+	const deliveryAgg = `
+		COALESCE(SUM(CASE WHEN r.delivery_status = 'sent' THEN 1 ELSE 0 END), 0) AS delivered_count,
+		COUNT(r.id) AS total_recipients`
+
+	// 按投递结果筛选，落在 HAVING 上（因为依赖聚合值）。
+	having := ""
+	switch strings.TrimSpace(req.DeliveryResult) {
+	case "delivered":
+		// 有收件人且全部送达
+		having = "HAVING COUNT(r.id) > 0 AND COUNT(r.id) = COALESCE(SUM(CASE WHEN r.delivery_status = 'sent' THEN 1 ELSE 0 END), 0)"
+	case "undelivered":
+		// 至少有一个收件人没送达（含无收件人的情况）
+		having = "HAVING COUNT(r.id) = 0 OR COUNT(r.id) > COALESCE(SUM(CASE WHEN r.delivery_status = 'sent' THEN 1 ELSE 0 END), 0)"
+	}
+
+	// COUNT 查询：把聚合+HAVING 包成子查询后数行数，保证与主查询筛选口径一致。
+	countSQL := `
+		SELECT COUNT(*) FROM (
+			SELECT a.id
+			FROM opportunity_alerts a
+			LEFT JOIN opportunity_alert_recipients r ON r.alert_id = a.id
+			WHERE ` + whereClause + `
+			GROUP BY a.id
+			` + having + `
+		) sub`
 	var total int
-	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM opportunity_alerts a WHERE "+whereClause, args...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+
 	args = append(args, req.PageSize, (req.Page-1)*req.PageSize)
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.tenant_id, a.recording_id, a.employee_id, a.customer_id, COALESCE(a.customer_name, ''),
@@ -61,17 +89,38 @@ func (s *Store) ListForAdmin(ctx context.Context, req AdminListRequest) ([]*Aler
 		       COALESCE(a.evidence, ''), COALESCE(a.suggested_action, ''), COALESCE(a.suggested_script, ''),
 		       COALESCE(a.priority, 'medium'), a.status, a.viewed_at, a.handled_at, a.ignored_at,
 		       a.dedupe_key, a.raw_payload, a.created_at, a.updated_at,
-		       NULL::text, NULL::timestamp
+		       `+deliveryAgg+`
 		FROM opportunity_alerts a
+		LEFT JOIN opportunity_alert_recipients r ON r.alert_id = a.id
 		WHERE `+whereClause+`
+		GROUP BY a.id
+		`+having+`
 		ORDER BY a.created_at DESC, a.id DESC
 		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	items, err := scanAlerts(rows)
-	if err != nil {
+
+	// 这里的列与 scanAlert 不同（末尾是两个聚合整数而非 recipient 字段），
+	// 所以在本函数内单独扫描，不复用共享的 scanAlert。
+	items := make([]*Alert, 0)
+	for rows.Next() {
+		var item Alert
+		var status string
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID, &item.CustomerID, &item.CustomerName,
+			&item.AlertType, &item.Title, &item.Summary, &item.Reason, &item.CustomerObjection, &item.Evidence,
+			&item.SuggestedAction, &item.SuggestedScript, &item.Priority, &status, &item.ViewedAt, &item.HandledAt,
+			&item.IgnoredAt, &item.DedupeKey, &item.RawPayload, &item.CreatedAt, &item.UpdatedAt,
+			&item.DeliveredCount, &item.TotalRecipients,
+		); err != nil {
+			return nil, 0, err
+		}
+		item.Status = AlertStatus(status)
+		items = append(items, &item)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil

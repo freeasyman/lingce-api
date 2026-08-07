@@ -213,11 +213,12 @@ func (h *Handler) ListAdminAlerts(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	items, total, err := h.service.ListForAdmin(r.Context(), claims, AdminListRequest{
-		TenantID: tenantID,
-		Status:   normalizeStatus(r.URL.Query().Get("status")),
-		Keyword:  strings.TrimSpace(r.URL.Query().Get("keyword")),
-		Page:     page,
-		PageSize: pageSize,
+		TenantID:       tenantID,
+		Status:         normalizeStatus(r.URL.Query().Get("status")),
+		Keyword:        strings.TrimSpace(r.URL.Query().Get("keyword")),
+		DeliveryResult: normalizeDeliveryResult(r.URL.Query().Get("delivery_result")),
+		Page:           page,
+		PageSize:       pageSize,
 	})
 	if err != nil {
 		httpError(w, err)
