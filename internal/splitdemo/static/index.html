@@ -55,6 +55,8 @@
     .recording-item,.case-item,.candidate-item,.encounter-card,.result-item,.seam-card,.summary-card{border:1px solid var(--border);border-radius:14px;background:#fff}
     .recording-item,.case-item,.candidate-item{padding:10px;cursor:pointer}
     .recording-item.active,.case-item.active{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+    .tiny-action{border:none;background:transparent;color:#6b7280;padding:0;font-size:12px;font-weight:600;cursor:pointer}
+    .tiny-action:hover{color:#dc2626;text-decoration:underline}
     .candidate-item{padding:10px}
     .candidate-item header,.selected-header,.encounter-card header,.result-item header{display:flex;justify-content:space-between;gap:12px;align-items:start}
     .title{font-weight:800}
@@ -97,6 +99,23 @@
     .delta{padding:10px;border-radius:12px;background:#f8fafc;border:1px solid var(--border)}
     .delta.good{background:#f0fdf4;border-color:#86efac}
     .delta.bad{background:#fef2f2;border-color:#fecaca}
+    .match-headline{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+    .match-headline strong{display:block;font-size:22px;line-height:1.2}
+    .match-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .match-col{display:flex;flex-direction:column;gap:10px}
+    .match-col h3{margin:0;font-size:18px}
+    .match-card .match-time{font-weight:700;color:#374151;margin-bottom:8px}
+    .match-status{margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-weight:700}
+    .match-status.ok{color:var(--green)}
+    .match-status.warn{color:var(--amber)}
+    .match-status.bad{color:var(--red)}
+    .match-details{margin-top:10px}
+    .match-details summary{cursor:pointer;font-weight:700;color:#374151}
+    .match-detail-item{padding:12px;border:1px solid var(--border);border-radius:12px;background:#f8fafc}
+    .match-detail-item + .match-detail-item{margin-top:10px}
+    .match-detail-item.missed,.match-detail-item.swallowed{border-color:#fecaca;background:#fef2f2}
+    .match-detail-item.oversplit{border-color:#fcd34d;background:#fffbeb}
+    .match-detail-item .small{margin-top:4px}
     .gap-list,.result-list{display:flex;flex-direction:column;gap:10px}
     .result-item{padding:12px}
     .result-item.missed{border-color:#fecaca;background:#fef2f2}
@@ -127,12 +146,12 @@
     <div class="topbar">
       <div class="brand">
         <h1>录音切分 Demo</h1>
-        <div class="sub">标注录音 / 跑测试 / 造用例</div>
+        <div class="sub">造测试用例 / 合成测试 / 真实录音标注</div>
       </div>
       <div class="nav">
-        <a class="tab" href="#annotate" data-tab="annotate">标注录音</a>
-        <a class="tab" href="#test" data-tab="test">跑测试</a>
-        <a class="tab" href="#build" data-tab="build">造用例</a>
+        <a class="tab" href="#build" data-tab="build">造测试用例</a>
+        <a class="tab" href="#test" data-tab="test">合成测试</a>
+        <a class="tab" href="#annotate" data-tab="annotate">真实录音标注</a>
       </div>
     </div>
 
@@ -160,13 +179,19 @@
         <div class="card">
           <div class="status-line">
             <div>
-              <h2 style="margin:0">标注录音</h2>
-              <div class="small">选择录音后自动切分，确认就诊卡片即可。</div>
+              <h2 style="margin:0">真实录音标注</h2>
+              <div class="small">先手动选录音，再确认并执行切分。</div>
             </div>
             <div class="small">当前 prompt: <span id="annPromptVersion">v0.2</span></div>
           </div>
+          <div class="hint" style="margin-top:10px">流程：先选录音，再手工确认“我要执行切分”，最后点“执行切分”。</div>
           <div id="annStatus" class="status hidden"></div>
           <div id="annRunMeta" class="small" style="margin-top:10px"></div>
+          <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+            <input id="annConfirm" type="checkbox" style="width:auto">
+            我已确认要处理当前录音
+          </label>
+          <button id="annRunBtn" style="margin-top:8px" disabled>执行切分</button>
           <div id="annProgressWrap" class="hidden" style="margin-top:10px">
             <div class="progress"><div id="annProgress"></div></div>
           </div>
@@ -189,10 +214,10 @@
       <div class="card">
         <div class="status-line">
           <div>
-            <h2 style="margin:0">跑测试</h2>
+            <h2 style="margin:0">合成测试</h2>
             <div class="small">编辑 prompt，选择用例，运行评测。</div>
           </div>
-          <div class="small">模型 <input id="testModel" style="width:160px;display:inline-block;padding:6px 8px" value="qwen-max"> 版本 <input id="testVersion" style="width:120px;display:inline-block;padding:6px 8px" value="v0.2"></div>
+          <div class="small">模型 <input id="testModel" style="width:160px;display:inline-block;padding:6px 8px" value="qwen-max"> 版本 <input id="testVersion" style="width:120px;display:inline-block;padding:6px 8px" value="v0.2"> <button id="resetPromptsBtn" class="secondary" style="width:auto;padding:6px 10px;margin-left:8px">恢复默认提示词</button></div>
         </div>
         <div class="grid-test-top" style="margin-top:12px">
           <div class="field"><label>System Prompt</label><textarea id="testSystem"></textarea></div>
@@ -233,7 +258,7 @@
 
     <section id="page-build" class="page">
       <div class="card">
-        <h2>造用例</h2>
+        <h2>造测试用例</h2>
         <div class="small">先选素材，再给每个接缝单独选信号类型。无提示直接切换会自动把间隔归零。</div>
       </div>
       <div class="grid-build">
@@ -260,7 +285,7 @@
           <div class="row" style="margin-top:12px">
             <button id="buildPreviewBtn">预览拼接结果</button>
             <button id="buildSaveBtn" class="secondary">保存用例</button>
-            <a id="buildJumpTest" class="tab" href="#test">去跑测试</a>
+            <a id="buildJumpTest" class="tab" href="#test">去合成测试</a>
           </div>
           <div id="buildStatus" class="status hidden"></div>
           <div id="buildPreview" style="margin-top:12px"></div>
@@ -291,7 +316,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const routes = ['annotate','test','build'];
-    const LS = {prompts:'splitdemo.prompts.v2', ann:'splitdemo.annotate.state.v2', build:'splitdemo.build.state.v2'};
+    const LS = {prompts:'splitdemo.prompts.v3', ann:'splitdemo.annotate.state.v2', build:'splitdemo.build.state.v2'};
     const defaultSystemPrompt = `你是一个医疗录音结构化助手。你的唯一任务是把一段连续的门诊录音转写文本,按时间轴切分成连续的片段,并判断每个片段的类型。
 
 ## 你要做的事
@@ -308,7 +333,101 @@
 - 不要总结对话内容
 - 不要提取任何可用于宣传的片段
 
-以上都由后续环节处理。你只回答"边界在哪里、这段是什么类型"。`;
+以上都由后续环节处理。你只回答"边界在哪里、这段是什么类型"。
+
+## 片段类型定义
+
+- encounter:一次就诊。一个患者(含陪同家属)与医生的连续诊疗交互,包含问诊、查体、解释、开方、医嘱中至少一项。
+- non_encounter_talk:非就诊对话。医生与同事讨论排班/器械、接电话、闲聊。即使内容涉及某位患者的病情,只要患者不在场,也归此类。
+- idle:静默或无有效内容。
+- uncertain:无法判断类型,需人工复核。
+
+## 就诊边界的裁定规则
+
+判定为同一次就诊(不切开):
+- 同一患者连续讲多个不相关的问题
+- 家属代述,患者本人不在场
+- 患者中途离开做检查后返回
+- 医生短暂离开,患者留在诊室
+- 内部短静默(30 秒以内)
+- 医生查阅资料、书写记录时的静默
+- 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
+
+判定为不是就诊:
+- 患者只是问路、拿报告、取药,没有诊疗内容
+- 医生与同事的任何交流
+
+## 边界信号(按可靠性排序)
+
+强信号:
+- 叫号或点名:"下一个"、"张三"、"李阿姨来了"
+- 明确的结束语:"没什么问题了"、"回去吃药"、"下周再来"、"好,就这样"
+- 明确的开场语:"哪里不舒服"、"什么时候开始的"、"坐吧"
+- 长静默(超过 90 秒)
+- 时间戳跳跃:相邻两句发言之间的时间差超过 30 秒。你必须主动检查每对相邻发言的时间戳,计算间隔。间隔超过 30 秒是强边界信号,超过 90 秒几乎必然是边界。注意:转写文本里的静默不会有任何文字提示,只表现为时间戳的数字跳跃(如 [05:10] 后面紧接 [06:12]),你必须自己做减法计算。
+
+中等信号:
+- 主诉突变且与前文无关联
+- 称谓变化:"阿姨"变成"小伙子"
+- 中等静默(30 到 90 秒)
+- 寒暄模式重现
+
+弱信号:
+- 固定问诊句式重复出现
+- 语气回到问诊开场状态
+
+## 最重要的原则:宁可多切,不要漏切
+
+把两个不同患者错误地合并成一段,是严重错误。它会导致 A 患者的主诉和 B 患者的诊断混进同一份病历,产生临床安全风险,而且很难被发现。
+
+把一次就诊错误地切成两段,是轻微错误。人工合并即可修复。
+
+因此:
+- 遇到疑似不同患者时,优先切开
+- 拿不准的边界,切开并标记低置信度
+- 不要为了让片段"看起来完整"而合并可疑区域
+
+## 输出格式
+
+只输出 JSON,不要任何解释文字、不要 markdown 代码块标记。
+
+{
+  "segments": [
+    {
+      "index": 1,
+      "segment_type": "encounter",
+      "start_seconds": 0,
+      "end_seconds": 412,
+      "boundary_confidence": 0.93,
+      "boundary_reasons": ["closing_phrase:没问题了回去吧", "silence_38s"],
+      "silence_gap_seconds": 38,
+      "needs_review": false,
+      "multi_patient": false,
+      "contains_clinical_info": null,
+      "text_preview": "医生:坐吧,哪里不舒服? 患者:最近胃一直疼..."
+    }
+  ]
+}
+
+字段说明:
+- index: 从 1 开始的连续序号
+- segment_type: encounter | non_encounter_talk | idle | uncertain
+- start_seconds / end_seconds: 相对录音开始的偏移秒数
+- boundary_confidence: 0.0 到 1.0,你对这个片段边界判定的可信程度
+- boundary_reasons: 你依据了哪些信号,写成 "信号类型:具体证据" 的形式
+- silence_gap_seconds: 该片段与下一片段之间的静默秒数,不确定时填 null
+- needs_review: boundary_confidence 低于 0.75 时必须为 true
+- multi_patient: 仅 encounter 类型有意义,疑似多位患者同时就诊时为 true,否则 false
+- contains_clinical_info: 仅 non_encounter_talk 类型有意义,该段是否涉及患者病情。其他类型填 null
+- text_preview: 该片段开头约 100 字,用于人工识别这段在讲什么
+
+## 硬性约束
+
+1. 第一个片段的 start_seconds 必须是 0
+2. 最后一个片段的 end_seconds 必须等于录音总时长
+3. 相邻片段必须首尾相接:segments[i].end_seconds == segments[i+1].start_seconds
+4. 不允许有间隙,不允许重叠
+5. 每个片段的 end_seconds 必须大于 start_seconds`;
     const defaultUserPrompt = `录音总时长:{{duration_seconds}} 秒
 
 转写文本:
@@ -340,7 +459,7 @@
       route:'annotate',
       annotate:{tenantId:1,minDuration:600,items:[],selectedId:null,detail:null,result:null,jobId:null,run:null,progress:null,annotations:null,overview:null,focused:1,expanded:{},saving:false},
       test:{cases:[],selectedId:'',selectedCase:null,currentRun:null,prevRun:null,running:false,progress:null,queue:[],lastSelectedId:''},
-      build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null},
+      build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null,saving:false},
       prompts: defaultPrompts,
       reasonResolve:null,
       reasonAction:'',
@@ -391,6 +510,10 @@
     function setStatus(el, msg, extra=''){ el.classList.remove('hidden'); el.querySelectorAll('.status-line').forEach(()=>{}); el.innerHTML = `<div class="status-line"><div>${escapeHtml(msg)}</div><div>${escapeHtml(extra)}</div></div>`; }
     function clearStatus(el){ el.classList.add('hidden'); el.innerHTML = ''; }
     function usePromptLabel(){ $('annPromptVersion').textContent = state.annotate.result?.split_prompt_version || state.prompts.version || 'v0.2'; $('annPromptLabel').textContent = `prompt ${state.prompts.version || 'v0.2'}`; }
+    function syncAnnotateRunButton(){
+      const enabled = !!state.annotate.detail && $('annConfirm').checked && !state.annotate.saving;
+      $('annRunBtn').disabled = !enabled;
+    }
 
     function initPromptsUI(){
       $('testModel').value = state.prompts.model || 'qwen-max';
@@ -398,6 +521,11 @@
       $('testSystem').value = state.prompts.system || defaultSystemPrompt;
       $('testUser').value = state.prompts.user || defaultUserPrompt;
       usePromptLabel();
+    }
+    function resetPrompts(){
+      state.prompts = {version:'v0.2', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
+      savePrompts();
+      initPromptsUI();
     }
     function syncPromptsFromUI(){
       state.prompts = {
@@ -446,15 +574,19 @@
       const fn = state.reasonResolve; state.reasonResolve = null;
       if(fn) fn(value);
     }
+    function confirmedSeqSet(){
+      const list = state.annotate.annotations?.encounters || [];
+      return new Set(list.map(item => Number(item.seq)).filter(Boolean));
+    }
 
     async function loadAnnotate(){
       state.annotate.tenantId = Number($('annTenantId').value || 1);
       state.annotate.minDuration = Number($('annMinDuration').value || 600);
       const data = await api(`/internal/split-demo/recordings?tenant_id=${state.annotate.tenantId}&min_duration_seconds=${state.annotate.minDuration}&page=1&page_size=50`);
       state.annotate.items = data.items || [];
-      state.annotate.selectedId = state.annotate.items[0]?.id || null;
+      if(!state.annotate.items.find(x => x.id === state.annotate.selectedId)) state.annotate.selectedId = null;
       renderAnnotateList();
-      if(state.annotate.selectedId) await loadAnnotateDetail(state.annotate.selectedId, true);
+      if(state.annotate.selectedId) await loadAnnotateDetail(state.annotate.selectedId);
     }
     function renderAnnotateList(){
       const el = $('annRecordingList'); el.innerHTML = '';
@@ -464,35 +596,56 @@
         div.innerHTML = `<div class="title">#${item.id} ${item.employee_name || ''} ${item.has_saved_annotation ? '<span class="pill">✓ 已标注</span>' : ''}</div>
           <div class="dim">${item.recorded_at || ''}</div>
           <div class="dim">${fmtHMS(item.recording_duration || 0)}</div>`;
-        div.onclick = () => { state.annotate.selectedId = item.id; renderAnnotateList(); loadAnnotateDetail(item.id, true); };
+        div.onclick = () => { state.annotate.selectedId = item.id; renderAnnotateList(); loadAnnotateDetail(item.id, false); };
         el.appendChild(div);
       });
+      if(!state.annotate.selectedId){
+        $('annRunMeta').textContent = '请先从左侧选择一条录音';
+        $('annRaw').textContent = '';
+        $('annTimeline').innerHTML = '';
+        $('annProgressText').textContent = '';
+        $('annCount').textContent = '';
+        $('annEncounters').innerHTML = '<div class="small muted">还没有选中录音。</div>';
+      }
       renderAnnotationOverview();
       usePromptLabel();
     }
-    async function loadAnnotateDetail(id, maybeRun){
+    async function loadAnnotateDetail(id){
       clearStatus($('annStatus'));
       state.annotate.detail = await api(`/internal/split-demo/recordings/${id}`);
+      $('annConfirm').checked = false;
+      syncAnnotateRunButton();
       $('annRaw').textContent = JSON.stringify({transcript_source:state.annotate.detail.transcript_source, transcript_text:state.annotate.detail.transcript_text, transcription_segments:state.annotate.detail.transcription_segments, cleaned_transcription:state.annotate.detail.cleaned_transcription, timeline_transcript:state.annotate.detail.timeline_transcript, structured_transcript:state.annotate.detail.structured_transcript}, null, 2);
       $('annRunMeta').textContent = `录音 #${state.annotate.detail.id} | ${state.annotate.detail.employee_name || ''} | ${state.annotate.detail.recorded_at || ''} | 来源 ${state.annotate.detail.transcript_source || ''}`;
-      if(state.annotate.detail.latest_run?.result && !maybeRun){
+      if(state.annotate.detail.latest_run?.result){
         state.annotate.result = state.annotate.detail.latest_run.result;
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
         renderAnnotateResult();
         return;
       }
-      await runAnnotateSplit(id);
+      state.annotate.result = null;
+      state.annotate.annotations = state.annotate.detail.latest_annotation || null;
+      $('annTimeline').innerHTML = '';
+      $('annProgressText').textContent = '等待手工确认后执行切分';
+      $('annCount').textContent = '';
+      $('annEncounters').innerHTML = '<div class="small muted">先确认录音，再点“执行切分”。</div>';
     }
     async function runAnnotateSplit(id){
-      setStatus($('annStatus'), '正在切分...');
-      $('annProgressWrap').classList.remove('hidden');
-      $('annProgress').style.width = '8%';
-      $('annProgressText').textContent = '准备中';
-      const job = await api('/internal/split-demo/split', {method:'POST', body:JSON.stringify({
-        recording_id:id, model:state.prompts.model || 'qwen-max', prompt_version:state.prompts.version || 'v0.2', system_prompt:state.prompts.system, user_prompt:state.prompts.user
-      })});
-      state.annotate.jobId = job.id;
-      await pollJob(job.id, 'split');
+      try{
+        setStatus($('annStatus'), '正在切分...');
+        $('annProgressWrap').classList.remove('hidden');
+        $('annProgress').style.width = '8%';
+        $('annProgressText').textContent = '准备中';
+        const job = await api('/internal/split-demo/split', {method:'POST', body:JSON.stringify({
+          recording_id:id, model:state.prompts.model || 'qwen-max', prompt_version:state.prompts.version || 'v0.2', system_prompt:state.prompts.system, user_prompt:state.prompts.user
+        })});
+        state.annotate.jobId = job.id;
+        await pollJob(job.id, 'split');
+      }catch(err){
+        setStatus($('annStatus'), `切分失败：${err.message}`);
+        $('annProgressText').textContent = `切分失败：${err.message}`;
+        $('annProgress').style.width = '100%';
+      }
     }
     async function pollJob(jobId, kind){
       const url = kind === 'test' ? `/internal/split-demo/synthetic/runs/${jobId}` : `/internal/split-demo/split-jobs/${jobId}`;
@@ -518,7 +671,18 @@
       }
       if(job.status === 'failed') throw new Error(job.error_message || job.message || '任务失败');
       await new Promise(r => setTimeout(r, 1200));
-      return pollJob(jobId, kind);
+      try{
+        return await pollJob(jobId, kind);
+      }catch(err){
+        if(kind === 'split'){
+          setStatus($('annStatus'), `任务失败：${err.message}`);
+          $('annProgressText').textContent = `任务失败：${err.message}`;
+          $('annProgress').style.width = '100%';
+        }else{
+          setStatus($('testStatus'), `任务失败：${err.message}`);
+        }
+        throw err;
+      }
     }
     function renderAnnotateResult(){
       const result = state.annotate.result;
@@ -533,8 +697,9 @@
         d.title = `${seg.segment_type} ${fmtMMSS(seg.start_seconds)}-${fmtMMSS(seg.end_seconds)}`;
         $('annTimeline').appendChild(d);
       });
-      const encounters = (result.encounters || []).map((x,i) => buildEncounterCard(x,i+1));
-      const reviewed = state.annotate.annotations?.encounters?.length || 0;
+      const confirmed = confirmedSeqSet();
+      const encounters = (result.encounters || []).map((x,i) => buildEncounterCard(x,i+1, confirmed.has(i+1)));
+      const reviewed = confirmed.size;
       $('annCount').textContent = `已确认 ${reviewed}/${encounters.length}`;
       $('annEncounters').innerHTML = '';
       encounters.forEach((card, idx) => {
@@ -546,6 +711,7 @@
       });
       state.annotate.focused = Math.min(state.annotate.focused || 1, encounters.length || 1);
       renderAnnotationOverview();
+      syncAnnotateRunButton();
     }
     function buildBoundary(prev, next, idx){
       const gap = Math.max(0, next.start_seconds - prev.end_seconds);
@@ -560,9 +726,9 @@
         </details>
       </div>`;
     }
-    function buildEncounterCard(item, seq){
+    function buildEncounterCard(item, seq, confirmed){
       const div = document.createElement('div');
-      div.className = `encounter-card ${state.annotate.focused === seq ? 'focused' : ''}${state.annotate.annotations?.encounters?.find(x => x.seq === seq) ? ' done-ok' : ''}`;
+      div.className = `encounter-card ${state.annotate.focused === seq ? 'focused' : ''}${confirmed ? ' done-ok' : ''}`;
       div.dataset.seq = seq;
       div.innerHTML = `
         <div class="encounter-head">
@@ -580,9 +746,9 @@
         <div class="small">开场：“${escapeHtml(item.opening_line || '—')}”</div>
         <div class="small">结束：“${escapeHtml(item.closing_line || '—')}”</div>
         <div class="actions" style="margin-top:10px">
-          <button data-act="correct">✓ 正确</button>
-          <button data-act="merge" class="secondary">合并↑</button>
-          <button data-act="delete" class="secondary">不是就诊</button>
+          <button data-act="correct" ${confirmed ? 'disabled' : ''}>✓ 正确</button>
+          <button data-act="merge" class="secondary" ${confirmed ? 'disabled' : ''}>合并↑</button>
+          <button data-act="delete" class="secondary" ${confirmed ? 'disabled' : ''}>不是就诊</button>
         </div>
         <button class="ghost" style="margin-top:8px;padding:0;border:none;color:var(--blue)">▶ 展开对话</button>
         <div class="transcript hidden"></div>
@@ -602,10 +768,14 @@
     }
     function focusEncounter(seq){ state.annotate.focused = seq; renderAnnotateResult(); document.querySelector(`#annEncounters .encounter-card[data-seq="${seq}"]`)?.scrollIntoView({behavior:'smooth', block:'center'}); }
     async function handleEncounterAction(action, seq){
+      const confirmed = confirmedSeqSet();
+      if(action === 'correct' && confirmed.has(seq)) return;
       if(action === 'correct'){
         const card = state.annotate.result?.encounters?.[seq-1]; if(!card) return;
         state.annotate.annotations = state.annotate.annotations || {encounters:[],corrections:[]};
-        state.annotate.annotations.encounters.push({seq, start_seconds:card.start_seconds, end_seconds:card.end_seconds, source:'ai_confirmed', patient_hint:card.patient_hint || ''});
+        if(!state.annotate.annotations.encounters.some(x => Number(x.seq) === seq)){
+          state.annotate.annotations.encounters.push({seq, start_seconds:card.start_seconds, end_seconds:card.end_seconds, source:'ai_confirmed', patient_hint:card.patient_hint || ''});
+        }
         await refreshAnnotateOverview(); renderAnnotateResult(); focusEncounter(Math.min(seq+1, (state.annotate.result?.encounters || []).length));
         return;
       }
@@ -655,16 +825,37 @@
     async function initAnnotate(){
       usePromptLabel();
       if(!state.annotate.items.length) await loadAnnotate();
+      syncAnnotateRunButton();
     }
     function renderTestCaseList(){
-      $('testCaseList').innerHTML = '';
+      const el = $('testCaseList'); el.innerHTML = '';
+      if(!state.test.cases.length){
+        el.innerHTML = `
+          <div class="hint">
+            <div style="font-weight:700;margin-bottom:6px">还没有测试用例</div>
+            <div class="small" style="color:inherit">测试用例 = 几条短录音拼接成的假长录音。你知道正确的切分位置在哪，所以能自动算出 AI 的准确率。</div>
+            <div style="margin-top:10px"><a href="#build">去造第一个用例 →</a></div>
+          </div>`;
+        return;
+      }
       state.test.cases.forEach(item => {
         const div = document.createElement('div');
         div.className = 'case-item' + (state.test.selectedId === item.id ? ' active' : '');
-        div.innerHTML = `<div class="title">${escapeHtml(item.name || item.id)}</div>
-          <div class="dim">${escapeHtml(item.description || '')}</div>
-          <div class="dim">召回 ${item.last_recall ? `${Math.round(item.last_recall*100)}%` : '未测试'}</div>`;
+        div.innerHTML = `<div class="status-line" style="align-items:flex-start">
+          <div style="min-width:0">
+            <div class="title">${escapeHtml(item.name || item.id)}</div>
+            <div class="dim">ID：${escapeHtml(item.id || '')}</div>
+            <div class="dim">${escapeHtml(item.description || '')}</div>
+            <div class="dim">召回 ${item.last_recall ? `${Math.round(item.last_recall*100)}%` : '未测试'}</div>
+          </div>
+          <button class="tiny-action" data-delete-case="${escapeHtml(item.id || '')}">删除</button>
+        </div>`;
         div.onclick = () => selectTestCase(item.id);
+        div.querySelector('[data-delete-case]')?.addEventListener('click', async e => {
+          e.preventDefault();
+          e.stopPropagation();
+          await deleteSyntheticCase(item.id, item.name || item.id);
+        });
         $('testCaseList').appendChild(div);
       });
     }
@@ -675,6 +866,12 @@
     async function loadTestCases(){
       state.test.cases = await api('/internal/split-demo/synthetic/cases');
       renderTestCaseList();
+      if(state.test.selectedId && !state.test.cases.find(x => x.id === state.test.selectedId)){
+        state.test.selectedId = '';
+        state.test.selectedCase = null;
+        state.test.currentRun = null;
+        state.test.prevRun = null;
+      }
       if(state.test.cases.length && !state.test.selectedId) await selectTestCase(state.test.cases[0].id);
     }
     async function selectTestCase(id){
@@ -688,18 +885,19 @@
     }
     function renderTestCaseDetail(){
       const run = state.test.currentRun;
-      $('testCaseMeta').textContent = state.test.selectedCase ? `${state.test.selectedCase.name || state.test.selectedCase.id}` : '';
-      if(!run || !run.eval){
+      const caseData = state.test.selectedCase || {};
+      $('testCaseMeta').textContent = caseData ? `${caseData.name || caseData.id || ''}` : '';
+      if(!run || !run.match_report){
         $('testSummaryCards').innerHTML = '<div class="small muted">选中用例后运行测试。</div>';
         $('testGapStats').innerHTML = '';
         $('testDetails').innerHTML = '';
         $('testCompare').innerHTML = '';
-        $('testRaw').textContent = JSON.stringify(state.test.selectedCase || {}, null, 2);
+        $('testRaw').textContent = JSON.stringify(caseData || {}, null, 2);
         return;
       }
-      renderTestResult(run);
-      renderCompare();
-      $('testRaw').textContent = JSON.stringify({case:state.test.selectedCase, latest_run:run, previous_run:state.test.prevRun}, null, 2);
+      renderTestResult(run, caseData);
+      renderCompare(run);
+      $('testRaw').textContent = JSON.stringify({case:caseData, latest_run:run, previous_run:state.test.prevRun}, null, 2);
     }
     function renderTestProgress(job){
       const text = job.stage === 'summary' ? `摘要 ${job.summary_done || 0}/${job.summary_total || 0}` : `分块 ${job.completed_chunks || 0}/${job.total_chunks || 0}`;
@@ -711,58 +909,188 @@
       arr.sort((a,b) => (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9));
       return arr;
     }
-    function renderTestResult(run){
+    function renderTestResult(run, caseData){
+      const report = run.match_report || {};
+      const headline = buildMatchHeadline(report);
+      $('testSummaryCards').innerHTML = `
+        <div class="match-headline">
+          <div>
+            <strong>${escapeHtml(headline)}</strong>
+            <div class="small">左边是放进去的素材，右边是 AI 切出来的就诊。</div>
+          </div>
+          <div class="small">prompt ${escapeHtml(state.prompts.version || 'v0.2')}</div>
+        </div>`;
+      $('testGapStats').innerHTML = renderMatchColumns(caseData, run, report);
+      $('testDetails').innerHTML = renderSeamDetails(report);
+      $('testCompare').innerHTML = renderDetailedMetrics(run);
+    }
+    function buildMatchHeadline(report){
+      const materials = report?.material_count || 0;
+      const encounters = report?.encounter_count || 0;
+      const missed = report?.missed_count || 0;
+      const oversplit = report?.oversplit_count || 0;
+      if(!materials) return '没有可展示的对照结果';
+      if(missed > 0 && oversplit > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 漏了 ${missed} 段、多切 ${oversplit} 段`;
+      if(missed > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 漏了 ${missed} 段（严重）`;
+      if(oversplit > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 多切了 ${oversplit} 段`;
+      return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 全部正确 ✓`;
+    }
+    function renderMatchColumns(caseData, run, report){
+      const materials = caseData?.segments || [];
+      const encounters = run?.result?.encounters || [];
+      return `
+        <div class="match-grid">
+          <div class="match-col">
+            <h3>你放进去的（正确答案）</h3>
+            ${materials.map((item, idx) => renderMaterialCard(item, idx + 1, report)).join('') || '<div class="small muted">暂无素材</div>'}
+          </div>
+          <div class="match-col">
+            <h3>AI 切出来的</h3>
+            ${encounters.map((item, idx) => renderEncounterCard(item, idx + 1, report)).join('') || '<div class="small muted">暂无就诊</div>'}
+          </div>
+        </div>`;
+    }
+    function renderMaterialCard(item, index, report){
+      const verdict = (report?.materials || [])[index - 1] || {};
+      const status = materialStatusText(verdict);
+      return `
+        <div class="encounter-card match-card ${status.cls}">
+          <div class="encounter-head">
+            <div>
+              <div class="title">素材 #${index}</div>
+              <div class="small">${fmtMMSS(item.start_seconds || 0)}-${fmtMMSS(item.end_seconds || 0)} (${fmtHMS((item.end_seconds || 0) - (item.start_seconds || 0))})</div>
+            </div>
+            <div class="pill">${escapeHtml(status.badge)}</div>
+          </div>
+          <div class="encounter-lines">
+            <div class="encounter-line"><strong>👤 患者</strong>${escapeHtml(item.summary?.patient_hint || '—')}</div>
+            <div class="encounter-line"><strong>🗣️ 主诉</strong>${escapeHtml(item.summary?.chief_complaint || '—')}</div>
+            <div class="encounter-line"><strong>💊 处置</strong>${escapeHtml(item.summary?.disposition || '—')}</div>
+          </div>
+          <div class="match-status ${status.cls}">${escapeHtml(status.text)}</div>
+          ${renderSeamJump(index, report)}
+        </div>`;
+    }
+    function renderEncounterCard(item, index, report){
+      const verdict = (report?.encounters || [])[index - 1] || {};
+      const status = encounterStatusText(verdict);
+      return `
+        <div class="encounter-card match-card ${status.cls}">
+          <div class="encounter-head">
+            <div>
+              <div class="title">就诊 #${index}</div>
+              <div class="small">${fmtMMSS(item.start_seconds || 0)}-${fmtMMSS(item.end_seconds || 0)} (${fmtHMS((item.end_seconds || 0) - (item.start_seconds || 0))})</div>
+            </div>
+            <div class="pill">${escapeHtml(status.badge)}</div>
+          </div>
+          <div class="encounter-lines">
+            <div class="encounter-line"><strong>👤 患者</strong>${escapeHtml(item.patient_hint || '—')}</div>
+            <div class="encounter-line"><strong>🗣️ 主诉</strong>${escapeHtml(item.chief_complaint || '—')}</div>
+            <div class="encounter-line"><strong>💊 处置</strong>${escapeHtml(item.disposition || '—')}</div>
+          </div>
+          <div class="match-status ${status.cls}">${escapeHtml(status.text)}</div>
+          ${renderSeamJump(index, report)}
+        </div>`;
+    }
+    function materialStatusText(item){
+      const verdict = item?.verdict || 'missing';
+      if(verdict === 'matched'){
+        return {cls:'ok', badge:'✓', text:'✓ AI 识别出来了'};
+      }
+      if(verdict === 'merged'){
+        return {cls:'bad', badge:'✗', text:`✗ AI 没识别出来，被合并进就诊 #${item.matched_encounters?.[0] || '—'}`};
+      }
+      if(verdict === 'oversplit'){
+        const targets = (item.matched_encounters || []).map(n => `就诊 #${n}`).join('、');
+        return {cls:'warn', badge:'⚠', text:`⚠ AI 切成了 ${item.matched_encounters?.length || 0} 段（${targets || '—'}）`};
+      }
+      return {cls:'bad', badge:'✗', text:'✗ AI 判定这段不是就诊'};
+    }
+    function encounterStatusText(item){
+      const verdict = item?.verdict || 'swallowed';
+      if(verdict === 'matched'){
+        return {cls:'ok', badge:'✓', text:`✓ 对应素材 #${item.covered_materials?.[0] || '—'}`};
+      }
+      if(verdict === 'partial'){
+        return {cls:'warn', badge:'⚠', text:`⚠ 素材 #${item.covered_materials?.[0] || '—'} 的一部分`};
+      }
+      const refs = (item.covered_materials || []).map(n => `素材 #${n}`).join('、');
+      return {cls:'bad', badge:'⚠', text:`⚠ 这一段吞掉了${refs ? ` ${refs}` : ' 素材'}`};
+    }
+    function renderSeamJump(index, report){
+      const seam = (report?.seams || [])[Math.max(0, index - 1)];
+      if(!seam) return '';
+      return `<div style="margin-top:10px"><button class="secondary" type="button" data-seam-jump="${index}">看详情</button></div>`;
+    }
+    function renderSeamDetails(report){
+      const seams = report?.seams || [];
+      if(!seams.length) return '<div class="small muted">暂无接缝详情。</div>';
+      return `
+        <details class="match-details" open>
+          <summary>接缝明细</summary>
+          <div style="margin-top:10px" class="stack">
+            ${seams.map((seam, idx) => `
+              <div class="match-detail-item ${seam.detected ? 'hit' : 'missed'}" id="seam-${idx + 1}">
+                <div class="title">素材 #${seam.after_material} 和素材 #${seam.after_material + 1} 之间</div>
+                <div class="small">应在 ${fmtMMSS(seam.at_seconds)}，信号：${escapeHtml(sigLabel(seam.gap_type || ''))}${seam.gap_seconds ? `，静默 ${fmtHMS(seam.gap_seconds)}` : ''}</div>
+                <div class="small" style="margin-top:8px"><strong>前文</strong></div>
+                <pre>${escapeHtml(seam.before_text || '')}</pre>
+                <div class="small" style="margin-top:8px"><strong>后文</strong></div>
+                <pre>${escapeHtml(seam.after_text || '')}</pre>
+                <div class="small" style="margin-top:8px">AI 的判断：${seam.detected ? '切开' : '没有切开'}${seam.ai_confidence ? `，置信度 ${Math.round(seam.ai_confidence * 100)}%` : ''}</div>
+              </div>
+            `).join('')}
+          </div>
+        </details>`;
+    }
+    function renderDetailedMetrics(run){
       const ev = run.eval || {};
-      $('testSummaryCards').innerHTML = [
+      const cur = state.test.currentRun, prev = state.test.prevRun;
+      const statGrid = [
         {label:'漏切', value:ev.missed || 0, cls: ev.missed ? 'bad' : 'ok', sub:'严重'},
         {label:'过切', value:ev.extra || 0, cls: ev.extra ? 'warn' : 'ok', sub:'轻微'},
         {label:'召回', value:`${Math.round((ev.recall || 0) * 100)}%`, cls:'ok', sub:`${ev.hits || 0}/${ev.total_ground_truth || 0}`},
         {label:'精确', value:`${Math.round((ev.precision || 0) * 100)}%`, cls:'ok', sub:`${ev.hits || 0}/${(ev.hits || 0) + (ev.extra || 0)}`},
         {label:'平均偏移', value:`${Number(ev.mean_offset || 0).toFixed(1)}s`, cls:'ok', sub:'命中平均偏差'},
         {label:'最大偏移', value:`${ev.max_offset || 0}s`, cls:'ok', sub:'最差命中偏差'},
-      ].map(x => `<div class="summary-card ${x.cls}"><strong>${x.value}</strong><div>${x.label}</div><div class="small">${x.sub}</div></div>`).join('');
-      const gapType = ev.by_gap_type || {};
-      $('testGapStats').innerHTML = `<h3 style="margin:0 0 10px">哪种边界最弱</h3><div class="sig-table">${
-        Object.entries(gapType).map(([k,v]) => {
-          const total = Math.max(1, v.total || 0);
-          const hit = Math.max(0, v.hits || 0);
-          const rate = Math.round((hit/total)*100);
-          const weak = (v.missed || 0) > 0;
-          return `<div class="sig-row">
-            <div>${escapeHtml(sigLabel(k))}</div>
-            <div class="sig-fill"><div style="width:${rate}%"></div></div>
-            <div>${hit}/${v.total || 0}${weak ? ' ✗' : ' ✓'}</div>
-          </div>`;
-        }).join('') || '<div class="small muted">暂无</div>'
-      }</div>`;
-      $('testDetails').innerHTML = '';
-      sortedDetails(ev).forEach(item => {
-        const div = document.createElement('div');
-        div.className = `result-item ${item.kind}`;
-        if(item.kind === 'missed') div.style.order = '-1';
-        div.innerHTML = `
-          <header>
-            <div class="title">${item.kind === 'missed' ? '✗ 漏切' : item.kind === 'extra' ? '✗ 过切' : '✓ 命中'}</div>
-            <div class="small">${item.kind === 'missed' ? `应在 ${fmtMMSS(item.ground_truth_at)} ` : item.kind === 'extra' ? `AI 切在 ${fmtMMSS(item.predicted_at)}` : `应在 ${fmtMMSS(item.ground_truth_at)} → AI ${fmtMMSS(item.predicted_at)}`}</div>
-          </header>
-          <div class="small">信号类型：${escapeHtml(sigLabel(item.gap_type || ''))}${item.offset_seconds !== undefined && item.offset_seconds !== null ? ` | 偏移 ${item.offset_seconds > 0 ? '+' : ''}${item.offset_seconds}s` : ''}</div>
-          <pre style="margin-top:8px">${escapeHtml(item.context_text || '')}</pre>`;
-        $('testDetails').appendChild(div);
-      });
-      $('testRaw').textContent = JSON.stringify({eval:ev, result:run.result}, null, 2);
-    }
-    function renderCompare(){
-      const cur = state.test.currentRun, prev = state.test.prevRun;
-      if(!cur || !prev || !cur.eval || !prev.eval){ $('testCompare').innerHTML=''; return; }
-      const d = [
-        {label:'漏切变化', text:`${prev.eval.missed || 0} → ${cur.eval.missed || 0}`, good:(cur.eval.missed || 0) < (prev.eval.missed || 0)},
-        {label:'过切变化', text:`${prev.eval.extra || 0} → ${cur.eval.extra || 0}`, good:(cur.eval.extra || 0) <= (prev.eval.extra || 0)},
-        {label:'召回变化', text:`${Math.round((prev.eval.recall || 0) * 100)}% → ${Math.round((cur.eval.recall || 0) * 100)}%`, good:(cur.eval.recall || 0) >= (prev.eval.recall || 0)},
-        {label:'精确变化', text:`${Math.round((prev.eval.precision || 0) * 100)}% → ${Math.round((cur.eval.precision || 0) * 100)}%`, good:(cur.eval.precision || 0) >= (prev.eval.precision || 0)},
       ];
-      $('testCompare').innerHTML = `<h3 style="margin:0 0 10px">和上次比</h3><div class="compare-grid">${
-        d.map(x => `<div class="delta ${x.good ? 'good':'bad'}"><div class="small">${x.label}</div><strong>${x.text}</strong></div>`).join('')
-      }</div>`;
+      const gapType = ev.by_gap_type || {};
+      const compare = (!cur || !prev || !cur.eval || !prev.eval) ? '' : `
+        <div style="margin-top:12px">
+          <h3 style="margin:0 0 10px">和上次比</h3>
+          <div class="compare-grid">
+            ${[
+              {label:'漏切变化', text:`${prev.eval.missed || 0} → ${cur.eval.missed || 0}`, good:(cur.eval.missed || 0) < (prev.eval.missed || 0)},
+              {label:'过切变化', text:`${prev.eval.extra || 0} → ${cur.eval.extra || 0}`, good:(cur.eval.extra || 0) <= (prev.eval.extra || 0)},
+              {label:'召回变化', text:`${Math.round((prev.eval.recall || 0) * 100)}% → ${Math.round((cur.eval.recall || 0) * 100)}%`, good:(cur.eval.recall || 0) >= (prev.eval.recall || 0)},
+              {label:'精确变化', text:`${Math.round((prev.eval.precision || 0) * 100)}% → ${Math.round((cur.eval.precision || 0) * 100)}%`, good:(cur.eval.precision || 0) >= (prev.eval.precision || 0)},
+            ].map(x => `<div class="delta ${x.good ? 'good':'bad'}"><div class="small">${x.label}</div><strong>${x.text}</strong></div>`).join('')}
+          </div>
+        </div>`;
+      return `
+        <details class="details" style="margin-top:14px">
+          <summary>详细指标（边界精度）</summary>
+          <div style="margin-top:12px">
+            <div class="summary-grid">${statGrid.map(x => `<div class="summary-card ${x.cls}"><strong>${x.value}</strong><div>${x.label}</div><div class="small">${x.sub}</div></div>`).join('')}</div>
+            <div style="margin-top:14px">
+              <h3 style="margin:0 0 10px">按信号类型</h3>
+              <div class="sig-table">${
+                Object.entries(gapType).map(([k,v]) => {
+                  const total = Math.max(1, v.total || 0);
+                  const hit = Math.max(0, v.hits || 0);
+                  const rate = Math.round((hit/total)*100);
+                  const weak = (v.missed || 0) > 0;
+                  return `<div class="sig-row">
+                    <div>${escapeHtml(sigLabel(k))}</div>
+                    <div class="sig-fill"><div style="width:${rate}%"></div></div>
+                    <div>${hit}/${v.total || 0}${weak ? ' ✗' : ' ✓'}</div>
+                  </div>`;
+                }).join('') || '<div class="small muted">暂无</div>'
+              }</div>
+            </div>
+            ${compare}
+          </div>
+        </details>`;
     }
     async function runTestCase(caseId){
       syncPromptsFromUI();
@@ -784,8 +1112,8 @@
     async function runSelectedTest(){
       if(!state.test.selectedId) return;
       const job = await runTestCase(state.test.selectedId);
-      state.test.currentRun = job;
       const detail = await api(`/internal/split-demo/synthetic/cases/${encodeURIComponent(state.test.selectedId)}`);
+      state.test.currentRun = detail.latest_run || job;
       state.test.prevRun = (detail.previous_runs || [])[0] || null;
       state.test.selectedCase = detail.case;
       renderTestCaseDetail();
@@ -800,8 +1128,8 @@
         const job = await runTestCase(id);
         done++;
         if(id === state.test.selectedId){
-          state.test.currentRun = job;
           const detail = await api(`/internal/split-demo/synthetic/cases/${encodeURIComponent(id)}`);
+          state.test.currentRun = detail.latest_run || job;
           state.test.prevRun = (detail.previous_runs || [])[0] || null;
           state.test.selectedCase = detail.case;
           renderTestCaseDetail();
@@ -822,8 +1150,34 @@
       renderBuildCandidateList();
       renderBuildComposer();
     }
+    async function deleteSyntheticCase(id, label){
+      if(!id) return;
+      if(!confirm(`确定删除用例 ${label || id}？`)) return;
+      await api(`/internal/split-demo/synthetic/cases/${encodeURIComponent(id)}`, {method:'DELETE'});
+      if(state.test.selectedId === id){
+        state.test.selectedId = '';
+        state.test.selectedCase = null;
+        state.test.currentRun = null;
+        state.test.prevRun = null;
+      }
+      if(state.build.savedCase?.id === id){
+        state.build.savedCase = null;
+        $('buildStatus').classList.remove('hidden');
+        $('buildStatus').innerHTML = `<div class="status-line"><div>用例已删除</div><div></div></div>`;
+      }
+      await loadTestCases();
+    }
     function renderBuildCandidateList(){
       const el = $('buildCandidateList'); el.innerHTML = '';
+      if(!state.build.candidates.length){
+        el.innerHTML = `
+          <div class="hint">
+            <div style="font-weight:700;margin-bottom:6px">没有找到候选录音</div>
+            <div class="small" style="color:inherit">请确认开发数据库里有 tenant_id=1、时长 3-15 分钟、已完成转写的医生录音。</div>
+          </div>`;
+        updateBuildCounters();
+        return;
+      }
       state.build.candidates.forEach(item => {
         const checked = state.build.selected.includes(item.id);
         const div = document.createElement('div');
@@ -973,16 +1327,37 @@
       $('buildPreview').innerHTML = `
         <div class="hint">总时长 ${fmtHMS(state.build.preview.duration_seconds || 0)} | 正确边界 ${state.build.preview.ground_truth?.length || 0} 个</div>
         <div style="margin-top:10px"><strong>正确边界列表</strong><ul>${gt || '<li>无</li>'}</ul></div>
-        <div style="margin-top:10px"><strong>拼接后文本前 500 字</strong><pre>${escapeHtml((state.build.preview.transcript || '').slice(0,500))}</pre></div>
+        <details open style="margin-top:10px">
+          <summary><strong>拼接后全文</strong></summary>
+          <div class="small" style="margin:8px 0 6px">共 ${escapeHtml(String(state.build.preview.transcript?.length || 0))} 字</div>
+          <pre style="max-height:420px">${escapeHtml(state.build.preview.transcript || '')}</pre>
+        </details>
       `;
     }
     async function saveBuildCase(){
-      if(!state.build.preview) await renderBuildPreview();
-      if(!state.build.preview) return;
-      state.build.savedCase = await api('/internal/split-demo/synthetic/cases', {method:'POST', body:JSON.stringify(state.build.preview)});
-      $('buildStatus').classList.remove('hidden');
-      $('buildStatus').innerHTML = `<div class="status-line"><div>已保存用例 ${escapeHtml(state.build.savedCase.id)}</div><div><a href="#test">去跑测试</a></div></div>`;
-      await loadTestCases();
+      try{
+        if(state.build.saving) return;
+        if(!state.build.preview) await renderBuildPreview();
+        if(!state.build.preview) return;
+        state.build.saving = true;
+        $('buildSaveBtn').disabled = true;
+        $('buildStatus').classList.remove('hidden');
+        $('buildStatus').innerHTML = `<div class="status-line"><div>正在保存用例...</div><div></div></div>`;
+        state.build.savedCase = await api('/internal/split-demo/synthetic/cases', {method:'POST', body:JSON.stringify(state.build.preview)});
+        state.test.selectedId = state.build.savedCase.id;
+        state.test.selectedCase = state.build.preview;
+        state.test.currentRun = null;
+        state.test.prevRun = null;
+        $('buildStatus').innerHTML = `<div class="status-line"><div>已保存用例 ${escapeHtml(state.build.savedCase.name || state.build.savedCase.id)}（${escapeHtml(state.build.savedCase.id)}）</div><div><button class="tiny-action" id="buildDeleteSavedCase">删除</button> <a href="#test">去合成测试</a></div></div>`;
+        $('buildDeleteSavedCase').onclick = async () => { await deleteSyntheticCase(state.build.savedCase.id, state.build.savedCase.name || state.build.savedCase.id); };
+        await loadTestCases();
+      }catch(err){
+        $('buildStatus').classList.remove('hidden');
+        $('buildStatus').innerHTML = `<div class="status-line"><div>保存失败：${escapeHtml(err.message || String(err))}</div><div></div></div>`;
+      }finally{
+        state.build.saving = false;
+        $('buildSaveBtn').disabled = false;
+      }
     }
     async function loadBuildStateIfNeeded(){
       if(state.build.candidates.length) return;
@@ -1002,10 +1377,17 @@
 
     $('annFilterBtn').onclick = loadAnnotate;
     $('saveAnnotationBtn') && ($('saveAnnotationBtn').onclick = saveAnnotation);
+    $('annConfirm').onchange = syncAnnotateRunButton;
+    $('annRunBtn').onclick = async () => {
+      if(!state.annotate.detail) return;
+      if(!$('annConfirm').checked) { alert('请先勾选确认'); return; }
+      await runAnnotateSplit(state.annotate.detail.id);
+    };
     $('testRunSelected').onclick = runSelectedTest;
     $('testRunAll').onclick = runAllTests;
     $('buildPreviewBtn').onclick = renderBuildPreview;
     $('buildSaveBtn').onclick = saveBuildCase;
+    $('resetPromptsBtn').onclick = resetPrompts;
     $('testModel').oninput = syncPromptsFromUI;
     $('testVersion').oninput = syncPromptsFromUI;
     $('testSystem').oninput = syncPromptsFromUI;
@@ -1020,10 +1402,20 @@
       closeReason({code, note});
     };
     document.querySelectorAll('.tab[data-tab]').forEach(a => a.onclick = e => { e.preventDefault(); location.hash = `#${a.dataset.tab}`; });
+    document.addEventListener('click', e => {
+      const btn = e.target.closest?.('[data-seam-jump]');
+      if(!btn) return;
+      const idx = Number(btn.getAttribute('data-seam-jump') || 0);
+      const target = document.getElementById(`seam-${idx}`);
+      if(target){
+        target.open = true;
+        target.scrollIntoView({behavior:'smooth', block:'center'});
+      }
+    });
     window.addEventListener('hashchange', renderRoute);
     renderReasonButtons();
     initPromptsUI();
-    if(!location.hash) location.hash = '#annotate';
+    if(!location.hash) location.hash = '#build';
     renderRoute();
   </script>
 </body>

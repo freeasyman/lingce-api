@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -71,4 +72,41 @@ func (s *AnnotationStore) Load(ctx context.Context, recordingID int64) (*Annotat
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (s *AnnotationStore) LoadAll(ctx context.Context) ([]*AnnotationRecord, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]*AnnotationRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var record AnnotationRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			continue
+		}
+		copyRecord := record
+		out = append(out, &copyRecord)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AnnotatedAt == out[j].AnnotatedAt {
+			return out[i].RecordingID < out[j].RecordingID
+		}
+		return out[i].AnnotatedAt < out[j].AnnotatedAt
+	})
+	return out, nil
 }

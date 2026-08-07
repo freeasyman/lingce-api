@@ -72,5 +72,18 @@ func cloneJob(job *SplitJob) *SplitJob {
 		}
 		copyJob.Result = &resultCopy
 	}
+	if job.MatchReport != nil {
+		matchCopy := *job.MatchReport
+		if job.MatchReport.Materials != nil {
+			matchCopy.Materials = append([]MaterialMatch(nil), job.MatchReport.Materials...)
+		}
+		if job.MatchReport.Encounters != nil {
+			matchCopy.Encounters = append([]EncounterMatch(nil), job.MatchReport.Encounters...)
+		}
+		if job.MatchReport.Seams != nil {
+			matchCopy.Seams = append([]SeamDetail(nil), job.MatchReport.Seams...)
+		}
+		copyJob.MatchReport = &matchCopy
+	}
 	return &copyJob
 }

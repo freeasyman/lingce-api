@@ -15,16 +15,20 @@ type Store struct {
 	pool            *pgxpool.Pool
 	runStore        *RunStore
 	annotationStore *AnnotationStore
+	syntheticStore  *SyntheticStore
 }
 
-func NewStore(pool *pgxpool.Pool, runStore *RunStore, annotationStore *AnnotationStore) *Store {
+func NewStore(pool *pgxpool.Pool, runStore *RunStore, annotationStore *AnnotationStore, syntheticStore *SyntheticStore) *Store {
 	if runStore == nil {
 		runStore = NewRunStore("")
 	}
 	if annotationStore == nil {
 		annotationStore = NewAnnotationStore("")
 	}
-	return &Store{pool: pool, runStore: runStore, annotationStore: annotationStore}
+	if syntheticStore == nil {
+		syntheticStore = NewSyntheticStore("")
+	}
+	return &Store{pool: pool, runStore: runStore, annotationStore: annotationStore, syntheticStore: syntheticStore}
 }
 
 func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int) ([]RecordingListItem, int64, error) {
@@ -225,6 +229,109 @@ func (s *Store) LoadAnnotation(ctx context.Context, recordingID int64) (*Annotat
 		return nil, nil
 	}
 	return s.annotationStore.Load(ctx, recordingID)
+}
+
+func (s *Store) LoadAllAnnotations(ctx context.Context) ([]*AnnotationRecord, error) {
+	if s.annotationStore == nil {
+		return nil, nil
+	}
+	return s.annotationStore.LoadAll(ctx)
+}
+
+func (s *Store) SaveSyntheticCase(ctx context.Context, record *SyntheticCase) error {
+	if s.syntheticStore == nil {
+		return nil
+	}
+	return s.syntheticStore.Save(ctx, record)
+}
+
+func (s *Store) GetSyntheticCase(ctx context.Context, caseID string) (*SyntheticCase, error) {
+	if s.syntheticStore == nil {
+		return nil, nil
+	}
+	return s.syntheticStore.Load(ctx, caseID)
+}
+
+func (s *Store) ListSyntheticCases(ctx context.Context) ([]*SyntheticCase, error) {
+	if s.syntheticStore == nil {
+		return nil, nil
+	}
+	return s.syntheticStore.List(ctx)
+}
+
+func (s *Store) DeleteSyntheticCase(ctx context.Context, caseID string) error {
+	if s.syntheticStore == nil {
+		return nil
+	}
+	return s.syntheticStore.Delete(ctx, caseID)
+}
+
+func (s *Store) ListSyntheticCandidates(ctx context.Context, tenantID int64, minDurationSeconds, maxDurationSeconds, limit int) ([]SyntheticCandidate, error) {
+	if tenantID <= 0 {
+		tenantID = 1
+	}
+	if minDurationSeconds <= 0 {
+		minDurationSeconds = 180
+	}
+	if maxDurationSeconds <= 0 {
+		maxDurationSeconds = 900
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			r.id,
+			COALESCE(r.duration, 0) AS duration,
+			COALESCE(
+				NULLIF(NULLIF(e.full_name, 'unknown'), ''),
+				NULLIF(NULLIF(e.name, 'unknown'), ''),
+				NULLIF(e.phone, ''),
+				NULLIF(oa.username, ''),
+				NULLIF(oa.email, ''),
+				'未知员工'
+			) AS employee_name,
+			r.recorded_at,
+			LENGTH(COALESCE(r.transcription_text, '')) AS transcript_length,
+			COALESCE(r.transcription_text, '') AS transcript_text
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
+		WHERE r.tenant_id = $1
+		  AND r.deleted_at IS NULL
+		  AND LOWER(COALESCE(r.business_scope, '')) = 'doctor'
+		  AND r.transcription_text IS NOT NULL
+		  AND COALESCE(r.duration, 0) BETWEEN $2 AND $3
+		ORDER BY COALESCE(r.duration, 0) ASC, r.id DESC
+		LIMIT $4
+	`, tenantID, minDurationSeconds, maxDurationSeconds, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list synthetic candidates: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]SyntheticCandidate, 0, limit)
+	for rows.Next() {
+		var (
+			item       SyntheticCandidate
+			recordedAt sql.NullTime
+			fullText   string
+		)
+		if err := rows.Scan(&item.ID, &item.DurationSeconds, &item.EmployeeName, &recordedAt, &item.TranscriptChars, &fullText); err != nil {
+			return nil, fmt.Errorf("scan synthetic candidate: %w", err)
+		}
+		if recordedAt.Valid {
+			v := recordedAt.Time.Format(time.RFC3339)
+			item.RecordedAt = &v
+		}
+		item.TranscriptText = strings.TrimSpace(fullText)
+		item.TranscriptPreview = shortenPreviewText(item.TranscriptText, 180)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func chooseTranscriptSource(item RecordingDetail) string {

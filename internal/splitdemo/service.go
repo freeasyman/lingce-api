@@ -73,6 +73,7 @@ const (
 - 明确的结束语:"没什么问题了"、"回去吃药"、"下周再来"、"好,就这样"
 - 明确的开场语:"哪里不舒服"、"什么时候开始的"、"坐吧"
 - 长静默(超过 90 秒)
+- 时间戳跳跃:相邻两句发言之间的时间差超过 30 秒。你必须主动检查每对相邻发言的时间戳,计算间隔。间隔超过 30 秒是强边界信号,超过 90 秒几乎必然是边界。注意:转写文本里的静默不会有任何文字提示,只表现为时间戳的数字跳跃(如 [05:10] 后面紧接 [06:12]),你必须自己做减法计算。
 
 中等信号:
 - 主诉突变且与前文无关联
@@ -170,6 +171,48 @@ func (s *Service) LoadAnnotation(ctx context.Context, recordingID int64) (*Annot
 	return s.store.LoadAnnotation(ctx, recordingID)
 }
 
+func (s *Service) GetAnnotationOverview(ctx context.Context, recordingID int64) (*AnnotationOverviewResponse, error) {
+	overall, err := s.buildAnnotationOverview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp := &AnnotationOverviewResponse{
+		ReasonOptions: correctionReasonOptions(),
+		Overall:       *overall,
+	}
+	if record, err := s.store.LoadAnnotation(ctx, recordingID); err == nil && record != nil {
+		resp.Recording = buildAnnotationSummary(record)
+	}
+	return resp, nil
+}
+
+func (s *Service) buildAnnotationOverview(ctx context.Context) (*AnnotationOverview, error) {
+	items, err := s.store.LoadAllAnnotations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats := map[string]int{}
+	total := 0
+	for _, record := range items {
+		if record == nil {
+			continue
+		}
+		for _, correction := range record.Corrections {
+			code := strings.TrimSpace(correction.ReasonCode)
+			if code == "" {
+				code = string(CorrectionReasonOther)
+			}
+			stats[code]++
+			total++
+		}
+	}
+	return &AnnotationOverview{
+		TotalRecordings:  len(items),
+		TotalCorrections: total,
+		ByReason:         buildReasonStats(stats),
+	}, nil
+}
+
 func (s *Service) SummarizeEncounterText(ctx context.Context, model, encounterText string) (*EncounterSummary, error) {
 	if strings.TrimSpace(model) == "" {
 		model = defaultModelName
@@ -194,15 +237,34 @@ func (s *Service) SummarizeEncounterText(ctx context.Context, model, encounterTe
 }
 
 func (s *Service) SplitRecording(ctx context.Context, req SplitRequest) (*SplitResponse, error) {
-	return s.splitRecording(ctx, req, nil)
+	return s.splitRecordingWithInput(ctx, req, nil, nil)
 }
 
 func (s *Service) SplitRecordingWithProgress(ctx context.Context, req SplitRequest, report func(SplitProgress)) (*SplitResponse, error) {
-	return s.splitRecording(ctx, req, report)
+	return s.splitRecordingWithInput(ctx, req, nil, report)
 }
 
-func (s *Service) splitRecording(ctx context.Context, req SplitRequest, report func(SplitProgress)) (*SplitResponse, error) {
-	if req.RecordingID <= 0 {
+func (s *Service) SplitSyntheticCase(ctx context.Context, caseID string, req SplitRequest, report func(SplitProgress)) (*SplitResponse, *SyntheticCase, error) {
+	syntheticCase, err := s.store.GetSyntheticCase(ctx, caseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if syntheticCase == nil {
+		return nil, nil, fmt.Errorf("synthetic case not found")
+	}
+	recording, err := s.buildSyntheticRecordingDetail(ctx, syntheticCase)
+	if err != nil {
+		return nil, syntheticCase, err
+	}
+	resp, err := s.splitRecordingWithInput(ctx, req, recording, report)
+	if err != nil {
+		return nil, syntheticCase, err
+	}
+	return resp, syntheticCase, nil
+}
+
+func (s *Service) splitRecordingWithInput(ctx context.Context, req SplitRequest, recording *RecordingDetail, report func(SplitProgress)) (*SplitResponse, error) {
+	if req.RecordingID <= 0 && recording == nil {
 		return nil, fmt.Errorf("recording_id is required")
 	}
 	if strings.TrimSpace(req.Model) == "" {
@@ -226,9 +288,12 @@ func (s *Service) splitRecording(ctx context.Context, req SplitRequest, report f
 		temp = *req.Temperature
 	}
 
-	recording, err := s.store.GetRecording(ctx, req.RecordingID)
-	if err != nil {
-		return nil, err
+	if recording == nil {
+		var err error
+		recording, err = s.store.GetRecording(ctx, req.RecordingID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	totalSeconds := recordingDurationSeconds(recording)
 	inputChunks := buildInputChunks(recording, chunkChars)
@@ -539,14 +604,13 @@ func extractDurationFromTranscriptHeader(transcript string) string {
 
 func parseSegmentsOutput(content string) ([]SplitSegment, error) {
 	cleaned := stripCodeFence(strings.TrimSpace(content))
-	if extracted, ok := extractFirstJSONObject(cleaned); ok {
-		cleaned = extracted
-	}
-	var raw struct {
-		Segments []map[string]interface{} `json:"segments"`
-	}
-	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
-		return nil, err
+	raw, err := decodeSegmentsPayload(cleaned)
+	if err != nil {
+		sanitized := sanitizeSegmentsPayload(cleaned)
+		raw, err = decodeSegmentsPayload(sanitized)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := make([]SplitSegment, 0, len(raw.Segments))
 	for _, seg := range raw.Segments {
@@ -568,6 +632,39 @@ func parseSegmentsOutput(content string) ([]SplitSegment, error) {
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+func decodeSegmentsPayload(content string) (*struct {
+	Segments []map[string]interface{} `json:"segments"`
+}, error) {
+	if extracted, ok := extractFirstJSONObject(content); ok {
+		content = extracted
+	}
+	var raw struct {
+		Segments []map[string]interface{} `json:"segments"`
+	}
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return nil, err
+	}
+	return &raw, nil
+}
+
+func sanitizeSegmentsPayload(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimPrefix(trimmed, "* ")
+		trimmed = strings.TrimPrefix(trimmed, "- ")
+		trimmed = strings.TrimPrefix(trimmed, "• ")
+		trimmed = strings.ReplaceAll(trimmed, ",*", ",")
+		trimmed = strings.ReplaceAll(trimmed, "[*", "[")
+		trimmed = strings.ReplaceAll(trimmed, "{*", "{")
+		lines[i] = trimmed
+	}
+	sanitized := strings.Join(lines, "\n")
+	sanitized = strings.ReplaceAll(sanitized, ",]", "]")
+	sanitized = strings.ReplaceAll(sanitized, ",}", "}")
+	return sanitized
 }
 
 func (s *Service) repairSegmentsOutput(ctx context.Context, model, raw string) (string, error) {
@@ -1196,6 +1293,65 @@ func translateReasonLabels(items []string) []string {
 	return out
 }
 
+func correctionReasonOptions() []CorrectionReasonOption {
+	return []CorrectionReasonOption{
+		{Code: string(CorrectionReasonPatientReturned), Label: "患者中途离开后返回", Description: "患者去做检查/取药后回到诊室，被误判为两次就诊", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonColleagueTalk), Label: "医生与同事交流", Description: "医生和护士/同事讨论，被误判为一次就诊", Actions: []string{"delete"}},
+		{Code: string(CorrectionReasonMultiPatient), Label: "多患者同诊", Description: "夫妻同诊、母子同诊被切成多段", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonFamilyProxy), Label: "家属代述", Description: "家属替患者描述病情，被误判为独立就诊", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonTopicShift), Label: "同一患者话题跳转", Description: "同一患者连续问不相关问题，被误判为两次", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonMissedBoundary), Label: "漏切边界", Description: "两个不同患者被合并成一段", Actions: []string{"split"}},
+		{Code: string(CorrectionReasonBoundaryOffset), Label: "边界位置偏移", Description: "类型判对了，但起止秒数不准", Actions: []string{"adjust"}},
+		{Code: string(CorrectionReasonNotEncounter), Label: "非就诊内容", Description: "问路、取报告、纯闲聊被判成就诊", Actions: []string{"delete"}},
+		{Code: string(CorrectionReasonMissingEncounter), Label: "遗漏的就诊", Description: "AI 完全没识别出这段就诊", Actions: []string{"add"}},
+		{Code: string(CorrectionReasonOther), Label: "其他", Description: "需要补充备注", Actions: []string{"merge", "split", "adjust", "delete", "add"}},
+	}
+}
+
+func buildReasonStats(stats map[string]int) []CorrectionReasonStat {
+	options := correctionReasonOptions()
+	out := make([]CorrectionReasonStat, 0, len(options))
+	for _, option := range options {
+		if count := stats[option.Code]; count > 0 {
+			out = append(out, CorrectionReasonStat{Code: option.Code, Label: option.Label, Count: count})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Code < out[j].Code
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func buildAnnotationSummary(record *AnnotationRecord) *AnnotationSummary {
+	if record == nil {
+		return nil
+	}
+	stats := map[string]int{}
+	for _, item := range record.Corrections {
+		code := strings.TrimSpace(item.ReasonCode)
+		if code == "" {
+			code = string(CorrectionReasonOther)
+		}
+		stats[code]++
+	}
+	return &AnnotationSummary{
+		RecordingID:      record.RecordingID,
+		TotalCorrections: len(record.Corrections),
+		ByReason:         buildReasonStats(stats),
+	}
+}
+
+func shortenPreviewText(text string, limit int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit]) + "..."
+}
+
 func formatDurationChinese(totalSeconds int) string {
 	if totalSeconds <= 0 {
 		return "0秒"
@@ -1231,20 +1387,60 @@ func recordingDurationSeconds(recording *RecordingDetail) int {
 }
 
 func pickSecondsValue(m map[string]interface{}, keys ...string) int {
+	// 第一优先级：直接按调用方传入的 keys 查找（秒级字段）
 	if value := pickFirstRaw(m, keys...); value != nil {
 		return numericToInt(value)
 	}
-	msKeys := []string{}
+
+	// 第二优先级：尝试秒级别名（不做单位换算）
+	secondsAliases := []string{
+		"startTime", "start_time", "start", "begin", "begin_time",
+		"sentence_begin", "sentence_start", "from", "offset",
+	}
+	endAliases := []string{
+		"endTime", "end_time", "end", "finish", "finish_time",
+		"sentence_end", "sentence_finish", "to",
+	}
+	isEnd := false
 	for _, key := range keys {
-		switch {
-		case strings.Contains(key, "start"):
-			msKeys = append(msKeys, "start_ms")
-		case strings.Contains(key, "end"):
-			msKeys = append(msKeys, "end_ms")
+		if strings.Contains(key, "end") {
+			isEnd = true
+			break
 		}
 	}
-	for _, key := range msKeys {
-		if value, ok := m[key]; ok {
+	aliases := secondsAliases
+	if isEnd {
+		aliases = endAliases
+	}
+	if value := pickFirstRaw(m, aliases...); value != nil {
+		v := numericToInt(value)
+		// 如果值超过 86400（一天秒数），大概率是毫秒
+		if v > 86400 {
+			return int(math.Round(float64(v) / 1000.0))
+		}
+		return v
+	}
+
+	// 第三优先级：毫秒字段，按调用方 key 匹配对应的 _ms 变体
+	for _, key := range keys {
+		var msVariants []string
+		switch {
+		case strings.Contains(key, "start"):
+			msVariants = []string{
+				"start_ms", "start_time_ms", "startTimeMs",
+				"begin_ms", "begin_time_ms", "beginTimeMs",
+				"sentence_begin_ms", "sentenceBeginMs",
+				"from_ms", "fromMs", "offset_ms", "offsetMs",
+			}
+		case strings.Contains(key, "end"):
+			msVariants = []string{
+				"end_ms", "end_time_ms", "endTimeMs",
+				"finish_ms", "finish_time_ms", "finishTimeMs",
+				"sentence_end_ms", "sentenceEndMs",
+				"to_ms", "toMs",
+			}
+		}
+		if value := pickFirstRaw(m, msVariants...); value != nil {
 			return int(math.Round(float64(numericToInt(value)) / 1000.0))
 		}
 	}

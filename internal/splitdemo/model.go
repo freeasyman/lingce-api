@@ -51,10 +51,13 @@ type SplitRequest struct {
 type SplitRunRecord struct {
 	ID            int64          `json:"id"`
 	RecordingID   int64          `json:"recording_id"`
+	CaseID        string         `json:"case_id,omitempty"`
 	Model         string         `json:"model"`
 	PromptVersion string         `json:"prompt_version"`
 	Status        string         `json:"status"`
 	Result        *SplitResponse `json:"result,omitempty"`
+	Eval          *EvalReport    `json:"eval,omitempty"`
+	MatchReport   *MatchReport   `json:"match_report,omitempty"`
 	RawOutput     string         `json:"raw_output,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
@@ -195,6 +198,7 @@ const (
 type SplitJob struct {
 	ID              string         `json:"id"`
 	RecordingID     int64          `json:"recording_id"`
+	CaseID          string         `json:"case_id,omitempty"`
 	Model           string         `json:"model"`
 	PromptVersion   string         `json:"prompt_version"`
 	Status          SplitJobStatus `json:"status"`
@@ -210,6 +214,8 @@ type SplitJob struct {
 	CreatedAt       string         `json:"created_at"`
 	UpdatedAt       string         `json:"updated_at"`
 	Result          *SplitResponse `json:"result,omitempty"`
+	Eval            *EvalReport    `json:"eval,omitempty"`
+	MatchReport     *MatchReport   `json:"match_report,omitempty"`
 	ErrorMessage    string         `json:"error_message,omitempty"`
 }
 
@@ -261,6 +267,213 @@ type AnnotationCorrection struct {
 	FromSegmentIndex     int    `json:"from_segment_index,omitempty"`
 	EncounterSeq         int    `json:"encounter_seq,omitempty"`
 	Notes                string `json:"notes,omitempty"`
+	ReasonCode           string `json:"reason_code,omitempty"`
+	ReasonNote           string `json:"reason_note,omitempty"`
+}
+
+type CorrectionReasonCode string
+
+const (
+	CorrectionReasonPatientReturned  CorrectionReasonCode = "patient_returned"
+	CorrectionReasonColleagueTalk    CorrectionReasonCode = "colleague_talk"
+	CorrectionReasonMultiPatient     CorrectionReasonCode = "multi_patient"
+	CorrectionReasonFamilyProxy      CorrectionReasonCode = "family_proxy"
+	CorrectionReasonTopicShift       CorrectionReasonCode = "topic_shift"
+	CorrectionReasonMissedBoundary   CorrectionReasonCode = "missed_boundary"
+	CorrectionReasonBoundaryOffset   CorrectionReasonCode = "boundary_offset"
+	CorrectionReasonNotEncounter     CorrectionReasonCode = "not_encounter"
+	CorrectionReasonMissingEncounter CorrectionReasonCode = "missing_encounter"
+	CorrectionReasonOther            CorrectionReasonCode = "other"
+)
+
+type CorrectionReasonOption struct {
+	Code        string   `json:"code"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Actions     []string `json:"actions,omitempty"`
+}
+
+type CorrectionReasonStat struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+type AnnotationStats struct {
+	TotalCorrections int                    `json:"total_corrections"`
+	ByReason         []CorrectionReasonStat `json:"by_reason"`
+}
+
+type AnnotationSummary struct {
+	RecordingID      int64                  `json:"recording_id,omitempty"`
+	TotalCorrections int                    `json:"total_corrections"`
+	ByReason         []CorrectionReasonStat `json:"by_reason"`
+}
+
+type AnnotationOverview struct {
+	TotalRecordings  int                    `json:"total_recordings"`
+	TotalCorrections int                    `json:"total_corrections"`
+	ByReason         []CorrectionReasonStat `json:"by_reason"`
+}
+
+type AnnotationOverviewResponse struct {
+	ReasonOptions []CorrectionReasonOption `json:"reason_options"`
+	Recording     *AnnotationSummary       `json:"recording,omitempty"`
+	Overall       AnnotationOverview       `json:"overall"`
+}
+
+type SyntheticCandidate struct {
+	ID                int64   `json:"id"`
+	DurationSeconds   int     `json:"duration_seconds"`
+	EmployeeName      string  `json:"employee_name"`
+	RecordedAt        *string `json:"recorded_at,omitempty"`
+	TranscriptChars   int     `json:"transcript_chars"`
+	TranscriptPreview string  `json:"transcript_preview,omitempty"`
+	TranscriptText    string  `json:"transcript_text,omitempty"`
+}
+
+type SyntheticGapType string
+
+const (
+	SyntheticGapSilence   SyntheticGapType = "silence"
+	SyntheticGapCallNext  SyntheticGapType = "call_next"
+	SyntheticGapClosing   SyntheticGapType = "closing"
+	SyntheticGapAbrupt    SyntheticGapType = "abrupt"
+	SyntheticGapColleague SyntheticGapType = "colleague"
+)
+
+type SyntheticSource struct {
+	RecordingID  int64            `json:"recording_id"`
+	GapSeconds   int              `json:"gap_seconds"`
+	GapType      SyntheticGapType `json:"gap_type"`
+	StartSeconds int              `json:"start_seconds,omitempty"`
+	EndSeconds   int              `json:"end_seconds,omitempty"`
+	Summary      *EncounterSummary `json:"summary,omitempty"`
+}
+
+type GroundTruthMark struct {
+	AtSeconds   int    `json:"at_seconds"`
+	MarkType    string `json:"mark_type"`
+	GapType     string `json:"gap_type"`
+	Description string `json:"description,omitempty"`
+}
+
+type SyntheticCase struct {
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description"`
+	Segments        []SyntheticSource `json:"segments"`
+	DurationSeconds int               `json:"duration_seconds"`
+	Transcript      string            `json:"transcript"`
+	GroundTruth     []GroundTruthMark `json:"ground_truth"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+type MaterialMatch struct {
+	MaterialIndex     int               `json:"material_index"`
+	RecordingID       int64             `json:"recording_id"`
+	StartSeconds      int               `json:"start_seconds"`
+	EndSeconds        int               `json:"end_seconds"`
+	Summary           *EncounterSummary `json:"summary,omitempty"`
+	Verdict           string            `json:"verdict"`
+	MatchedEncounters []int             `json:"matched_encounters"`
+	MergedWith        []int             `json:"merged_with,omitempty"`
+}
+
+type EncounterMatch struct {
+	Seq              int               `json:"seq"`
+	StartSeconds     int               `json:"start_seconds"`
+	EndSeconds       int               `json:"end_seconds"`
+	Summary          *EncounterSummary `json:"summary,omitempty"`
+	Verdict          string            `json:"verdict"`
+	CoveredMaterials []int             `json:"covered_materials"`
+}
+
+type SeamDetail struct {
+	AfterMaterial int     `json:"after_material"`
+	AtSeconds     int     `json:"at_seconds"`
+	GapType       string  `json:"gap_type"`
+	GapSeconds    int     `json:"gap_seconds"`
+	Detected      bool    `json:"detected"`
+	BeforeText    string  `json:"before_text"`
+	AfterText     string  `json:"after_text"`
+	AIConfidence  float64 `json:"ai_confidence,omitempty"`
+}
+
+type MatchReport struct {
+	MaterialCount  int              `json:"material_count"`
+	EncounterCount int              `json:"encounter_count"`
+	MissedCount    int              `json:"missed_count"`
+	OversplitCount  int              `json:"oversplit_count"`
+	Materials      []MaterialMatch  `json:"materials"`
+	Encounters     []EncounterMatch `json:"encounters"`
+	Seams          []SeamDetail     `json:"seams"`
+}
+
+type SyntheticCaseSummary struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	Segments        int       `json:"segments"`
+	DurationSeconds int       `json:"duration_seconds"`
+	GroundTruth     int       `json:"ground_truth"`
+	LastPrecision   float64   `json:"last_precision,omitempty"`
+	LastRecall      float64   `json:"last_recall,omitempty"`
+	LastRunAt       string    `json:"last_run_at,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type SyntheticPreviewResult struct {
+	Case SyntheticCase `json:"case"`
+}
+
+type SyntheticCaseDetail struct {
+	Case         SyntheticCase     `json:"case"`
+	LatestRun    *SplitRunRecord   `json:"latest_run,omitempty"`
+	PreviousRuns []*SplitRunRecord `json:"previous_runs,omitempty"`
+}
+
+type SyntheticRunRequest struct {
+	CaseID           string   `json:"case_id"`
+	Model            string   `json:"model"`
+	SystemPrompt     string   `json:"system_prompt"`
+	UserPrompt       string   `json:"user_prompt"`
+	PromptVersion    string   `json:"prompt_version"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	MaxChunkChars    *int     `json:"max_chunk_chars,omitempty"`
+	ToleranceSeconds *int     `json:"tolerance_seconds,omitempty"`
+}
+
+type EvalDetail struct {
+	Kind          string `json:"kind"`
+	GroundTruthAt int    `json:"ground_truth_at,omitempty"`
+	PredictedAt   int    `json:"predicted_at,omitempty"`
+	OffsetSeconds int    `json:"offset_seconds,omitempty"`
+	GapType       string `json:"gap_type,omitempty"`
+	ContextText   string `json:"context_text"`
+}
+
+type GapTypeStat struct {
+	Total  int `json:"total"`
+	Hits   int `json:"hits"`
+	Missed int `json:"missed"`
+	Extra  int `json:"extra"`
+}
+
+type EvalReport struct {
+	CaseID           string                  `json:"case_id"`
+	ToleranceSeconds int                     `json:"tolerance_seconds"`
+	TotalGroundTruth int                     `json:"total_ground_truth"`
+	Hits             int                     `json:"hits"`
+	Missed           int                     `json:"missed"`
+	Extra            int                     `json:"extra"`
+	Precision        float64                 `json:"precision"`
+	Recall           float64                 `json:"recall"`
+	MeanOffset       float64                 `json:"mean_offset"`
+	MaxOffset        int                     `json:"max_offset"`
+	Details          []EvalDetail            `json:"details"`
+	ByGapType        map[string]*GapTypeStat `json:"by_gap_type"`
 }
 
 type Usage struct {
