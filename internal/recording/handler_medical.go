@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
-	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
@@ -39,13 +38,8 @@ func (h *Handler) ListMedicalRecordings(w http.ResponseWriter, r *http.Request) 
 	req.Page = page
 	req.PageSize = pageSize
 
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
-	if err != nil {
-		if err.Error() == "no tenant access" || err.Error() == "access denied" {
-			httputil.WriteForbidden(w, err.Error())
-			return
-		}
-		httputil.WriteBadRequest(w, err.Error())
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
+	if !ok {
 		return
 	}
 	if len(scope.TenantIDs) == 0 {
