@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -58,138 +59,114 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 
 // RegisterRoutes registers medical recording routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Recording CRUD endpoints
-	mux.Handle("GET /api/v1/recordings", authMw(http.HandlerFunc(h.ListRecordings)))
-	mux.Handle("GET /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.GetRecording)))
-	mux.Handle("POST /api/v1/recordings", authMw(http.HandlerFunc(h.CreateRecording)))
-	mux.Handle("PUT /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
-	mux.Handle("PATCH /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.UpdateRecording)))
-	mux.Handle("DELETE /api/v1/recordings/{id}", authMw(http.HandlerFunc(h.DeleteRecording)))
-
-	// Recording Statistics endpoints
-	mux.Handle("GET /api/v1/recordings/stats/overview", authMw(http.HandlerFunc(h.GetStatsOverview)))
-	mux.Handle("GET /api/v1/recordings/stats/by-scene", authMw(http.HandlerFunc(h.GetStatsByScene)))
-	mux.Handle("GET /api/v1/recordings/stats/by-source", authMw(http.HandlerFunc(h.GetStatsBySource)))
-
-	// Recording Task endpoints
-	mux.Handle("GET /api/v1/recording-tasks", authMw(http.HandlerFunc(h.ListRecordingTasks)))
-	mux.Handle("GET /api/v1/recording-tasks/{id}", authMw(http.HandlerFunc(h.GetTask)))
-	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/complete", authMw(http.HandlerFunc(h.CompleteTask)))
-	mux.Handle("POST /api/v1/recording-tasks/{id}/actions/cancel", authMw(http.HandlerFunc(h.CancelTask)))
-
-	// Advanced Recording endpoints
-	mux.Handle("GET /api/v1/recordings/stats/by-tenant", authMw(http.HandlerFunc(h.GetStatsByTenant)))
-	mux.Handle("GET /api/v1/recordings/stats/duration-distribution", authMw(http.HandlerFunc(h.GetDurationDistribution)))
-	mux.Handle("GET /api/v1/recordings/stats/daily", authMw(http.HandlerFunc(h.GetDailyStats)))
-	mux.Handle("POST /api/v1/recordings/actions/upload", authMw(http.HandlerFunc(h.UploadRecording)))
-	mux.Handle("/api/v1/trial-recordings/actions/upload", authMw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			httputil.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
-			return
-		}
-		h.UploadTrialRecording(w, r)
-	})))
-	mux.Handle("GET /api/v1/trial-agreements/current-status", authMw(http.HandlerFunc(h.GetTrialAgreementStatus)))
-	mux.Handle("POST /api/v1/trial-agreements/accept", authMw(http.HandlerFunc(h.AcceptTrialAgreement)))
-	mux.Handle("GET /api/v1/recordings/{id}/play-url", authMw(http.HandlerFunc(h.GetPlayURL)))
-	mux.Handle("GET /api/v1/recordings/{id}/file-test", authMw(http.HandlerFunc(h.TestPlayback)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/transcribe", authMw(http.HandlerFunc(h.TriggerTranscribe)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/analyze", authMw(http.HandlerFunc(h.TriggerAnalyze)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/clean", authMw(http.HandlerFunc(h.TriggerClean)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/dispatch-follow-ups", authMw(http.HandlerFunc(h.DispatchFollowUpTasks)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/confirm-action", authMw(http.HandlerFunc(h.ConfirmFollowUpAction)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/generate-opening", authMw(http.HandlerFunc(h.GenerateOpeningScript)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/generate-ops-plan", authMw(http.HandlerFunc(h.GenerateOperationsPlan)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/mark-highlight", authMw(http.HandlerFunc(h.MarkHighlight)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/reanalyze", authMw(http.HandlerFunc(h.ReanalyzeRecording)))
-	mux.Handle("POST /api/v1/recordings/{id}/actions/confirm-follow-ups", authMw(http.HandlerFunc(h.ConfirmFollowUpTasks)))
-	mux.Handle("POST /api/v1/recordings/actions/batch-transcribe", authMw(http.HandlerFunc(h.BatchTranscribe)))
-	mux.Handle("POST /api/v1/recordings/actions/batch-delete", authMw(http.HandlerFunc(h.BatchDelete)))
-	mux.Handle("GET /api/v1/recordings/{id}/analysis", authMw(http.HandlerFunc(h.GetAnalysisResult)))
-	mux.Handle("GET /api/v1/recordings/{id}/therapist-reset", authMw(http.HandlerFunc(h.GetTherapistReset)))
-	mux.Handle("GET /api/v1/recordings/reset-code-dictionary", authMw(http.HandlerFunc(h.GetResetCodeDictionary)))
-	mux.Handle("POST /api/v1/recordings/{id}/analysis/feedback", authMw(http.HandlerFunc(h.SubmitAnalysisFeedback)))
-	mux.Handle("GET /api/v1/recordings/{id}/learning-recommendation", authMw(http.HandlerFunc(h.GetLearningRecommendation)))
-	mux.Handle("GET /api/v1/recordings/{id}/ops-plan-jobs/{job_id}", authMw(http.HandlerFunc(h.GetOperationsPlanJobStatus)))
-	mux.Handle("GET /api/v1/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasks)))
-	mux.Handle("GET /api/v1/recordings/{id}/route", authMw(http.HandlerFunc(h.GetMedicalRecordingRoute)))
-	mux.Handle("GET /api/v1/recordings/{id}/segue", authMw(http.HandlerFunc(h.GetMedicalRecordingSegue)))
-	mux.Handle("GET /api/v1/recordings/{id}/emr", authMw(http.HandlerFunc(h.GetRecordingEMR)))
-	mux.Handle("POST /api/v1/recordings/{id}/emr/confirm", authMw(http.HandlerFunc(h.ConfirmRecordingEMR)))
-	mux.Handle("POST /api/v1/recordings/{id}/route-review", authMw(http.HandlerFunc(h.RouteReviewRecording)))
-	mux.Handle("GET /api/v1/recordings/search-patients", authMw(http.HandlerFunc(h.SearchRecordingPatients)))
-
-	// Medical Recording Dashboard endpoints
-	mux.Handle("GET /api/v1/recordings/quality-control", authMw(http.HandlerFunc(h.GetQualityControlDashboard)))
-	mux.Handle("GET /api/v1/recordings/doctor-ability", authMw(http.HandlerFunc(h.GetDoctorAbilityRanking)))
-	mux.Handle("GET /api/v1/recordings/doctor-ability/employees/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilityDetail)))
-	mux.Handle("GET /api/v1/recordings/consultant-ability/employees/{employee_id}", authMw(http.HandlerFunc(h.GetConsultantAbilityDetail)))
-	mux.Handle("GET /api/v1/recordings/communication-analysis", authMw(http.HandlerFunc(h.GetCommunicationAnalysis)))
-	mux.Handle("GET /api/v1/recordings/weekly-meeting", authMw(http.HandlerFunc(h.GetWeeklyMeetingMaterial)))
-	mux.Handle("GET /api/v1/recordings/weekly-summary", authMw(http.HandlerFunc(h.GetWeeklySummary)))
-	mux.Handle("GET /api/v1/recordings/team-trends", authMw(http.HandlerFunc(h.GetTeamTrends)))
-	mux.Handle("GET /api/v1/recordings/segue-dashboard", authMw(http.HandlerFunc(h.GetSegueDashboard)))
-	mux.Handle("GET /api/v1/recordings/doctor-ability-segue", authMw(http.HandlerFunc(h.GetDoctorAbilitySegue)))
-	mux.Handle("GET /api/v1/recordings/doctor-ability-segue/employees/{employee_id}", authMw(http.HandlerFunc(h.GetDoctorAbilitySegueDetail)))
-	mux.Handle("GET /api/v1/recordings/best-practices", authMw(http.HandlerFunc(h.ListBestPractices)))
-	mux.Handle("POST /api/v1/recordings/{id}/best-practice", authMw(http.HandlerFunc(h.AddBestPractice)))
-	mux.Handle("DELETE /api/v1/recordings/{id}/best-practice", authMw(http.HandlerFunc(h.DeleteBestPractice)))
-	mux.Handle("GET /api/v1/recordings/followup-generation-mode", authMw(http.HandlerFunc(h.GetFollowUpGenerationMode)))
-	mux.Handle("POST /api/v1/recordings/followup-generation-mode", authMw(http.HandlerFunc(h.UpdateFollowUpGenerationMode)))
-
-	// Recording Task Advanced endpoints
-	mux.Handle("GET /api/v1/recording-tasks/stats", authMw(http.HandlerFunc(h.GetTaskStats)))
-	mux.Handle("GET /api/v1/recording-tasks/daily-briefing", authMw(http.HandlerFunc(h.GetDailyBriefing)))
-	mux.Handle("GET /api/v1/recording-tasks/my-tasks", authMw(http.HandlerFunc(h.GetMyTasks)))
-	mux.Handle("GET /api/v1/recording-tasks/recordings/{id}/tasks", authMw(http.HandlerFunc(h.GetRecordingTasksByRecordingID)))
-	mux.Handle("GET /api/v1/recording-tasks/employees", authMw(http.HandlerFunc(h.ListTaskEmployees)))
-	mux.Handle("POST /api/v1/recording-tasks/assign", authMw(http.HandlerFunc(h.BatchAssignTasks)))
-	mux.Handle("GET /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.ListEmployeePartnerships)))
-	mux.Handle("POST /api/v1/recording-tasks/employee-partnerships", authMw(http.HandlerFunc(h.CreateEmployeePartnership)))
-	mux.Handle("DELETE /api/v1/recording-tasks/employee-partnerships/{id}", authMw(http.HandlerFunc(h.DeleteEmployeePartnership)))
-
-	// Recording Dashboard endpoints
-	mux.Handle("GET /api/v1/recordings/dashboard/daily-report", authMw(http.HandlerFunc(h.GetDailyReport)))
-	mux.Handle("GET /api/v1/recordings/dashboard/diagnosis", authMw(http.HandlerFunc(h.GetOperationsDiagnosis)))
-	mux.Handle("PATCH /api/v1/recordings/dashboard/target", authMw(http.HandlerFunc(h.UpdateMonthlyTarget)))
-	mux.Handle("GET /api/v1/recordings/dashboard/funnel-detail", authMw(http.HandlerFunc(h.GetFunnelDetail)))
-
-	// Analysis Dashboard endpoints
-	mux.Handle("GET /api/v1/recordings/dashboard/employee-diagnosis", authMw(http.HandlerFunc(h.GetEmployeeDiagnosis)))
-	mux.Handle("GET /api/v1/recordings/dashboard/team-ability", authMw(http.HandlerFunc(h.GetTeamAbility)))
-	mux.Handle("GET /api/v1/recordings/dashboard/morning-meeting", authMw(http.HandlerFunc(h.GetMorningMeetingMaterial)))
-	mux.Handle("POST /api/v1/recordings/dashboard/morning-meeting/actions/mark-used", authMw(http.HandlerFunc(h.MarkMorningMeetingUsed)))
-	mux.Handle("GET /api/v1/recordings/dashboard/employee-growth", authMw(http.HandlerFunc(h.GetEmployeeGrowth)))
-	mux.Handle("GET /api/v1/recordings/management-events", authMw(http.HandlerFunc(h.ListManagementEvents)))
-	mux.Handle("POST /api/v1/recordings/management-events", authMw(http.HandlerFunc(h.CreateManagementEvent)))
-	mux.Handle("GET /api/v1/recordings/management-risks", authMw(http.HandlerFunc(h.GetManagementRisks)))
-	mux.Handle("POST /api/v1/recordings/management-risks/actions/handle", authMw(http.HandlerFunc(h.MarkManagementRiskHandled)))
-	mux.Handle("GET /api/v1/recordings/benchmark-clips", authMw(http.HandlerFunc(h.ListBenchmarkClips)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/generate-candidates", authMw(http.HandlerFunc(h.GenerateBenchmarkCandidates)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/{id}/actions/accept", authMw(http.HandlerFunc(h.AcceptBenchmarkClip)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/{id}/actions/reject", authMw(http.HandlerFunc(h.RejectBenchmarkClip)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/actions/mark-meeting-used", authMw(http.HandlerFunc(h.MarkBenchmarkUsedInMeeting)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/clip/{id}/actions/push", authMw(http.HandlerFunc(h.PushBenchmarkClip)))
-	mux.Handle("GET /api/v1/recordings/benchmark-clips/clip/{id}/pushes", authMw(http.HandlerFunc(h.ListBenchmarkClipPushes)))
-	mux.Handle("POST /api/v1/recordings/benchmark-clips/push/{push_id}/actions/ack", authMw(http.HandlerFunc(h.AckBenchmarkClipPush)))
-	mux.Handle("GET /api/v1/employees/learning-tasks", authMw(http.HandlerFunc(h.ListMyLearningTasks)))
-	mux.Handle("POST /api/v1/employees/learning-tasks/{push_id}/actions/acknowledge", authMw(http.HandlerFunc(h.AckMyLearningTask)))
-	mux.Handle("POST /api/v1/recordings/{id}/benchmark-clip", authMw(http.HandlerFunc(h.CreateManualBenchmarkClip)))
-
-	// Recording Prompt Advanced endpoints
-	mux.Handle("GET /api/v1/recordings/prompts", authMw(http.HandlerFunc(h.ListRecordingPrompts)))
-	mux.Handle("POST /api/v1/recordings/prompts", authMw(http.HandlerFunc(h.CreateRecordingPrompt)))
-	mux.Handle("GET /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.GetRecordingPrompt)))
-	mux.Handle("PUT /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.UpdateRecordingPrompt)))
-	mux.Handle("DELETE /api/v1/recordings/prompts/codes/{code}", authMw(http.HandlerFunc(h.DeleteRecordingPrompt)))
-	mux.Handle("POST /api/v1/recordings/prompts/codes/{code}/actions/test", authMw(http.HandlerFunc(h.TestRecordingPrompt)))
-	mux.Handle("GET /api/v1/recordings/prompts/tenant-configs", authMw(http.HandlerFunc(h.ListTenantPromptConfigs)))
-	mux.Handle("POST /api/v1/recordings/prompts/tenant-configs", authMw(http.HandlerFunc(h.CreateTenantPromptConfig)))
-	mux.Handle("PUT /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.UpdateTenantPromptConfig)))
-	mux.Handle("DELETE /api/v1/recordings/prompts/tenant-configs/{id}", authMw(http.HandlerFunc(h.DeleteTenantPromptConfig)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/recordings", Handler: h.ListRecordings, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}", Handler: h.GetRecording, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings", Handler: h.CreateRecording, Auth: true},
+		{Method: "PUT", Path: "/api/v1/recordings/{id}", Handler: h.UpdateRecording, Auth: true},
+		{Method: "PATCH", Path: "/api/v1/recordings/{id}", Handler: h.UpdateRecording, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recordings/{id}", Handler: h.DeleteRecording, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/overview", Handler: h.GetStatsOverview, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/by-scene", Handler: h.GetStatsByScene, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/by-source", Handler: h.GetStatsBySource, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks", Handler: h.ListRecordingTasks, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/{id}", Handler: h.GetTask, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/actions/complete", Handler: h.CompleteTask, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/actions/cancel", Handler: h.CancelTask, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/by-tenant", Handler: h.GetStatsByTenant, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/duration-distribution", Handler: h.GetDurationDistribution, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/stats/daily", Handler: h.GetDailyStats, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/actions/upload", Handler: h.UploadRecording, Auth: true},
+		{Method: "POST", Path: "/api/v1/trial-recordings/actions/upload", Handler: h.UploadTrialRecording, Auth: true},
+		{Method: "GET", Path: "/api/v1/trial-agreements/current-status", Handler: h.GetTrialAgreementStatus, Auth: true},
+		{Method: "POST", Path: "/api/v1/trial-agreements/accept", Handler: h.AcceptTrialAgreement, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/play-url", Handler: h.GetPlayURL, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/file-test", Handler: h.TestPlayback, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/transcribe", Handler: h.TriggerTranscribe, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/analyze", Handler: h.TriggerAnalyze, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/clean", Handler: h.TriggerClean, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/dispatch-follow-ups", Handler: h.DispatchFollowUpTasks, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/confirm-action", Handler: h.ConfirmFollowUpAction, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/generate-opening", Handler: h.GenerateOpeningScript, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/generate-ops-plan", Handler: h.GenerateOperationsPlan, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/mark-highlight", Handler: h.MarkHighlight, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/reanalyze", Handler: h.ReanalyzeRecording, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/confirm-follow-ups", Handler: h.ConfirmFollowUpTasks, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/actions/batch-transcribe", Handler: h.BatchTranscribe, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/actions/batch-delete", Handler: h.BatchDelete, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/analysis", Handler: h.GetAnalysisResult, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/therapist-reset", Handler: h.GetTherapistReset, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/reset-code-dictionary", Handler: h.GetResetCodeDictionary, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/analysis/feedback", Handler: h.SubmitAnalysisFeedback, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/learning-recommendation", Handler: h.GetLearningRecommendation, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/ops-plan-jobs/{job_id}", Handler: h.GetOperationsPlanJobStatus, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/tasks", Handler: h.GetRecordingTasks, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/route", Handler: h.GetMedicalRecordingRoute, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/segue", Handler: h.GetMedicalRecordingSegue, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/emr", Handler: h.GetRecordingEMR, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/emr/confirm", Handler: h.ConfirmRecordingEMR, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/route-review", Handler: h.RouteReviewRecording, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/search-patients", Handler: h.SearchRecordingPatients, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/quality-control", Handler: h.GetQualityControlDashboard, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/doctor-ability", Handler: h.GetDoctorAbilityRanking, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/doctor-ability/employees/{employee_id}", Handler: h.GetDoctorAbilityDetail, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/consultant-ability/employees/{employee_id}", Handler: h.GetConsultantAbilityDetail, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/communication-analysis", Handler: h.GetCommunicationAnalysis, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/weekly-meeting", Handler: h.GetWeeklyMeetingMaterial, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/weekly-summary", Handler: h.GetWeeklySummary, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/team-trends", Handler: h.GetTeamTrends, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/segue-dashboard", Handler: h.GetSegueDashboard, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/doctor-ability-segue", Handler: h.GetDoctorAbilitySegue, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/doctor-ability-segue/employees/{employee_id}", Handler: h.GetDoctorAbilitySegueDetail, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/best-practices", Handler: h.ListBestPractices, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/best-practice", Handler: h.AddBestPractice, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recordings/{id}/best-practice", Handler: h.DeleteBestPractice, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/followup-generation-mode", Handler: h.GetFollowUpGenerationMode, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/followup-generation-mode", Handler: h.UpdateFollowUpGenerationMode, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/stats", Handler: h.GetTaskStats, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/daily-briefing", Handler: h.GetDailyBriefing, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/my-tasks", Handler: h.GetMyTasks, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/employees", Handler: h.ListTaskEmployees, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/assign", Handler: h.BatchAssignTasks, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/employee-partnerships", Handler: h.ListEmployeePartnerships, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/employee-partnerships", Handler: h.CreateEmployeePartnership, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recording-tasks/employee-partnerships/{id}", Handler: h.DeleteEmployeePartnership, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/daily-report", Handler: h.GetDailyReport, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/diagnosis", Handler: h.GetOperationsDiagnosis, Auth: true},
+		{Method: "PATCH", Path: "/api/v1/recordings/dashboard/target", Handler: h.UpdateMonthlyTarget, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/funnel-detail", Handler: h.GetFunnelDetail, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/employee-diagnosis", Handler: h.GetEmployeeDiagnosis, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/team-ability", Handler: h.GetTeamAbility, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/morning-meeting", Handler: h.GetMorningMeetingMaterial, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/dashboard/morning-meeting/actions/mark-used", Handler: h.MarkMorningMeetingUsed, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/dashboard/employee-growth", Handler: h.GetEmployeeGrowth, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/management-events", Handler: h.ListManagementEvents, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/management-events", Handler: h.CreateManagementEvent, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/management-risks", Handler: h.GetManagementRisks, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/management-risks/actions/handle", Handler: h.MarkManagementRiskHandled, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/benchmark-clips", Handler: h.ListBenchmarkClips, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/generate-candidates", Handler: h.GenerateBenchmarkCandidates, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/{id}/actions/accept", Handler: h.AcceptBenchmarkClip, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/{id}/actions/reject", Handler: h.RejectBenchmarkClip, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/actions/mark-meeting-used", Handler: h.MarkBenchmarkUsedInMeeting, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/clip/{id}/actions/push", Handler: h.PushBenchmarkClip, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/benchmark-clips/clip/{id}/pushes", Handler: h.ListBenchmarkClipPushes, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/push/{push_id}/actions/ack", Handler: h.AckBenchmarkClipPush, Auth: true},
+		{Method: "GET", Path: "/api/v1/employees/learning-tasks", Handler: h.ListMyLearningTasks, Auth: true},
+		{Method: "POST", Path: "/api/v1/employees/learning-tasks/{push_id}/actions/acknowledge", Handler: h.AckMyLearningTask, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/{id}/benchmark-clip", Handler: h.CreateManualBenchmarkClip, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/prompts", Handler: h.ListRecordingPrompts, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/prompts", Handler: h.CreateRecordingPrompt, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/prompts/codes/{code}", Handler: h.GetRecordingPrompt, Auth: true},
+		{Method: "PUT", Path: "/api/v1/recordings/prompts/codes/{code}", Handler: h.UpdateRecordingPrompt, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recordings/prompts/codes/{code}", Handler: h.DeleteRecordingPrompt, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/prompts/codes/{code}/actions/test", Handler: h.TestRecordingPrompt, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/prompts/tenant-configs", Handler: h.ListTenantPromptConfigs, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/prompts/tenant-configs", Handler: h.CreateTenantPromptConfig, Auth: true},
+		{Method: "PUT", Path: "/api/v1/recordings/prompts/tenant-configs/{id}", Handler: h.UpdateTenantPromptConfig, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recordings/prompts/tenant-configs/{id}", Handler: h.DeleteTenantPromptConfig, Auth: true},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 
 	// Analysis routing + audit endpoints
 	h.RegisterAnalysisRoutes(mux, jwtSecret)

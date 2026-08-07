@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -14,21 +15,16 @@ import (
 
 // RegisterSalesRoutes registers all lingce-sales API routes.
 func (h *Handler) RegisterSalesRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Prospect CRUD
-	mux.Handle("POST /api/v1/lingce-sales/prospects", authMw(http.HandlerFunc(h.CreateSalesProspect)))
-	mux.Handle("GET /api/v1/lingce-sales/prospects", authMw(http.HandlerFunc(h.ListSalesProspects)))
-	mux.Handle("GET /api/v1/lingce-sales/prospects/{id}", authMw(http.HandlerFunc(h.GetSalesProspect)))
-	mux.Handle("PUT /api/v1/lingce-sales/prospects/{id}", authMw(http.HandlerFunc(h.UpdateSalesProspect)))
-
-	// Stage management
-	mux.Handle("POST /api/v1/lingce-sales/prospects/{id}/confirm-stage-change", authMw(http.HandlerFunc(h.ConfirmSalesStageChange)))
-	mux.Handle("GET /api/v1/lingce-sales/prospects/{id}/stage-history", authMw(http.HandlerFunc(h.GetSalesStageHistory)))
-
-	// Recording association
-	mux.Handle("POST /api/v1/lingce-sales/recordings/{id}/associate-prospect", authMw(http.HandlerFunc(h.AssociateSalesRecordingToProspect)))
-	mux.Handle("GET /api/v1/lingce-sales/prospects/{id}/recordings", authMw(http.HandlerFunc(h.GetSalesProspectRecordings)))
+	router.Register(mux, []router.Route{
+		{Method: "POST", Path: "/api/v1/lingce-sales/prospects", Handler: h.CreateSalesProspect, Auth: true},
+		{Method: "GET", Path: "/api/v1/lingce-sales/prospects", Handler: h.ListSalesProspects, Auth: true},
+		{Method: "GET", Path: "/api/v1/lingce-sales/prospects/{id}", Handler: h.GetSalesProspect, Auth: true},
+		{Method: "PUT", Path: "/api/v1/lingce-sales/prospects/{id}", Handler: h.UpdateSalesProspect, Auth: true},
+		{Method: "POST", Path: "/api/v1/lingce-sales/prospects/{id}/confirm-stage-change", Handler: h.ConfirmSalesStageChange, Auth: true},
+		{Method: "GET", Path: "/api/v1/lingce-sales/prospects/{id}/stage-history", Handler: h.GetSalesStageHistory, Auth: true},
+		{Method: "POST", Path: "/api/v1/lingce-sales/recordings/{id}/associate-prospect", Handler: h.AssociateSalesRecordingToProspect, Auth: true},
+		{Method: "GET", Path: "/api/v1/lingce-sales/prospects/{id}/recordings", Handler: h.GetSalesProspectRecordings, Auth: true},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // CreateSalesProspect handles POST /api/v1/lingce-sales/prospects

@@ -8,24 +8,26 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
 )
 
 func (h *Handler) RegisterAnalysisRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-	mux.Handle("GET /api/v1/analysis/routes/options/roles", authMw(http.HandlerFunc(h.ListAnalysisRoleOptions)))
-	mux.Handle("GET /api/v1/analysis/routes/options/pipelines", authMw(http.HandlerFunc(h.ListAnalysisPipelineOptions)))
-	mux.Handle("GET /api/v1/analysis/routes", authMw(http.HandlerFunc(h.ListAnalysisRoutes)))
-	mux.Handle("GET /api/v1/analysis/routes/{id}", authMw(http.HandlerFunc(h.GetAnalysisRoute)))
-	mux.Handle("POST /api/v1/analysis/routes", authMw(http.HandlerFunc(h.CreateAnalysisRoute)))
-	mux.Handle("PUT /api/v1/analysis/routes/{id}", authMw(http.HandlerFunc(h.UpdateAnalysisRoute)))
-	mux.Handle("POST /api/v1/analysis/routes/{id}/publish", authMw(http.HandlerFunc(h.PublishAnalysisRoute)))
-	mux.Handle("POST /api/v1/analysis/routes/{id}/rollback", authMw(http.HandlerFunc(h.RollbackAnalysisRoute)))
-	mux.Handle("GET /api/v1/analysis/runs", authMw(http.HandlerFunc(h.ListAnalysisRuns)))
-	mux.Handle("GET /api/v1/analysis/runs/{id}", authMw(http.HandlerFunc(h.GetAnalysisRun)))
-	mux.Handle("GET /api/v1/analysis/runs/{id}/steps", authMw(http.HandlerFunc(h.ListAnalysisRunSteps)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/analysis/routes/options/roles", Handler: h.ListAnalysisRoleOptions, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/routes/options/pipelines", Handler: h.ListAnalysisPipelineOptions, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/routes", Handler: h.ListAnalysisRoutes, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/routes/{id}", Handler: h.GetAnalysisRoute, Auth: true},
+		{Method: "POST", Path: "/api/v1/analysis/routes", Handler: h.CreateAnalysisRoute, Auth: true},
+		{Method: "PUT", Path: "/api/v1/analysis/routes/{id}", Handler: h.UpdateAnalysisRoute, Auth: true},
+		{Method: "POST", Path: "/api/v1/analysis/routes/{id}/publish", Handler: h.PublishAnalysisRoute, Auth: true},
+		{Method: "POST", Path: "/api/v1/analysis/routes/{id}/rollback", Handler: h.RollbackAnalysisRoute, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/runs", Handler: h.ListAnalysisRuns, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/runs/{id}", Handler: h.GetAnalysisRun, Auth: true},
+		{Method: "GET", Path: "/api/v1/analysis/runs/{id}/steps", Handler: h.ListAnalysisRunSteps, Auth: true},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 func (h *Handler) ListAnalysisRoleOptions(w http.ResponseWriter, r *http.Request) {

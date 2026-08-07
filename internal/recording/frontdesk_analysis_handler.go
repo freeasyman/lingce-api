@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -45,13 +46,12 @@ func respondError(w http.ResponseWriter, status int, message string) {
 
 // RegisterFrontdeskAnalysisRoutes registers front-desk analysis routes
 func (h *Handler) RegisterFrontdeskAnalysisRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	// Knowledge base endpoints
-	mux.Handle("GET /api/v1/frontdesk/knowledge-bases", authMw(http.HandlerFunc(h.ListFrontdeskKnowledgeBases)))
-	mux.Handle("GET /api/v1/frontdesk/knowledge-bases/{kb_type}", authMw(http.HandlerFunc(h.GetFrontdeskKnowledgeBase)))
-	mux.Handle("POST /api/v1/frontdesk/knowledge-bases", authMw(http.HandlerFunc(h.CreateFrontdeskKnowledgeBase)))
-	mux.Handle("PUT /api/v1/frontdesk/knowledge-bases/{kb_type}", authMw(http.HandlerFunc(h.UpdateFrontdeskKnowledgeBase)))
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/frontdesk/knowledge-bases", Handler: h.ListFrontdeskKnowledgeBases, Auth: true},
+		{Method: "GET", Path: "/api/v1/frontdesk/knowledge-bases/{kb_type}", Handler: h.GetFrontdeskKnowledgeBase, Auth: true},
+		{Method: "POST", Path: "/api/v1/frontdesk/knowledge-bases", Handler: h.CreateFrontdeskKnowledgeBase, Auth: true},
+		{Method: "PUT", Path: "/api/v1/frontdesk/knowledge-bases/{kb_type}", Handler: h.UpdateFrontdeskKnowledgeBase, Auth: true},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
 // ListFrontdeskShiftAnalyses lists shift analyses for a tenant
