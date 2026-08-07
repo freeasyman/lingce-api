@@ -149,8 +149,8 @@ func main() {
 	wecomStore := wecom.NewStore(pool)
 	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
 	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
-	wecomHandler := wecom.NewHandler(wecomService, cfg.External.LingceWorkerToken)
-	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
+	wecomHandler := wecom.NewHandler(wecomService)
+	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
 
 	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)
@@ -202,10 +202,10 @@ func main() {
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, wecomService, cfg.External.EmployeeWebBaseURL)
 	wecomService.SetBindingUpsertHook(opportunityAlertService.AutoResendSkippedUnboundForEmployee)
-	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService, cfg.External.InternalWorkerToken)
+	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService)
 	opportunityAlertHandler.RegisterConfigRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)
-	opportunityAlertHandler.RegisterInternalRoutes(mux)
+	opportunityAlertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
 	// Register medical recording module
 	recStore := recording.NewStore(pool)

@@ -8,17 +8,17 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
 type Handler struct {
-	service       *Service
-	internalToken string
+	service *Service
 }
 
-func NewHandler(service *Service, internalToken string) *Handler {
-	return &Handler{service: service, internalToken: strings.TrimSpace(internalToken)}
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
 }
 
 func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -68,15 +68,18 @@ func (h *Handler) RegisterMobileRoutes(mux *http.ServeMux, jwtSecret string) {
 	mux.Handle("POST /api/v1/mobile/opportunity-alerts/{id}/actions/ignore", authMw(http.HandlerFunc(h.MarkIgnored)))
 }
 
-func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /api/v1/internal/opportunity-alerts/from-recording", http.HandlerFunc(h.CreateFromRecordingInternal))
+func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
+	router.Register(mux, []router.Route{
+		{
+			Method:   "POST",
+			Path:     "/api/v1/internal/opportunity-alerts/from-recording",
+			Handler:  h.CreateFromRecordingInternal,
+			AuthMode: "internal",
+		},
+	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
 }
 
 func (h *Handler) CreateFromRecordingInternal(w http.ResponseWriter, r *http.Request) {
-	if h.internalToken != "" && strings.TrimSpace(r.Header.Get("X-Internal-Token")) != h.internalToken {
-		httputil.WriteUnauthorized(w, "invalid internal token")
-		return
-	}
 	var req struct {
 		RecordingID   int64  `json:"recording_id"`
 		TriggerSource string `json:"trigger_source"`

@@ -14,20 +14,19 @@ import (
 )
 
 type Handler struct {
-	service       *Service
-	internalToken string
+	service *Service
 }
 
-func NewHandler(service *Service, internalToken string) *Handler {
-	return &Handler{service: service, internalToken: strings.TrimSpace(internalToken)}
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
 }
 
-func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgxpool.Pool) {
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgxpool.Pool, internalToken string) {
 	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/wecom/callback", Handler: h.VerifyURL},
 		{Method: "POST", Path: "/api/v1/wecom/callback", Handler: h.Callback},
 		{Method: "POST", Path: "/api/v1/wecom/oauth/login", Handler: h.OAuthLogin},
-		{Method: "POST", Path: "/api/v1/wecom/internal/send", Handler: h.InternalSend},
+		{Method: "POST", Path: "/api/v1/wecom/internal/send", Handler: h.InternalSend, AuthMode: "internal"},
 		{
 			Method:           "POST",
 			Path:             "/api/v1/wecom/bind",
@@ -47,7 +46,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 		{Method: "POST", Path: "/api/v1/ops/wecom/bindings", Handler: h.CreateBinding, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "DELETE", Path: "/api/v1/ops/wecom/bindings/{id}", Handler: h.DeleteBinding, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
-	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, Pool: pool})
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, Pool: pool, InternalToken: strings.TrimSpace(internalToken)})
 }
 
 func (h *Handler) isAdmin(r *http.Request) bool {
@@ -139,10 +138,6 @@ func (h *Handler) Bind(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) InternalSend(w http.ResponseWriter, r *http.Request) {
-	if h.internalToken != "" && strings.TrimSpace(r.Header.Get("X-Internal-Token")) != h.internalToken {
-		httputil.WriteUnauthorized(w, "invalid internal token")
-		return
-	}
 	var req InternalSendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
