@@ -79,6 +79,9 @@ type Alert struct {
 	UpdatedAt         time.Time
 	RecipientType     *RecipientType
 	RecipientReadAt   *time.Time
+	// 投递汇总，仅管理端列表填充（ListForAdmin），其它查询保持零值
+	DeliveredCount  int
+	TotalRecipients int
 }
 
 type AlertRecipient struct {
