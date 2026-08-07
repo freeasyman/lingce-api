@@ -60,6 +60,35 @@ type OperationLog struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// SystemActionLog represents an institution-side system action log entry.
+type SystemActionLog struct {
+	ID             int64      `json:"id"`
+	TenantID       *int64     `json:"tenant_id,omitempty"`
+	TenantName     *string    `json:"tenant_name,omitempty"`
+	ActorID        *int64     `json:"actor_id,omitempty"`
+	ActorName      *string    `json:"actor_name,omitempty"`
+	ActorRoleCode  *string    `json:"actor_role_code,omitempty"`
+	ActorRoleName  *string    `json:"actor_role_name,omitempty"`
+	LogType        string     `json:"log_type"`
+	ActionCode     string     `json:"action_code"`
+	ActionName     string     `json:"action_name"`
+	RoutePath      *string    `json:"route_path,omitempty"`
+	Result         string     `json:"result"`
+	ErrorMessage   *string    `json:"error_message,omitempty"`
+	ObjectType     *string    `json:"object_type,omitempty"`
+	ObjectID       *string    `json:"object_id,omitempty"`
+	ObjectName     *string    `json:"object_name,omitempty"`
+	RequestSummary JSONObject `json:"request_summary,omitempty"`
+	BeforeSummary  JSONObject `json:"before_summary,omitempty"`
+	AfterSummary   JSONObject `json:"after_summary,omitempty"`
+	IPAddress      *string    `json:"ip_address,omitempty"`
+	UserAgent      *string    `json:"user_agent,omitempty"`
+	DeviceType     *string    `json:"device_type,omitempty"`
+	TraceID        *string    `json:"trace_id,omitempty"`
+	RequestID      *string    `json:"request_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
 // LLMModelConfig represents an LLM model configuration
 type LLMModelConfig struct {
 	ID               int64      `json:"id"`

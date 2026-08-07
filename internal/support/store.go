@@ -526,6 +526,205 @@ func (s *Store) GetOperationLogByID(ctx context.Context, id int64) (*OperationLo
 	return &l, nil
 }
 
+// CreateSystemActionLog creates an institution-side system action log entry.
+func (s *Store) CreateSystemActionLog(ctx context.Context, log *SystemActionLog) error {
+	query := `
+		INSERT INTO system_action_logs (
+			tenant_id, tenant_name, actor_id, actor_name, actor_role_code, actor_role_name,
+			log_type, action_code, action_name, route_path, result, error_message,
+			object_type, object_id, object_name, request_summary, before_summary, after_summary,
+			ip_address, user_agent, device_type, trace_id, request_id, created_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15, COALESCE($16, '{}'::jsonb), COALESCE($17, '{}'::jsonb), COALESCE($18, '{}'::jsonb),
+			$19, $20, $21, $22, $23, NOW()
+		)
+		RETURNING id, created_at
+	`
+
+	return s.pool.QueryRow(ctx, query,
+		log.TenantID, log.TenantName, log.ActorID, log.ActorName, log.ActorRoleCode, log.ActorRoleName,
+		log.LogType, log.ActionCode, log.ActionName, log.RoutePath, log.Result, log.ErrorMessage,
+		log.ObjectType, log.ObjectID, log.ObjectName, log.RequestSummary, log.BeforeSummary, log.AfterSummary,
+		log.IPAddress, log.UserAgent, log.DeviceType, log.TraceID, log.RequestID,
+	).Scan(&log.ID, &log.CreatedAt)
+}
+
+// GetSystemActionActorSnapshot resolves tenant and institution employee display snapshots.
+func (s *Store) GetSystemActionActorSnapshot(ctx context.Context, tenantID, actorID int64) (tenantName, actorName, roleCode, roleName string, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(t.name, ''), CONCAT('租户#', t.id::text)) AS tenant_name,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), CONCAT('员工#', e.id::text)) AS actor_name,
+		       COALESCE((
+		           SELECT lower(trim(er.role_code))
+		           FROM institution_employee_roles er
+		           WHERE er.tenant_id = e.tenant_id
+		             AND er.employee_id = e.id
+		             AND trim(COALESCE(er.role_code, '')) <> ''
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
+		           LIMIT 1
+		       ), '') AS role_code,
+		       COALESCE((
+		           SELECT COALESCE(NULLIF(ir.name, ''), NULLIF(r.name_cn, ''), er.role_code)
+		           FROM institution_employee_roles er
+		           LEFT JOIN institution_roles ir
+		             ON ir.tenant_id = er.tenant_id
+		            AND lower(ir.code) = lower(er.role_code)
+		            AND ir.deleted_at IS NULL
+		           LEFT JOIN inst_roles r ON lower(r.code) = lower(er.role_code)
+		           WHERE er.tenant_id = e.tenant_id
+		             AND er.employee_id = e.id
+		             AND trim(COALESCE(er.role_code, '')) <> ''
+		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
+		           LIMIT 1
+		       ), '') AS role_name
+		FROM employees e
+		JOIN tenants t ON t.id = e.tenant_id
+		WHERE e.tenant_id = $1
+		  AND e.id = $2
+		  AND e.deleted_at IS NULL
+		  AND t.deleted_at IS NULL
+	`, tenantID, actorID).Scan(&tenantName, &actorName, &roleCode, &roleName)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("failed to resolve system action actor snapshot: %w", err)
+	}
+	return tenantName, actorName, roleCode, roleName, nil
+}
+
+// ListSystemActionLogs retrieves a paginated list of system action logs.
+func (s *Store) ListSystemActionLogs(ctx context.Context, req SystemActionLogListRequest) ([]*SystemActionLog, int, error) {
+	conditions := []string{"1=1"}
+	args := []interface{}{}
+	argIndex := 1
+
+	if req.TenantID != nil {
+		conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
+		args = append(args, *req.TenantID)
+		argIndex++
+	}
+	if req.ActorID != nil {
+		conditions = append(conditions, fmt.Sprintf("actor_id = $%d", argIndex))
+		args = append(args, *req.ActorID)
+		argIndex++
+	}
+	if req.Keyword != nil && strings.TrimSpace(*req.Keyword) != "" {
+		conditions = append(conditions, fmt.Sprintf(`(
+			tenant_name ILIKE $%d OR actor_name ILIKE $%d OR action_name ILIKE $%d
+			OR action_code ILIKE $%d OR object_name ILIKE $%d OR object_id ILIKE $%d
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.Keyword)+"%")
+		argIndex++
+	}
+	if req.LogType != nil && strings.TrimSpace(*req.LogType) != "" {
+		conditions = append(conditions, fmt.Sprintf("log_type = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.LogType))
+		argIndex++
+	}
+	if req.ActionCode != nil && strings.TrimSpace(*req.ActionCode) != "" {
+		conditions = append(conditions, fmt.Sprintf("action_code = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.ActionCode))
+		argIndex++
+	}
+	if req.Result != nil && strings.TrimSpace(*req.Result) != "" {
+		conditions = append(conditions, fmt.Sprintf("result = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.Result))
+		argIndex++
+	}
+	if req.IPAddress != nil && strings.TrimSpace(*req.IPAddress) != "" {
+		conditions = append(conditions, fmt.Sprintf("ip_address ILIKE $%d", argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.IPAddress)+"%")
+		argIndex++
+	}
+	if req.DeviceType != nil && strings.TrimSpace(*req.DeviceType) != "" {
+		conditions = append(conditions, fmt.Sprintf("device_type = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.DeviceType))
+		argIndex++
+	}
+	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.StartDate))
+		argIndex++
+	}
+	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
+		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.EndDate))
+		argIndex++
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+	var total int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM system_action_logs WHERE %s", whereClause)
+	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count system action logs: %w", err)
+	}
+
+	offset := (req.Page - 1) * req.PageSize
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, tenant_name, actor_id, actor_name, actor_role_code, actor_role_name,
+		       log_type, action_code, action_name, route_path, result, error_message,
+		       object_type, object_id, object_name, request_summary, before_summary, after_summary,
+		       ip_address, user_agent, device_type, trace_id, request_id, created_at
+		FROM system_action_logs
+		WHERE %s
+		ORDER BY created_at DESC, id DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+	args = append(args, req.PageSize, offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query system action logs: %w", err)
+	}
+	defer rows.Close()
+
+	logs := make([]*SystemActionLog, 0)
+	for rows.Next() {
+		var l SystemActionLog
+		if err := rows.Scan(
+			&l.ID, &l.TenantID, &l.TenantName, &l.ActorID, &l.ActorName, &l.ActorRoleCode, &l.ActorRoleName,
+			&l.LogType, &l.ActionCode, &l.ActionName, &l.RoutePath, &l.Result, &l.ErrorMessage,
+			&l.ObjectType, &l.ObjectID, &l.ObjectName, &l.RequestSummary, &l.BeforeSummary, &l.AfterSummary,
+			&l.IPAddress, &l.UserAgent, &l.DeviceType, &l.TraceID, &l.RequestID, &l.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("failed to scan system action log: %w", err)
+		}
+		logs = append(logs, &l)
+	}
+	if rows.Err() != nil {
+		return nil, 0, fmt.Errorf("failed to iterate system action logs: %w", rows.Err())
+	}
+
+	return logs, total, nil
+}
+
+// GetSystemActionLogByID retrieves a system action log by ID.
+func (s *Store) GetSystemActionLogByID(ctx context.Context, id int64) (*SystemActionLog, error) {
+	query := `
+		SELECT id, tenant_id, tenant_name, actor_id, actor_name, actor_role_code, actor_role_name,
+		       log_type, action_code, action_name, route_path, result, error_message,
+		       object_type, object_id, object_name, request_summary, before_summary, after_summary,
+		       ip_address, user_agent, device_type, trace_id, request_id, created_at
+		FROM system_action_logs
+		WHERE id = $1
+	`
+	var l SystemActionLog
+	err := s.pool.QueryRow(ctx, query, id).Scan(
+		&l.ID, &l.TenantID, &l.TenantName, &l.ActorID, &l.ActorName, &l.ActorRoleCode, &l.ActorRoleName,
+		&l.LogType, &l.ActionCode, &l.ActionName, &l.RoutePath, &l.Result, &l.ErrorMessage,
+		&l.ObjectType, &l.ObjectID, &l.ObjectName, &l.RequestSummary, &l.BeforeSummary, &l.AfterSummary,
+		&l.IPAddress, &l.UserAgent, &l.DeviceType, &l.TraceID, &l.RequestID, &l.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("system action log not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query system action log: %w", err)
+	}
+	return &l, nil
+}
+
 // LLM Model Config Methods
 
 // ListLLMModelConfigs retrieves a paginated list of LLM model configs

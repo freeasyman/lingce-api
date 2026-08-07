@@ -1148,6 +1148,39 @@ func (s *Service) GetVisitByID(ctx context.Context, id int64) (map[string]interf
 	return s.store.GetVisitByID(ctx, id)
 }
 
+func (s *Service) ListEncounters(ctx context.Context, req EncounterListRequest) ([]*EncounterResponse, int64, error) {
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100
+	}
+	items, total, err := s.store.ListEncounters(ctx, req.TenantID, req.RecordingID, req.Keyword, req.Page, req.PageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]*EncounterResponse, 0, len(items))
+	for _, item := range items {
+		out = append(out, toEncounterResponse(item))
+	}
+	return out, total, nil
+}
+
+func (s *Service) GetEncounterByID(ctx context.Context, id int64) (*EncounterResponse, error) {
+	item, err := s.store.GetEncounterByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toEncounterResponse(item), nil
+}
+
+func (s *Service) ProjectEncounterFromRecording(ctx context.Context, recordingID int64) (int, error) {
+	return s.store.ProjectEncounterFromRecording(ctx, recordingID)
+}
+
 // Helper functions
 
 // toNotificationResponse converts a Notification to NotificationResponse
@@ -1190,6 +1223,237 @@ func toOperationLogResponse(l *OperationLog) *OperationLogResponse {
 		Duration:     l.Duration,
 		CreatedAt:    l.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+}
+
+func toSystemActionLogResponse(l *SystemActionLog) *SystemActionLogResponse {
+	if l == nil {
+		return nil
+	}
+	return &SystemActionLogResponse{
+		ID:             l.ID,
+		TenantID:       l.TenantID,
+		TenantName:     l.TenantName,
+		ActorID:        l.ActorID,
+		ActorName:      l.ActorName,
+		ActorRoleCode:  l.ActorRoleCode,
+		ActorRoleName:  l.ActorRoleName,
+		LogType:        l.LogType,
+		ActionCode:     l.ActionCode,
+		ActionName:     l.ActionName,
+		RoutePath:      l.RoutePath,
+		Result:         l.Result,
+		Summary:        buildSystemActionLogSummary(l),
+		ErrorMessage:   l.ErrorMessage,
+		IPAddress:      l.IPAddress,
+		UserAgent:      l.UserAgent,
+		DeviceType:     l.DeviceType,
+		ObjectType:     l.ObjectType,
+		ObjectID:       l.ObjectID,
+		ObjectName:     l.ObjectName,
+		RequestSummary: l.RequestSummary,
+		BeforeSummary:  l.BeforeSummary,
+		AfterSummary:   l.AfterSummary,
+		TraceID:        l.TraceID,
+		RequestID:      l.RequestID,
+		CreatedAt:      formatDBLocalTime(l.CreatedAt),
+	}
+}
+
+func formatDBLocalTime(t time.Time) string {
+	// system_action_logs uses timestamp without timezone; preserve DB wall-clock semantics in API output.
+	localWallClock := time.Date(
+		t.Year(), t.Month(), t.Day(),
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(),
+		time.Local,
+	)
+	return localWallClock.Format("2006-01-02T15:04:05Z07:00")
+}
+
+func buildSystemActionLogSummary(l *SystemActionLog) string {
+	if l == nil {
+		return ""
+	}
+	actor := "未知账号"
+	if l.ActorName != nil && strings.TrimSpace(*l.ActorName) != "" {
+		actor = strings.TrimSpace(*l.ActorName)
+	}
+	target := ""
+	if l.ObjectName != nil && strings.TrimSpace(*l.ObjectName) != "" {
+		target = "：" + strings.TrimSpace(*l.ObjectName)
+	} else if l.ObjectID != nil && strings.TrimSpace(*l.ObjectID) != "" {
+		target = "：" + strings.TrimSpace(*l.ObjectID)
+	}
+	result := "成功"
+	if l.Result == "failure" {
+		result = "失败"
+	}
+	return fmt.Sprintf("%s %s%s（%s）", actor, l.ActionName, target, result)
+}
+
+func normalizeSystemActionLogWriteRequest(req *SystemActionLogWriteRequest) {
+	req.LogType = strings.TrimSpace(req.LogType)
+	req.ActionCode = strings.TrimSpace(req.ActionCode)
+	req.ActionName = strings.TrimSpace(req.ActionName)
+	req.Result = strings.TrimSpace(req.Result)
+	if req.Result == "" {
+		req.Result = "success"
+	}
+	req.Result = strings.ToLower(req.Result)
+	if req.Result != "success" && req.Result != "failure" {
+		req.Result = "success"
+	}
+}
+
+func isValidSystemActionLogCode(value string) bool {
+	return systemActionLogCodePattern.MatchString(strings.TrimSpace(value))
+}
+
+func sanitizeJSONObject(value JSONObject) JSONObject {
+	if value == nil {
+		return JSONObject{}
+	}
+	out := make(JSONObject, len(value))
+	for key, raw := range value {
+		out[key] = sanitizeLogValue(key, raw)
+	}
+	return out
+}
+
+func sanitizeLogValue(key string, value any) any {
+	if isSensitiveLogKey(key) {
+		return "[redacted]"
+	}
+	switch v := value.(type) {
+	case JSONObject:
+		return sanitizeJSONObject(v)
+	case map[string]interface{}:
+		child := make(JSONObject, len(v))
+		for k, raw := range v {
+			child[k] = sanitizeLogValue(k, raw)
+		}
+		return child
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = sanitizeAnonymousLogValue(item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func sanitizeAnonymousLogValue(value any) any {
+	switch v := value.(type) {
+	case JSONObject:
+		return sanitizeJSONObject(v)
+	case map[string]interface{}:
+		child := make(JSONObject, len(v))
+		for k, raw := range v {
+			child[k] = sanitizeLogValue(k, raw)
+		}
+		return child
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, item := range v {
+			out[i] = sanitizeAnonymousLogValue(item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitiveLogKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "password", "passwd", "secret", "token", "access_token", "refresh_token", "authorization", "auth", "captcha", "sms_code", "verify_code", "code":
+		return true
+	default:
+		return false
+	}
+}
+
+func ensureJSONObject(value JSONObject) JSONObject {
+	if value == nil {
+		return JSONObject{}
+	}
+	return value
+}
+
+func trimStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	return stringPtrIfNotBlank(*value)
+}
+
+func stringPtrIfNotBlank(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func anyToStringPtr(value any) *string {
+	if value == nil {
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		return stringPtrIfNotBlank(v)
+	case float64:
+		out := strconv.FormatFloat(v, 'f', -1, 64)
+		return &out
+	case int:
+		out := strconv.Itoa(v)
+		return &out
+	case int64:
+		out := strconv.FormatInt(v, 10)
+		return &out
+	default:
+		out := fmt.Sprintf("%v", v)
+		return stringPtrIfNotBlank(out)
+	}
+}
+
+func toEncounterResponse(item *Encounter) *EncounterResponse {
+	if item == nil {
+		return nil
+	}
+	resp := &EncounterResponse{
+		ID:                  item.ID,
+		TenantID:            item.TenantID,
+		RecordingID:         item.RecordingID,
+		AnalysisRunID:       item.AnalysisRunID,
+		SequenceNo:          item.SequenceNo,
+		Title:               item.Title,
+		Summary:             item.Summary,
+		PatientName:         item.PatientName,
+		PatientAge:          item.PatientAge,
+		PatientGender:       item.PatientGender,
+		PatientPhone:        item.PatientPhone,
+		EmployeeID:          item.EmployeeID,
+		EmployeeName:        item.EmployeeName,
+		Scene:               item.Scene,
+		StartSeconds:        item.StartSeconds,
+		EndSeconds:          item.EndSeconds,
+		SourcePromptCode:    item.SourcePromptCode,
+		SourcePromptVersion: item.SourcePromptVersion,
+		SourceType:          item.SourceType,
+		AnalysisPayload:     item.AnalysisPayload,
+		CreatedAt:           item.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:           item.UpdatedAt.Format(time.RFC3339),
+	}
+	if item.StartAt != nil {
+		v := item.StartAt.Format(time.RFC3339)
+		resp.StartAt = &v
+	}
+	if item.EndAt != nil {
+		v := item.EndAt.Format(time.RFC3339)
+		resp.EndAt = &v
+	}
+	return resp
 }
 
 // toLLMModelConfigResponse converts an LLMModelConfig to LLMModelConfigResponse
