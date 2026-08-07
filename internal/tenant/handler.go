@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -20,6 +21,14 @@ type Handler struct {
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func resolveTenantScopeID(claims *auth.Claims, tenantIDParam string, allowAllOnAdmin bool) (int64, error) {
+	tenantIDParam = strings.TrimSpace(tenantIDParam)
+	if claims != nil && claims.UserType == auth.UserTypeAdmin && allowAllOnAdmin && tenantIDParam == "" {
+		return 0, nil
+	}
+	return tenancy.RequireTenantID(claims, tenantIDParam)
 }
 
 // RegisterRoutes registers tenant routes
@@ -65,6 +74,12 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 
 // ListTenants handles listing tenants
 func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
 	var req TenantListRequest
 	req.Keyword = strings.TrimSpace(r.URL.Query().Get("keyword"))
 	req.Name = r.URL.Query().Get("name")
@@ -86,15 +101,14 @@ func (h *Handler) ListTenants(w http.ResponseWriter, r *http.Request) {
 		req.PageSize = 20
 	}
 
-	// Tenant-side accounts can only see their own tenant in list API.
 	if !h.isAdmin(r) {
-		claims := middleware.GetUserClaims(r.Context())
-		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
-			httputil.WriteForbidden(w, "Admin access required")
+		tenantID, err := resolveTenantScopeID(claims, "", false)
+		if err != nil {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
 
-		tenant, err := h.service.GetTenantByID(r.Context(), *claims.TenantID)
+		tenant, err := h.service.GetTenantByID(r.Context(), tenantID)
 		if err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
@@ -499,17 +513,20 @@ func (h *Handler) GetSubscriptionEvents(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if !h.isAdmin(r) {
-		claims := middleware.GetUserClaims(r.Context())
-		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 || *claims.TenantID != id {
-			httputil.WriteForbidden(w, "Admin access required")
-			return
-		}
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
 	}
 	policy, err := h.service.GetTenantFeatures(r.Context(), id)
 	if err != nil {
@@ -592,7 +609,7 @@ func (h *Handler) GetTenantProfile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
 		httputil.WriteForbidden(w, "No tenant access")
 		return
 	}
@@ -615,7 +632,7 @@ func (h *Handler) UpdateTenantProfile(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
 		httputil.WriteForbidden(w, "No tenant access")
 		return
 	}
@@ -662,17 +679,19 @@ func (h *Handler) InitTrialTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetTrialHomeSummary(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if !h.isAdmin(r) {
-		claims := middleware.GetUserClaims(r.Context())
-		if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 || *claims.TenantID != id {
-			httputil.WriteForbidden(w, "Admin access required")
-			return
-		}
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
 	}
 	summary, err := h.service.GetTrialHomeSummary(r.Context(), id)
 	if err != nil {
@@ -693,7 +712,7 @@ func (h *Handler) MarkTrialDemoViewed(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
 		httputil.WriteForbidden(w, "No tenant access")
 		return
 	}
@@ -726,7 +745,7 @@ func (h *Handler) GetInstitutionStatistics(w http.ResponseWriter, r *http.Reques
 		httputil.WriteBadRequest(w, "Invalid tenant ID")
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID != id) {
+	if err := tenancy.RequireSameTenant(claims, id); err != nil {
 		httputil.WriteForbidden(w, "No tenant access")
 		return
 	}
