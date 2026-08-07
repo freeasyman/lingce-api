@@ -85,19 +85,8 @@ type promptDebugListRow struct {
 }
 
 func (h *Handler) ListPromptDebugRecordings(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, strings.TrimSpace(r.URL.Query().Get("tenant_id")))
-	if err != nil {
-		if err.Error() == "no tenant access" || err.Error() == "access denied" {
-			httputil.WriteForbidden(w, err.Error())
-			return
-		}
-		httputil.WriteBadRequest(w, err.Error())
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
+	if !ok {
 		return
 	}
 	if len(scope.TenantIDs) == 0 {

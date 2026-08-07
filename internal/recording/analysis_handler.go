@@ -9,7 +9,6 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
-	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
 )
@@ -31,7 +30,7 @@ func (h *Handler) RegisterAnalysisRoutes(mux *http.ServeMux, jwtSecret string) {
 }
 
 func (h *Handler) ListAnalysisRoleOptions(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -44,7 +43,7 @@ func (h *Handler) ListAnalysisRoleOptions(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) ListAnalysisPipelineOptions(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.resolveAnalysisScope(w, r); !ok {
+	if _, ok := resolveRecordingScope(w, r, h.service.store.pool); !ok {
 		return
 	}
 	items, err := h.service.ListAnalysisPipelineOptions(r.Context())
@@ -56,7 +55,7 @@ func (h *Handler) ListAnalysisPipelineOptions(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) ListAnalysisRoutes(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -93,7 +92,7 @@ func (h *Handler) ListAnalysisRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAnalysisRoute(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -110,7 +109,7 @@ func (h *Handler) GetAnalysisRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CreateAnalysisRoute(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -128,7 +127,7 @@ func (h *Handler) CreateAnalysisRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAnalysisRoute(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -150,7 +149,7 @@ func (h *Handler) UpdateAnalysisRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) PublishAnalysisRoute(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -172,7 +171,7 @@ func (h *Handler) PublishAnalysisRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RollbackAnalysisRoute(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -189,7 +188,7 @@ func (h *Handler) RollbackAnalysisRoute(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) ListAnalysisRuns(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -224,7 +223,7 @@ func (h *Handler) ListAnalysisRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAnalysisRun(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -241,7 +240,7 @@ func (h *Handler) GetAnalysisRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListAnalysisRunSteps(w http.ResponseWriter, r *http.Request) {
-	scope, ok := h.resolveAnalysisScope(w, r)
+	scope, ok := resolveRecordingScope(w, r, h.service.store.pool)
 	if !ok {
 		return
 	}
@@ -255,24 +254,6 @@ func (h *Handler) ListAnalysisRunSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, items)
-}
-
-func (h *Handler) resolveAnalysisScope(w http.ResponseWriter, r *http.Request) (*tenancy.Scope, bool) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "invalid token")
-		return nil, false
-	}
-	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
-	if err != nil {
-		if err.Error() == "no tenant access" || err.Error() == "access denied" {
-			httputil.WriteForbidden(w, err.Error())
-		} else {
-			httputil.WriteBadRequest(w, err.Error())
-		}
-		return nil, false
-	}
-	return scope, true
 }
 
 func parsePositiveInt(raw string, def int) int {
