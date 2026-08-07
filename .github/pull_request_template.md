@@ -14,6 +14,7 @@ Migration file(s):
 Validation:
 
 - [ ] `make check-migrations`
+- [ ] `make check-db-migration-link`
 - [ ] `go test ./internal/store`
 - [ ] `./bin/lingce-api --config ./configs/dev.toml --migrate-only` was considered for the target environment.
 

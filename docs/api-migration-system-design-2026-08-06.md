@@ -192,10 +192,12 @@ CI 至少检查：
 - migration 文件未被修改后复用旧版本号
 - 代码里声明的最低 schema 版本与 migration 账本一致
 - 新增数据库对象是否有对应 migration
+- DB 敏感文件变更时，必须同时出现版本化 migration 文件
 
 当前仓库已新增 `.github/workflows/migration-check.yml`，会执行：
 
 - `make check-migrations`
+- `make check-db-migration-link`
 - `go test ./internal/store -run TestLoadEmbeddedSchemaMigrations`
 
 ### 9.3 启动失败策略

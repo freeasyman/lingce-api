@@ -22,9 +22,10 @@ LOCAL_BIN="bin/${SERVICE_NAME}"
 VERSION="${VERSION:-$(cat VERSION 2>/dev/null || echo "1.0.6")}"
 GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 BUILD_TIME="${BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+RELEASE_NOTE="${RELEASE_NOTE:-迁移体系门禁上线：启动只校验版本，DB变更必须同步版本化迁移}"
 
 echo "==> Building ..."
-VERSION="${VERSION}" GIT_SHA="${GIT_SHA}" BUILD_TIME="${BUILD_TIME}" bash scripts/build.sh
+VERSION="${VERSION}" GIT_SHA="${GIT_SHA}" BUILD_TIME="${BUILD_TIME}" RELEASE_NOTE="${RELEASE_NOTE}" bash scripts/build.sh
 
 echo "==> Uploading ${LOCAL_BIN} to ${REMOTE_HOST}:${REMOTE_DIR}/${SERVICE_NAME}.new ..."
 ssh "${REMOTE_HOST}" "mkdir -p ${REMOTE_DIR}"
@@ -32,7 +33,7 @@ scp "${LOCAL_BIN}" "${REMOTE_HOST}:${REMOTE_DIR}/${SERVICE_NAME}.new"
 
 echo "==> Deploying on ${REMOTE_HOST} ..."
 ssh "${REMOTE_HOST}" \
-  "REMOTE_DIR='${REMOTE_DIR}' SERVICE_NAME='${SERVICE_NAME}' HEALTH_URL='${HEALTH_URL}' HEALTH_TIMEOUT_SEC='${HEALTH_TIMEOUT_SEC}' DEPLOY_LOG_PATH='${DEPLOY_LOG_PATH}' DEPLOY_ACTOR='${DEPLOY_ACTOR}' VERSION='${VERSION}' GIT_SHA='${GIT_SHA}' BUILD_TIME='${BUILD_TIME}' bash -s" <<'REMOTE_SCRIPT'
+  "REMOTE_DIR='${REMOTE_DIR}' SERVICE_NAME='${SERVICE_NAME}' HEALTH_URL='${HEALTH_URL}' HEALTH_TIMEOUT_SEC='${HEALTH_TIMEOUT_SEC}' DEPLOY_LOG_PATH='${DEPLOY_LOG_PATH}' DEPLOY_ACTOR='${DEPLOY_ACTOR}' VERSION='${VERSION}' GIT_SHA='${GIT_SHA}' BUILD_TIME='${BUILD_TIME}' RELEASE_NOTE='${RELEASE_NOTE}' bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 cd "${REMOTE_DIR}"
@@ -50,7 +51,7 @@ restart_service() {
 append_deploy_log() {
   local status="$1"
   local line
-  line="$(date '+%F %T') service=${SERVICE_NAME} version=${VERSION} git_sha=${GIT_SHA} build_time=${BUILD_TIME} actor=${DEPLOY_ACTOR} status=${status}"
+  line="$(date '+%F %T') service=${SERVICE_NAME} version=${VERSION} release_note=${RELEASE_NOTE} git_sha=${GIT_SHA} build_time=${BUILD_TIME} actor=${DEPLOY_ACTOR} status=${status}"
   if [ -w "${DEPLOY_LOG_PATH}" ] || [ ! -e "${DEPLOY_LOG_PATH}" ]; then
     echo "${line}" >> "${DEPLOY_LOG_PATH}" || true
   elif command -v sudo >/dev/null 2>&1; then

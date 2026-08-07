@@ -42,9 +42,10 @@ import (
 )
 
 var (
-	version   = "1.0.8"
-	gitSHA    = "unknown"
-	buildTime = "unknown"
+	version     = "1.1.0"
+	gitSHA      = "unknown"
+	buildTime   = "unknown"
+	releaseNote = "迁移体系门禁上线：启动只校验版本，DB变更必须同步版本化迁移"
 )
 
 func main() {
@@ -63,6 +64,7 @@ func main() {
 	setupLogger(cfg.Log.Level)
 	slog.Info("starting lingce-api",
 		"version", version,
+		"release_note", releaseNote,
 		"env", cfg.App.Env,
 		"config", *configPath,
 		"db_host", cfg.Database.Host,
@@ -122,10 +124,11 @@ func main() {
 	// Version endpoint
 	versionHandler := func(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteSuccess(w, map[string]string{
-			"service":    "lingce-api",
-			"version":    version,
-			"git_sha":    gitSHA,
-			"build_time": buildTime,
+			"service":      "lingce-api",
+			"version":      version,
+			"release_note": releaseNote,
+			"git_sha":      gitSHA,
+			"build_time":   buildTime,
 		})
 	}
 	mux.HandleFunc("GET /version", versionHandler)

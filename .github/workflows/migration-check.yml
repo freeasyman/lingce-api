@@ -20,5 +20,11 @@ jobs:
       - name: Check migration files
         run: make check-migrations
 
+      - name: Check DB change requires migration
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: make check-db-migration-link
+
       - name: Test migration loader
         run: go test ./internal/store -run TestLoadEmbeddedSchemaMigrations

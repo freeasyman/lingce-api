@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean build-linux docs help migration check-migrations
+.PHONY: build run test lint clean build-linux docs help migration check-migrations check-db-migration-link
 
 APP_NAME := lingce-api
 BUILD_DIR := bin
@@ -15,6 +15,7 @@ help:
 	@echo "  docs         - Start API documentation server"
 	@echo "  migration    - Create a new versioned schema migration file"
 	@echo "  check-migrations - Validate migration filenames and order"
+	@echo "  check-db-migration-link - Ensure DB-sensitive changes include migration files"
 
 build:
 	@echo "Building $(APP_NAME)..."
@@ -57,3 +58,6 @@ migration:
 
 check-migrations:
 	@./scripts/check_migrations.sh
+
+check-db-migration-link:
+	@./scripts/check_db_migration_link.sh
