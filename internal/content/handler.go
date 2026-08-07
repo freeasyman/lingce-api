@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -20,21 +21,12 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers content module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	authMw := middleware.Auth(jwtSecret)
-
-	h.registerTopicRoutes(mux, authMw)
-
-	// Content item management endpoints
-	h.registerContentItemRoutes(mux, authMw)
-
-	// Content seeds endpoints
-	h.registerContentSeedRoutes(mux, authMw)
-
-	h.registerLLMPromptRoutes(mux, authMw)
-
-	// Content prompt templates endpoints
-	h.registerContentPromptRoutes(mux, authMw)
-
+	deps := router.RouteDeps{JWTSecret: jwtSecret}
+	h.registerTopicRoutes(mux, deps)
+	h.registerContentItemRoutes(mux, deps)
+	h.registerContentSeedRoutes(mux, deps)
+	h.registerLLMPromptRoutes(mux, deps)
+	h.registerContentPromptRoutes(mux, deps)
 }
 
 // Topic Handlers

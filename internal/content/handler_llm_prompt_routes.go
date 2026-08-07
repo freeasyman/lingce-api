@@ -6,18 +6,22 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-func (h *Handler) registerLLMPromptRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
-	mux.Handle("GET /api/v1/llm/prompts", authMw(http.HandlerFunc(h.ListTemplates)))
-	mux.Handle("POST /api/v1/llm/prompts", authMw(http.HandlerFunc(h.CreateTemplate)))
-	mux.Handle("GET /api/v1/llm/prompts/{template_id}", authMw(http.HandlerFunc(h.GetTemplate)))
-	mux.Handle("PUT /api/v1/llm/prompts/{template_id}", authMw(http.HandlerFunc(h.UpdateTemplate)))
-	mux.Handle("DELETE /api/v1/llm/prompts/{template_id}", authMw(http.HandlerFunc(h.DeleteTemplate)))
-	mux.Handle("GET /api/v1/llm/prompts/{template_id}/versions", authMw(http.HandlerFunc(h.ListTemplateVersions)))
-	mux.Handle("POST /api/v1/llm/prompts/{template_id}/actions/publish", authMw(http.HandlerFunc(h.PublishTemplate)))
-	mux.Handle("POST /api/v1/llm/prompts/{template_id}/actions/rollback", authMw(http.HandlerFunc(h.RollbackLLMPromptAction)))
+func (h *Handler) registerLLMPromptRoutes(mux *http.ServeMux, deps router.RouteDeps) {
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/llm/prompts", Handler: h.ListTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/llm/prompts", Handler: h.CreateTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/llm/prompts/{template_id}", Handler: h.GetTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/llm/prompts/{template_id}", Handler: h.UpdateTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/llm/prompts/{template_id}", Handler: h.DeleteTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/llm/prompts/{template_id}/versions", Handler: h.ListTemplateVersions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/llm/prompts/{template_id}/actions/publish", Handler: h.PublishTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/llm/prompts/{template_id}/actions/rollback", Handler: h.RollbackLLMPromptAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, deps)
 }
 
 type rollbackLLMPromptRequest struct {

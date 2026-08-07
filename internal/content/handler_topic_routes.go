@@ -1,19 +1,23 @@
 package content
 
-import "net/http"
+import (
+	"net/http"
 
-func (h *Handler) registerTopicRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
-	// Resource-oriented content-topic routes
-	mux.Handle("GET /api/v1/content-topics", authMw(http.HandlerFunc(h.ListTopics)))
-	mux.Handle("POST /api/v1/content-topics", authMw(http.HandlerFunc(h.CreateTopic)))
-	mux.Handle("GET /api/v1/content-topics/{id}", authMw(http.HandlerFunc(h.GetTopic)))
-	mux.Handle("PUT /api/v1/content-topics/{id}", authMw(http.HandlerFunc(h.UpdateTopic)))
-	mux.Handle("DELETE /api/v1/content-topics/{id}", authMw(http.HandlerFunc(h.DeleteTopic)))
+	"github.com/freeasyman/lingce-api/internal/router"
+)
 
-	mux.Handle("POST /api/v1/content-topics/actions/generate", authMw(http.HandlerFunc(h.GenerateTopics)))
-	mux.Handle("POST /api/v1/content-topics/{id}/actions/select", authMw(http.HandlerFunc(h.SelectTopic)))
-
-	mux.Handle("GET /api/v1/content-topics/insights/stats", authMw(http.HandlerFunc(h.GetInsightsStats)))
-	mux.Handle("GET /api/v1/content-topics/insights/frequent-questions", authMw(http.HandlerFunc(h.GetFrequentQuestions)))
-	mux.Handle("POST /api/v1/content-topics/insights/actions/mine-topics", authMw(http.HandlerFunc(h.MineTopics)))
+func (h *Handler) registerTopicRoutes(mux *http.ServeMux, deps router.RouteDeps) {
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics", Handler: h.CreateTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/{id}", Handler: h.GetTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/content-topics/{id}", Handler: h.UpdateTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/content-topics/{id}", Handler: h.DeleteTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics/actions/generate", Handler: h.GenerateTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics/{id}/actions/select", Handler: h.SelectTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/insights/stats", Handler: h.GetInsightsStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/insights/frequent-questions", Handler: h.GetFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics/insights/actions/mine-topics", Handler: h.MineTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, deps)
 }

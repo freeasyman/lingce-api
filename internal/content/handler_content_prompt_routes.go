@@ -1,16 +1,22 @@
 package content
 
-import "net/http"
+import (
+	"net/http"
 
-func (h *Handler) registerContentPromptRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
-	// Resource-oriented content prompt template routes
-	mux.Handle("GET /api/v1/content-items/prompts", authMw(http.HandlerFunc(h.ListContentTemplates)))
-	mux.Handle("POST /api/v1/content-items/prompts", authMw(http.HandlerFunc(h.CreateContentTemplate)))
-	mux.Handle("GET /api/v1/content-items/prompts/{id}", authMw(http.HandlerFunc(h.GetContentTemplate)))
-	mux.Handle("PUT /api/v1/content-items/prompts/{id}", authMw(http.HandlerFunc(h.UpdateContentTemplate)))
-	mux.Handle("DELETE /api/v1/content-items/prompts/{id}", authMw(http.HandlerFunc(h.DeleteContentTemplate)))
-	mux.Handle("POST /api/v1/content-items/prompts/{id}/actions/clone", authMw(http.HandlerFunc(h.CloneContentTemplate)))
-	mux.Handle("POST /api/v1/content-items/prompts/{id}/actions/test", authMw(http.HandlerFunc(h.TestContentTemplate)))
-	mux.Handle("GET /api/v1/content-items/prompts/{id}/stats", authMw(http.HandlerFunc(h.GetContentTemplateStats)))
-	mux.Handle("POST /api/v1/content-items/prompts/actions/initialize-defaults", authMw(http.HandlerFunc(h.InitializeDefaultTemplates)))
+	"github.com/freeasyman/lingce-api/internal/router"
+)
+
+func (h *Handler) registerContentPromptRoutes(mux *http.ServeMux, deps router.RouteDeps) {
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/content-items/prompts", Handler: h.ListContentTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/prompts", Handler: h.CreateContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items/prompts/{id}", Handler: h.GetContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/content-items/prompts/{id}", Handler: h.UpdateContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/content-items/prompts/{id}", Handler: h.DeleteContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/prompts/{id}/actions/clone", Handler: h.CloneContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/prompts/{id}/actions/test", Handler: h.TestContentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items/prompts/{id}/stats", Handler: h.GetContentTemplateStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/prompts/actions/initialize-defaults", Handler: h.InitializeDefaultTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, deps)
 }

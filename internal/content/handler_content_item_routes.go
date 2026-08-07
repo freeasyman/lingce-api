@@ -1,25 +1,28 @@
 package content
 
-import "net/http"
+import (
+	"net/http"
 
-func (h *Handler) registerContentItemRoutes(mux *http.ServeMux, authMw func(http.Handler) http.Handler) {
-	// Resource-oriented content-item routes
-	mux.Handle("GET /api/v1/content-items", authMw(http.HandlerFunc(h.ListContents)))
-	mux.Handle("POST /api/v1/content-items", authMw(http.HandlerFunc(h.CreateContent)))
-	mux.Handle("GET /api/v1/content-items/{id}", authMw(http.HandlerFunc(h.GetContent)))
-	mux.Handle("PUT /api/v1/content-items/{id}", authMw(http.HandlerFunc(h.UpdateContent)))
-	mux.Handle("DELETE /api/v1/content-items/{id}", authMw(http.HandlerFunc(h.DeleteContent)))
+	"github.com/freeasyman/lingce-api/internal/router"
+)
 
-	mux.Handle("POST /api/v1/content-items/actions/generate", authMw(http.HandlerFunc(h.GenerateContent)))
-	mux.Handle("POST /api/v1/content-items/{id}/actions/publish", authMw(http.HandlerFunc(h.PublishContent)))
-	mux.Handle("POST /api/v1/content-items/{id}/actions/unpublish", authMw(http.HandlerFunc(h.UnpublishContent)))
-	mux.Handle("POST /api/v1/content-items/{id}/actions/generate-images", authMw(http.HandlerFunc(h.GenerateImages)))
-	mux.Handle("POST /api/v1/content-items/{id}/actions/generate-single-image", authMw(http.HandlerFunc(h.GenerateSingleImage)))
-	mux.Handle("POST /api/v1/content-items/{id}/actions/save-composed-images", authMw(http.HandlerFunc(h.SaveComposedImages)))
-
-	// GEO sub-resources
-	mux.Handle("POST /api/v1/content-items/{id}/geo/analyze", authMw(http.HandlerFunc(h.AnalyzeGEOByID)))
-	mux.Handle("POST /api/v1/content-items/geo/analyze", authMw(http.HandlerFunc(h.AnalyzeGEO)))
-	mux.Handle("POST /api/v1/content-items/geo/optimize", authMw(http.HandlerFunc(h.OptimizeGEO)))
-	mux.Handle("GET /api/v1/content-items/geo/prompt-injection", authMw(http.HandlerFunc(h.GetGEOPromptInjection)))
+func (h *Handler) registerContentItemRoutes(mux *http.ServeMux, deps router.RouteDeps) {
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items", Handler: h.CreateContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items/{id}", Handler: h.GetContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/content-items/{id}", Handler: h.UpdateContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/content-items/{id}", Handler: h.DeleteContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/actions/generate", Handler: h.GenerateContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/publish", Handler: h.PublishContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/unpublish", Handler: h.UnpublishContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/generate-images", Handler: h.GenerateImages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/generate-single-image", Handler: h.GenerateSingleImage, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/save-composed-images", Handler: h.SaveComposedImages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/geo/analyze", Handler: h.AnalyzeGEOByID, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/geo/analyze", Handler: h.AnalyzeGEO, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/geo/optimize", Handler: h.OptimizeGEO, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items/geo/prompt-injection", Handler: h.GetGEOPromptInjection, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, deps)
 }
