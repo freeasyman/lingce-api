@@ -9,14 +9,14 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
 type Handler struct {
-	service       *Service
-	jwtSecret     string
-	internalToken string
+	service   *Service
+	jwtSecret string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -105,8 +105,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 }
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
-	h.internalToken = strings.TrimSpace(internalToken)
-	mux.Handle("POST /api/v1/internal/system-logs", http.HandlerFunc(h.CreateInternalSystemActionLog))
+	router.Register(mux, []router.Route{
+		{
+			Method:   "POST",
+			Path:     "/api/v1/internal/system-logs",
+			Handler:  h.CreateInternalSystemActionLog,
+			AuthMode: "internal",
+		},
+	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
 }
 
 // Notification Handlers
@@ -458,6 +464,266 @@ func (h *Handler) GetOperationLogByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, log)
+}
+
+// CreateInstitutionSystemActionLog handles creating an institution-side system action log.
+func (h *Handler) CreateInstitutionSystemActionLog(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
+		httputil.WriteForbidden(w, "Institution access required")
+		return
+	}
+
+	var req SystemActionLogWriteRequest
+	if err := decodeSystemActionLogWriteRequest(w, r, &req); err != nil {
+		if httpErr, ok := err.(*systemActionLogHTTPError); ok {
+			httputil.WriteError(w, httpErr.status, httpErr.code, httpErr.message, nil)
+			return
+		}
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	req.TenantID = claims.TenantID
+	req.ActorID = &claims.UserID
+	if req.ActorName == nil || strings.TrimSpace(*req.ActorName) == "" {
+		if name, ok := userInfoString(r, "X-User-Name"); ok {
+			req.ActorName = &name
+		}
+	}
+	if req.TenantName == nil || strings.TrimSpace(*req.TenantName) == "" {
+		if tenantName, ok := userInfoString(r, "X-Tenant-Name"); ok {
+			req.TenantName = &tenantName
+		}
+	}
+	if req.ActorRoleCode == nil || strings.TrimSpace(*req.ActorRoleCode) == "" {
+		if roleCode, ok := userInfoString(r, "X-User-Role-Code"); ok {
+			req.ActorRoleCode = &roleCode
+		}
+	}
+	if req.ActorRoleName == nil || strings.TrimSpace(*req.ActorRoleName) == "" {
+		if roleName, ok := userInfoString(r, "X-User-Role-Name"); ok {
+			req.ActorRoleName = &roleName
+		}
+	}
+
+	log, err := h.service.CreateSystemActionLog(r.Context(), req, clientIP(r), r.UserAgent(), detectDeviceType(r.UserAgent()))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, log)
+}
+
+// CreateInternalSystemActionLog handles creating a system action log for internal services.
+func (h *Handler) CreateInternalSystemActionLog(w http.ResponseWriter, r *http.Request) {
+	var req SystemActionLogWriteRequest
+	if err := decodeSystemActionLogWriteRequest(w, r, &req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if claims := h.tryGetClaims(r); claims != nil {
+		req.ActorID = &claims.UserID
+		req.TenantID = claims.TenantID
+		if req.ActorRoleCode == nil || strings.TrimSpace(*req.ActorRoleCode) == "" {
+			if roleCode, ok := userInfoString(r, "X-User-Role-Code"); ok {
+				req.ActorRoleCode = &roleCode
+			}
+		}
+		if req.ActorName == nil || strings.TrimSpace(*req.ActorName) == "" {
+			if name, ok := userInfoString(r, "X-User-Name"); ok {
+				req.ActorName = &name
+			}
+		}
+		if req.TenantName == nil || strings.TrimSpace(*req.TenantName) == "" {
+			if tenantName, ok := userInfoString(r, "X-Tenant-Name"); ok {
+				req.TenantName = &tenantName
+			}
+		}
+		if req.ActorRoleName == nil || strings.TrimSpace(*req.ActorRoleName) == "" {
+			if roleName, ok := userInfoString(r, "X-User-Role-Name"); ok {
+				req.ActorRoleName = &roleName
+			}
+		}
+	}
+
+	log, err := h.service.CreateSystemActionLog(r.Context(), req, clientIP(r), r.UserAgent(), detectDeviceType(r.UserAgent()))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, log)
+}
+
+type systemActionLogHTTPError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e *systemActionLogHTTPError) Error() string {
+	return e.message
+}
+
+func decodeSystemActionLogWriteRequest(w http.ResponseWriter, r *http.Request, target *SystemActionLogWriteRequest) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return &systemActionLogHTTPError{
+			status:  http.StatusBadRequest,
+			code:    "BAD_REQUEST",
+			message: "invalid request body",
+		}
+	}
+	return nil
+}
+
+// ListSystemActionLogs handles listing system action logs.
+func (h *Handler) ListSystemActionLogs(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	var req SystemActionLogListRequest
+	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
+		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
+		req.TenantID = &tenantID
+	}
+	if actorIDStr := r.URL.Query().Get("actor_id"); actorIDStr != "" {
+		actorID, _ := strconv.ParseInt(actorIDStr, 10, 64)
+		req.ActorID = &actorID
+	}
+	if keyword := r.URL.Query().Get("keyword"); keyword != "" {
+		req.Keyword = &keyword
+	}
+	if logType := r.URL.Query().Get("log_type"); logType != "" {
+		req.LogType = &logType
+	}
+	if actionCode := r.URL.Query().Get("action_code"); actionCode != "" {
+		req.ActionCode = &actionCode
+	}
+	if result := r.URL.Query().Get("result"); result != "" {
+		req.Result = &result
+	}
+	if ip := r.URL.Query().Get("ip"); ip != "" {
+		req.IPAddress = &ip
+	}
+	if deviceType := r.URL.Query().Get("device_type"); deviceType != "" {
+		req.DeviceType = &deviceType
+	}
+	if startDate := r.URL.Query().Get("start_date"); startDate != "" {
+		req.StartDate = &startDate
+	}
+	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
+		req.EndDate = &endDate
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	req.Page = page
+	req.PageSize = pageSize
+
+	logs, total, err := h.service.ListSystemActionLogs(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, logs, int64(total), req.Page, req.PageSize)
+}
+
+// GetSystemActionLogByID handles getting log detail.
+func (h *Handler) GetSystemActionLogByID(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid log ID")
+		return
+	}
+
+	log, err := h.service.GetSystemActionLogByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, log)
+}
+
+func (h *Handler) tryGetClaims(r *http.Request) *auth.Claims {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || h.jwtSecret == "" {
+		return nil
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil
+	}
+	claims, err := auth.ParseToken(h.jwtSecret, parts[1])
+	if err != nil {
+		return nil
+	}
+	return claims
+}
+
+func userInfoString(r *http.Request, header string) (string, bool) {
+	value := strings.TrimSpace(r.Header.Get(header))
+	if value != "" {
+		return value, true
+	}
+	return "", false
+}
+
+func clientIP(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); v != "" {
+		parts := strings.Split(v, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		return v
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func detectDeviceType(userAgent string) string {
+	ua := strings.ToLower(strings.TrimSpace(userAgent))
+	switch {
+	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad") || strings.Contains(ua, "ios"):
+		return "ios"
+	case strings.Contains(ua, "android"):
+		return "android"
+	case strings.Contains(ua, "windows") || strings.Contains(ua, "macintosh") || strings.Contains(ua, "linux"):
+		return "web"
+	default:
+		return "unknown"
+	}
 }
 
 // LLM Model Config Handlers
@@ -1636,6 +1902,79 @@ func (h *Handler) GetVisitByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httputil.WriteSuccess(w, visit)
+}
+
+func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access encounters")
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	req := EncounterListRequest{
+		TenantID:    parseQueryInt64Ptr(r.URL.Query().Get("tenant_id")),
+		RecordingID: parseQueryInt64Ptr(r.URL.Query().Get("recording_id")),
+		Keyword:     parseQueryStringPtr(r.URL.Query().Get("keyword")),
+		Page:        page,
+		PageSize:    pageSize,
+	}
+	items, total, err := h.service.ListEncounters(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, total, req.Page, req.PageSize)
+}
+
+func (h *Handler) GetEncounterByID(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can access encounters")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid encounter ID")
+		return
+	}
+	item, err := h.service.GetEncounterByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) ProjectEncounterFromRecording(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can project encounters")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	count, err := h.service.ProjectEncounterFromRecording(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int{"projected_count": count})
 }
 
 func (h *Handler) parseAIUsageRequest(r *http.Request) (AIUsageListRequest, error) {

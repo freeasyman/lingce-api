@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/rbac"
@@ -15,6 +16,7 @@ type Route struct {
 	Path             string
 	Handler          http.HandlerFunc
 	Auth             bool     // Whether authentication is required
+	AuthMode         string   // public, jwt, internal
 	AllowedUserTypes []string // Allowed user types: admin, employee, mobile
 	Permission       string   // Permission code (e.g., "recording:write"), empty string skips permission check
 	TenantScoped     bool     // Whether tenant isolation is required
@@ -22,18 +24,28 @@ type Route struct {
 
 // RouteDeps contains dependencies for route registration
 type RouteDeps struct {
-	JWTSecret   string
-	PermChecker *rbac.PermissionChecker
-	Pool        *pgxpool.Pool // For tenant scope resolution
+	JWTSecret     string
+	InternalToken string
+	PermChecker   *rbac.PermissionChecker
+	Pool          *pgxpool.Pool // For tenant scope resolution
 }
 
 // Register registers routes with declarative authentication and authorization
 func Register(mux *http.ServeMux, routes []Route, deps RouteDeps) {
 	for _, route := range routes {
 		handler := route.Handler
+		authMode := strings.TrimSpace(route.AuthMode)
+		if authMode == "" && route.Auth {
+			authMode = "jwt"
+		}
 
 		// Apply middleware chain (innermost to outermost)
-		if route.Auth {
+		switch authMode {
+		case "":
+			// no auth
+		case "internal":
+			handler = internalTokenMiddleware(handler, deps.InternalToken)
+		default:
 			// 1. Tenant scope (if required)
 			if route.TenantScoped && deps.Pool != nil {
 				tenantScopeMw := tenancy.TenantScopeMiddleware(deps.Pool)
@@ -58,6 +70,20 @@ func Register(mux *http.ServeMux, routes []Route, deps RouteDeps) {
 		// Register route
 		pattern := route.Method + " " + route.Path
 		mux.HandleFunc(pattern, handler)
+	}
+}
+
+func internalTokenMiddleware(next http.HandlerFunc, expectedToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(expectedToken) == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if strings.TrimSpace(r.Header.Get("X-Internal-Token")) != expectedToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
