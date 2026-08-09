@@ -53,6 +53,7 @@ type SplitRequest struct {
 
 type SplitRunRecord struct {
 	ID            int64          `json:"id"`
+	RunID         string         `json:"run_id,omitempty"`
 	RecordingID   int64          `json:"recording_id"`
 	CaseID        string         `json:"case_id,omitempty"`
 	Model         string         `json:"model"`

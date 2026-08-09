@@ -408,7 +408,13 @@ func (s *Service) splitRecordingWithInput(ctx context.Context, req SplitRequest,
 			if repairErr != nil {
 				return nil, fmt.Errorf("parse chunk %d output: %w", idx+1, err)
 			}
+			repaired = sanitizeSegmentsPayload(repaired)
 			parsed, err = parseSegmentsOutput(repaired)
+			if err != nil {
+				if extracted, ok := extractFirstJSONObject(repaired); ok {
+					parsed, err = parseSegmentsOutput(extracted)
+				}
+			}
 			if err != nil {
 				return nil, fmt.Errorf("parse chunk %d output after repair: %w", idx+1, err)
 			}

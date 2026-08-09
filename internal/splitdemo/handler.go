@@ -407,6 +407,7 @@ func (h *Handler) runSplitJob(jobID string, req SplitRequest) {
 		job.Result = result
 	})
 	if err := h.service.store.SaveRun(context.Background(), &SplitRunRecord{
+		RunID:         jobID,
 		RecordingID:   req.RecordingID,
 		Model:         req.Model,
 		PromptVersion: req.PromptVersion,
@@ -477,6 +478,7 @@ func (h *Handler) runSyntheticJob(jobID string, req SyntheticRunRequest) {
 		job.MatchReport = matchReport
 	})
 	_ = h.service.store.SaveRun(context.Background(), &SplitRunRecord{
+		RunID:         jobID,
 		CaseID:        req.CaseID,
 		Model:         req.Model,
 		PromptVersion: req.PromptVersion,

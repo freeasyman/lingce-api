@@ -497,7 +497,7 @@
     const defaultPrompts = loadPrompts();
     let state = {
       route:'annotate',
-      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,rawResult:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false,lastSavedSignature:'',undoBusy:false},
+      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,rawResult:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false,lastSavedSignature:'',undoBusy:false,currentRunID:'',displayMode:'restore'},
       test:{cases:[],selectedId:'',selectedCase:null,currentRun:null,prevRun:null,running:false,progress:null,queue:[],lastSelectedId:''},
       build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null,saving:false},
       prompts: defaultPrompts,
@@ -817,7 +817,7 @@
         duration_seconds: Number(state.annotate.rawResult?.recording_duration_seconds || state.annotate.result?.recording_duration_seconds || 0),
         annotated_at: new Date().toISOString(),
         annotated_by: 'demo',
-        source_run_id: String(state.annotate.detail?.latest_run?.id || ''),
+        source_run_id: String(state.annotate.currentRunID || state.annotate.detail?.latest_run?.run_id || state.annotate.detail?.latest_run?.id || ''),
         encounters,
         corrections: state.annotate.annotations?.corrections || [],
       };
@@ -827,9 +827,20 @@
       return JSON.stringify({
         recording_id: record.recording_id || 0,
         duration_seconds: Number(record.duration_seconds || 0),
+        source_run_id: String(record.source_run_id || ''),
         encounters: record.encounters || [],
         corrections: record.corrections || [],
       });
+    }
+    function annotationHintText(){
+      const latest = state.annotate.detail?.latest_annotation || null;
+      const latestCount = latest?.corrections?.length || 0;
+      const currentCount = state.annotate.annotations?.corrections?.length || 0;
+      if(!latest) return '';
+      if(state.annotate.displayMode === 'rerun' && currentCount === 0){
+        return `这是新一次切分的结果（${state.prompts.version || 'v0.2'}）。上次标注有 ${latestCount} 处修正，本次尚未标注。保存会覆盖上次的标注记录。`;
+      }
+      return `这条录音已标注过（${latestCount} 处修正），当前显示的是修正后的结果`;
     }
     function rebuildAnnotatedResult(){
       const base = state.annotate.rawResult || state.annotate.result;
@@ -901,6 +912,8 @@
         state.annotate.rawResult = cloneResultForDisplay(state.annotate.detail.latest_run.result);
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
         state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
+        state.annotate.currentRunID = String(state.annotate.detail.latest_annotation?.source_run_id || state.annotate.detail.latest_run?.run_id || state.annotate.detail.latest_run?.id || '');
+        state.annotate.displayMode = 'restore';
         state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
         renderAnnotateResult();
         syncAnnotateRunButton();
@@ -909,6 +922,8 @@
       state.annotate.rawResult = null;
       state.annotate.result = null;
       state.annotate.annotations = state.annotate.detail.latest_annotation || null;
+      state.annotate.currentRunID = String(state.annotate.detail.latest_annotation?.source_run_id || state.annotate.detail.latest_run?.run_id || state.annotate.detail.latest_run?.id || '');
+      state.annotate.displayMode = 'restore';
       state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
       $('annTimeline').innerHTML = '';
       $('annProgressText').textContent = '等待手工确认后执行切分';
@@ -948,9 +963,10 @@
       if(job.status === 'completed'){
         if(kind === 'split'){
           state.annotate.rawResult = cloneResultForDisplay(job.result);
-          state.annotate.annotations = state.annotate.detail?.latest_annotation || state.annotate.annotations || {encounters:[], corrections:[]};
-          state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
-          state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
+          state.annotate.annotations = {encounters:[], corrections:[]};
+          state.annotate.result = cloneResultForDisplay(job.result);
+          state.annotate.currentRunID = String(job.id || '');
+          state.annotate.displayMode = 'rerun';
           $('annProgress').style.width = '100%';
           renderAnnotateResult();
           await refreshAnnotateOverview();
@@ -1000,7 +1016,7 @@
       }
       $('annCorrectionSummary').innerHTML = correctionText;
       $('annCount').textContent = `已确认 ${reviewed}/${encounters.length}`;
-      $('annSavedHint').textContent = state.annotate.detail?.latest_annotation ? `这条录音已标注过（${state.annotate.detail.latest_annotation.corrections?.length || 0} 处修正），当前显示的是修正后的结果` : '';
+      $('annSavedHint').textContent = annotationHintText();
       $('annEncounters').innerHTML = '';
       encounters.forEach((card, idx) => {
         if(idx > 0) {
