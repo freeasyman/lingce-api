@@ -195,7 +195,7 @@
               <h2 style="margin:0">真实录音标注</h2>
               <div class="small">先手动选录音，再确认并执行切分。</div>
             </div>
-            <div class="small">当前 prompt: <span id="annPromptVersion">v0.2</span></div>
+            <div class="small">当前 prompt: <span id="annPromptVersion">v0.3</span></div>
           </div>
           <div class="hint" style="margin-top:10px">流程：先选录音，再手工确认“我要执行切分”，最后点“执行切分”。</div>
           <div id="annStatus" class="status hidden"></div>
@@ -211,6 +211,7 @@
           <div id="annTimeline" class="timeline" style="margin-top:12px"></div>
           <div id="annProgressText" class="small" style="margin-top:8px"></div>
           <div id="annSavedHint" class="small" style="margin-top:8px"></div>
+          <div id="annPromptMismatch" class="small" style="margin-top:8px"></div>
           <div id="annCorrectionSummary" style="margin-top:10px;font-weight:700"></div>
           <div id="annCount" style="margin-top:12px;font-weight:700"></div>
           <div class="row" style="margin-top:12px">
@@ -235,7 +236,7 @@
             <h2 style="margin:0">合成测试</h2>
             <div class="small">编辑 prompt，选择用例，运行评测。</div>
           </div>
-          <div class="small">模型 <input id="testModel" style="width:160px;display:inline-block;padding:6px 8px" value="qwen-max"> 版本 <input id="testVersion" style="width:120px;display:inline-block;padding:6px 8px" value="v0.2"> <button id="resetPromptsBtn" class="secondary" style="width:auto;padding:6px 10px;margin-left:8px">恢复默认提示词</button></div>
+          <div class="small">模型 <input id="testModel" style="width:160px;display:inline-block;padding:6px 8px" value="qwen-max"> 版本 <input id="testVersion" style="width:120px;display:inline-block;padding:6px 8px" value="v0.3"> <button id="resetPromptsBtn" class="secondary" style="width:auto;padding:6px 10px;margin-left:8px">恢复默认提示词</button></div>
         </div>
         <div class="grid-test-top" style="margin-top:12px">
           <div class="field"><label>System Prompt</label><textarea id="testSystem"></textarea></div>
@@ -335,7 +336,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const routes = ['annotate','test','build'];
-    const LS = {prompts:'splitdemo.prompts.v3', ann:'splitdemo.annotate.state.v2', build:'splitdemo.build.state.v2'};
+    const LS = {prompts:'splitdemo.prompts.v4', ann:'splitdemo.annotate.state.v2', build:'splitdemo.build.state.v2'};
     const defaultSystemPrompt = `你是一个医疗录音结构化助手。你的唯一任务是把一段连续的门诊录音转写文本,按时间轴切分成连续的片段,并判断每个片段的类型。
 
 ## 你要做的事
@@ -371,24 +372,66 @@
 - 内部短静默(30 秒以内)
 - 医生查阅资料、书写记录时的静默
 - 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
-- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要还是同一个人在说,就是一次就诊
+- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要医生没有重新做基础问诊,就是一次就诊
+- 一次就诊包含问诊、查体、解释病情、看报告、讲治疗方案、谈费用等多个阶段。这些阶段之间不是就诊边界
 - 医生为了举例说明而提到的其他患者。例如"我有个病人和你情况差不多,四十多岁,也是这个症状,吃了三个月就好了"。这个被提到的患者不在现场,不构成新的就诊
 
-## 判断"是不是换人了"的唯一可靠依据
+## 重要:不要依赖说话人标记
 
-切开的前提是**说话的患者本人换了**,不是话题换了。
+转写文本里的说话人标记(speaker_0、speaker_1 等)**极不可靠**。很多录音的说话人分离完全失效,整条录音的所有发言都被标成同一个说话人。
 
-判断方法:看被提到的那个人有没有在对话里应答。
-- 如果有人开始回答医生的提问、描述自己的症状 -- 这是新的患者到场,应当切开
-- 如果只是被医生或患者在叙述中提及,始终没有出现属于他的发言 -- 这是举例或转述,不切开
+因此:
+- 不要用"说话人标记有没有变化"来判断是否换了患者
+- 所有发言都是 speaker_0 也完全正常,这不代表只有一个人在说话
+- 你必须靠**说话内容本身**来判断谁在说话、说的是谁的病情
 
-举例场景的典型特征:被提到的人没有名字("有个病人"、"我另一个患者"),用第三人称叙述,时态是过去的,而且这段话是为了说服眼前的患者。
+如何从内容判断说话人角色:
+- 提问、下医嘱、解释病理、开药的是医生
+- 描述症状、回答提问、询问治疗方案的是患者或家属
+- 同一行文本里可能混进了多个人的话(转写没断开),要按语义拆解
+
+## 判断"是不是换了患者"
+
+看这三件事,任意一件成立就说明换人了:
+
+1. **有明确的告别或交接** -- 前一位患者的诊疗已经收尾
+2. **新的主诉从零开始被陈述** -- 有人开始讲一个全新的、与前文毫无关联的症状,并且医生在重新做基础问诊("多久了""什么时候开始的""以前看过吗")
+3. **患者的身份特征变了** -- 年龄、性别、称谓、孩子的名字发生变化
+
+反过来,以下情况说明还是同一位患者,不要切:
+- 话题从一个症状转到另一个症状,但医生没有重新做基础问诊
+- 讨论从病情转到费用、流程、注意事项 -- 这仍属于本次就诊
+- 医生举例提到其他患者("我有个病人和你情况差不多,四十多岁"),这个人没有实际参与对话
 
 判定为不是就诊:
 - 患者只是问路、拿报告、取药,没有诊疗内容
 - 医生与同事的任何交流
 
 ## 边界信号(按可靠性排序)
+
+最强信号 -- 告别与交接(优先级高于一切,只要出现就应当在此处切开):
+
+通用告别:
+- 互道再见:"拜拜"、"再见"、"谢谢医生"、"慢走"、"辛苦了"
+- 送客动作:"那我们就先这样"、"好,你先过去吧"、"行,那就这样"
+
+公立医院/医保门诊的结束方式(以开单、指路、交接科室为主):
+- 开单指路:"拿着单子去二楼抽血"、"这个方子去药房拿药"、"到一楼收费处交费"
+- 交接科室:"我给你开个住院证,去住院部办手续"、"转到骨科去看看"、"挂个专家号再看"
+- 医嘱收尾:"回去按时吃药,两周后复查"、"不舒服再来"、"先吃一周看看效果"
+- 叫号:"下一个"、"下一位"
+
+私立/消费医疗的结束方式(以交接非医疗人员为主):
+- 交接给客服、咨询师、前台:"我让客服跟你详细说费用"、"你带妈妈去前台了解一下"、"到那边找小王办手续"
+- 交接后医生可能还会和同事有几句交代,这几句属于本次就诊的尾部,不要单独成段
+
+这类信号即使前后所有发言都被标成同一个说话人,也必须切开。告别语的语义本身就证明了这次就诊结束了。
+
+**容易混淆的一点:去做检查不等于结束。**
+- "先去做个 CT,做完拿过来我看"、"去拍个片子,回来找我" -- 患者会返回,**这是同一次就诊**,不要切
+- "拿着单子去二楼抽血"(没说要回来)、"结果出来了再挂号" -- 这次就诊已经结束,应当切开
+
+判断依据:医生有没有明确表示患者要回到这里。说了要回来就不切,没说就切。
 
 强信号:
 - 叫号或点名:"下一个"、"张三"、"李阿姨来了"
@@ -418,12 +461,13 @@
 - 拿不准的边界,切开并标记低置信度
 - 不要为了让片段"看起来完整"而合并可疑区域
 
-但"优先切开"有前提:必须确实存在患者可能换人的迹象。以下情况不属于"拿不准",不要切:
-- 只是话题变了,说话的人没变
-- 只是被提到了另一个患者,那个人没有出现在对话里
-- 只是出现了一段静默,但静默前后是同一个人在说同一件事
+但"优先切开"有前提:必须存在上一节所列的换人迹象之一。以下情况不属于"拿不准",不要切:
+- 话题变了,但医生没有重新做基础问诊
+- 讨论转向费用、流程、后续安排
+- 只是被提到了另一个患者,那个人没有实际参与对话
+- 出现了一段静默,但静默前后讨论的是同一个人的同一件事
 
-这两类过切会让医生反复做无意义的合并操作,严重时会让他不再信任切分结果。
+一次就诊可能长达二三十分钟,包含问诊、查体、解释、看报告、讲方案、谈费用等多个阶段。**阶段切换不是就诊边界。** 把一次完整就诊按阶段切成四五段,会让医生反复做无意义的合并,最终不再信任切分结果。
 
 ## 输出格式
 
@@ -511,14 +555,14 @@
         if(raw){
           const parsed = JSON.parse(raw);
           return {
-            version: parsed.version || 'v0.2',
+            version: parsed.version || 'v0.3',
             model: parsed.model || 'qwen-max',
             system: parsed.system || defaultSystemPrompt,
             user: parsed.user || defaultUserPrompt,
           };
         }
       }catch(e){}
-      return {version:'v0.2', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
+      return {version:'v0.3', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
     }
     function savePrompts(){
       localStorage.setItem(LS.prompts, JSON.stringify(state.prompts));
@@ -549,7 +593,16 @@
     }
     function setStatus(el, msg, extra=''){ el.classList.remove('hidden'); el.querySelectorAll('.status-line').forEach(()=>{}); el.innerHTML = `<div class="status-line"><div>${escapeHtml(msg)}</div><div>${escapeHtml(extra)}</div></div>`; }
     function clearStatus(el){ el.classList.add('hidden'); el.innerHTML = ''; }
-    function usePromptLabel(){ $('annPromptVersion').textContent = state.annotate.result?.split_prompt_version || state.prompts.version || 'v0.2'; $('annPromptLabel').textContent = `prompt ${state.prompts.version || 'v0.2'}`; }
+    function usePromptLabel(){ $('annPromptVersion').textContent = state.prompts.version || 'v0.3'; $('annPromptLabel').textContent = `prompt ${state.prompts.version || 'v0.3'}`; }
+    function syncPromptVersionMeta(){
+      const el = $('annPromptMismatch');
+      if(!el) return;
+      const currentVersion = state.prompts.version || 'v0.3';
+      const resultVersion = state.annotate.result?.split_prompt_version || state.annotate.rawResult?.split_prompt_version || '';
+      el.textContent = resultVersion && resultVersion !== currentVersion
+        ? `这份结果是 ${resultVersion} 跑的，当前 prompt 已更新到 ${currentVersion}。重跑可看新版效果。`
+        : '';
+    }
     function syncAnnotateRunButton(){
       const enabled = !!state.annotate.detail && $('annConfirm').checked && !state.annotate.saving;
       $('annRunBtn').disabled = !enabled;
@@ -560,20 +613,20 @@
 
     function initPromptsUI(){
       $('testModel').value = state.prompts.model || 'qwen-max';
-      $('testVersion').value = state.prompts.version || 'v0.2';
+      $('testVersion').value = state.prompts.version || 'v0.3';
       $('testSystem').value = state.prompts.system || defaultSystemPrompt;
       $('testUser').value = state.prompts.user || defaultUserPrompt;
       usePromptLabel();
     }
     function resetPrompts(){
-      state.prompts = {version:'v0.2', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
+      state.prompts = {version:'v0.3', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
       savePrompts();
       initPromptsUI();
     }
     function syncPromptsFromUI(){
       state.prompts = {
         model: $('testModel').value.trim() || 'qwen-max',
-        version: $('testVersion').value.trim() || 'v0.2',
+        version: $('testVersion').value.trim() || 'v0.3',
         system: $('testSystem').value,
         user: $('testUser').value,
       };
@@ -838,7 +891,7 @@
       const currentCount = state.annotate.annotations?.corrections?.length || 0;
       if(!latest) return '';
       if(state.annotate.displayMode === 'rerun' && currentCount === 0){
-        return `这是新一次切分的结果（${state.prompts.version || 'v0.2'}）。上次标注有 ${latestCount} 处修正，本次尚未标注。保存会覆盖上次的标注记录。`;
+        return `这是新一次切分的结果（${state.prompts.version || 'v0.3'}）。上次标注有 ${latestCount} 处修正，本次尚未标注。保存会覆盖上次的标注记录。`;
       }
       return `这条录音已标注过（${latestCount} 处修正），当前显示的是修正后的结果`;
     }
@@ -907,11 +960,13 @@
       syncAnnotateRunButton();
       $('annRaw').textContent = JSON.stringify({transcript_source:state.annotate.detail.transcript_source, transcript_text:state.annotate.detail.transcript_text, transcription_segments:state.annotate.detail.transcription_segments, cleaned_transcription:state.annotate.detail.cleaned_transcription, timeline_transcript:state.annotate.detail.timeline_transcript, structured_transcript:state.annotate.detail.structured_transcript}, null, 2);
       $('annRunMeta').textContent = `录音 #${state.annotate.detail.id} | ${state.annotate.detail.employee_name || ''} | ${state.annotate.detail.recorded_at || ''} | 来源 ${state.annotate.detail.transcript_source || ''}`;
+      $('annPromptMismatch').textContent = '';
       state.annotate.baselineCorrections = state.annotate.detail.latest_annotation?.corrections?.length || 0;
       if(state.annotate.detail.latest_run?.result){
         state.annotate.rawResult = cloneResultForDisplay(state.annotate.detail.latest_run.result);
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
         state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
+        $('annRunMeta').textContent = `录音 #${state.annotate.detail.id} | ${state.annotate.detail.employee_name || ''} | ${state.annotate.detail.recorded_at || ''} | 来源 ${state.annotate.detail.transcript_source || ''} | 切分于 ${state.annotate.rawResult?.split_prompt_version || state.annotate.detail.latest_run?.split_prompt_version || state.annotate.detail.latest_run?.prompt_version || '未知版本'}`;
         state.annotate.currentRunID = String(state.annotate.detail.latest_annotation?.source_run_id || state.annotate.detail.latest_run?.run_id || state.annotate.detail.latest_run?.id || '');
         state.annotate.displayMode = 'restore';
         state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
@@ -939,7 +994,7 @@
         $('annProgress').style.width = '8%';
         $('annProgressText').textContent = '准备中';
         const job = await api('/internal/split-demo/split', {method:'POST', body:JSON.stringify({
-          recording_id:id, model:state.prompts.model || 'qwen-max', prompt_version:state.prompts.version || 'v0.2', system_prompt:state.prompts.system, user_prompt:state.prompts.user
+          recording_id:id, model:state.prompts.model || 'qwen-max', prompt_version:state.prompts.version || 'v0.3', system_prompt:state.prompts.system, user_prompt:state.prompts.user
         })});
         state.annotate.jobId = job.id;
         await pollJob(job.id, 'split');
@@ -991,7 +1046,10 @@
     }
     function renderAnnotateResult(){
       const result = state.annotate.result;
-      if(!result) return;
+      if(!result){
+        syncPromptVersionMeta();
+        return;
+      }
       usePromptLabel();
       $('annRaw').textContent = JSON.stringify(result, null, 2);
       $('annTimeline').innerHTML = '';
@@ -1017,6 +1075,7 @@
       $('annCorrectionSummary').innerHTML = correctionText;
       $('annCount').textContent = `已确认 ${reviewed}/${encounters.length}`;
       $('annSavedHint').textContent = annotationHintText();
+      syncPromptVersionMeta();
       $('annEncounters').innerHTML = '';
       encounters.forEach((card, idx) => {
         if(idx > 0) {
@@ -1452,7 +1511,7 @@
             <strong>${escapeHtml(headline)}</strong>
             <div class="small">左边是放进去的素材，右边是 AI 切出来的就诊。</div>
           </div>
-          <div class="small">prompt ${escapeHtml(state.prompts.version || 'v0.2')}</div>
+          <div class="small">prompt ${escapeHtml(state.prompts.version || 'v0.3')}</div>
         </div>`;
       $('testGapStats').innerHTML = renderMatchColumns(caseData, run, report);
       $('testDetails').innerHTML = renderSeamDetails(report);
