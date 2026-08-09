@@ -61,6 +61,18 @@ const (
 - 内部短静默(30 秒以内)
 - 医生查阅资料、书写记录时的静默
 - 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
+- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要还是同一个人在说,就是一次就诊
+- 医生为了举例说明而提到的其他患者。例如"我有个病人和你情况差不多,四十多岁,也是这个症状,吃了三个月就好了"。这个被提到的患者不在现场,不构成新的就诊
+
+## 判断"是不是换人了"的唯一可靠依据
+
+切开的前提是**说话的患者本人换了**,不是话题换了。
+
+判断方法:看被提到的那个人有没有在对话里应答。
+- 如果有人开始回答医生的提问、描述自己的症状 -- 这是新的患者到场,应当切开
+- 如果只是被医生或患者在叙述中提及,始终没有出现属于他的发言 -- 这是举例或转述,不切开
+
+举例场景的典型特征:被提到的人没有名字("有个病人"、"我另一个患者"),用第三人称叙述,时态是过去的,而且这段话是为了说服眼前的患者。
 
 判定为不是就诊:
 - 患者只是问路、拿报告、取药,没有诊疗内容
@@ -95,6 +107,13 @@ const (
 - 遇到疑似不同患者时,优先切开
 - 拿不准的边界,切开并标记低置信度
 - 不要为了让片段"看起来完整"而合并可疑区域
+
+但"优先切开"有前提:必须确实存在患者可能换人的迹象。以下情况不属于"拿不准",不要切:
+- 只是话题变了,说话的人没变
+- 只是被提到了另一个患者,那个人没有出现在对话里
+- 只是出现了一段静默,但静默前后是同一个人在说同一件事
+
+这两类过切会让医生反复做无意义的合并操作,严重时会让他不再信任切分结果。
 
 ## 输出格式
 
@@ -1303,6 +1322,8 @@ func correctionReasonOptions() []CorrectionReasonOption {
 		{Code: string(CorrectionReasonMultiPatient), Label: "多患者同诊", Description: "夫妻同诊、母子同诊被切成多段", Actions: []string{"merge"}},
 		{Code: string(CorrectionReasonFamilyProxy), Label: "家属代述", Description: "家属替患者描述病情，被误判为独立就诊", Actions: []string{"merge"}},
 		{Code: string(CorrectionReasonTopicShift), Label: "同一患者话题跳转", Description: "同一患者连续问不相关问题，被误判为两次", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonFalseBoundary), Label: "同一患者被无故切开", Description: "同一患者的连续沟通，中间没有任何话题跳转，却被切成两段", Actions: []string{"merge"}},
+		{Code: string(CorrectionReasonMentionedPatient), Label: "举例提到的其他患者", Description: "医生举例说'有个和你类似的病人'，被误判为新的就诊", Actions: []string{"merge", "delete"}},
 		{Code: string(CorrectionReasonMissedBoundary), Label: "漏切边界", Description: "两个不同患者被合并成一段", Actions: []string{"split"}},
 		{Code: string(CorrectionReasonBoundaryOffset), Label: "边界位置偏移", Description: "类型判对了，但起止秒数不准", Actions: []string{"adjust"}},
 		{Code: string(CorrectionReasonNotEncounter), Label: "非就诊内容", Description: "问路、取报告、纯闲聊被判成就诊", Actions: []string{"delete"}},

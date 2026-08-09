@@ -210,6 +210,7 @@
           </div>
           <div id="annTimeline" class="timeline" style="margin-top:12px"></div>
           <div id="annProgressText" class="small" style="margin-top:8px"></div>
+          <div id="annSavedHint" class="small" style="margin-top:8px"></div>
           <div id="annCorrectionSummary" style="margin-top:10px;font-weight:700"></div>
           <div id="annCount" style="margin-top:12px;font-weight:700"></div>
           <button id="saveAnnotationBtn" class="secondary" style="margin-top:12px">保存标注</button>
@@ -367,6 +368,18 @@
 - 内部短静默(30 秒以内)
 - 医生查阅资料、书写记录时的静默
 - 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
+- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要还是同一个人在说,就是一次就诊
+- 医生为了举例说明而提到的其他患者。例如"我有个病人和你情况差不多,四十多岁,也是这个症状,吃了三个月就好了"。这个被提到的患者不在现场,不构成新的就诊
+
+## 判断"是不是换人了"的唯一可靠依据
+
+切开的前提是**说话的患者本人换了**,不是话题换了。
+
+判断方法:看被提到的那个人有没有在对话里应答。
+- 如果有人开始回答医生的提问、描述自己的症状 -- 这是新的患者到场,应当切开
+- 如果只是被医生或患者在叙述中提及,始终没有出现属于他的发言 -- 这是举例或转述,不切开
+
+举例场景的典型特征:被提到的人没有名字("有个病人"、"我另一个患者"),用第三人称叙述,时态是过去的,而且这段话是为了说服眼前的患者。
 
 判定为不是就诊:
 - 患者只是问路、拿报告、取药,没有诊疗内容
@@ -401,6 +414,13 @@
 - 遇到疑似不同患者时,优先切开
 - 拿不准的边界,切开并标记低置信度
 - 不要为了让片段"看起来完整"而合并可疑区域
+
+但"优先切开"有前提:必须确实存在患者可能换人的迹象。以下情况不属于"拿不准",不要切:
+- 只是话题变了,说话的人没变
+- 只是被提到了另一个患者,那个人没有出现在对话里
+- 只是出现了一段静默,但静默前后是同一个人在说同一件事
+
+这两类过切会让医生反复做无意义的合并操作,严重时会让他不再信任切分结果。
 
 ## 输出格式
 
@@ -456,6 +476,8 @@
       {code:'multi_patient', label:'多患者同诊'},
       {code:'family_proxy', label:'家属代述'},
       {code:'topic_shift', label:'同一患者话题跳转'},
+      {code:'false_boundary', label:'同一患者被无故切开'},
+      {code:'mentioned_patient', label:'举例提到的其他患者'},
       {code:'missed_boundary', label:'漏切边界'},
       {code:'boundary_offset', label:'边界位置偏移'},
       {code:'not_encounter', label:'非就诊内容'},
@@ -472,7 +494,7 @@
     const defaultPrompts = loadPrompts();
     let state = {
       route:'annotate',
-      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false},
+      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,rawResult:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false},
       test:{cases:[],selectedId:'',selectedCase:null,currentRun:null,prevRun:null,running:false,progress:null,queue:[],lastSelectedId:''},
       build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null,saving:false},
       prompts: defaultPrompts,
@@ -590,8 +612,218 @@
       if(fn) fn(value);
     }
     function confirmedSeqSet(){
-      const list = state.annotate.annotations?.encounters || [];
-      return new Set(list.map(item => Number(item.seq)).filter(Boolean));
+      const list = state.annotate.result?.encounters || [];
+      return new Set(list.filter(item => item && item.confirmed).map((item, idx) => Number(item.seq || (idx + 1))).filter(Boolean));
+    }
+    function deepClone(value){
+      return value ? JSON.parse(JSON.stringify(value)) : value;
+    }
+    function sourceLabelFor(source){
+      return ({
+        ai_confirmed:'AI 原样',
+        human_merged:'已人工合并',
+        human_deleted:'已人工删除',
+        human_split:'已人工切开',
+        human_added:'已人工补充',
+        human_adjusted:'已人工调边界',
+      })[source] || '人工修正';
+    }
+    function mergedFromLabel(item){
+      const merged = Array.isArray(item?.merged_from_seqs) ? item.merged_from_seqs.filter(n => Number(n) > 0) : [];
+      if(!merged.length) return '';
+      const parts = [Number(item.seq || 0), ...merged].filter(Boolean).sort((a, b) => a - b);
+      return `由 ${parts.map(n => `#${n}`).join(' + ')} 合并`;
+    }
+    function cloneEncounterItem(item, idx){
+      const out = deepClone(item) || {};
+      out.seq = Number(out.seq || idx + 1);
+      out.start_seconds = Number(out.start_seconds || 0);
+      out.end_seconds = Number(out.end_seconds || 0);
+      out.duration_seconds = Math.max(0, Number(out.duration_seconds || (out.end_seconds - out.start_seconds)));
+      out.source = out.source || 'ai_confirmed';
+      out.source_label = out.source_label || sourceLabelFor(out.source);
+      out.confirmed = !!out.confirmed;
+      out.target_start_seconds = Number(out.target_start_seconds || out.start_seconds || 0);
+      out.original_start_seconds = Number(out.original_start_seconds || out.start_seconds || 0);
+      return out;
+    }
+    function cloneResultForDisplay(result){
+      if(!result) return null;
+      const copy = deepClone(result);
+      copy.encounters = (copy.encounters || []).map((item, idx) => cloneEncounterItem(item, idx));
+      return copy;
+    }
+    function encounterLocateIndex(encounters, correction){
+      if(!Array.isArray(encounters) || !encounters.length || !correction) return -1;
+      const targetStart = Number(correction.target_start_seconds || 0);
+      if(targetStart > 0){
+        const byTarget = encounters.findIndex(item => Number(item.target_start_seconds || item.original_start_seconds || item.start_seconds || 0) === targetStart);
+        if(byTarget >= 0) return byTarget;
+      }
+      const seq = Number(correction.encounter_seq || 0);
+      if(seq > 0 && seq <= encounters.length) return seq - 1;
+      return -1;
+    }
+    function overlaySavedEncounter(display, saved){
+      if(!display || !saved) return display;
+      display.patient_hint = saved.patient_hint || display.patient_hint || '';
+      display.chief_complaint = saved.chief_complaint || display.chief_complaint || '';
+      display.disposition = saved.disposition || display.disposition || '';
+      display.opening_line = saved.opening_line || display.opening_line || '';
+      display.closing_line = saved.closing_line || display.closing_line || '';
+      display.source = saved.source || display.source || 'ai_confirmed';
+      display.source_label = saved.source_label || sourceLabelFor(display.source);
+      display.confirmed = !!saved.confirmed;
+      display.merged_from_seqs = Array.isArray(saved.merged_from_seqs) ? saved.merged_from_seqs.slice() : (display.merged_from_seqs || []);
+      return display;
+    }
+    function applyEncounterCorrection(encounters, correction){
+      const action = String(correction?.type || '').trim();
+      const idx = encounterLocateIndex(encounters, correction);
+      if(action === 'correct'){
+        if(idx >= 0 && encounters[idx]) encounters[idx].confirmed = true;
+        return;
+      }
+      if(action === 'delete'){
+        if(idx >= 0) encounters.splice(idx, 1);
+        return;
+      }
+      if(action === 'merge'){
+        if(idx > 0 && encounters[idx] && encounters[idx - 1]){
+          const cur = encounters[idx];
+          const prev = encounters[idx - 1];
+          prev.end_seconds = Math.max(Number(prev.end_seconds || 0), Number(cur.end_seconds || 0));
+          prev.duration_seconds = Math.max(0, Number(prev.end_seconds || 0) - Number(prev.start_seconds || 0));
+          prev.full_text = `${prev.full_text || ''}\n${cur.full_text || ''}`.trim();
+          prev.utterances = [...(prev.utterances || []), ...(cur.utterances || [])];
+          prev.source = 'human_merged';
+          prev.source_label = sourceLabelFor(prev.source);
+          prev.confirmed = prev.confirmed || cur.confirmed;
+          prev.merged_from_seqs = [...new Set([...(prev.merged_from_seqs || []), Number(cur.seq || 0)].filter(Boolean))];
+          encounters.splice(idx, 1);
+        }
+        return;
+      }
+      if(action === 'split'){
+        const cur = idx >= 0 ? encounters[idx] : null;
+        const splitAt = Number(correction.split_at_seconds || 0);
+        if(!cur || splitAt <= Number(cur.start_seconds || 0) || splitAt >= Number(cur.end_seconds || 0)) return;
+        const left = deepClone(cur);
+        const right = deepClone(cur);
+        left.end_seconds = splitAt;
+        right.start_seconds = splitAt;
+        left.duration_seconds = Math.max(0, Number(left.end_seconds || 0) - Number(left.start_seconds || 0));
+        right.duration_seconds = Math.max(0, Number(right.end_seconds || 0) - Number(right.start_seconds || 0));
+        left.source = 'human_split';
+        right.source = 'human_split';
+        left.source_label = sourceLabelFor(left.source);
+        right.source_label = sourceLabelFor(right.source);
+        left.confirmed = !!cur.confirmed;
+        right.confirmed = !!cur.confirmed;
+        encounters.splice(idx, 1, left, right);
+        return;
+      }
+      if(action === 'adjust'){
+        const cur = idx >= 0 ? encounters[idx] : null;
+        if(!cur) return;
+        const start = Number(correction.start_seconds || correction.target_start_seconds || cur.start_seconds || 0);
+        const end = Number(correction.end_seconds || cur.end_seconds || 0);
+        if(end <= start) return;
+        cur.start_seconds = start;
+        cur.end_seconds = end;
+        cur.duration_seconds = Math.max(0, end - start);
+        cur.source = 'human_adjusted';
+        cur.source_label = sourceLabelFor(cur.source);
+        return;
+      }
+      if(action === 'add'){
+        const start = Number(correction.start_seconds || correction.target_start_seconds || 0);
+        const end = Number(correction.end_seconds || 0);
+        if(end <= start) return;
+        const inserted = cloneEncounterItem({
+          start_seconds: start,
+          end_seconds: end,
+          duration_seconds: end - start,
+          source: 'human_added',
+          source_label: sourceLabelFor('human_added'),
+          confirmed: true,
+          seq: Number(correction.target_start_seconds || correction.start_seconds || start) || (encounters.length + 1),
+          original_start_seconds: start,
+          target_start_seconds: start,
+          patient_hint: correction.patient_hint || '',
+          chief_complaint: correction.chief_complaint || '',
+          disposition: correction.disposition || '',
+          opening_line: correction.opening_line || '',
+          closing_line: correction.closing_line || '',
+          full_text: correction.full_text || '',
+          utterances: correction.utterances || [],
+        }, encounters.length);
+        const insertAt = idx >= 0 ? idx + 1 : encounters.length;
+        encounters.splice(insertAt, 0, inserted);
+      }
+    }
+    function applySavedAnnotation(rawResult, annotation){
+      const base = cloneResultForDisplay(rawResult);
+      if(!base) return null;
+      if(!annotation) return base;
+      const encounters = (base.encounters || []).map((item, idx) => cloneEncounterItem(item, idx));
+      (annotation.corrections || []).forEach(correction => applyEncounterCorrection(encounters, correction));
+      const savedEncounters = Array.isArray(annotation.encounters) ? annotation.encounters : [];
+      if(savedEncounters.length){
+        encounters.forEach(item => {
+          const match = savedEncounters.find(saved => Number(saved.seq || 0) === Number(item.seq || 0))
+            || savedEncounters.find(saved => Number(saved.start_seconds || 0) === Number(item.start_seconds || 0) && Number(saved.end_seconds || 0) === Number(item.end_seconds || 0));
+          if(match) overlaySavedEncounter(item, match);
+        });
+      }
+      base.encounters = encounters;
+      return base;
+    }
+    async function summarizeEncounter(item){
+      const text = String(item?.full_text || '').trim();
+      if(!text) return item;
+      const summary = await api('/internal/split-demo/encounter-summary', {method:'POST', body:JSON.stringify({
+        model: state.prompts.model || 'qwen-max',
+        encounter_text: text,
+      })});
+      item.patient_hint = summary.patient_hint || item.patient_hint || '';
+      item.chief_complaint = summary.chief_complaint || item.chief_complaint || '';
+      item.disposition = summary.disposition || item.disposition || '';
+      return item;
+    }
+    function buildAnnotationPayload(){
+      const encounters = (state.annotate.result?.encounters || []).map((item, idx) => {
+        const copy = deepClone(item) || {};
+        copy.seq = Number(copy.seq || idx + 1);
+        copy.start_seconds = Number(copy.start_seconds || 0);
+        copy.end_seconds = Number(copy.end_seconds || 0);
+        copy.duration_seconds = Math.max(0, Number(copy.end_seconds || 0) - Number(copy.start_seconds || 0));
+        copy.source = copy.source || 'ai_confirmed';
+        copy.source_label = copy.source_label || sourceLabelFor(copy.source);
+        copy.confirmed = !!copy.confirmed;
+        copy.merged_from_seqs = Array.isArray(copy.merged_from_seqs) ? copy.merged_from_seqs.map(n => Number(n)).filter(Boolean) : [];
+        delete copy.summary_loading;
+        delete copy.summary_error;
+        return copy;
+      });
+      return {
+        recording_id: state.annotate.selectedId,
+        duration_seconds: Number(state.annotate.rawResult?.recording_duration_seconds || state.annotate.result?.recording_duration_seconds || 0),
+        annotated_at: new Date().toISOString(),
+        annotated_by: 'demo',
+        source_run_id: String(state.annotate.detail?.latest_run?.id || ''),
+        encounters,
+        corrections: state.annotate.annotations?.corrections || [],
+      };
+    }
+    function rebuildAnnotatedResult(){
+      const base = state.annotate.rawResult || state.annotate.result;
+      if(!base) return;
+      state.annotate.result = applySavedAnnotation(base, state.annotate.annotations || {encounters:[], corrections:[]});
+    }
+    function replaceDisplayedEncounters(nextEncounters){
+      if(!state.annotate.result) return;
+      state.annotate.result = {...state.annotate.result, encounters: nextEncounters};
     }
 
     async function loadAnnotate(){
@@ -651,15 +883,18 @@
       $('annRunMeta').textContent = `录音 #${state.annotate.detail.id} | ${state.annotate.detail.employee_name || ''} | ${state.annotate.detail.recorded_at || ''} | 来源 ${state.annotate.detail.transcript_source || ''}`;
       state.annotate.baselineCorrections = state.annotate.detail.latest_annotation?.corrections?.length || 0;
       if(state.annotate.detail.latest_run?.result){
-        state.annotate.result = state.annotate.detail.latest_run.result;
+        state.annotate.rawResult = cloneResultForDisplay(state.annotate.detail.latest_run.result);
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
+        state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
         renderAnnotateResult();
         return;
       }
+      state.annotate.rawResult = null;
       state.annotate.result = null;
       state.annotate.annotations = state.annotate.detail.latest_annotation || null;
       $('annTimeline').innerHTML = '';
       $('annProgressText').textContent = '等待手工确认后执行切分';
+      $('annSavedHint').textContent = '';
       $('annCorrectionSummary').textContent = '';
       $('annCount').textContent = '';
       $('annEncounters').innerHTML = '<div class="small muted">先确认录音，再点“执行切分”。</div>';
@@ -694,8 +929,9 @@
       }
       if(job.status === 'completed'){
         if(kind === 'split'){
-          state.annotate.result = job.result;
-          state.annotate.annotations = state.annotate.detail?.latest_annotation || null;
+          state.annotate.rawResult = cloneResultForDisplay(job.result);
+          state.annotate.annotations = state.annotate.detail?.latest_annotation || state.annotate.annotations || {encounters:[], corrections:[]};
+          state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
           $('annProgress').style.width = '100%';
           renderAnnotateResult();
           await refreshAnnotateOverview();
@@ -732,7 +968,7 @@
         $('annTimeline').appendChild(d);
       });
       const confirmed = confirmedSeqSet();
-      const encounters = (result.encounters || []).map((x,i) => buildEncounterCard(x,i+1, confirmed.has(i+1)));
+      const encounters = (result.encounters || []).map((x,i) => buildEncounterCard(x,i+1, confirmed.has(Number(x.seq || i+1))));
       const reviewed = confirmed.size;
       const currentCorrections = state.annotate.annotations?.corrections?.length || 0;
       const baselineCorrections = Number(state.annotate.baselineCorrections || 0);
@@ -745,9 +981,10 @@
       }
       $('annCorrectionSummary').innerHTML = correctionText;
       $('annCount').textContent = `已确认 ${reviewed}/${encounters.length}`;
+      $('annSavedHint').textContent = state.annotate.detail?.latest_annotation ? `这条录音已标注过（${state.annotate.detail.latest_annotation.corrections?.length || 0} 处修正），当前显示的是修正后的结果` : '';
       $('annEncounters').innerHTML = '';
       encounters.forEach((card, idx) => {
-        if(idx > 0 && encounters[idx-1].dataset.seq !== card.dataset.seq) {
+        if(idx > 0) {
           const prev = result.encounters[idx-1], next = result.encounters[idx];
           $('annEncounters').insertAdjacentHTML('beforeend', buildBoundary(prev, next, idx));
         }
@@ -761,7 +998,7 @@
       const gap = Math.max(0, next.start_seconds - prev.end_seconds);
       return `<div class="boundary">
         <details>
-          <summary>检查此处边界：就诊 #${idx} 与 就诊 #${idx+1}</summary>
+          <summary>检查此处边界：原始 #${prev.seq} 与 原始 #${next.seq}</summary>
           <div class="small" style="margin-top:8px">间隙 ${fmtMMSS(prev.end_seconds)} - ${fmtMMSS(next.start_seconds)}（${fmtHMS(gap)}）</div>
           <div class="boundary-grid" style="margin-top:10px">
             <div><div class="small">上一段结尾</div><pre>${escapeHtml(joinUtterances((prev.utterances || []).slice(-5)))}</pre></div>
@@ -909,15 +1146,18 @@
       };
       return box.outerHTML;
     }
-    function buildEncounterCard(item, seq, confirmed){
+    function buildEncounterCard(item, pos, confirmed){
       const div = document.createElement('div');
-      const expanded = !!state.annotate.expanded[seq];
-      div.className = `encounter-card ${state.annotate.focused === seq ? 'focused' : ''}${confirmed ? ' done-ok' : ''}`;
-      div.dataset.seq = seq;
+      const expanded = !!state.annotate.expanded[item.seq];
+      div.className = `encounter-card ${state.annotate.focused === pos ? 'focused' : ''}${confirmed ? ' done-ok' : ''}`;
+      div.dataset.seq = item.seq;
+      div.dataset.pos = pos;
+      const mergeLabel = mergedFromLabel(item);
       div.innerHTML = `
         <div class="encounter-head">
           <div>
-            <div class="title">就诊 #${seq}</div>
+            <div class="title">原始 #${item.seq}${item.source && item.source !== 'ai_confirmed' ? ` <span class="pill">${escapeHtml(item.source_label || sourceLabelFor(item.source))}</span>` : ''}</div>
+            <div class="dim">当前第 ${pos} 段${mergeLabel ? ` · ${escapeHtml(mergeLabel)}` : ''}</div>
             <div class="dim">本段 ${fmtHMS(item.duration_seconds || (item.end_seconds-item.start_seconds))}，播放窗 ${fmtHMS(Math.max(1, (item.end_seconds-item.start_seconds) + 16))}（前后各 +8 秒）</div>
           </div>
           <div class="pill">置信 ${Number(item.boundary_confidence || 0).toFixed(2)} ${item.confidence_label || ''}</div>
@@ -929,9 +1169,10 @@
         </div>
         <div class="small">开场：“${escapeHtml(item.opening_line || '—')}”</div>
         <div class="small">结束：“${escapeHtml(item.closing_line || '—')}”</div>
+        ${item.summary_error ? '<div class="small" style="color:var(--red);font-weight:700">摘要更新失败，仍显示旧摘要</div>' : (item.summary_loading ? '<div class="small" style="color:var(--blue);font-weight:700">正在更新摘要...</div>' : '')}
         <div class="actions" style="margin-top:10px">
           <button data-act="correct" ${confirmed ? 'disabled' : ''}>✓ 正确</button>
-          <button data-act="merge" class="secondary" ${confirmed ? 'disabled' : ''}>合并↑</button>
+          <button data-act="merge" class="secondary" ${confirmed || pos <= 1 ? 'disabled' : ''} title="${pos <= 1 ? '第一段不能与上一段合并' : ''}">合并↑</button>
           <button data-act="delete" class="secondary" ${confirmed ? 'disabled' : ''}>不是就诊</button>
         </div>
         <button class="ghost" style="margin-top:8px;padding:0;border:none;color:var(--blue)">${expanded ? '▼ 收起对话' : '▶ 展开对话'}</button>
@@ -939,7 +1180,7 @@
       `;
       div.querySelector('.ghost').onclick = e => {
         e.stopPropagation();
-        const currentSeq = Number(div.dataset.seq || seq);
+        const currentSeq = Number(div.dataset.seq || item.seq);
         const box = div.querySelector('.transcript');
         const open = box.classList.toggle('hidden') ? false : true;
         state.annotate.expanded[currentSeq] = open;
@@ -948,35 +1189,69 @@
       };
       div.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async e => {
         e.stopPropagation();
-        await handleEncounterAction(btn.dataset.act, seq);
+        await handleEncounterAction(btn.dataset.act, pos);
       });
-      ensureCardPlayer(div, item, seq);
+      ensureCardPlayer(div, item, item.seq);
       return div;
     }
-    function focusEncounter(seq){ state.annotate.focused = seq; renderAnnotateResult(); document.querySelector(`#annEncounters .encounter-card[data-seq="${seq}"]`)?.scrollIntoView({behavior:'smooth', block:'center'}); }
-    async function handleEncounterAction(action, seq){
+    function focusEncounter(pos){
+      state.annotate.focused = pos;
+      renderAnnotateResult();
+      document.querySelector(`#annEncounters .encounter-card[data-pos="${pos}"]`)?.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    async function handleEncounterAction(action, pos){
       const confirmed = confirmedSeqSet();
-      if(action === 'correct' && confirmed.has(seq)) return;
+      const card = state.annotate.result?.encounters?.[pos-1];
+      if(!card) return;
+      if(action === 'correct' && confirmed.has(Number(card.seq || 0))) return;
       if(action === 'correct'){
-        const card = state.annotate.result?.encounters?.[seq-1]; if(!card) return;
         state.annotate.annotations = state.annotate.annotations || {encounters:[],corrections:[]};
-        if(!state.annotate.annotations.encounters.some(x => Number(x.seq) === seq)){
-          state.annotate.annotations.encounters.push({seq, start_seconds:card.start_seconds, end_seconds:card.end_seconds, source:'ai_confirmed', patient_hint:card.patient_hint || ''});
-        }
-        await refreshAnnotateOverview(); renderAnnotateResult(); focusEncounter(Math.min(seq+1, (state.annotate.result?.encounters || []).length));
+        card.confirmed = true;
+        card.source = 'ai_confirmed';
+        card.source_label = sourceLabelFor(card.source);
+        await refreshAnnotateOverview(); renderAnnotateResult(); focusEncounter(Math.min(pos+1, (state.annotate.result?.encounters || []).length));
         return;
       }
-      const reason = await openReason(action, seq);
+      const reason = await openReason(action, pos);
       if(!reason) return;
       state.annotate.annotations = state.annotate.annotations || {encounters:[],corrections:[]};
-      state.annotate.annotations.corrections.push({type:action, reason_code:reason.code, reason_note:reason.note || '', encounter_seq:seq});
+      const target = state.annotate.result?.encounters?.[pos-1] || null;
+      state.annotate.annotations.corrections.push({type:action, reason_code:reason.code, reason_note:reason.note || '', encounter_seq:Number(target?.seq || pos), target_start_seconds:Number(target?.target_start_seconds || target?.start_seconds || 0)});
       if(action === 'delete'){
-        state.annotate.result.encounters.splice(seq-1,1);
-      }else if(action === 'merge' && seq > 1){
-        const cur = state.annotate.result.encounters[seq-1], prev = state.annotate.result.encounters[seq-2];
-        prev.end_seconds = Math.max(prev.end_seconds, cur.end_seconds);
-        prev.full_text = `${prev.full_text || ''}\n${cur.full_text || ''}`.trim();
-        state.annotate.result.encounters.splice(seq-1,1);
+        const nextEncounters = (state.annotate.result?.encounters || []).filter((_, idx) => idx !== pos-1);
+        replaceDisplayedEncounters(nextEncounters);
+        setStatus($('annStatus'), `已删除原始 #${target?.seq || pos}`, new Date().toLocaleTimeString());
+        renderAnnotateResult();
+      }else if(action === 'merge' && pos > 1){
+        const sourceEncounters = state.annotate.result?.encounters || [];
+        const nextEncounters = sourceEncounters.map(item => item);
+        const cur = nextEncounters[pos-1];
+        const prev = nextEncounters[pos-2];
+        if(prev && cur){
+          prev.summary_loading = true;
+          prev.summary_error = false;
+          prev.end_seconds = Math.max(Number(prev.end_seconds || 0), Number(cur.end_seconds || 0));
+          prev.duration_seconds = Math.max(0, prev.end_seconds - prev.start_seconds);
+          prev.full_text = `${prev.full_text || ''}\n${cur.full_text || ''}`.trim();
+          prev.utterances = [...(prev.utterances || []), ...(cur.utterances || [])];
+          prev.source = 'human_merged';
+          prev.source_label = sourceLabelFor(prev.source);
+          prev.merged_from_seqs = [...new Set([...(prev.merged_from_seqs || []), Number(cur.seq || 0)].filter(Boolean))];
+          nextEncounters.splice(pos-1, 1);
+          replaceDisplayedEncounters(nextEncounters);
+          setStatus($('annStatus'), `原始 #${prev.seq} 已合并原始 #${cur.seq}，正在更新摘要...`, new Date().toLocaleTimeString());
+          renderAnnotateResult();
+        }
+        try{
+          if(prev) await summarizeEncounter(prev);
+        }catch(err){
+          if(prev) prev.summary_error = true;
+          setStatus($('annStatus'), `原始 #${prev?.seq || ''} 摘要更新失败：${err.message}`);
+        }finally{
+          if(prev) prev.summary_loading = false;
+          replaceDisplayedEncounters(nextEncounters);
+          renderAnnotateResult();
+        }
       }
       renderAnnotateResult();
       await refreshAnnotateOverview();
@@ -994,19 +1269,18 @@
     async function saveAnnotation(){
       if(state.annotate.saving || !state.annotate.result) return;
       state.annotate.saving = true;
-      const payload = {
-        recording_id: state.annotate.selectedId,
-        duration_seconds: Number(state.annotate.result.recording_duration_seconds || 0),
-        annotated_at: new Date().toISOString(),
-        annotated_by: 'demo',
-        source_run_id: String(state.annotate.detail?.latest_run?.id || ''),
-        encounters: (state.annotate.annotations?.encounters || state.annotate.result.encounters.map((x,i) => ({seq:i+1,start_seconds:x.start_seconds,end_seconds:x.end_seconds,patient_hint:x.patient_hint || '',source:'ai_confirmed'}))),
-        corrections: state.annotate.annotations?.corrections || [],
-      };
-      await api('/internal/split-demo/save-annotation', {method:'POST', body:JSON.stringify(payload)});
-      state.annotate.saving = false;
-      await refreshAnnotateOverview();
-      setStatus($('annStatus'), '已保存基准');
+      try{
+        const payload = buildAnnotationPayload();
+        await api('/internal/split-demo/save-annotation', {method:'POST', body:JSON.stringify(payload)});
+        state.annotate.annotations = payload;
+        state.annotate.detail.latest_annotation = deepClone(payload);
+        state.annotate.baselineCorrections = payload.corrections.length || 0;
+        await refreshAnnotateOverview();
+        renderAnnotateResult();
+        setStatus($('annStatus'), `已保存基准，本条修正 ${payload.corrections.length || 0} 处`);
+      }finally{
+        state.annotate.saving = false;
+      }
     }
 
     async function initAnnotate(){

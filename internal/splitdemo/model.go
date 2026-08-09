@@ -256,6 +256,9 @@ type AnnotationEncounter struct {
 	EndSeconds     int    `json:"end_seconds"`
 	PatientHint    string `json:"patient_hint,omitempty"`
 	Source         string `json:"source"`
+	SourceLabel    string `json:"source_label,omitempty"`
+	Confirmed      bool   `json:"confirmed,omitempty"`
+	MergedFromSeqs []int  `json:"merged_from_seqs,omitempty"`
 	ChiefComplaint string `json:"chief_complaint,omitempty"`
 	Disposition    string `json:"disposition,omitempty"`
 	OpeningLine    string `json:"opening_line,omitempty"`
@@ -269,6 +272,7 @@ type AnnotationCorrection struct {
 	SplitAtSeconds       int    `json:"split_at_seconds,omitempty"`
 	FromSegmentIndex     int    `json:"from_segment_index,omitempty"`
 	EncounterSeq         int    `json:"encounter_seq,omitempty"`
+	TargetStartSeconds   int    `json:"target_start_seconds,omitempty"`
 	Notes                string `json:"notes,omitempty"`
 	ReasonCode           string `json:"reason_code,omitempty"`
 	ReasonNote           string `json:"reason_note,omitempty"`
@@ -282,6 +286,8 @@ const (
 	CorrectionReasonMultiPatient     CorrectionReasonCode = "multi_patient"
 	CorrectionReasonFamilyProxy      CorrectionReasonCode = "family_proxy"
 	CorrectionReasonTopicShift       CorrectionReasonCode = "topic_shift"
+	CorrectionReasonFalseBoundary    CorrectionReasonCode = "false_boundary"
+	CorrectionReasonMentionedPatient CorrectionReasonCode = "mentioned_patient"
 	CorrectionReasonMissedBoundary   CorrectionReasonCode = "missed_boundary"
 	CorrectionReasonBoundaryOffset   CorrectionReasonCode = "boundary_offset"
 	CorrectionReasonNotEncounter     CorrectionReasonCode = "not_encounter"
