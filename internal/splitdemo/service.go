@@ -155,8 +155,8 @@ func NewService(store *Store, llm *Client) *Service {
 	return &Service{store: store, llm: llm}
 }
 
-func (s *Service) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int) ([]RecordingListItem, int64, error) {
-	return s.store.ListRecordings(ctx, tenantID, minDurationSeconds, page, pageSize)
+func (s *Service) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int, recordingID int64, query string) ([]RecordingListItem, int64, error) {
+	return s.store.ListRecordings(ctx, tenantID, minDurationSeconds, page, pageSize, recordingID, query)
 }
 
 func (s *Service) GetRecording(ctx context.Context, recordingID int64) (*RecordingDetail, error) {
@@ -193,10 +193,12 @@ func (s *Service) buildAnnotationOverview(ctx context.Context) (*AnnotationOverv
 	}
 	stats := map[string]int{}
 	total := 0
+	ids := make([]int64, 0, len(items))
 	for _, record := range items {
 		if record == nil {
 			continue
 		}
+		ids = append(ids, record.RecordingID)
 		for _, correction := range record.Corrections {
 			code := strings.TrimSpace(correction.ReasonCode)
 			if code == "" {
@@ -207,9 +209,10 @@ func (s *Service) buildAnnotationOverview(ctx context.Context) (*AnnotationOverv
 		}
 	}
 	return &AnnotationOverview{
-		TotalRecordings:  len(items),
-		TotalCorrections: total,
-		ByReason:         buildReasonStats(stats),
+		TotalRecordings:       len(items),
+		TotalCorrections:      total,
+		ByReason:              buildReasonStats(stats),
+		AnnotatedRecordingIDs: ids,
 	}, nil
 }
 

@@ -134,6 +134,16 @@
     .seam-card{padding:12px;background:#f8fafc}
     .seam-card .grid{display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center}
     .seam-card select,.seam-card input{padding:8px 10px}
+    .segment-player{margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:12px;background:#f8fafc}
+    .segment-player .player-row{display:flex;align-items:center;gap:8px}
+    .segment-player .player-btn{
+      flex:0 0 auto;width:34px;height:34px;min-width:34px;padding:0;border-radius:999px;
+      display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1;
+    }
+    .segment-player .player-time{flex:0 0 auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+    .segment-player .player-range{flex:1 1 auto;min-width:0}
+    .segment-player .player-range input{width:100%;height:10px;padding:0}
+    .segment-player .player-note{margin-top:4px;font-size:12px;color:var(--muted)}
     .hidden{display:none}
     @media (max-width:1100px){
       .grid-annotate,.grid-test-top,.grid-test-bottom{grid-template-columns:1fr}
@@ -162,12 +172,15 @@
             <summary class="title">筛选</summary>
             <div class="stack" style="margin-top:10px">
               <div class="field"><label>租户 ID</label><input id="annTenantId" value="1"></div>
-              <div class="field"><label>最小时长（秒）</label><input id="annMinDuration" value="600"></div>
-              <button id="annFilterBtn">筛选</button>
-            </div>
+              <div class="field"><label>录音 ID</label><input id="annRecordingId" placeholder="可选"></div>
+                  <div class="field"><label>关键词</label><input id="annQuery" placeholder="员工名 / 文本 / 文件名"></div>
+                  <div class="field"><label>最小时长（秒）</label><input id="annMinDuration" value="600"></div>
+                  <button id="annFilterBtn">筛选</button>
+                </div>
           </details>
           <div style="margin-top:12px" class="stack">
-            <div class="row" style="justify-content:space-between"><strong>录音列表</strong><span id="annPromptLabel" class="small"></span></div>
+            <div class="row" style="justify-content:space-between"><strong>录音列表</strong><span class="small">只显示有时间戳的录音</span><span id="annPromptLabel" class="small"></span></div>
+            <div id="annListSummary" class="small" style="font-weight:700"></div>
             <div id="annRecordingList" class="list scroll"></div>
           </div>
           <div style="margin-top:12px" class="stack">
@@ -197,6 +210,7 @@
           </div>
           <div id="annTimeline" class="timeline" style="margin-top:12px"></div>
           <div id="annProgressText" class="small" style="margin-top:8px"></div>
+          <div id="annCorrectionSummary" style="margin-top:10px;font-weight:700"></div>
           <div id="annCount" style="margin-top:12px;font-weight:700"></div>
           <button id="saveAnnotationBtn" class="secondary" style="margin-top:12px">保存标注</button>
           <div id="annEncounters" class="list" style="margin-top:12px"></div>
@@ -228,6 +242,7 @@
         <div class="card">
           <div class="row" style="justify-content:space-between;align-items:center">
             <strong>用例列表</strong>
+            <span class="small">只显示有时间戳的录音</span>
             <span class="small">点击选中</span>
           </div>
           <div id="testCaseList" class="list scroll" style="margin-top:10px"></div>
@@ -457,7 +472,7 @@
     const defaultPrompts = loadPrompts();
     let state = {
       route:'annotate',
-      annotate:{tenantId:1,minDuration:600,items:[],selectedId:null,detail:null,result:null,jobId:null,run:null,progress:null,annotations:null,overview:null,focused:1,expanded:{},saving:false},
+      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false},
       test:{cases:[],selectedId:'',selectedCase:null,currentRun:null,prevRun:null,running:false,progress:null,queue:[],lastSelectedId:''},
       build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null,saving:false},
       prompts: defaultPrompts,
@@ -581,21 +596,38 @@
 
     async function loadAnnotate(){
       state.annotate.tenantId = Number($('annTenantId').value || 1);
+      state.annotate.recordingId = String($('annRecordingId').value || '').trim();
+      state.annotate.query = String($('annQuery').value || '').trim();
       state.annotate.minDuration = Number($('annMinDuration').value || 600);
-      const data = await api(`/internal/split-demo/recordings?tenant_id=${state.annotate.tenantId}&min_duration_seconds=${state.annotate.minDuration}&page=1&page_size=50`);
+      const params = new URLSearchParams({
+        tenant_id: String(state.annotate.tenantId),
+        min_duration_seconds: String(state.annotate.minDuration),
+        page: '1',
+        page_size: '50',
+      });
+      if(state.annotate.recordingId) params.set('recording_id', state.annotate.recordingId);
+      if(state.annotate.query) params.set('q', state.annotate.query);
+      const data = await api(`/internal/split-demo/recordings?${params.toString()}`);
       state.annotate.items = data.items || [];
+      state.annotate.totalAvailable = Number(data.total || state.annotate.items.length || 0);
       if(!state.annotate.items.find(x => x.id === state.annotate.selectedId)) state.annotate.selectedId = null;
       renderAnnotateList();
       if(state.annotate.selectedId) await loadAnnotateDetail(state.annotate.selectedId);
     }
     function renderAnnotateList(){
       const el = $('annRecordingList'); el.innerHTML = '';
+      const annotatedCount = state.annotate.items.filter(item => item.has_saved_annotation).length;
+      $('annListSummary').textContent = `已标注 ${annotatedCount} / 可标注 ${state.annotate.totalAvailable || state.annotate.items.length || 0}`;
       state.annotate.items.forEach(item => {
         const div = document.createElement('div');
         div.className = 'recording-item' + (state.annotate.selectedId === item.id ? ' active' : '');
+        const density = item.recording_duration ? (Number(item.transcript_segments_count || 0) / Math.max(1, Number(item.recording_duration || 0) / 60)) : 0;
+        const sparse = density > 0 && density < 2;
         div.innerHTML = `<div class="title">#${item.id} ${item.employee_name || ''} ${item.has_saved_annotation ? '<span class="pill">✓ 已标注</span>' : ''}</div>
           <div class="dim">${item.recorded_at || ''}</div>
-          <div class="dim">${fmtHMS(item.recording_duration || 0)}</div>`;
+          <div class="dim">${fmtHMS(item.recording_duration || 0)} · ${item.transcript_segments_count || 0}条 · ${item.transcript_chars || 0}字 ${sparse ? '<span title="转写稀疏，可能漏录，标注价值低" style="color:var(--amber);font-weight:700">⚠</span>' : ''}</div>
+          <div class="dim">${item.recording_url ? '有原始音频' : '无音频链接'}</div>`;
+        if(sparse) div.title = '转写稀疏，可能漏录，标注价值低';
         div.onclick = () => { state.annotate.selectedId = item.id; renderAnnotateList(); loadAnnotateDetail(item.id, false); };
         el.appendChild(div);
       });
@@ -617,6 +649,7 @@
       syncAnnotateRunButton();
       $('annRaw').textContent = JSON.stringify({transcript_source:state.annotate.detail.transcript_source, transcript_text:state.annotate.detail.transcript_text, transcription_segments:state.annotate.detail.transcription_segments, cleaned_transcription:state.annotate.detail.cleaned_transcription, timeline_transcript:state.annotate.detail.timeline_transcript, structured_transcript:state.annotate.detail.structured_transcript}, null, 2);
       $('annRunMeta').textContent = `录音 #${state.annotate.detail.id} | ${state.annotate.detail.employee_name || ''} | ${state.annotate.detail.recorded_at || ''} | 来源 ${state.annotate.detail.transcript_source || ''}`;
+      state.annotate.baselineCorrections = state.annotate.detail.latest_annotation?.corrections?.length || 0;
       if(state.annotate.detail.latest_run?.result){
         state.annotate.result = state.annotate.detail.latest_run.result;
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
@@ -627,6 +660,7 @@
       state.annotate.annotations = state.annotate.detail.latest_annotation || null;
       $('annTimeline').innerHTML = '';
       $('annProgressText').textContent = '等待手工确认后执行切分';
+      $('annCorrectionSummary').textContent = '';
       $('annCount').textContent = '';
       $('annEncounters').innerHTML = '<div class="small muted">先确认录音，再点“执行切分”。</div>';
     }
@@ -700,6 +734,16 @@
       const confirmed = confirmedSeqSet();
       const encounters = (result.encounters || []).map((x,i) => buildEncounterCard(x,i+1, confirmed.has(i+1)));
       const reviewed = confirmed.size;
+      const currentCorrections = state.annotate.annotations?.corrections?.length || 0;
+      const baselineCorrections = Number(state.annotate.baselineCorrections || 0);
+      let correctionText = `本条修正 ${currentCorrections} 处`;
+      if(baselineCorrections > 0){
+        const delta = baselineCorrections - currentCorrections;
+        if(delta > 0) correctionText += `（上次 ${baselineCorrections} 处，<span style="color:var(--green)">改善 ${delta} 处</span>）`;
+        else if(delta < 0) correctionText += `（上次 ${baselineCorrections} 处，<span style="color:var(--red)">退化 ${Math.abs(delta)} 处</span>）`;
+        else correctionText += `（与上次相同）`;
+      }
+      $('annCorrectionSummary').innerHTML = correctionText;
       $('annCount').textContent = `已确认 ${reviewed}/${encounters.length}`;
       $('annEncounters').innerHTML = '';
       encounters.forEach((card, idx) => {
@@ -726,15 +770,155 @@
         </details>
       </div>`;
     }
+    function fmtTimeClock(seconds){
+      seconds = Math.max(0, Number(seconds || 0));
+      const m = Math.floor(seconds / 60);
+      const s = String(Math.floor(seconds % 60)).padStart(2, '0');
+      return `${m}:${s}`;
+    }
+    function ensureCardPlayer(div, item, seq){
+      const src = state.annotate.detail?.recording_url || '';
+      if(!src) return '';
+      const context = 8;
+      const start = Math.max(0, Number(item.start_seconds || 0) - context);
+      const end = Math.max(start + 1, Number(item.end_seconds || start + 1) + context);
+      const total = Math.max(1, end - start);
+      const playerState = state.annotate.players?.[seq] || {};
+      const initialCurrent = Math.max(start, Math.min(end, Number(playerState.current ?? start)));
+      const existing = div.querySelector('.segment-player');
+      if(existing) existing.remove();
+      const box = document.createElement('div');
+      box.className = 'segment-player';
+      box.innerHTML = `
+        <div class="player-row">
+          <button type="button" class="secondary player-btn" data-player-toggle aria-label="播放/暂停">▶</button>
+          <div class="player-range"><input type="range" min="${start}" max="${end}" step="0.1" value="${initialCurrent}" data-player-range></div>
+          <div class="player-time" data-player-time>${fmtTimeClock(Math.max(0, initialCurrent - start))} / ${fmtTimeClock(Math.max(0, item.end_seconds - item.start_seconds))}</div>
+        </div>
+        <div class="player-note">拖动进度条只改变位置，不改变播放状态。</div>
+      `;
+      div.appendChild(box);
+      let audio = playerState.audio;
+      if(!audio){
+        audio = new Audio(src);
+        audio.preload = 'auto';
+        playerState.audio = audio;
+      }
+      if(audio.src !== src){
+        audio.pause();
+        audio.src = src;
+        audio.load();
+      }
+      if(!state.annotate.players) state.annotate.players = {};
+      state.annotate.players[seq] = playerState;
+      playerState.current = initialCurrent;
+      playerState.start = start;
+      playerState.end = end;
+      playerState.playing = !!playerState.playing;
+      playerState.dragging = false;
+      box.title = `${fmtMMSS(start)} - ${fmtMMSS(end)}`;
+      const toggle = box.querySelector('[data-player-toggle]');
+      const range = box.querySelector('[data-player-range]');
+      const timeText = box.querySelector('[data-player-time]');
+      const syncButton = () => {
+        toggle.textContent = audio.paused ? '▶' : '❚❚';
+        playerState.playing = !audio.paused;
+      };
+      const syncTime = (value) => {
+        const next = Math.max(start, Math.min(end, Number(value || start)));
+        playerState.current = next;
+        range.value = String(next);
+        timeText.textContent = `${fmtTimeClock(Math.max(0, next - start))} / ${fmtTimeClock(Math.max(0, item.end_seconds - item.start_seconds))}`;
+      };
+      if(playerState._boundLoadedMetadata) audio.removeEventListener('loadedmetadata', playerState._boundLoadedMetadata);
+      if(playerState._boundTimeUpdate) audio.removeEventListener('timeupdate', playerState._boundTimeUpdate);
+      if(playerState._boundEnded) audio.removeEventListener('ended', playerState._boundEnded);
+      if(playerState._boundPlay) audio.removeEventListener('play', playerState._boundPlay);
+      if(playerState._boundPause) audio.removeEventListener('pause', playerState._boundPause);
+      playerState._boundLoadedMetadata = () => {
+        try{ audio.currentTime = initialCurrent; }catch(err){}
+        syncTime(initialCurrent);
+      };
+      playerState._boundTimeUpdate = () => {
+        if(playerState.dragging) return;
+        if(audio.currentTime >= end){
+          try{ audio.pause(); }catch(err){}
+          try{ audio.currentTime = end; }catch(err){}
+          syncTime(end);
+          syncButton();
+          return;
+        }
+        syncTime(audio.currentTime);
+      };
+      playerState._boundEnded = () => {
+        syncTime(end);
+        syncButton();
+      };
+      playerState._boundPlay = syncButton;
+      playerState._boundPause = syncButton;
+      audio.addEventListener('loadedmetadata', playerState._boundLoadedMetadata);
+      audio.addEventListener('timeupdate', playerState._boundTimeUpdate);
+      audio.addEventListener('ended', playerState._boundEnded);
+      audio.addEventListener('play', playerState._boundPlay);
+      audio.addEventListener('pause', playerState._boundPause);
+      if(audio.readyState >= 1) {
+        try{ audio.currentTime = initialCurrent; }catch(err){}
+      }
+      syncTime(initialCurrent);
+      syncButton();
+      toggle.onclick = async e => {
+        e.stopPropagation();
+        if(audio.paused){
+          const target = Math.max(start, Math.min(end, Number(range.value || playerState.current || start)));
+          try{ audio.currentTime = target; }catch(err){}
+          if(target >= end){
+            try{ audio.currentTime = start; }catch(err){}
+          }
+          await audio.play().catch(() => {});
+        }else{
+          audio.pause();
+        }
+      };
+      range.oninput = () => {
+        const v = Math.max(start, Math.min(end, Number(range.value || start)));
+        try{ audio.currentTime = v; }catch(err){}
+        syncTime(v);
+      };
+      range.onpointerdown = () => {
+        playerState.dragging = true;
+      };
+      range.onmousedown = () => {
+        playerState.dragging = true;
+      };
+      range.onpointerup = () => {
+        playerState.dragging = false;
+        syncTime(audio.currentTime);
+      };
+      range.onpointercancel = () => {
+        playerState.dragging = false;
+        syncTime(audio.currentTime);
+      };
+      range.onmouseup = () => {
+        playerState.dragging = false;
+        syncTime(audio.currentTime);
+      };
+      range.onchange = () => {
+        const v = Math.max(start, Math.min(end, Number(range.value || start)));
+        try{ audio.currentTime = v; }catch(err){}
+        syncTime(v);
+      };
+      return box.outerHTML;
+    }
     function buildEncounterCard(item, seq, confirmed){
       const div = document.createElement('div');
+      const expanded = !!state.annotate.expanded[seq];
       div.className = `encounter-card ${state.annotate.focused === seq ? 'focused' : ''}${confirmed ? ' done-ok' : ''}`;
       div.dataset.seq = seq;
       div.innerHTML = `
         <div class="encounter-head">
           <div>
             <div class="title">就诊 #${seq}</div>
-            <div class="dim">${fmtMMSS(item.start_seconds)} - ${fmtMMSS(item.end_seconds)}（${fmtHMS(item.duration_seconds || (item.end_seconds-item.start_seconds))}）</div>
+            <div class="dim">本段 ${fmtHMS(item.duration_seconds || (item.end_seconds-item.start_seconds))}，播放窗 ${fmtHMS(Math.max(1, (item.end_seconds-item.start_seconds) + 16))}（前后各 +8 秒）</div>
           </div>
           <div class="pill">置信 ${Number(item.boundary_confidence || 0).toFixed(2)} ${item.confidence_label || ''}</div>
         </div>
@@ -750,20 +934,23 @@
           <button data-act="merge" class="secondary" ${confirmed ? 'disabled' : ''}>合并↑</button>
           <button data-act="delete" class="secondary" ${confirmed ? 'disabled' : ''}>不是就诊</button>
         </div>
-        <button class="ghost" style="margin-top:8px;padding:0;border:none;color:var(--blue)">▶ 展开对话</button>
-        <div class="transcript hidden"></div>
+        <button class="ghost" style="margin-top:8px;padding:0;border:none;color:var(--blue)">${expanded ? '▼ 收起对话' : '▶ 展开对话'}</button>
+        <div class="transcript${expanded ? '' : ' hidden'}"></div>
       `;
-      div.querySelector('.ghost').onclick = () => {
+      div.querySelector('.ghost').onclick = e => {
+        e.stopPropagation();
+        const currentSeq = Number(div.dataset.seq || seq);
         const box = div.querySelector('.transcript');
         const open = box.classList.toggle('hidden') ? false : true;
+        state.annotate.expanded[currentSeq] = open;
         if(open && !box.innerHTML) box.innerHTML = `<pre>${escapeHtml(joinUtterances(item.utterances || []))}</pre>`;
         div.querySelector('.ghost').textContent = open ? '▼ 收起对话' : '▶ 展开对话';
       };
-      div.onclick = () => focusEncounter(seq);
       div.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async e => {
         e.stopPropagation();
         await handleEncounterAction(btn.dataset.act, seq);
       });
+      ensureCardPlayer(div, item, seq);
       return div;
     }
     function focusEncounter(seq){ state.annotate.focused = seq; renderAnnotateResult(); document.querySelector(`#annEncounters .encounter-card[data-seq="${seq}"]`)?.scrollIntoView({behavior:'smooth', block:'center'}); }
@@ -928,12 +1115,23 @@
       const materials = report?.material_count || 0;
       const encounters = report?.encounter_count || 0;
       const missed = report?.missed_count || 0;
+      const merged = report?.merged_count || 0;
       const oversplit = report?.oversplit_count || 0;
       if(!materials) return '没有可展示的对照结果';
-      if(missed > 0 && oversplit > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 漏了 ${missed} 段、多切 ${oversplit} 段`;
-      if(missed > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 漏了 ${missed} 段（严重）`;
-      if(oversplit > 0) return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 多切了 ${oversplit} 段`;
-      return `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊 → 全部正确 ✓`;
+      const head = `放进 ${materials} 段素材 → AI 切出 ${encounters} 次就诊`;
+      // 漏切 = 完全没覆盖(missed) + 被合并进同一段(merged)，两者临床风险相同
+      const under = missed + merged;
+      const problems = [];
+      if(under > 0){
+        const parts = [];
+        if(merged > 0) parts.push(`${merged} 段被合并`);
+        if(missed > 0) parts.push(`${missed} 段没切出`);
+        problems.push(`漏切 ${under} 段（${parts.join('、')}）`);
+      }
+      if(oversplit > 0) problems.push(`多切 ${oversplit} 段`);
+      if(!problems.length) return `${head} → 全部正确 ✓`;
+      const severe = under > 0 ? '（严重）' : '';
+      return `${head} → ${problems.join('，')}${severe}`;
     }
     function renderMatchColumns(caseData, run, report){
       const materials = caseData?.segments || [];
@@ -1004,7 +1202,20 @@
         const targets = (item.matched_encounters || []).map(n => `就诊 #${n}`).join('、');
         return {cls:'warn', badge:'⚠', text:`⚠ AI 切成了 ${item.matched_encounters?.length || 0} 段（${targets || '—'}）`};
       }
-      return {cls:'bad', badge:'✗', text:'✗ AI 判定这段不是就诊'};
+      // missing：没有任何 encounter 覆盖到这段。要说清 AI 把这段判成了什么。
+      const typeNames = {
+        non_encounter_talk: '非就诊对话',
+        idle: '静默',
+        uncertain: '待复核',
+        encounter: '就诊',
+        unknown: '未知类型',
+      };
+      const covering = item?.covering_types || [];
+      if(!covering.length){
+        return {cls:'bad', badge:'✗', text:'✗ AI 的时间轴完全没覆盖这段（输出不完整）'};
+      }
+      const desc = covering.map(c => `${typeNames[c.segment_type] || c.segment_type} ${fmtHMS(c.overlap_seconds)}`).join('、');
+      return {cls:'bad', badge:'✗', text:`✗ AI 把这段判成了：${desc}`};
     }
     function encounterStatusText(item){
       const verdict = item?.verdict || 'swallowed';

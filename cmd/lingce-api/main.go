@@ -42,10 +42,10 @@ import (
 )
 
 var (
-	version     = "1.1.0"
+	version     = "1.1.1"
 	gitSHA      = "unknown"
 	buildTime   = "unknown"
-	releaseNote = "迁移体系门禁上线：启动只校验版本，DB变更必须同步版本化迁移"
+	releaseNote = "API单体治理重大更新：统一租户访问模型，收口路由鉴权、租户隔离与服务层边界校验"
 )
 
 func main() {
@@ -251,7 +251,8 @@ func main() {
 
 	splitDemoRunStore := splitdemo.NewRunStore("")
 	splitDemoAnnotationStore := splitdemo.NewAnnotationStore("")
-	splitDemoStore := splitdemo.NewStore(pool, splitDemoRunStore, splitDemoAnnotationStore)
+	splitDemoSyntheticStore := splitdemo.NewSyntheticStore("")
+	splitDemoStore := splitdemo.NewStore(pool, splitDemoRunStore, splitDemoAnnotationStore, splitDemoSyntheticStore)
 	splitDemoClient := splitdemo.NewClient(cfg.DashScope.BaseURL, cfg.DashScope.APIKey)
 	splitDemoService := splitdemo.NewService(splitDemoStore, splitDemoClient)
 	splitDemoHandler := splitdemo.NewHandler(splitDemoService)

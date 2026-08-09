@@ -56,7 +56,9 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	minDuration := parseIntQuery(r, "min_duration_seconds", 600)
 	page := parseIntQuery(r, "page", 1)
 	pageSize := parseIntQuery(r, "page_size", 20)
-	items, total, err := h.service.ListRecordings(r.Context(), tenantID, minDuration, page, pageSize)
+	recordingID := parseInt64Query(r, "recording_id", 0)
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, total, err := h.service.ListRecordings(r.Context(), tenantID, minDuration, page, pageSize, recordingID, query)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

@@ -31,7 +31,7 @@ func NewStore(pool *pgxpool.Pool, runStore *RunStore, annotationStore *Annotatio
 	return &Store{pool: pool, runStore: runStore, annotationStore: annotationStore, syntheticStore: syntheticStore}
 }
 
-func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int) ([]RecordingListItem, int64, error) {
+func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationSeconds, page, pageSize int, recordingID int64, query string) ([]RecordingListItem, int64, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -47,19 +47,47 @@ func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationS
 	if minDurationSeconds < 0 {
 		minDurationSeconds = 0
 	}
-	where := `
-		r.tenant_id = $1
-		AND r.deleted_at IS NULL
-		AND LOWER(COALESCE(r.business_scope, '')) = 'doctor'
-		AND COALESCE(r.duration, 0) >= $2
-		AND r.transcription_text IS NOT NULL
-		AND length(r.transcription_text) > 2000
-	`
+	where := []string{
+		"r.tenant_id = $1",
+		"r.deleted_at IS NULL",
+		"LOWER(COALESCE(r.business_scope, '')) = 'doctor'",
+		"COALESCE(r.duration, 0) >= $2",
+		"r.transcription_text IS NOT NULL",
+		"length(r.transcription_text) > 2000",
+		`CASE
+			WHEN jsonb_typeof(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)) = 'array' THEN
+				CASE
+					WHEN jsonb_array_length(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)) > 0 THEN
+						(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_time'
+						 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_seconds'
+						 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start'
+						 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_ms')
+					ELSE FALSE
+				END
+			ELSE FALSE
+		END`,
+	}
+	args := []any{tenantID, minDurationSeconds}
+	if recordingID > 0 {
+		args = append(args, recordingID)
+		where = append(where, fmt.Sprintf("r.id = $%d", len(args)))
+	}
+	if strings.TrimSpace(query) != "" {
+		args = append(args, "%"+strings.TrimSpace(query)+"%")
+		where = append(where, fmt.Sprintf(`(
+			COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.phone, ''), NULLIF(oa.username, ''), NULLIF(oa.email, ''), '') ILIKE $%d
+			OR COALESCE(r.file_url, '') ILIKE $%d
+			OR COALESCE(r.transcription_text, '') ILIKE $%d
+		)`, len(args), len(args), len(args)))
+	}
+	whereSQL := strings.Join(where, " AND ")
 	var total int64
-	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recordings r WHERE %s`, where), tenantID, minDurationSeconds).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recordings r LEFT JOIN employees e ON e.id = r.employee_id LEFT JOIN operations_admins oa ON oa.id = r.employee_id WHERE %s`, whereSQL), args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count split demo recordings: %w", err)
 	}
 	offset := (page - 1) * pageSize
+	pageArg := len(args) + 1
+	offsetArg := len(args) + 2
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT
 			r.id,
@@ -72,9 +100,11 @@ func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationS
 				NULLIF(oa.email, ''),
 				'未知员工'
 			) AS employee_name,
+			COALESCE(r.file_url, '') AS recording_url,
 			r.duration,
 			r.recorded_at,
 			COALESCE(length(COALESCE(r.transcription_text, '')), 0) AS transcript_chars,
+			COALESCE(jsonb_array_length(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)), 0) AS transcript_segments_count,
 			CASE WHEN COALESCE(length(trim(COALESCE(r.transcription_text, ''))), 0) > 0 THEN TRUE ELSE FALSE END AS has_transcript,
 			CASE
 				WHEN jsonb_typeof(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)) = 'array'
@@ -90,8 +120,8 @@ func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationS
 		LEFT JOIN operations_admins oa ON oa.id = r.employee_id
 		WHERE %s
 		ORDER BY COALESCE(r.duration, 0) DESC, r.id DESC
-		LIMIT $3 OFFSET $4
-	`, where), tenantID, minDurationSeconds, pageSize, offset)
+		LIMIT $%d OFFSET $%d
+	`, whereSQL, pageArg, offsetArg), append(args, pageSize, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list split demo recordings: %w", err)
 	}
@@ -103,7 +133,7 @@ func (s *Store) ListRecordings(ctx context.Context, tenantID int64, minDurationS
 			item       RecordingListItem
 			recordedAt sql.NullTime
 		)
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.EmployeeName, &item.RecordingDuration, &recordedAt, &item.TranscriptChars, &item.HasTranscript, &item.HasStructuredInput); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.EmployeeName, &item.RecordingURL, &item.RecordingDuration, &recordedAt, &item.TranscriptChars, &item.TranscriptSegmentsCount, &item.HasTranscript, &item.HasStructuredInput); err != nil {
 			return nil, 0, fmt.Errorf("scan split demo recording: %w", err)
 		}
 		if recordedAt.Valid {
@@ -143,6 +173,7 @@ func (s *Store) GetRecording(ctx context.Context, recordingID int64) (*Recording
 				NULLIF(oa.email, ''),
 				'未知员工'
 			) AS employee_name,
+			COALESCE(r.file_url, '') AS recording_url,
 			r.duration,
 			r.recorded_at,
 			r.transcription_text,
@@ -174,6 +205,7 @@ func (s *Store) GetRecording(ctx context.Context, recordingID int64) (*Recording
 		&item.TenantName,
 		&item.EmployeeID,
 		&item.EmployeeName,
+		&item.RecordingURL,
 		&item.RecordingDuration,
 		&recordedAt,
 		&transcriptText,
@@ -301,6 +333,18 @@ func (s *Store) ListSyntheticCandidates(ctx context.Context, tenantID int64, min
 		  AND r.deleted_at IS NULL
 		  AND LOWER(COALESCE(r.business_scope, '')) = 'doctor'
 		  AND r.transcription_text IS NOT NULL
+		  AND CASE
+		  	WHEN jsonb_typeof(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)) = 'array' THEN
+		  		CASE
+		  			WHEN jsonb_array_length(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)) > 0 THEN
+		  				(COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_time'
+		  				 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_seconds'
+		  				 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start'
+		  				 OR COALESCE(r.transcription_segments::jsonb, '[]'::jsonb)->0 ? 'start_ms')
+		  			ELSE FALSE
+		  		END
+		  	ELSE FALSE
+		  END
 		  AND COALESCE(r.duration, 0) BETWEEN $2 AND $3
 		ORDER BY COALESCE(r.duration, 0) ASC, r.id DESC
 		LIMIT $4

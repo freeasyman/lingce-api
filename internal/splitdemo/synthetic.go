@@ -399,11 +399,13 @@ func buildSyntheticMatchReport(caseData *SyntheticCase, result *SplitResponse) *
 		switch len(materialOverlaps[i]) {
 		case 0:
 			item.Verdict = "missing"
+			item.CoveringTypes = coveringSegmentTypes(result.Segments, src.StartSeconds, src.EndSeconds)
 			report.MissedCount++
 		case 1:
 			encIdx := materialOverlaps[i][0] - 1
 			if len(encounterOverlaps[encIdx]) > 1 {
 				item.Verdict = "merged"
+				report.MergedCount++
 				for _, other := range encounterOverlaps[encIdx] {
 					if other != i+1 {
 						item.MergedWith = append(item.MergedWith, other)
@@ -496,6 +498,40 @@ func overlapSeconds(aStart, aEnd, bStart, bEnd int) int {
 		return 0
 	}
 	return end - start
+}
+
+// coveringSegmentTypes 返回与 [start,end) 有实质重叠的 segment 类型(去重,按覆盖时长降序)。
+// 用于解释"素材没被任何 encounter 覆盖"的真实原因:AI 到底把这段判成了什么。
+func coveringSegmentTypes(segments []SplitSegment, start, end int) []CoverageByType {
+	if end <= start {
+		return nil
+	}
+	span := end - start
+	acc := map[string]int{}
+	for _, seg := range segments {
+		ov := overlapSeconds(start, end, seg.StartSeconds, seg.EndSeconds)
+		if ov <= 0 {
+			continue
+		}
+		// 只统计占素材时长 5% 以上的覆盖,避免边界处 1 秒的擦碰被列出来
+		if float64(ov)/float64(span) < 0.05 {
+			continue
+		}
+		segType := strings.TrimSpace(seg.SegmentType)
+		if segType == "" {
+			segType = "unknown"
+		}
+		acc[segType] += ov
+	}
+	if len(acc) == 0 {
+		return nil
+	}
+	out := make([]CoverageByType, 0, len(acc))
+	for segType, ov := range acc {
+		out = append(out, CoverageByType{SegmentType: segType, OverlapSeconds: ov})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].OverlapSeconds > out[j].OverlapSeconds })
+	return out
 }
 
 func syntheticSeamContext(transcript string, seam int, before bool) string {

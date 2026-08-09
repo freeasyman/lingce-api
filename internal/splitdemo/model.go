@@ -3,18 +3,20 @@ package splitdemo
 import "time"
 
 type RecordingListItem struct {
-	ID                 int64   `json:"id"`
-	TenantID           int64   `json:"tenant_id"`
-	EmployeeName       string  `json:"employee_name"`
-	RecordingDuration  *int    `json:"recording_duration,omitempty"`
-	RecordedAt         *string `json:"recorded_at,omitempty"`
-	HasTranscript      bool    `json:"has_transcript"`
-	HasStructuredInput bool    `json:"has_structured_input"`
-	TranscriptChars    int     `json:"transcript_chars"`
-	HasSavedRun        bool    `json:"has_saved_run"`
-	SavedRunAt         *string `json:"saved_run_at,omitempty"`
-	HasSavedAnnotation bool    `json:"has_saved_annotation"`
-	SavedAnnotationAt  *string `json:"saved_annotation_at,omitempty"`
+	ID                      int64   `json:"id"`
+	TenantID                int64   `json:"tenant_id"`
+	EmployeeName            string  `json:"employee_name"`
+	RecordingURL            string  `json:"recording_url,omitempty"`
+	RecordingDuration       *int    `json:"recording_duration,omitempty"`
+	RecordedAt              *string `json:"recorded_at,omitempty"`
+	HasTranscript           bool    `json:"has_transcript"`
+	HasStructuredInput      bool    `json:"has_structured_input"`
+	TranscriptChars         int     `json:"transcript_chars"`
+	TranscriptSegmentsCount int     `json:"transcript_segments_count"`
+	HasSavedRun             bool    `json:"has_saved_run"`
+	SavedRunAt              *string `json:"saved_run_at,omitempty"`
+	HasSavedAnnotation      bool    `json:"has_saved_annotation"`
+	SavedAnnotationAt       *string `json:"saved_annotation_at,omitempty"`
 }
 
 type RecordingDetail struct {
@@ -23,6 +25,7 @@ type RecordingDetail struct {
 	TenantName           string                   `json:"tenant_name"`
 	EmployeeID           int64                    `json:"employee_id"`
 	EmployeeName         string                   `json:"employee_name"`
+	RecordingURL         string                   `json:"recording_url,omitempty"`
 	RecordingDuration    *int                     `json:"recording_duration,omitempty"`
 	RecordedAt           *string                  `json:"recorded_at,omitempty"`
 	TranscriptText       *string                  `json:"transcript_text,omitempty"`
@@ -311,9 +314,10 @@ type AnnotationSummary struct {
 }
 
 type AnnotationOverview struct {
-	TotalRecordings  int                    `json:"total_recordings"`
-	TotalCorrections int                    `json:"total_corrections"`
-	ByReason         []CorrectionReasonStat `json:"by_reason"`
+	TotalRecordings       int                    `json:"total_recordings"`
+	TotalCorrections      int                    `json:"total_corrections"`
+	ByReason              []CorrectionReasonStat `json:"by_reason"`
+	AnnotatedRecordingIDs []int64                `json:"annotated_recording_ids,omitempty"`
 }
 
 type AnnotationOverviewResponse struct {
@@ -343,11 +347,11 @@ const (
 )
 
 type SyntheticSource struct {
-	RecordingID  int64            `json:"recording_id"`
-	GapSeconds   int              `json:"gap_seconds"`
-	GapType      SyntheticGapType `json:"gap_type"`
-	StartSeconds int              `json:"start_seconds,omitempty"`
-	EndSeconds   int              `json:"end_seconds,omitempty"`
+	RecordingID  int64             `json:"recording_id"`
+	GapSeconds   int               `json:"gap_seconds"`
+	GapType      SyntheticGapType  `json:"gap_type"`
+	StartSeconds int               `json:"start_seconds,omitempty"`
+	EndSeconds   int               `json:"end_seconds,omitempty"`
 	Summary      *EncounterSummary `json:"summary,omitempty"`
 }
 
@@ -379,6 +383,14 @@ type MaterialMatch struct {
 	Verdict           string            `json:"verdict"`
 	MatchedEncounters []int             `json:"matched_encounters"`
 	MergedWith        []int             `json:"merged_with,omitempty"`
+	// CoveringTypes 记录该素材时间段被哪些 segment_type 覆盖(按覆盖秒数降序)。
+	// verdict 为 missing 时用它说明 AI 到底把这段判成了什么,而不是笼统说"不是就诊"。
+	CoveringTypes []CoverageByType `json:"covering_types,omitempty"`
+}
+
+type CoverageByType struct {
+	SegmentType    string `json:"segment_type"`
+	OverlapSeconds int    `json:"overlap_seconds"`
 }
 
 type EncounterMatch struct {
@@ -402,10 +414,13 @@ type SeamDetail struct {
 }
 
 type MatchReport struct {
-	MaterialCount  int              `json:"material_count"`
-	EncounterCount int              `json:"encounter_count"`
-	MissedCount    int              `json:"missed_count"`
-	OversplitCount  int              `json:"oversplit_count"`
+	MaterialCount  int `json:"material_count"`
+	EncounterCount int `json:"encounter_count"`
+	// MissedCount 完全没有 encounter 覆盖到的素材数
+	MissedCount int `json:"missed_count"`
+	// MergedCount 被合并进同一个 encounter 的素材数(漏切,和 MissedCount 同样严重)
+	MergedCount    int              `json:"merged_count"`
+	OversplitCount int              `json:"oversplit_count"`
 	Materials      []MaterialMatch  `json:"materials"`
 	Encounters     []EncounterMatch `json:"encounters"`
 	Seams          []SeamDetail     `json:"seams"`
