@@ -213,7 +213,10 @@
           <div id="annSavedHint" class="small" style="margin-top:8px"></div>
           <div id="annCorrectionSummary" style="margin-top:10px;font-weight:700"></div>
           <div id="annCount" style="margin-top:12px;font-weight:700"></div>
-          <button id="saveAnnotationBtn" class="secondary" style="margin-top:12px">保存标注</button>
+          <div class="row" style="margin-top:12px">
+            <button id="saveAnnotationBtn" class="secondary">保存标注</button>
+            <button id="undoAnnotationBtn" class="secondary">撤销上一步</button>
+          </div>
           <div id="annEncounters" class="list" style="margin-top:12px"></div>
           <div id="annDebug" class="details" style="margin-top:12px">
             <details>
@@ -494,7 +497,7 @@
     const defaultPrompts = loadPrompts();
     let state = {
       route:'annotate',
-      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,rawResult:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false},
+      annotate:{tenantId:1,minDuration:600,recordingId:'',query:'',items:[],selectedId:null,detail:null,rawResult:null,result:null,jobId:null,run:null,progress:null,annotations:null,baselineCorrections:0,overview:null,totalAvailable:0,focused:1,expanded:{},saving:false,lastSavedSignature:'',undoBusy:false},
       test:{cases:[],selectedId:'',selectedCase:null,currentRun:null,prevRun:null,running:false,progress:null,queue:[],lastSelectedId:''},
       build:{candidates:[],selected:[],configs:[],preview:null,savedCase:null,saving:false},
       prompts: defaultPrompts,
@@ -550,6 +553,9 @@
     function syncAnnotateRunButton(){
       const enabled = !!state.annotate.detail && $('annConfirm').checked && !state.annotate.saving;
       $('annRunBtn').disabled = !enabled;
+      $('saveAnnotationBtn').disabled = !!state.annotate.saving;
+      const canUndo = !!state.annotate.annotations?.history?.length && !state.annotate.saving && !state.annotate.undoBusy;
+      $('undoAnnotationBtn').disabled = !canUndo;
     }
 
     function initPromptsUI(){
@@ -816,6 +822,15 @@
         corrections: state.annotate.annotations?.corrections || [],
       };
     }
+    function annotationSignature(record){
+      if(!record) return '';
+      return JSON.stringify({
+        recording_id: record.recording_id || 0,
+        duration_seconds: Number(record.duration_seconds || 0),
+        encounters: record.encounters || [],
+        corrections: record.corrections || [],
+      });
+    }
     function rebuildAnnotatedResult(){
       const base = state.annotate.rawResult || state.annotate.result;
       if(!base) return;
@@ -886,12 +901,15 @@
         state.annotate.rawResult = cloneResultForDisplay(state.annotate.detail.latest_run.result);
         state.annotate.annotations = state.annotate.detail.latest_annotation || null;
         state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
+        state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
         renderAnnotateResult();
+        syncAnnotateRunButton();
         return;
       }
       state.annotate.rawResult = null;
       state.annotate.result = null;
       state.annotate.annotations = state.annotate.detail.latest_annotation || null;
+      state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
       $('annTimeline').innerHTML = '';
       $('annProgressText').textContent = '等待手工确认后执行切分';
       $('annSavedHint').textContent = '';
@@ -932,6 +950,7 @@
           state.annotate.rawResult = cloneResultForDisplay(job.result);
           state.annotate.annotations = state.annotate.detail?.latest_annotation || state.annotate.annotations || {encounters:[], corrections:[]};
           state.annotate.result = applySavedAnnotation(state.annotate.rawResult, state.annotate.annotations);
+          state.annotate.lastSavedSignature = annotationSignature(state.annotate.annotations || {encounters:[], corrections:[]});
           $('annProgress').style.width = '100%';
           renderAnnotateResult();
           await refreshAnnotateOverview();
@@ -1209,6 +1228,7 @@
         card.confirmed = true;
         card.source = 'ai_confirmed';
         card.source_label = sourceLabelFor(card.source);
+        await saveAnnotation({quiet:true});
         await refreshAnnotateOverview(); renderAnnotateResult(); focusEncounter(Math.min(pos+1, (state.annotate.result?.encounters || []).length));
         return;
       }
@@ -1222,6 +1242,7 @@
         replaceDisplayedEncounters(nextEncounters);
         setStatus($('annStatus'), `已删除原始 #${target?.seq || pos}`, new Date().toLocaleTimeString());
         renderAnnotateResult();
+        await saveAnnotation({quiet:true});
       }else if(action === 'merge' && pos > 1){
         const sourceEncounters = state.annotate.result?.encounters || [];
         const nextEncounters = sourceEncounters.map(item => item);
@@ -1251,6 +1272,7 @@
           if(prev) prev.summary_loading = false;
           replaceDisplayedEncounters(nextEncounters);
           renderAnnotateResult();
+          await saveAnnotation({quiet:true});
         }
       }
       renderAnnotateResult();
@@ -1266,20 +1288,55 @@
       state.annotate.overview = await api(`/internal/split-demo/annotation-overview?recording_id=${state.annotate.selectedId || 0}`).catch(() => null);
       renderAnnotationOverview();
     }
-    async function saveAnnotation(){
+    async function saveAnnotation(options={}){
+      const quiet = !!options.quiet;
+      const force = !!options.force;
       if(state.annotate.saving || !state.annotate.result) return;
+      const payload = buildAnnotationPayload();
+      const signature = annotationSignature(payload);
+      if(!force && signature && signature === state.annotate.lastSavedSignature){
+        syncAnnotateRunButton();
+        return payload;
+      }
       state.annotate.saving = true;
       try{
-        const payload = buildAnnotationPayload();
-        await api('/internal/split-demo/save-annotation', {method:'POST', body:JSON.stringify(payload)});
-        state.annotate.annotations = payload;
-        state.annotate.detail.latest_annotation = deepClone(payload);
-        state.annotate.baselineCorrections = payload.corrections.length || 0;
+        const saved = await api('/internal/split-demo/save-annotation', {method:'POST', body:JSON.stringify(payload)});
+        state.annotate.lastSavedSignature = annotationSignature(saved || payload);
+        state.annotate.annotations = saved || payload;
+        state.annotate.detail.latest_annotation = deepClone(saved || payload);
+        state.annotate.baselineCorrections = (saved || payload).corrections?.length || 0;
         await refreshAnnotateOverview();
         renderAnnotateResult();
-        setStatus($('annStatus'), `已保存基准，本条修正 ${payload.corrections.length || 0} 处`);
+        setStatus($('annStatus'), quiet ? `已自动保存，本条修正 ${(saved || payload).corrections?.length || 0} 处` : `已保存基准，本条修正 ${(saved || payload).corrections?.length || 0} 处`);
+        syncAnnotateRunButton();
+        return saved || payload;
+      }catch(err){
+        setStatus($('annStatus'), `保存失败：${err.message}`);
+        throw err;
       }finally{
         state.annotate.saving = false;
+      }
+    }
+    async function undoAnnotation(){
+      if(state.annotate.saving || state.annotate.undoBusy) return;
+      if(!(state.annotate.annotations?.history?.length || 0)) return;
+      state.annotate.undoBusy = true;
+      try{
+        const record = await api('/internal/split-demo/undo-annotation', {method:'POST', body:JSON.stringify({recording_id: state.annotate.selectedId})});
+        state.annotate.annotations = record;
+        state.annotate.detail.latest_annotation = deepClone(record);
+        state.annotate.lastSavedSignature = annotationSignature(record);
+        state.annotate.baselineCorrections = record.corrections?.length || 0;
+        state.annotate.result = applySavedAnnotation(state.annotate.rawResult, record);
+        renderAnnotateResult();
+        await refreshAnnotateOverview();
+        setStatus($('annStatus'), `已撤销上一步，本条修正 ${record.corrections?.length || 0} 处`);
+      }catch(err){
+        setStatus($('annStatus'), `撤销失败：${err.message}`);
+        throw err;
+      }finally{
+        state.annotate.undoBusy = false;
+        syncAnnotateRunButton();
       }
     }
 
@@ -1861,7 +1918,8 @@
     }
 
     $('annFilterBtn').onclick = loadAnnotate;
-    $('saveAnnotationBtn') && ($('saveAnnotationBtn').onclick = saveAnnotation);
+    $('saveAnnotationBtn') && ($('saveAnnotationBtn').onclick = () => saveAnnotation({quiet:false}));
+    $('undoAnnotationBtn') && ($('undoAnnotationBtn').onclick = undoAnnotation);
     $('annConfirm').onchange = syncAnnotateRunButton;
     $('annRunBtn').onclick = async () => {
       if(!state.annotate.detail) return;

@@ -34,6 +34,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /internal/split-demo/split", h.SplitRecording)
 	mux.HandleFunc("GET /internal/split-demo/split-jobs/{id}", h.GetSplitJob)
 	mux.HandleFunc("POST /internal/split-demo/save-annotation", h.SaveAnnotation)
+	mux.HandleFunc("POST /internal/split-demo/undo-annotation", h.UndoAnnotation)
 	mux.HandleFunc("GET /internal/split-demo/annotation-overview", h.AnnotationOverview)
 	mux.HandleFunc("GET /internal/split-demo/synthetic/candidates", h.ListSyntheticCandidates)
 	mux.HandleFunc("POST /internal/split-demo/synthetic/preview", h.PreviewSyntheticCase)
@@ -134,6 +135,27 @@ func (h *Handler) SaveAnnotation(w http.ResponseWriter, r *http.Request) {
 		record.AnnotatedAt = time.Now().Format(time.RFC3339)
 	}
 	if err := h.service.SaveAnnotation(r.Context(), &record); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, record)
+}
+
+func (h *Handler) UndoAnnotation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		httputil.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
+		return
+	}
+	var req struct {
+		RecordingID int64 `json:"recording_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	record, err := h.service.UndoAnnotation(r.Context(), req.RecordingID)
+	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

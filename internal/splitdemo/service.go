@@ -183,11 +183,51 @@ func (s *Service) GetRecording(ctx context.Context, recordingID int64) (*Recordi
 }
 
 func (s *Service) SaveAnnotation(ctx context.Context, record *AnnotationRecord) error {
+	if record == nil {
+		return fmt.Errorf("empty annotation record")
+	}
+	if record.RecordingID <= 0 {
+		return fmt.Errorf("recording_id is required")
+	}
+	existing, err := s.store.LoadAnnotation(ctx, record.RecordingID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		history := make([]*AnnotationRecord, 0, len(existing.History)+1)
+		history = append(history, cloneAnnotationRecord(existing))
+		history = append(history, existing.History...)
+		record.History = history
+	} else {
+		record.History = nil
+	}
 	return s.store.SaveAnnotation(ctx, record)
 }
 
 func (s *Service) LoadAnnotation(ctx context.Context, recordingID int64) (*AnnotationRecord, error) {
 	return s.store.LoadAnnotation(ctx, recordingID)
+}
+
+func (s *Service) UndoAnnotation(ctx context.Context, recordingID int64) (*AnnotationRecord, error) {
+	if recordingID <= 0 {
+		return nil, fmt.Errorf("recording_id is required")
+	}
+	current, err := s.store.LoadAnnotation(ctx, recordingID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil || len(current.History) == 0 {
+		return nil, fmt.Errorf("no annotation history")
+	}
+	prev := cloneAnnotationRecord(current.History[0])
+	if prev == nil {
+		return nil, fmt.Errorf("annotation history is empty")
+	}
+	prev.History = append([]*AnnotationRecord(nil), current.History[1:]...)
+	if err := s.store.SaveAnnotation(ctx, prev); err != nil {
+		return nil, err
+	}
+	return prev, nil
 }
 
 func (s *Service) GetAnnotationOverview(ctx context.Context, recordingID int64) (*AnnotationOverviewResponse, error) {

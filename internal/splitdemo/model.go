@@ -248,6 +248,7 @@ type AnnotationRecord struct {
 	SourceRunID     string                 `json:"source_run_id,omitempty"`
 	Encounters      []AnnotationEncounter  `json:"encounters"`
 	Corrections     []AnnotationCorrection `json:"corrections"`
+	History         []*AnnotationRecord    `json:"history,omitempty"`
 }
 
 type AnnotationEncounter struct {
@@ -263,6 +264,17 @@ type AnnotationEncounter struct {
 	Disposition    string `json:"disposition,omitempty"`
 	OpeningLine    string `json:"opening_line,omitempty"`
 	ClosingLine    string `json:"closing_line,omitempty"`
+}
+
+func cloneAnnotationRecord(record *AnnotationRecord) *AnnotationRecord {
+	if record == nil {
+		return nil
+	}
+	clone := *record
+	clone.Encounters = append([]AnnotationEncounter(nil), record.Encounters...)
+	clone.Corrections = append([]AnnotationCorrection(nil), record.Corrections...)
+	clone.History = nil
+	return &clone
 }
 
 type AnnotationCorrection struct {
