@@ -11,10 +11,14 @@ type EncryptedCallbackEnvelope struct {
 }
 
 type CallbackEvent struct {
-	XMLName    xml.Name `xml:"xml"`
-	InfoType   string   `xml:"InfoType"`
-	TimeStamp  string   `xml:"TimeStamp"`
-	AuthCorpID string   `xml:"AuthCorpId"`
+	XMLName       xml.Name `xml:"xml"`
+	SuiteID       string   `xml:"SuiteId,omitempty"`
+	InfoType      string   `xml:"InfoType,omitempty"`
+	TimeStamp     string   `xml:"TimeStamp,omitempty"`
+	SuiteTicket   string   `xml:"SuiteTicket,omitempty"`
+	AuthCorpID    string   `xml:"AuthCorpId,omitempty"`
+	AuthCode      string   `xml:"AuthCode,omitempty"`
+	PermanentCode string   `xml:"PermanentCode,omitempty"`
 }
 
 type UserBindingRecord struct {
@@ -80,6 +84,19 @@ type TenantWeComAppRecord struct {
 	LastSyncAt           *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+}
+
+type SuiteTicketRecord struct {
+	SuiteID     string
+	SuiteTicket string
+}
+
+type CorpInstallRecord struct {
+	CorpID        string
+	CorpName      string
+	PermanentCode string
+	AgentID       int64
+	Status        string
 }
 
 type MessageLogRecord struct {

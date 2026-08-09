@@ -19,6 +19,62 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+func (s *Store) SaveSuiteTicket(ctx context.Context, record SuiteTicketRecord) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO wecom_suite_tickets (suite_id, suite_ticket, created_at) VALUES ($1, $2, NOW())`, record.SuiteID, record.SuiteTicket)
+	return err
+}
+
+func (s *Store) GetLatestSuiteTicket(ctx context.Context, suiteID string) (string, error) {
+	var ticket string
+	err := s.pool.QueryRow(ctx, `SELECT suite_ticket FROM wecom_suite_tickets WHERE suite_id = $1 ORDER BY id DESC LIMIT 1`, suiteID).Scan(&ticket)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("suite ticket not found")
+	}
+	if err != nil {
+		return "", err
+	}
+	return ticket, nil
+}
+
+func (s *Store) UpsertCorpInstall(ctx context.Context, record CorpInstallRecord) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO wecom_corp_installs (corp_id, corp_name, permanent_code, agent_id, status, created_at, updated_at, cancelled_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NULL)
+		ON CONFLICT (corp_id)
+		DO UPDATE SET
+			corp_name = EXCLUDED.corp_name,
+			permanent_code = EXCLUDED.permanent_code,
+			agent_id = EXCLUDED.agent_id,
+			status = EXCLUDED.status,
+			updated_at = NOW(),
+			cancelled_at = NULL
+	`, record.CorpID, record.CorpName, record.PermanentCode, record.AgentID, record.Status)
+	return err
+}
+
+func (s *Store) GetCorpInstallByCorpID(ctx context.Context, corpID string) (*CorpInstallRecord, error) {
+	var item CorpInstallRecord
+	err := s.pool.QueryRow(ctx, `SELECT corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active') FROM wecom_corp_installs WHERE corp_id = $1 AND COALESCE(status, 'active') = 'active'`, corpID).Scan(
+		&item.CorpID,
+		&item.CorpName,
+		&item.PermanentCode,
+		&item.AgentID,
+		&item.Status,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("corp install not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (s *Store) MarkCorpInstallCancelled(ctx context.Context, corpID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE wecom_corp_installs SET status = 'cancelled', updated_at = NOW(), cancelled_at = NOW() WHERE corp_id = $1`, corpID)
+	return err
+}
+
 func (s *Store) ListTenantApps(ctx context.Context, tenantID *int64) ([]*TenantWeComAppRecord, error) {
 	where := "1=1"
 	args := []interface{}{}
@@ -599,6 +655,43 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 		&item.EmployeeID,
 		&item.TenantID,
 		&item.AgentID,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (s *Store) GetActivePartnerBindingByEmployeeID(ctx context.Context, employeeID int64) (*EmployeeBindingRecord, error) {
+	var item EmployeeBindingRecord
+	var permanentCode string
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			wub.corp_id,
+			COALESCE(wci.corp_name, ''),
+			wub.wecom_user_id,
+			wub.employee_id,
+			wub.tenant_id,
+			COALESCE(wci.agent_id, 0),
+			COALESCE(wci.permanent_code, '')
+		FROM wecom_user_bindings wub
+		INNER JOIN wecom_corp_installs wci
+		  ON wci.corp_id = wub.corp_id
+		 AND COALESCE(wci.status, 'active') = 'active'
+		WHERE wub.employee_id = $1
+		ORDER BY wub.updated_at DESC, wub.id DESC
+		LIMIT 1
+	`, employeeID).Scan(
+		&item.CorpID,
+		&item.CorpName,
+		&item.WeComUserID,
+		&item.EmployeeID,
+		&item.TenantID,
+		&item.AgentID,
+		&permanentCode,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil

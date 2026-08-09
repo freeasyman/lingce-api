@@ -139,3 +139,15 @@ type TenantWeComAppResponse struct {
 	CreatedAt            string  `json:"created_at"`
 	UpdatedAt            string  `json:"updated_at"`
 }
+
+type InstallURLResponse struct {
+	InstallURL  string `json:"install_url"`
+	RedirectURI string `json:"redirect_uri"`
+	State       string `json:"state"`
+	AuthType    int    `json:"auth_type"`
+}
+
+type InstallCallbackResult struct {
+	CorpID   string `json:"corp_id"`
+	CorpName string `json:"corp_name,omitempty"`
+}

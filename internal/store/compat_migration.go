@@ -1847,6 +1847,13 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tenant_wecom_apps_tenant_id ON tenant_wecom_apps(tenant_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tenant_wecom_apps_corp_id ON tenant_wecom_apps(corp_id)`,
+		`CREATE TABLE IF NOT EXISTS wecom_suite_tickets (
+			id BIGSERIAL PRIMARY KEY,
+			suite_id TEXT NOT NULL,
+			suite_ticket TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_suite_tickets_suite_id_created_at ON wecom_suite_tickets(suite_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS wecom_user_bindings (
 			id BIGSERIAL PRIMARY KEY,
 			corp_id TEXT NOT NULL,

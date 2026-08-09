@@ -96,7 +96,14 @@ type AliyunConfig struct {
 }
 
 type WeComConfig struct {
-	APIBaseURL string `toml:"api_base_url"`
+	APIBaseURL         string `toml:"api_base_url"`
+	SuiteID            string `toml:"suite_id"`
+	SuiteSecret        string `toml:"suite_secret"`
+	Token              string `toml:"token"`
+	EncodingAESKey     string `toml:"encoding_aes_key"`
+	CallbackBaseURL    string `toml:"callback_base_url"`
+	InstallRedirectURL string `toml:"install_redirect_url"`
+	InstallAuthType    int    `toml:"install_auth_type"`
 }
 
 type LogConfig struct {
@@ -109,6 +116,7 @@ type secretsConfig struct {
 	External  ExternalSecrets  `toml:"external"`
 	DashScope DashScopeSecrets `toml:"dashscope"`
 	Aliyun    AliyunSecrets    `toml:"aliyun"`
+	WeCom     WeComSecrets     `toml:"wecom"`
 }
 
 type DatabaseSecrets struct {
@@ -139,6 +147,16 @@ type DashScopeSecrets struct {
 type AliyunSecrets struct {
 	AccessKeyID     string `toml:"access_key_id"`
 	AccessKeySecret string `toml:"access_key_secret"`
+}
+
+type WeComSecrets struct {
+	SuiteID            string `toml:"suite_id"`
+	SuiteSecret        string `toml:"suite_secret"`
+	Token              string `toml:"token"`
+	EncodingAESKey     string `toml:"encoding_aes_key"`
+	CallbackBaseURL    string `toml:"callback_base_url"`
+	InstallRedirectURL string `toml:"install_redirect_url"`
+	InstallAuthType    int    `toml:"install_auth_type"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -243,6 +261,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.WeCom.APIBaseURL == "" {
 		cfg.WeCom.APIBaseURL = "https://qyapi.weixin.qq.com"
 	}
+	if cfg.WeCom.InstallAuthType == 0 {
+		cfg.WeCom.InstallAuthType = 1
+	}
 	if cfg.External.EmployeeWebBaseURL == "" {
 		if strings.EqualFold(cfg.App.Env, "development") || strings.EqualFold(cfg.App.Env, "dev") {
 			cfg.External.EmployeeWebBaseURL = "http://localhost:3000"
@@ -321,6 +342,27 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	if secrets.Aliyun.AccessKeySecret != "" {
 		cfg.Aliyun.AccessKeySecret = secrets.Aliyun.AccessKeySecret
+	}
+	if secrets.WeCom.SuiteID != "" {
+		cfg.WeCom.SuiteID = secrets.WeCom.SuiteID
+	}
+	if secrets.WeCom.SuiteSecret != "" {
+		cfg.WeCom.SuiteSecret = secrets.WeCom.SuiteSecret
+	}
+	if secrets.WeCom.Token != "" {
+		cfg.WeCom.Token = secrets.WeCom.Token
+	}
+	if secrets.WeCom.EncodingAESKey != "" {
+		cfg.WeCom.EncodingAESKey = secrets.WeCom.EncodingAESKey
+	}
+	if secrets.WeCom.CallbackBaseURL != "" {
+		cfg.WeCom.CallbackBaseURL = secrets.WeCom.CallbackBaseURL
+	}
+	if secrets.WeCom.InstallRedirectURL != "" {
+		cfg.WeCom.InstallRedirectURL = secrets.WeCom.InstallRedirectURL
+	}
+	if secrets.WeCom.InstallAuthType != 0 {
+		cfg.WeCom.InstallAuthType = secrets.WeCom.InstallAuthType
 	}
 }
 

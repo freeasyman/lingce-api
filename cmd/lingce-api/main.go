@@ -151,6 +151,23 @@ func main() {
 	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	wecomHandler := wecom.NewHandler(wecomService)
 	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
+	wecomPartnerClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.SuiteID, cfg.WeCom.SuiteSecret)
+	wecomPartnerService := wecom.NewPartnerService(
+		wecomStore,
+		authStore,
+		wecomPartnerClient,
+		cfg.JWT.Secret,
+		cfg.JWT.ExpiryHours,
+		cfg.WeCom.SuiteID,
+		cfg.WeCom.Token,
+		cfg.WeCom.EncodingAESKey,
+		cfg.WeCom.CallbackBaseURL,
+		cfg.WeCom.InstallRedirectURL,
+		cfg.WeCom.InstallAuthType,
+	)
+	wecomPartnerHandler := wecom.NewPartnerHandler(wecomPartnerService)
+	wecomPartnerHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
+	wecomService.SetPartnerService(wecomPartnerService)
 
 	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)

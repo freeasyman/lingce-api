@@ -36,6 +36,7 @@ type Service struct {
 	jwtSecret       string
 	jwtExpiryHours  int
 	onBindingUpsert func(context.Context, int64, int64) error
+	partnerService  *PartnerService
 }
 
 func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int) *Service {
@@ -51,6 +52,10 @@ func NewService(store *Store, authStore *internalauth.Store, client *Client, jwt
 
 func (s *Service) SetBindingUpsertHook(fn func(context.Context, int64, int64) error) {
 	s.onBindingUpsert = fn
+}
+
+func (s *Service) SetPartnerService(partnerService *PartnerService) {
+	s.partnerService = partnerService
 }
 
 func (s *Service) IsEnabled() bool {
@@ -454,8 +459,28 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 		if err != nil {
 			return nil, err
 		}
-		perRecipientKey := fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID)
 		if binding == nil || strings.TrimSpace(binding.CorpID) == "" || strings.TrimSpace(binding.WeComUserID) == "" || binding.AgentID <= 0 {
+			if s.partnerService != nil && s.partnerService.IsEnabled() {
+				partnerResp, err := s.partnerService.SendInternalMessage(ctx, InternalSendMessageRequest{
+					MessageScene: req.MessageScene,
+					DedupeKey:    req.DedupeKey,
+					EmployeeIDs:  []int64{employeeID},
+					Title:        req.Title,
+					Content:      req.Content,
+					TargetURL:    req.TargetURL,
+					ButtonText:   req.ButtonText,
+					Extra:        req.Extra,
+					BizDate:      req.BizDate,
+				})
+				if err != nil {
+					return nil, err
+				}
+				resp.Sent += partnerResp.Sent
+				resp.Skipped += partnerResp.Skipped
+				resp.Failed += partnerResp.Failed
+				continue
+			}
+			perRecipientKey := fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID)
 			_, inserted, insertErr := s.store.InsertMessageLog(ctx, MessageLogRecord{
 				EmployeeID:     employeeID,
 				MessageScene:   req.MessageScene,
@@ -475,6 +500,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			}
 			continue
 		}
+
 		targetURL := attachWeComEntryParams(req.TargetURL, binding.CorpID, binding.AgentID)
 		app, ok := appCache[binding.CorpID]
 		if !ok {
@@ -486,7 +512,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 					EmployeeID:     employeeID,
 					WeComUserID:    binding.WeComUserID,
 					MessageScene:   req.MessageScene,
-					DedupeKey:      perRecipientKey,
+					DedupeKey:      fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID),
 					Title:          req.Title,
 					Content:        req.Content,
 					TargetURL:      targetURL,
@@ -512,7 +538,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 				EmployeeID:     employeeID,
 				WeComUserID:    binding.WeComUserID,
 				MessageScene:   req.MessageScene,
-				DedupeKey:      perRecipientKey,
+				DedupeKey:      fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID),
 				Title:          req.Title,
 				Content:        req.Content,
 				TargetURL:      targetURL,
@@ -546,7 +572,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			EmployeeID:     employeeID,
 			WeComUserID:    binding.WeComUserID,
 			MessageScene:   req.MessageScene,
-			DedupeKey:      perRecipientKey,
+			DedupeKey:      fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID),
 			Title:          req.Title,
 			Content:        req.Content,
 			TargetURL:      targetURL,
