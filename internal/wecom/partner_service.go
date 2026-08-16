@@ -2,7 +2,9 @@ package wecom
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -18,7 +20,11 @@ type PartnerService struct {
 	authStore          *internalauth.Store
 	client             *Client
 	crypto             *Crypto
-	suiteID            string
+	mode               string
+	appID              string
+	appIDLabel         string
+	routePrefix        string
+	installURLBase     string
 	jwtSecret          string
 	jwtExpiryHours     int
 	callbackBaseURL    string
@@ -26,13 +32,16 @@ type PartnerService struct {
 	installAuthType    int
 }
 
-func NewPartnerService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int, suiteID, token, encodingAESKey, callbackBaseURL, installRedirectURL string, installAuthType int) *PartnerService {
-	suiteID = strings.TrimSpace(suiteID)
+func NewPartnerService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int, mode, appID, appIDLabel, routePrefix, token, encodingAESKey, callbackBaseURL, installRedirectURL string, installAuthType int) *PartnerService {
+	mode = strings.TrimSpace(mode)
+	appID = strings.TrimSpace(appID)
+	appIDLabel = strings.TrimSpace(appIDLabel)
+	routePrefix = strings.TrimSpace(routePrefix)
 	token = strings.TrimSpace(token)
 	encodingAESKey = strings.TrimSpace(encodingAESKey)
 	var crypto *Crypto
-	if suiteID != "" && token != "" && encodingAESKey != "" {
-		if c, err := NewCrypto(token, encodingAESKey, suiteID); err == nil {
+	if appID != "" && token != "" && encodingAESKey != "" {
+		if c, err := NewCrypto(token, encodingAESKey, appID); err == nil {
 			crypto = c
 		}
 	}
@@ -44,7 +53,11 @@ func NewPartnerService(store *Store, authStore *internalauth.Store, client *Clie
 		authStore:          authStore,
 		client:             client,
 		crypto:             crypto,
-		suiteID:            suiteID,
+		mode:               mode,
+		appID:              appID,
+		appIDLabel:         firstNonEmpty(appIDLabel, "suite_id"),
+		routePrefix:        strings.TrimRight(firstNonEmpty(routePrefix, "/api/v1/wecom/partner"), "/"),
+		installURLBase:     "https://open.work.weixin.qq.com/3rdapp/install",
 		jwtSecret:          jwtSecret,
 		jwtExpiryHours:     jwtExpiryHours,
 		callbackBaseURL:    strings.TrimRight(strings.TrimSpace(callbackBaseURL), "/"),
@@ -54,12 +67,12 @@ func NewPartnerService(store *Store, authStore *internalauth.Store, client *Clie
 }
 
 func (s *PartnerService) IsEnabled() bool {
-	return s.client != nil && s.store != nil && s.authStore != nil && s.crypto != nil && strings.TrimSpace(s.suiteID) != ""
+	return s.client != nil && s.store != nil && s.authStore != nil && s.crypto != nil && strings.TrimSpace(s.appID) != ""
 }
 
 func (s *PartnerService) VerifyURL(signature, timestamp, nonce, echostr string) (string, error) {
 	if !s.IsEnabled() {
-		return "", fmt.Errorf("wecom partner mode is not configured")
+		return "", fmt.Errorf("wecom %s mode is not configured", s.mode)
 	}
 	if !s.crypto.VerifySignature(signature, timestamp, nonce, echostr) {
 		return "", fmt.Errorf("invalid signature")
@@ -67,9 +80,54 @@ func (s *PartnerService) VerifyURL(signature, timestamp, nonce, echostr string) 
 	return s.crypto.Decrypt(echostr)
 }
 
+func (s *PartnerService) VerifyEnterpriseURL(corpID, signature, timestamp, nonce, echostr string) (string, error) {
+	if !s.IsEnabled() {
+		return "", fmt.Errorf("wecom %s mode is not configured", s.mode)
+	}
+	corpID = strings.TrimSpace(corpID)
+	if corpID != "" {
+		crypto, err := NewCrypto(s.crypto.token, base64EncodingAESKey(s.crypto.aesKey), corpID)
+		if err != nil {
+			return "", err
+		}
+		if !crypto.VerifySignature(signature, timestamp, nonce, echostr) {
+			return "", fmt.Errorf("invalid signature")
+		}
+		return crypto.Decrypt(echostr)
+	}
+
+	installs, err := s.store.ListActiveCorpInstallsByMode(context.Background(), s.mode, s.appID)
+	if err != nil {
+		return "", err
+	}
+	errs := make([]string, 0, len(installs))
+	for _, install := range installs {
+		if install == nil || strings.TrimSpace(install.CorpID) == "" {
+			continue
+		}
+		crypto, err := NewCrypto(s.crypto.token, base64EncodingAESKey(s.crypto.aesKey), strings.TrimSpace(install.CorpID))
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", install.CorpID, err))
+			continue
+		}
+		if !crypto.VerifySignature(signature, timestamp, nonce, echostr) {
+			continue
+		}
+		plain, err := crypto.Decrypt(echostr)
+		if err == nil {
+			return plain, nil
+		}
+		errs = append(errs, fmt.Sprintf("%s: %v", install.CorpID, err))
+	}
+	if len(errs) == 0 {
+		return "", fmt.Errorf("no active corp install matched callback")
+	}
+	return "", errors.New(strings.Join(errs, "; "))
+}
+
 func (s *PartnerService) HandleCallback(ctx context.Context, signature, timestamp, nonce string, body []byte) error {
 	if !s.IsEnabled() {
-		return fmt.Errorf("wecom partner mode is not configured")
+		return fmt.Errorf("wecom %s mode is not configured", s.mode)
 	}
 	var envelope EncryptedCallbackEnvelope
 	if err := xml.Unmarshal(body, &envelope); err != nil {
@@ -89,28 +147,140 @@ func (s *PartnerService) HandleCallback(ctx context.Context, signature, timestam
 	if err := xml.Unmarshal([]byte(plain), &event); err != nil {
 		return fmt.Errorf("parse decrypted callback: %w", err)
 	}
-	if event.SuiteID != "" && event.SuiteID != s.suiteID {
-		return fmt.Errorf("suite id mismatch")
+	if event.SuiteID != "" && event.SuiteID != s.appID {
+		return fmt.Errorf("%s mismatch: expected=%s actual=%s", s.appIDLabel, s.appID, event.SuiteID)
 	}
-	_ = s.store.SaveEventLog(ctx, event.AuthCorpID, event.InfoType, plain)
 	switch event.InfoType {
 	case "suite_ticket":
-		return s.store.SaveSuiteTicket(ctx, SuiteTicketRecord{SuiteID: s.suiteID, SuiteTicket: event.SuiteTicket})
+		_ = s.store.SaveEventLog(ctx, event.AuthCorpID, event.InfoType, plain)
+		return s.store.SaveSuiteTicket(ctx, SuiteTicketRecord{Mode: s.mode, ProviderApp: s.appID, SuiteID: s.appID, SuiteTicket: event.SuiteTicket})
 	case "create_auth", "change_auth":
-		if _, err := s.syncCorpInstall(ctx, event.AuthCorpID, event.AuthCode); err != nil {
+		existingCount, err := s.store.CountEventLogsByPayload(ctx, event.InfoType, plain)
+		if err != nil {
 			return err
 		}
+		_ = s.store.SaveEventLog(ctx, event.AuthCorpID, event.InfoType, plain)
+		if existingCount > 0 {
+			slog.Info("skip duplicate wecom auth callback",
+				"mode", s.mode,
+				"info_type", event.InfoType,
+				"corp_id", event.AuthCorpID,
+			)
+			return nil
+		}
+		if strings.TrimSpace(event.AuthCode) == "" {
+			slog.Info("skip wecom auth callback sync because auth_code is missing",
+				"mode", s.mode,
+				"info_type", event.InfoType,
+				"corp_id", event.AuthCorpID,
+			)
+			return nil
+		}
+		go s.syncCorpInstallAsync(event.InfoType, event.AuthCorpID, event.AuthCode)
 		return nil
 	case "cancel_auth":
-		return s.store.MarkCorpInstallCancelled(ctx, event.AuthCorpID)
+		_ = s.store.SaveEventLog(ctx, event.AuthCorpID, event.InfoType, plain)
+		return s.store.MarkCorpInstallCancelled(ctx, s.mode, s.appID, event.AuthCorpID)
 	default:
+		_ = s.store.SaveEventLog(ctx, event.AuthCorpID, event.InfoType, plain)
 		return nil
+	}
+}
+
+func (s *PartnerService) HandleEnterpriseCallback(ctx context.Context, corpID, signature, timestamp, nonce string, body []byte) error {
+	if !s.IsEnabled() {
+		return fmt.Errorf("wecom %s mode is not configured", s.mode)
+	}
+	var envelope EncryptedCallbackEnvelope
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("parse callback xml: %w", err)
+	}
+	if strings.TrimSpace(envelope.Encrypt) == "" {
+		return fmt.Errorf("missing encrypted payload")
+	}
+	corpID = strings.TrimSpace(corpID)
+	candidateCorpIDs := make([]string, 0, 8)
+	if corpID != "" {
+		candidateCorpIDs = append(candidateCorpIDs, corpID)
+	} else {
+		installs, err := s.store.ListActiveCorpInstallsByMode(ctx, s.mode, s.appID)
+		if err != nil {
+			return err
+		}
+		for _, install := range installs {
+			if install == nil || strings.TrimSpace(install.CorpID) == "" {
+				continue
+			}
+			candidateCorpIDs = append(candidateCorpIDs, strings.TrimSpace(install.CorpID))
+		}
+	}
+	if len(candidateCorpIDs) == 0 {
+		return fmt.Errorf("no active corp install matched callback")
+	}
+	errs := make([]string, 0, len(candidateCorpIDs))
+	for _, candidateCorpID := range candidateCorpIDs {
+		crypto, err := NewCrypto(s.crypto.token, base64EncodingAESKey(s.crypto.aesKey), candidateCorpID)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", candidateCorpID, err))
+			continue
+		}
+		if !crypto.VerifySignature(signature, timestamp, nonce, envelope.Encrypt) {
+			continue
+		}
+		plain, err := crypto.Decrypt(envelope.Encrypt)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", candidateCorpID, err))
+			continue
+		}
+		var event CallbackEvent
+		if err := xml.Unmarshal([]byte(plain), &event); err != nil {
+			return fmt.Errorf("parse decrypted callback: %w", err)
+		}
+		_ = s.store.SaveEventLog(ctx, candidateCorpID, firstNonEmpty(event.InfoType, "enterprise_callback"), plain)
+		return nil
+	}
+	if len(errs) == 0 {
+		return fmt.Errorf("invalid signature")
+	}
+	return errors.New(strings.Join(errs, "; "))
+}
+
+func base64EncodingAESKey(raw []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	return strings.TrimSuffix(encoded, "=")
+}
+
+func (s *PartnerService) syncCorpInstallAsync(infoType, corpID, authCode string) {
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		syncCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		_, err := s.syncCorpInstall(syncCtx, 0, corpID, authCode)
+		cancel()
+		if err == nil {
+			slog.Info("wecom auth callback synced asynchronously",
+				"mode", s.mode,
+				"info_type", infoType,
+				"corp_id", corpID,
+				"attempt", attempt,
+			)
+			return
+		}
+		slog.Warn("wecom auth callback async sync failed",
+			"mode", s.mode,
+			"info_type", infoType,
+			"corp_id", corpID,
+			"attempt", attempt,
+			"error", err,
+		)
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 	}
 }
 
 func (s *PartnerService) BuildInstallURL(ctx context.Context, state string, authType int) (*InstallURLResponse, error) {
 	if !s.IsEnabled() {
-		return nil, fmt.Errorf("wecom partner mode is not configured")
+		return nil, fmt.Errorf("wecom %s mode is not configured", s.mode)
 	}
 	redirectURI, err := s.getInstallRedirectURI()
 	if err != nil {
@@ -126,7 +296,7 @@ func (s *PartnerService) BuildInstallURL(ctx context.Context, state string, auth
 	if state == "" {
 		state = fmt.Sprintf("lingce%d", time.Now().Unix())
 	}
-	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.suiteID)
+	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.mode, s.appID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +311,7 @@ func (s *PartnerService) BuildInstallURL(ctx context.Context, state string, auth
 	if err := s.client.SetSessionInfo(ctx, suiteAccessToken, preAuthCode, authType); err != nil {
 		return nil, err
 	}
-	installURL := "https://open.work.weixin.qq.com/3rdapp/install?suite_id=" + url.QueryEscape(s.suiteID) +
+	installURL := s.installURLBase + "?suite_id=" + url.QueryEscape(s.appID) +
 		"&pre_auth_code=" + url.QueryEscape(preAuthCode) +
 		"&redirect_uri=" + url.QueryEscape(redirectURI) +
 		"&state=" + url.QueryEscape(state)
@@ -153,25 +323,29 @@ func (s *PartnerService) BuildInstallURL(ctx context.Context, state string, auth
 	}, nil
 }
 
-func (s *PartnerService) HandleInstallCallback(ctx context.Context, authCode string) (*InstallCallbackResult, error) {
+func (s *PartnerService) HandleInstallCallback(ctx context.Context, authCode, state string) (*InstallCallbackResult, error) {
 	if !s.IsEnabled() {
-		return nil, fmt.Errorf("wecom partner mode is not configured")
+		return nil, fmt.Errorf("wecom %s mode is not configured", s.mode)
 	}
-	install, err := s.syncCorpInstall(ctx, "", authCode)
+	tenantID := decodePartnerInstallTenantID(state)
+	install, err := s.syncCorpInstall(ctx, tenantID, "", authCode)
 	if err != nil {
 		return nil, err
 	}
-	return &InstallCallbackResult{CorpID: install.CorpID, CorpName: install.CorpName}, nil
+	return &InstallCallbackResult{TenantID: install.TenantID, CorpID: install.CorpID, CorpName: install.CorpName}, nil
 }
 
 func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAuthLoginResponse, error) {
 	if !s.IsEnabled() {
-		return nil, fmt.Errorf("wecom partner mode is not configured")
+		return nil, fmt.Errorf("wecom %s mode is not configured", s.mode)
 	}
 	if strings.TrimSpace(code) == "" {
 		return nil, fmt.Errorf("code is required")
 	}
-	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.suiteID)
+	if s.mode == ModePartnerTemplate {
+		return s.loginWithTemplateOAuth(ctx, code, corpID)
+	}
+	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.mode, s.appID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +357,7 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 	if err != nil {
 		return nil, err
 	}
-	if corpID == "" {
+	if s.mode == ModePartnerTemplate || corpID == "" {
 		corpID = userInfo.CorpID
 	}
 	corpID = strings.TrimSpace(corpID)
@@ -193,7 +367,7 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 	if strings.TrimSpace(userInfo.UserID) == "" {
 		return nil, fmt.Errorf("wecom returned empty user id")
 	}
-	install, err := s.store.GetCorpInstallByCorpID(ctx, corpID)
+	install, err := s.store.GetCorpInstallByCorpID(ctx, s.mode, s.appID, corpID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +390,7 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 		Mobile:      userDetail.Mobile,
 		Avatar:      userDetail.Avatar,
 	}
-	binding, err := s.store.GetUserBinding(ctx, corpID, userInfo.UserID)
+	binding, err := s.store.GetUserBinding(ctx, s.mode, s.appID, corpID, userInfo.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +402,7 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
 	}
 	if mobile := normalizePhone(userDetail.Mobile); mobile != "" {
-		employeeID, err := s.store.FindUniqueEmployeeIDByPhone(ctx, mobile)
+		employeeID, err := s.store.FindUniqueEmployeeIDByPhoneAndTenant(ctx, mobile, install.TenantID)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +411,12 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 			if err != nil {
 				return nil, err
 			}
+			if install.TenantID > 0 && employee.TenantID != install.TenantID {
+				return nil, fmt.Errorf("tenant mismatch")
+			}
 			if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+				Mode:        s.mode,
+				ProviderApp: s.appID,
 				CorpID:      corpID,
 				WeComUserID: userInfo.UserID,
 				EmployeeID:  employee.ID,
@@ -256,12 +435,160 @@ func (s *PartnerService) LoginWithOAuth(ctx context.Context, code, corpID string
 	return &OAuthLoginResponse{Status: "needs_bind", Profile: profile}, nil
 }
 
+func (s *PartnerService) loginWithTemplateOAuth(ctx context.Context, code, corpID string) (*OAuthLoginResponse, error) {
+	install, corpAccessToken, userInfo, err := s.resolveTemplateOAuthContext(ctx, code, strings.TrimSpace(corpID))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(userInfo.UserID) == "" {
+		return nil, fmt.Errorf("wecom returned empty user id")
+	}
+	userDetail, err := s.client.GetUserDetail(ctx, corpAccessToken, userInfo.UserID)
+	if (err != nil || strings.TrimSpace(userDetail.Mobile) == "") && strings.TrimSpace(userInfo.UserTicket) != "" {
+		userDetail, err = s.client.GetAuthUserDetail(ctx, corpAccessToken, userInfo.UserTicket)
+	}
+	if err != nil {
+		return nil, err
+	}
+	profile := &OAuthUserProfile{
+		CorpID:      install.CorpID,
+		WeComUserID: userInfo.UserID,
+		OpenUserID:  userInfo.OpenUserID,
+		Name:        userDetail.Name,
+		Mobile:      userDetail.Mobile,
+		Avatar:      userDetail.Avatar,
+	}
+	binding, err := s.store.GetUserBinding(ctx, s.mode, s.appID, install.CorpID, userInfo.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if binding == nil {
+		binding, err = s.store.GetAnyUserBinding(ctx, install.CorpID, userInfo.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if binding != nil {
+			if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+				Mode:        s.mode,
+				ProviderApp: s.appID,
+				CorpID:      install.CorpID,
+				WeComUserID: userInfo.UserID,
+				EmployeeID:  binding.EmployeeID,
+				TenantID:    binding.TenantID,
+				Source:      "legacy_promoted",
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if binding != nil {
+		authResp, err := s.issueMobileLogin(ctx, binding.EmployeeID)
+		if err != nil {
+			return nil, err
+		}
+		return &OAuthLoginResponse{Status: "logged_in", Auth: authResp, Profile: profile}, nil
+	}
+	if mobile := normalizePhone(userDetail.Mobile); mobile != "" {
+		employeeID, err := s.store.FindUniqueEmployeeIDByPhoneAndTenant(ctx, mobile, install.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		if employeeID != nil {
+			employee, err := s.authStore.GetEmployeeByID(ctx, *employeeID)
+			if err != nil {
+				return nil, err
+			}
+			if install.TenantID > 0 && employee.TenantID != install.TenantID {
+				return nil, fmt.Errorf("tenant mismatch")
+			}
+			if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+				Mode:        s.mode,
+				ProviderApp: s.appID,
+				CorpID:      install.CorpID,
+				WeComUserID: userInfo.UserID,
+				EmployeeID:  employee.ID,
+				TenantID:    employee.TenantID,
+				Source:      "auto_phone",
+			}); err != nil {
+				return nil, err
+			}
+			authResp, err := s.issueMobileLogin(ctx, employee.ID)
+			if err != nil {
+				return nil, err
+			}
+			return &OAuthLoginResponse{Status: "logged_in", AutoBound: true, Auth: authResp, Profile: profile}, nil
+		}
+	}
+	return &OAuthLoginResponse{Status: "needs_bind", Profile: profile}, nil
+}
+
+func (s *PartnerService) resolveTemplateOAuthContext(ctx context.Context, code, corpID string) (*CorpInstallRecord, string, *userInfo3rdResponse, error) {
+	if corpID != "" {
+		install, err := s.store.GetCorpInstallByCorpID(ctx, s.mode, s.appID, corpID)
+		if err == nil {
+			corpAccessToken, _, tokenErr := s.resolveTemplateCorpToken(ctx, install)
+			if tokenErr != nil {
+				return nil, "", nil, tokenErr
+			}
+			userInfo, userErr := s.client.GetCorpUserInfo(ctx, corpAccessToken, code)
+			if userErr != nil {
+				return nil, "", nil, userErr
+			}
+			return install, corpAccessToken, userInfo, nil
+		}
+	}
+
+	// A code can only be consumed by the enterprise that issued it. Trying the
+	// active installs preserves existing deployments until public-to-open CorpID
+	// conversion is configured for deterministic lookup.
+	installs, err := s.store.ListActiveCorpInstallsByMode(ctx, s.mode, s.appID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	var lastErr error
+	for _, install := range installs {
+		if install == nil || strings.TrimSpace(install.CorpID) == "" {
+			continue
+		}
+		corpAccessToken, _, tokenErr := s.resolveTemplateCorpToken(ctx, install)
+		if tokenErr != nil {
+			lastErr = tokenErr
+			continue
+		}
+		userInfo, userErr := s.client.GetCorpUserInfo(ctx, corpAccessToken, code)
+		if userErr != nil {
+			lastErr = userErr
+			continue
+		}
+		if strings.TrimSpace(userInfo.UserID) != "" {
+			return install, corpAccessToken, userInfo, nil
+		}
+		lastErr = fmt.Errorf("wecom returned empty user id")
+	}
+	if lastErr != nil {
+		return nil, "", nil, lastErr
+	}
+	return nil, "", nil, fmt.Errorf("corp install not found")
+}
+
+func (s *PartnerService) resolveTemplateCorpToken(ctx context.Context, install *CorpInstallRecord) (string, int64, error) {
+	if install == nil {
+		return "", 0, fmt.Errorf("corp install not found")
+	}
+	// For a partner-template app, permanent_code is the generated Secret of
+	// the customer's commissioned self-built app. It must use gettoken, not
+	// the standard third-party application's service/get_corp_token endpoint.
+	return s.client.GetCorpAccessToken(ctx, install.CorpID, install.PermanentCode)
+}
+
 func (s *PartnerService) BindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64) error {
 	employee, err := s.authStore.GetEmployeeByID(ctx, employeeID)
 	if err != nil {
 		return err
 	}
 	return s.store.UpsertUserBinding(ctx, UserBindingRecord{
+		Mode:        s.mode,
+		ProviderApp: s.appID,
 		CorpID:      strings.TrimSpace(corpID),
 		WeComUserID: strings.TrimSpace(wecomUserID),
 		EmployeeID:  employee.ID,
@@ -270,12 +597,12 @@ func (s *PartnerService) BindEmployee(ctx context.Context, corpID, wecomUserID s
 	})
 }
 
-func (s *PartnerService) syncCorpInstall(ctx context.Context, corpID, authCode string) (*CorpInstallRecord, error) {
+func (s *PartnerService) syncCorpInstall(ctx context.Context, tenantID int64, corpID, authCode string) (*CorpInstallRecord, error) {
 	authCode = strings.TrimSpace(authCode)
 	if authCode == "" {
 		return nil, fmt.Errorf("missing auth_code")
 	}
-	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.suiteID)
+	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.mode, s.appID)
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +629,9 @@ func (s *PartnerService) syncCorpInstall(ctx context.Context, corpID, authCode s
 		agentID = infoResp.AuthInfo.Agent[0].AgentID
 	}
 	record := CorpInstallRecord{
+		Mode:          s.mode,
+		ProviderApp:   s.appID,
+		TenantID:      tenantID,
 		CorpID:        corpID,
 		CorpName:      strings.TrimSpace(infoResp.AuthCorpInfo.CorpName),
 		PermanentCode: permanentResp.PermanentCode,
@@ -311,7 +641,7 @@ func (s *PartnerService) syncCorpInstall(ctx context.Context, corpID, authCode s
 	if err := s.store.UpsertCorpInstall(ctx, record); err != nil {
 		return nil, err
 	}
-	slog.Info("wecom partner corp install synced", "corp_id", record.CorpID, "corp_name", record.CorpName, "agent_id", record.AgentID)
+	slog.Info("wecom third-party corp install synced", "mode", s.mode, "corp_id", record.CorpID, "corp_name", record.CorpName, "agent_id", record.AgentID)
 	return &record, nil
 }
 
@@ -389,13 +719,15 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 	appCache := make(map[string]*CorpInstallRecord)
 	tokenCache := make(map[string]string)
 	for _, employeeID := range employeeIDs {
-		binding, err := s.store.GetActivePartnerBindingByEmployeeID(ctx, employeeID)
+		binding, err := s.store.GetActivePartnerBindingByEmployeeID(ctx, s.mode, s.appID, employeeID)
 		if err != nil {
 			return nil, err
 		}
 		if binding == nil || strings.TrimSpace(binding.CorpID) == "" || strings.TrimSpace(binding.WeComUserID) == "" || binding.AgentID <= 0 {
 			perRecipientKey := fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID)
 			_, inserted, insertErr := s.store.InsertMessageLog(ctx, MessageLogRecord{
+				Mode:           s.mode,
+				ProviderApp:    s.appID,
 				EmployeeID:     employeeID,
 				MessageScene:   req.MessageScene,
 				DedupeKey:      perRecipientKey,
@@ -415,12 +747,14 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 			continue
 		}
 
-		targetURL := attachWeComEntryParams(req.TargetURL, binding.CorpID, binding.AgentID)
+		targetURL := attachWeComPartnerEntryParams(req.TargetURL, s.appID, binding.CorpID, s.mode)
 		install, ok := appCache[binding.CorpID]
 		if !ok {
-			install, err = s.store.GetCorpInstallByCorpID(ctx, binding.CorpID)
+			install, err = s.store.GetCorpInstallByCorpID(ctx, s.mode, s.appID, binding.CorpID)
 			if err != nil {
 				_, inserted, insertErr := s.store.InsertMessageLog(ctx, MessageLogRecord{
+					Mode:           s.mode,
+					ProviderApp:    s.appID,
 					CorpID:         binding.CorpID,
 					TenantID:       binding.TenantID,
 					EmployeeID:     employeeID,
@@ -447,6 +781,8 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 		}
 		if strings.TrimSpace(install.PermanentCode) == "" {
 			_, inserted, insertErr := s.store.InsertMessageLog(ctx, MessageLogRecord{
+				Mode:           s.mode,
+				ProviderApp:    s.appID,
 				CorpID:         binding.CorpID,
 				TenantID:       binding.TenantID,
 				EmployeeID:     employeeID,
@@ -482,6 +818,8 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 			"extra":         req.Extra,
 		})
 		logID, inserted, err := s.store.InsertMessageLog(ctx, MessageLogRecord{
+			Mode:           s.mode,
+			ProviderApp:    s.appID,
 			CorpID:         binding.CorpID,
 			TenantID:       binding.TenantID,
 			EmployeeID:     employeeID,
@@ -503,22 +841,9 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 			continue
 		}
 
-		suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.suiteID)
-		if err != nil {
-			_ = s.store.UpdateMessageLogStatus(ctx, logID, "failed", err.Error(), "")
-			resp.Failed++
-			continue
-		}
-		suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
-		if err != nil {
-			_ = s.store.UpdateMessageLogStatus(ctx, logID, "failed", err.Error(), "")
-			resp.Failed++
-			continue
-		}
-
 		corpToken, ok := tokenCache[binding.CorpID]
 		if !ok {
-			corpToken, _, err = s.client.GetCorpToken(ctx, suiteAccessToken, binding.CorpID, install.PermanentCode)
+			corpToken, _, err = s.resolveInstalledCorpToken(ctx, install)
 			if err != nil {
 				_ = s.store.UpdateMessageLogStatus(ctx, logID, "failed", err.Error(), "")
 				resp.Failed++
@@ -530,7 +855,7 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 		sendResp, err := s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, targetURL, req.ButtonText)
 		if err != nil {
 			if isWeComAccessTokenExpired(err) {
-				corpToken, _, err = s.client.GetCorpToken(ctx, suiteAccessToken, binding.CorpID, install.PermanentCode)
+				corpToken, _, err = s.resolveInstalledCorpToken(ctx, install)
 				if err == nil {
 					tokenCache[binding.CorpID] = corpToken
 					sendResp, err = s.client.SendTextCardMessage(ctx, corpToken, binding.AgentID, binding.WeComUserID, req.Title, req.Content, targetURL, req.ButtonText)
@@ -548,6 +873,24 @@ func (s *PartnerService) SendInternalMessage(ctx context.Context, req InternalSe
 	return resp, nil
 }
 
+func (s *PartnerService) resolveInstalledCorpToken(ctx context.Context, install *CorpInstallRecord) (string, int64, error) {
+	if s.mode == ModePartnerTemplate {
+		return s.resolveTemplateCorpToken(ctx, install)
+	}
+	if install == nil {
+		return "", 0, fmt.Errorf("corp install not found")
+	}
+	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.mode, s.appID)
+	if err != nil {
+		return "", 0, err
+	}
+	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
+	if err != nil {
+		return "", 0, err
+	}
+	return s.client.GetCorpToken(ctx, suiteAccessToken, install.CorpID, install.PermanentCode)
+}
+
 func (s *PartnerService) getInstallRedirectURI() (string, error) {
 	if s.installRedirectURL != "" {
 		return s.installRedirectURL, nil
@@ -555,5 +898,5 @@ func (s *PartnerService) getInstallRedirectURI() (string, error) {
 	if s.callbackBaseURL == "" {
 		return "", fmt.Errorf("wecom install redirect url is not configured")
 	}
-	return s.callbackBaseURL + "/api/v1/wecom/partner/install/callback", nil
+	return s.callbackBaseURL + s.routePrefix + "/install/callback", nil
 }

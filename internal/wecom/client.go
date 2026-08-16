@@ -71,6 +71,10 @@ type authInfoResponse struct {
 	} `json:"auth_info"`
 }
 
+type setScopeResponse struct {
+	apiErrorResponse
+}
+
 type userInfo3rdResponse struct {
 	apiErrorResponse
 	CorpID     string `json:"CorpId"`
@@ -200,6 +204,21 @@ func (c *Client) GetUserInfo3rd(ctx context.Context, suiteAccessToken, code stri
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) SetAgentScope(ctx context.Context, suiteAccessToken string, agentID int64, allowUsers []string, allowParties, allowTags []int64) error {
+	var resp setScopeResponse
+	path := "/cgi-bin/agent/set_scope?suite_access_token=" + url.QueryEscape(suiteAccessToken)
+	payload := map[string]any{
+		"agentid":     agentID,
+		"allow_user":  allowUsers,
+		"allow_party": allowParties,
+		"allow_tag":   allowTags,
+	}
+	if err := c.postJSON(ctx, path, payload, &resp); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) GetCorpAccessToken(ctx context.Context, corpID, corpSecret string) (string, int64, error) {

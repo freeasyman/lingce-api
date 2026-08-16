@@ -3,6 +3,12 @@ package wecom
 import "encoding/xml"
 import "time"
 
+const (
+	ModeSelfBuilt       = "self_built"
+	ModePartnerStandard = "partner_standard"
+	ModePartnerTemplate = "partner_template"
+)
+
 type EncryptedCallbackEnvelope struct {
 	XMLName xml.Name `xml:"xml"`
 	ToUser  string   `xml:"ToUserName"`
@@ -23,6 +29,8 @@ type CallbackEvent struct {
 
 type UserBindingRecord struct {
 	ID          int64
+	Mode        string
+	ProviderApp string
 	CorpID      string
 	WeComUserID string
 	EmployeeID  int64
@@ -57,6 +65,8 @@ type OAuthUserProfile struct {
 }
 
 type EmployeeBindingRecord struct {
+	Mode        string
+	ProviderApp string
 	CorpID      string
 	CorpName    string
 	WeComUserID string
@@ -87,20 +97,29 @@ type TenantWeComAppRecord struct {
 }
 
 type SuiteTicketRecord struct {
+	Mode        string
+	ProviderApp string
 	SuiteID     string
 	SuiteTicket string
 }
 
 type CorpInstallRecord struct {
+	Mode          string
+	ProviderApp   string
+	TenantID      int64
 	CorpID        string
 	CorpName      string
 	PermanentCode string
 	AgentID       int64
 	Status        string
+	UpdatedAt     *time.Time
+	CancelledAt   *time.Time
 }
 
 type MessageLogRecord struct {
 	ID              int64
+	Mode            string
+	ProviderApp     string
 	CorpID          string
 	TenantID        int64
 	EmployeeID      int64

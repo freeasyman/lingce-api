@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,24 +17,31 @@ import (
 )
 
 type PartnerHandler struct {
-	service *PartnerService
+	service     *PartnerService
+	routePrefix string
 }
 
 func NewPartnerHandler(service *PartnerService) *PartnerHandler {
-	return &PartnerHandler{service: service}
+	prefix := "/api/v1/wecom/partner"
+	if service != nil && strings.TrimSpace(service.routePrefix) != "" {
+		prefix = service.routePrefix
+	}
+	return &PartnerHandler{service: service, routePrefix: strings.TrimRight(prefix, "/")}
 }
 
 func (h *PartnerHandler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgxpool.Pool, internalToken string) {
 	routes := []router.Route{
-		{Method: "GET", Path: "/api/v1/wecom/partner/callback", Handler: h.VerifyURL},
-		{Method: "POST", Path: "/api/v1/wecom/partner/callback", Handler: h.Callback},
-		{Method: "GET", Path: "/api/v1/wecom/partner/install-url", Handler: h.InstallURL},
-		{Method: "GET", Path: "/api/v1/wecom/partner/install", Handler: h.InstallRedirect},
-		{Method: "GET", Path: "/api/v1/wecom/partner/install/callback", Handler: h.InstallCallback},
-		{Method: "POST", Path: "/api/v1/wecom/partner/oauth/login", Handler: h.OAuthLogin},
+		{Method: "GET", Path: h.routePrefix + "/callback", Handler: h.VerifyURL},
+		{Method: "POST", Path: h.routePrefix + "/callback", Handler: h.Callback},
+		{Method: "GET", Path: h.routePrefix + "/enterprise-callback", Handler: h.VerifyEnterpriseURL},
+		{Method: "POST", Path: h.routePrefix + "/enterprise-callback", Handler: h.EnterpriseCallback},
+		{Method: "GET", Path: h.routePrefix + "/install-url", Handler: h.InstallURL},
+		{Method: "GET", Path: h.routePrefix + "/install", Handler: h.InstallRedirect},
+		{Method: "GET", Path: h.routePrefix + "/install/callback", Handler: h.InstallCallback},
+		{Method: "POST", Path: h.routePrefix + "/oauth/login", Handler: h.OAuthLogin},
 		{
 			Method:           "POST",
-			Path:             "/api/v1/wecom/partner/bind",
+			Path:             h.routePrefix + "/bind",
 			Handler:          h.Bind,
 			Auth:             true,
 			AllowedUserTypes: []string{"employee", "mobile"},
@@ -43,11 +51,12 @@ func (h *PartnerHandler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, po
 }
 
 func (h *PartnerHandler) VerifyURL(w http.ResponseWriter, r *http.Request) {
+	echostr := rawQueryValue(r.URL.RawQuery, "echostr")
 	plain, err := h.service.VerifyURL(
 		r.URL.Query().Get("msg_signature"),
 		r.URL.Query().Get("timestamp"),
 		r.URL.Query().Get("nonce"),
-		r.URL.Query().Get("echostr"),
+		echostr,
 	)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -72,6 +81,75 @@ func (h *PartnerHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("nonce"),
 		body,
 	); err != nil {
+		slog.Warn("wecom partner callback failed",
+			"path", r.URL.Path,
+			"has_msg_signature", strings.TrimSpace(r.URL.Query().Get("msg_signature")) != "",
+			"has_timestamp", strings.TrimSpace(r.URL.Query().Get("timestamp")) != "",
+			"has_nonce", strings.TrimSpace(r.URL.Query().Get("nonce")) != "",
+			"body_bytes", len(body),
+			"error", err,
+		)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("success"))
+}
+
+func (h *PartnerHandler) VerifyEnterpriseURL(w http.ResponseWriter, r *http.Request) {
+	corpID := strings.TrimSpace(r.URL.Query().Get("corp_id"))
+	echostr := rawQueryValue(r.URL.RawQuery, "echostr")
+	plain, err := h.service.VerifyEnterpriseURL(
+		corpID,
+		r.URL.Query().Get("msg_signature"),
+		r.URL.Query().Get("timestamp"),
+		r.URL.Query().Get("nonce"),
+		echostr,
+	)
+	if err != nil {
+		slog.Warn("wecom partner enterprise verify url failed",
+			"path", r.URL.Path,
+			"corp_id", corpID,
+			"has_msg_signature", strings.TrimSpace(r.URL.Query().Get("msg_signature")) != "",
+			"has_timestamp", strings.TrimSpace(r.URL.Query().Get("timestamp")) != "",
+			"has_nonce", strings.TrimSpace(r.URL.Query().Get("nonce")) != "",
+			"has_echostr", strings.TrimSpace(echostr) != "",
+			"error", err,
+		)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(plain))
+}
+
+func (h *PartnerHandler) EnterpriseCallback(w http.ResponseWriter, r *http.Request) {
+	corpID := strings.TrimSpace(r.URL.Query().Get("corp_id"))
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("invalid body"))
+		return
+	}
+	if err := h.service.HandleEnterpriseCallback(
+		r.Context(),
+		corpID,
+		r.URL.Query().Get("msg_signature"),
+		r.URL.Query().Get("timestamp"),
+		r.URL.Query().Get("nonce"),
+		body,
+	); err != nil {
+		slog.Warn("wecom partner enterprise callback failed",
+			"path", r.URL.Path,
+			"corp_id", corpID,
+			"has_msg_signature", strings.TrimSpace(r.URL.Query().Get("msg_signature")) != "",
+			"has_timestamp", strings.TrimSpace(r.URL.Query().Get("timestamp")) != "",
+			"has_nonce", strings.TrimSpace(r.URL.Query().Get("nonce")) != "",
+			"body_bytes", len(body),
+			"error", err,
+		)
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(err.Error()))
 		return
@@ -90,7 +168,16 @@ func (h *PartnerHandler) InstallURL(w http.ResponseWriter, r *http.Request) {
 		}
 		authType = parsed
 	}
-	resp, err := h.service.BuildInstallURL(r.Context(), r.URL.Query().Get("state"), authType)
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if tenantRaw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantRaw != "" {
+		tenantID, err := strconv.ParseInt(tenantRaw, 10, 64)
+		if err != nil || tenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant_id must be a positive integer")
+			return
+		}
+		state = encodePartnerInstallState(tenantID, state)
+	}
+	resp, err := h.service.BuildInstallURL(r.Context(), state, authType)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -109,7 +196,16 @@ func (h *PartnerHandler) InstallRedirect(w http.ResponseWriter, r *http.Request)
 		}
 		authType = parsed
 	}
-	resp, err := h.service.BuildInstallURL(r.Context(), r.URL.Query().Get("state"), authType)
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if tenantRaw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantRaw != "" {
+		tenantID, err := strconv.ParseInt(tenantRaw, 10, 64)
+		if err != nil || tenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant_id must be a positive integer")
+			return
+		}
+		state = encodePartnerInstallState(tenantID, state)
+	}
+	resp, err := h.service.BuildInstallURL(r.Context(), state, authType)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -118,7 +214,7 @@ func (h *PartnerHandler) InstallRedirect(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *PartnerHandler) InstallCallback(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.HandleInstallCallback(r.Context(), r.URL.Query().Get("auth_code"))
+	result, err := h.service.HandleInstallCallback(r.Context(), r.URL.Query().Get("auth_code"), r.URL.Query().Get("state"))
 	if err != nil {
 		writePartnerInstallHTML(w, http.StatusBadRequest, "授权失败", err.Error(), "请返回企业微信后台重试，或联系灵策技术支持。")
 		return
@@ -142,6 +238,11 @@ func (h *PartnerHandler) OAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.LoginWithOAuth(r.Context(), req.Code, req.CorpID)
 	if err != nil {
+		slog.Warn("wecom partner oauth login failed",
+			"path", r.URL.Path,
+			"corp_id", strings.TrimSpace(req.CorpID),
+			"error", err,
+		)
 		httputil.WriteError(w, http.StatusUnauthorized, "WECOM_LOGIN_FAILED", err.Error(), nil)
 		return
 	}

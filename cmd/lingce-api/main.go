@@ -149,25 +149,58 @@ func main() {
 	wecomStore := wecom.NewStore(pool)
 	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
 	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	if err := wecomService.SetPartnerEnterpriseCallback(cfg.WeCom.PartnerEnterprise.Token, cfg.WeCom.PartnerEnterprise.EncodingAESKey); err != nil {
+		slog.Error("failed to configure wecom partner enterprise callback", "error", err)
+		os.Exit(1)
+	}
 	wecomHandler := wecom.NewHandler(wecomService)
 	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
-	wecomPartnerClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.SuiteID, cfg.WeCom.SuiteSecret)
-	wecomPartnerService := wecom.NewPartnerService(
-		wecomStore,
-		authStore,
-		wecomPartnerClient,
-		cfg.JWT.Secret,
-		cfg.JWT.ExpiryHours,
-		cfg.WeCom.SuiteID,
-		cfg.WeCom.Token,
-		cfg.WeCom.EncodingAESKey,
-		cfg.WeCom.CallbackBaseURL,
-		cfg.WeCom.InstallRedirectURL,
-		cfg.WeCom.InstallAuthType,
-	)
-	wecomPartnerHandler := wecom.NewPartnerHandler(wecomPartnerService)
-	wecomPartnerHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
-	wecomService.SetPartnerService(wecomPartnerService)
+	if strings.TrimSpace(cfg.WeCom.Provider.CorpID) != "" && strings.TrimSpace(cfg.WeCom.Provider.Secret) != "" {
+		licenseClient := wecom.NewLicenseClient(cfg.WeCom.APIBaseURL, cfg.WeCom.Provider.CorpID, cfg.WeCom.Provider.Secret)
+		licenseService := wecom.NewLicenseService(licenseClient)
+		wecom.NewLicenseHandler(licenseService).RegisterRoutes(mux, cfg.External.InternalWorkerToken)
+	}
+
+	if strings.TrimSpace(cfg.WeCom.PartnerStandard.AppID) != "" {
+		standardClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerStandard.AppID, cfg.WeCom.PartnerStandard.AppSecret)
+		standardService := wecom.NewPartnerService(
+			wecomStore,
+			authStore,
+			standardClient,
+			cfg.JWT.Secret,
+			cfg.JWT.ExpiryHours,
+			wecom.ModePartnerStandard,
+			cfg.WeCom.PartnerStandard.AppID,
+			"suite_id",
+			"/api/v1/wecom/partner-standard",
+			cfg.WeCom.PartnerStandard.Token,
+			cfg.WeCom.PartnerStandard.EncodingAESKey,
+			cfg.WeCom.PartnerStandard.CallbackBaseURL,
+			cfg.WeCom.PartnerStandard.InstallRedirectURL,
+			cfg.WeCom.PartnerStandard.InstallAuthType,
+		)
+		wecom.NewPartnerHandler(standardService).RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
+	}
+	if strings.TrimSpace(cfg.WeCom.PartnerTemplate.AppID) != "" {
+		templateClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerTemplate.AppID, cfg.WeCom.PartnerTemplate.AppSecret)
+		templateService := wecom.NewPartnerService(
+			wecomStore,
+			authStore,
+			templateClient,
+			cfg.JWT.Secret,
+			cfg.JWT.ExpiryHours,
+			wecom.ModePartnerTemplate,
+			cfg.WeCom.PartnerTemplate.AppID,
+			"template_id",
+			"/api/v1/wecom/partner-template",
+			cfg.WeCom.PartnerTemplate.Token,
+			cfg.WeCom.PartnerTemplate.EncodingAESKey,
+			cfg.WeCom.PartnerTemplate.CallbackBaseURL,
+			cfg.WeCom.PartnerTemplate.InstallRedirectURL,
+			cfg.WeCom.PartnerTemplate.InstallAuthType,
+		)
+		wecom.NewPartnerHandler(templateService).RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
+	}
 
 	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)

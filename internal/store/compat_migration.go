@@ -13,7 +13,7 @@ import (
 
 const (
 	compatMigrationKey        = "startup_compat"
-	compatMigrationVersion    = 1
+	compatMigrationVersion    = 2
 	compatMigrationLockKey    = int64(2026080601)
 	compatMigrationStateTable = "api_migration_state"
 )
@@ -1849,13 +1849,46 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_tenant_wecom_apps_corp_id ON tenant_wecom_apps(corp_id)`,
 		`CREATE TABLE IF NOT EXISTS wecom_suite_tickets (
 			id BIGSERIAL PRIMARY KEY,
+			mode TEXT NOT NULL DEFAULT '',
+			provider_app TEXT NOT NULL DEFAULT '',
 			suite_id TEXT NOT NULL,
 			suite_ticket TEXT NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_wecom_suite_tickets_suite_id_created_at ON wecom_suite_tickets(suite_id, created_at DESC)`,
+		`ALTER TABLE wecom_suite_tickets ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_suite_tickets ADD COLUMN IF NOT EXISTS provider_app TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_suite_tickets_mode_app_created_at ON wecom_suite_tickets(mode, provider_app, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS wecom_corp_installs (
+			id BIGSERIAL PRIMARY KEY,
+			mode TEXT NOT NULL DEFAULT '',
+			provider_app TEXT NOT NULL DEFAULT '',
+			tenant_id BIGINT NOT NULL DEFAULT 0,
+			corp_id TEXT NOT NULL,
+			corp_name TEXT NOT NULL DEFAULT '',
+			permanent_code TEXT NOT NULL DEFAULT '',
+			agent_id BIGINT NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			cancelled_at TIMESTAMP
+		)`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS provider_app TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS tenant_id BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS corp_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS permanent_code TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS agent_id BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE wecom_corp_installs ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP`,
+		`DROP INDEX IF EXISTS uk_wecom_corp_installs_corp_id`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uk_wecom_corp_installs_mode_app_corp_id ON wecom_corp_installs(mode, provider_app, corp_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_wecom_corp_installs_tenant_id ON wecom_corp_installs(tenant_id, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS wecom_user_bindings (
 			id BIGSERIAL PRIMARY KEY,
+			mode TEXT NOT NULL DEFAULT '',
+			provider_app TEXT NOT NULL DEFAULT '',
 			corp_id TEXT NOT NULL,
 			wecom_user_id TEXT NOT NULL,
 			employee_id BIGINT NOT NULL,
@@ -1863,8 +1896,10 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			source TEXT NOT NULL DEFAULT 'manual',
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			UNIQUE (corp_id, wecom_user_id)
+			UNIQUE (mode, provider_app, corp_id, wecom_user_id)
 		)`,
+		`ALTER TABLE wecom_user_bindings ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_user_bindings ADD COLUMN IF NOT EXISTS provider_app TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_wecom_user_bindings_employee_id ON wecom_user_bindings(employee_id)`,
 		`CREATE TABLE IF NOT EXISTS wecom_directory_members (
 			id BIGSERIAL PRIMARY KEY,
@@ -1895,6 +1930,8 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_wecom_event_logs_created_at ON wecom_event_logs(created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS wecom_message_logs (
 			id BIGSERIAL PRIMARY KEY,
+			mode TEXT NOT NULL DEFAULT '',
+			provider_app TEXT NOT NULL DEFAULT '',
 			corp_id TEXT,
 			tenant_id BIGINT NOT NULL DEFAULT 0,
 			employee_id BIGINT NOT NULL DEFAULT 0,
@@ -1912,6 +1949,8 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE wecom_message_logs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE wecom_message_logs ADD COLUMN IF NOT EXISTS provider_app TEXT NOT NULL DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uk_wecom_message_logs_dedupe_key ON wecom_message_logs(dedupe_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_wecom_message_logs_employee_created_at ON wecom_message_logs(employee_id, created_at DESC)`,
 	}
@@ -2059,6 +2098,62 @@ func compatMigrationAlreadySatisfied(ctx context.Context, db compatExecutor) (bo
 				WHERE table_schema = 'public'
 				  AND table_name = 'institution_menus'
 				  AND column_name = 'is_feature_assignable'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_suite_tickets'
+				  AND column_name = 'mode'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_suite_tickets'
+				  AND column_name = 'provider_app'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_corp_installs'
+				  AND column_name = 'mode'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_corp_installs'
+				  AND column_name = 'provider_app'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_user_bindings'
+				  AND column_name = 'mode'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_user_bindings'
+				  AND column_name = 'provider_app'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_message_logs'
+				  AND column_name = 'mode'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_schema = 'public'
+				  AND table_name = 'wecom_message_logs'
+				  AND column_name = 'provider_app'
 			)
 	`).Scan(&ready); err != nil {
 		return false, err

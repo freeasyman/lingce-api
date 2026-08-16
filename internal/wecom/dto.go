@@ -148,6 +148,18 @@ type InstallURLResponse struct {
 }
 
 type InstallCallbackResult struct {
+	TenantID int64  `json:"tenant_id,omitempty"`
 	CorpID   string `json:"corp_id"`
 	CorpName string `json:"corp_name,omitempty"`
+}
+
+type CorpInstallResponse struct {
+	TenantID      int64   `json:"tenant_id"`
+	CorpID        string  `json:"corp_id"`
+	CorpName      string  `json:"corp_name,omitempty"`
+	AgentID       int64   `json:"agent_id"`
+	Status        string  `json:"status"`
+	HasPermanent  bool    `json:"has_permanent_code"`
+	UpdatedAt     *string `json:"updated_at,omitempty"`
+	CancelledAt   *string `json:"cancelled_at,omitempty"`
 }

@@ -3,6 +3,7 @@ package wecom
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,13 +21,39 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 func (s *Store) SaveSuiteTicket(ctx context.Context, record SuiteTicketRecord) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO wecom_suite_tickets (suite_id, suite_ticket, created_at) VALUES ($1, $2, NOW())`, record.SuiteID, record.SuiteTicket)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO wecom_suite_tickets (mode, provider_app, suite_id, suite_ticket, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+	`, record.Mode, record.ProviderApp, record.SuiteID, record.SuiteTicket)
 	return err
 }
 
-func (s *Store) GetLatestSuiteTicket(ctx context.Context, suiteID string) (string, error) {
+func (s *Store) GetLatestSuiteTicket(ctx context.Context, mode, providerApp string) (string, error) {
 	var ticket string
-	err := s.pool.QueryRow(ctx, `SELECT suite_ticket FROM wecom_suite_tickets WHERE suite_id = $1 ORDER BY id DESC LIMIT 1`, suiteID).Scan(&ticket)
+	err := s.pool.QueryRow(ctx, `
+		SELECT suite_ticket
+		FROM wecom_suite_tickets
+		WHERE mode = $1 AND provider_app = $2
+		ORDER BY id DESC
+		LIMIT 1
+	`, mode, providerApp).Scan(&ticket)
+	if err == nil {
+		return ticket, nil
+	}
+	if err != pgx.ErrNoRows {
+		return "", err
+	}
+
+	// Compatibility fallback:
+	// historical third-party records were stored before mode/provider_app existed,
+	// so install/login should still be able to reuse the latest ticket by app id.
+	err = s.pool.QueryRow(ctx, `
+		SELECT suite_ticket
+		FROM wecom_suite_tickets
+		WHERE suite_id = $1
+		ORDER BY id DESC
+		LIMIT 1
+	`, providerApp).Scan(&ticket)
 	if err == pgx.ErrNoRows {
 		return "", fmt.Errorf("suite ticket not found")
 	}
@@ -38,31 +65,89 @@ func (s *Store) GetLatestSuiteTicket(ctx context.Context, suiteID string) (strin
 
 func (s *Store) UpsertCorpInstall(ctx context.Context, record CorpInstallRecord) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO wecom_corp_installs (corp_id, corp_name, permanent_code, agent_id, status, created_at, updated_at, cancelled_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW(), NULL)
-		ON CONFLICT (corp_id)
+		INSERT INTO wecom_corp_installs (mode, provider_app, tenant_id, corp_id, corp_name, permanent_code, agent_id, status, created_at, updated_at, cancelled_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NULL)
+		ON CONFLICT (mode, provider_app, corp_id)
 		DO UPDATE SET
+			tenant_id = CASE
+				WHEN EXCLUDED.tenant_id > 0 THEN EXCLUDED.tenant_id
+				ELSE wecom_corp_installs.tenant_id
+			END,
 			corp_name = EXCLUDED.corp_name,
 			permanent_code = EXCLUDED.permanent_code,
 			agent_id = EXCLUDED.agent_id,
 			status = EXCLUDED.status,
 			updated_at = NOW(),
 			cancelled_at = NULL
-	`, record.CorpID, record.CorpName, record.PermanentCode, record.AgentID, record.Status)
+	`, record.Mode, record.ProviderApp, record.TenantID, record.CorpID, record.CorpName, record.PermanentCode, record.AgentID, record.Status)
+	if err == nil {
+		return nil
+	}
+	if !isCorpInstallPrimaryConflict(err) {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE wecom_corp_installs
+		SET
+			mode = $1,
+			provider_app = $2,
+			tenant_id = CASE
+				WHEN $3 > 0 THEN $3
+				ELSE tenant_id
+			END,
+			corp_name = $4,
+			permanent_code = $5,
+			agent_id = $6,
+			status = $7,
+			updated_at = NOW(),
+			cancelled_at = NULL
+		WHERE corp_id = $8
+	`, record.Mode, record.ProviderApp, record.TenantID, record.CorpName, record.PermanentCode, record.AgentID, record.Status, record.CorpID)
 	return err
 }
 
-func (s *Store) GetCorpInstallByCorpID(ctx context.Context, corpID string) (*CorpInstallRecord, error) {
+func (s *Store) GetCorpInstallByCorpID(ctx context.Context, mode, providerApp, corpID string) (*CorpInstallRecord, error) {
 	var item CorpInstallRecord
-	err := s.pool.QueryRow(ctx, `SELECT corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active') FROM wecom_corp_installs WHERE corp_id = $1 AND COALESCE(status, 'active') = 'active'`, corpID).Scan(
+	err := s.pool.QueryRow(ctx, `
+		SELECT mode, COALESCE(provider_app, ''), COALESCE(tenant_id, 0), corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active'), updated_at, cancelled_at
+		FROM wecom_corp_installs
+		WHERE mode = $1 AND provider_app = $2 AND corp_id = $3 AND COALESCE(status, 'active') = 'active'
+	`, mode, providerApp, corpID).Scan(
+		&item.Mode,
+		&item.ProviderApp,
+		&item.TenantID,
 		&item.CorpID,
 		&item.CorpName,
 		&item.PermanentCode,
 		&item.AgentID,
 		&item.Status,
+		&item.UpdatedAt,
+		&item.CancelledAt,
 	)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("corp install not found")
+		err = s.pool.QueryRow(ctx, `
+			SELECT COALESCE(mode, ''), COALESCE(provider_app, ''), COALESCE(tenant_id, 0), corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active'), updated_at, cancelled_at
+			FROM wecom_corp_installs
+			WHERE corp_id = $1 AND COALESCE(status, 'active') = 'active'
+		`, corpID).Scan(
+			&item.Mode,
+			&item.ProviderApp,
+			&item.TenantID,
+			&item.CorpID,
+			&item.CorpName,
+			&item.PermanentCode,
+			&item.AgentID,
+			&item.Status,
+			&item.UpdatedAt,
+			&item.CancelledAt,
+		)
+		if err == nil {
+			return &item, nil
+		}
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("corp install not found")
+		}
+		return nil, err
 	}
 	if err != nil {
 		return nil, err
@@ -70,9 +155,101 @@ func (s *Store) GetCorpInstallByCorpID(ctx context.Context, corpID string) (*Cor
 	return &item, nil
 }
 
-func (s *Store) MarkCorpInstallCancelled(ctx context.Context, corpID string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE wecom_corp_installs SET status = 'cancelled', updated_at = NOW(), cancelled_at = NOW() WHERE corp_id = $1`, corpID)
+func isCorpInstallPrimaryConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "wecom_corp_installs_pkey") || errors.Is(err, pgx.ErrTxClosed)
+}
+
+func (s *Store) MarkCorpInstallCancelled(ctx context.Context, mode, providerApp, corpID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE wecom_corp_installs
+		SET status = 'cancelled', updated_at = NOW(), cancelled_at = NOW()
+		WHERE mode = $1 AND provider_app = $2 AND corp_id = $3
+	`, mode, providerApp, corpID)
 	return err
+}
+
+func (s *Store) ListCorpInstalls(ctx context.Context, tenantID *int64, corpID string) ([]*CorpInstallRecord, error) {
+	where := "1=1"
+	args := []any{}
+	if tenantID != nil && *tenantID > 0 {
+		where = "tenant_id = $1"
+		args = append(args, *tenantID)
+	}
+	corpID = strings.TrimSpace(corpID)
+	if corpID != "" {
+		args = append(args, corpID)
+		where += fmt.Sprintf(" AND corp_id = $%d", len(args))
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(mode, ''), COALESCE(provider_app, ''), COALESCE(tenant_id, 0), corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active'), updated_at, cancelled_at
+		FROM wecom_corp_installs
+		WHERE `+where+`
+		ORDER BY updated_at DESC NULLS LAST, corp_id ASC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*CorpInstallRecord, 0)
+	for rows.Next() {
+		var item CorpInstallRecord
+		if err := rows.Scan(
+			&item.Mode,
+			&item.ProviderApp,
+			&item.TenantID,
+			&item.CorpID,
+			&item.CorpName,
+			&item.PermanentCode,
+			&item.AgentID,
+			&item.Status,
+			&item.UpdatedAt,
+			&item.CancelledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ListActiveCorpInstallsByMode(ctx context.Context, mode, providerApp string) ([]*CorpInstallRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(mode, ''), COALESCE(provider_app, ''), COALESCE(tenant_id, 0), corp_id, COALESCE(corp_name, ''), permanent_code, COALESCE(agent_id, 0), COALESCE(status, 'active'), updated_at, cancelled_at
+		FROM wecom_corp_installs
+		WHERE mode = $1
+		  AND provider_app = $2
+		  AND COALESCE(status, 'active') = 'active'
+		ORDER BY updated_at DESC NULLS LAST, corp_id ASC
+	`, mode, providerApp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*CorpInstallRecord, 0)
+	for rows.Next() {
+		var item CorpInstallRecord
+		if err := rows.Scan(
+			&item.Mode,
+			&item.ProviderApp,
+			&item.TenantID,
+			&item.CorpID,
+			&item.CorpName,
+			&item.PermanentCode,
+			&item.AgentID,
+			&item.Status,
+			&item.UpdatedAt,
+			&item.CancelledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) ListTenantApps(ctx context.Context, tenantID *int64) ([]*TenantWeComAppRecord, error) {
@@ -227,23 +404,94 @@ func (s *Store) UpdateTenantAppAccessToken(ctx context.Context, id int64, access
 }
 
 func (s *Store) UpsertUserBinding(ctx context.Context, record UserBindingRecord) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO wecom_user_bindings (corp_id, wecom_user_id, employee_id, tenant_id, source, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-		ON CONFLICT (corp_id, wecom_user_id)
-		DO UPDATE SET
-			employee_id = EXCLUDED.employee_id,
-			tenant_id = EXCLUDED.tenant_id,
-			source = EXCLUDED.source,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE wecom_user_bindings
+		SET
+			mode = $1,
+			provider_app = $2,
+			employee_id = $5,
+			tenant_id = $6,
+			source = $7,
 			updated_at = NOW()
-	`, record.CorpID, record.WeComUserID, record.EmployeeID, record.TenantID, record.Source)
-	return err
+		WHERE mode = $1
+		  AND provider_app = $2
+		  AND corp_id = $3
+		  AND wecom_user_id = $4
+	`, record.Mode, record.ProviderApp, record.CorpID, record.WeComUserID, record.EmployeeID, record.TenantID, record.Source)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		tag, err = tx.Exec(ctx, `
+			UPDATE wecom_user_bindings
+			SET
+				mode = $1,
+				provider_app = $2,
+				employee_id = $5,
+				tenant_id = $6,
+				source = $7,
+				updated_at = NOW()
+			WHERE corp_id = $3
+			  AND wecom_user_id = $4
+		`, record.Mode, record.ProviderApp, record.CorpID, record.WeComUserID, record.EmployeeID, record.TenantID, record.Source)
+		if err != nil {
+			return err
+		}
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO wecom_user_bindings (mode, provider_app, corp_id, wecom_user_id, employee_id, tenant_id, source, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		`, record.Mode, record.ProviderApp, record.CorpID, record.WeComUserID, record.EmployeeID, record.TenantID, record.Source); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
-func (s *Store) GetUserBinding(ctx context.Context, corpID, wecomUserID string) (*UserBindingRecord, error) {
+func (s *Store) GetUserBinding(ctx context.Context, mode, providerApp, corpID, wecomUserID string) (*UserBindingRecord, error) {
 	var item UserBindingRecord
-	err := s.pool.QueryRow(ctx, `SELECT id, corp_id, wecom_user_id, employee_id, tenant_id, source FROM wecom_user_bindings WHERE corp_id = $1 AND wecom_user_id = $2`, corpID, wecomUserID).Scan(
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(mode, ''), COALESCE(provider_app, ''), corp_id, wecom_user_id, employee_id, tenant_id, source
+		FROM wecom_user_bindings
+		WHERE mode = $1 AND provider_app = $2 AND corp_id = $3 AND wecom_user_id = $4
+	`, mode, providerApp, corpID, wecomUserID).Scan(
 		&item.ID,
+		&item.Mode,
+		&item.ProviderApp,
+		&item.CorpID,
+		&item.WeComUserID,
+		&item.EmployeeID,
+		&item.TenantID,
+		&item.Source,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (s *Store) GetAnyUserBinding(ctx context.Context, corpID, wecomUserID string) (*UserBindingRecord, error) {
+	var item UserBindingRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(mode, ''), COALESCE(provider_app, ''), corp_id, wecom_user_id, employee_id, tenant_id, source
+		FROM wecom_user_bindings
+		WHERE corp_id = $1 AND wecom_user_id = $2
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`, corpID, wecomUserID).Scan(
+		&item.ID,
+		&item.Mode,
+		&item.ProviderApp,
 		&item.CorpID,
 		&item.WeComUserID,
 		&item.EmployeeID,
@@ -635,6 +883,8 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 	var item EmployeeBindingRecord
 	err := s.pool.QueryRow(ctx, `
 		SELECT
+			COALESCE(wub.mode, ''),
+			COALESCE(wub.provider_app, ''),
 			wub.corp_id,
 			COALESCE(wta.corp_name, ''),
 			wub.wecom_user_id,
@@ -649,6 +899,8 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 		ORDER BY wub.updated_at DESC, wub.id DESC
 		LIMIT 1
 	`, employeeID).Scan(
+		&item.Mode,
+		&item.ProviderApp,
 		&item.CorpID,
 		&item.CorpName,
 		&item.WeComUserID,
@@ -665,11 +917,13 @@ func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int
 	return &item, nil
 }
 
-func (s *Store) GetActivePartnerBindingByEmployeeID(ctx context.Context, employeeID int64) (*EmployeeBindingRecord, error) {
+func (s *Store) GetActivePartnerBindingByEmployeeID(ctx context.Context, mode, providerApp string, employeeID int64) (*EmployeeBindingRecord, error) {
 	var item EmployeeBindingRecord
 	var permanentCode string
 	err := s.pool.QueryRow(ctx, `
 		SELECT
+			COALESCE(wub.mode, ''),
+			COALESCE(wub.provider_app, ''),
 			wub.corp_id,
 			COALESCE(wci.corp_name, ''),
 			wub.wecom_user_id,
@@ -679,12 +933,18 @@ func (s *Store) GetActivePartnerBindingByEmployeeID(ctx context.Context, employe
 			COALESCE(wci.permanent_code, '')
 		FROM wecom_user_bindings wub
 		INNER JOIN wecom_corp_installs wci
-		  ON wci.corp_id = wub.corp_id
+		  ON wci.mode = wub.mode
+		 AND wci.provider_app = wub.provider_app
+		 AND wci.corp_id = wub.corp_id
 		 AND COALESCE(wci.status, 'active') = 'active'
-		WHERE wub.employee_id = $1
+		WHERE wub.mode = $1
+		  AND wub.provider_app = $2
+		  AND wub.employee_id = $3
 		ORDER BY wub.updated_at DESC, wub.id DESC
 		LIMIT 1
-	`, employeeID).Scan(
+	`, mode, providerApp, employeeID).Scan(
+		&item.Mode,
+		&item.ProviderApp,
 		&item.CorpID,
 		&item.CorpName,
 		&item.WeComUserID,
