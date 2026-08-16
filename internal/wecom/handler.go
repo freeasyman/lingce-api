@@ -3,7 +3,9 @@ package wecom
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			AllowedUserTypes: []string{"employee", "mobile"},
 		},
 		{Method: "GET", Path: "/api/v1/ops/wecom/apps", Handler: h.ListTenantApps, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/wecom/corp-installs", Handler: h.ListCorpInstalls, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.GetTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/ops/wecom/apps", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "PUT", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
@@ -56,20 +59,48 @@ func (h *Handler) isAdmin(r *http.Request) bool {
 }
 
 func (h *Handler) VerifyURL(w http.ResponseWriter, r *http.Request) {
+	echostr := rawQueryValue(r.URL.RawQuery, "echostr")
 	plain, err := h.service.VerifyURL(
 		r.Context(),
 		r.URL.Query().Get("msg_signature"),
 		r.URL.Query().Get("timestamp"),
 		r.URL.Query().Get("nonce"),
-		r.URL.Query().Get("echostr"),
+		echostr,
 	)
 	if err != nil {
+		slog.Warn("wecom verify url failed",
+			"path", r.URL.Path,
+			"has_msg_signature", strings.TrimSpace(r.URL.Query().Get("msg_signature")) != "",
+			"has_timestamp", strings.TrimSpace(r.URL.Query().Get("timestamp")) != "",
+			"has_nonce", strings.TrimSpace(r.URL.Query().Get("nonce")) != "",
+			"has_echostr", strings.TrimSpace(echostr) != "",
+			"error", err,
+		)
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(err.Error()))
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(plain))
+}
+
+func rawQueryValue(rawQuery, key string) string {
+	if strings.TrimSpace(rawQuery) == "" || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	prefix := key + "="
+	for _, part := range strings.Split(rawQuery, "&") {
+		if !strings.HasPrefix(part, prefix) {
+			continue
+		}
+		value := strings.TrimPrefix(part, prefix)
+		decoded, err := url.QueryUnescape(strings.ReplaceAll(value, "+", "%2B"))
+		if err != nil {
+			return value
+		}
+		return decoded
+	}
+	return ""
 }
 
 func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +117,14 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("nonce"),
 		body,
 	); err != nil {
+		slog.Warn("wecom callback failed",
+			"path", r.URL.Path,
+			"has_msg_signature", strings.TrimSpace(r.URL.Query().Get("msg_signature")) != "",
+			"has_timestamp", strings.TrimSpace(r.URL.Query().Get("timestamp")) != "",
+			"has_nonce", strings.TrimSpace(r.URL.Query().Get("nonce")) != "",
+			"body_bytes", len(body),
+			"error", err,
+		)
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(err.Error()))
 		return
@@ -164,6 +203,25 @@ func (h *Handler) ListTenantApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := h.service.ListTenantApps(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ListCorpInstalls(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.ResolveOptionalTenantID(claims, r.URL.Query().Get("tenant_id"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, err := h.service.ListCorpInstalls(r.Context(), tenantID, r.URL.Query().Get("corp_id"))
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

@@ -36,7 +36,6 @@ type Service struct {
 	jwtSecret       string
 	jwtExpiryHours  int
 	onBindingUpsert func(context.Context, int64, int64) error
-	partnerService  *PartnerService
 }
 
 func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int) *Service {
@@ -52,10 +51,6 @@ func NewService(store *Store, authStore *internalauth.Store, client *Client, jwt
 
 func (s *Service) SetBindingUpsertHook(fn func(context.Context, int64, int64) error) {
 	s.onBindingUpsert = fn
-}
-
-func (s *Service) SetPartnerService(partnerService *PartnerService) {
-	s.partnerService = partnerService
 }
 
 func (s *Service) IsEnabled() bool {
@@ -212,7 +207,7 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 		Mobile:      userDetail.Mobile,
 		Avatar:      userDetail.Avatar,
 	}
-	binding, err := s.store.GetUserBinding(ctx, corpID, userInfo.UserID)
+	binding, err := s.store.GetUserBinding(ctx, ModeSelfBuilt, "", corpID, userInfo.UserID)
 	if err != nil {
 		slog.Warn("wecom oauth login failed: query binding", "corp_id", corpID, "wecom_user_id", userInfo.UserID, "error", err)
 		return nil, err
@@ -236,6 +231,8 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 				return nil, fmt.Errorf("tenant mismatch")
 			}
 			if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+				Mode:        ModeSelfBuilt,
+				ProviderApp: "",
 				CorpID:      corpID,
 				WeComUserID: userInfo.UserID,
 				EmployeeID:  employee.ID,
@@ -247,6 +244,8 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 			}
 			s.runBindingUpsertHook(ctx, employee.TenantID, employee.ID)
 			binding = &UserBindingRecord{
+				Mode:        ModeSelfBuilt,
+				ProviderApp: "",
 				CorpID:      corpID,
 				WeComUserID: userInfo.UserID,
 				EmployeeID:  employee.ID,
@@ -309,7 +308,7 @@ func (s *Service) bindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	if enforcePhoneMatch && normalizePhone(employee.Phone) != normalizePhone(userDetail.Mobile) {
 		return fmt.Errorf("当前登录手机号与企业微信通讯录手机号不一致，请使用本人账号或联系管理员")
 	}
-	existing, err := s.store.GetUserBinding(ctx, corpID, wecomUserID)
+	existing, err := s.store.GetUserBinding(ctx, ModeSelfBuilt, "", corpID, wecomUserID)
 	if err != nil {
 		return err
 	}
@@ -317,6 +316,8 @@ func (s *Service) bindEmployee(ctx context.Context, corpID, wecomUserID string, 
 		return fmt.Errorf("binding already exists")
 	}
 	if err := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+		Mode:        ModeSelfBuilt,
+		ProviderApp: "",
 		CorpID:      corpID,
 		WeComUserID: wecomUserID,
 		EmployeeID:  employee.ID,
@@ -363,6 +364,7 @@ func defaultWeComHomeURL(corpID string, agentID int64) string {
 	if agentID > 0 {
 		values.Set("agent_id", fmt.Sprintf("%d", agentID))
 	}
+	values.Set("mode", "self_built")
 	target := url.URL{
 		Scheme:   "https",
 		Host:     defaultWeComEmployeeHost,
@@ -460,26 +462,6 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			return nil, err
 		}
 		if binding == nil || strings.TrimSpace(binding.CorpID) == "" || strings.TrimSpace(binding.WeComUserID) == "" || binding.AgentID <= 0 {
-			if s.partnerService != nil && s.partnerService.IsEnabled() {
-				partnerResp, err := s.partnerService.SendInternalMessage(ctx, InternalSendMessageRequest{
-					MessageScene: req.MessageScene,
-					DedupeKey:    req.DedupeKey,
-					EmployeeIDs:  []int64{employeeID},
-					Title:        req.Title,
-					Content:      req.Content,
-					TargetURL:    req.TargetURL,
-					ButtonText:   req.ButtonText,
-					Extra:        req.Extra,
-					BizDate:      req.BizDate,
-				})
-				if err != nil {
-					return nil, err
-				}
-				resp.Sent += partnerResp.Sent
-				resp.Skipped += partnerResp.Skipped
-				resp.Failed += partnerResp.Failed
-				continue
-			}
 			perRecipientKey := fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID)
 			_, inserted, insertErr := s.store.InsertMessageLog(ctx, MessageLogRecord{
 				EmployeeID:     employeeID,
@@ -633,6 +615,34 @@ func (s *Service) ListTenantApps(ctx context.Context, tenantID *int64) ([]*Tenan
 	return out, nil
 }
 
+func (s *Service) ListCorpInstalls(ctx context.Context, tenantID *int64, corpID string) ([]*CorpInstallResponse, error) {
+	items, err := s.store.ListCorpInstalls(ctx, tenantID, corpID)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]*CorpInstallResponse, 0, len(items))
+	for _, item := range items {
+		row := &CorpInstallResponse{
+			TenantID:     item.TenantID,
+			CorpID:       item.CorpID,
+			CorpName:     item.CorpName,
+			AgentID:      item.AgentID,
+			Status:       item.Status,
+			HasPermanent: strings.TrimSpace(item.PermanentCode) != "",
+		}
+		if item.UpdatedAt != nil {
+			value := formatTime(*item.UpdatedAt)
+			row.UpdatedAt = &value
+		}
+		if item.CancelledAt != nil {
+			value := formatTime(*item.CancelledAt)
+			row.CancelledAt = &value
+		}
+		resp = append(resp, row)
+	}
+	return resp, nil
+}
+
 func (s *Service) ListBindingStatuses(ctx context.Context, tenantID *int64, keyword, status string, page, pageSize int) ([]*BindingStatusResponse, int, error) {
 	items, total, err := s.store.ListBindingStatuses(ctx, tenantID, keyword, status, page, pageSize)
 	if err != nil {
@@ -704,12 +714,14 @@ func (s *Service) SyncDirectoryAndPrebind(ctx context.Context, tenantID int64) (
 			if len(matches) == 1 {
 				id := matches[0].EmployeeID
 				matchedEmployeeID = &id
-				binding, bindErr := s.store.GetUserBinding(ctx, app.CorpID, strings.TrimSpace(user.UserID))
+				binding, bindErr := s.store.GetUserBinding(ctx, ModeSelfBuilt, "", app.CorpID, strings.TrimSpace(user.UserID))
 				if bindErr != nil {
 					return nil, bindErr
 				}
 				if binding == nil || binding.EmployeeID == id {
 					if upsertErr := s.store.UpsertUserBinding(ctx, UserBindingRecord{
+						Mode:        ModeSelfBuilt,
+						ProviderApp: "",
 						CorpID:      app.CorpID,
 						WeComUserID: strings.TrimSpace(user.UserID),
 						EmployeeID:  id,

@@ -149,10 +149,6 @@ func main() {
 	wecomStore := wecom.NewStore(pool)
 	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
 	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
-	if err := wecomService.SetPartnerEnterpriseCallback(cfg.WeCom.PartnerEnterprise.Token, cfg.WeCom.PartnerEnterprise.EncodingAESKey); err != nil {
-		slog.Error("failed to configure wecom partner enterprise callback", "error", err)
-		os.Exit(1)
-	}
 	wecomHandler := wecom.NewHandler(wecomService)
 	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
 	if strings.TrimSpace(cfg.WeCom.Provider.CorpID) != "" && strings.TrimSpace(cfg.WeCom.Provider.Secret) != "" {

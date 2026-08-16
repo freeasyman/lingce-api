@@ -96,19 +96,18 @@ type AliyunConfig struct {
 }
 
 type WeComConfig struct {
-	APIBaseURL        string                 `toml:"api_base_url"`
-	LegacyAppID       string                 `toml:"suite_id"`
-	LegacyAppSecret   string                 `toml:"suite_secret"`
-	LegacyToken       string                 `toml:"token"`
-	LegacyAESKey      string                 `toml:"encoding_aes_key"`
-	LegacyCallback    string                 `toml:"callback_base_url"`
-	LegacyRedirect    string                 `toml:"install_redirect_url"`
-	LegacyAuthType    int                    `toml:"install_auth_type"`
-	SelfBuilt         WeComSelfBuiltConfig   `toml:"self_built"`
-	PartnerStandard   WeComPartnerModeConfig `toml:"partner_standard"`
-	PartnerTemplate   WeComPartnerModeConfig `toml:"partner_template"`
-	PartnerEnterprise WeComCallbackConfig    `toml:"partner_enterprise_callback"`
-	Provider          WeComProviderConfig    `toml:"provider"`
+	APIBaseURL      string                 `toml:"api_base_url"`
+	LegacyAppID     string                 `toml:"suite_id"`
+	LegacyAppSecret string                 `toml:"suite_secret"`
+	LegacyToken     string                 `toml:"token"`
+	LegacyAESKey    string                 `toml:"encoding_aes_key"`
+	LegacyCallback  string                 `toml:"callback_base_url"`
+	LegacyRedirect  string                 `toml:"install_redirect_url"`
+	LegacyAuthType  int                    `toml:"install_auth_type"`
+	SelfBuilt       WeComSelfBuiltConfig   `toml:"self_built"`
+	PartnerStandard WeComPartnerModeConfig `toml:"partner_standard"`
+	PartnerTemplate WeComPartnerModeConfig `toml:"partner_template"`
+	Provider        WeComProviderConfig    `toml:"provider"`
 }
 
 type WeComSelfBuiltConfig struct{}
@@ -177,17 +176,16 @@ type AliyunSecrets struct {
 }
 
 type WeComSecrets struct {
-	LegacyAppID       string                  `toml:"suite_id"`
-	LegacyAppSecret   string                  `toml:"suite_secret"`
-	LegacyToken       string                  `toml:"token"`
-	LegacyAESKey      string                  `toml:"encoding_aes_key"`
-	LegacyCallback    string                  `toml:"callback_base_url"`
-	LegacyRedirect    string                  `toml:"install_redirect_url"`
-	LegacyAuthType    int                     `toml:"install_auth_type"`
-	PartnerStandard   WeComPartnerModeSecrets `toml:"partner_standard"`
-	PartnerTemplate   WeComPartnerModeSecrets `toml:"partner_template"`
-	PartnerEnterprise WeComCallbackSecrets    `toml:"partner_enterprise_callback"`
-	Provider          WeComProviderSecrets    `toml:"provider"`
+	LegacyAppID     string                  `toml:"suite_id"`
+	LegacyAppSecret string                  `toml:"suite_secret"`
+	LegacyToken     string                  `toml:"token"`
+	LegacyAESKey    string                  `toml:"encoding_aes_key"`
+	LegacyCallback  string                  `toml:"callback_base_url"`
+	LegacyRedirect  string                  `toml:"install_redirect_url"`
+	LegacyAuthType  int                     `toml:"install_auth_type"`
+	PartnerStandard WeComPartnerModeSecrets `toml:"partner_standard"`
+	PartnerTemplate WeComPartnerModeSecrets `toml:"partner_template"`
+	Provider        WeComProviderSecrets    `toml:"provider"`
 }
 
 type WeComPartnerModeSecrets struct {
@@ -416,7 +414,6 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerStandard, secrets.WeCom.PartnerStandard)
 	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerTemplate, secrets.WeCom.PartnerTemplate)
-	mergeWeComCallbackSecrets(&cfg.WeCom.PartnerEnterprise, secrets.WeCom.PartnerEnterprise)
 	mergeWeComProviderSecrets(&cfg.WeCom.Provider, secrets.WeCom.Provider)
 	if cfg.WeCom.PartnerTemplate.AppID == "" && secrets.WeCom.LegacyAppID != "" {
 		cfg.WeCom.PartnerTemplate.AppID = secrets.WeCom.LegacyAppID
