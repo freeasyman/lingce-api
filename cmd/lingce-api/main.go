@@ -163,13 +163,12 @@ func main() {
 
 	if strings.TrimSpace(cfg.WeCom.PartnerStandard.AppID) != "" {
 		standardClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerStandard.AppID, cfg.WeCom.PartnerStandard.AppSecret)
-		standardService := wecom.NewPartnerService(
+		standardService := wecom.NewPartnerStandardService(
 			wecomStore,
 			authStore,
 			standardClient,
 			cfg.JWT.Secret,
 			cfg.JWT.ExpiryHours,
-			wecom.ModePartnerStandard,
 			cfg.WeCom.PartnerStandard.AppID,
 			"suite_id",
 			"/api/v1/wecom/partner-standard",
@@ -183,13 +182,12 @@ func main() {
 	}
 	if strings.TrimSpace(cfg.WeCom.PartnerTemplate.AppID) != "" {
 		templateClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerTemplate.AppID, cfg.WeCom.PartnerTemplate.AppSecret)
-		templateService := wecom.NewPartnerService(
+		templateService := wecom.NewPartnerTemplateService(
 			wecomStore,
 			authStore,
 			templateClient,
 			cfg.JWT.Secret,
 			cfg.JWT.ExpiryHours,
-			wecom.ModePartnerTemplate,
 			cfg.WeCom.PartnerTemplate.AppID,
 			"template_id",
 			"/api/v1/wecom/partner-template",

@@ -1,6 +1,7 @@
 package wecom
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -17,14 +18,27 @@ import (
 )
 
 type PartnerHandler struct {
-	service     *PartnerService
+	service     partnerHTTPService
 	routePrefix string
 }
 
-func NewPartnerHandler(service *PartnerService) *PartnerHandler {
+type partnerHTTPService interface {
+	RoutePrefix() string
+	VerifyURL(signature, timestamp, nonce, echostr string) (string, error)
+	VerifyEnterpriseURL(corpID, signature, timestamp, nonce, echostr string) (string, error)
+	HandleCallback(ctx context.Context, signature, timestamp, nonce string, body []byte) error
+	HandleEnterpriseCallback(ctx context.Context, corpID, signature, timestamp, nonce string, body []byte) error
+	BuildInstallURL(ctx context.Context, state string, authType int) (*InstallURLResponse, error)
+	HandleInstallCallback(ctx context.Context, authCode, state string) (*InstallCallbackResult, error)
+	LoginWithOAuth(ctx context.Context, code, corpID string) (*OAuthLoginResponse, error)
+	SendInternalMessage(ctx context.Context, req InternalSendMessageRequest) (*InternalSendMessageResponse, error)
+	BindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64) error
+}
+
+func NewPartnerHandler(service partnerHTTPService) *PartnerHandler {
 	prefix := "/api/v1/wecom/partner"
-	if service != nil && strings.TrimSpace(service.routePrefix) != "" {
-		prefix = service.routePrefix
+	if service != nil && strings.TrimSpace(service.RoutePrefix()) != "" {
+		prefix = service.RoutePrefix()
 	}
 	return &PartnerHandler{service: service, routePrefix: strings.TrimRight(prefix, "/")}
 }
