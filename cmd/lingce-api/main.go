@@ -148,7 +148,15 @@ func main() {
 
 	wecomStore := wecom.NewStore(pool)
 	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
-	wecomService := wecom.NewService(wecomStore, authStore, wecomClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	wecomService := wecom.NewService(
+		wecomStore,
+		authStore,
+		wecomClient,
+		cfg.JWT.Secret,
+		cfg.JWT.ExpiryHours,
+		strings.TrimSpace(cfg.WeCom.PartnerStandard.SuiteID) != "",
+		strings.TrimSpace(cfg.WeCom.PartnerTemplate.SuiteID) != "",
+	)
 	wecomHandler := wecom.NewHandler(wecomService)
 	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
 	if strings.TrimSpace(cfg.WeCom.Provider.CorpID) != "" && strings.TrimSpace(cfg.WeCom.Provider.Secret) != "" {
@@ -157,15 +165,15 @@ func main() {
 		wecom.NewLicenseHandler(licenseService).RegisterRoutes(mux, cfg.External.InternalWorkerToken)
 	}
 
-	if strings.TrimSpace(cfg.WeCom.PartnerStandard.AppID) != "" {
-		standardClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerStandard.AppID, cfg.WeCom.PartnerStandard.AppSecret)
+	if strings.TrimSpace(cfg.WeCom.PartnerStandard.SuiteID) != "" {
+		standardClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerStandard.SuiteID, cfg.WeCom.PartnerStandard.SuiteSecret)
 		standardService := wecom.NewPartnerStandardService(
 			wecomStore,
 			authStore,
 			standardClient,
 			cfg.JWT.Secret,
 			cfg.JWT.ExpiryHours,
-			cfg.WeCom.PartnerStandard.AppID,
+			cfg.WeCom.PartnerStandard.SuiteID,
 			"suite_id",
 			"/api/v1/wecom/partner-standard",
 			cfg.WeCom.PartnerStandard.Token,
@@ -176,15 +184,15 @@ func main() {
 		)
 		wecom.NewPartnerHandler(standardService).RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
 	}
-	if strings.TrimSpace(cfg.WeCom.PartnerTemplate.AppID) != "" {
-		templateClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerTemplate.AppID, cfg.WeCom.PartnerTemplate.AppSecret)
+	if strings.TrimSpace(cfg.WeCom.PartnerTemplate.SuiteID) != "" {
+		templateClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerTemplate.SuiteID, cfg.WeCom.PartnerTemplate.SuiteSecret)
 		templateService := wecom.NewPartnerTemplateService(
 			wecomStore,
 			authStore,
 			templateClient,
 			cfg.JWT.Secret,
 			cfg.JWT.ExpiryHours,
-			cfg.WeCom.PartnerTemplate.AppID,
+			cfg.WeCom.PartnerTemplate.SuiteID,
 			"template_id",
 			"/api/v1/wecom/partner-template",
 			cfg.WeCom.PartnerTemplate.Token,

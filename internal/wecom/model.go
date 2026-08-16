@@ -25,6 +25,11 @@ type CallbackEvent struct {
 	AuthCorpID    string   `xml:"AuthCorpId,omitempty"`
 	AuthCode      string   `xml:"AuthCode,omitempty"`
 	PermanentCode string   `xml:"PermanentCode,omitempty"`
+	ToUserName    string   `xml:"ToUserName,omitempty"`
+	FromUserName  string   `xml:"FromUserName,omitempty"`
+	MsgType       string   `xml:"MsgType,omitempty"`
+	Event         string   `xml:"Event,omitempty"`
+	AgentID       string   `xml:"AgentID,omitempty"`
 }
 
 type UserBindingRecord struct {
@@ -101,6 +106,7 @@ type SuiteTicketRecord struct {
 	ProviderApp string
 	SuiteID     string
 	SuiteTicket string
+	CreatedAt   *time.Time
 }
 
 type CorpInstallRecord struct {
@@ -114,6 +120,12 @@ type CorpInstallRecord struct {
 	Status        string
 	UpdatedAt     *time.Time
 	CancelledAt   *time.Time
+}
+
+type EventLogRecord struct {
+	CorpID    string
+	InfoType  string
+	CreatedAt *time.Time
 }
 
 type MessageLogRecord struct {

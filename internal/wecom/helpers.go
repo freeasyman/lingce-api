@@ -75,9 +75,9 @@ func decodePartnerInstallTenantID(state string) int64 {
 	return tenantID
 }
 
-func attachWeComPartnerEntryParams(targetURL string, suiteID, corpID, mode string) string {
+func attachWeComPartnerEntryParams(targetURL, suiteID, corpID string, agentID int64, mode string) string {
 	target := strings.TrimSpace(targetURL)
-	if target == "" || strings.TrimSpace(suiteID) == "" {
+	if target == "" {
 		return target
 	}
 	parsed, err := url.Parse(target)
@@ -93,14 +93,17 @@ func attachWeComPartnerEntryParams(targetURL string, suiteID, corpID, mode strin
 		}
 	}
 	query := parsed.Query()
-	if query.Get("suite_id") == "" && query.Get("suiteid") == "" {
+	if strings.TrimSpace(mode) == ModePartnerStandard && strings.TrimSpace(suiteID) != "" && query.Get("suite_id") == "" && query.Get("suiteid") == "" {
 		query.Set("suite_id", strings.TrimSpace(suiteID))
 	}
 	if strings.TrimSpace(corpID) != "" && query.Get("corp_id") == "" && query.Get("corpid") == "" {
 		query.Set("corp_id", strings.TrimSpace(corpID))
 	}
-	if query.Get("mode") == "" && strings.TrimSpace(mode) != "" {
-		query.Set("mode", strings.TrimSpace(mode))
+	if (strings.TrimSpace(mode) == ModePartnerTemplate || strings.TrimSpace(mode) == ModeSelfBuilt) &&
+		agentID > 0 &&
+		query.Get("agent_id") == "" &&
+		query.Get("agentid") == "" {
+		query.Set("agent_id", strconv.FormatInt(agentID, 10))
 	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String()

@@ -35,10 +35,12 @@ type Service struct {
 	secretProtector *SecretProtector
 	jwtSecret       string
 	jwtExpiryHours  int
+	partnerStandardConfigured bool
+	partnerTemplateConfigured bool
 	onBindingUpsert func(context.Context, int64, int64) error
 }
 
-func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int) *Service {
+func NewService(store *Store, authStore *internalauth.Store, client *Client, jwtSecret string, jwtExpiryHours int, partnerStandardConfigured bool, partnerTemplateConfigured bool) *Service {
 	return &Service{
 		store:           store,
 		authStore:       authStore,
@@ -46,6 +48,8 @@ func NewService(store *Store, authStore *internalauth.Store, client *Client, jwt
 		secretProtector: NewSecretProtector(jwtSecret),
 		jwtSecret:       jwtSecret,
 		jwtExpiryHours:  jwtExpiryHours,
+		partnerStandardConfigured: partnerStandardConfigured,
+		partnerTemplateConfigured: partnerTemplateConfigured,
 	}
 }
 
@@ -640,6 +644,94 @@ func (s *Service) ListCorpInstalls(ctx context.Context, tenantID *int64, corpID 
 		}
 		resp = append(resp, row)
 	}
+	return resp, nil
+}
+
+func (s *Service) GetPartnerModeStatuses(ctx context.Context) ([]*PartnerModeStatusResponse, error) {
+	modes := []struct {
+		mode        string
+		providerApp string
+		suiteID     string
+		configured  bool
+	}{
+		{mode: ModePartnerStandard, providerApp: "ww1f02782c6f13254f", suiteID: "ww1f02782c6f13254f", configured: s.partnerStandardConfigured},
+		{mode: ModePartnerTemplate, providerApp: "dka3fffb6a3be8c955", suiteID: "dka3fffb6a3be8c955", configured: s.partnerTemplateConfigured},
+	}
+
+	eventTypes := []string{"suite_ticket", "create_auth", "change_auth", "cancel_auth", "enter_agent", "partner_enterprise_callback"}
+	recentEvents, err := s.store.ListRecentEventLogs(ctx, eventTypes, 20)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := make([]*PartnerModeStatusResponse, 0, len(modes))
+	for _, item := range modes {
+		row := &PartnerModeStatusResponse{
+			Mode:         item.mode,
+			ProviderApp:  item.providerApp,
+			SuiteID:      item.suiteID,
+			Configured:   item.configured,
+			RecentEvents: make([]*EventLogSummaryResponse, 0, 8),
+		}
+		ticket, ticketErr := s.store.GetLatestSuiteTicketRecord(ctx, item.mode, item.providerApp)
+		if ticketErr == nil && ticket != nil {
+			row.HasSuiteTicket = true
+			if ticket.CreatedAt != nil {
+				value := formatTime(*ticket.CreatedAt)
+				row.LastSuiteTicketAt = &value
+			}
+		} else if ticketErr != nil && !errors.Is(ticketErr, ErrSuiteTicketMissing) {
+			return nil, ticketErr
+		}
+
+		activeInstallCount, err := s.store.CountActiveCorpInstallsByMode(ctx, item.mode, item.providerApp)
+		if err != nil {
+			return nil, err
+		}
+		row.ActiveInstallCount = activeInstallCount
+
+		for _, event := range recentEvents {
+			if event == nil {
+				continue
+			}
+			include := false
+			switch item.mode {
+			case ModePartnerTemplate:
+				include = event.InfoType == "suite_ticket" ||
+					event.InfoType == "create_auth" ||
+					event.InfoType == "change_auth" ||
+					event.InfoType == "cancel_auth" ||
+					event.InfoType == "enter_agent"
+			case ModePartnerStandard:
+				include = false
+			}
+			if !include {
+				continue
+			}
+			if event.InfoType == "suite_ticket" && !row.HasSuiteTicket {
+				row.HasSuiteTicket = true
+				if row.LastSuiteTicketAt == nil && event.CreatedAt != nil {
+					value := formatTime(*event.CreatedAt)
+					row.LastSuiteTicketAt = &value
+				}
+			}
+			entry := &EventLogSummaryResponse{
+				CorpID:   event.CorpID,
+				InfoType: event.InfoType,
+			}
+			if event.CreatedAt != nil {
+				value := formatTime(*event.CreatedAt)
+				entry.CreatedAt = &value
+			}
+			row.RecentEvents = append(row.RecentEvents, entry)
+			if len(row.RecentEvents) >= 8 {
+				break
+			}
+		}
+
+		resp = append(resp, row)
+	}
+
 	return resp, nil
 }
 

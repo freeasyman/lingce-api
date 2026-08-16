@@ -39,6 +39,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 		},
 		{Method: "GET", Path: "/api/v1/ops/wecom/apps", Handler: h.ListTenantApps, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/ops/wecom/corp-installs", Handler: h.ListCorpInstalls, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/ops/wecom/partner-status", Handler: h.GetPartnerStatuses, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.GetTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/ops/wecom/apps", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "PUT", Path: "/api/v1/ops/wecom/apps/{id}", Handler: h.UpsertTenantApp, Auth: true, AllowedUserTypes: []string{"admin"}},
@@ -222,6 +223,19 @@ func (h *Handler) ListCorpInstalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := h.service.ListCorpInstalls(r.Context(), tenantID, r.URL.Query().Get("corp_id"))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) GetPartnerStatuses(w http.ResponseWriter, r *http.Request) {
+	if !h.isAdmin(r) {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	items, err := h.service.GetPartnerModeStatuses(r.Context())
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

@@ -3,6 +3,7 @@ package wecom
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -35,6 +36,10 @@ type partnerHTTPService interface {
 	BindEmployee(ctx context.Context, corpID, wecomUserID string, employeeID int64) error
 }
 
+type partnerInstallFlowCapable interface {
+	SupportsInstallFlow() bool
+}
+
 func NewPartnerHandler(service partnerHTTPService) *PartnerHandler {
 	prefix := "/api/v1/wecom/partner"
 	if service != nil && strings.TrimSpace(service.RoutePrefix()) != "" {
@@ -49,9 +54,6 @@ func (h *PartnerHandler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, po
 		{Method: "POST", Path: h.routePrefix + "/callback", Handler: h.Callback},
 		{Method: "GET", Path: h.routePrefix + "/enterprise-callback", Handler: h.VerifyEnterpriseURL},
 		{Method: "POST", Path: h.routePrefix + "/enterprise-callback", Handler: h.EnterpriseCallback},
-		{Method: "GET", Path: h.routePrefix + "/install-url", Handler: h.InstallURL},
-		{Method: "GET", Path: h.routePrefix + "/install", Handler: h.InstallRedirect},
-		{Method: "GET", Path: h.routePrefix + "/install/callback", Handler: h.InstallCallback},
 		{Method: "POST", Path: h.routePrefix + "/oauth/login", Handler: h.OAuthLogin},
 		{
 			Method:           "POST",
@@ -61,7 +63,21 @@ func (h *PartnerHandler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, po
 			AllowedUserTypes: []string{"employee", "mobile"},
 		},
 	}
+	if h.supportsInstallFlow() {
+		routes = append(routes,
+			router.Route{Method: "GET", Path: h.routePrefix + "/install-url", Handler: h.InstallURL},
+			router.Route{Method: "GET", Path: h.routePrefix + "/install", Handler: h.InstallRedirect},
+			router.Route{Method: "GET", Path: h.routePrefix + "/install/callback", Handler: h.InstallCallback},
+		)
+	}
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, Pool: pool, InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *PartnerHandler) supportsInstallFlow() bool {
+	if capable, ok := h.service.(partnerInstallFlowCapable); ok {
+		return capable.SupportsInstallFlow()
+	}
+	return true
 }
 
 func (h *PartnerHandler) VerifyURL(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +209,7 @@ func (h *PartnerHandler) InstallURL(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.BuildInstallURL(r.Context(), state, authType)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writePartnerAPIError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -221,7 +237,7 @@ func (h *PartnerHandler) InstallRedirect(w http.ResponseWriter, r *http.Request)
 	}
 	resp, err := h.service.BuildInstallURL(r.Context(), state, authType)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writePartnerAPIError(w, err)
 		return
 	}
 	http.Redirect(w, r, resp.InstallURL, http.StatusFound)
@@ -257,7 +273,7 @@ func (h *PartnerHandler) OAuthLogin(w http.ResponseWriter, r *http.Request) {
 			"corp_id", strings.TrimSpace(req.CorpID),
 			"error", err,
 		)
-		httputil.WriteError(w, http.StatusUnauthorized, "WECOM_LOGIN_FAILED", err.Error(), nil)
+		writePartnerAPIError(w, err)
 		return
 	}
 	if resp.Status == "needs_bind" {
@@ -293,4 +309,25 @@ func writePartnerInstallHTML(w http.ResponseWriter, status int, title, message, 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + html.EscapeString(title) + "</title><style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Hiragino Sans GB,Microsoft YaHei,sans-serif;background:#f5f7fb;color:#1f2937}main{max-width:520px;margin:0 auto;padding:48px 20px}section{background:#fff;border-radius:20px;padding:28px 24px;box-shadow:0 16px 40px rgba(15,23,42,.08)}h1{margin:0 0 12px;font-size:28px}p{margin:0 0 10px;line-height:1.7}small{display:block;color:#6b7280;line-height:1.6}</style></head><body><main><section><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p><small>" + html.EscapeString(hint) + "</small></section></main></body></html>"))
+}
+
+func writePartnerAPIError(w http.ResponseWriter, err error) {
+	if err == nil {
+		httputil.WriteInternalError(w, "unknown error")
+		return
+	}
+	message := err.Error()
+	switch {
+	case errors.Is(err, ErrSuiteTicketMissing):
+		httputil.WriteError(w, http.StatusPreconditionFailed, "WECOM_SUITE_TICKET_MISSING", "企业微信第三方应用回调尚未生效，缺少 suite ticket", nil)
+	case errors.Is(err, ErrCorpInstallMissing), errors.Is(err, ErrCorpInstallContextMiss):
+		httputil.WriteError(w, http.StatusPreconditionFailed, "WECOM_CORP_INSTALL_MISSING", "当前企业尚未形成可用的第三方应用安装实例，请先完成企业授权或重新安装应用", nil)
+	default:
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			httputil.WriteError(w, http.StatusUnauthorized, "WECOM_API_ERROR", apiErr.Error(), map[string]any{"errcode": apiErr.Code})
+			return
+		}
+		httputil.WriteError(w, http.StatusUnauthorized, "WECOM_LOGIN_FAILED", message, nil)
+	}
 }

@@ -42,6 +42,10 @@ func (s *PartnerTemplateService) RoutePrefix() string {
 	return s.routePrefixValue()
 }
 
+func (s *PartnerTemplateService) SupportsInstallFlow() bool {
+	return false
+}
+
 func (s *PartnerTemplateService) VerifyURL(signature, timestamp, nonce, echostr string) (string, error) {
 	return s.verifyURL(signature, timestamp, nonce, echostr)
 }
@@ -148,7 +152,8 @@ func (s *PartnerTemplateService) HandleEnterpriseCallback(ctx context.Context, c
 		if err := xml.Unmarshal([]byte(plain), &event); err != nil {
 			return fmt.Errorf("parse decrypted callback: %w", err)
 		}
-		_ = s.store.SaveEventLog(ctx, candidateCorpID, firstNonEmpty(event.InfoType, "enterprise_callback"), plain)
+		eventType := firstNonEmpty(strings.TrimSpace(event.InfoType), strings.TrimSpace(event.Event), "enterprise_callback")
+		_ = s.store.SaveEventLog(ctx, candidateCorpID, eventType, plain)
 		return nil
 	}
 	if len(errs) == 0 {
@@ -238,7 +243,7 @@ func (s *PartnerTemplateService) loginTemplateOAuth(ctx context.Context, code, c
 
 func (s *PartnerTemplateService) resolveTemplateOAuthContext(ctx context.Context, code, corpID string) (*CorpInstallRecord, string, *userInfo3rdResponse, error) {
 	if corpID == "" {
-		return nil, "", nil, fmt.Errorf("missing corp install context")
+		return nil, "", nil, ErrCorpInstallContextMiss
 	}
 	install, err := s.store.GetCorpInstallByCorpID(ctx, s.mode, s.appID, corpID)
 	if err != nil {
@@ -257,7 +262,7 @@ func (s *PartnerTemplateService) resolveTemplateOAuthContext(ctx context.Context
 
 func (s *PartnerTemplateService) resolveTemplateCorpToken(ctx context.Context, install *CorpInstallRecord) (string, int64, error) {
 	if install == nil {
-		return "", 0, fmt.Errorf("corp install not found")
+		return "", 0, ErrCorpInstallMissing
 	}
 	return s.client.GetCorpAccessToken(ctx, install.CorpID, install.PermanentCode)
 }

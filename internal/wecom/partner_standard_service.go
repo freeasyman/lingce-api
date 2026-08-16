@@ -42,6 +42,10 @@ func (s *PartnerStandardService) RoutePrefix() string {
 	return s.routePrefixValue()
 }
 
+func (s *PartnerStandardService) SupportsInstallFlow() bool {
+	return true
+}
+
 func (s *PartnerStandardService) VerifyURL(signature, timestamp, nonce, echostr string) (string, error) {
 	return s.verifyURL(signature, timestamp, nonce, echostr)
 }
@@ -148,7 +152,8 @@ func (s *PartnerStandardService) HandleEnterpriseCallback(ctx context.Context, c
 		if err := xml.Unmarshal([]byte(plain), &event); err != nil {
 			return fmt.Errorf("parse decrypted callback: %w", err)
 		}
-		_ = s.store.SaveEventLog(ctx, candidateCorpID, firstNonEmpty(event.InfoType, "enterprise_callback"), plain)
+		eventType := firstNonEmpty(strings.TrimSpace(event.InfoType), strings.TrimSpace(event.Event), "enterprise_callback")
+		_ = s.store.SaveEventLog(ctx, candidateCorpID, eventType, plain)
 		return nil
 	}
 	if len(errs) == 0 {
@@ -264,7 +269,7 @@ func (s *PartnerStandardService) loginStandardOAuth(ctx context.Context, code, c
 
 func (s *PartnerStandardService) resolveInstalledCorpToken(ctx context.Context, install *CorpInstallRecord) (string, int64, error) {
 	if install == nil {
-		return "", 0, fmt.Errorf("corp install not found")
+		return "", 0, ErrCorpInstallMissing
 	}
 	suiteTicket, err := s.store.GetLatestSuiteTicket(ctx, s.mode, s.appID)
 	if err != nil {

@@ -40,9 +40,33 @@ func (s *Store) GetLatestSuiteTicket(ctx context.Context, mode, providerApp stri
 		return ticket, nil
 	}
 	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("suite ticket not found")
+		return "", ErrSuiteTicketMissing
 	}
 	return "", err
+}
+
+func (s *Store) GetLatestSuiteTicketRecord(ctx context.Context, mode, providerApp string) (*SuiteTicketRecord, error) {
+	var item SuiteTicketRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT mode, provider_app, suite_id, suite_ticket, created_at
+		FROM wecom_suite_tickets
+		WHERE mode = $1 AND provider_app = $2
+		ORDER BY id DESC
+		LIMIT 1
+	`, mode, providerApp).Scan(
+		&item.Mode,
+		&item.ProviderApp,
+		&item.SuiteID,
+		&item.SuiteTicket,
+		&item.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, ErrSuiteTicketMissing
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 func (s *Store) UpsertCorpInstall(ctx context.Context, record CorpInstallRecord) error {
@@ -84,7 +108,7 @@ func (s *Store) GetCorpInstallByCorpID(ctx context.Context, mode, providerApp, c
 		&item.CancelledAt,
 	)
 	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("corp install not found")
+		return nil, ErrCorpInstallMissing
 	}
 	if err != nil {
 		return nil, err
@@ -180,6 +204,18 @@ func (s *Store) ListActiveCorpInstallsByMode(ctx context.Context, mode, provider
 		items = append(items, &item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) CountActiveCorpInstallsByMode(ctx context.Context, mode, providerApp string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(1)
+		FROM wecom_corp_installs
+		WHERE mode = $1
+		  AND provider_app = $2
+		  AND COALESCE(status, 'active') = 'active'
+	`, mode, providerApp).Scan(&count)
+	return count, err
 }
 
 func (s *Store) ListTenantApps(ctx context.Context, tenantID *int64) ([]*TenantWeComAppRecord, error) {
@@ -742,6 +778,48 @@ func (s *Store) CountEventLogsByPayload(ctx context.Context, infoType, rawPayloa
 func (s *Store) SaveEventLog(ctx context.Context, corpID, infoType, rawPayload string) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO wecom_event_logs (corp_id, info_type, raw_payload, created_at) VALUES ($1, $2, $3, NOW())`, corpID, infoType, rawPayload)
 	return err
+}
+
+func (s *Store) ListRecentEventLogs(ctx context.Context, infoTypes []string, limit int) ([]*EventLogRecord, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	baseSQL := `
+		SELECT COALESCE(corp_id, ''), COALESCE(info_type, ''), created_at
+		FROM wecom_event_logs
+	`
+	args := make([]any, 0, len(infoTypes)+1)
+	where := ""
+	if len(infoTypes) > 0 {
+		parts := make([]string, 0, len(infoTypes))
+		for _, infoType := range infoTypes {
+			infoType = strings.TrimSpace(infoType)
+			if infoType == "" {
+				continue
+			}
+			args = append(args, infoType)
+			parts = append(parts, fmt.Sprintf("$%d", len(args)))
+		}
+		if len(parts) > 0 {
+			where = " WHERE info_type IN (" + strings.Join(parts, ", ") + ")"
+		}
+	}
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, baseSQL+where+fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*EventLogRecord, 0, limit)
+	for rows.Next() {
+		var item EventLogRecord
+		if err := rows.Scan(&item.CorpID, &item.InfoType, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) GetActiveBindingByEmployeeID(ctx context.Context, employeeID int64) (*EmployeeBindingRecord, error) {

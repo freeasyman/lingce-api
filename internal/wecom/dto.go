@@ -154,12 +154,29 @@ type InstallCallbackResult struct {
 }
 
 type CorpInstallResponse struct {
-	TenantID      int64   `json:"tenant_id"`
-	CorpID        string  `json:"corp_id"`
-	CorpName      string  `json:"corp_name,omitempty"`
-	AgentID       int64   `json:"agent_id"`
-	Status        string  `json:"status"`
-	HasPermanent  bool    `json:"has_permanent_code"`
-	UpdatedAt     *string `json:"updated_at,omitempty"`
-	CancelledAt   *string `json:"cancelled_at,omitempty"`
+	TenantID     int64   `json:"tenant_id"`
+	CorpID       string  `json:"corp_id"`
+	CorpName     string  `json:"corp_name,omitempty"`
+	AgentID      int64   `json:"agent_id"`
+	Status       string  `json:"status"`
+	HasPermanent bool    `json:"has_permanent_code"`
+	UpdatedAt    *string `json:"updated_at,omitempty"`
+	CancelledAt  *string `json:"cancelled_at,omitempty"`
+}
+
+type EventLogSummaryResponse struct {
+	CorpID    string  `json:"corp_id,omitempty"`
+	InfoType  string  `json:"info_type"`
+	CreatedAt *string `json:"created_at,omitempty"`
+}
+
+type PartnerModeStatusResponse struct {
+	Mode               string                     `json:"mode"`
+	ProviderApp        string                     `json:"provider_app"`
+	SuiteID            string                     `json:"suite_id"`
+	Configured         bool                       `json:"configured"`
+	HasSuiteTicket     bool                       `json:"has_suite_ticket"`
+	LastSuiteTicketAt  *string                    `json:"last_suite_ticket_at,omitempty"`
+	ActiveInstallCount int                        `json:"active_install_count"`
+	RecentEvents       []*EventLogSummaryResponse `json:"recent_events"`
 }

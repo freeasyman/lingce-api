@@ -176,7 +176,7 @@ func (s *PartnerService) syncCorpInstallAsync(infoType, corpID, authCode string)
 
 func (s *PartnerService) completeOAuthLogin(ctx context.Context, install *CorpInstallRecord, corpAccessToken string, userInfo *userInfo3rdResponse) (*OAuthLoginResponse, error) {
 	if install == nil {
-		return nil, fmt.Errorf("corp install not found")
+		return nil, ErrCorpInstallMissing
 	}
 	if userInfo == nil || strings.TrimSpace(userInfo.UserID) == "" {
 		return nil, fmt.Errorf("wecom returned empty user id")
@@ -407,7 +407,7 @@ func (s *PartnerService) sendInternalMessage(ctx context.Context, req InternalSe
 			continue
 		}
 
-		targetURL := attachWeComPartnerEntryParams(req.TargetURL, s.appID, binding.CorpID, s.mode)
+		targetURL := attachWeComPartnerEntryParams(req.TargetURL, s.appID, binding.CorpID, binding.AgentID, s.mode)
 		install, ok := appCache[binding.CorpID]
 		if !ok {
 			install, err = s.store.GetCorpInstallByCorpID(ctx, s.mode, s.appID, binding.CorpID)

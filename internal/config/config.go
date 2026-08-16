@@ -113,6 +113,8 @@ type WeComConfig struct {
 type WeComSelfBuiltConfig struct{}
 
 type WeComPartnerModeConfig struct {
+	SuiteID            string `toml:"suite_id"`
+	SuiteSecret        string `toml:"suite_secret"`
 	AppID              string `toml:"app_id"`
 	AppSecret          string `toml:"app_secret"`
 	Token              string `toml:"token"`
@@ -189,6 +191,8 @@ type WeComSecrets struct {
 }
 
 type WeComPartnerModeSecrets struct {
+	SuiteID            string `toml:"suite_id"`
+	SuiteSecret        string `toml:"suite_secret"`
 	AppID              string `toml:"app_id"`
 	AppSecret          string `toml:"app_secret"`
 	Token              string `toml:"token"`
@@ -310,11 +314,11 @@ func applyDefaults(cfg *Config) {
 	if cfg.WeCom.APIBaseURL == "" {
 		cfg.WeCom.APIBaseURL = "https://qyapi.weixin.qq.com"
 	}
-	if cfg.WeCom.PartnerTemplate.AppID == "" && cfg.WeCom.LegacyAppID != "" {
-		cfg.WeCom.PartnerTemplate.AppID = cfg.WeCom.LegacyAppID
+	if cfg.WeCom.PartnerTemplate.SuiteID == "" && cfg.WeCom.LegacyAppID != "" {
+		cfg.WeCom.PartnerTemplate.SuiteID = cfg.WeCom.LegacyAppID
 	}
-	if cfg.WeCom.PartnerTemplate.AppSecret == "" && cfg.WeCom.LegacyAppSecret != "" {
-		cfg.WeCom.PartnerTemplate.AppSecret = cfg.WeCom.LegacyAppSecret
+	if cfg.WeCom.PartnerTemplate.SuiteSecret == "" && cfg.WeCom.LegacyAppSecret != "" {
+		cfg.WeCom.PartnerTemplate.SuiteSecret = cfg.WeCom.LegacyAppSecret
 	}
 	if cfg.WeCom.PartnerTemplate.Token == "" && cfg.WeCom.LegacyToken != "" {
 		cfg.WeCom.PartnerTemplate.Token = cfg.WeCom.LegacyToken
@@ -415,11 +419,11 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerStandard, secrets.WeCom.PartnerStandard)
 	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerTemplate, secrets.WeCom.PartnerTemplate)
 	mergeWeComProviderSecrets(&cfg.WeCom.Provider, secrets.WeCom.Provider)
-	if cfg.WeCom.PartnerTemplate.AppID == "" && secrets.WeCom.LegacyAppID != "" {
-		cfg.WeCom.PartnerTemplate.AppID = secrets.WeCom.LegacyAppID
+	if cfg.WeCom.PartnerTemplate.SuiteID == "" && secrets.WeCom.LegacyAppID != "" {
+		cfg.WeCom.PartnerTemplate.SuiteID = secrets.WeCom.LegacyAppID
 	}
-	if cfg.WeCom.PartnerTemplate.AppSecret == "" && secrets.WeCom.LegacyAppSecret != "" {
-		cfg.WeCom.PartnerTemplate.AppSecret = secrets.WeCom.LegacyAppSecret
+	if cfg.WeCom.PartnerTemplate.SuiteSecret == "" && secrets.WeCom.LegacyAppSecret != "" {
+		cfg.WeCom.PartnerTemplate.SuiteSecret = secrets.WeCom.LegacyAppSecret
 	}
 	if cfg.WeCom.PartnerTemplate.Token == "" && secrets.WeCom.LegacyToken != "" {
 		cfg.WeCom.PartnerTemplate.Token = secrets.WeCom.LegacyToken
@@ -467,17 +471,29 @@ func validate(cfg *Config) error {
 }
 
 func applyWeComPartnerDefaults(cfg *WeComPartnerModeConfig) {
+	if cfg.SuiteID == "" && cfg.AppID != "" {
+		cfg.SuiteID = cfg.AppID
+	}
+	if cfg.SuiteSecret == "" && cfg.AppSecret != "" {
+		cfg.SuiteSecret = cfg.AppSecret
+	}
 	if cfg.InstallAuthType == 0 {
 		cfg.InstallAuthType = 1
 	}
 }
 
 func mergeWeComPartnerSecrets(cfg *WeComPartnerModeConfig, secrets WeComPartnerModeSecrets) {
-	if secrets.AppID != "" {
-		cfg.AppID = secrets.AppID
+	if secrets.SuiteID != "" {
+		cfg.SuiteID = secrets.SuiteID
 	}
-	if secrets.AppSecret != "" {
-		cfg.AppSecret = secrets.AppSecret
+	if secrets.SuiteSecret != "" {
+		cfg.SuiteSecret = secrets.SuiteSecret
+	}
+	if cfg.SuiteID == "" && secrets.AppID != "" {
+		cfg.SuiteID = secrets.AppID
+	}
+	if cfg.SuiteSecret == "" && secrets.AppSecret != "" {
+		cfg.SuiteSecret = secrets.AppSecret
 	}
 	if secrets.Token != "" {
 		cfg.Token = secrets.Token
