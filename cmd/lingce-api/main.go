@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -34,7 +35,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 	"github.com/freeasyman/lingce-api/internal/tenant"
-	"github.com/freeasyman/lingce-api/internal/wecom"
+	wecomdelegated "github.com/freeasyman/lingce-api/internal/wecomv2/delegated"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/freeasyman/lingce-api/pkg/oss"
@@ -146,64 +147,6 @@ func main() {
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
-	wecomStore := wecom.NewStore(pool)
-	wecomClient := wecom.NewClient(cfg.WeCom.APIBaseURL)
-	wecomService := wecom.NewService(
-		wecomStore,
-		authStore,
-		wecomClient,
-		cfg.JWT.Secret,
-		cfg.JWT.ExpiryHours,
-		strings.TrimSpace(cfg.WeCom.PartnerStandard.SuiteID) != "",
-		strings.TrimSpace(cfg.WeCom.PartnerTemplate.SuiteID) != "",
-	)
-	wecomHandler := wecom.NewHandler(wecomService)
-	wecomHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
-	if strings.TrimSpace(cfg.WeCom.Provider.CorpID) != "" && strings.TrimSpace(cfg.WeCom.Provider.Secret) != "" {
-		licenseClient := wecom.NewLicenseClient(cfg.WeCom.APIBaseURL, cfg.WeCom.Provider.CorpID, cfg.WeCom.Provider.Secret)
-		licenseService := wecom.NewLicenseService(licenseClient)
-		wecom.NewLicenseHandler(licenseService).RegisterRoutes(mux, cfg.External.InternalWorkerToken)
-	}
-
-	if strings.TrimSpace(cfg.WeCom.PartnerStandard.SuiteID) != "" {
-		standardClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerStandard.SuiteID, cfg.WeCom.PartnerStandard.SuiteSecret)
-		standardService := wecom.NewPartnerStandardService(
-			wecomStore,
-			authStore,
-			standardClient,
-			cfg.JWT.Secret,
-			cfg.JWT.ExpiryHours,
-			cfg.WeCom.PartnerStandard.SuiteID,
-			"suite_id",
-			"/api/v1/wecom/partner-standard",
-			cfg.WeCom.PartnerStandard.Token,
-			cfg.WeCom.PartnerStandard.EncodingAESKey,
-			cfg.WeCom.PartnerStandard.CallbackBaseURL,
-			cfg.WeCom.PartnerStandard.InstallRedirectURL,
-			cfg.WeCom.PartnerStandard.InstallAuthType,
-		)
-		wecom.NewPartnerHandler(standardService).RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
-	}
-	if strings.TrimSpace(cfg.WeCom.PartnerTemplate.SuiteID) != "" {
-		templateClient := wecom.NewPartnerClient(cfg.WeCom.APIBaseURL, cfg.WeCom.PartnerTemplate.SuiteID, cfg.WeCom.PartnerTemplate.SuiteSecret)
-		templateService := wecom.NewPartnerTemplateService(
-			wecomStore,
-			authStore,
-			templateClient,
-			cfg.JWT.Secret,
-			cfg.JWT.ExpiryHours,
-			cfg.WeCom.PartnerTemplate.SuiteID,
-			"template_id",
-			"/api/v1/wecom/partner-template",
-			cfg.WeCom.PartnerTemplate.Token,
-			cfg.WeCom.PartnerTemplate.EncodingAESKey,
-			cfg.WeCom.PartnerTemplate.CallbackBaseURL,
-			cfg.WeCom.PartnerTemplate.InstallRedirectURL,
-			cfg.WeCom.PartnerTemplate.InstallAuthType,
-		)
-		wecom.NewPartnerHandler(templateService).RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.LingceWorkerToken)
-	}
-
 	// Register tenant/sysconfig modules
 	tenantStore := tenant.NewStore(pool)
 	sysconfigStore := sysconfig.NewStore(pool)
@@ -252,8 +195,8 @@ func main() {
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 
 	opportunityAlertStore := opportunityalert.NewStore(pool)
-	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, wecomService, cfg.External.EmployeeWebBaseURL)
-	wecomService.SetBindingUpsertHook(opportunityAlertService.AutoResendSkippedUnboundForEmployee)
+	delegatedWeComModule := wecomdelegated.NewModule(pool, cfg.WeCom, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, delegatedWeComModule.MessageSender(), cfg.External.EmployeeWebBaseURL)
 	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService)
 	opportunityAlertHandler.RegisterConfigRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)
@@ -395,6 +338,8 @@ func main() {
 	sandboxHandler := sandbox.NewHandler(sandboxService)
 	sandboxHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	delegatedWeComModule.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.InternalWorkerToken)
+
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)
 	dashboardService := dashboard.NewService(dashboardStore, recService)
@@ -445,6 +390,21 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+func hostFromURLOrDefault(rawURL, fallback string) string {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return fallback
+	}
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || strings.TrimSpace(parsed.Hostname()) == "" {
+		return fallback
+	}
+	return parsed.Hostname()
 }
 
 func setupLogger(level string) {
