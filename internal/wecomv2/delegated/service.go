@@ -79,7 +79,13 @@ func (s *Service) ListCorpInstalls(ctx context.Context, tenantID *int64, corpID 
 	}
 	resp := make([]*CorpInstallResponse, 0, len(items))
 	for _, item := range items {
-		resp = append(resp, s.toResponse(item))
+		row := s.toResponse(item)
+		if item != nil {
+			health, _ := s.CheckInstallHealth(ctx, item)
+			row.HealthCheck = health
+			row.HealthSummary = summarizeHealthCheck(health)
+		}
+		resp = append(resp, row)
 	}
 	return resp, nil
 }
@@ -103,8 +109,14 @@ func (s *Service) GetCorpInstallDetail(ctx context.Context, providerApp, corpID 
 			CreatedAt:  event.CreatedAt,
 		})
 	}
+	install := s.toResponse(item)
+	if item != nil {
+		health, _ := s.CheckInstallHealth(ctx, item)
+		install.HealthCheck = health
+		install.HealthSummary = summarizeHealthCheck(health)
+	}
 	return &CorpInstallDetailResponse{
-		Install:      s.toResponse(item),
+		Install:      install,
 		RecentEvents: respEvents,
 	}, nil
 }
@@ -122,6 +134,7 @@ func (s *Service) GetOverview(ctx context.Context) (*DelegatedAppOverviewRespons
 	if err != nil {
 		return nil, err
 	}
+	healthCheck, _ := s.CheckHealth(ctx)
 	respEvents := make([]*EventLogResponse, 0, len(events))
 	for _, event := range events {
 		respEvents = append(respEvents, &EventLogResponse{
@@ -137,8 +150,165 @@ func (s *Service) GetOverview(ctx context.Context) (*DelegatedAppOverviewRespons
 		TemplateConnected:  strings.TrimSpace(state.SuiteTicket) != "",
 		LastSuiteTicketAt:  state.SuiteTicketReceivedAt,
 		ActiveInstallCount: activeInstallCount,
+		HealthCheck:        healthCheck,
 		RecentEvents:       respEvents,
 	}, nil
+}
+
+func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResponse, error) {
+	state, err := s.store.GetRuntimeState(ctx, s.providerApp)
+	if err != nil {
+		return nil, err
+	}
+	result := &DelegatedAppHealthCheckResponse{
+		SuiteToken: &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		AuthInfo:   &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		CorpToken:  &DelegatedAppStepCheck{OK: false, Status: "missing"},
+	}
+	suiteTicket := strings.TrimSpace(state.SuiteTicket)
+	if suiteTicket == "" {
+		result.SuiteToken.Error = "suite_ticket missing"
+		result.AuthInfo.Error = "suite_ticket missing"
+		result.CorpToken.Error = "suite_ticket missing"
+		return result, nil
+	}
+	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
+	if err != nil {
+		msg := err.Error()
+		result.SuiteToken.Status = "failed"
+		result.SuiteToken.Error = msg
+		result.AuthInfo.Status = "blocked"
+		result.AuthInfo.Error = msg
+		result.CorpToken.Status = "blocked"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.SuiteToken.OK = true
+	result.SuiteToken.Status = "ok"
+	items, err := s.store.ListCorpInstalls(ctx, nil, "")
+	if err != nil {
+		msg := err.Error()
+		result.AuthInfo.Status = "failed"
+		result.AuthInfo.Error = msg
+		result.CorpToken.Status = "blocked"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	var item *corpInstallRecord
+	for _, candidate := range items {
+		if candidate == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(candidate.Status), "active") {
+			item = candidate
+			break
+		}
+	}
+	if item == nil || strings.TrimSpace(item.PermanentCode) == "" || strings.TrimSpace(item.CorpID) == "" {
+		result.AuthInfo.Error = "install permanent code missing"
+		result.CorpToken.Error = "install permanent code missing"
+		return result, nil
+	}
+	if _, err := s.client.GetAuthInfo(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
+		msg := err.Error()
+		result.AuthInfo.Status = "failed"
+		result.AuthInfo.Error = msg
+		result.CorpToken.Status = "blocked"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.AuthInfo.OK = true
+	result.AuthInfo.Status = "ok"
+	if _, _, err := s.client.GetDelegatedCorpAccessToken(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
+		msg := err.Error()
+		result.CorpToken.Status = "failed"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.CorpToken.OK = true
+	result.CorpToken.Status = "ok"
+	return result, nil
+}
+
+func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecord) (*DelegatedAppHealthCheckResponse, error) {
+	result := &DelegatedAppHealthCheckResponse{
+		SuiteToken: &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		AuthInfo:   &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		CorpToken:  &DelegatedAppStepCheck{OK: false, Status: "missing"},
+	}
+	if item == nil {
+		result.SuiteToken.Error = "install missing"
+		result.AuthInfo.Error = "install missing"
+		result.CorpToken.Error = "install missing"
+		return result, nil
+	}
+	state, err := s.store.GetRuntimeState(ctx, s.providerApp)
+	if err != nil {
+		return nil, err
+	}
+	suiteTicket := strings.TrimSpace(state.SuiteTicket)
+	if suiteTicket == "" {
+		result.SuiteToken.Error = "suite_ticket missing"
+		result.AuthInfo.Error = "suite_ticket missing"
+		result.CorpToken.Error = "suite_ticket missing"
+		return result, nil
+	}
+	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
+	if err != nil {
+		msg := err.Error()
+		result.SuiteToken.Status = "failed"
+		result.SuiteToken.Error = msg
+		result.AuthInfo.Status = "blocked"
+		result.AuthInfo.Error = msg
+		result.CorpToken.Status = "blocked"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.SuiteToken.OK = true
+	result.SuiteToken.Status = "ok"
+	if strings.TrimSpace(item.PermanentCode) == "" || strings.TrimSpace(item.CorpID) == "" {
+		result.AuthInfo.Error = "install permanent code missing"
+		result.CorpToken.Error = "install permanent code missing"
+		return result, nil
+	}
+	if _, err := s.client.GetAuthInfo(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
+		msg := err.Error()
+		result.AuthInfo.Status = "failed"
+		result.AuthInfo.Error = msg
+		result.CorpToken.Status = "blocked"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.AuthInfo.OK = true
+	result.AuthInfo.Status = "ok"
+	if _, _, err := s.client.GetDelegatedCorpAccessToken(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
+		msg := err.Error()
+		result.CorpToken.Status = "failed"
+		result.CorpToken.Error = msg
+		return result, nil
+	}
+	result.CorpToken.OK = true
+	result.CorpToken.Status = "ok"
+	return result, nil
+}
+
+func summarizeHealthCheck(health *DelegatedAppHealthCheckResponse) string {
+	if health == nil {
+		return "未检查"
+	}
+	if health.CorpToken != nil && health.CorpToken.OK {
+		return "可发消息"
+	}
+	if health.CorpToken != nil && strings.TrimSpace(health.CorpToken.Error) != "" {
+		return "企业凭证不可用"
+	}
+	if health.AuthInfo != nil && !health.AuthInfo.OK {
+		return "授权未完成"
+	}
+	if health.SuiteToken != nil && !health.SuiteToken.OK {
+		return "模板票据异常"
+	}
+	return "待检查"
 }
 
 func (s *Service) BindCorpInstallTenant(ctx context.Context, req CorpInstallBindRequest) (*CorpInstallResponse, error) {
@@ -235,6 +405,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 		perEmployeeKey := fmt.Sprintf("%s:%d", strings.TrimSpace(req.DedupeKey), employeeID)
 		if binding == nil || strings.TrimSpace(binding.CorpID) == "" || strings.TrimSpace(binding.WeComUserID) == "" || binding.AgentID <= 0 {
 			_, inserted, insertErr := s.store.InsertMessageLog(ctx, messageLogRecord{
+				ProviderApp:    s.providerApp,
 				EmployeeID:     employeeID,
 				MessageScene:   req.MessageScene,
 				DedupeKey:      perEmployeeKey,
@@ -267,6 +438,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 			"extra":         req.Extra,
 		})
 		logID, inserted, err := s.store.InsertMessageLog(ctx, messageLogRecord{
+			ProviderApp:    s.providerApp,
 			CorpID:         binding.CorpID,
 			TenantID:       binding.TenantID,
 			EmployeeID:     employeeID,
@@ -677,15 +849,7 @@ func (s *Service) resolveCorpAccessToken(ctx context.Context, install *corpInsta
 	if install == nil {
 		return "", 0, fmt.Errorf("wecom corp install not found")
 	}
-	suiteTicket, err := s.store.GetRuntimeStateSuiteTicket(ctx, s.providerApp)
-	if err != nil {
-		return "", 0, err
-	}
-	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
-	if err != nil {
-		return "", 0, err
-	}
-	return s.client.GetDelegatedCorpAccessToken(ctx, suiteAccessToken, install.CorpID, install.PermanentCode)
+	return s.client.GetCorpAccessToken(ctx, install.CorpID, install.PermanentCode)
 }
 
 func (s *Service) toResponse(item *corpInstallRecord) *CorpInstallResponse {

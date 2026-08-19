@@ -21,6 +21,8 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
@@ -84,7 +86,7 @@ func main() {
 
 	if *migrateOnly {
 		slog.Info("applying schema migrations")
-		if err := store.ApplySchemaMigrations(ctx, pool); err != nil {
+		if err := store.ApplySchemaMigrations(ctx, pool, cfg.Schema.MaxMigrationVersion); err != nil {
 			slog.Error("failed to apply schema migrations", "error", err)
 			os.Exit(1)
 		}
@@ -98,7 +100,7 @@ func main() {
 	}
 
 	slog.Info("checking schema migrations")
-	if err := store.CheckSchemaMigrations(ctx, pool); err != nil {
+	if err := store.CheckSchemaMigrations(ctx, pool, cfg.Schema.MaxMigrationVersion); err != nil {
 		slog.Error("failed to verify schema migrations", "error", err)
 		os.Exit(1)
 	}
@@ -190,6 +192,16 @@ func main() {
 	empService := employee.NewService(empStore)
 	empHandler := employee.NewHandler(empService)
 	empHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrPermissionStore := emrpermission.NewStore(pool)
+	emrPermissionService := emrpermission.NewService(emrPermissionStore)
+	emrPermissionHandler := emrpermission.NewHandler(emrPermissionService)
+	emrPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrRecordStore := emrrecord.NewStore(pool)
+	emrRecordService := emrrecord.NewService(emrRecordStore)
+	emrRecordHandler := emrrecord.NewHandler(emrRecordService)
+	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Create LLM gateway client
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)

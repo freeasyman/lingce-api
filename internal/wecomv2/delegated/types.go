@@ -43,6 +43,8 @@ type CorpInstallResponse struct {
 	CallbackURL    string  `json:"callback_url,omitempty"`
 	Token          string  `json:"token,omitempty"`
 	EncodingAESKey string  `json:"encoding_aes_key,omitempty"`
+	HealthCheck    *DelegatedAppHealthCheckResponse `json:"health_check,omitempty"`
+	HealthSummary  string  `json:"health_summary,omitempty"`
 	UpdatedAt      *string `json:"updated_at,omitempty"`
 	CancelledAt    *string `json:"cancelled_at,omitempty"`
 }
@@ -57,7 +59,20 @@ type DelegatedAppOverviewResponse struct {
 	TemplateConnected  bool                `json:"template_connected"`
 	LastSuiteTicketAt  *string             `json:"last_suite_ticket_at,omitempty"`
 	ActiveInstallCount int64               `json:"active_install_count"`
+	HealthCheck        *DelegatedAppHealthCheckResponse `json:"health_check,omitempty"`
 	RecentEvents       []*EventLogResponse `json:"recent_events"`
+}
+
+type DelegatedAppHealthCheckResponse struct {
+	SuiteToken  *DelegatedAppStepCheck `json:"suite_token,omitempty"`
+	AuthInfo    *DelegatedAppStepCheck `json:"auth_info,omitempty"`
+	CorpToken   *DelegatedAppStepCheck `json:"corp_token,omitempty"`
+}
+
+type DelegatedAppStepCheck struct {
+	OK     bool   `json:"ok"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 type EventLogResponse struct {
@@ -141,6 +156,7 @@ type employeeBindingRecord struct {
 }
 
 type messageLogRecord struct {
+	ProviderApp     string
 	CorpID          string
 	TenantID        int64
 	EmployeeID      int64

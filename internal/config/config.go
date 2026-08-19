@@ -14,6 +14,7 @@ type Config struct {
 	App       AppConfig       `toml:"app"`
 	Server    ServerConfig    `toml:"server"`
 	Database  DatabaseConfig  `toml:"database"`
+	Schema    SchemaConfig    `toml:"schema"`
 	JWT       JWTConfig       `toml:"jwt"`
 	Recording RecordingConfig `toml:"recording"`
 	External  ExternalConfig  `toml:"external"`
@@ -43,6 +44,10 @@ type DatabaseConfig struct {
 	SSLMode  string `toml:"sslmode"`
 	MaxConns int32  `toml:"max_conns"`
 	MinConns int32  `toml:"min_conns"`
+}
+
+type SchemaConfig struct {
+	MaxMigrationVersion string `toml:"max_migration_version"`
 }
 
 type JWTConfig struct {
@@ -96,32 +101,20 @@ type AliyunConfig struct {
 }
 
 type WeComConfig struct {
-	APIBaseURL      string                 `toml:"api_base_url"`
-	LegacyAppID     string                 `toml:"suite_id"`
-	LegacyAppSecret string                 `toml:"suite_secret"`
-	LegacyToken     string                 `toml:"token"`
-	LegacyAESKey    string                 `toml:"encoding_aes_key"`
-	LegacyCallback  string                 `toml:"callback_base_url"`
-	LegacyRedirect  string                 `toml:"install_redirect_url"`
-	LegacyAuthType  int                    `toml:"install_auth_type"`
-	SelfBuilt       WeComSelfBuiltConfig   `toml:"self_built"`
-	PartnerStandard WeComPartnerModeConfig `toml:"partner_standard"`
-	PartnerTemplate WeComPartnerModeConfig `toml:"partner_template"`
-	Provider        WeComProviderConfig    `toml:"provider"`
+	APIBaseURL   string              `toml:"api_base_url"`
+	DelegatedApp WeComModeConfig     `toml:"delegated_app"`
+	Provider     WeComProviderConfig `toml:"provider"`
 }
 
-type WeComSelfBuiltConfig struct{}
-
-type WeComPartnerModeConfig struct {
-	SuiteID            string `toml:"suite_id"`
-	SuiteSecret        string `toml:"suite_secret"`
-	AppID              string `toml:"app_id"`
-	AppSecret          string `toml:"app_secret"`
-	Token              string `toml:"token"`
-	EncodingAESKey     string `toml:"encoding_aes_key"`
-	CallbackBaseURL    string `toml:"callback_base_url"`
-	InstallRedirectURL string `toml:"install_redirect_url"`
-	InstallAuthType    int    `toml:"install_auth_type"`
+type WeComModeConfig struct {
+	SuiteID            string              `toml:"suite_id"`
+	SuiteSecret        string              `toml:"suite_secret"`
+	Token              string              `toml:"token"`
+	EncodingAESKey     string              `toml:"encoding_aes_key"`
+	CallbackBaseURL    string              `toml:"callback_base_url"`
+	InstallRedirectURL string              `toml:"install_redirect_url"`
+	InstallAuthType    int                 `toml:"install_auth_type"`
+	EnterpriseCallback WeComCallbackConfig `toml:"enterprise_callback"`
 }
 
 type WeComCallbackConfig struct {
@@ -178,28 +171,19 @@ type AliyunSecrets struct {
 }
 
 type WeComSecrets struct {
-	LegacyAppID     string                  `toml:"suite_id"`
-	LegacyAppSecret string                  `toml:"suite_secret"`
-	LegacyToken     string                  `toml:"token"`
-	LegacyAESKey    string                  `toml:"encoding_aes_key"`
-	LegacyCallback  string                  `toml:"callback_base_url"`
-	LegacyRedirect  string                  `toml:"install_redirect_url"`
-	LegacyAuthType  int                     `toml:"install_auth_type"`
-	PartnerStandard WeComPartnerModeSecrets `toml:"partner_standard"`
-	PartnerTemplate WeComPartnerModeSecrets `toml:"partner_template"`
-	Provider        WeComProviderSecrets    `toml:"provider"`
+	DelegatedApp WeComModeSecrets     `toml:"delegated_app"`
+	Provider     WeComProviderSecrets `toml:"provider"`
 }
 
-type WeComPartnerModeSecrets struct {
-	SuiteID            string `toml:"suite_id"`
-	SuiteSecret        string `toml:"suite_secret"`
-	AppID              string `toml:"app_id"`
-	AppSecret          string `toml:"app_secret"`
-	Token              string `toml:"token"`
-	EncodingAESKey     string `toml:"encoding_aes_key"`
-	CallbackBaseURL    string `toml:"callback_base_url"`
-	InstallRedirectURL string `toml:"install_redirect_url"`
-	InstallAuthType    int    `toml:"install_auth_type"`
+type WeComModeSecrets struct {
+	SuiteID            string               `toml:"suite_id"`
+	SuiteSecret        string               `toml:"suite_secret"`
+	Token              string               `toml:"token"`
+	EncodingAESKey     string               `toml:"encoding_aes_key"`
+	CallbackBaseURL    string               `toml:"callback_base_url"`
+	InstallRedirectURL string               `toml:"install_redirect_url"`
+	InstallAuthType    int                  `toml:"install_auth_type"`
+	EnterpriseCallback WeComCallbackSecrets `toml:"enterprise_callback"`
 }
 
 type WeComCallbackSecrets struct {
@@ -314,29 +298,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.WeCom.APIBaseURL == "" {
 		cfg.WeCom.APIBaseURL = "https://qyapi.weixin.qq.com"
 	}
-	if cfg.WeCom.PartnerTemplate.SuiteID == "" && cfg.WeCom.LegacyAppID != "" {
-		cfg.WeCom.PartnerTemplate.SuiteID = cfg.WeCom.LegacyAppID
-	}
-	if cfg.WeCom.PartnerTemplate.SuiteSecret == "" && cfg.WeCom.LegacyAppSecret != "" {
-		cfg.WeCom.PartnerTemplate.SuiteSecret = cfg.WeCom.LegacyAppSecret
-	}
-	if cfg.WeCom.PartnerTemplate.Token == "" && cfg.WeCom.LegacyToken != "" {
-		cfg.WeCom.PartnerTemplate.Token = cfg.WeCom.LegacyToken
-	}
-	if cfg.WeCom.PartnerTemplate.EncodingAESKey == "" && cfg.WeCom.LegacyAESKey != "" {
-		cfg.WeCom.PartnerTemplate.EncodingAESKey = cfg.WeCom.LegacyAESKey
-	}
-	if cfg.WeCom.PartnerTemplate.CallbackBaseURL == "" && cfg.WeCom.LegacyCallback != "" {
-		cfg.WeCom.PartnerTemplate.CallbackBaseURL = cfg.WeCom.LegacyCallback
-	}
-	if cfg.WeCom.PartnerTemplate.InstallRedirectURL == "" && cfg.WeCom.LegacyRedirect != "" {
-		cfg.WeCom.PartnerTemplate.InstallRedirectURL = cfg.WeCom.LegacyRedirect
-	}
-	if cfg.WeCom.PartnerTemplate.InstallAuthType == 0 && cfg.WeCom.LegacyAuthType != 0 {
-		cfg.WeCom.PartnerTemplate.InstallAuthType = cfg.WeCom.LegacyAuthType
-	}
-	applyWeComPartnerDefaults(&cfg.WeCom.PartnerStandard)
-	applyWeComPartnerDefaults(&cfg.WeCom.PartnerTemplate)
+	applyWeComModeDefaults(&cfg.WeCom.DelegatedApp)
 	if cfg.External.EmployeeWebBaseURL == "" {
 		if strings.EqualFold(cfg.App.Env, "development") || strings.EqualFold(cfg.App.Env, "dev") {
 			cfg.External.EmployeeWebBaseURL = "http://localhost:3000"
@@ -416,30 +378,8 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	if secrets.Aliyun.AccessKeySecret != "" {
 		cfg.Aliyun.AccessKeySecret = secrets.Aliyun.AccessKeySecret
 	}
-	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerStandard, secrets.WeCom.PartnerStandard)
-	mergeWeComPartnerSecrets(&cfg.WeCom.PartnerTemplate, secrets.WeCom.PartnerTemplate)
+	mergeWeComModeSecrets(&cfg.WeCom.DelegatedApp, secrets.WeCom.DelegatedApp)
 	mergeWeComProviderSecrets(&cfg.WeCom.Provider, secrets.WeCom.Provider)
-	if cfg.WeCom.PartnerTemplate.SuiteID == "" && secrets.WeCom.LegacyAppID != "" {
-		cfg.WeCom.PartnerTemplate.SuiteID = secrets.WeCom.LegacyAppID
-	}
-	if cfg.WeCom.PartnerTemplate.SuiteSecret == "" && secrets.WeCom.LegacyAppSecret != "" {
-		cfg.WeCom.PartnerTemplate.SuiteSecret = secrets.WeCom.LegacyAppSecret
-	}
-	if cfg.WeCom.PartnerTemplate.Token == "" && secrets.WeCom.LegacyToken != "" {
-		cfg.WeCom.PartnerTemplate.Token = secrets.WeCom.LegacyToken
-	}
-	if cfg.WeCom.PartnerTemplate.EncodingAESKey == "" && secrets.WeCom.LegacyAESKey != "" {
-		cfg.WeCom.PartnerTemplate.EncodingAESKey = secrets.WeCom.LegacyAESKey
-	}
-	if cfg.WeCom.PartnerTemplate.CallbackBaseURL == "" && secrets.WeCom.LegacyCallback != "" {
-		cfg.WeCom.PartnerTemplate.CallbackBaseURL = secrets.WeCom.LegacyCallback
-	}
-	if cfg.WeCom.PartnerTemplate.InstallRedirectURL == "" && secrets.WeCom.LegacyRedirect != "" {
-		cfg.WeCom.PartnerTemplate.InstallRedirectURL = secrets.WeCom.LegacyRedirect
-	}
-	if cfg.WeCom.PartnerTemplate.InstallAuthType == 0 && secrets.WeCom.LegacyAuthType != 0 {
-		cfg.WeCom.PartnerTemplate.InstallAuthType = secrets.WeCom.LegacyAuthType
-	}
 }
 
 func validate(cfg *Config) error {
@@ -470,30 +410,18 @@ func validate(cfg *Config) error {
 	return nil
 }
 
-func applyWeComPartnerDefaults(cfg *WeComPartnerModeConfig) {
-	if cfg.SuiteID == "" && cfg.AppID != "" {
-		cfg.SuiteID = cfg.AppID
-	}
-	if cfg.SuiteSecret == "" && cfg.AppSecret != "" {
-		cfg.SuiteSecret = cfg.AppSecret
-	}
+func applyWeComModeDefaults(cfg *WeComModeConfig) {
 	if cfg.InstallAuthType == 0 {
 		cfg.InstallAuthType = 1
 	}
 }
 
-func mergeWeComPartnerSecrets(cfg *WeComPartnerModeConfig, secrets WeComPartnerModeSecrets) {
+func mergeWeComModeSecrets(cfg *WeComModeConfig, secrets WeComModeSecrets) {
 	if secrets.SuiteID != "" {
 		cfg.SuiteID = secrets.SuiteID
 	}
 	if secrets.SuiteSecret != "" {
 		cfg.SuiteSecret = secrets.SuiteSecret
-	}
-	if cfg.SuiteID == "" && secrets.AppID != "" {
-		cfg.SuiteID = secrets.AppID
-	}
-	if cfg.SuiteSecret == "" && secrets.AppSecret != "" {
-		cfg.SuiteSecret = secrets.AppSecret
 	}
 	if secrets.Token != "" {
 		cfg.Token = secrets.Token
@@ -510,14 +438,11 @@ func mergeWeComPartnerSecrets(cfg *WeComPartnerModeConfig, secrets WeComPartnerM
 	if secrets.InstallAuthType != 0 {
 		cfg.InstallAuthType = secrets.InstallAuthType
 	}
-}
-
-func mergeWeComCallbackSecrets(cfg *WeComCallbackConfig, secrets WeComCallbackSecrets) {
-	if secrets.Token != "" {
-		cfg.Token = secrets.Token
+	if secrets.EnterpriseCallback.Token != "" {
+		cfg.EnterpriseCallback.Token = secrets.EnterpriseCallback.Token
 	}
-	if secrets.EncodingAESKey != "" {
-		cfg.EncodingAESKey = secrets.EncodingAESKey
+	if secrets.EnterpriseCallback.EncodingAESKey != "" {
+		cfg.EnterpriseCallback.EncodingAESKey = secrets.EnterpriseCallback.EncodingAESKey
 	}
 }
 

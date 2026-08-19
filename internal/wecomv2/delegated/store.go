@@ -265,15 +265,16 @@ func (s *Store) InsertMessageLog(ctx context.Context, record messageLogRecord) (
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO wecom_message_logs (
-			corp_id, tenant_id, employee_id, wecom_user_id, message_scene, dedupe_key,
+			provider_app, corp_id, tenant_id, employee_id, wecom_user_id, message_scene, dedupe_key,
 			title, content, target_url, status, error_message, request_payload, response_payload, biz_date, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, NULLIF($9, ''), $10, NULLIF($11, ''), COALESCE(NULLIF($12, '')::jsonb, '{}'::jsonb), COALESCE(NULLIF($13, '')::jsonb, '{}'::jsonb), NULLIF($14, '')::date, NOW(), NOW()
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, NULLIF($10, ''), $11, NULLIF($12, ''), COALESCE(NULLIF($13, '')::jsonb, '{}'::jsonb), COALESCE(NULLIF($14, '')::jsonb, '{}'::jsonb), NULLIF($15, '')::date, NOW(), NOW()
 		)
 		ON CONFLICT (dedupe_key) DO NOTHING
 		RETURNING id
 	`,
+		record.ProviderApp,
 		record.CorpID,
 		record.TenantID,
 		record.EmployeeID,

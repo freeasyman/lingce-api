@@ -37,8 +37,8 @@ type schemaMigration struct {
 }
 
 // ApplySchemaMigrations applies embedded versioned schema migrations exactly once.
-func ApplySchemaMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	migrations, err := loadEmbeddedSchemaMigrations()
+func ApplySchemaMigrations(ctx context.Context, pool *pgxpool.Pool, maxVersion string) error {
+	migrations, err := loadEmbeddedSchemaMigrations(maxVersion)
 	if err != nil {
 		return err
 	}
@@ -109,8 +109,8 @@ func ApplySchemaMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // CheckSchemaMigrations verifies that the database has all embedded migrations applied.
-func CheckSchemaMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	migrations, err := loadEmbeddedSchemaMigrations()
+func CheckSchemaMigrations(ctx context.Context, pool *pgxpool.Pool, maxVersion string) error {
+	migrations, err := loadEmbeddedSchemaMigrations(maxVersion)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func CheckSchemaMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func loadEmbeddedSchemaMigrations() ([]schemaMigration, error) {
+func loadEmbeddedSchemaMigrations(maxVersion string) ([]schemaMigration, error) {
 	entries, err := fs.ReadDir(schemaMigrationFS, "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded schema migrations: %w", err)
@@ -189,7 +189,21 @@ func loadEmbeddedSchemaMigrations() ([]schemaMigration, error) {
 	sort.Slice(migrations, func(i, j int) bool {
 		return migrations[i].Version < migrations[j].Version
 	})
-	return migrations, nil
+	return filterSchemaMigrationsByMaxVersion(migrations, maxVersion), nil
+}
+
+func filterSchemaMigrationsByMaxVersion(migrations []schemaMigration, maxVersion string) []schemaMigration {
+	maxVersion = strings.TrimSpace(maxVersion)
+	if maxVersion == "" {
+		return migrations
+	}
+	filtered := make([]schemaMigration, 0, len(migrations))
+	for _, migration := range migrations {
+		if migration.Version <= maxVersion {
+			filtered = append(filtered, migration)
+		}
+	}
+	return filtered
 }
 
 func ensureSchemaMigrationTable(ctx context.Context, db compatExecutor) error {
