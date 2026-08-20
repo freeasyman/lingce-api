@@ -361,14 +361,31 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("delegated oauth login start",
+		"corp_id", corpID,
+		"provider_app", s.providerApp,
+	)
 	corpAccessToken, _, err := s.resolveCorpAccessToken(ctx, install)
 	if err != nil {
+		slog.Warn("delegated oauth login corp access token failed",
+			"corp_id", corpID,
+			"error", err,
+		)
 		return nil, err
 	}
 	userInfo, err := s.client.GetCorpUserInfo(ctx, corpAccessToken, code)
 	if err != nil {
+		slog.Warn("delegated oauth login get corp userinfo failed",
+			"corp_id", corpID,
+			"error", err,
+		)
 		return nil, err
 	}
+	slog.Info("delegated oauth login got corp userinfo",
+		"corp_id", corpID,
+		"wecom_user_id", strings.TrimSpace(userInfo.UserID),
+		"has_user_ticket", strings.TrimSpace(userInfo.UserTicket) != "",
+	)
 	return s.completeOAuthLogin(ctx, install, corpAccessToken, userInfo)
 }
 
@@ -1129,12 +1146,12 @@ func (c *client) GetAuthUserDetail(ctx context.Context, corpAccessToken, userTic
 }
 
 type sendMessageResponse struct {
-	ErrCode        int    `json:"errcode"`
-	ErrMsg         string `json:"errmsg"`
-	InvalidUser    string `json:"invaliduser,omitempty"`
-	InvalidParty   string `json:"invalidparty,omitempty"`
-	InvalidTag     string `json:"invalidtag,omitempty"`
-	ResponseCode   string `json:"response_code,omitempty"`
+	ErrCode      int    `json:"errcode"`
+	ErrMsg       string `json:"errmsg"`
+	InvalidUser  string `json:"invaliduser,omitempty"`
+	InvalidParty string `json:"invalidparty,omitempty"`
+	InvalidTag   string `json:"invalidtag,omitempty"`
+	ResponseCode string `json:"response_code,omitempty"`
 }
 
 func (c *client) SendTextCardMessage(ctx context.Context, corpAccessToken string, agentID int64, toUser, title, description, targetURL, buttonText string) (*sendMessageResponse, error) {
