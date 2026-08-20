@@ -8,7 +8,7 @@ import (
 func TestLoadEmbeddedSchemaMigrations(t *testing.T) {
 	t.Parallel()
 
-	migrations, err := loadEmbeddedSchemaMigrations()
+	migrations, err := loadEmbeddedSchemaMigrations("")
 	if err != nil {
 		t.Fatalf("load embedded schema migrations: %v", err)
 	}
