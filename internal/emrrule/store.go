@@ -114,6 +114,28 @@ func (s *Store) CreateRun(ctx context.Context, record *RecordInput, stage, trigg
 	return id, nil
 }
 
+func (s *Store) FindLatestSuccessfulRun(ctx context.Context, tenantID, recordID int64, stage string, recordVersion *int) (int64, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM emr_rule_runs
+		WHERE tenant_id = $1
+		  AND record_id = $2
+		  AND stage = $3
+		  AND status = 'success'
+		  AND ($4::int IS NULL OR input_record_version = $4)
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, recordID, stage, recordVersion)
+	var runID int64
+	if err := row.Scan(&runID); err != nil {
+		if err == pgx.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("find latest emr rule run: %w", err)
+	}
+	return runID, nil
+}
+
 func (s *Store) ReplaceRunHits(ctx context.Context, runID int64, record *RecordInput, stage string, hits []RuleHit) ([]RuleHit, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -130,41 +152,74 @@ func (s *Store) ReplaceRunHits(ctx context.Context, runID int64, record *RecordI
 	}
 
 	inserted := make([]RuleHit, 0, len(hits))
+	batch := &pgx.Batch{}
 	for _, hit := range hits {
-		policyRaw, _ := json.Marshal(hit.ActionPolicy)
-		var hitID int64
-		err := tx.QueryRow(ctx, `
+		policyRaw, err := json.Marshal(hit.ActionPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("marshal action policy for %s: %w", hit.RuleCode, err)
+		}
+		batch.Queue(`
 			INSERT INTO emr_rule_hits (
 				tenant_id, run_id, record_id, rule_id, rule_code, rule_version, rule_name_snapshot,
 				stage, executor_type, target_type, target_path, hit_status, severity, action_policy_json,
 				doctor_message, qc_message, summary, current_state, is_active, created_at, updated_at
 			) VALUES ($1,$2,$3,$4,$5,'v1',$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,'open',TRUE,NOW(),NOW())
 			RETURNING id
-		`, record.TenantID, runID, record.ID, hit.RuleID, hit.RuleCode, hit.RuleName, stage, hit.ExecutorType, hit.TargetType, hit.TargetPath, hit.HitStatus, hit.Severity, string(policyRaw), hit.DoctorMessage, hit.QCMessage, hit.Summary).Scan(&hitID)
-		if err != nil {
-			return nil, fmt.Errorf("insert emr rule hit %s: %w", hit.RuleCode, err)
+		`, record.TenantID, runID, record.ID, hit.RuleID, hit.RuleCode, hit.RuleName, stage, hit.ExecutorType, hit.TargetType, hit.TargetPath, hit.HitStatus, hit.Severity, string(policyRaw), hit.DoctorMessage, hit.QCMessage, hit.Summary)
+	}
+	results := tx.SendBatch(ctx, batch)
+	defer results.Close()
+	for i := range hits {
+		var hitID int64
+		if err := results.QueryRow().Scan(&hitID); err != nil {
+			return nil, fmt.Errorf("insert emr rule hit %s: %w", hits[i].RuleCode, err)
 		}
-		hit.ID = hitID
-		hit.RunID = runID
-		for i := range hit.Evidence {
-			evidence := hit.Evidence[i]
-			structuredRaw, _ := json.Marshal(evidence.StructuredValue)
-			expectedRaw, _ := json.Marshal(evidence.ExpectedValue)
-			actualRaw, _ := json.Marshal(evidence.ActualValue)
-			var evidenceID int64
-			if err := tx.QueryRow(ctx, `
+		hits[i].ID = hitID
+		hits[i].RunID = runID
+	}
+	evidenceBatch := &pgx.Batch{}
+	type evidenceRef struct {
+		hitIndex int
+		evIndex  int
+	}
+	evidenceRefs := make([]evidenceRef, 0)
+	for i := range hits {
+		for j := range hits[i].Evidence {
+			evidence := &hits[i].Evidence[j]
+			structuredRaw, err := json.Marshal(evidence.StructuredValue)
+			if err != nil {
+				return nil, fmt.Errorf("marshal structured evidence for %s: %w", hits[i].RuleCode, err)
+			}
+			expectedRaw, err := json.Marshal(evidence.ExpectedValue)
+			if err != nil {
+				return nil, fmt.Errorf("marshal expected evidence for %s: %w", hits[i].RuleCode, err)
+			}
+			actualRaw, err := json.Marshal(evidence.ActualValue)
+			if err != nil {
+				return nil, fmt.Errorf("marshal actual evidence for %s: %w", hits[i].RuleCode, err)
+			}
+			evidenceBatch.Queue(`
 				INSERT INTO emr_rule_evidences (
 					tenant_id, hit_id, evidence_type, field_path, field_label, text_excerpt,
 					structured_value_json, expected_value_json, actual_value_json, created_at
 				) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,NOW())
 				RETURNING id
-			`, record.TenantID, hitID, evidence.EvidenceType, evidence.FieldPath, evidence.FieldLabel, evidence.TextExcerpt, string(structuredRaw), string(expectedRaw), string(actualRaw)).Scan(&evidenceID); err != nil {
-				return nil, fmt.Errorf("insert emr rule evidence: %w", err)
-			}
-			hit.Evidence[i].ID = evidenceID
-			hit.Evidence[i].HitID = hitID
+			`, record.TenantID, hits[i].ID, evidence.EvidenceType, evidence.FieldPath, evidence.FieldLabel, evidence.TextExcerpt, string(structuredRaw), string(expectedRaw), string(actualRaw))
+			evidenceRefs = append(evidenceRefs, evidenceRef{hitIndex: i, evIndex: j})
 		}
-		inserted = append(inserted, hit)
+	}
+	evidenceResults := tx.SendBatch(ctx, evidenceBatch)
+	defer evidenceResults.Close()
+	for _, ref := range evidenceRefs {
+		var evidenceID int64
+		if err := evidenceResults.QueryRow().Scan(&evidenceID); err != nil {
+			return nil, fmt.Errorf("insert emr rule evidence: %w", err)
+		}
+		hits[ref.hitIndex].Evidence[ref.evIndex].ID = evidenceID
+		hits[ref.hitIndex].Evidence[ref.evIndex].HitID = hits[ref.hitIndex].ID
+	}
+	for i := range hits {
+		inserted = append(inserted, hits[i])
 	}
 
 	status := "success"
@@ -178,6 +233,33 @@ func (s *Store) ReplaceRunHits(ctx context.Context, runID int64, record *RecordI
 		return nil, fmt.Errorf("commit emr rule hits tx: %w", err)
 	}
 	return inserted, nil
+}
+
+func (s *Store) ListRunHits(ctx context.Context, tenantID, recordID, runID int64) ([]RuleHit, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, record_id, rule_id, rule_code, rule_name_snapshot, stage, executor_type,
+		       target_type, target_path, hit_status, severity, action_policy_json, doctor_message,
+		       qc_message, summary, current_state, is_active, created_at::text, updated_at::text
+		FROM emr_rule_hits
+		WHERE tenant_id = $1 AND record_id = $2 AND run_id = $3
+		ORDER BY id ASC
+	`, tenantID, recordID, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list emr rule run hits: %w", err)
+	}
+	defer rows.Close()
+	hits := make([]RuleHit, 0)
+	for rows.Next() {
+		var hit RuleHit
+		var policyRaw []byte
+		if err := rows.Scan(&hit.ID, &hit.RunID, &hit.RecordID, &hit.RuleID, &hit.RuleCode, &hit.RuleName, &hit.Stage, &hit.ExecutorType, &hit.TargetType, &hit.TargetPath, &hit.HitStatus, &hit.Severity, &policyRaw, &hit.DoctorMessage, &hit.QCMessage, &hit.Summary, &hit.CurrentState, &hit.IsActive, &hit.CreatedAt, &hit.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan emr rule run hit: %w", err)
+		}
+		hit.ActionPolicy = JSONMap{}
+		_ = json.Unmarshal(policyRaw, &hit.ActionPolicy)
+		hits = append(hits, hit)
+	}
+	return hits, rows.Err()
 }
 
 func upsertSummary(ctx context.Context, tx pgx.Tx, record *RecordInput, runID int64, stage string) error {

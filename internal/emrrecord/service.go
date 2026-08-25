@@ -114,12 +114,16 @@ func (s *Service) SubmitRecord(ctx context.Context, tenantID, recordID, actorID 
 		return nil, err
 	}
 	if s.ruleService != nil {
-		summary, err := s.ruleService.CanSubmit(ctx, tenantID, recordID, actorID)
+		result, err := s.ruleService.RunRecordRules(ctx, tenantID, recordID, actorID, emrrule.RunRequest{Stage: "pre_submit", TriggerSource: "submit"})
 		if err != nil {
 			return nil, err
 		}
-		if summary != nil && !summary.CanSubmit {
-			return nil, fmt.Errorf("病历存在提交阻断规则，请处理后再提交")
+		if result != nil && !result.Summary.CanSubmit {
+			return nil, &emrrule.BlockError{
+				Message: "病历存在提交阻断规则，请处理后再提交",
+				Summary: result.Summary,
+				Hits:    blockingHits(result.Hits, "block_submit"),
+			}
 		}
 	}
 	return s.store.SubmitRecord(ctx, tenantID, recordID, actorID, actorType, req)
@@ -136,12 +140,16 @@ func (s *Service) ArchiveRecord(ctx context.Context, tenantID, recordID, actorID
 		return nil, err
 	}
 	if s.ruleService != nil {
-		summary, err := s.ruleService.CanArchive(ctx, tenantID, recordID, actorID)
+		result, err := s.ruleService.RunRecordRules(ctx, tenantID, recordID, actorID, emrrule.RunRequest{Stage: "pre_archive", TriggerSource: "archive"})
 		if err != nil {
 			return nil, err
 		}
-		if summary != nil && !summary.CanArchive {
-			return nil, fmt.Errorf("病历存在归档阻断规则，请处理后再归档")
+		if result != nil && !result.Summary.CanArchive {
+			return nil, &emrrule.BlockError{
+				Message: "病历存在归档阻断规则，请处理后再归档",
+				Summary: result.Summary,
+				Hits:    blockingHits(result.Hits, "block_archive"),
+			}
 		}
 	}
 	return s.store.ArchiveRecord(ctx, tenantID, recordID, actorID, actorType, req)
@@ -165,4 +173,17 @@ func (s *Service) ListAuditEvents(ctx context.Context, tenantID, recordID int64)
 		return nil, err
 	}
 	return s.store.ListAuditEvents(ctx, tenantID, recordID)
+}
+
+func blockingHits(hits []emrrule.RuleHit, policyKey string) []emrrule.RuleHit {
+	blocking := make([]emrrule.RuleHit, 0)
+	for _, hit := range hits {
+		if hit.Severity != "blocking" {
+			continue
+		}
+		if value, ok := hit.ActionPolicy[policyKey].(bool); ok && value {
+			blocking = append(blocking, hit)
+		}
+	}
+	return blocking
 }

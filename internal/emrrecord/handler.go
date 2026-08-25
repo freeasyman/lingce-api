@@ -3,11 +3,13 @@ package emrrecord
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrrule"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -26,6 +28,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/records", Handler: h.ListRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.GetRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/encounters/{id}", Handler: h.GetEncounter, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/import-recording-drafts", Handler: h.ImportRecordingDrafts, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/emr/records/{id}", Handler: h.SaveRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/submit", Handler: h.SubmitRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -130,6 +133,34 @@ func (h *Handler) SaveRecord(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) GetEncounter(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	encounterID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
+	if err != nil || encounterID <= 0 {
+		httputil.WriteBadRequest(w, "invalid encounter id")
+		return
+	}
+	resp, err := h.service.GetEncounter(r.Context(), tenantID, encounterID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if resp == nil {
+		httputil.WriteNotFound(w, "encounter not found")
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": resp})
+}
+
 func (h *Handler) SubmitRecord(w http.ResponseWriter, r *http.Request) {
 	h.writeRecordMutation(w, r, func(ctx context.Context, tenantID, recordID, actorID int64, actorType string, req SubmitRecordRequest) (*RecordWriteResponse, error) {
 		return h.service.SubmitRecord(ctx, tenantID, recordID, actorID, actorType, req)
@@ -215,7 +246,7 @@ func (h *Handler) writeRecordMutation(w http.ResponseWriter, r *http.Request, fn
 		}
 		resp, err := handler(r.Context(), tenantID, recordID, claims.UserID, string(claims.UserType), req)
 		if err != nil {
-			httputil.WriteInternalError(w, err.Error())
+			writeRecordMutationError(w, err)
 			return
 		}
 		if resp == nil {
@@ -231,7 +262,7 @@ func (h *Handler) writeRecordMutation(w http.ResponseWriter, r *http.Request, fn
 		}
 		resp, err := handler(r.Context(), tenantID, recordID, claims.UserID, string(claims.UserType), req)
 		if err != nil {
-			httputil.WriteInternalError(w, err.Error())
+			writeRecordMutationError(w, err)
 			return
 		}
 		if resp == nil {
@@ -247,7 +278,7 @@ func (h *Handler) writeRecordMutation(w http.ResponseWriter, r *http.Request, fn
 		}
 		resp, err := handler(r.Context(), tenantID, recordID, claims.UserID, string(claims.UserType), req)
 		if err != nil {
-			httputil.WriteInternalError(w, err.Error())
+			writeRecordMutationError(w, err)
 			return
 		}
 		if resp == nil {
@@ -258,6 +289,18 @@ func (h *Handler) writeRecordMutation(w http.ResponseWriter, r *http.Request, fn
 	default:
 		httputil.WriteInternalError(w, "unsupported record mutation")
 	}
+}
+
+func writeRecordMutationError(w http.ResponseWriter, err error) {
+	var blockErr *emrrule.BlockError
+	if errors.As(err, &blockErr) {
+		httputil.WriteError(w, http.StatusConflict, "EMR_RULE_BLOCKED", blockErr.Message, map[string]any{
+			"summary": blockErr.Summary,
+			"hits":    blockErr.Hits,
+		})
+		return
+	}
+	httputil.WriteInternalError(w, err.Error())
 }
 
 func parseIntDefault(value string, fallback int) int {

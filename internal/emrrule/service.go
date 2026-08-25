@@ -24,6 +24,20 @@ func (s *Service) RunRecordRules(ctx context.Context, tenantID, recordID, actorI
 	if record == nil {
 		return nil, nil
 	}
+	if runID, err := s.store.FindLatestSuccessfulRun(ctx, tenantID, recordID, stage, record.LatestVersionNo); err == nil && runID > 0 {
+		summary, err := s.store.GetSummary(ctx, tenantID, recordID)
+		if err != nil {
+			return nil, err
+		}
+		if summary == nil {
+			summary = &RuleSummary{RecordID: recordID, CanSubmit: true, CanArchive: true}
+		}
+		hits, err := s.store.ListRunHits(ctx, tenantID, recordID, runID)
+		if err != nil {
+			return nil, err
+		}
+		return &RunResult{Run: RuleRun{ID: runID, RecordID: recordID, Stage: stage, TriggerSource: trigger, Status: "success"}, Hits: hits, Summary: *summary}, nil
+	}
 	rules, err := s.store.ListExecutableRules(ctx, tenantID)
 	if err != nil {
 		return nil, err

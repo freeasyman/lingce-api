@@ -116,3 +116,11 @@ type RunResult struct {
 	Hits    []RuleHit   `json:"hits"`
 	Summary RuleSummary `json:"summary"`
 }
+
+type BlockError struct {
+	Message string      `json:"message"`
+	Summary RuleSummary `json:"summary"`
+	Hits    []RuleHit   `json:"hits"`
+}
+
+func (e *BlockError) Error() string { return e.Message }
