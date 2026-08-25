@@ -15,6 +15,97 @@ type builtinRuleSeed struct {
 	Examples        RuleExamples
 }
 
+type emrRuleObjectOptions struct {
+	Executor      string
+	TargetType    string
+	TargetPath    string
+	Fields        []string
+	Stages        []string
+	Severity      string
+	BlockSubmit   bool
+	BlockArchive  bool
+	AllowConfirm  bool
+	CountInQC     bool
+	EvidenceTypes []string
+	LogicType     string
+}
+
+func emrRuleObjectConditions(opts emrRuleObjectOptions) JSONMap {
+	logicType := opts.LogicType
+	if logicType == "" {
+		logicType = opts.Executor + "_rule"
+	}
+	return JSONMap{
+		"type":      "emr_rule_definition",
+		"target":    JSONMap{"type": opts.TargetType, "path": opts.TargetPath},
+		"execution": JSONMap{"executor": opts.Executor, "stages": opts.Stages},
+		"logic": JSONMap{
+			"operator":   "ALL",
+			"conditions": []JSONMap{{"type": logicType, "fields": opts.Fields}},
+		},
+		"action": JSONMap{
+			"severity":      opts.Severity,
+			"block_submit":  opts.BlockSubmit,
+			"block_archive": opts.BlockArchive,
+			"allow_confirm": opts.AllowConfirm,
+			"count_in_qc":   opts.CountInQC,
+		},
+		"evidence_schema": JSONMap{"types": opts.EvidenceTypes, "fields": opts.Fields},
+		"messages":        JSONMap{"doctor_style": "short_actionable", "qc_style": "evidence_first"},
+	}
+}
+
+type emrHardRuleOptions struct {
+	TargetType    string
+	TargetPath    string
+	Fields        []string
+	Stages        []string
+	Severity      string
+	BlockSubmit   bool
+	BlockArchive  bool
+	AllowConfirm  bool
+	CountInQC     bool
+	EvidenceTypes []string
+}
+
+func emrHardRuleConditions(opts emrHardRuleOptions) JSONMap {
+	return JSONMap{
+		"type": "emr_rule_definition",
+		"target": JSONMap{
+			"type": opts.TargetType,
+			"path": opts.TargetPath,
+		},
+		"execution": JSONMap{
+			"executor": "hard",
+			"stages":   opts.Stages,
+		},
+		"logic": JSONMap{
+			"operator": "ALL",
+			"conditions": []JSONMap{
+				{
+					"type":   "hard_rule",
+					"fields": opts.Fields,
+				},
+			},
+		},
+		"action": JSONMap{
+			"severity":      opts.Severity,
+			"block_submit":  opts.BlockSubmit,
+			"block_archive": opts.BlockArchive,
+			"allow_confirm": opts.AllowConfirm,
+			"count_in_qc":   opts.CountInQC,
+		},
+		"evidence_schema": JSONMap{
+			"types":  opts.EvidenceTypes,
+			"fields": opts.Fields,
+		},
+		"messages": JSONMap{
+			"doctor_style": "short_actionable",
+			"qc_style":     "evidence_first",
+		},
+	}
+}
+
 func builtinRuleSeeds() []builtinRuleSeed {
 	return []builtinRuleSeed{
 		{
@@ -348,7 +439,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "all"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "schema.common_fields", Fields: []string{"chief_complaint", "present_illness", "physical_exam", "diagnosis", "medical_advice"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "所有模板必须保留主诉、现病史、体格检查、诊断、医嘱等公共字段位置。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "所有模板必须保留公共字段位置。",
@@ -362,7 +453,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "all"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "template", TargetPath: "schema.orders", Fields: []string{"prescription", "treatment", "medical_advice"}, Stages: []string{"template_publish", "pre_submit"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "药品处方和治疗/收费相关项目必须分开建模与展示。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "处方和处置应分开展示。",
@@ -376,7 +467,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "gynecology"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "extensions.gynecology", Fields: []string{"menstrual_history", "marriage_childbearing", "pregnancy_history", "gyne_exam"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "妇科扩展字段默认展示；其他模板只有在适龄女性规则命中时才做提醒，不直接显现。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "妇科扩展字段按模板和人群条件控制。",
@@ -390,7 +481,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "gynecology"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "sections.physical_exam.gyne_exam", Fields: []string{"physical_exam", "gyne_exam"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "妇科专科查体仍属于体格检查体系，不单独替代体格检查主段落。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "妇科专科查体应挂接到体格检查。",
@@ -404,7 +495,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "tcm"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "sections.diagnosis", Fields: []string{"diagnosis", "tcm_diagnosis"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "公共字段中的诊断保留统一入口，中医诊断作为扩展字段并存。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "中医诊断作为扩展字段并存。",
@@ -418,7 +509,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "tcm"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "template", TargetPath: "structured.formula", Fields: []string{"formula", "prescription"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "中药方药可以扩展展示，但结构上仍归入处方/方药对象。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "方药应归入处方体系。",
@@ -432,7 +523,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "dental"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "template", TargetPath: "structured.tooth_position", Fields: []string{"tooth_position", "diagnosis", "treatment_plan"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "牙位字段必须能解释诊断、影像和治疗计划。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "牙位字段应绑定诊断与处置。",
@@ -446,11 +537,25 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "low",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "template_binding", "template": "dental"},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "sections.physical_exam.dental_exam", Fields: []string{"physical_exam", "dental_exam"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "口腔专科检查作为专科查体扩展，不脱离体格检查主段落。",
 			LegalBasis:      "门急诊病历模板设计规范。",
 			SuggestedScript: "口腔专科检查应挂接到体格检查。",
 			Examples:        RuleExamples{Safe: []string{"口腔专科检查"}},
+		},
+		{
+			ID:              "emr-rule-009",
+			Code:            "pediatrics.guardian_block",
+			Name:            "监护人字段固定扩展",
+			Category:        "emr_template",
+			Scope:           "emr",
+			Severity:        "low",
+			TriggerType:     "semantic",
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "template", TargetPath: "extensions.guardian", Fields: []string{"guardian", "feeding", "growth", "vaccination"}, Stages: []string{"template_publish"}, Severity: "blocking", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
+			Description:     "儿科模板必须固定提供监护人、喂养史、生长发育、疫苗接种等扩展字段。",
+			LegalBasis:      "儿科门急诊病历模板结构要求。",
+			SuggestedScript: "儿科模板缺少监护人或生长发育相关字段，请补齐后发布。",
+			Examples:        RuleExamples{Risky: []string{"儿科模板缺少监护人字段"}, Safe: []string{"监护人、喂养史、生长发育、疫苗接种字段完整"}},
 		},
 		{
 			ID:              "emr-rule-101",
@@ -460,7 +565,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"patient_name", "gender", "age", "allergy_history"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "record", TargetPath: "patient", Fields: []string{"patient.name", "patient.gender", "patient.age_text", "patient.phone", "patient.allergy_history"}, Stages: []string{"save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "姓名、性别、出生年月、民族、婚姻、职业、单位、住址、药物过敏史，以及每页姓名、病历号、就诊日期、科别必须完整。",
 			LegalBasis:      "门诊病历质量评定标准：一般项目。",
 			SuggestedScript: "请补全患者基本信息和药物过敏史后再提交。",
@@ -474,7 +579,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"encounter_start_time", "encounter_end_time", "created_at", "submitted_at", "archived_at", "updated_at"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "record", TargetPath: "time_chain", Fields: []string{"encountered_at", "created_at", "updated_at", "archived_at"}, Stages: []string{"save", "pre_submit", "pre_archive", "post_archive_qc"}, Severity: "blocking", BlockSubmit: true, BlockArchive: true, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field", "calculation"}}),
 			Description:     "接诊开始时间、结束时间、病历创建时间、提交时间、归档时间、最后修改时间不得逆序或异常。",
 			LegalBasis:      "门诊病历时间一致性与可追溯性要求。",
 			SuggestedScript: "请检查病历时间链是否完整、是否存在逆序。",
@@ -488,7 +593,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"chief_complaint"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "field", TargetPath: "sections.chief_complaint", Fields: []string{"sections.chief_complaint"}, Stages: []string{"realtime", "save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt"}}),
 			Description:     "主诉应为主要症状、部位和持续时间，重点突出、简明扼要；复诊无新症状且诊断明确时可写“病史同前”；主诉不得超过20个字（含标点）。",
 			LegalBasis:      "门诊病历质量评定标准：主诉。",
 			SuggestedScript: "请把主诉写成症状、部位和持续时间，不要用诊断名称代替。",
@@ -502,7 +607,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"present_illness", "past_history", "allergy_history", "family_history"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "field", TargetPath: "sections.present_illness", Fields: []string{"sections.present_illness", "sections.chief_complaint", "sections.diagnosis"}, Stages: []string{"save", "pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "初诊记录起病、演变、主要症状、诊疗经过和效果；复诊记录治疗后变化、疗效、未确诊时的新症状和鉴别资料。相关既往史、婚育史、过敏史、家族史不能缺。",
 			LegalBasis:      "门诊病历质量评定标准：病史。",
 			SuggestedScript: "请围绕主诉补全现病史，并确认过敏史、既往史等关键病史。",
@@ -516,7 +621,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"past_history"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.past_history", Fields: []string{"sections.past_history"}, Stages: []string{"save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "慢性病史、手术史、外伤史、传染病史、既往同类疾病、既往治疗情况应按场景采集。",
 			LegalBasis:      "门诊病历质量评定标准：既往史。",
 			SuggestedScript: "请补充既往史；如无特殊情况，也需有问诊或确认依据。",
@@ -530,7 +635,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"personal_history"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.personal_history", Fields: []string{"sections.personal_history"}, Stages: []string{"save", "pre_submit"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "吸烟、饮酒、职业暴露、生活习惯等个人史应在相关场景采集。",
 			LegalBasis:      "门诊病历质量评定标准：个人史。",
 			SuggestedScript: "请补充个人史，或确认本次不适用。",
@@ -544,7 +649,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"family_history"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.family_history", Fields: []string{"sections.family_history"}, Stages: []string{"save", "pre_submit"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "遗传病、肿瘤、慢病等家族史在相关场景下应记录。",
 			LegalBasis:      "门诊病历质量评定标准：家族史。",
 			SuggestedScript: "请补充家族史，或确认无相关家族病史。",
@@ -558,7 +663,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"diet", "sleep", "bowel_movement", "urination", "recent_weight_change"}, "templates": []string{"general", "tcm", "pediatrics"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field_group", TargetPath: "structured.general_status", Fields: []string{"diet", "sleep", "bowel_movement", "urination", "recent_weight_change"}, Stages: []string{"save", "pre_submit"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "现病史补全应覆盖饮食、睡眠、大便、小便和近期体重变化，尤其服务慢病评估、中医辨证和基层全科。",
 			LegalBasis:      "门诊病历质量评定标准：病史资料完整性。",
 			SuggestedScript: "请补问饮食、睡眠、二便和近期体重变化，或确认本次不适用。",
@@ -572,7 +677,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"physical_exam", "positive_findings", "necessary_negative_findings"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "field", TargetPath: "sections.physical_exam", Fields: []string{"sections.physical_exam", "structured.vital_signs"}, Stages: []string{"save", "pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "体检应记录一般情况、常规项目、与主诉相关的阳性体征、必要阴性体征和专科针对性检查，不能笼统写“正常”。",
 			LegalBasis:      "门诊病历质量评定标准：体格检查。",
 			SuggestedScript: "请补充生命体征、阳性体征和必要阴性体征，不要只写心肺腹正常。",
@@ -586,7 +691,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"auxiliary_exam"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "relationship", TargetPath: "orders.exams,sections.auxiliary_exam", Fields: []string{"sections.auxiliary_exam", "structured.exam_orders", "structured.exam_results"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "必要辅助检查和专科检查需记录，已有检查结果应进入病历；外院报告支持上传并由医生确认入文。",
 			LegalBasis:      "门诊病历质量评定标准：辅助检查。",
 			SuggestedScript: "请把已有检查结果写入病历，或标明结果待回。",
@@ -600,7 +705,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"diagnosis"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "field", TargetPath: "sections.diagnosis", Fields: []string{"sections.diagnosis"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "诊断明确时写完整诊断；诊断不明时写待查并给出进一步检查或处理建议；复诊应记录诊断进展。",
 			LegalBasis:      "门诊病历质量评定标准：诊断。",
 			SuggestedScript: "请完善诊断名称，或在待查时给出下一步检查计划。",
@@ -614,7 +719,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"chief_complaint", "present_illness", "physical_exam", "auxiliary_exam", "diagnosis"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "relationship", TargetPath: "diagnosis,evidence_chain", Fields: []string{"sections.chief_complaint", "sections.present_illness", "sections.physical_exam", "sections.auxiliary_exam", "sections.diagnosis"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "诊断必须能被主诉、现病史、体格检查、辅助检查解释；明显脱节时命中。",
 			LegalBasis:      "门诊病历质量评定标准：诊断依据一致性。",
 			SuggestedScript: "请核对诊断是否能被病史、查体和检查结果支持。",
@@ -628,7 +733,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"prescription", "treatment", "medical_advice"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "relationship", TargetPath: "diagnosis,prescription,treatment", Fields: []string{"sections.diagnosis", "sections.prescription", "sections.treatment", "sections.medical_advice"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "治疗措施、处方、住院理由、医学证明、特殊检查治疗和重要沟通必须在病历中有对应记录。",
 			LegalBasis:      "门诊病历质量评定标准：处理治疗。",
 			SuggestedScript: "请核对处方、处置和病历医嘱是否一致。",
@@ -642,7 +747,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"allergy_history"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "field", TargetPath: "patient.allergy_history", Fields: []string{"patient.allergy_history", "sections.allergy_history"}, Stages: []string{"realtime", "save", "pre_submit", "pre_archive"}, Severity: "blocking", BlockSubmit: false, BlockArchive: true, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "个人史/病史中必须确认药物、食物或其他过敏史；写“无”时也要有问诊证据。",
 			LegalBasis:      "门诊病历质量评定标准：一般项目与病史中的药物过敏史。",
 			SuggestedScript: "请确认过敏史。若为“无”，需有问诊证据后再提交。",
@@ -656,7 +761,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"allergy_history", "prescription"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "relationship", TargetPath: "patient.allergy_history,prescription", Fields: []string{"patient.allergy_history", "sections.prescription", "structured.prescription"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "blocking", BlockSubmit: true, BlockArchive: true, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "存在明确药物过敏史时，处方不得出现明确风险药物；若使用相关高风险药物，必须有人工确认和风险说明。",
 			LegalBasis:      "门诊病历质量评定标准：过敏史与处方安全。",
 			SuggestedScript: "请先核对过敏史与处方风险，再继续开药。",
@@ -670,7 +775,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"tcm_diagnosis", "inspection", "inquiry", "palpation", "tongue", "pulse_tcm", "syndrome", "treatment_method"}, "templates": []string{"tcm"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "field_group", TargetPath: "tcm.evidence_chain", Fields: []string{"sections.present_illness", "sections.physical_exam", "sections.tcm_diagnosis", "sections.tongue", "sections.pulse_tcm", "sections.syndrome", "sections.treatment_method"}, Stages: []string{"save", "pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "中医病历必须具备中医四诊信息；四诊可写在现病史或体格检查中，并形成辨证、治法、方药/调护建议链条。",
 			LegalBasis:      "门诊病历质量评定标准：专科模板与诊断、处理治疗。",
 			SuggestedScript: "请补全四诊、舌脉、辨证和治法后再提交。",
@@ -684,7 +789,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"inspection", "listening_smelling", "inquiry", "palpation", "tongue", "pulse_tcm", "syndrome"}, "templates": []string{"tcm"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "relationship", TargetPath: "tcm.four_diagnosis_to_syndrome", Fields: []string{"sections.present_illness", "sections.physical_exam", "sections.tongue", "sections.pulse_tcm", "sections.syndrome", "sections.treatment_method"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "辨证和治法必须能回溯到望闻问切、舌象、脉象等证据；辨证依据为空时命中。",
 			LegalBasis:      "中医门诊病历书写与质控要求。",
 			SuggestedScript: "请把辨证依据写清楚，至少能回到四诊和舌脉。",
@@ -698,7 +803,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"diagnosis", "tcm_diagnosis"}, "templates": []string{"tcm"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.diagnosis", Fields: []string{"sections.diagnosis", "sections.tcm_diagnosis"}, Stages: []string{"save", "pre_submit", "post_archive_qc"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "中医病历应尽量具备西医诊断；无西医诊断时提示，不作为强阻断项。",
 			LegalBasis:      "中医门诊病历记录辅助要求。",
 			SuggestedScript: "如能明确，请补充西医诊断；如不能明确，至少提示医生当前未写。",
@@ -712,7 +817,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"treatment_method", "formula"}, "templates": []string{"tcm"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "llm", TargetType: "relationship", TargetPath: "tcm.treatment_method,formula", Fields: []string{"sections.syndrome", "sections.treatment_method", "sections.formula", "structured.formula"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "text_excerpt", "model_explanation"}}),
 			Description:     "方药、加减、煎服法和调护建议必须与辨证、治法一致。",
 			LegalBasis:      "中医门诊病历书写与质控要求。",
 			SuggestedScript: "请核对方药是否与治法一致。",
@@ -726,7 +831,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"physician_signature"}, "templates": []string{"all"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "field", TargetPath: "structured.physician_signature", Fields: []string{"structured.physician_signature", "sections.physician_signature"}, Stages: []string{"pre_archive"}, Severity: "blocking", BlockSubmit: false, BlockArchive: true, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "归档前必须有可识别的医师签名；需要上级签名的文书必须保留上级确认。",
 			LegalBasis:      "门诊病历质量评定标准：医师签名。",
 			SuggestedScript: "归档前请完成医师确认，必要时补上级签名。",
@@ -740,7 +845,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"audit_trail"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "audit_log", TargetPath: "emr_field_events", Fields: []string{"emr_field_events.operator_id", "emr_field_events.change_reason", "emr_field_events.before_value", "emr_field_events.after_value"}, Stages: []string{"post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: false, CountInQC: true, EvidenceTypes: []string{"structured_object"}}),
 			Description:     "电子病历归档后修改必须保留原因、修改人、修改时间和前后差异。",
 			LegalBasis:      "门诊病历质量评定标准：书写要求。",
 			SuggestedScript: "归档后修改请保留原因和前后对比。",
@@ -754,7 +859,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"follow_up"}, "templates": []string{"all"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.follow_up", Fields: []string{"sections.follow_up"}, Stages: []string{"save", "pre_submit", "pre_archive"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "需要复诊、观察、待查结果回报、慢病管理的病历必须写明复诊时间、触发条件或随访要求。",
 			LegalBasis:      "门诊病历随访与复诊要求。",
 			SuggestedScript: "请补充复诊安排或随访条件。",
@@ -768,7 +873,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"menstrual_history", "last_menstrual_period"}, "templates": []string{"gynecology"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field_group", TargetPath: "extensions.gynecology", Fields: []string{"menstrual_history", "last_menstrual_period"}, Stages: []string{"save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "适龄女性接诊需记录月经史，至少包含周期、经期、经量、痛经和末次月经。",
 			LegalBasis:      "门诊病历质量评定标准：相关病史。",
 			SuggestedScript: "请补充月经史和末次月经后再提交。",
@@ -782,7 +887,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"marriage_childbearing", "pregnancy_history"}, "templates": []string{"gynecology"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field_group", TargetPath: "extensions.gynecology", Fields: []string{"marriage_childbearing", "pregnancy_history"}, Stages: []string{"save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "妇科病历应记录婚育情况、孕次、产次、流产史和避孕情况。",
 			LegalBasis:      "门诊病历质量评定标准：相关病史。",
 			SuggestedScript: "请补充婚育史和孕产史。",
@@ -796,7 +901,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"gyne_exam"}, "templates": []string{"gynecology"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field", TargetPath: "sections.gyne_exam", Fields: []string{"sections.gyne_exam", "extensions.gyne_exam_not_done_reason"}, Stages: []string{"pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "腹痛、出血、白带异常、盆腔相关主诉下，应记录妇科专科查体或未查原因。",
 			LegalBasis:      "门诊病历质量评定标准：专科查体。",
 			SuggestedScript: "请记录妇科查体或说明未查原因。",
@@ -810,7 +915,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"tooth_position", "treatment_plan"}, "templates": []string{"dental"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "relationship", TargetPath: "tooth_position,treatment_plan", Fields: []string{"structured.tooth_position", "sections.treatment_plan", "structured.treatment_plan"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "治疗计划必须对应明确牙位，口腔检查、影像和治疗步骤要能互相解释。",
 			LegalBasis:      "门诊病历质量评定标准：专科检查与处理治疗。",
 			SuggestedScript: "请确认牙位与治疗计划、影像部位一致。",
@@ -824,7 +929,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"treatment_plan", "medical_advice"}, "templates": []string{"dental"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "structured", TargetType: "relationship", TargetPath: "treatment_plan,informed_consent", Fields: []string{"sections.treatment_plan", "structured.treatment_plan", "sections.informed_consent", "structured.informed_consent"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "拔牙、种植、正畸、修复等操作应记录告知、同意和操作过程。",
 			LegalBasis:      "门诊病历质量评定标准：特殊操作记录。",
 			SuggestedScript: "请补充知情告知和同意记录。",
@@ -838,7 +943,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"guardian"}, "templates": []string{"pediatrics"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "field", TargetPath: "patient.guardian", Fields: []string{"patient.guardian", "structured.guardian", "extensions.guardian"}, Stages: []string{"realtime", "save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "陪诊监护人身份、与患儿关系应记录完整。",
 			LegalBasis:      "儿科门诊病历要求。",
 			SuggestedScript: "请补充监护人信息。",
@@ -852,7 +957,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"temperature", "mental_status"}, "templates": []string{"pediatrics"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field_group", TargetPath: "extensions.pediatrics_fever", Fields: []string{"temperature", "fever_duration", "antipyretic", "mental_status"}, Stages: []string{"realtime", "save", "pre_submit", "pre_archive"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "发热主诉下必须记录最高体温、持续时间、退热药使用和精神反应。",
 			LegalBasis:      "儿科门诊病历要求。",
 			SuggestedScript: "请补充儿童发热峰值和伴随反应。",
@@ -866,7 +971,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "high",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"weight", "prescription"}, "templates": []string{"pediatrics"}},
+			Conditions:      emrHardRuleConditions(emrHardRuleOptions{TargetType: "relationship", TargetPath: "patient.weight,prescription", Fields: []string{"patient.weight", "structured.weight", "sections.prescription", "structured.prescription"}, Stages: []string{"pre_submit", "pre_archive", "post_archive_qc"}, Severity: "important", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field", "structured_object"}}),
 			Description:     "儿科用药必须关注年龄、体重、剂量、用法和疗程；缺体重或剂量依据时命中。",
 			LegalBasis:      "儿科门诊病历要求。",
 			SuggestedScript: "请补充体重和剂量依据。",
@@ -880,7 +985,7 @@ func builtinRuleSeeds() []builtinRuleSeed {
 			Scope:           "emr",
 			Severity:        "medium",
 			TriggerType:     "semantic",
-			Conditions:      JSONMap{"type": "quality", "fields": []string{"feeding", "growth", "vaccination"}, "templates": []string{"pediatrics"}},
+			Conditions:      emrRuleObjectConditions(emrRuleObjectOptions{Executor: "hard", TargetType: "field_group", TargetPath: "extensions.pediatrics_growth", Fields: []string{"feeding", "growth", "vaccination"}, Stages: []string{"save", "pre_submit", "post_archive_qc"}, Severity: "notice", BlockSubmit: false, BlockArchive: false, AllowConfirm: true, CountInQC: true, EvidenceTypes: []string{"field"}}),
 			Description:     "相关场景下应记录喂养史、生长发育、疫苗接种情况。",
 			LegalBasis:      "儿科门诊病历要求。",
 			SuggestedScript: "请补充喂养史、生长发育和疫苗接种情况。",

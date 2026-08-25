@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
+	"github.com/freeasyman/lingce-api/internal/compliance"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
@@ -23,6 +24,8 @@ import (
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
+	"github.com/freeasyman/lingce-api/internal/emrrule"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
@@ -202,6 +205,26 @@ func main() {
 	emrRecordService := emrrecord.NewService(emrRecordStore)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrRuleStore := emrrule.NewStore(pool)
+	emrRuleService := emrrule.NewService(emrRuleStore)
+	emrRecordService.SetRuleService(emrRuleService)
+	emrRuleHandler := emrrule.NewHandler(emrRuleService)
+	emrRuleHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	complianceStore := compliance.NewStore(pool)
+	complianceService := compliance.NewService(complianceStore)
+	if err := complianceService.EnsureBuiltinRules(ctx); err != nil {
+		slog.Error("failed to ensure compliance builtin rules", "error", err)
+		os.Exit(1)
+	}
+	complianceHandler := compliance.NewHandler(complianceService)
+	complianceHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrTemplateStore := emrtemplate.NewStore(pool)
+	emrTemplateService := emrtemplate.NewService(emrTemplateStore, complianceService)
+	emrTemplateHandler := emrtemplate.NewHandler(emrTemplateService)
+	emrTemplateHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Create LLM gateway client
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
