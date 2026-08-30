@@ -144,6 +144,14 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 	if err != nil {
 		return nil, created, err
 	}
+	providerName, providerRole, startedAt := s.buildEncounterDefaultsForRecording(ctx, req.TenantID, req.EmployeeID, req.RecordedAt)
+	if _, err := s.store.EnsureEncounterForRecording(ctx, req.TenantID, recordingID, &req.EmployeeID, nil, providerName, providerRole, "store", sceneToVisitType(req.Scene), startedAt); err != nil {
+		slog.Warn("ensure encounter after owned audio ingest failed",
+			"recording_id", recordingID,
+			"tenant_id", req.TenantID,
+			"error", err,
+		)
+	}
 	resp := toRecordingResponse(recording)
 	if created {
 		triggerSource := strings.TrimSpace(req.TriggerSource)
@@ -253,78 +261,11 @@ func (s *Service) ListRecordings(ctx context.Context, req RecordingListRequest) 
 		resp := toRecordingResponse(r)
 		responses[i] = resp
 	}
-	if err := s.backfillListChiefComplaintFromEMR(ctx, responses); err != nil {
-		slog.Warn("failed to backfill chief complaint for recording list", "error", err)
-	}
 	for i := range responses {
 		compactRecordingListItem(responses[i])
 	}
 
 	return responses, total, nil
-}
-
-func (s *Service) backfillListChiefComplaintFromEMR(ctx context.Context, responses []*RecordingResponse) error {
-	if len(responses) == 0 {
-		return nil
-	}
-	needIDs := make([]int64, 0, len(responses))
-	for _, resp := range responses {
-		if resp == nil || resp.ID <= 0 {
-			continue
-		}
-		if resp.ChiefComplaint != nil && strings.TrimSpace(*resp.ChiefComplaint) != "" {
-			continue
-		}
-		needIDs = append(needIDs, resp.ID)
-	}
-	if len(needIDs) == 0 {
-		return nil
-	}
-
-	rows, err := s.store.pool.Query(ctx, `
-		SELECT recording_id, COALESCE(emr_content::jsonb, '{}'::jsonb)
-		FROM recording_emr_drafts
-		WHERE recording_id = ANY($1::bigint[])
-	`, needIDs)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	byID := make(map[int64]map[string]interface{}, len(needIDs))
-	for rows.Next() {
-		var recordingID int64
-		var emrContent JSONObject
-		if scanErr := rows.Scan(&recordingID, &emrContent); scanErr != nil {
-			return scanErr
-		}
-		byID[recordingID] = map[string]interface{}(emrContent)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, resp := range responses {
-		if resp == nil || resp.ID <= 0 {
-			continue
-		}
-		if resp.ChiefComplaint != nil && strings.TrimSpace(*resp.ChiefComplaint) != "" {
-			continue
-		}
-		content, ok := byID[resp.ID]
-		if !ok || content == nil {
-			continue
-		}
-		chiefComplaint := pickString(content, "chief_complaint")
-		if chiefComplaint == "" {
-			chiefComplaint = pickString(content, "chiefComplaint")
-		}
-		if chiefComplaint != "" {
-			resp.ChiefComplaint = literalStringPtr(chiefComplaint)
-		}
-	}
-
-	return nil
 }
 
 func compactRecordingListItem(resp *RecordingResponse) {
@@ -348,7 +289,6 @@ func compactRecordingListItem(resp *RecordingResponse) {
 	resp.TimelineTranscript = nil
 	resp.ContentSeeds = nil
 	resp.RouteReview = nil
-	resp.EMRDraft = nil
 	resp.ConsultationRecord = nil
 	resp.DealOutcome = nil
 	resp.SuggestedTask = nil
@@ -2826,8 +2766,47 @@ func (s *Service) CreateRecording(ctx context.Context, req CreateRecordingReques
 	if err != nil {
 		return nil, err
 	}
+	providerName, providerRole, startedAt := s.buildEncounterDefaultsForRecording(ctx, req.TenantID, req.EmployeeID, req.RecordingStartedAt)
+	if _, err := s.store.EnsureEncounterForRecording(ctx, req.TenantID, recording.ID, &req.EmployeeID, nil, providerName, providerRole, "store", sceneToVisitType(strOrDefault(req.Scene, "consultation")), startedAt); err != nil {
+		slog.Warn("ensure encounter after recording creation failed",
+			"recording_id", recording.ID,
+			"tenant_id", req.TenantID,
+			"error", err,
+		)
+	}
 
 	return toRecordingResponse(recording), nil
+}
+
+func (s *Service) buildEncounterDefaultsForRecording(ctx context.Context, tenantID, employeeID int64, startedAt *time.Time) (string, string, *time.Time) {
+	providerName := ""
+	providerRole := ""
+	if s.employeeStore != nil {
+		if emp, err := s.employeeStore.GetEmployeeByID(ctx, employeeID); err == nil && emp != nil {
+			providerName = strings.TrimSpace(emp.FullName)
+			providerRole = strings.TrimSpace(emp.RoleCode)
+		}
+	}
+	if providerName == "" {
+		providerName = fmt.Sprintf("employee-%d", employeeID)
+	}
+	if providerRole == "" {
+		providerRole = "doctor"
+	}
+	_ = tenantID
+	return providerName, providerRole, startedAt
+}
+
+func sceneToVisitType(scene string) string {
+	if strings.TrimSpace(scene) == "" {
+		return "consultation"
+	}
+	switch strings.ToLower(strings.TrimSpace(scene)) {
+	case "follow_up":
+		return "follow_up"
+	default:
+		return "consultation"
+	}
 }
 
 // UpdateRecording updates a medical recording
@@ -2847,7 +2826,6 @@ func (s *Service) UpdateRecording(ctx context.Context, id int64, req UpdateRecor
 	}
 
 	if req.CustomerID != nil && recording.CustomerID != nil && customerChanged(before.CustomerID, recording.CustomerID) {
-		_ = s.backfillEMRDraftCustomerID(ctx, id, *recording.CustomerID)
 		_ = s.rebindOpenTasksCustomer(ctx, id, *recording.CustomerID)
 		_ = s.dispatchMedicalFollowUpTasksIfPossible(ctx, id, "manual_link")
 		_ = s.appendCustomerInteraction(ctx, recording.TenantID, *recording.CustomerID, recording.EmployeeID, "recording_linked", "system", id, "录音关联客户")
@@ -2867,15 +2845,6 @@ func customerChanged(before *int64, after *int64) bool {
 		return true
 	}
 	return *before != *after
-}
-
-func (s *Service) backfillEMRDraftCustomerID(ctx context.Context, recordingID, customerID int64) error {
-	_, err := s.store.pool.Exec(ctx, `
-		UPDATE recording_emr_drafts
-		SET customer_id = $1
-		WHERE recording_id = $2 AND customer_id IS NULL
-	`, customerID, recordingID)
-	return err
 }
 
 func (s *Service) rebindOpenTasksCustomer(ctx context.Context, recordingID, customerID int64) error {
@@ -4220,23 +4189,6 @@ func populateCompatibilityFields(resp *RecordingResponse) {
 		resp.ContentSeedsTypes = []string{}
 	}
 
-	if resp.EMRStatus == nil {
-		if draft := firstNonNilMap(resp.EMRDraft, pickMap(analysisDisplay, "emr_draft"), pickMap(analysisResult, "emr_draft")); draft != nil {
-			if confirmed := pickBool(draft, "is_confirmed"); confirmed != nil {
-				if *confirmed {
-					resp.EMRStatus = pickStringPtr("confirmed")
-				} else {
-					resp.EMRStatus = pickStringPtr("draft")
-				}
-			}
-		}
-	}
-	if resp.EMRStatus == nil {
-		resp.EMRStatus = pickStringPtr(
-			pickString(analysisDisplay, "emr_status"),
-			pickString(analysisResult, "emr_status"),
-		)
-	}
 }
 
 func firstNonNilMap(candidates ...map[string]interface{}) map[string]interface{} {

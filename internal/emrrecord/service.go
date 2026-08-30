@@ -2,188 +2,296 @@ package emrrecord
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
-	"github.com/freeasyman/lingce-api/internal/emrrule"
-	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/internal/emrcheck"
+	"github.com/freeasyman/lingce-api/internal/emrprocess"
 )
 
 type Service struct {
-	store       *Store
-	ruleService *emrrule.Service
+	store   *Store
+	checks  *emrcheck.Service
+	process *emrprocess.Service
 }
 
-func NewService(store *Store) *Service {
-	return &Service{store: store}
+func NewService(store *Store, checks *emrcheck.Service, process *emrprocess.Service) *Service {
+	return &Service{store: store, checks: checks, process: process}
 }
 
-func (s *Service) SetRuleService(ruleService *emrrule.Service) {
-	s.ruleService = ruleService
+func (s *Service) List(ctx context.Context, tenantID int64, status string) ([]*Record, error) {
+	return s.store.List(ctx, tenantID, strings.TrimSpace(status))
 }
 
-func (s *Service) ListRecords(ctx context.Context, req ListRecordsRequest) ([]*RecordListItem, int, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", req.TenantID); err != nil {
-		return nil, 0, err
-	}
-	if err := tenancy.RequirePositiveID("employee_id", req.EmployeeID); err != nil {
-		return nil, 0, err
-	}
-	if req.Page <= 0 {
-		req.Page = 1
-	}
-	if req.PageSize <= 0 {
-		req.PageSize = 20
-	}
-	if req.PageSize > 100 {
-		req.PageSize = 100
-	}
-	return s.store.ListRecords(ctx, req)
+func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
+	return s.store.Get(ctx, tenantID, id)
 }
 
-func (s *Service) ImportRecordingDrafts(ctx context.Context, tenantID, actorID int64, recordingIDs []int64) (*ImportRecordingDraftsResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+func (s *Service) Create(ctx context.Context, tenantID, actorID int64, req CreateRequest) (*Record, error) {
+	if strings.TrimSpace(req.TemplateVersionID) == "" {
+		return s.createFailed(ctx, tenantID, actorID, "template_version_id is required")
+	}
+	if req.DocumentType != "" && req.DocumentType != "门诊病历" && req.DocumentType != "急诊病历" {
+		return s.createFailed(ctx, tenantID, actorID, "invalid document_type")
+	}
+	if req.VisitType != "初诊" && req.VisitType != "复诊" {
+		return s.createFailed(ctx, tenantID, actorID, "invalid visit_type")
+	}
+	record, err := s.store.Create(ctx, tenantID, actorID, req)
+	if err != nil {
+		_ = s.createFailedRecord(ctx, tenantID, actorID, err)
 		return nil, err
 	}
-	if err := tenancy.RequirePositiveID("actor_id", actorID); err != nil {
-		return nil, err
+	recordID := record.ID
+	if _, err := s.process.Append(ctx, emrprocess.AppendRequest{
+		TenantID: tenantID, RecordID: &recordID, ActionType: "创建", ActionResult: "成功",
+		ActorType: "人工", ActorID: &actorID, Source: "外部接口", AfterStatus: &record.Status,
+	}); err != nil {
+		return nil, fmt.Errorf("record create succeeded but process record failed: %w", err)
 	}
-	if len(recordingIDs) == 0 {
-		return nil, fmt.Errorf("recording_ids is required")
+	return record, nil
+}
+
+func (s *Service) createFailed(ctx context.Context, tenantID, actorID int64, reason string) (*Record, error) {
+	err := errors.New(reason)
+	_ = s.createFailedRecord(ctx, tenantID, actorID, err)
+	return nil, err
+}
+
+func (s *Service) createFailedRecord(ctx context.Context, tenantID, actorID int64, cause error) error {
+	_, err := s.process.Append(ctx, emrprocess.AppendRequest{
+		TenantID: tenantID, ActionType: "创建", ActionResult: "失败", ActorType: "人工", ActorID: &actorID,
+		Source: "外部接口", FailureReason: cause.Error(),
+	})
+	return err
+}
+
+func (s *Service) AutoSave(ctx context.Context, tenantID, actorID int64, id string, content map[string]any) (*Record, error) {
+	return s.store.SaveWorking(ctx, tenantID, actorID, id, content)
+}
+
+func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id string, content map[string]any, note string) (*WriteOutcome, error) {
+	if content == nil {
+		current, err := s.store.Get(ctx, tenantID, id)
+		if err != nil || current == nil {
+			return nil, fmt.Errorf("record not found")
+		}
+		content = current.WorkingContent
 	}
-	recordIDs, err := s.store.ImportRecordingDrafts(ctx, tenantID, actorID, recordingIDs)
+	outcome, err := s.store.SaveFormal(ctx, tenantID, actorID, id, content)
 	if err != nil {
 		return nil, err
 	}
-	return &ImportRecordingDraftsResponse{
-		ImportedCount: int64(len(recordIDs)),
-		RecordIDs:     recordIDs,
-	}, nil
+	run, checkErr := s.checks.Run(ctx, emrcheck.CheckRequest{TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID, TriggerAction: "手动保存", StartedBy: &actorID})
+	if checkErr == nil {
+		outcome.CheckRunID = &run.ID
+		outcome.CheckRun = run
+	}
+	processErr := s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, note, run, checkErr)
+	if processErr != nil {
+		return nil, processErr
+	}
+	return outcome, nil
 }
 
-func (s *Service) GetRecord(ctx context.Context, tenantID, recordID int64) (*RecordDetailResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
-		return nil, err
-	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
-		return nil, err
-	}
-	return s.store.GetRecord(ctx, tenantID, recordID)
+func (s *Service) Submit(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	return s.checkedTransition(ctx, tenantID, actorID, id, req, "提交", "待确认", false)
 }
 
-func (s *Service) GetEncounter(ctx context.Context, tenantID, encounterID int64) (*EncounterDetailResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
-		return nil, err
+func (s *Service) Confirm(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
 	}
-	if err := tenancy.RequirePositiveID("encounter_id", encounterID); err != nil {
-		return nil, err
+	if current.Status != "待确认" {
+		return nil, fmt.Errorf("record status %s cannot be confirmed", current.Status)
 	}
-	return s.store.GetEncounter(ctx, tenantID, encounterID)
+	return s.checkedTransition(ctx, tenantID, actorID, id, req, "确认", "已确认", false)
 }
 
-func (s *Service) SaveRecord(ctx context.Context, tenantID, recordID, actorID int64, actorType string, req SaveRecordRequest) (*RecordWriteResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
-		return nil, err
+func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
 	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
-		return nil, err
+	if current.Status != "已确认" {
+		return nil, fmt.Errorf("record status %s cannot be archived", current.Status)
 	}
-	if err := tenancy.RequirePositiveID("actor_id", actorID); err != nil {
-		return nil, err
+	return s.checkedTransition(ctx, tenantID, actorID, id, req, "归档", "已归档", false)
+}
+
+func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest, action, target string, revisionIncrement bool) (*WriteOutcome, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
 	}
-	resp, err := s.store.SaveRecord(ctx, tenantID, recordID, actorID, actorType, req)
-	if err != nil || resp == nil {
-		return resp, err
+	if !allowedTransition(current.Status, target) {
+		return nil, fmt.Errorf("record status %s cannot transition to %s", current.Status, target)
 	}
-	if s.ruleService != nil {
-		_, err = s.ruleService.RunStageAndGetSummary(ctx, tenantID, recordID, actorID, "save", "save")
+	content := req.Content
+	if content == nil {
+		content = current.WorkingContent
+	}
+	var outcome *WriteOutcome
+	if action == "提交" {
+		outcome, err = s.store.SaveFormal(ctx, tenantID, actorID, id, content)
 		if err != nil {
 			return nil, err
 		}
-	}
-	return resp, nil
-}
-
-func (s *Service) SubmitRecord(ctx context.Context, tenantID, recordID, actorID int64, actorType string, req SubmitRecordRequest) (*RecordWriteResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
-		return nil, err
-	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
-		return nil, err
-	}
-	if err := tenancy.RequirePositiveID("actor_id", actorID); err != nil {
-		return nil, err
-	}
-	if s.ruleService != nil {
-		result, err := s.ruleService.RunRecordRules(ctx, tenantID, recordID, actorID, emrrule.RunRequest{Stage: "pre_submit", TriggerSource: "submit"})
-		if err != nil {
-			return nil, err
+	} else {
+		if current.CurrentSnapshotID == nil {
+			return nil, fmt.Errorf("record has no formal snapshot")
 		}
-		if result != nil && !result.Summary.CanSubmit {
-			return nil, &emrrule.BlockError{
-				Message: "病历存在提交阻断规则，请处理后再提交",
-				Summary: result.Summary,
-				Hits:    blockingHits(result.Hits, "block_submit"),
+		if digest(content) != current.WorkingDigest {
+			return nil, fmt.Errorf("record has unsaved content; save it before %s", action)
+		}
+		snapshot, snapshotErr := s.store.GetSnapshot(ctx, tenantID, id, *current.CurrentSnapshotID)
+		if snapshotErr != nil || snapshot == nil {
+			return nil, fmt.Errorf("record snapshot not found")
+		}
+		outcome = &WriteOutcome{Record: current, Snapshot: snapshot, BeforeContent: current.WorkingContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: current.CurrentSnapshotID}
+	}
+	run, checkErr := s.checks.Run(ctx, emrcheck.CheckRequest{TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID, TriggerAction: action, StartedBy: &actorID})
+	if checkErr != nil {
+		_ = s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, nil, checkErr)
+		return nil, checkErr
+	}
+	outcome.CheckRunID = &run.ID
+	outcome.CheckRun = run
+	if run.OverallResult == "需要处理" {
+		if action == "提交" {
+			updated, transitionErr := s.store.Transition(ctx, tenantID, id, "需补全", actorID, nil, nil, false)
+			if transitionErr != nil {
+				return nil, transitionErr
 			}
+			outcome.Record = updated
+			outcome.AfterStatus = "需补全"
 		}
+		if processErr := s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, run, fmt.Errorf("检查结果需要处理")); processErr != nil {
+			return nil, processErr
+		}
+		return outcome, fmt.Errorf("病历存在需要处理的质量问题")
 	}
-	return s.store.SubmitRecord(ctx, tenantID, recordID, actorID, actorType, req)
+	updated, err := s.store.Transition(ctx, tenantID, id, target, actorID, snapshotID(target, outcome.Snapshot.ID), snapshotID(target, outcome.Snapshot.ID), revisionIncrement)
+	if err != nil {
+		return nil, err
+	}
+	outcome.Record = updated
+	outcome.AfterStatus = target
+	if err := s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, run, nil); err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
-func (s *Service) ArchiveRecord(ctx context.Context, tenantID, recordID, actorID int64, actorType string, req ArchiveRecordRequest) (*RecordWriteResponse, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
-		return nil, err
+func allowedTransition(from, to string) bool {
+	switch {
+	case from == "草稿" && to == "待确认":
+		return true
+	case from == "需补全" && to == "待确认":
+		return true
+	case from == "退回" && to == "待确认":
+		return true
+	case from == "待确认" && to == "已确认":
+		return true
+	case from == "已确认" && to == "已归档":
+		return true
+	default:
+		return false
 	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
-		return nil, err
-	}
-	if err := tenancy.RequirePositiveID("actor_id", actorID); err != nil {
-		return nil, err
-	}
-	if s.ruleService != nil {
-		result, err := s.ruleService.RunRecordRules(ctx, tenantID, recordID, actorID, emrrule.RunRequest{Stage: "pre_archive", TriggerSource: "archive"})
-		if err != nil {
-			return nil, err
-		}
-		if result != nil && !result.Summary.CanArchive {
-			return nil, &emrrule.BlockError{
-				Message: "病历存在归档阻断规则，请处理后再归档",
-				Summary: result.Summary,
-				Hits:    blockingHits(result.Hits, "block_archive"),
-			}
-		}
-	}
-	return s.store.ArchiveRecord(ctx, tenantID, recordID, actorID, actorType, req)
 }
 
-func (s *Service) ListVersions(ctx context.Context, tenantID, recordID int64) ([]*RecordVersionDTO, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+func (s *Service) Revise(ctx context.Context, tenantID, actorID int64, id, note string) (*Record, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
+	if current.Status != "已确认" && current.Status != "已归档" {
+		return nil, fmt.Errorf("record status %s cannot be revised", current.Status)
+	}
+	before := current.Status
+	updated, err := s.store.Transition(ctx, tenantID, id, "草稿", actorID, nil, nil, before == "已归档")
+	if err != nil {
 		return nil, err
 	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
+	actionType := "确认失效"
+	if before == "已归档" {
+		actionType = "受控修订"
+	}
+	if _, err := s.process.Append(ctx, emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: actionType, ActionResult: "成功", ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: &before, AfterStatus: &updated.Status, BeforeSnapshotID: current.CurrentSnapshotID, AfterSnapshotID: current.CurrentSnapshotID, ActionNote: note}); err != nil {
 		return nil, err
 	}
-	return s.store.ListVersions(ctx, tenantID, recordID)
+	return updated, nil
 }
 
-func (s *Service) ListAuditEvents(ctx context.Context, tenantID, recordID int64) ([]*RecordAuditEventDTO, error) {
-	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
+func (s *Service) Void(ctx context.Context, tenantID, actorID int64, id, note string) (*Record, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
+	updated, err := s.store.Void(ctx, tenantID, id)
+	if err != nil {
 		return nil, err
 	}
-	if err := tenancy.RequirePositiveID("record_id", recordID); err != nil {
+	if _, err := s.process.Append(ctx, emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: "作废", ActionResult: "成功", ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: &current.Status, AfterStatus: &updated.Status, BeforeSnapshotID: current.CurrentSnapshotID, AfterSnapshotID: current.CurrentSnapshotID, ActionNote: note}); err != nil {
 		return nil, err
 	}
-	return s.store.ListAuditEvents(ctx, tenantID, recordID)
+	return updated, nil
 }
 
-func blockingHits(hits []emrrule.RuleHit, policyKey string) []emrrule.RuleHit {
-	blocking := make([]emrrule.RuleHit, 0)
-	for _, hit := range hits {
-		if hit.Severity != "blocking" {
-			continue
-		}
-		if value, ok := hit.ActionPolicy[policyKey].(bool); ok && value {
-			blocking = append(blocking, hit)
+func (s *Service) Snapshots(ctx context.Context, tenantID int64, id string) ([]*Snapshot, error) {
+	return s.store.ListSnapshots(ctx, tenantID, id)
+}
+
+func (s *Service) appendProcess(ctx context.Context, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, run *emrcheck.CheckRun, cause error) error {
+	result := "成功"
+	failure := ""
+	if cause != nil {
+		result = "失败"
+		failure = cause.Error()
+	}
+	var runID *string
+	if run != nil {
+		runID = &run.ID
+	}
+	changes := diffTopLevel(outcome.BeforeContent, outcome.Record.WorkingContent)
+	_, err := s.process.Append(ctx, emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), CheckRunID: runID, FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: map[string]any{"check_run_id": runID, "failure": failure}})
+	return err
+}
+
+func diffTopLevel(before, after map[string]any) []any {
+	changes := make([]any, 0)
+	keys := map[string]bool{}
+	for key := range before {
+		keys[key] = true
+	}
+	for key := range after {
+		keys[key] = true
+	}
+	for key := range keys {
+		oldValue, oldOK := before[key]
+		newValue, newOK := after[key]
+		oldRaw, _ := json.Marshal(oldValue)
+		newRaw, _ := json.Marshal(newValue)
+		if oldOK != newOK || string(oldRaw) != string(newRaw) {
+			changes = append(changes, map[string]any{"field": key, "before": oldValue, "after": newValue})
 		}
 	}
-	return blocking
+	return changes
 }
+
+func snapshotID(target, id string) *string {
+	if target == "已确认" || target == "已归档" {
+		return &id
+	}
+	return &id
+}
+func snapshotPtr(snapshot *Snapshot) *string {
+	if snapshot == nil {
+		return nil
+	}
+	return &snapshot.ID
+}
+func stringPtr(value string) *string { return &value }

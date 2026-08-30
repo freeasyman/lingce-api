@@ -17,7 +17,7 @@ func (s *Store) ListEvents(ctx context.Context, tenantID int64) ([]*ComplianceEv
 		       evidence_at, transcript, related_actions, created_at, updated_at
 		FROM compliance_events
 		WHERE deleted_at IS NULL
-		  AND (tenant_id = 0 OR tenant_id = $1)
+		  AND tenant_id = $1
 		ORDER BY timestamp DESC, created_at DESC, id DESC
 	`, tenantID)
 	if err != nil {
@@ -48,7 +48,7 @@ func (s *Store) GetEvent(ctx context.Context, tenantID int64, id string) (*Compl
 		FROM compliance_events
 		WHERE deleted_at IS NULL
 		  AND id = $1
-		  AND (tenant_id = 0 OR tenant_id = $2)
+		  AND tenant_id = $2
 	`, id, tenantID)
 	event, err := scanComplianceEvent(row)
 	if err == pgx.ErrNoRows {

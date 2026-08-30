@@ -102,7 +102,6 @@ type RecordingResponse struct {
 	RouteReviewReason     *string                  `json:"route_review_reason"`
 	RouteAutoDecision     *string                  `json:"route_auto_decision"`
 	RouteReviewStatus     *string                  `json:"route_review_status"`
-	EMRStatus             *string                  `json:"emr_status"`
 	StatusSummary         *string                  `json:"status_summary,omitempty"`
 	KeyQuotes             []string                 `json:"key_quotes,omitempty"`
 	DealOutcome           map[string]interface{}   `json:"deal_outcome,omitempty"`

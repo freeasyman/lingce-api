@@ -88,7 +88,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/customers/{id}/momentum-history", Handler: h.GetCustomerMomentumHistory, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/duplicates", Handler: h.CheckDuplicates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/{id}/consultation-records", Handler: h.GetConsultationRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.GetEMRRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/customers/tags/batch", Handler: h.BatchTagCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/tags/stats", Handler: h.GetTagStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/groups/{id}/members", Handler: h.GetGroupMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1258,50 +1257,6 @@ func (h *Handler) GetConsultationRecords(w http.ResponseWriter, r *http.Request)
 	}
 
 	records, total, err := h.service.ListConsultationRecords(r.Context(), id, page, pageSize)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-
-	httputil.WritePaginated(w, records, int64(total), page, pageSize)
-}
-
-// GetEMRRecords handles getting customer EMR records
-func (h *Handler) GetEMRRecords(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid customer ID")
-		return
-	}
-
-	// Check tenant access
-	existingCustomer, err := h.service.GetCustomerByID(r.Context(), id)
-	if err != nil {
-		httputil.WriteNotFound(w, err.Error())
-		return
-	}
-
-	if err := tenancy.RequireSameTenant(claims, existingCustomer.TenantID); err != nil {
-		httputil.WriteForbidden(w, "Access denied")
-		return
-	}
-
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-
-	records, total, err := h.service.ListEMRRecords(r.Context(), id, page, pageSize)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

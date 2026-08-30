@@ -27,8 +27,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "PATCH", Path: "/api/v1/compliance/rules/{id}", Handler: h.UpdateRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "DELETE", Path: "/api/v1/compliance/rules/{id}", Handler: h.DeleteRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/compliance/rules/actions/restore-builtin", Handler: h.RestoreBuiltinRules},
-		{Method: "GET", Path: "/api/v1/compliance/events", Handler: h.ListEvents},
-		{Method: "GET", Path: "/api/v1/compliance/events/{id}", Handler: h.GetEvent},
+		{Method: "GET", Path: "/api/v1/compliance/events", Handler: h.ListEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/compliance/events/{id}", Handler: h.GetEvent, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 	}
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
@@ -158,14 +158,15 @@ func (h *Handler) RestoreBuiltinRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
-	var tenantID int64 = 0
-	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
-		resolved, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
-		if err != nil {
-			httputil.WriteBadRequest(w, err.Error())
-			return
-		}
-		tenantID = resolved
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	events, err := h.service.ListEvents(r.Context(), tenantID)
 	if err != nil {
@@ -176,14 +177,15 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetEvent(w http.ResponseWriter, r *http.Request) {
-	var tenantID int64 = 0
-	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
-		resolved, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
-		if err != nil {
-			httputil.WriteBadRequest(w, err.Error())
-			return
-		}
-		tenantID = resolved
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
 	}
 	event, err := h.service.GetEvent(r.Context(), tenantID, strings.TrimSpace(r.PathValue("id")))
 	if err != nil {

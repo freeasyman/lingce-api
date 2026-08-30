@@ -22,9 +22,11 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
+	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrprocess"
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
-	"github.com/freeasyman/lingce-api/internal/emrrule"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -201,16 +203,38 @@ func main() {
 	emrPermissionHandler := emrpermission.NewHandler(emrPermissionService)
 	emrPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	emrQualityStore := emrquality.NewStore(pool)
+	emrQualityService := emrquality.NewService(emrQualityStore)
+	if err := emrQualityService.EnsureBuiltin(ctx); err != nil {
+		slog.Error("failed to ensure EMR quality requirements", "error", err)
+		os.Exit(1)
+	}
+	emrQualityHandler := emrquality.NewHandler(emrQualityService)
+	emrQualityHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrTemplateStore := emrtemplate.NewStore(pool)
+	emrTemplateService := emrtemplate.NewService(emrTemplateStore)
+	if err := emrTemplateService.EnsureBuiltin(ctx); err != nil {
+		slog.Error("failed to ensure builtin EMR template", "error", err)
+		os.Exit(1)
+	}
+	emrTemplateHandler := emrtemplate.NewHandler(emrTemplateService)
+	emrTemplateHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrProcessStore := emrprocess.NewStore(pool)
+	emrProcessService := emrprocess.NewService(emrProcessStore)
+	emrProcessHandler := emrprocess.NewHandler(emrProcessService)
+	emrProcessHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	emrCheckStore := emrcheck.NewStore(pool)
+	emrCheckService := emrcheck.NewService(emrCheckStore)
+	emrCheckHandler := emrcheck.NewHandler(emrCheckService)
+	emrCheckHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
 	emrRecordStore := emrrecord.NewStore(pool)
-	emrRecordService := emrrecord.NewService(emrRecordStore)
+	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	emrRuleStore := emrrule.NewStore(pool)
-	emrRuleService := emrrule.NewService(emrRuleStore)
-	emrRecordService.SetRuleService(emrRuleService)
-	emrRuleHandler := emrrule.NewHandler(emrRuleService)
-	emrRuleHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	complianceStore := compliance.NewStore(pool)
 	complianceService := compliance.NewService(complianceStore)
@@ -220,11 +244,6 @@ func main() {
 	}
 	complianceHandler := compliance.NewHandler(complianceService)
 	complianceHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	emrTemplateStore := emrtemplate.NewStore(pool)
-	emrTemplateService := emrtemplate.NewService(emrTemplateStore, complianceService)
-	emrTemplateHandler := emrtemplate.NewHandler(emrTemplateService)
-	emrTemplateHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// Create LLM gateway client
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)

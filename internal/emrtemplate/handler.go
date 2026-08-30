@@ -2,71 +2,66 @@ package emrtemplate
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct {
-	service *Service
-}
+type Handler struct{ service *Service }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
-}
-
+func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	routes := []router.Route{
-		{Method: "GET", Path: "/api/v1/emr/templates", Handler: h.ListTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/emr/templates/{id}", Handler: h.GetTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/templates", Handler: h.CreateTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "PUT", Path: "/api/v1/emr/templates/{id}", Handler: h.UpdateTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "PUT", Path: "/api/v1/emr/templates/{id}/bindings", Handler: h.SaveBindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-	}
-	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/emr/templates", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/templates", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/templates/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/templates/{id}/versions", Handler: h.CreateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/templates/{id}/versions", Handler: h.ListVersions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/template-versions/{id}", Handler: h.GetVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}", Handler: h.UpdateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}/sections", Handler: h.SaveSections, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}/quality-requirements", Handler: h.SaveBindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/template-versions/{id}/publish", Handler: h.Publish, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/template-versions/{id}/disable", Handler: h.Disable, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
-
-func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
+func (h *Handler) auth(r *http.Request) (*auth.Claims, int64, error) {
+	c := middleware.GetUserClaims(r.Context())
+	if c == nil {
+		return nil, 0, fmt.Errorf("invalid token")
 	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
+	return c, tid, err
+}
+func parseID(r *http.Request) string      { return strings.TrimSpace(r.PathValue("id")) }
+func decode(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	c, tid, err := h.auth(r)
+	_ = c
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	items, err := h.service.ListTemplates(r.Context(), tenantID)
+	items, err := h.service.List(r.Context(), tid)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
-
-func (h *Handler) GetTemplate(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	templateID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
-	if err != nil || templateID <= 0 {
-		httputil.WriteBadRequest(w, "invalid template id")
-		return
-	}
-	item, err := h.service.GetTemplate(r.Context(), tenantID, templateID)
+	item, err := h.service.Get(r.Context(), tid, parseID(r))
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -77,85 +72,147 @@ func (h *Handler) GetTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
-
-func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	c, tid, err := h.auth(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	var req SaveTemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
+	if decode(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.CreateTemplate(r.Context(), tenantID, claims.UserID, req)
+	item, err := h.service.Create(r.Context(), tid, c.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
-
-func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
+	c, tid, err := h.auth(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	templateID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
-	if err != nil || templateID <= 0 {
-		httputil.WriteBadRequest(w, "invalid template id")
+	var req SaveVersionRequest
+	if decode(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	var req SaveTemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	item, err := h.service.UpdateTemplate(r.Context(), tenantID, templateID, claims.UserID, req)
+	item, err := h.service.CreateVersion(r.Context(), tid, c.UserID, parseID(r), req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
-
-func (h *Handler) SaveBindings(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+func (h *Handler) ListVersions(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	templateID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
-	if err != nil || templateID <= 0 {
-		httputil.WriteBadRequest(w, "invalid template id")
+	items, err := h.service.ListVersions(r.Context(), tid, parseID(r))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	var req SaveBindingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	items, err := h.service.SaveBindings(r.Context(), tenantID, templateID, claims.UserID, req)
+	v, err := h.service.GetVersion(r.Context(), tid, parseID(r))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if v == nil {
+		httputil.WriteNotFound(w, "template version not found")
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": v})
+}
+func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req SaveVersionRequest
+	if decode(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	v, err := h.service.UpdateVersion(r.Context(), tid, parseID(r), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": v})
+}
+func (h *Handler) SaveSections(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req SaveSectionsRequest
+	if decode(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	items, err := h.service.SaveSections(r.Context(), tid, parseID(r), req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+func (h *Handler) SaveBindings(w http.ResponseWriter, r *http.Request) {
+	_, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req SaveBindingsRequest
+	if decode(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	items, err := h.service.SaveBindings(r.Context(), tid, parseID(r), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
+	c, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.service.Publish(r.Context(), tid, parseID(r), c.UserID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"ok": true})
+}
+func (h *Handler) Disable(w http.ResponseWriter, r *http.Request) {
+	c, tid, err := h.auth(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.service.Disable(r.Context(), tid, parseID(r), c.UserID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }

@@ -18,6 +18,43 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+func (s *Store) EnsureEncounterForRecording(ctx context.Context, tenantID, recordingID int64, providerID, departmentID *int64, providerName, providerRole, channel, visitType string, startedAt *time.Time) (int64, error) {
+	var encounterID int64
+	if strings.TrimSpace(channel) == "" {
+		channel = "store"
+	}
+	if strings.TrimSpace(visitType) == "" {
+		visitType = "consultation"
+	}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO encounters (
+			tenant_id, source_type, source_id, patient_candidate_json,
+			provider_id, provider_name, provider_role, department_id,
+			channel, visit_type, started_at, status, created_at, updated_at
+		)
+		VALUES (
+			$1, 'recording', $2, '{}'::jsonb,
+			$3, $4, $5, $6,
+			$7, $8, $9, 'new', NOW(), NOW()
+		)
+		ON CONFLICT (tenant_id, source_type, source_id)
+		DO UPDATE SET
+			provider_id = COALESCE(EXCLUDED.provider_id, encounters.provider_id),
+			provider_name = COALESCE(NULLIF(EXCLUDED.provider_name, ''), encounters.provider_name),
+			provider_role = COALESCE(NULLIF(EXCLUDED.provider_role, ''), encounters.provider_role),
+			department_id = COALESCE(EXCLUDED.department_id, encounters.department_id),
+			channel = COALESCE(NULLIF(EXCLUDED.channel, ''), encounters.channel),
+			visit_type = COALESCE(NULLIF(EXCLUDED.visit_type, ''), encounters.visit_type),
+			started_at = COALESCE(EXCLUDED.started_at, encounters.started_at),
+			updated_at = NOW()
+		RETURNING id
+	`, tenantID, recordingID, providerID, providerName, providerRole, departmentID, channel, visitType, startedAt).Scan(&encounterID)
+	if err != nil {
+		return 0, fmt.Errorf("ensure encounter for recording: %w", err)
+	}
+	return encounterID, nil
+}
+
 type RecordingMediaRef struct {
 	RecordingID int64
 	TenantID    int64

@@ -102,7 +102,7 @@ func validateRule(rule *Rule) error {
 }
 
 func isValidScope(value string) bool {
-	return value == "communication" || value == "content" || value == "emr"
+	return value == "communication" || value == "content"
 }
 
 func isValidSeverity(value string) bool {

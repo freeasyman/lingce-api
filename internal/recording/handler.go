@@ -103,8 +103,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recordings/{id}/tasks", Handler: h.GetRecordingTasks, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/{id}/route", Handler: h.GetMedicalRecordingRoute, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/{id}/segue", Handler: h.GetMedicalRecordingSegue, Auth: true},
-		{Method: "GET", Path: "/api/v1/recordings/{id}/emr", Handler: h.GetRecordingEMR, Auth: true},
-		{Method: "POST", Path: "/api/v1/recordings/{id}/emr/confirm", Handler: h.ConfirmRecordingEMR, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/route-review", Handler: h.RouteReviewRecording, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/search-patients", Handler: h.SearchRecordingPatients, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/quality-control", Handler: h.GetQualityControlDashboard, Auth: true},
