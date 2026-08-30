@@ -3,7 +3,9 @@ package emrrecord
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
@@ -20,6 +22,7 @@ func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/records", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.ListByPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/versions", Handler: h.Snapshots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -57,6 +60,35 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ListByPatient(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, err := h.tenant(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	patientID, err := parsePositiveID(recordID(r), "patient_id")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	pagination := httputil.ParsePagination(r)
+	page, pageSize := pagination.Page, pagination.PageSize
+	items, total, err := h.service.ListByPatient(r.Context(), tenantID, patientID, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, int64(total), page, pageSize)
+}
+
+func parsePositiveID(raw, name string) (int64, error) {
+	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("invalid %s", name)
+	}
+	return id, nil
 }
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	tenantID, actorID, err := h.tenant(r)
