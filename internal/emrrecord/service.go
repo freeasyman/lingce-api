@@ -25,6 +25,10 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string) ([]*R
 	return s.store.List(ctx, tenantID, strings.TrimSpace(status))
 }
 
+func (s *Service) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
+	return s.store.ListByPatient(ctx, tenantID, patientID, page, pageSize)
+}
+
 func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
 	return s.store.Get(ctx, tenantID, id)
 }

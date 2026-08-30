@@ -83,6 +83,46 @@ func (s *Store) List(ctx context.Context, tenantID int64, status string) ([]*Rec
 	return items, rows.Err()
 }
 
+func (s *Store) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM emr_records
+		WHERE tenant_id=$1 AND patient_id=$2
+	`, tenantID, patientID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count emr records by patient: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.tenant_id=$1 AND r.patient_id=$2 ORDER BY r.started_at DESC, r.updated_at DESC LIMIT $3 OFFSET $4", tenantID, patientID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list emr records by patient: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*Record, 0, pageSize)
+	for rows.Next() {
+		item, scanErr := scanRecord(rows)
+		if scanErr != nil {
+			return nil, 0, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req CreateRequest) (*Record, error) {
 	patient := encodeObject(req.PatientSnapshot)
 	encounterContext := encodeObject(req.EncounterContext)
