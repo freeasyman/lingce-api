@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
@@ -59,6 +60,169 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, er
 	if err != nil {
 		return nil, fmt.Errorf("get emr record: %w", err)
 	}
+	return item, nil
+}
+
+func (s *Store) ListAICandidates(ctx context.Context, tenantID int64, recordID string, activeOnly bool) ([]*AICandidate, error) {
+	where := "r.tenant_id=$1 AND c.record_id=$2"
+	args := []any{tenantID, recordID}
+	if activeOnly {
+		where += " AND c.status='待处理'"
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, c.record_id, c.section_code, c.content, c.source_evidence,
+		       c.status, c.generated_at, c.handled_at, c.handled_by
+		FROM emr_ai_candidates c
+		JOIN emr_records r ON r.id=c.record_id
+		WHERE `+where+`
+		ORDER BY c.generated_at DESC, c.id DESC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list emr ai candidates: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*AICandidate, 0)
+	for rows.Next() {
+		item, err := scanAICandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) CreateAICandidate(ctx context.Context, tenantID int64, recordID string, req CreateAICandidateRequest) (*AICandidate, error) {
+	content := encodeObject(req.Content)
+	sourceEvidence := encodeObject(req.SourceEvidence)
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO emr_ai_candidates (record_id, section_code, content, source_evidence)
+		SELECT r.id, $3, $4::jsonb, $5::jsonb
+		FROM emr_records r
+		JOIN emr_template_sections section ON section.template_version_id=r.template_version_id
+		WHERE r.id=$1 AND r.tenant_id=$2 AND section.code=$3
+		RETURNING id
+	`, recordID, tenantID, strings.TrimSpace(req.SectionCode), content, sourceEvidence).Scan(&id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("record or template section not found")
+		}
+		return nil, fmt.Errorf("create emr ai candidate: %w", err)
+	}
+	return s.GetAICandidate(ctx, tenantID, recordID, id)
+}
+
+func (s *Store) GetAICandidate(ctx context.Context, tenantID int64, recordID, candidateID string) (*AICandidate, error) {
+	item, err := scanAICandidate(s.pool.QueryRow(ctx, `
+		SELECT c.id, c.record_id, c.section_code, c.content, c.source_evidence,
+		       c.status, c.generated_at, c.handled_at, c.handled_by
+		FROM emr_ai_candidates c
+		JOIN emr_records r ON r.id=c.record_id
+		WHERE r.tenant_id=$1 AND c.record_id=$2 AND c.id=$3
+	`, tenantID, recordID, candidateID))
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get emr ai candidate: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) ApplyAICandidateDecision(ctx context.Context, tenantID, actorID int64, recordID, candidateID, decision string, content map[string]any, processWriter func(context.Context, pgx.Tx, *AICandidate, *Record, map[string]any) error) (*AICandidate, *Record, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin ai candidate decision: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2 FOR UPDATE", recordID, tenantID))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil, fmt.Errorf("record not found")
+		}
+		return nil, nil, fmt.Errorf("lock emr record for ai candidate: %w", err)
+	}
+
+	candidate, err := scanAICandidate(tx.QueryRow(ctx, `
+		SELECT c.id, c.record_id, c.section_code, c.content, c.source_evidence,
+		       c.status, c.generated_at, c.handled_at, c.handled_by
+		FROM emr_ai_candidates c
+		WHERE c.record_id=$1 AND c.id=$2
+		FOR UPDATE
+	`, recordID, candidateID))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil, fmt.Errorf("ai candidate not found")
+		}
+		return nil, nil, fmt.Errorf("lock ai candidate: %w", err)
+	}
+	if candidate.Status != "待处理" {
+		return nil, nil, fmt.Errorf("ai candidate has already been handled")
+	}
+
+	beforeContent := current.WorkingContent
+	if decision == "已采纳" {
+		if !editable(current.Status) {
+			return nil, nil, fmt.Errorf("record status %s is not editable", current.Status)
+		}
+		if content == nil {
+			return nil, nil, fmt.Errorf("content is required when accepting ai candidate")
+		}
+		raw := encodeObject(content)
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_records
+			SET working_content=$3::jsonb, working_digest=$4, last_saved_at=NOW(), updated_at=NOW()
+			WHERE id=$1 AND tenant_id=$2
+		`, recordID, tenantID, raw, digest(content)); err != nil {
+			return nil, nil, fmt.Errorf("save accepted ai candidate content: %w", err)
+		}
+	}
+
+	var handledAt time.Time
+	var handledBy *int64
+	var candidateContent, candidateEvidence []byte
+	err = tx.QueryRow(ctx, `
+		UPDATE emr_ai_candidates
+		SET status=$4, handled_at=NOW(), handled_by=$3
+		WHERE record_id=$1 AND id=$2 AND status='待处理'
+		RETURNING id, record_id, section_code, content, source_evidence, status, generated_at, handled_at, handled_by
+	`, recordID, candidateID, actorID, decision).Scan(
+		&candidate.ID, &candidate.RecordID, &candidate.SectionCode, &candidateContent,
+		&candidateEvidence, &candidate.Status, &candidate.GeneratedAt, &handledAt, &handledBy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("handle emr ai candidate: %w", err)
+	}
+	candidate.Content = decodeObject(candidateContent)
+	candidate.SourceEvidence = decodeObject(candidateEvidence)
+	candidate.HandledAt = &handledAt
+	candidate.HandledBy = handledBy
+
+	updated, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", recordID, tenantID))
+	if err != nil {
+		return nil, nil, fmt.Errorf("load updated emr record: %w", err)
+	}
+	if processWriter != nil {
+		if err := processWriter(ctx, tx, candidate, updated, beforeContent); err != nil {
+			return nil, nil, fmt.Errorf("append ai candidate process record: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit ai candidate decision: %w", err)
+	}
+	return candidate, updated, nil
+}
+
+func scanAICandidate(row pgx.Row) (*AICandidate, error) {
+	item := &AICandidate{}
+	var content, sourceEvidence []byte
+	if err := row.Scan(&item.ID, &item.RecordID, &item.SectionCode, &content, &sourceEvidence, &item.Status, &item.GeneratedAt, &item.HandledAt, &item.HandledBy); err != nil {
+		return nil, err
+	}
+	item.Content = decodeObject(content)
+	item.SourceEvidence = decodeObject(sourceEvidence)
 	return item, nil
 }
 

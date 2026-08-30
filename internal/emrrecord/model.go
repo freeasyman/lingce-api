@@ -54,6 +54,18 @@ type Snapshot struct {
 	FormedAt          time.Time      `json:"formed_at"`
 }
 
+type AICandidate struct {
+	ID             string         `json:"id"`
+	RecordID       string         `json:"record_id"`
+	SectionCode    string         `json:"section_code"`
+	Content        map[string]any `json:"content"`
+	SourceEvidence map[string]any `json:"source_evidence"`
+	Status         string         `json:"status"`
+	GeneratedAt    time.Time      `json:"generated_at"`
+	HandledAt      *time.Time     `json:"handled_at,omitempty"`
+	HandledBy      *int64         `json:"handled_by,omitempty"`
+}
+
 type CreateRequest struct {
 	EncounterID       *int64         `json:"encounter_id,omitempty"`
 	PatientID         *int64         `json:"patient_id,omitempty"`
@@ -76,6 +88,17 @@ type ContentRequest struct {
 }
 
 type ActionRequest struct {
+	Content map[string]any `json:"content,omitempty"`
+	Note    string         `json:"note,omitempty"`
+}
+
+type CreateAICandidateRequest struct {
+	SectionCode    string         `json:"section_code"`
+	Content        map[string]any `json:"content"`
+	SourceEvidence map[string]any `json:"source_evidence"`
+}
+
+type HandleAICandidateRequest struct {
 	Content map[string]any `json:"content,omitempty"`
 	Note    string         `json:"note,omitempty"`
 }

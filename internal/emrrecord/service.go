@@ -10,6 +10,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -40,6 +41,42 @@ func (s *Service) ListByPatientScoped(ctx context.Context, tenantID, patientID i
 
 func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
 	return s.store.Get(ctx, tenantID, id)
+}
+
+func (s *Service) ListAICandidates(ctx context.Context, tenantID int64, recordID string, activeOnly bool) ([]*AICandidate, error) {
+	return s.store.ListAICandidates(ctx, tenantID, recordID, activeOnly)
+}
+
+func (s *Service) CreateAICandidate(ctx context.Context, tenantID int64, recordID string, req CreateAICandidateRequest) (*AICandidate, error) {
+	if strings.TrimSpace(req.SectionCode) == "" {
+		return nil, fmt.Errorf("section_code is required")
+	}
+	if req.Content == nil {
+		return nil, fmt.Errorf("content is required")
+	}
+	return s.store.CreateAICandidate(ctx, tenantID, recordID, req)
+}
+
+func (s *Service) HandleAICandidate(ctx context.Context, tenantID, actorID int64, recordID, candidateID, decision string, req HandleAICandidateRequest) (*AICandidate, *Record, error) {
+	if decision != "已采纳" && decision != "已拒绝" {
+		return nil, nil, fmt.Errorf("invalid ai candidate decision")
+	}
+	candidate, record, err := s.store.ApplyAICandidateDecision(ctx, tenantID, actorID, recordID, candidateID, decision, req.Content, func(ctx context.Context, tx pgx.Tx, candidate *AICandidate, record *Record, beforeContent map[string]any) error {
+		changes := []any{}
+		if decision == "已采纳" {
+			changes = diffTopLevel(beforeContent, record.WorkingContent)
+		}
+		_, err := s.process.AppendTx(ctx, tx, emrprocess.AppendRequest{
+			TenantID: tenantID, RecordID: &recordID, ActionType: "AI" + decision,
+			ActionResult: "成功", ActorType: "人工", ActorID: &actorID, Source: "病历详情",
+			ActionNote: req.Note, AICandidateID: &candidate.ID, ContentChanges: changes,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return candidate, record, nil
 }
 
 func (s *Service) Create(ctx context.Context, tenantID, actorID int64, req CreateRequest) (*Record, error) {

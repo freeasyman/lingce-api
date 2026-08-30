@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -13,6 +14,18 @@ type Store struct{ pool *pgxpool.Pool }
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 func (s *Store) Append(ctx context.Context, req AppendRequest) (*ProcessRecord, error) {
+	return appendRecord(ctx, s.pool, req)
+}
+
+func (s *Store) AppendTx(ctx context.Context, tx pgx.Tx, req AppendRequest) (*ProcessRecord, error) {
+	return appendRecord(ctx, tx, req)
+}
+
+type queryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func appendRecord(ctx context.Context, db queryRower, req AppendRequest) (*ProcessRecord, error) {
 	output, err := json.Marshal(req.OutputInfo)
 	if err != nil {
 		return nil, fmt.Errorf("marshal process output: %w", err)
@@ -23,7 +36,7 @@ func (s *Store) Append(ctx context.Context, req AppendRequest) (*ProcessRecord, 
 	}
 	item := &ProcessRecord{}
 	var outputRaw, changesRaw []byte
-	err = s.pool.QueryRow(ctx, `INSERT INTO emr_process_records
+	err = db.QueryRow(ctx, `INSERT INTO emr_process_records
 	(tenant_id, record_id, action_type, action_result, actor_type, actor_id, source, before_status, after_status,
 	 action_snapshot_id, before_snapshot_id, after_snapshot_id, check_run_id, ai_candidate_id, output_info,
 	 failure_reason, action_note, content_changes)
@@ -81,6 +94,9 @@ type Service struct{ store *Store }
 func NewService(store *Store) *Service { return &Service{store: store} }
 func (s *Service) Append(ctx context.Context, req AppendRequest) (*ProcessRecord, error) {
 	return s.store.Append(ctx, req)
+}
+func (s *Service) AppendTx(ctx context.Context, tx pgx.Tx, req AppendRequest) (*ProcessRecord, error) {
+	return s.store.AppendTx(ctx, tx, req)
 }
 func (s *Service) List(ctx context.Context, tenantID int64, recordID string) ([]*ProcessRecord, error) {
 	return s.store.List(ctx, tenantID, recordID)
