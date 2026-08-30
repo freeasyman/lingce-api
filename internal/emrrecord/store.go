@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -83,7 +85,53 @@ func (s *Store) List(ctx context.Context, tenantID int64, status string) ([]*Rec
 	return items, rows.Err()
 }
 
+func (s *Store) ListScoped(ctx context.Context, tenantID int64, status string, access *emrpermission.Access) ([]*Record, error) {
+	args := []any{tenantID}
+	where := "r.tenant_id=$1"
+	if status != "" {
+		args = append(args, status)
+		where += fmt.Sprintf(" AND r.status=$%d", len(args))
+	}
+	if access != nil && !access.Admin && access.Scope != "tenant" {
+		switch access.Scope {
+		case "self":
+			args = append(args, access.UserID)
+			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
+		case "department":
+			if access.DepartmentID == nil {
+				return []*Record{}, nil
+			}
+			args = append(args, *access.DepartmentID)
+			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+		default:
+			return []*Record{}, nil
+		}
+	}
+	rows, err := s.pool.Query(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list scoped emr records: %w", err)
+	}
+	defer rows.Close()
+	items := make([]*Record, 0)
+	for rows.Next() {
+		item, scanErr := scanRecord(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
+	return s.listByPatient(ctx, tenantID, patientID, page, pageSize, nil)
+}
+
+func (s *Store) ListByPatientScoped(ctx context.Context, tenantID, patientID int64, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
+	return s.listByPatient(ctx, tenantID, patientID, page, pageSize, access)
+}
+
+func (s *Store) listByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -94,16 +142,30 @@ func (s *Store) ListByPatient(ctx context.Context, tenantID, patientID int64, pa
 		pageSize = 100
 	}
 
+	args := []any{tenantID, patientID}
+	where := "r.tenant_id=$1 AND r.patient_id=$2"
+	if access != nil && !access.Admin && access.Scope != "tenant" {
+		switch access.Scope {
+		case "self":
+			args = append(args, access.UserID)
+			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
+		case "department":
+			if access.DepartmentID == nil {
+				return []*Record{}, 0, nil
+			}
+			args = append(args, *access.DepartmentID)
+			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+		default:
+			return []*Record{}, 0, nil
+		}
+	}
 	var total int
-	if err := s.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM emr_records
-		WHERE tenant_id=$1 AND patient_id=$2
-	`, tenantID, patientID).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM emr_records r WHERE "+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count emr records by patient: %w", err)
 	}
 
-	rows, err := s.pool.Query(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.tenant_id=$1 AND r.patient_id=$2 ORDER BY r.started_at DESC, r.updated_at DESC LIMIT $3 OFFSET $4", tenantID, patientID, pageSize, (page-1)*pageSize)
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.started_at DESC, r.updated_at DESC LIMIT $"+strconv.Itoa(len(args)-1)+" OFFSET $"+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list emr records by patient: %w", err)
 	}

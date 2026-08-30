@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 )
 
@@ -25,8 +26,16 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string) ([]*R
 	return s.store.List(ctx, tenantID, strings.TrimSpace(status))
 }
 
+func (s *Service) ListScoped(ctx context.Context, tenantID int64, status string, access *emrpermission.Access) ([]*Record, error) {
+	return s.store.ListScoped(ctx, tenantID, strings.TrimSpace(status), access)
+}
+
 func (s *Service) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
 	return s.store.ListByPatient(ctx, tenantID, patientID, page, pageSize)
+}
+
+func (s *Service) ListByPatientScoped(ctx context.Context, tenantID, patientID int64, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
+	return s.store.ListByPatientScoped(ctx, tenantID, patientID, page, pageSize, access)
 }
 
 func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {

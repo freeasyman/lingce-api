@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -13,9 +14,14 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct{ service *Service }
+type Handler struct {
+	service     *Service
+	permissions *emrpermission.Service
+}
 
-func NewHandler(service *Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
+	return &Handler{service: service, permissions: permissions}
+}
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/templates", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -39,11 +45,20 @@ func (h *Handler) auth(r *http.Request) (*auth.Claims, int64, error) {
 	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 	return c, tid, err
 }
+func (h *Handler) authorize(r *http.Request, ability string) (*auth.Claims, int64, error) {
+	claims, tenantID, err := h.auth(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := h.permissions.Authorize(r.Context(), claims, tenantID, ability); err != nil {
+		return nil, 0, err
+	}
+	return claims, tenantID, nil
+}
 func parseID(r *http.Request) string      { return strings.TrimSpace(r.PathValue("id")) }
 func decode(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	c, tid, err := h.auth(r)
-	_ = c
+	_, tid, err := h.authorize(r, "record.read")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -56,7 +71,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "record.read")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -73,7 +88,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	c, tid, err := h.auth(r)
+	c, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -91,7 +106,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
-	c, tid, err := h.auth(r)
+	c, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -109,7 +124,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) ListVersions(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "record.read")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -122,7 +137,7 @@ func (h *Handler) ListVersions(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "record.read")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -139,7 +154,7 @@ func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": v})
 }
 func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -157,7 +172,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": v})
 }
 func (h *Handler) SaveSections(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -175,7 +190,7 @@ func (h *Handler) SaveSections(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) SaveBindings(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.auth(r)
+	_, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -193,7 +208,7 @@ func (h *Handler) SaveBindings(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
-	c, tid, err := h.auth(r)
+	c, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -205,7 +220,7 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }
 func (h *Handler) Disable(w http.ResponseWriter, r *http.Request) {
-	c, tid, err := h.auth(r)
+	c, tid, err := h.authorize(r, "template.manage")
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

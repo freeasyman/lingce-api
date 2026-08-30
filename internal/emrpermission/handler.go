@@ -39,6 +39,11 @@ func (h *Handler) ListPermissions(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	access, err := h.service.Authorize(r.Context(), claims, tenantID, "quality.manage")
+	if err != nil || !access.CanManagePermissions() {
+		http.Error(w, "Forbidden: EMR permission management required", http.StatusForbidden)
+		return
+	}
 	items, err := h.service.ListEmployeePermissions(r.Context(), tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -59,9 +64,16 @@ func (h *Handler) GetPermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
-	if err != nil {
+	if err != nil || employeeID <= 0 {
 		httputil.WriteBadRequest(w, "invalid employee_id")
 		return
+	}
+	if employeeID != claims.UserID {
+		access, accessErr := h.service.Authorize(r.Context(), claims, tenantID, "quality.manage")
+		if accessErr != nil || !access.CanManagePermissions() {
+			http.Error(w, "Forbidden: EMR permission management required", http.StatusForbidden)
+			return
+		}
 	}
 	item, err := h.service.GetAssignment(r.Context(), tenantID, employeeID)
 	if err != nil {
@@ -80,6 +92,11 @@ func (h *Handler) UpsertPermission(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	access, err := h.service.Authorize(r.Context(), claims, tenantID, "quality.manage")
+	if err != nil || !access.CanManagePermissions() {
+		http.Error(w, "Forbidden: EMR permission management required", http.StatusForbidden)
 		return
 	}
 	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)

@@ -9,15 +9,21 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct{ service *Service }
+type Handler struct {
+	service     *Service
+	permissions *emrpermission.Service
+}
 
-func NewHandler(service *Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
+	return &Handler{service: service, permissions: permissions}
+}
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
@@ -45,16 +51,44 @@ func (h *Handler) tenant(r *http.Request) (int64, int64, error) {
 	return tenantID, claims.UserID, nil
 }
 
+func (h *Handler) authorize(r *http.Request, ability string) (*emrpermission.Access, int64, error) {
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, _, err := h.tenant(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, ability)
+	if err != nil {
+		return nil, 0, err
+	}
+	return access, tenantID, nil
+}
+
+func (h *Handler) authorizeRecord(r *http.Request, ability string) (*emrpermission.Access, int64, error) {
+	access, tenantID, err := h.authorize(r, ability)
+	if err != nil {
+		return nil, 0, err
+	}
+	allowed, err := h.permissions.CanAccessRecord(r.Context(), access, recordID(r))
+	if err != nil {
+		return nil, 0, err
+	}
+	if !allowed {
+		return nil, 0, fmt.Errorf("emr record access denied")
+	}
+	return access, tenantID, nil
+}
+
 func decodeBody(r *http.Request, value any) error { return json.NewDecoder(r.Body).Decode(value) }
 func recordID(r *http.Request) string             { return strings.TrimSpace(r.PathValue("id")) }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, err := h.tenant(r)
+	access, tenantID, err := h.authorize(r, "record.read")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	items, err := h.service.List(r.Context(), tenantID, r.URL.Query().Get("status"))
+	items, err := h.service.ListScoped(r.Context(), tenantID, r.URL.Query().Get("status"), access)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -63,9 +97,9 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListByPatient(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, err := h.tenant(r)
+	access, tenantID, err := h.authorize(r, "record.read")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	patientID, err := parsePositiveID(recordID(r), "patient_id")
@@ -75,7 +109,7 @@ func (h *Handler) ListByPatient(w http.ResponseWriter, r *http.Request) {
 	}
 	pagination := httputil.ParsePagination(r)
 	page, pageSize := pagination.Page, pagination.PageSize
-	items, total, err := h.service.ListByPatient(r.Context(), tenantID, patientID, page, pageSize)
+	items, total, err := h.service.ListByPatientScoped(r.Context(), tenantID, patientID, page, pageSize, access)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -91,9 +125,9 @@ func parsePositiveID(raw, name string) (int64, error) {
 	return id, nil
 }
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.tenant(r)
+	access, tenantID, err := h.authorize(r, "record.create")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req CreateRequest
@@ -101,7 +135,15 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.Create(r.Context(), tenantID, actorID, req)
+	doctorID := access.UserID
+	if req.DoctorID != nil && *req.DoctorID > 0 {
+		doctorID = *req.DoctorID
+	}
+	if !access.CanRecord(doctorID, req.DepartmentID) {
+		httputil.WriteForbidden(w, "emr record access denied")
+		return
+	}
+	item, err := h.service.Create(r.Context(), tenantID, access.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -109,9 +151,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, err := h.tenant(r)
+	_, tenantID, err := h.authorizeRecord(r, "record.read")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	item, err := h.service.Get(r.Context(), tenantID, recordID(r))
@@ -126,9 +168,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) Snapshots(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, err := h.tenant(r)
+	_, tenantID, err := h.authorizeRecord(r, "record.history.read")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	items, err := h.service.Snapshots(r.Context(), tenantID, recordID(r))
@@ -139,9 +181,9 @@ func (h *Handler) Snapshots(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) AutoSave(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.tenant(r)
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req ContentRequest
@@ -149,7 +191,7 @@ func (h *Handler) AutoSave(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.AutoSave(r.Context(), tenantID, actorID, recordID(r), req.Content)
+	item, err := h.service.AutoSave(r.Context(), tenantID, access.UserID, recordID(r), req.Content)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -157,9 +199,9 @@ func (h *Handler) AutoSave(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) ManualSave(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.tenant(r)
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req ActionRequest
@@ -167,20 +209,29 @@ func (h *Handler) ManualSave(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.ManualSave(r.Context(), tenantID, actorID, recordID(r), req.Content, req.Note)
+	item, err := h.service.ManualSave(r.Context(), tenantID, access.UserID, recordID(r), req.Content, req.Note)
 	if err != nil {
 		writeActionError(w, item, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
-func (h *Handler) Submit(w http.ResponseWriter, r *http.Request)  { h.action(w, r, h.service.Submit) }
-func (h *Handler) Confirm(w http.ResponseWriter, r *http.Request) { h.action(w, r, h.service.Confirm) }
-func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) { h.action(w, r, h.service.Archive) }
-func (h *Handler) action(w http.ResponseWriter, r *http.Request, action func(context.Context, int64, int64, string, ActionRequest) (*WriteOutcome, error)) {
-	tenantID, actorID, err := h.tenant(r)
+func (h *Handler) Submit(w http.ResponseWriter, r *http.Request) {
+	h.action(w, r, "record.submit", h.service.Submit)
+}
+
+func (h *Handler) Confirm(w http.ResponseWriter, r *http.Request) {
+	h.action(w, r, "record.archive", h.service.Confirm)
+}
+
+func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
+	h.action(w, r, "record.archive", h.service.Archive)
+}
+
+func (h *Handler) action(w http.ResponseWriter, r *http.Request, ability string, action func(context.Context, int64, int64, string, ActionRequest) (*WriteOutcome, error)) {
+	access, tenantID, err := h.authorizeRecord(r, ability)
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req ActionRequest
@@ -190,7 +241,7 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, action func(con
 			return
 		}
 	}
-	item, err := action(r.Context(), tenantID, actorID, recordID(r), req)
+	item, err := action(r.Context(), tenantID, access.UserID, recordID(r), req)
 	if err != nil {
 		writeActionError(w, item, err)
 		return
@@ -233,14 +284,14 @@ func checkIssues(run *emrcheck.CheckRun) []map[string]any {
 	return issues
 }
 func (h *Handler) Revise(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.tenant(r)
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req ActionRequest
 	_ = decodeBody(r, &req)
-	item, err := h.service.Revise(r.Context(), tenantID, actorID, recordID(r), req.Note)
+	item, err := h.service.Revise(r.Context(), tenantID, access.UserID, recordID(r), req.Note)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -248,14 +299,14 @@ func (h *Handler) Revise(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.tenant(r)
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	var req ActionRequest
 	_ = decodeBody(r, &req)
-	item, err := h.service.Void(r.Context(), tenantID, actorID, recordID(r), req.Note)
+	item, err := h.service.Void(r.Context(), tenantID, access.UserID, recordID(r), req.Note)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

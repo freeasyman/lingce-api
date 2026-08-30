@@ -6,15 +6,21 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct{ service *Service }
+type Handler struct {
+	service     *Service
+	permissions *emrpermission.Service
+}
 
-func NewHandler(service *Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
+	return &Handler{service: service, permissions: permissions}
+}
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/quality-requirements", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -31,8 +37,19 @@ func claimsTenant(r *http.Request) (int64, error) {
 	}
 	return tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 }
+func (h *Handler) authorize(r *http.Request) (int64, error) {
+	c := middleware.GetUserClaims(r.Context())
+	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		return 0, err
+	}
+	if _, err := h.permissions.Authorize(r.Context(), c, tid, "quality.manage"); err != nil {
+		return 0, err
+	}
+	return tid, nil
+}
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	tid, err := claimsTenant(r)
+	tid, err := h.authorize(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -45,7 +62,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	tid, err := claimsTenant(r)
+	tid, err := h.authorize(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -77,6 +94,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	if _, err := h.permissions.Authorize(r.Context(), c, tid, "quality.manage"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	var req SaveRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -98,6 +119,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if _, err := h.permissions.Authorize(r.Context(), c, tid, "quality.manage"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
@@ -126,6 +151,10 @@ func (h *Handler) Disable(w http.ResponseWriter, r *http.Request) {
 	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if _, err := h.permissions.Authorize(r.Context(), c, tid, "quality.manage"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))

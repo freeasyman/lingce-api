@@ -1,18 +1,25 @@
 package emrcheck
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct{ service *Service }
+type Handler struct {
+	service     *Service
+	permissions *emrpermission.Service
+}
 
-func NewHandler(service *Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
+	return &Handler{service: service, permissions: permissions}
+}
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
@@ -23,14 +30,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 }
 
 func (h *Handler) RunManual(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := h.tenant(r)
+	tenantID, actorID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	recordID := strings.TrimSpace(r.PathValue("id"))
@@ -38,7 +40,7 @@ func (h *Handler) RunManual(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid record id")
 		return
 	}
-	item, err := h.service.RunManual(r.Context(), tenantID, claims.UserID, recordID)
+	item, err := h.service.RunManual(r.Context(), tenantID, actorID, recordID)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -51,10 +53,31 @@ func (h *Handler) tenant(r *http.Request) (int64, error) {
 	return tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
 }
 
-func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) authorizeRecord(r *http.Request, ability string) (int64, int64, error) {
+	claims := middleware.GetUserClaims(r.Context())
 	tenantID, err := h.tenant(r)
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		return 0, 0, err
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, ability)
+	if err != nil {
+		return 0, 0, err
+	}
+	recordID := strings.TrimSpace(r.PathValue("id"))
+	allowed, err := h.permissions.CanAccessRecord(r.Context(), access, recordID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !allowed {
+		return 0, 0, fmt.Errorf("emr record access denied")
+	}
+	return tenantID, access.UserID, nil
+}
+
+func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, err := h.authorizeRecord(r, "record.read")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	recordID := strings.TrimSpace(r.PathValue("id"))
@@ -71,9 +94,9 @@ func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := h.tenant(r)
+	tenantID, _, err := h.authorizeRecord(r, "record.read")
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
+		httputil.WriteForbidden(w, err.Error())
 		return
 	}
 	recordID := strings.TrimSpace(r.PathValue("id"))

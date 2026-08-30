@@ -218,22 +218,22 @@ func main() {
 		slog.Error("failed to ensure builtin EMR template", "error", err)
 		os.Exit(1)
 	}
-	emrTemplateHandler := emrtemplate.NewHandler(emrTemplateService)
+	emrTemplateHandler := emrtemplate.NewHandler(emrTemplateService, emrPermissionService)
 	emrTemplateHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrProcessStore := emrprocess.NewStore(pool)
 	emrProcessService := emrprocess.NewService(emrProcessStore)
-	emrProcessHandler := emrprocess.NewHandler(emrProcessService)
+	emrProcessHandler := emrprocess.NewHandler(emrProcessService, emrPermissionService)
 	emrProcessHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrCheckStore := emrcheck.NewStore(pool)
 	emrCheckService := emrcheck.NewService(emrCheckStore)
-	emrCheckHandler := emrcheck.NewHandler(emrCheckService)
+	emrCheckHandler := emrcheck.NewHandler(emrCheckService, emrPermissionService)
 	emrCheckHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrRecordStore := emrrecord.NewStore(pool)
 	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
-	emrRecordHandler := emrrecord.NewHandler(emrRecordService)
+	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	complianceStore := compliance.NewStore(pool)
