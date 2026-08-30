@@ -209,7 +209,7 @@ func main() {
 		slog.Error("failed to ensure EMR quality requirements", "error", err)
 		os.Exit(1)
 	}
-	emrQualityHandler := emrquality.NewHandler(emrQualityService)
+	emrQualityHandler := emrquality.NewHandler(emrQualityService, emrPermissionService)
 	emrQualityHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrTemplateStore := emrtemplate.NewStore(pool)
