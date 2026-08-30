@@ -37,20 +37,24 @@ func claimsTenant(r *http.Request) (int64, error) {
 	}
 	return tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 }
-func (h *Handler) authorize(r *http.Request) (int64, error) {
+func (h *Handler) authorize(r *http.Request) (int64, bool, error) {
 	c := middleware.GetUserClaims(r.Context())
 	tid, err := tenancy.RequireTenantID(c, r.URL.Query().Get("tenant_id"))
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if _, err := h.permissions.Authorize(r.Context(), c, tid, "quality.manage"); err != nil {
-		return 0, err
+		return 0, true, err
 	}
-	return tid, nil
+	return tid, false, nil
 }
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	tid, err := h.authorize(r)
+	tid, forbidden, err := h.authorize(r)
 	if err != nil {
+		if forbidden {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -62,8 +66,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	tid, err := h.authorize(r)
+	tid, forbidden, err := h.authorize(r)
 	if err != nil {
+		if forbidden {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
