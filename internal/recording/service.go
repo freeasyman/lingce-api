@@ -116,6 +116,9 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 	if strings.TrimSpace(req.FileURL) == "" {
 		return nil, false, fmt.Errorf("file_url is required")
 	}
+	if req.EncounterID != nil && *req.EncounterID <= 0 {
+		return nil, false, fmt.Errorf("encounter_id is invalid")
+	}
 	if strings.TrimSpace(req.BusinessScope) == "" {
 		scope, err := s.store.ResolveEmployeeBusinessScope(ctx, req.TenantID, req.EmployeeID)
 		if err != nil {
@@ -144,13 +147,15 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 	if err != nil {
 		return nil, created, err
 	}
-	providerName, providerRole, startedAt := s.buildEncounterDefaultsForRecording(ctx, req.TenantID, req.EmployeeID, req.RecordedAt)
-	if _, err := s.store.EnsureEncounterForRecording(ctx, req.TenantID, recordingID, &req.EmployeeID, nil, providerName, providerRole, "store", sceneToVisitType(req.Scene), startedAt); err != nil {
-		slog.Warn("ensure encounter after owned audio ingest failed",
-			"recording_id", recordingID,
-			"tenant_id", req.TenantID,
-			"error", err,
-		)
+	if req.EncounterID == nil {
+		providerName, providerRole, startedAt := s.buildEncounterDefaultsForRecording(ctx, req.TenantID, req.EmployeeID, req.RecordedAt)
+		if _, err := s.store.EnsureEncounterForRecording(ctx, req.TenantID, recordingID, &req.EmployeeID, nil, providerName, providerRole, "store", sceneToVisitType(req.Scene), startedAt); err != nil {
+			slog.Warn("ensure encounter after owned audio ingest failed",
+				"recording_id", recordingID,
+				"tenant_id", req.TenantID,
+				"error", err,
+			)
+		}
 	}
 	resp := toRecordingResponse(recording)
 	if created {

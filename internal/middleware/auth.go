@@ -33,6 +33,11 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Extract token from Authorization header
 			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				if token := strings.TrimSpace(r.URL.Query().Get("access_token")); token != "" {
+					authHeader = "Bearer " + token
+				}
+			}
 			if authHeader == "" {
 				httputil.WriteUnauthorized(w, "Missing authorization header")
 				return

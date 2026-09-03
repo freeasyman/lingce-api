@@ -52,6 +52,13 @@ func (s *Store) EnsureEncounterForRecording(ctx context.Context, tenantID, recor
 	if err != nil {
 		return 0, fmt.Errorf("ensure encounter for recording: %w", err)
 	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE recordings
+		SET encounter_id = $3, updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, recordingID, encounterID); err != nil {
+		return 0, fmt.Errorf("link recording to encounter: %w", err)
+	}
 	return encounterID, nil
 }
 
@@ -1873,28 +1880,35 @@ func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIng
 	err := s.pool.QueryRow(ctx, `
 		WITH ins AS (
 			INSERT INTO recordings (
-				tenant_id, employee_id, file_url, file_name, duration, mime_type,
+				tenant_id, employee_id, encounter_id, customer_id, patient_id, file_url, file_name, duration, mime_type,
 				source, scene, business_scope, status,
 				transcription_status, cleaned_transcription_status, analysis_status,
 				recorded_at, order_no, oss_key, created_at, updated_at
 			)
 			SELECT
-				$1::bigint, $2::bigint, $3::text, $4::text, NULLIF($5::integer, 0), $6::text,
-				$7::text, $8::text, $9::text, 'uploaded',
+				$1::bigint, $2::bigint, $3::bigint, $4::bigint, $5::bigint, $6::text, $7::text, NULLIF($8::integer, 0), $9::text,
+				$10::text, $11::text, $12::text, 'uploaded',
 				'queued', 'pending', 'pending',
-				$10::timestamp, NULLIF($11::text, ''), NULLIF($12::text, ''), NOW(), NOW()
-			WHERE NULLIF($11::text, '') IS NULL
-			   OR NOT EXISTS (SELECT 1 FROM recordings WHERE order_no = $11::text)
+				$13::timestamp, NULLIF($14::text, ''), NULLIF($15::text, ''), NOW(), NOW()
+		WHERE ($3::bigint IS NULL OR EXISTS (
+			SELECT 1 FROM encounters e WHERE e.id = $3::bigint AND e.tenant_id = $1::bigint
+		))
+		  AND (NULLIF($14::text, '') IS NULL
+		   OR NOT EXISTS (SELECT 1 FROM recordings WHERE order_no = $14::text)
+		  )
 			RETURNING id
 		)
 		SELECT id, true FROM ins
 		UNION ALL
 		SELECT id, false FROM recordings
-		WHERE NULLIF($11::text, '') IS NOT NULL
-		  AND order_no = $11::text
+		WHERE NULLIF($14::text, '') IS NOT NULL
+		  AND order_no = $14::text
+		  AND ($3::bigint IS NULL OR EXISTS (
+			SELECT 1 FROM encounters e WHERE e.id = $3::bigint AND e.tenant_id = $1::bigint
+		  ))
 		  AND NOT EXISTS (SELECT 1 FROM ins)
 		LIMIT 1
-	`, req.TenantID, req.EmployeeID, req.FileURL, req.FileName, req.DurationSeconds, req.MIMEType, req.Source, req.Scene, req.BusinessScope, req.RecordedAt, req.OrderNo, req.OSSKey).Scan(&recordingID, &created)
+	`, req.TenantID, req.EmployeeID, req.EncounterID, req.CustomerID, req.PatientID, req.FileURL, req.FileName, req.DurationSeconds, req.MIMEType, req.Source, req.Scene, req.BusinessScope, req.RecordedAt, req.OrderNo, req.OSSKey).Scan(&recordingID, &created)
 	if err != nil {
 		return 0, false, fmt.Errorf("create owned audio recording: %w", err)
 	}

@@ -292,11 +292,11 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		RecordedAt:      core.StartTime,
 		// Use event_id as the recording dedupe key so callback ingest and worker pull
 		// resolve to the same recording when they see the same badge audio.
-		OrderNo:         core.EventID,
-		OSSKey:          ossKey,
-		Source:          "smart_badge",
-		BusinessScope:   businessScope,
-		Scene:           "consultation",
+		OrderNo:       core.EventID,
+		OSSKey:        ossKey,
+		Source:        "smart_badge",
+		BusinessScope: businessScope,
+		Scene:         "consultation",
 	})
 	if err != nil {
 		slog.Error("audio callback recording upsert failed",
@@ -311,6 +311,16 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 			"error", err,
 		)
 		return nil, fmt.Errorf("upsert recording from callback: %w", err)
+	}
+	if _, err := recordingStore.EnsureEncounterForRecording(ctx, tenantID, recordingID, &employeeID, nil, "", "", "store", "consultation", core.StartTime); err != nil {
+		slog.Error("audio callback encounter ensure failed",
+			"device_no", core.DeviceNo,
+			"tenant_id", tenantID,
+			"employee_id", employeeID,
+			"recording_id", recordingID,
+			"error", err,
+		)
+		return nil, fmt.Errorf("ensure encounter from audio callback: %w", err)
 	}
 
 	if _, err := s.pool.Exec(ctx, `

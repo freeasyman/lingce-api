@@ -4,17 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
-	defaultPromptVersion         = "v0.1"
+	defaultPromptVersion         = "v0.3"
 	defaultModelName             = "qwen-max"
 	defaultMaxChunkChars         = 12000
+	twoPassScanOverlapSeconds    = 300
+	dashscopeInputLimit          = 30720
+	tokenPerRuneRatio            = 1.3
+	outputReserve                = 2000
+	summaryOutputReserve         = 1000
 	encounterSummarySystemPrompt = `你是医疗记录助手。从就诊对话中提取关键信息,只输出 JSON,不要任何解释。
 
 输出格式:
@@ -61,24 +69,66 @@ const (
 - 内部短静默(30 秒以内)
 - 医生查阅资料、书写记录时的静默
 - 夫妻同诊、母子同诊等多位患者同时在场、医生交替问诊的情况 -- 判为一次 encounter,并标记 multi_patient: true
-- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要还是同一个人在说,就是一次就诊
+- 同一患者的连续沟通,无论话题怎么转换,都不切开。话题从胃痛转到睡眠、再转到体检报告,只要医生没有重新做基础问诊,就是一次就诊
+- 一次就诊包含问诊、查体、解释病情、看报告、讲治疗方案、谈费用等多个阶段。这些阶段之间不是就诊边界
 - 医生为了举例说明而提到的其他患者。例如"我有个病人和你情况差不多,四十多岁,也是这个症状,吃了三个月就好了"。这个被提到的患者不在现场,不构成新的就诊
 
-## 判断"是不是换人了"的唯一可靠依据
+## 重要:不要依赖说话人标记
 
-切开的前提是**说话的患者本人换了**,不是话题换了。
+转写文本里的说话人标记(speaker_0、speaker_1 等)**极不可靠**。很多录音的说话人分离完全失效,整条录音的所有发言都被标成同一个说话人。
 
-判断方法:看被提到的那个人有没有在对话里应答。
-- 如果有人开始回答医生的提问、描述自己的症状 -- 这是新的患者到场,应当切开
-- 如果只是被医生或患者在叙述中提及,始终没有出现属于他的发言 -- 这是举例或转述,不切开
+因此:
+- 不要用"说话人标记有没有变化"来判断是否换了患者
+- 所有发言都是 speaker_0 也完全正常,这不代表只有一个人在说话
+- 你必须靠**说话内容本身**来判断谁在说话、说的是谁的病情
 
-举例场景的典型特征:被提到的人没有名字("有个病人"、"我另一个患者"),用第三人称叙述,时态是过去的,而且这段话是为了说服眼前的患者。
+如何从内容判断说话人角色:
+- 提问、下医嘱、解释病理、开药的是医生
+- 描述症状、回答提问、询问治疗方案的是患者或家属
+- 同一行文本里可能混进了多个人的话(转写没断开),要按语义拆解
+
+## 判断"是不是换了患者"
+
+看这三件事,任意一件成立就说明换人了:
+
+1. **有明确的告别或交接** -- 前一位患者的诊疗已经收尾
+2. **新的主诉从零开始被陈述** -- 有人开始讲一个全新的、与前文毫无关联的症状,并且医生在重新做基础问诊("多久了""什么时候开始的""以前看过吗")
+3. **患者的身份特征变了** -- 年龄、性别、称谓、孩子的名字发生变化
+
+反过来,以下情况说明还是同一位患者,不要切:
+- 话题从一个症状转到另一个症状,但医生没有重新做基础问诊
+- 讨论从病情转到费用、流程、注意事项 -- 这仍属于本次就诊
+- 医生举例提到其他患者("我有个病人和你情况差不多,四十多岁"),这个人没有实际参与对话
 
 判定为不是就诊:
 - 患者只是问路、拿报告、取药,没有诊疗内容
 - 医生与同事的任何交流
 
 ## 边界信号(按可靠性排序)
+
+最强信号 -- 告别与交接(优先级高于一切,只要出现就应当在此处切开):
+
+通用告别:
+- 互道再见:"拜拜"、"再见"、"谢谢医生"、"慢走"、"辛苦了"
+- 送客动作:"那我们就先这样"、"好,你先过去吧"、"行,那就这样"
+
+公立医院/医保门诊的结束方式(以开单、指路、交接科室为主):
+- 开单指路:"拿着单子去二楼抽血"、"这个方子去药房拿药"、"到一楼收费处交费"
+- 交接科室:"我给你开个住院证,去住院部办手续"、"转到骨科去看看"、"挂个专家号再看"
+- 医嘱收尾:"回去按时吃药,两周后复查"、"不舒服再来"、"先吃一周看看效果"
+- 叫号:"下一个"、"下一位"
+
+私立/消费医疗的结束方式(以交接非医疗人员为主):
+- 交接给客服、咨询师、前台:"我让客服跟你详细说费用"、"你带妈妈去前台了解一下"、"到那边找小王办手续"
+- 交接后医生可能还会和同事有几句交代,这几句属于本次就诊的尾部,不要单独成段
+
+这类信号即使前后所有发言都被标成同一个说话人,也必须切开。告别语的语义本身就证明了这次就诊结束了。
+
+**容易混淆的一点:去做检查不等于结束。**
+- "先去做个 CT,做完拿过来我看"、"去拍个片子,回来找我" -- 患者会返回,**这是同一次就诊**,不要切
+- "拿着单子去二楼抽血"(没说要回来)、"结果出来了再挂号" -- 这次就诊已经结束,应当切开
+
+判断依据:医生有没有明确表示患者要回到这里。说了要回来就不切,没说就切。
 
 强信号:
 - 叫号或点名:"下一个"、"张三"、"李阿姨来了"
@@ -108,12 +158,13 @@ const (
 - 拿不准的边界,切开并标记低置信度
 - 不要为了让片段"看起来完整"而合并可疑区域
 
-但"优先切开"有前提:必须确实存在患者可能换人的迹象。以下情况不属于"拿不准",不要切:
-- 只是话题变了,说话的人没变
-- 只是被提到了另一个患者,那个人没有出现在对话里
-- 只是出现了一段静默,但静默前后是同一个人在说同一件事
+但"优先切开"有前提:必须存在上一节所列的换人迹象之一。以下情况不属于"拿不准",不要切:
+- 话题变了,但医生没有重新做基础问诊
+- 讨论转向费用、流程、后续安排
+- 只是被提到了另一个患者,那个人没有实际参与对话
+- 出现了一段静默,但静默前后讨论的是同一个人的同一件事
 
-这两类过切会让医生反复做无意义的合并操作,严重时会让他不再信任切分结果。
+一次就诊可能长达二三十分钟,包含问诊、查体、解释、看报告、讲方案、谈费用等多个阶段。**阶段切换不是就诊边界。** 把一次完整就诊按阶段切成四五段,会让医生反复做无意义的合并,最终不再信任切分结果。
 
 ## 输出格式
 
@@ -163,6 +214,77 @@ const (
 {{transcript}}
 
 请按 system prompt 的要求切分这条录音的时间轴,输出 JSON。`
+	twoPassScanSystemPrompt = `你是医疗录音边界检测助手。你的唯一任务是从转写文本中找出所有可能是"就诊结束"的位置，不做判断，只做发现。
+
+**重要：必须从头到尾完整扫描整段文本，不要遗漏开头部分的信号。越早出现的信号越重要，务必报告。**
+
+## 要找的信号
+
+强信号（必须报告）：
+- 告别语：拜拜、再见、谢谢医生、慢走、辛苦了
+- 公立医院开单指路：去二楼抽血、去药房拿药、拿着单子、到收费处、做完CT回来找我（这个是中途不算）、不舒服再来
+- 公立医院交接科室：转到骨科、挂专家号、开住院证
+- 私立/消费医疗交接：让客服跟你详细说、带你去前台、找小王办手续
+- 叫号/点名：下一个、下一位
+
+中等信号（也要报告）：
+- 相邻两句时间戳间隔超过 30 秒（你必须计算每对相邻行的时间差）
+
+## 扫描策略
+
+1. 先完整浏览一遍文本，标记所有疑似位置
+2. 按时间顺序输出，从最早的开始
+3. 宁可多报不要漏报，第二步会筛选
+
+## 输出格式
+
+只输出 JSON 数组，不要任何解释文字：
+
+[
+  {"at_seconds": 615, "signal_type": "farewell", "signal_text": "拜拜"},
+  {"at_seconds": 1968, "signal_type": "farewell", "signal_text": "谢谢医生"},
+  {"at_seconds": 2100, "signal_type": "silence_gap", "signal_text": "间隔 62 秒"}
+]
+
+signal_type 的值：farewell / handoff / call_next / silence_gap
+at_seconds 精确到秒。按时间从早到晚排序。`
+	twoPassScanUserPrompt = `录音总时长：{{duration_seconds}} 秒
+
+以下是转写文本（每行格式：[开始时间] 内容）：
+
+{{transcript}}
+
+请**从头到尾**扫描整段文本，找出所有可能是就诊结束的位置。特别注意：文本开头的信号同样重要，不要遗漏。按时间顺序输出 JSON 数组。`
+	twoPassJudgeSystemPrompt = `你是医疗录音边界判定助手。你会看到一段 6 分钟左右的录音片段，其中某个时间点被标记为疑似就诊边界。你的任务是判断这里是不是真正的就诊结束。
+
+## 是就诊结束（返回 true）
+
+- 边界后出现了新患者描述自己的症状，医生重新做基础问诊（"多久了"、"什么时候开始的"、"以前看过吗"）
+- 边界处有明确的告别语，后面是叫号或新患者
+
+## 不是就诊结束（返回 false）
+
+- 同一患者话题转换（从症状聊到费用、复查安排、用药方法）
+- 患者中途离开做检查，但医生明确说了要回来
+- 静默后同一对话继续
+- 医生举例提到另一个患者，但那个人没有出现在对话里
+
+## 不要依赖说话人标记
+
+转写里说话人标记（speaker_0 等）可能全是同一个，不可信。靠内容判断：提问、下医嘱、解释病理的是医生；描述症状、回答提问的是患者。
+
+## 输出格式
+
+只输出 JSON，不要任何解释：
+
+{"is_boundary": true, "confidence": 0.91, "reason": "32:47 处互道拜拜，32:54 医生开始询问新患者"}`
+	twoPassJudgeUserPrompt = `疑似边界在 {{at_seconds}} 秒（{{at_time}}），触发信号：{{signal_text}}
+
+以下是边界前后各约 3 分钟的对话：
+
+{{window_transcript}}
+
+这里是不是真正的就诊结束？`
 )
 
 type Service struct {
@@ -279,23 +401,7 @@ func (s *Service) SummarizeEncounterText(ctx context.Context, model, encounterTe
 	if strings.TrimSpace(model) == "" {
 		model = defaultModelName
 	}
-	temp := 0.1
-	content, _, err := s.llm.ChatCompletion(ctx, llmChatRequest{
-		Model: model,
-		Messages: []llmMessage{
-			{Role: "system", Content: encounterSummarySystemPrompt},
-			{Role: "user", Content: strings.ReplaceAll(encounterSummaryUserPrompt, "{{encounter_text}}", encounterText)},
-		},
-		Temperature: &temp,
-	})
-	if err != nil {
-		return nil, err
-	}
-	summary, err := parseEncounterSummaryOutput(content)
-	if err != nil {
-		return nil, err
-	}
-	return &summary, nil
+	return s.summarizeEncounterTextWithFallback(ctx, model, encounterText, false)
 }
 
 func (s *Service) SplitRecording(ctx context.Context, req SplitRequest) (*SplitResponse, error) {
@@ -356,6 +462,9 @@ func (s *Service) splitRecordingWithInput(ctx context.Context, req SplitRequest,
 		if err != nil {
 			return nil, err
 		}
+	}
+	if shouldUseTwoPass(req, recording) {
+		return s.splitRecordingTwoPass(ctx, req, recording, report, temp)
 	}
 	totalSeconds := recordingDurationSeconds(recording)
 	inputChunks := buildInputChunks(recording, chunkChars)
@@ -488,6 +597,749 @@ func (s *Service) splitRecordingWithInput(ctx context.Context, req SplitRequest,
 	}
 	return resp, nil
 }
+
+func shouldUseTwoPass(req SplitRequest, recording *RecordingDetail) bool {
+	if req.UseTwoPass != nil {
+		return *req.UseTwoPass
+	}
+	return recording != nil && len(recording.TranscriptionSegs) > 0
+}
+
+func (s *Service) splitRecordingTwoPass(ctx context.Context, req SplitRequest, recording *RecordingDetail, report func(SplitProgress), temp float64) (*SplitResponse, error) {
+	totalSeconds := recordingDurationSeconds(recording)
+	utterances := buildUtterances(recording)
+	if len(utterances) == 0 {
+		return s.splitRecordingSinglePass(ctx, req, recording, report, temp)
+	}
+	if report != nil {
+		report(SplitProgress{
+			Stage:       "preparing",
+			Message:     fmt.Sprintf("录音已加载，准备两遍切分，共 %d 条发言", len(utterances)),
+			TotalChunks: len(utterances),
+		})
+	}
+	started := time.Now()
+	scanPrompt := firstNonEmpty(req.ScanSystemPrompt, twoPassScanSystemPrompt)
+	scanUserPrompt := firstNonEmpty(req.ScanUserPrompt, twoPassScanUserPrompt)
+	judgePrompt := firstNonEmpty(req.JudgeSystemPrompt, twoPassJudgeSystemPrompt)
+	judgeUserPrompt := firstNonEmpty(req.JudgeUserPrompt, twoPassJudgeUserPrompt)
+	candidates, usage, err := s.scanCandidateBoundaries(ctx, req.Model, utterances, totalSeconds, scanPrompt, scanUserPrompt, report, req)
+	if err != nil {
+		return nil, err
+	}
+	judgments, judgedUsage, err := s.judgeCandidateBoundaries(ctx, req.Model, utterances, candidates, judgePrompt, judgeUserPrompt, report, req)
+	if err != nil {
+		return nil, err
+	}
+	usage.PromptTokens += judgedUsage.PromptTokens
+	usage.CompletionTokens += judgedUsage.CompletionTokens
+	usage.TotalTokens += judgedUsage.TotalTokens
+	if report != nil {
+		report(SplitProgress{
+			Stage:            "merging",
+			Message:          fmt.Sprintf("合并确认边界与过短片段，候选 %d 个，已判定 %d 个", len(candidates), len(judgments)),
+			TotalCandidates:  len(candidates),
+			JudgedCandidates: len(judgments),
+			TotalChunks:      len(candidates),
+			CompletedChunks:  len(judgments),
+		})
+	}
+	segments := buildSegmentsFromJudgments(judgments, utterances, totalSeconds)
+	normalized := normalizeSegments(segments, totalSeconds)
+	enrichSegments(normalized, utterances)
+	boundaries := buildBoundaryReviews(normalized, utterances)
+	summary := buildSplitSummary(normalized)
+	encounters := buildEncounterViews(normalized, utterances)
+	if len(encounters) > 0 {
+		if report != nil {
+			report(SplitProgress{
+				Stage:           "summary",
+				Message:         fmt.Sprintf("正在生成就诊摘要... 第 1/%d 个", len(encounters)),
+				TotalChunks:     len(candidates),
+				CompletedChunks: len(candidates),
+				CurrentChunk:    len(candidates),
+				SummaryTotal:    len(encounters),
+				SummaryDone:     0,
+				CurrentSummary:  1,
+				PartialSegments: len(normalized),
+			})
+		}
+		if err := s.fillEncounterSummaries(ctx, req.Model, encounters, report, len(candidates), len(normalized)); err != nil {
+			return nil, err
+		}
+	}
+	validation := validateSegments(normalized, totalSeconds)
+	elapsed := time.Since(started)
+
+	// 保存详细的调试日志
+	debugLog := fmt.Sprintf(`# 两遍切分调试日志 - v%s
+录音 ID: %d
+总时长: %d 秒 (%.1f 分钟)
+模型: %s
+
+## 第一步：扫描候选边界
+找到 %d 个候选边界
+
+候选列表：
+%s
+
+## 第二步：逐一判定
+判定了 %d 个候选
+
+判定结果：
+%s
+
+## 最终输出
+共 %d 段
+
+段列表：
+%s
+`,
+		req.PromptVersion,
+		req.RecordingID,
+		totalSeconds,
+		float64(totalSeconds)/60.0,
+		req.Model,
+		len(candidates),
+		mustJSONStringIndent(candidates),
+		len(judgments),
+		mustJSONStringIndent(judgments),
+		len(normalized),
+		mustJSONStringIndent(normalized),
+	)
+
+	// 保存到文件
+	debugPath := fmt.Sprintf("data/debug/recording_%d_v%s_%d.log", req.RecordingID, req.PromptVersion, time.Now().Unix())
+	os.MkdirAll("data/debug", 0755)
+	if err := os.WriteFile(debugPath, []byte(debugLog), 0644); err == nil {
+		log.Printf("调试日志已保存: %s", debugPath)
+	}
+
+	resp := &SplitResponse{
+		RecordingID:        req.RecordingID,
+		RecordingDuration:  totalSeconds,
+		SplitModel:         req.Model,
+		SplitPromptVersion: req.PromptVersion,
+		InputKind:          recording.TranscriptSource,
+		ChunkCount:         len(candidates),
+		ElapsedMS:          elapsed.Milliseconds(),
+		Usage:              usage,
+		Segments:           normalized,
+		Boundaries:         boundaries,
+		Summary:            summary,
+		Encounters:         encounters,
+		Validation:         validation,
+		RawOutput:          strings.Join([]string{mustJSONString(candidates), mustJSONString(judgments)}, "\n\n--- two pass ---\n\n"),
+	}
+	if report != nil {
+		report(SplitProgress{
+			Stage:           "completed",
+			Message:         fmt.Sprintf("切分完成，共 %d 段", len(normalized)),
+			TotalChunks:     len(candidates),
+			CompletedChunks: len(candidates),
+			CurrentChunk:    len(candidates),
+			PartialSegments: len(normalized),
+		})
+	}
+	return resp, nil
+}
+
+func (s *Service) splitRecordingSinglePass(ctx context.Context, req SplitRequest, recording *RecordingDetail, report func(SplitProgress), temp float64) (*SplitResponse, error) {
+	totalSeconds := recordingDurationSeconds(recording)
+	inputChunks := buildInputChunks(recording, defaultMaxChunkChars)
+	if len(inputChunks) == 0 {
+		inputChunks = []inputChunk{{StartSeconds: 0, EndSeconds: totalSeconds, Content: rawTranscriptFallback(recording)}}
+	}
+	if report != nil {
+		report(SplitProgress{
+			Stage:       "preparing",
+			Message:     fmt.Sprintf("录音已加载，准备切分，共 %d 块", len(inputChunks)),
+			TotalChunks: len(inputChunks),
+		})
+	}
+	started := time.Now()
+	segments := make([]SplitSegment, 0, 16)
+	usage := Usage{}
+	rawOutputs := make([]string, 0, len(inputChunks))
+	for idx, chunk := range inputChunks {
+		if report != nil {
+			report(SplitProgress{
+				Stage:           "running",
+				Message:         fmt.Sprintf("正在处理第 %d/%d 块", idx+1, len(inputChunks)),
+				TotalChunks:     len(inputChunks),
+				CompletedChunks: idx,
+				CurrentChunk:    idx + 1,
+				PartialSegments: len(segments),
+			})
+		}
+		content := buildChunkContent(recording, chunk, idx+1, len(inputChunks))
+		finalUserPrompt := composeUserPrompt(req.UserPrompt, content)
+		contentText, chunkUsage, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+			Model: req.Model,
+			Messages: []llmMessage{
+				{Role: "system", Content: req.SystemPrompt},
+				{Role: "user", Content: finalUserPrompt},
+			},
+			Temperature: &temp,
+		})
+		if err != nil {
+			return nil, err
+		}
+		usage.PromptTokens += chunkUsage.PromptTokens
+		usage.CompletionTokens += chunkUsage.CompletionTokens
+		usage.TotalTokens += chunkUsage.TotalTokens
+		rawOutputs = append(rawOutputs, contentText)
+		parsed, err := parseSegmentsOutput(contentText)
+		if err != nil {
+			repaired, repairErr := s.repairSegmentsOutput(ctx, req.Model, contentText)
+			if repairErr != nil {
+				return nil, fmt.Errorf("parse chunk %d output: %w", idx+1, err)
+			}
+			repaired = sanitizeSegmentsPayload(repaired)
+			parsed, err = parseSegmentsOutput(repaired)
+			if err != nil {
+				if extracted, ok := extractFirstJSONObject(repaired); ok {
+					parsed, err = parseSegmentsOutput(extracted)
+				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("parse chunk %d output after repair: %w", idx+1, err)
+			}
+			contentText = repaired
+		}
+		parsed = constrainSegmentsToChunk(parsed, chunk)
+		segments = append(segments, parsed...)
+		if report != nil {
+			report(SplitProgress{
+				Stage:           "running",
+				Message:         fmt.Sprintf("第 %d/%d 块完成，当前已产出 %d 段", idx+1, len(inputChunks), len(segments)),
+				TotalChunks:     len(inputChunks),
+				CompletedChunks: idx + 1,
+				CurrentChunk:    idx + 1,
+				PartialSegments: len(segments),
+			})
+		}
+	}
+	normalized := normalizeSegments(segments, totalSeconds)
+	utterances := buildUtterances(recording)
+	enrichSegments(normalized, utterances)
+	boundaries := buildBoundaryReviews(normalized, utterances)
+	summary := buildSplitSummary(normalized)
+	encounters := buildEncounterViews(normalized, utterances)
+	if len(encounters) > 0 {
+		if report != nil {
+			report(SplitProgress{
+				Stage:           "summary",
+				Message:         fmt.Sprintf("正在生成就诊摘要... 第 1/%d 个", len(encounters)),
+				TotalChunks:     len(inputChunks),
+				CompletedChunks: len(inputChunks),
+				CurrentChunk:    len(inputChunks),
+				SummaryTotal:    len(encounters),
+				SummaryDone:     0,
+				CurrentSummary:  1,
+				PartialSegments: len(normalized),
+			})
+		}
+		if err := s.fillEncounterSummaries(ctx, req.Model, encounters, report, len(inputChunks), len(normalized)); err != nil {
+			return nil, err
+		}
+	}
+	validation := validateSegments(normalized, totalSeconds)
+	elapsed := time.Since(started)
+	resp := &SplitResponse{
+		RecordingID:        req.RecordingID,
+		RecordingDuration:  totalSeconds,
+		SplitModel:         req.Model,
+		SplitPromptVersion: req.PromptVersion,
+		InputKind:          recording.TranscriptSource,
+		ChunkCount:         len(inputChunks),
+		ElapsedMS:          elapsed.Milliseconds(),
+		Usage:              usage,
+		Segments:           normalized,
+		Boundaries:         boundaries,
+		Summary:            summary,
+		Encounters:         encounters,
+		Validation:         validation,
+		RawOutput:          strings.Join(rawOutputs, "\n\n--- chunk ---\n\n"),
+	}
+	if report != nil {
+		report(SplitProgress{
+			Stage:           "completed",
+			Message:         fmt.Sprintf("切分完成，共 %d 段", len(normalized)),
+			TotalChunks:     len(inputChunks),
+			CompletedChunks: len(inputChunks),
+			CurrentChunk:    len(inputChunks),
+			PartialSegments: len(normalized),
+		})
+	}
+	return resp, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func mustJSONString(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func mustJSONStringIndent(v interface{}) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func (s *Service) scanCandidateBoundaries(ctx context.Context, model string, utterances []Utterance, totalSeconds int, systemPrompt, userPrompt string, report func(SplitProgress), req SplitRequest) ([]CandidateBoundary, Usage, error) {
+	if len(utterances) == 0 {
+		return nil, Usage{}, nil
+	}
+	var usage Usage
+	text := buildScanTranscript(utterances)
+	availableChars := scanTranscriptBudget(systemPrompt, userPrompt)
+	if availableChars <= 0 {
+		availableChars = 12000
+	}
+	if utf8.RuneCountInString(text) > availableChars {
+		var all []CandidateBoundary
+		start := 0
+		for start < totalSeconds {
+			window, end := buildScanWindowByChars(utterances, start, availableChars)
+			if len(window) == 0 {
+				break
+			}
+			cands, u, err := s.scanCandidateBoundariesOnce(ctx, model, window, totalSeconds, systemPrompt, userPrompt, report)
+			if err != nil {
+				return nil, usage, err
+			}
+			usage.PromptTokens += u.PromptTokens
+			usage.CompletionTokens += u.CompletionTokens
+			usage.TotalTokens += u.TotalTokens
+			all = append(all, cands...)
+			if end >= totalSeconds {
+				break
+			}
+			start = maxInt(0, end-twoPassScanOverlapSeconds)
+		}
+		return dedupeCandidates(all), usage, nil
+	}
+	return s.scanCandidateBoundariesOnce(ctx, model, utterances, totalSeconds, systemPrompt, userPrompt, report)
+}
+
+func estimateTokens(s string) int {
+	return int(float64(utf8.RuneCountInString(s)) * tokenPerRuneRatio)
+}
+
+func scanTranscriptBudget(systemPrompt, userPrompt string) int {
+	templateUser := strings.ReplaceAll(userPrompt, "{{duration_seconds}}", "99999")
+	templateUser = strings.ReplaceAll(templateUser, "{{transcript}}", "")
+	overhead := estimateTokens(systemPrompt) + estimateTokens(templateUser)
+	availableTokens := dashscopeInputLimit - overhead - outputReserve
+	budget := int(float64(availableTokens) / tokenPerRuneRatio)
+	if budget < 4000 {
+		return 4000
+	}
+	// 限制单次窗口大小为 12000 字符（约 40 分钟），避免 LLM 注意力衰减
+	if budget > 12000 {
+		budget = 12000
+	}
+	return budget
+}
+
+func buildScanWindowByChars(utterances []Utterance, startSeconds, maxChars int) ([]Utterance, int) {
+	if len(utterances) == 0 {
+		return nil, startSeconds
+	}
+	if maxChars <= 0 {
+		maxChars = scanTranscriptBudget("", "")
+	}
+	startIdx := -1
+	for idx, utt := range utterances {
+		if utt.EndSeconds > startSeconds || utt.StartSeconds >= startSeconds {
+			startIdx = idx
+			break
+		}
+	}
+	if startIdx < 0 {
+		return nil, startSeconds
+	}
+	window := make([]Utterance, 0, 128)
+	totalChars := 0
+	endSeconds := utterances[startIdx].EndSeconds
+	for idx := startIdx; idx < len(utterances); idx++ {
+		line := fmt.Sprintf("[%s] %s", formatSeconds(utterances[idx].StartSeconds), strings.TrimSpace(utterances[idx].Text))
+		lineChars := utf8.RuneCountInString(line) + 1
+		if len(window) > 0 && totalChars+lineChars > maxChars {
+			break
+		}
+		window = append(window, utterances[idx])
+		totalChars += lineChars
+		if utterances[idx].EndSeconds > endSeconds {
+			endSeconds = utterances[idx].EndSeconds
+		}
+	}
+	return window, endSeconds
+}
+
+func (s *Service) scanCandidateBoundariesOnce(ctx context.Context, model string, utterances []Utterance, totalSeconds int, systemPrompt, userPrompt string, report func(SplitProgress)) ([]CandidateBoundary, Usage, error) {
+	return s.scanCandidateBoundariesOnceWithRetry(ctx, model, utterances, totalSeconds, systemPrompt, userPrompt, report, false)
+}
+
+func (s *Service) scanCandidateBoundariesOnceWithRetry(ctx context.Context, model string, utterances []Utterance, totalSeconds int, systemPrompt, userPrompt string, report func(SplitProgress), retried bool) ([]CandidateBoundary, Usage, error) {
+	temp := 0.0
+	transcript := buildScanTranscript(utterances)
+	finalUserPrompt := strings.ReplaceAll(userPrompt, "{{duration_seconds}}", fmt.Sprintf("%d", totalSeconds))
+	finalUserPrompt = strings.ReplaceAll(finalUserPrompt, "{{transcript}}", transcript)
+	userOverheadRunes := utf8.RuneCountInString(finalUserPrompt) - utf8.RuneCountInString(transcript)
+	log.Printf("[splitdemo] scan input: system=%d rune, user=%d rune, transcript=%d rune, total=%d rune, est_tokens=%d",
+		utf8.RuneCountInString(systemPrompt),
+		userOverheadRunes,
+		utf8.RuneCountInString(transcript),
+		utf8.RuneCountInString(systemPrompt)+utf8.RuneCountInString(finalUserPrompt),
+		estimateTokens(systemPrompt+finalUserPrompt))
+	content, usage, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+		Model: model,
+		Messages: []llmMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: finalUserPrompt},
+		},
+		Temperature: &temp,
+	})
+	if err != nil {
+		if !retried && strings.Contains(err.Error(), "Range of input length") && len(utterances) > 1 {
+			mid := len(utterances) / 2
+			left, leftUsage, leftErr := s.scanCandidateBoundariesOnceWithRetry(ctx, model, utterances[:mid], totalSeconds, systemPrompt, userPrompt, report, true)
+			if leftErr != nil {
+				return nil, Usage{}, leftErr
+			}
+			right, rightUsage, rightErr := s.scanCandidateBoundariesOnceWithRetry(ctx, model, utterances[mid:], totalSeconds, systemPrompt, userPrompt, report, true)
+			if rightErr != nil {
+				return nil, Usage{}, rightErr
+			}
+			return dedupeCandidates(append(left, right...)), Usage{
+				PromptTokens:     leftUsage.PromptTokens + rightUsage.PromptTokens,
+				CompletionTokens: leftUsage.CompletionTokens + rightUsage.CompletionTokens,
+				TotalTokens:      leftUsage.TotalTokens + rightUsage.TotalTokens,
+			}, nil
+		}
+		return nil, Usage{}, err
+	}
+	candidates, err := parseCandidateBoundariesOutput(content)
+	if err != nil {
+		return nil, usage, fmt.Errorf("parse candidate boundaries: %w", err)
+	}
+	if report != nil {
+		report(SplitProgress{
+			Stage:           "scanning",
+			Message:         fmt.Sprintf("第一步：扫描边界信号... 候选 %d 个", len(candidates)),
+			TotalCandidates: len(candidates),
+		})
+	}
+	return candidates, usage, nil
+}
+
+func (s *Service) judgeCandidateBoundaries(ctx context.Context, model string, utterances []Utterance, candidates []CandidateBoundary, systemPrompt, userPrompt string, report func(SplitProgress), req SplitRequest) ([]BoundaryJudgment, Usage, error) {
+	if len(candidates) == 0 {
+		return nil, Usage{}, nil
+	}
+	out := make([]BoundaryJudgment, 0, len(candidates))
+	usage := Usage{}
+	for idx, candidate := range candidates {
+		window := buildCandidateWindow(utterances, candidate.AtSeconds, 180)
+		finalUserPrompt := strings.ReplaceAll(userPrompt, "{{at_seconds}}", fmt.Sprintf("%d", candidate.AtSeconds))
+		finalUserPrompt = strings.ReplaceAll(finalUserPrompt, "{{at_time}}", formatSeconds(candidate.AtSeconds))
+		finalUserPrompt = strings.ReplaceAll(finalUserPrompt, "{{signal_text}}", candidate.SignalText)
+		finalUserPrompt = strings.ReplaceAll(finalUserPrompt, "{{window_transcript}}", window)
+		userOverheadRunes := utf8.RuneCountInString(finalUserPrompt) - utf8.RuneCountInString(window)
+		log.Printf("[splitdemo] judge input: system=%d rune, user=%d rune, transcript=%d rune, total=%d rune, est_tokens=%d",
+			utf8.RuneCountInString(systemPrompt),
+			userOverheadRunes,
+			utf8.RuneCountInString(window),
+			utf8.RuneCountInString(systemPrompt)+utf8.RuneCountInString(finalUserPrompt),
+			estimateTokens(systemPrompt+finalUserPrompt))
+		temp := 0.0
+		content, u, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+			Model: model,
+			Messages: []llmMessage{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: finalUserPrompt},
+			},
+			Temperature: &temp,
+		})
+		if err != nil {
+			return nil, usage, err
+		}
+		usage.PromptTokens += u.PromptTokens
+		usage.CompletionTokens += u.CompletionTokens
+		usage.TotalTokens += u.TotalTokens
+		judgment, err := parseBoundaryJudgmentOutput(content)
+		if err != nil {
+			repaired, repairErr := s.repairBoundaryJudgmentOutput(ctx, model, content)
+			if repairErr != nil {
+				return nil, usage, fmt.Errorf("parse candidate %d judgment: %w", idx+1, err)
+			}
+			repaired = sanitizeSegmentsPayload(repaired)
+			judgment, err = parseBoundaryJudgmentOutput(repaired)
+			if err != nil {
+				if extracted, ok := extractFirstJSONObject(repaired); ok {
+					judgment, err = parseBoundaryJudgmentOutput(extracted)
+				}
+			}
+			if err != nil {
+				return nil, usage, fmt.Errorf("parse candidate %d judgment after repair: %w", idx+1, err)
+			}
+		}
+		judgment.AtSeconds = candidate.AtSeconds
+		judgment.SignalType = candidate.SignalType
+		judgment.SignalText = candidate.SignalText
+		out = append(out, judgment)
+		if report != nil {
+			report(SplitProgress{
+				Stage:            "judging",
+				Message:          fmt.Sprintf("第二步：判定候选 %d/%d", idx+1, len(candidates)),
+				TotalCandidates:  len(candidates),
+				JudgedCandidates: idx + 1,
+			})
+		}
+	}
+	return out, usage, nil
+}
+
+func buildSegmentsFromJudgments(judgments []BoundaryJudgment, utterances []Utterance, totalSeconds int) []SplitSegment {
+	cuts := make([]BoundaryJudgment, 0, len(judgments))
+	for _, item := range judgments {
+		if item.IsBoundary {
+			cuts = append(cuts, item)
+		}
+	}
+	sort.SliceStable(cuts, func(i, j int) bool { return cuts[i].AtSeconds < cuts[j].AtSeconds })
+	filtered := make([]BoundaryJudgment, 0, len(cuts))
+	for _, item := range cuts {
+		if len(filtered) == 0 {
+			filtered = append(filtered, item)
+			continue
+		}
+		prev := filtered[len(filtered)-1]
+		if item.AtSeconds-prev.AtSeconds < 60 {
+			if item.Confidence > prev.Confidence {
+				filtered[len(filtered)-1] = item
+			}
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	bounds := []int{0}
+	for _, item := range filtered {
+		if item.AtSeconds > 0 && item.AtSeconds < totalSeconds {
+			bounds = append(bounds, item.AtSeconds)
+		}
+	}
+	bounds = append(bounds, totalSeconds)
+	bounds = dedupeInts(bounds)
+	segments := make([]SplitSegment, 0, len(bounds)-1)
+	for i := 0; i < len(bounds)-1; i++ {
+		start := bounds[i]
+		end := bounds[i+1]
+		if end <= start {
+			continue
+		}
+		selected := sliceUtterancesByRange(utterances, start, end)
+		seg := SplitSegment{
+			SegmentType:        "encounter",
+			StartSeconds:       start,
+			EndSeconds:         end,
+			BoundaryConfidence: 0.85,
+			NeedsReview:        false,
+			Utterances:         selected,
+		}
+		if len(selected) == 0 {
+			seg.SegmentType = "idle"
+			seg.NeedsReview = true
+		}
+		segments = append(segments, seg)
+	}
+	segments = mergeShortSegments(segments, utterances, 60)
+	for i := range segments {
+		if segments[i].BoundaryConfidence <= 0 {
+			segments[i].BoundaryConfidence = 0.85
+		}
+		segments[i].ReasonLabels = translateReasonLabels(segments[i].BoundaryReasons)
+		segments[i].ConfidenceLabel = confidenceLabel(segments[i].BoundaryConfidence)
+	}
+	return segments
+}
+
+func mergeShortSegments(segments []SplitSegment, utterances []Utterance, minSeconds int) []SplitSegment {
+	if len(segments) == 0 {
+		return segments
+	}
+	out := make([]SplitSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.DurationSeconds >= minSeconds || len(out) == 0 {
+			out = append(out, seg)
+			continue
+		}
+		prev := &out[len(out)-1]
+		prev.EndSeconds = seg.EndSeconds
+		prev.DurationSeconds = prev.EndSeconds - prev.StartSeconds
+		prev.Utterances = sliceUtterancesByRange(utterances, prev.StartSeconds, prev.EndSeconds)
+		prev.FullText = joinUtterances(prev.Utterances)
+		prev.NeedsReview = true
+	}
+	for i := range out {
+		out[i].Index = i + 1
+		out[i].DurationSeconds = out[i].EndSeconds - out[i].StartSeconds
+	}
+	return out
+}
+
+func parseCandidateBoundariesOutput(content string) ([]CandidateBoundary, error) {
+	cleaned := stripCodeFence(strings.TrimSpace(content))
+	if extracted, ok := extractFirstJSONArray(cleaned); ok {
+		cleaned = extracted
+	}
+	var out []CandidateBoundary
+	if err := json.Unmarshal([]byte(cleaned), &out); err == nil {
+		return out, nil
+	}
+	var wrapper struct {
+		Candidates []CandidateBoundary `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &wrapper); err != nil {
+		return nil, err
+	}
+	return wrapper.Candidates, nil
+}
+
+func parseBoundaryJudgmentOutput(content string) (BoundaryJudgment, error) {
+	cleaned := stripCodeFence(strings.TrimSpace(content))
+	if extracted, ok := extractFirstJSONObject(cleaned); ok {
+		cleaned = extracted
+	}
+	var out BoundaryJudgment
+	if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+		return BoundaryJudgment{}, err
+	}
+	return out, nil
+}
+
+func (s *Service) repairBoundaryJudgmentOutput(ctx context.Context, model, raw string) (string, error) {
+	temp := 0.0
+	content, _, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+		Model: model,
+		Messages: []llmMessage{
+			{Role: "system", Content: "你是 JSON 修复助手。把用户提供的内容修复成合法完整的 JSON，只输出 JSON，不要解释。必须保留原始含义，不要新增字段，不要改字段名。"},
+			{Role: "user", Content: "下面内容可能截断、混入解释文字或格式错误，请修复为一个完整合法的 JSON 对象，且必须包含 is_boundary、confidence、reason 这三个字段。\n\n" + raw},
+		},
+		Temperature: &temp,
+	})
+	return content, err
+}
+
+func extractFirstJSONArray(content string) (string, bool) {
+	start := strings.Index(content, "[")
+	if start < 0 {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for idx := start; idx < len(content); idx++ {
+		ch := content[idx]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return content[start : idx+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+func buildScanTranscript(utterances []Utterance) string {
+	parts := make([]string, 0, len(utterances))
+	for _, item := range utterances {
+		parts = append(parts, fmt.Sprintf("[%s] %s", formatSeconds(item.StartSeconds), strings.TrimSpace(item.Text)))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func buildCandidateWindow(utterances []Utterance, atSeconds, radius int) string {
+	start := maxInt(0, atSeconds-radius)
+	end := atSeconds + radius
+	selected := sliceUtterancesByRange(utterances, start, end)
+	return joinUtterances(selected)
+}
+
+func dedupeCandidates(items []CandidateBoundary) []CandidateBoundary {
+	if len(items) == 0 {
+		return nil
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].AtSeconds < items[j].AtSeconds })
+	out := make([]CandidateBoundary, 0, len(items))
+	for _, item := range items {
+		if len(out) == 0 {
+			out = append(out, item)
+			continue
+		}
+		prev := out[len(out)-1]
+		if absInt(item.AtSeconds-prev.AtSeconds) <= 5 {
+			if len(item.SignalText) > len(prev.SignalText) {
+				out[len(out)-1] = item
+			}
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeInts(values []int) []int {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Ints(values)
+	out := values[:0]
+	last := values[0] - 1
+	for _, v := range values {
+		if v == last {
+			continue
+		}
+		out = append(out, v)
+		last = v
+	}
+	return out
+}
+
 
 func constrainSegmentsToChunk(segments []SplitSegment, chunk inputChunk) []SplitSegment {
 	if len(segments) == 0 {
@@ -1009,7 +1861,6 @@ func buildEncounterViews(segments []SplitSegment, utterances []Utterance) []Enco
 }
 
 func (s *Service) fillEncounterSummaries(ctx context.Context, model string, encounters []EncounterView, report func(SplitProgress), totalChunks, partialSegments int) error {
-	temp := 0.1
 	for idx := range encounters {
 		if report != nil {
 			report(SplitProgress{
@@ -1024,21 +1875,9 @@ func (s *Service) fillEncounterSummaries(ctx context.Context, model string, enco
 				PartialSegments: partialSegments,
 			})
 		}
-		prompt := strings.ReplaceAll(encounterSummaryUserPrompt, "{{encounter_text}}", encounters[idx].FullText)
-		content, _, err := s.llm.ChatCompletion(ctx, llmChatRequest{
-			Model: model,
-			Messages: []llmMessage{
-				{Role: "system", Content: encounterSummarySystemPrompt},
-				{Role: "user", Content: prompt},
-			},
-			Temperature: &temp,
-		})
+		summary, err := s.summarizeEncounterTextWithFallback(ctx, model, encounters[idx].FullText, false)
 		if err != nil {
 			return fmt.Errorf("summarize encounter %d: %w", encounters[idx].EncounterNumber, err)
-		}
-		summary, err := parseEncounterSummaryOutput(content)
-		if err != nil {
-			return fmt.Errorf("parse encounter %d summary: %w", encounters[idx].EncounterNumber, err)
 		}
 		encounters[idx].PatientHint = strings.TrimSpace(summary.PatientHint)
 		encounters[idx].ChiefComplaint = strings.TrimSpace(summary.ChiefComplaint)
@@ -1058,6 +1897,136 @@ func (s *Service) fillEncounterSummaries(ctx context.Context, model string, enco
 		})
 	}
 	return nil
+}
+
+func (s *Service) summarizeEncounterTextWithFallback(ctx context.Context, model, encounterText string, retried bool) (*EncounterSummary, error) {
+	summary, err := s.summarizeEncounterTextOnce(ctx, model, encounterText)
+	if err == nil {
+		return summary, nil
+	}
+	if !retried && strings.Contains(err.Error(), "Range of input length") {
+		chunks := splitEncounterTextForSummary(encounterText, summaryTranscriptBudget())
+		if len(chunks) > 1 {
+			parts := make([]EncounterSummary, 0, len(chunks))
+			for _, chunk := range chunks {
+				item, chunkErr := s.summarizeEncounterTextWithFallback(ctx, model, chunk, true)
+				if chunkErr != nil {
+					return nil, chunkErr
+				}
+				parts = append(parts, *item)
+			}
+			merged := mergeEncounterSummaries(parts)
+			return &merged, nil
+		}
+	}
+	return nil, err
+}
+
+func (s *Service) summarizeEncounterTextOnce(ctx context.Context, model, encounterText string) (*EncounterSummary, error) {
+	temp := 0.1
+	prompt := strings.ReplaceAll(encounterSummaryUserPrompt, "{{encounter_text}}", encounterText)
+	userOverheadRunes := utf8.RuneCountInString(prompt) - utf8.RuneCountInString(encounterText)
+	log.Printf("[splitdemo] summary input: system=%d rune, user=%d rune, transcript=%d rune, total=%d rune, est_tokens=%d",
+		utf8.RuneCountInString(encounterSummarySystemPrompt),
+		userOverheadRunes,
+		utf8.RuneCountInString(encounterText),
+		utf8.RuneCountInString(encounterSummarySystemPrompt)+utf8.RuneCountInString(prompt),
+		estimateTokens(encounterSummarySystemPrompt+prompt))
+	content, _, err := s.llm.ChatCompletion(ctx, llmChatRequest{
+		Model: model,
+		Messages: []llmMessage{
+			{Role: "system", Content: encounterSummarySystemPrompt},
+			{Role: "user", Content: prompt},
+		},
+		Temperature: &temp,
+	})
+	if err != nil {
+		return nil, err
+	}
+	summary, err := parseEncounterSummaryOutput(content)
+	if err != nil {
+		return nil, err
+	}
+	return &summary, nil
+}
+
+func summaryTranscriptBudget() int {
+	templateUser := strings.ReplaceAll(encounterSummaryUserPrompt, "{{encounter_text}}", "")
+	overhead := estimateTokens(encounterSummarySystemPrompt) + estimateTokens(templateUser)
+	availableTokens := dashscopeInputLimit - overhead - summaryOutputReserve
+	budget := int(float64(availableTokens) / tokenPerRuneRatio)
+	if budget < 3000 {
+		return 3000
+	}
+	return budget
+}
+
+func splitEncounterTextForSummary(text string, maxRunes int) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if maxRunes <= 0 {
+		maxRunes = summaryTranscriptBudget()
+	}
+	lines := strings.Split(text, "\n")
+	chunks := make([]string, 0, 4)
+	var current []string
+	currentRunes := 0
+	for _, line := range lines {
+		lineRunes := utf8.RuneCountInString(line) + 1
+		if lineRunes > maxRunes {
+			if len(current) > 0 {
+				chunks = append(chunks, strings.Join(current, "\n"))
+				current = nil
+				currentRunes = 0
+			}
+			runes := []rune(line)
+			for start := 0; start < len(runes); start += maxRunes {
+				end := minInt(len(runes), start+maxRunes)
+				chunks = append(chunks, string(runes[start:end]))
+			}
+			continue
+		}
+		if len(current) > 0 && currentRunes+lineRunes > maxRunes {
+			chunks = append(chunks, strings.Join(current, "\n"))
+			current = nil
+			currentRunes = 0
+		}
+		current = append(current, line)
+		currentRunes += lineRunes
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, strings.Join(current, "\n"))
+	}
+	return chunks
+}
+
+func mergeEncounterSummaries(items []EncounterSummary) EncounterSummary {
+	return EncounterSummary{
+		PatientHint:    joinUniqueSummaryFields(items, func(item EncounterSummary) string { return item.PatientHint }, 2),
+		ChiefComplaint: joinUniqueSummaryFields(items, func(item EncounterSummary) string { return item.ChiefComplaint }, 3),
+		Disposition:    joinUniqueSummaryFields(items, func(item EncounterSummary) string { return item.Disposition }, 3),
+	}
+}
+
+func joinUniqueSummaryFields(items []EncounterSummary, pick func(EncounterSummary) string, limit int) string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		value := strings.TrimSpace(pick(item))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return strings.Join(out, "；")
 }
 
 func parseEncounterSummaryOutput(content string) (EncounterSummary, error) {

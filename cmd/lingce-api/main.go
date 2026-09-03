@@ -16,6 +16,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
 	"github.com/freeasyman/lingce-api/internal/compliance"
+	"github.com/freeasyman/lingce-api/internal/complianceguard"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
@@ -26,6 +27,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 	"github.com/freeasyman/lingce-api/internal/emrquality"
+	"github.com/freeasyman/lingce-api/internal/emrrealtime"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
@@ -235,6 +237,22 @@ func main() {
 	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	emrRecordHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+	var ossClient *oss.Client
+	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
+		var err error
+		ossClient, err = oss.NewClient(
+			cfg.Aliyun.OSSEndpoint,
+			cfg.Aliyun.AccessKeyID,
+			cfg.Aliyun.AccessKeySecret,
+			cfg.Aliyun.OSSBucket,
+			cfg.Aliyun.OSSPublicBaseURL,
+		)
+		if err != nil {
+			slog.Warn("failed to create OSS client", "error", err)
+		}
+	}
 
 	complianceStore := compliance.NewStore(pool)
 	complianceService := compliance.NewService(complianceStore)
@@ -245,8 +263,10 @@ func main() {
 	complianceHandler := compliance.NewHandler(complianceService)
 	complianceHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	// Create LLM gateway client
-	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+	// Register the new Compliance Guard domain separately from legacy compliance.
+	// It only reads source systems in phase 1 and never writes compliance_* tables.
+	complianceGuardHandler := complianceguard.NewHandler(pool)
+	complianceGuardHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	delegatedWeComModule := wecomdelegated.NewModule(pool, cfg.WeCom, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
@@ -269,6 +289,9 @@ func main() {
 		llmClient,
 		opportunityAlertService,
 	)
+	emrRealtimeService := emrrealtime.NewService(pool, emrRecordService, recService, emrPermissionService, cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey, llmClient, ossClient)
+	emrRealtimeHandler := emrrealtime.NewHandler(emrRealtimeService, emrPermissionService)
+	emrRealtimeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	recHandler := recording.NewHandler(recService, cfg.Recording.PlayURLRequireOwnedMedia, recording.RecordingOSSConfig{
 		Endpoint:        cfg.Aliyun.OSSEndpoint,
 		Bucket:          cfg.Aliyun.OSSBucket,
@@ -364,22 +387,6 @@ func main() {
 	badgeHandler := badge.NewHandler(badgeService)
 	badgeHandler.SetCallbackGatewayToken(cfg.External.BadgeCallbackGatewayToken)
 	badgeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	// Create OSS client
-	var ossClient *oss.Client
-	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
-		var err error
-		ossClient, err = oss.NewClient(
-			cfg.Aliyun.OSSEndpoint,
-			cfg.Aliyun.AccessKeyID,
-			cfg.Aliyun.AccessKeySecret,
-			cfg.Aliyun.OSSBucket,
-			cfg.Aliyun.OSSPublicBaseURL,
-		)
-		if err != nil {
-			slog.Warn("failed to create OSS client", "error", err)
-		}
-	}
 
 	// Register content module
 	contentStore := content.NewStore(pool)

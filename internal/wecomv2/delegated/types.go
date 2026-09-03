@@ -30,23 +30,23 @@ type BindRequest struct {
 }
 
 type CorpInstallResponse struct {
-	ID             string  `json:"id"`
-	ProviderApp    string  `json:"provider_app"`
-	TenantID       int64   `json:"tenant_id"`
-	CorpID         string  `json:"corp_id"`
-	CorpName       string  `json:"corp_name,omitempty"`
-	AgentID        int64   `json:"agent_id"`
-	Status         string  `json:"status"`
-	HasPermanent   bool    `json:"has_permanent_code"`
-	LaunchURL      string  `json:"launch_url,omitempty"`
-	TrustedDomain  string  `json:"trusted_domain,omitempty"`
-	CallbackURL    string  `json:"callback_url,omitempty"`
-	Token          string  `json:"token,omitempty"`
-	EncodingAESKey string  `json:"encoding_aes_key,omitempty"`
+	ID             string                           `json:"id"`
+	ProviderApp    string                           `json:"provider_app"`
+	TenantID       int64                            `json:"tenant_id"`
+	CorpID         string                           `json:"corp_id"`
+	CorpName       string                           `json:"corp_name,omitempty"`
+	AgentID        int64                            `json:"agent_id"`
+	Status         string                           `json:"status"`
+	HasPermanent   bool                             `json:"has_permanent_code"`
+	LaunchURL      string                           `json:"launch_url,omitempty"`
+	TrustedDomain  string                           `json:"trusted_domain,omitempty"`
+	CallbackURL    string                           `json:"callback_url,omitempty"`
+	Token          string                           `json:"token,omitempty"`
+	EncodingAESKey string                           `json:"encoding_aes_key,omitempty"`
 	HealthCheck    *DelegatedAppHealthCheckResponse `json:"health_check,omitempty"`
-	HealthSummary  string  `json:"health_summary,omitempty"`
-	UpdatedAt      *string `json:"updated_at,omitempty"`
-	CancelledAt    *string `json:"cancelled_at,omitempty"`
+	HealthSummary  string                           `json:"health_summary,omitempty"`
+	UpdatedAt      *string                          `json:"updated_at,omitempty"`
+	CancelledAt    *string                          `json:"cancelled_at,omitempty"`
 }
 
 type CorpInstallDetailResponse struct {
@@ -55,25 +55,34 @@ type CorpInstallDetailResponse struct {
 }
 
 type DelegatedAppOverviewResponse struct {
-	ProviderApp        string              `json:"provider_app"`
-	TemplateConnected  bool                `json:"template_connected"`
-	LastSuiteTicketAt  *string             `json:"last_suite_ticket_at,omitempty"`
-	ActiveInstallCount int64               `json:"active_install_count"`
+	ProviderApp        string                           `json:"provider_app"`
+	TemplateConnected  bool                             `json:"template_connected"`
+	LastSuiteTicketAt  *string                          `json:"last_suite_ticket_at,omitempty"`
+	ActiveInstallCount int64                            `json:"active_install_count"`
 	HealthCheck        *DelegatedAppHealthCheckResponse `json:"health_check,omitempty"`
-	RecentEvents       []*EventLogResponse `json:"recent_events"`
+	RecentEvents       []*EventLogResponse              `json:"recent_events"`
 }
 
 type DelegatedAppHealthCheckResponse struct {
-	SuiteToken  *DelegatedAppStepCheck `json:"suite_token,omitempty"`
-	AuthInfo    *DelegatedAppStepCheck `json:"auth_info,omitempty"`
-	CorpToken   *DelegatedAppStepCheck `json:"corp_token,omitempty"`
+	SuiteToken       *DelegatedAppStepCheck `json:"suite_token,omitempty"`
+	AuthInfo         *DelegatedAppStepCheck `json:"auth_info,omitempty"`
+	CorpToken        *DelegatedAppStepCheck `json:"corp_token,omitempty"`
+	LicenseAutoActiv *DelegatedAppStepCheck `json:"license_auto_activate,omitempty"`
 }
 
 type DelegatedAppStepCheck struct {
-	OK     bool   `json:"ok"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	OK               bool   `json:"ok"`
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
+	LicenseStatus    *int   `json:"license_status,omitempty"`
+	LicenseCheckTime *int64 `json:"license_check_time,omitempty"`
 }
+
+const (
+	LicenseStatusUnknown   = 0
+	LicenseStatusTrial     = 1
+	LicenseStatusPurchased = 2
+)
 
 type EventLogResponse struct {
 	ID         string  `json:"id"`
@@ -114,12 +123,20 @@ type encryptedCallbackEnvelope struct {
 }
 
 type callbackEvent struct {
-	XMLName     xml.Name `xml:"xml"`
-	SuiteID     string   `xml:"SuiteId,omitempty"`
-	InfoType    string   `xml:"InfoType,omitempty"`
-	SuiteTicket string   `xml:"SuiteTicket,omitempty"`
-	AuthCorpID  string   `xml:"AuthCorpId,omitempty"`
-	AuthCode    string   `xml:"AuthCode,omitempty"`
+	XMLName           xml.Name `xml:"xml"`
+	SuiteID           string   `xml:"SuiteId,omitempty"`
+	InfoType          string   `xml:"InfoType,omitempty"`
+	SuiteTicket       string   `xml:"SuiteTicket,omitempty"`
+	AuthCorpID        string   `xml:"AuthCorpId,omitempty"`
+	AuthCode          string   `xml:"AuthCode,omitempty"`
+	UserID            string   `xml:"UserID,omitempty"`
+	UserIDAlt         string   `xml:"UserId,omitempty"`
+	Scene             string   `xml:"Scene,omitempty"`
+	LicenseType       string   `xml:"LicenseType,omitempty"`
+	LicenseStatus     string   `xml:"LicenseStatus,omitempty"`
+	ActiveTime        string   `xml:"ActiveTime,omitempty"`
+	ExpireTime        string   `xml:"ExpireTime,omitempty"`
+	LicenseExpireTime string   `xml:"LicenseExpireTime,omitempty"`
 }
 
 type corpInstallRecord struct {

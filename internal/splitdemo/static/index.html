@@ -239,8 +239,10 @@
           <div class="small">模型 <input id="testModel" style="width:160px;display:inline-block;padding:6px 8px" value="qwen-max"> 版本 <input id="testVersion" style="width:120px;display:inline-block;padding:6px 8px" value="v0.3"> <button id="resetPromptsBtn" class="secondary" style="width:auto;padding:6px 10px;margin-left:8px">恢复默认提示词</button></div>
         </div>
         <div class="grid-test-top" style="margin-top:12px">
-          <div class="field"><label>System Prompt</label><textarea id="testSystem"></textarea></div>
-          <div class="field"><label>User Prompt</label><textarea id="testUser"></textarea></div>
+          <div class="field"><label>第一步 System Prompt</label><textarea id="scanSystem"></textarea></div>
+          <div class="field"><label>第一步 User Prompt</label><textarea id="scanUser"></textarea></div>
+          <div class="field"><label>第二步 System Prompt</label><textarea id="judgeSystem"></textarea></div>
+          <div class="field"><label>第二步 User Prompt</label><textarea id="judgeUser"></textarea></div>
         </div>
       </div>
       <div class="grid-test-bottom" style="margin-top:14px">
@@ -517,6 +519,77 @@
 {{transcript}}
 
 请按 system prompt 的要求切分这条录音的时间轴,输出 JSON。`;
+    const twoPassScanSystemPrompt = `你是医疗录音边界检测助手。你的唯一任务是从转写文本中找出所有可能是"就诊结束"的位置，不做判断，只做发现。
+
+**重要：必须从头到尾完整扫描整段文本，不要遗漏开头部分的信号。越早出现的信号越重要，务必报告。**
+
+## 要找的信号
+
+强信号（必须报告）：
+- 告别语：拜拜、再见、谢谢医生、慢走、辛苦了
+- 公立医院开单指路：去二楼抽血、去药房拿药、拿着单子、到收费处、做完CT回来找我（这个是中途不算）、不舒服再来
+- 公立医院交接科室：转到骨科、挂专家号、开住院证
+- 私立/消费医疗交接：让客服跟你详细说、带你去前台、找小王办手续
+- 叫号/点名：下一个、下一位
+
+中等信号（也要报告）：
+- 相邻两句时间戳间隔超过 30 秒（你必须计算每对相邻行的时间差）
+
+## 扫描策略
+
+1. 先完整浏览一遍文本，标记所有疑似位置
+2. 按时间顺序输出，从最早的开始
+3. 宁可多报不要漏报，第二步会筛选
+
+## 输出格式
+
+只输出 JSON 数组，不要任何解释文字：
+
+[
+  {"at_seconds": 615, "signal_type": "farewell", "signal_text": "拜拜"},
+  {"at_seconds": 1968, "signal_type": "farewell", "signal_text": "谢谢医生"},
+  {"at_seconds": 2100, "signal_type": "silence_gap", "signal_text": "间隔 62 秒"}
+]
+
+signal_type 的值：farewell / handoff / call_next / silence_gap
+at_seconds 精确到秒。按时间从早到晚排序。`;
+    const twoPassScanUserPrompt = `录音总时长：{{duration_seconds}} 秒
+
+以下是转写文本（每行格式：[开始时间] 内容）：
+
+{{transcript}}
+
+请**从头到尾**扫描整段文本，找出所有可能是就诊结束的位置。特别注意：文本开头的信号同样重要，不要遗漏。按时间顺序输出 JSON 数组。`;
+    const twoPassJudgeSystemPrompt = `你是医疗录音边界判定助手。你会看到一段 6 分钟左右的录音片段，其中某个时间点被标记为疑似就诊边界。你的任务是判断这里是不是真正的就诊结束。
+
+## 是就诊结束（返回 true）
+
+- 边界后出现了新患者描述自己的症状，医生重新做基础问诊（"多久了"、"什么时候开始的"、"以前看过吗"）
+- 边界处有明确的告别语，后面是叫号或新患者
+
+## 不是就诊结束（返回 false）
+
+- 同一患者话题转换（从症状聊到费用、复查安排、用药方法）
+- 患者中途离开做检查，但医生明确说了要回来
+- 静默后同一对话继续
+- 医生举例提到另一个患者，但那个人没有出现在对话里
+
+## 不要依赖说话人标记
+
+转写里说话人标记（speaker_0 等）可能全是同一个，不可信。靠内容判断：提问、下医嘱、解释病理的是医生；描述症状、回答提问的是患者。
+
+## 输出格式
+
+只输出 JSON，不要任何解释：
+
+{"is_boundary": true, "confidence": 0.91, "reason": "32:47 处互道拜拜，32:54 医生开始询问新患者"}`;
+    const twoPassJudgeUserPrompt = `疑似边界在 {{at_seconds}} 秒（{{at_time}}），触发信号：{{signal_text}}
+
+以下是边界前后各约 3 分钟的对话：
+
+{{window_transcript}}
+
+这里是不是真正的就诊结束？`;
     const reasonOptions = [
       {code:'patient_returned', label:'患者中途离开后返回'},
       {code:'colleague_talk', label:'医生与同事交流'},
@@ -557,12 +630,14 @@
           return {
             version: parsed.version || 'v0.3',
             model: parsed.model || 'qwen-max',
-            system: parsed.system || defaultSystemPrompt,
-            user: parsed.user || defaultUserPrompt,
+            scan_system: parsed.scan_system || twoPassScanSystemPrompt,
+            scan_user: parsed.scan_user || twoPassScanUserPrompt,
+            judge_system: parsed.judge_system || twoPassJudgeSystemPrompt,
+            judge_user: parsed.judge_user || twoPassJudgeUserPrompt,
           };
         }
       }catch(e){}
-      return {version:'v0.3', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
+      return {version:'v0.3', model:'qwen-max', scan_system:twoPassScanSystemPrompt, scan_user:twoPassScanUserPrompt, judge_system:twoPassJudgeSystemPrompt, judge_user:twoPassJudgeUserPrompt};
     }
     function savePrompts(){
       localStorage.setItem(LS.prompts, JSON.stringify(state.prompts));
@@ -614,12 +689,14 @@
     function initPromptsUI(){
       $('testModel').value = state.prompts.model || 'qwen-max';
       $('testVersion').value = state.prompts.version || 'v0.3';
-      $('testSystem').value = state.prompts.system || defaultSystemPrompt;
-      $('testUser').value = state.prompts.user || defaultUserPrompt;
+      $('scanSystem').value = state.prompts.scan_system || twoPassScanSystemPrompt;
+      $('scanUser').value = state.prompts.scan_user || twoPassScanUserPrompt;
+      $('judgeSystem').value = state.prompts.judge_system || twoPassJudgeSystemPrompt;
+      $('judgeUser').value = state.prompts.judge_user || twoPassJudgeUserPrompt;
       usePromptLabel();
     }
     function resetPrompts(){
-      state.prompts = {version:'v0.3', model:'qwen-max', system:defaultSystemPrompt, user:defaultUserPrompt};
+      state.prompts = {version:'v0.3', model:'qwen-max', scan_system:twoPassScanSystemPrompt, scan_user:twoPassScanUserPrompt, judge_system:twoPassJudgeSystemPrompt, judge_user:twoPassJudgeUserPrompt};
       savePrompts();
       initPromptsUI();
     }
@@ -627,11 +704,31 @@
       state.prompts = {
         model: $('testModel').value.trim() || 'qwen-max',
         version: $('testVersion').value.trim() || 'v0.3',
-        system: $('testSystem').value,
-        user: $('testUser').value,
+        scan_system: $('scanSystem').value,
+        scan_user: $('scanUser').value,
+        judge_system: $('judgeSystem').value,
+        judge_user: $('judgeUser').value,
       };
       savePrompts();
       usePromptLabel();
+    }
+    function splitProgressText(job){
+      const stage = job?.stage || '';
+      if(stage === 'scanning') return '第一步：扫描边界信号...';
+      if(stage === 'judging') return `第二步：判定候选 ${job.judged_candidates || 0}/${job.total_candidates || 0}`;
+      if(stage === 'merging') return '第三步：合并过短片段';
+      if(stage === 'summary') return `正在生成摘要... 第 ${job.summary_done || 0}/${job.summary_total || 0} 个`;
+      if(stage === 'completed') return job.message || '切分完成';
+      return job?.message || '准备中';
+    }
+    function splitProgressPct(job){
+      const stage = job?.stage || '';
+      if(stage === 'scanning') return 20;
+      if(stage === 'judging') return 20 + Math.round(((job.judged_candidates || 0) / Math.max(job.total_candidates || 1, 1)) * 50);
+      if(stage === 'merging') return 80;
+      if(stage === 'summary') return 80 + Math.round(((job.summary_done || 0) / Math.max(job.summary_total || 1, 1)) * 20);
+      if(stage === 'completed') return 100;
+      return 8;
     }
 
     function normalizeUtterance(item){
@@ -994,7 +1091,13 @@
         $('annProgress').style.width = '8%';
         $('annProgressText').textContent = '准备中';
         const job = await api('/internal/split-demo/split', {method:'POST', body:JSON.stringify({
-          recording_id:id, model:state.prompts.model || 'qwen-max', prompt_version:state.prompts.version || 'v0.3', system_prompt:state.prompts.system, user_prompt:state.prompts.user
+          recording_id:id,
+          model:state.prompts.model || 'qwen-max',
+          prompt_version:state.prompts.version || 'v0.3',
+          scan_system_prompt:state.prompts.scan_system,
+          scan_user_prompt:state.prompts.scan_user,
+          judge_system_prompt:state.prompts.judge_system,
+          judge_user_prompt:state.prompts.judge_user
         })});
         state.annotate.jobId = job.id;
         await pollJob(job.id, 'split');
@@ -1008,9 +1111,9 @@
       const url = kind === 'test' ? `/internal/split-demo/synthetic/runs/${jobId}` : `/internal/split-demo/split-jobs/${jobId}`;
       const job = await api(url);
       if(kind === 'split'){
-        const pct = job.stage === 'summary' ? 50 + Math.round(((job.summary_done || 0) / Math.max(job.summary_total || 1)) * 50) : Math.max(5, Math.round(((job.completed_chunks || 0) / Math.max(job.total_chunks || 1)) * 50));
+        const pct = splitProgressPct(job);
         $('annProgress').style.width = `${job.status === 'completed' ? 100 : pct}%`;
-        $('annProgressText').textContent = `${job.message || ''} | ${job.stage || ''} | ${job.completed_chunks || 0}/${job.total_chunks || 0}`;
+        $('annProgressText').textContent = splitProgressText(job);
         setStatus($('annStatus'), job.message || '处理中', job.updated_at || '');
       }else{
         renderTestProgress(job);
@@ -1493,8 +1596,7 @@
       $('testRaw').textContent = JSON.stringify({case:caseData, latest_run:run, previous_run:state.test.prevRun}, null, 2);
     }
     function renderTestProgress(job){
-      const text = job.stage === 'summary' ? `摘要 ${job.summary_done || 0}/${job.summary_total || 0}` : `分块 ${job.completed_chunks || 0}/${job.total_chunks || 0}`;
-      setStatus($('testStatus'), job.message || text, job.updated_at || '');
+      setStatus($('testStatus'), job.message || splitProgressText(job), job.updated_at || '');
     }
     function sortedDetails(evalReport){
       const arr = (evalReport?.details || []).slice();
@@ -1711,7 +1813,16 @@
     }
     async function runTestCase(caseId){
       syncPromptsFromUI();
-      const req = {case_id:caseId, model:state.prompts.model, system_prompt:state.prompts.system, user_prompt:state.prompts.user, prompt_version:state.prompts.version, tolerance_seconds:15};
+      const req = {
+        case_id:caseId,
+        model:state.prompts.model,
+        prompt_version:state.prompts.version,
+        scan_system_prompt:state.prompts.scan_system,
+        scan_user_prompt:state.prompts.scan_user,
+        judge_system_prompt:state.prompts.judge_system,
+        judge_user_prompt:state.prompts.judge_user,
+        tolerance_seconds:15
+      };
       const job = await api('/internal/split-demo/synthetic/run', {method:'POST', body:JSON.stringify(req)});
       state.test.running = true;
       $('testStatus').classList.remove('hidden');
@@ -2008,8 +2119,10 @@
     $('resetPromptsBtn').onclick = resetPrompts;
     $('testModel').oninput = syncPromptsFromUI;
     $('testVersion').oninput = syncPromptsFromUI;
-    $('testSystem').oninput = syncPromptsFromUI;
-    $('testUser').oninput = syncPromptsFromUI;
+    $('scanSystem').oninput = syncPromptsFromUI;
+    $('scanUser').oninput = syncPromptsFromUI;
+    $('judgeSystem').oninput = syncPromptsFromUI;
+    $('judgeUser').oninput = syncPromptsFromUI;
     $('reasonModal').onclick = e => { if(e.target === $('reasonModal')) closeReason(null); };
     $('reasonCancel').onclick = () => closeReason(null);
     $('reasonOk').onclick = () => {

@@ -2,6 +2,8 @@ package opportunityalert
 
 import "time"
 
+import "context"
+
 type ListRequest struct {
 	Status   string
 	Page     int
@@ -73,6 +75,23 @@ type CreateAlertInput struct {
 	Priority          string
 	DedupeKey         string
 	RawPayload        JSONObject
+}
+
+type MessageSendRequest struct {
+	MessageScene string
+	DedupeKey    string
+	EmployeeIDs  []int64
+	Title        string
+	Content      string
+	TargetURL    string
+	ButtonText   string
+	BizDate      *string
+	Extra        any
+}
+
+type MessageSender interface {
+	IsEnabled() bool
+	SendInternalMessage(ctx context.Context, req MessageSendRequest) error
 }
 
 func ToResponse(item *Alert) *AlertResponse {

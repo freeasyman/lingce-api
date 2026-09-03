@@ -45,6 +45,26 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
+func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
+	router.Register(mux, []router.Route{
+		{Method: "POST", Path: "/api/v1/internal/emr/recording-ai-candidates", Handler: h.GenerateRecordingAICandidates, AuthMode: "internal"},
+	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *Handler) GenerateRecordingAICandidates(w http.ResponseWriter, r *http.Request) {
+	var req GenerateAICandidatesRequest
+	if decodeBody(r, &req) != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	outcome, err := h.service.GenerateRecordingAICandidates(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": outcome})
+}
+
 func (h *Handler) ListAICandidates(w http.ResponseWriter, r *http.Request) {
 	_, tenantID, err := h.authorizeRecord(r, "record.read")
 	if err != nil {

@@ -402,11 +402,19 @@ func (s *Store) ListRecentEventLogsByCorpID(ctx context.Context, corpID string, 
 func (s *Store) GetRuntimeState(ctx context.Context, providerApp string) (*runtimeStateRecord, error) {
 	var item runtimeStateRecord
 	var suiteTicketReceivedAt *time.Time
+	var providerAccessTokenExpiresAt *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(provider_app, ''), COALESCE(suite_ticket, ''), suite_ticket_received_at
+		SELECT COALESCE(provider_app, ''), COALESCE(suite_ticket, ''), suite_ticket_received_at,
+		       COALESCE(provider_access_token, ''), provider_access_token_expires_at
 		FROM wecom_runtime_state
 		WHERE provider_app = $1
-	`, strings.TrimSpace(providerApp)).Scan(&item.ProviderApp, &item.SuiteTicket, &suiteTicketReceivedAt)
+	`, strings.TrimSpace(providerApp)).Scan(
+		&item.ProviderApp,
+		&item.SuiteTicket,
+		&suiteTicketReceivedAt,
+		&item.ProviderAccessToken,
+		&providerAccessTokenExpiresAt,
+	)
 	if err == pgx.ErrNoRows {
 		return &item, nil
 	}
@@ -417,7 +425,28 @@ func (s *Store) GetRuntimeState(ctx context.Context, providerApp string) (*runti
 		v := suiteTicketReceivedAt.Format(time.RFC3339)
 		item.SuiteTicketReceivedAt = &v
 	}
+	if providerAccessTokenExpiresAt != nil {
+		v := providerAccessTokenExpiresAt.Format(time.RFC3339)
+		item.ProviderAccessTokenExpiresAt = &v
+	}
 	return &item, nil
+}
+
+func (s *Store) UpsertRuntimeStateProviderAccessToken(ctx context.Context, providerApp, accessToken string, expiresIn int64) error {
+	if expiresIn <= 0 {
+		expiresIn = 7200
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO wecom_runtime_state (
+			provider_app, provider_access_token, provider_access_token_expires_at, created_at, updated_at
+		) VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'), NOW(), NOW())
+		ON CONFLICT (provider_app)
+		DO UPDATE SET
+			provider_access_token = EXCLUDED.provider_access_token,
+			provider_access_token_expires_at = EXCLUDED.provider_access_token_expires_at,
+			updated_at = NOW()
+	`, strings.TrimSpace(providerApp), strings.TrimSpace(accessToken), expiresIn)
+	return err
 }
 
 func (s *Store) CountActiveCorpInstalls(ctx context.Context, providerApp string) (int64, error) {
@@ -462,7 +491,9 @@ func (s *Store) ListRecentEventLogs(ctx context.Context, limit int) ([]*eventLog
 }
 
 type runtimeStateRecord struct {
-	ProviderApp           string
-	SuiteTicket           string
-	SuiteTicketReceivedAt *string
+	ProviderApp                  string
+	SuiteTicket                  string
+	SuiteTicketReceivedAt        *string
+	ProviderAccessToken          string
+	ProviderAccessTokenExpiresAt *string
 }

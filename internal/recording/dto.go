@@ -5,6 +5,9 @@ import "time"
 type OwnedAudioIngestRequest struct {
 	TenantID        int64
 	EmployeeID      int64
+	EncounterID     *int64
+	CustomerID      *int64
+	PatientID       *int64
 	FileURL         string
 	FileName        string
 	MIMEType        string

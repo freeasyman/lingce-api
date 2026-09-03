@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -47,9 +48,15 @@ func NewService(store *Store, authStore *internalauth.Store, cfg config.WeComCon
 		jwtExpiryHours = 24
 	}
 	return &Service{
-		store:                    store,
-		authStore:                authStore,
-		client:                   newClient(strings.TrimSpace(cfg.APIBaseURL), strings.TrimSpace(cfg.DelegatedApp.SuiteID), strings.TrimSpace(cfg.DelegatedApp.SuiteSecret)),
+		store:     store,
+		authStore: authStore,
+		client: newClient(
+			strings.TrimSpace(cfg.APIBaseURL),
+			strings.TrimSpace(cfg.DelegatedApp.SuiteID),
+			strings.TrimSpace(cfg.DelegatedApp.SuiteSecret),
+			strings.TrimSpace(cfg.Provider.CorpID),
+			strings.TrimSpace(cfg.Provider.Secret),
+		),
 		providerApp:              strings.TrimSpace(cfg.DelegatedApp.SuiteID),
 		providerCorpID:           strings.TrimSpace(cfg.Provider.CorpID),
 		token:                    strings.TrimSpace(cfg.DelegatedApp.Token),
@@ -161,15 +168,17 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 		return nil, err
 	}
 	result := &DelegatedAppHealthCheckResponse{
-		SuiteToken: &DelegatedAppStepCheck{OK: false, Status: "missing"},
-		AuthInfo:   &DelegatedAppStepCheck{OK: false, Status: "missing"},
-		CorpToken:  &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		SuiteToken:       &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		AuthInfo:         &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		CorpToken:        &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		LicenseAutoActiv: &DelegatedAppStepCheck{OK: false, Status: "missing"},
 	}
 	suiteTicket := strings.TrimSpace(state.SuiteTicket)
 	if suiteTicket == "" {
 		result.SuiteToken.Error = "suite_ticket missing"
 		result.AuthInfo.Error = "suite_ticket missing"
 		result.CorpToken.Error = "suite_ticket missing"
+		result.LicenseAutoActiv.Error = "suite_ticket missing"
 		return result, nil
 	}
 	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
@@ -181,6 +190,7 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 		result.AuthInfo.Error = msg
 		result.CorpToken.Status = "blocked"
 		result.CorpToken.Error = msg
+		result.LicenseAutoActiv.Error = msg
 		return result, nil
 	}
 	result.SuiteToken.OK = true
@@ -192,6 +202,7 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 		result.AuthInfo.Error = msg
 		result.CorpToken.Status = "blocked"
 		result.CorpToken.Error = msg
+		result.LicenseAutoActiv.Error = msg
 		return result, nil
 	}
 	var item *corpInstallRecord
@@ -207,6 +218,7 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 	if item == nil || strings.TrimSpace(item.PermanentCode) == "" || strings.TrimSpace(item.CorpID) == "" {
 		result.AuthInfo.Error = "install permanent code missing"
 		result.CorpToken.Error = "install permanent code missing"
+		result.LicenseAutoActiv.Error = "install permanent code missing"
 		return result, nil
 	}
 	if _, err := s.client.GetAuthInfo(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
@@ -215,6 +227,7 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 		result.AuthInfo.Error = msg
 		result.CorpToken.Status = "blocked"
 		result.CorpToken.Error = msg
+		result.LicenseAutoActiv.Error = msg
 		return result, nil
 	}
 	result.AuthInfo.OK = true
@@ -227,19 +240,22 @@ func (s *Service) CheckHealth(ctx context.Context) (*DelegatedAppHealthCheckResp
 	}
 	result.CorpToken.OK = true
 	result.CorpToken.Status = "ok"
+	s.checkLicenseAutoActivation(ctx, item, result.LicenseAutoActiv)
 	return result, nil
 }
 
 func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecord) (*DelegatedAppHealthCheckResponse, error) {
 	result := &DelegatedAppHealthCheckResponse{
-		SuiteToken: &DelegatedAppStepCheck{OK: false, Status: "missing"},
-		AuthInfo:   &DelegatedAppStepCheck{OK: false, Status: "missing"},
-		CorpToken:  &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		SuiteToken:       &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		AuthInfo:         &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		CorpToken:        &DelegatedAppStepCheck{OK: false, Status: "missing"},
+		LicenseAutoActiv: &DelegatedAppStepCheck{OK: false, Status: "missing"},
 	}
 	if item == nil {
 		result.SuiteToken.Error = "install missing"
 		result.AuthInfo.Error = "install missing"
 		result.CorpToken.Error = "install missing"
+		result.LicenseAutoActiv.Error = "install missing"
 		return result, nil
 	}
 	state, err := s.store.GetRuntimeState(ctx, s.providerApp)
@@ -251,6 +267,7 @@ func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecor
 		result.SuiteToken.Error = "suite_ticket missing"
 		result.AuthInfo.Error = "suite_ticket missing"
 		result.CorpToken.Error = "suite_ticket missing"
+		result.LicenseAutoActiv.Error = "suite_ticket missing"
 		return result, nil
 	}
 	suiteAccessToken, _, err := s.client.GetSuiteAccessToken(ctx, suiteTicket)
@@ -262,6 +279,7 @@ func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecor
 		result.AuthInfo.Error = msg
 		result.CorpToken.Status = "blocked"
 		result.CorpToken.Error = msg
+		result.LicenseAutoActiv.Error = msg
 		return result, nil
 	}
 	result.SuiteToken.OK = true
@@ -269,6 +287,7 @@ func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecor
 	if strings.TrimSpace(item.PermanentCode) == "" || strings.TrimSpace(item.CorpID) == "" {
 		result.AuthInfo.Error = "install permanent code missing"
 		result.CorpToken.Error = "install permanent code missing"
+		result.LicenseAutoActiv.Error = "install permanent code missing"
 		return result, nil
 	}
 	if _, err := s.client.GetAuthInfo(ctx, suiteAccessToken, item.CorpID, item.PermanentCode); err != nil {
@@ -277,6 +296,7 @@ func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecor
 		result.AuthInfo.Error = msg
 		result.CorpToken.Status = "blocked"
 		result.CorpToken.Error = msg
+		result.LicenseAutoActiv.Error = msg
 		return result, nil
 	}
 	result.AuthInfo.OK = true
@@ -289,6 +309,7 @@ func (s *Service) CheckInstallHealth(ctx context.Context, item *corpInstallRecor
 	}
 	result.CorpToken.OK = true
 	result.CorpToken.Status = "ok"
+	s.checkLicenseAutoActivation(ctx, item, result.LicenseAutoActiv)
 	return result, nil
 }
 
@@ -297,6 +318,9 @@ func summarizeHealthCheck(health *DelegatedAppHealthCheckResponse) string {
 		return "未检查"
 	}
 	if health.CorpToken != nil && health.CorpToken.OK {
+		if health.LicenseAutoActiv != nil && !health.LicenseAutoActiv.OK {
+			return "许可自动激活异常"
+		}
 		return "可发消息"
 	}
 	if health.CorpToken != nil && strings.TrimSpace(health.CorpToken.Error) != "" {
@@ -365,6 +389,14 @@ func (s *Service) LoginWithOAuth(ctx context.Context, code, corpID string) (*OAu
 		"corp_id", corpID,
 		"provider_app", s.providerApp,
 	)
+	if err := s.enableLicenseAutoActivation(ctx, corpID); err != nil {
+		// Activation is asynchronous and must not prevent us from returning the
+		// normal WeCom error, which the handler maps to a stable business code.
+		slog.Warn("delegated oauth license auto activation request failed",
+			"corp_id", corpID,
+			"error", err,
+		)
+	}
 	corpAccessToken, _, err := s.resolveCorpAccessToken(ctx, install)
 	if err != nil {
 		slog.Warn("delegated oauth login corp access token failed",
@@ -414,6 +446,7 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 
 	tokenCache := make(map[string]string)
 	installCache := make(map[string]*corpInstallRecord)
+	licenseActivationCache := make(map[string]error)
 	for _, employeeID := range employeeIDs {
 		binding, err := s.store.GetActiveBindingByEmployeeID(ctx, s.providerApp, employeeID)
 		if err != nil {
@@ -486,6 +519,18 @@ func (s *Service) SendInternalMessage(ctx context.Context, req InternalSendMessa
 				continue
 			}
 			installCache[binding.CorpID] = install
+		}
+		activationErr, activationChecked := licenseActivationCache[binding.CorpID]
+		if !activationChecked {
+			activationErr = s.enableLicenseAutoActivation(ctx, binding.CorpID)
+			licenseActivationCache[binding.CorpID] = activationErr
+		}
+		if activationErr != nil {
+			slog.Warn("delegated message license auto activation request failed",
+				"corp_id", binding.CorpID,
+				"employee_id", employeeID,
+				"error", activationErr,
+			)
 		}
 
 		corpToken, ok := tokenCache[binding.CorpID]
@@ -607,23 +652,32 @@ func (s *Service) HandleCallback(ctx context.Context, signature, timestamp, nonc
 func (s *Service) VerifyEnterpriseCallbackURL(signature, timestamp, nonce, echostr string) (string, error) {
 	token := firstNonEmpty(s.enterpriseCallbackToken, s.token)
 	aesKey := firstNonEmpty(s.enterpriseCallbackAESKey, s.encodingAESKey)
-	crypto, err := newCrypto(token, aesKey, s.providerApp)
-	if err != nil {
-		return "", err
+	var lastErr error
+	for _, receiverID := range s.enterpriseReceiverIDs(context.Background()) {
+		crypto, err := newCrypto(token, aesKey, receiverID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !crypto.VerifySignature(signature, timestamp, nonce, echostr) {
+			lastErr = fmt.Errorf("invalid signature")
+			continue
+		}
+		plain, err := crypto.Decrypt(echostr)
+		if err == nil {
+			return plain, nil
+		}
+		lastErr = err
 	}
-	if !crypto.VerifySignature(signature, timestamp, nonce, echostr) {
-		return "", fmt.Errorf("invalid signature")
+	if lastErr != nil {
+		return "", lastErr
 	}
-	return crypto.Decrypt(echostr)
+	return "", fmt.Errorf("invalid signature")
 }
 
 func (s *Service) HandleEnterpriseCallback(ctx context.Context, signature, timestamp, nonce string, body []byte) error {
 	token := firstNonEmpty(s.enterpriseCallbackToken, s.token)
 	aesKey := firstNonEmpty(s.enterpriseCallbackAESKey, s.encodingAESKey)
-	crypto, err := newCrypto(token, aesKey, s.providerApp)
-	if err != nil {
-		return err
-	}
 	var envelope encryptedCallbackEnvelope
 	if err := xml.Unmarshal(body, &envelope); err != nil {
 		return fmt.Errorf("parse callback xml: %w", err)
@@ -631,14 +685,94 @@ func (s *Service) HandleEnterpriseCallback(ctx context.Context, signature, times
 	if strings.TrimSpace(envelope.Encrypt) == "" {
 		return fmt.Errorf("missing encrypted payload")
 	}
-	if !crypto.VerifySignature(signature, timestamp, nonce, envelope.Encrypt) {
+	var (
+		plain             string
+		matchedReceiverID string
+		lastErr           error
+	)
+	for _, receiverID := range s.enterpriseReceiverIDs(ctx) {
+		crypto, err := newCrypto(token, aesKey, receiverID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !crypto.VerifySignature(signature, timestamp, nonce, envelope.Encrypt) {
+			lastErr = fmt.Errorf("invalid signature")
+			continue
+		}
+		plain, err = crypto.Decrypt(envelope.Encrypt)
+		if err == nil {
+			matchedReceiverID = receiverID
+			break
+		}
+		lastErr = err
+	}
+	if plain == "" {
+		if lastErr != nil {
+			return lastErr
+		}
 		return fmt.Errorf("invalid signature")
 	}
-	plain, err := crypto.Decrypt(envelope.Encrypt)
-	if err != nil {
+	var event callbackEvent
+	if err := xml.Unmarshal([]byte(plain), &event); err != nil {
+		return fmt.Errorf("parse decrypted enterprise callback: %w", err)
+	}
+	infoType := strings.TrimSpace(event.InfoType)
+	if infoType == "" {
+		infoType = "enterprise_callback"
+	}
+	corpID := firstNonEmpty(event.AuthCorpID, matchedReceiverID)
+	if err := s.store.SaveEventLog(ctx, corpID, infoType, plain); err != nil {
 		return err
 	}
-	return s.store.SaveEventLog(ctx, "", "enterprise_callback", plain)
+	if isAutoActivateEvent(infoType) {
+		slog.Info("delegated app license auto activation event received",
+			"corp_id", corpID,
+			"wecom_user_id", firstNonEmpty(event.UserID, event.UserIDAlt),
+			"scene", strings.TrimSpace(event.Scene),
+			"license_type", strings.TrimSpace(event.LicenseType),
+			"license_status", strings.TrimSpace(event.LicenseStatus),
+			"active_time", strings.TrimSpace(event.ActiveTime),
+			"expire_time", firstNonEmpty(event.ExpireTime, event.LicenseExpireTime),
+		)
+	}
+	return nil
+}
+
+func isAutoActivateEvent(infoType string) bool {
+	switch strings.ToLower(strings.TrimSpace(infoType)) {
+	case "auto_activate", "license_auto_activate", "license_auto_active":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) enterpriseReceiverIDs(ctx context.Context) []string {
+	ids := []string{s.providerApp, s.providerCorpID}
+	if s.store != nil {
+		if installs, err := s.store.ListCorpInstalls(ctx, nil, ""); err == nil {
+			for _, item := range installs {
+				if item != nil {
+					ids = append(ids, item.CorpID)
+				}
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *Service) handleCallbackEvent(ctx context.Context, plain string, event *callbackEvent) error {
@@ -719,14 +853,26 @@ func (s *Service) syncCorpInstall(ctx context.Context, corpID, authCode string) 
 	if len(authInfo.AuthInfo.Agent) > 0 {
 		agentID = authInfo.AuthInfo.Agent[0].AgentID
 	}
-	return s.store.UpsertCorpInstall(ctx, corpInstallRecord{
+	if err := s.store.UpsertCorpInstall(ctx, corpInstallRecord{
 		ProviderApp:   s.providerApp,
 		CorpID:        corpID,
 		CorpName:      strings.TrimSpace(authInfo.AuthCorpInfo.CorpName),
 		PermanentCode: strings.TrimSpace(permanentResp.PermanentCode),
 		AgentID:       agentID,
 		Status:        "active",
-	})
+	}); err != nil {
+		return err
+	}
+	if err := s.enableLicenseAutoActivation(ctx, corpID); err != nil {
+		// License setup must not make WeCom reject an otherwise valid install callback.
+		// The failure is retained in event logs and exposed by the OPS health check.
+		slog.Warn("delegated app license auto activation setup failed",
+			"corp_id", corpID,
+			"error", err,
+		)
+		_ = s.store.SaveEventLog(ctx, corpID, "license_auto_activate_failed", err.Error())
+	}
+	return nil
 }
 
 func (s *Service) completeOAuthLogin(ctx context.Context, install *corpInstallRecord, corpAccessToken string, userInfo *userInfo3rdResponse) (*OAuthLoginResponse, error) {
@@ -869,6 +1015,76 @@ func (s *Service) resolveCorpAccessToken(ctx context.Context, install *corpInsta
 	return s.client.GetCorpAccessToken(ctx, install.CorpID, install.PermanentCode)
 }
 
+func (s *Service) getProviderAccessToken(ctx context.Context) (string, error) {
+	state, err := s.store.GetRuntimeState(ctx, s.providerApp)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(state.ProviderAccessToken) != "" && state.ProviderAccessTokenExpiresAt != nil {
+		expiresAt, parseErr := time.Parse(time.RFC3339, *state.ProviderAccessTokenExpiresAt)
+		if parseErr == nil && expiresAt.After(time.Now().Add(60*time.Second)) {
+			return state.ProviderAccessToken, nil
+		}
+	}
+	token, expiresIn, err := s.client.GetProviderAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("provider access token is empty")
+	}
+	if err := s.store.UpsertRuntimeStateProviderAccessToken(ctx, s.providerApp, token, expiresIn); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Service) enableLicenseAutoActivation(ctx context.Context, corpID string) error {
+	providerAccessToken, err := s.getProviderAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	return s.client.SetLicenseAutoActiveStatus(ctx, providerAccessToken, strings.TrimSpace(corpID))
+}
+
+func (s *Service) checkLicenseAutoActivation(ctx context.Context, item *corpInstallRecord, result *DelegatedAppStepCheck) {
+	if result == nil {
+		return
+	}
+	if item == nil || strings.TrimSpace(item.CorpID) == "" {
+		result.Error = "install corp_id missing"
+		return
+	}
+	providerAccessToken, err := s.getProviderAccessToken(ctx)
+	if err != nil {
+		result.Status = "failed"
+		result.Error = err.Error()
+		return
+	}
+	license, err := s.client.GetAppLicenseInfo(ctx, providerAccessToken, item.CorpID)
+	if err != nil {
+		result.Status = "failed"
+		result.Error = err.Error()
+		return
+	}
+	result.LicenseStatus = &license.Status
+	if license.CheckTime > 0 {
+		result.LicenseCheckTime = &license.CheckTime
+	}
+	if isReadyLicenseStatus(license.Status) {
+		result.OK = true
+		result.Status = "ready"
+		return
+	}
+	result.Status = "unavailable"
+	result.Error = "接口调用许可未开通或无可用许可"
+}
+
+func isReadyLicenseStatus(status int) bool {
+	// WeCom reports 1 for trial and 2 for a purchased license.
+	return status == LicenseStatusTrial || status == LicenseStatusPurchased
+}
+
 func (s *Service) toResponse(item *corpInstallRecord) *CorpInstallResponse {
 	if item == nil {
 		return nil
@@ -962,21 +1178,77 @@ func attachWeComEntryParams(targetURL, corpID string, agentID int64) string {
 }
 
 type client struct {
-	baseURL     string
-	suiteID     string
-	suiteSecret string
+	baseURL        string
+	suiteID        string
+	suiteSecret    string
+	providerCorpID string
+	providerSecret string
 }
 
-func newClient(baseURL, suiteID, suiteSecret string) *client {
+func newClient(baseURL, suiteID, suiteSecret, providerCorpID, providerSecret string) *client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://qyapi.weixin.qq.com"
 	}
 	return &client{
-		baseURL:     baseURL,
-		suiteID:     strings.TrimSpace(suiteID),
-		suiteSecret: strings.TrimSpace(suiteSecret),
+		baseURL:        baseURL,
+		suiteID:        strings.TrimSpace(suiteID),
+		suiteSecret:    strings.TrimSpace(suiteSecret),
+		providerCorpID: strings.TrimSpace(providerCorpID),
+		providerSecret: strings.TrimSpace(providerSecret),
 	}
+}
+
+func (c *client) GetProviderAccessToken(ctx context.Context) (string, int64, error) {
+	if strings.TrimSpace(c.providerCorpID) == "" || strings.TrimSpace(c.providerSecret) == "" {
+		return "", 0, fmt.Errorf("wecom provider credentials are not configured")
+	}
+	type response struct {
+		ErrCode     int    `json:"errcode"`
+		ErrMsg      string `json:"errmsg"`
+		AccessToken string `json:"provider_access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	var resp response
+	if err := postJSON(ctx, c.baseURL+"/cgi-bin/service/get_provider_token", map[string]string{
+		"corpid":          c.providerCorpID,
+		"provider_secret": c.providerSecret,
+	}, &resp); err != nil {
+		return "", 0, err
+	}
+	return resp.AccessToken, resp.ExpiresIn, nil
+}
+
+func (c *client) SetLicenseAutoActiveStatus(ctx context.Context, providerAccessToken, corpID string) error {
+	var resp struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	return postJSON(ctx, c.baseURL+"/cgi-bin/license/set_auto_active_status?provider_access_token="+url.QueryEscape(providerAccessToken), map[string]any{
+		"auth_corpid": corpID,
+		"suite_id":    c.suiteID,
+		"auto_active": 1,
+	}, &resp)
+}
+
+type appLicenseInfo struct {
+	Status    int   `json:"license_status"`
+	CheckTime int64 `json:"license_check_time"`
+}
+
+func (c *client) GetAppLicenseInfo(ctx context.Context, providerAccessToken, corpID string) (appLicenseInfo, error) {
+	var resp struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		appLicenseInfo
+	}
+	if err := postJSON(ctx, c.baseURL+"/cgi-bin/license/get_app_license_info?provider_access_token="+url.QueryEscape(providerAccessToken), map[string]string{
+		"corpid":   corpID,
+		"suite_id": c.suiteID,
+	}, &resp); err != nil {
+		return appLicenseInfo{}, err
+	}
+	return resp.appLicenseInfo, nil
 }
 
 func (c *client) GetSuiteAccessToken(ctx context.Context, suiteTicket string) (string, int64, error) {
@@ -1177,6 +1449,28 @@ func (c *client) SendTextCardMessage(ctx context.Context, corpAccessToken string
 	return &resp, nil
 }
 
+type wecomAPIError struct {
+	Code int
+	Msg  string
+}
+
+func (e *wecomAPIError) Error() string {
+	if strings.TrimSpace(e.Msg) == "" {
+		return fmt.Sprintf("wecom api error: %d", e.Code)
+	}
+	return fmt.Sprintf("wecom api error: %d %s", e.Code, e.Msg)
+}
+
+func (e *wecomAPIError) IsLicenseUnavailable() bool {
+	switch e.Code {
+	case 48002, 701000, 701001, 701002:
+		return true
+	default:
+		message := strings.ToLower(e.Msg)
+		return strings.Contains(message, "接口调用许可") || strings.Contains(message, "api forbidden")
+	}
+}
+
 func postJSON(ctx context.Context, targetURL string, payload any, target any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -1207,7 +1501,7 @@ func postJSON(ctx context.Context, targetURL string, payload any, target any) er
 		ErrMsg  string `json:"errmsg"`
 	}
 	if err := json.Unmarshal(data, &apiErr); err == nil && apiErr.ErrCode != 0 {
-		return fmt.Errorf("wecom api error: %d %s", apiErr.ErrCode, apiErr.ErrMsg)
+		return &wecomAPIError{Code: apiErr.ErrCode, Msg: apiErr.ErrMsg}
 	}
 	return nil
 }
@@ -1237,7 +1531,7 @@ func getJSON(ctx context.Context, targetURL string, target any) error {
 		ErrMsg  string `json:"errmsg"`
 	}
 	if err := json.Unmarshal(data, &apiErr); err == nil && apiErr.ErrCode != 0 {
-		return fmt.Errorf("wecom api error: %d %s", apiErr.ErrCode, apiErr.ErrMsg)
+		return &wecomAPIError{Code: apiErr.ErrCode, Msg: apiErr.ErrMsg}
 	}
 	return nil
 }
@@ -1308,6 +1602,12 @@ func (c *crypto) Decrypt(encrypted string) (string, error) {
 	msgLen := int(binary.BigEndian.Uint32(plain[16:20]))
 	if msgLen < 0 || len(plain) < 20+msgLen {
 		return "", fmt.Errorf("invalid message length")
+	}
+	if c.receiverID != "" {
+		receivedID := string(plain[20+msgLen:])
+		if receivedID != c.receiverID {
+			return "", fmt.Errorf("receiver id mismatch")
+		}
 	}
 	return string(plain[20 : 20+msgLen]), nil
 }

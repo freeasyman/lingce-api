@@ -79,9 +79,22 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 			Handler: h.SendSMS,
 			Auth:    false,
 		},
+		// Keep the mobile-prefixed paths used by the employee web client.
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/mobile/sms/send",
+			Handler: h.SendSMS,
+			Auth:    false,
+		},
 		{
 			Method:  "POST",
 			Path:    "/api/v1/auth/sms/login",
+			Handler: h.SMSLogin,
+			Auth:    false,
+		},
+		{
+			Method:  "POST",
+			Path:    "/api/v1/auth/mobile/sms/login",
 			Handler: h.SMSLogin,
 			Auth:    false,
 		},

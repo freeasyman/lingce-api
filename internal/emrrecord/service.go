@@ -57,6 +57,56 @@ func (s *Service) CreateAICandidate(ctx context.Context, tenantID int64, recordI
 	return s.store.CreateAICandidate(ctx, tenantID, recordID, req)
 }
 
+func (s *Service) GenerateRecordingAICandidates(ctx context.Context, req GenerateAICandidatesRequest) (*GenerateAICandidatesOutcome, error) {
+	if req.TenantID <= 0 || req.RecordingID <= 0 {
+		return nil, fmt.Errorf("tenant_id and recording_id are required")
+	}
+	if strings.TrimSpace(req.GenerationKey) == "" {
+		return nil, fmt.Errorf("generation_key is required")
+	}
+	if len(req.Candidates) == 0 {
+		return nil, fmt.Errorf("candidates must not be empty")
+	}
+	for _, candidate := range req.Candidates {
+		if strings.TrimSpace(candidate.SectionCode) == "" || candidate.Content == nil {
+			return nil, fmt.Errorf("candidate section_code and content are required")
+		}
+	}
+	outcome, created, err := s.store.GenerateRecordingAICandidates(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if created && outcome != nil && outcome.Record != nil {
+		recordID := outcome.Record.ID
+		if _, err := s.process.Append(ctx, emrprocess.AppendRequest{
+			TenantID: req.TenantID, RecordID: &recordID, ActionType: "生成病历", ActionResult: "成功",
+			ActorType: "系统", Source: "录音分析", AfterStatus: &outcome.Record.Status,
+			OutputInfo: map[string]any{"recording_id": req.RecordingID, "generation_key": req.GenerationKey},
+		}); err != nil {
+			return nil, fmt.Errorf("record generated but process record failed: %w", err)
+		}
+	}
+	return outcome, nil
+}
+
+func (s *Service) GenerateRealtimeAICandidates(ctx context.Context, req GenerateRealtimeAICandidatesRequest) ([]*AICandidate, error) {
+	if req.TenantID <= 0 || strings.TrimSpace(req.RecordID) == "" || req.EncounterID <= 0 {
+		return nil, fmt.Errorf("tenant_id, record_id and encounter_id are required")
+	}
+	if strings.TrimSpace(req.GenerationKey) == "" {
+		return nil, fmt.Errorf("generation_key is required")
+	}
+	if len(req.Candidates) == 0 {
+		return nil, fmt.Errorf("candidates must not be empty")
+	}
+	for _, candidate := range req.Candidates {
+		if strings.TrimSpace(candidate.SectionCode) == "" || candidate.Content == nil {
+			return nil, fmt.Errorf("candidate section_code and content are required")
+		}
+	}
+	return s.store.GenerateRealtimeAICandidates(ctx, req)
+}
+
 func (s *Service) HandleAICandidate(ctx context.Context, tenantID, actorID int64, recordID, candidateID, decision string, req HandleAICandidateRequest) (*AICandidate, *Record, error) {
 	if decision != "已采纳" && decision != "已拒绝" {
 		return nil, nil, fmt.Errorf("invalid ai candidate decision")

@@ -2,6 +2,7 @@ package delegated
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,8 +29,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/wecom/delegated-app/callback", Handler: h.VerifyCallbackURL},
 		{Method: "POST", Path: "/api/v1/wecom/delegated-app/callback", Handler: h.Callback},
-		{Method: "GET", Path: "/api/v1/wecom/partner-template/callback", Handler: h.VerifyCallbackURL},
-		{Method: "POST", Path: "/api/v1/wecom/partner-template/callback", Handler: h.Callback},
 		{Method: "GET", Path: "/api/v1/wecom/delegated-app/enterprise-callback", Handler: h.VerifyEnterpriseCallbackURL},
 		{Method: "POST", Path: "/api/v1/wecom/delegated-app/enterprise-callback", Handler: h.EnterpriseCallback},
 		{Method: "GET", Path: "/api/v1/wecom/delegated-app/launch", Handler: h.Launch},
@@ -191,6 +190,16 @@ func (h *Handler) OAuthLogin(w http.ResponseWriter, r *http.Request) {
 			"corp_id", strings.TrimSpace(req.CorpID),
 			"error", err,
 		)
+		if isLicenseUnavailableError(err) {
+			httputil.WriteError(
+				w,
+				http.StatusServiceUnavailable,
+				"WECOM_LICENSE_PENDING",
+				"应用正在开通，请稍后重新从企业微信工作台进入。",
+				map[string]any{"retryable": true},
+			)
+			return
+		}
 		httputil.WriteError(w, http.StatusUnauthorized, "WECOM_LOGIN_FAILED", err.Error(), nil)
 		return
 	}
@@ -199,6 +208,21 @@ func (h *Handler) OAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func isLicenseUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *wecomAPIError
+	if errors.As(err, &apiErr) && apiErr.IsLicenseUnavailable() {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "48002") ||
+		strings.Contains(message, "701000") ||
+		strings.Contains(message, "接口调用许可") ||
+		strings.Contains(message, "api forbidden")
 }
 
 func (h *Handler) Bind(w http.ResponseWriter, r *http.Request) {

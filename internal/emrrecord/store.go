@@ -114,6 +114,358 @@ func (s *Store) CreateAICandidate(ctx context.Context, tenantID int64, recordID 
 	return s.GetAICandidate(ctx, tenantID, recordID, id)
 }
 
+type recordingEMRSource struct {
+	RecordingID   int64
+	TenantID      int64
+	EmployeeID    *int64
+	CustomerID    *int64
+	PatientID     *int64
+	RecordedAt    *time.Time
+	CreatedAt     time.Time
+	Scene         string
+	EncounterID   int64
+	PatientName   string
+	PatientAge    *int
+	PatientGender string
+	PatientPhone  string
+	DepartmentID  *int64
+	StartedAt     *time.Time
+	EndedAt       *time.Time
+}
+
+func (s *Store) GenerateRecordingAICandidates(ctx context.Context, req GenerateAICandidatesRequest) (*GenerateAICandidatesOutcome, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("begin recording emr candidate generation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	source, err := loadRecordingEMRSource(ctx, tx, req.TenantID, req.RecordingID)
+	if err != nil {
+		return nil, false, err
+	}
+	record, created, err := ensureRecordingEMRRecord(ctx, tx, source)
+	if err != nil {
+		return nil, false, err
+	}
+
+	candidateIDs := make([]string, 0, len(req.Candidates))
+	for _, candidateReq := range req.Candidates {
+		sectionCode := strings.TrimSpace(candidateReq.SectionCode)
+		if sectionCode == "" || candidateReq.Content == nil {
+			return nil, false, fmt.Errorf("candidate section_code and content are required")
+		}
+		evidence := cloneObject(candidateReq.SourceEvidence)
+		if evidence == nil {
+			evidence = map[string]any{}
+		}
+		evidence["recording_id"] = req.RecordingID
+		evidence["generation_key"] = req.GenerationKey
+		evidence["source_type"] = "recording_transcription"
+		evidenceRaw := encodeObject(evidence)
+		contentRaw := encodeObject(candidateReq.Content)
+
+		var candidateID string
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_ai_candidates
+			WHERE record_id=$1
+			  AND section_code=$2
+			  AND source_evidence->>'generation_key'=$3
+			ORDER BY generated_at DESC, id DESC
+			LIMIT 1
+			FOR UPDATE
+		`, record.ID, sectionCode, req.GenerationKey).Scan(&candidateID)
+		if err == nil {
+			var status string
+			if err := tx.QueryRow(ctx, `SELECT status FROM emr_ai_candidates WHERE id=$1`, candidateID).Scan(&status); err != nil {
+				return nil, false, fmt.Errorf("load existing emr candidate: %w", err)
+			}
+			if status == "待处理" {
+				if _, err := tx.Exec(ctx, `
+					UPDATE emr_ai_candidates
+					SET content=$2::jsonb, source_evidence=$3::jsonb, generated_at=NOW()
+					WHERE id=$1
+				`, candidateID, contentRaw, evidenceRaw); err != nil {
+					return nil, false, fmt.Errorf("update emr ai candidate: %w", err)
+				}
+			}
+			candidateIDs = append(candidateIDs, candidateID)
+			continue
+		}
+		if err != pgx.ErrNoRows {
+			return nil, false, fmt.Errorf("find existing emr candidate: %w", err)
+		}
+
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO emr_ai_candidates (record_id, section_code, content, source_evidence)
+			SELECT r.id, $3, $4::jsonb, $5::jsonb
+			FROM emr_records r
+			JOIN emr_template_sections section ON section.template_version_id=r.template_version_id
+			WHERE r.id=$1 AND r.tenant_id=$2 AND section.code=$3
+			RETURNING id
+		`, record.ID, req.TenantID, sectionCode, contentRaw, evidenceRaw).Scan(&candidateID); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, false, fmt.Errorf("record or template section not found")
+			}
+			return nil, false, fmt.Errorf("create emr ai candidate: %w", err)
+		}
+		candidateIDs = append(candidateIDs, candidateID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("commit recording emr candidate generation: %w", err)
+	}
+
+	result := &GenerateAICandidatesOutcome{Record: record, Candidates: make([]*AICandidate, 0, len(candidateIDs))}
+	result.Record, err = s.Get(ctx, req.TenantID, record.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, candidateID := range candidateIDs {
+		candidate, err := s.GetAICandidate(ctx, req.TenantID, record.ID, candidateID)
+		if err != nil {
+			return nil, false, err
+		}
+		if candidate != nil {
+			result.Candidates = append(result.Candidates, candidate)
+		}
+	}
+	return result, created, nil
+}
+
+func (s *Store) GenerateRealtimeAICandidates(ctx context.Context, req GenerateRealtimeAICandidatesRequest) ([]*AICandidate, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin realtime emr candidate generation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var recordID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM emr_records
+		WHERE id=$1 AND tenant_id=$2 AND encounter_id=$3
+		FOR UPDATE
+	`, req.RecordID, req.TenantID, req.EncounterID).Scan(&recordID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("realtime emr record not found")
+		}
+		return nil, fmt.Errorf("lock realtime emr record: %w", err)
+	}
+
+	candidateIDs := make([]string, 0, len(req.Candidates))
+	for _, candidateReq := range req.Candidates {
+		sectionCode := strings.TrimSpace(candidateReq.SectionCode)
+		evidence := cloneObject(candidateReq.SourceEvidence)
+		if evidence == nil {
+			evidence = map[string]any{}
+		}
+		evidence["encounter_id"] = req.EncounterID
+		evidence["generation_key"] = req.GenerationKey
+		evidence["source_type"] = "realtime_transcription"
+		contentRaw := encodeObject(candidateReq.Content)
+		evidenceRaw := encodeObject(evidence)
+
+		var candidateID string
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_ai_candidates
+			WHERE record_id=$1
+			  AND section_code=$2
+			  AND source_evidence->>'generation_key'=$3
+			ORDER BY generated_at DESC, id DESC
+			LIMIT 1
+			FOR UPDATE
+		`, recordID, sectionCode, req.GenerationKey).Scan(&candidateID)
+		if err == nil {
+			candidateIDs = append(candidateIDs, candidateID)
+			continue
+		}
+		if err != pgx.ErrNoRows {
+			return nil, fmt.Errorf("find generated realtime emr candidate: %w", err)
+		}
+
+		err = tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_ai_candidates
+			WHERE record_id=$1 AND section_code=$2 AND status='待处理'
+			ORDER BY generated_at DESC, id DESC
+			LIMIT 1
+			FOR UPDATE
+		`, recordID, sectionCode).Scan(&candidateID)
+		if err == nil {
+			if _, err := tx.Exec(ctx, `
+				UPDATE emr_ai_candidates
+				SET content=$2::jsonb, source_evidence=$3::jsonb, generated_at=NOW()
+				WHERE id=$1
+			`, candidateID, contentRaw, evidenceRaw); err != nil {
+				return nil, fmt.Errorf("update realtime emr ai candidate: %w", err)
+			}
+			candidateIDs = append(candidateIDs, candidateID)
+			continue
+		}
+		if err != pgx.ErrNoRows {
+			return nil, fmt.Errorf("find realtime emr candidate: %w", err)
+		}
+
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO emr_ai_candidates (record_id, section_code, content, source_evidence)
+			SELECT r.id, $3, $4::jsonb, $5::jsonb
+			FROM emr_records r
+			JOIN emr_template_sections section ON section.template_version_id=r.template_version_id
+			WHERE r.id=$1 AND r.tenant_id=$2 AND section.code=$3
+			RETURNING id
+		`, recordID, req.TenantID, sectionCode, contentRaw, evidenceRaw).Scan(&candidateID); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, fmt.Errorf("realtime record or template section not found")
+			}
+			return nil, fmt.Errorf("create realtime emr ai candidate: %w", err)
+		}
+		candidateIDs = append(candidateIDs, candidateID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit realtime emr candidate generation: %w", err)
+	}
+
+	items := make([]*AICandidate, 0, len(candidateIDs))
+	for _, candidateID := range candidateIDs {
+		candidate, err := s.GetAICandidate(ctx, req.TenantID, recordID, candidateID)
+		if err != nil {
+			return nil, err
+		}
+		if candidate != nil {
+			items = append(items, candidate)
+		}
+	}
+	return items, nil
+}
+
+func loadRecordingEMRSource(ctx context.Context, tx pgx.Tx, tenantID, recordingID int64) (*recordingEMRSource, error) {
+	item := &recordingEMRSource{}
+	var employeeID, customerID, patientID, departmentID *int64
+	var recordedAt, startedAt, endedAt *time.Time
+	err := tx.QueryRow(ctx, `
+		SELECT r.id, r.tenant_id, r.employee_id, r.customer_id,
+		       COALESCE(e.patient_id, c.patient_id, r.patient_id),
+		       COALESCE(r.recorded_at, r.created_at), r.created_at, COALESCE(r.scene, ''),
+		       e.id, COALESCE(NULLIF(e.patient_name, ''), NULLIF(c.name, ''), ''),
+		       e.department_id, e.started_at, e.ended_at,
+		       c.age, COALESCE(c.gender, ''), COALESCE(c.phone, '')
+		FROM recordings r
+		JOIN encounters e
+		  ON e.tenant_id=r.tenant_id
+		 AND (e.id=r.encounter_id OR (r.encounter_id IS NULL AND e.source_type='recording' AND e.source_id=r.id))
+		LEFT JOIN customers c
+		  ON c.tenant_id=r.tenant_id AND c.id=r.customer_id AND c.deleted_at IS NULL
+		WHERE r.id=$1 AND r.tenant_id=$2 AND r.deleted_at IS NULL
+	`, recordingID, tenantID).Scan(
+		&item.RecordingID, &item.TenantID, &employeeID, &customerID, &patientID,
+		&recordedAt, &item.CreatedAt, &item.Scene, &item.EncounterID, &item.PatientName,
+		&departmentID, &startedAt, &endedAt, &item.PatientAge, &item.PatientGender, &item.PatientPhone,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("recording or shared encounter not found")
+		}
+		return nil, fmt.Errorf("load recording emr source: %w", err)
+	}
+	item.EmployeeID = employeeID
+	item.CustomerID = customerID
+	item.PatientID = patientID
+	item.RecordedAt = recordedAt
+	item.DepartmentID = departmentID
+	item.StartedAt = startedAt
+	item.EndedAt = endedAt
+	if item.StartedAt == nil {
+		item.StartedAt = recordedAt
+	}
+	return item, nil
+}
+
+func ensureRecordingEMRRecord(ctx context.Context, tx pgx.Tx, source *recordingEMRSource) (*Record, bool, error) {
+	var recordID string
+	err := tx.QueryRow(ctx, `
+		SELECT id FROM emr_records
+		WHERE tenant_id=$1 AND encounter_id=$2
+		FOR UPDATE
+	`, source.TenantID, source.EncounterID).Scan(&recordID)
+	if err == nil {
+		record, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", recordID, source.TenantID))
+		return record, false, err
+	}
+	if err != pgx.ErrNoRows {
+		return nil, false, fmt.Errorf("load emr record for encounter: %w", err)
+	}
+
+	var templateVersionID, documentType string
+	err = tx.QueryRow(ctx, `
+		SELECT v.id, v.document_type
+		FROM emr_template_versions v
+		JOIN emr_templates t ON t.id=v.template_id
+		WHERE t.code='standard_outpatient'
+		  AND t.status='enabled'
+		  AND v.status='published'
+		  AND (t.tenant_id IS NULL OR t.tenant_id=$1)
+		ORDER BY (t.tenant_id IS NULL), v.created_at DESC
+		LIMIT 1
+	`, source.TenantID).Scan(&templateVersionID, &documentType)
+	if err != nil {
+		return nil, false, fmt.Errorf("load published emr template: %w", err)
+	}
+	patientSnapshot, _ := json.Marshal(map[string]any{
+		"patient_id": source.PatientID, "name": source.PatientName, "age": source.PatientAge,
+		"gender": source.PatientGender, "phone": source.PatientPhone,
+	})
+	encounterContext, _ := json.Marshal(map[string]any{"encounter_id": source.EncounterID, "scene": source.Scene})
+	sourceReferences, _ := json.Marshal(map[string]any{"source_type": "recording", "recording_id": source.RecordingID})
+	startedAt := time.Now().UTC()
+	if source.StartedAt != nil {
+		startedAt = source.StartedAt.UTC()
+	}
+	doctorID := int64(0)
+	if source.EmployeeID != nil {
+		doctorID = *source.EmployeeID
+	}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO emr_records (
+			tenant_id, encounter_id, patient_id, patient_snapshot, template_version_id,
+			document_type, visit_type, department_id, doctor_id, started_at, ended_at,
+			encounter_context, source_references, working_content, working_digest,
+			status, created_by
+		) VALUES ($1,$2,$3,$4::jsonb,$5,$6,'初诊',$7,$8,$9,$10,$11::jsonb,$12::jsonb,'{}'::jsonb,'', '草稿',0)
+		ON CONFLICT (tenant_id, encounter_id) DO NOTHING
+		RETURNING id
+	`, source.TenantID, source.EncounterID, source.PatientID, string(patientSnapshot), templateVersionID,
+		documentType, source.DepartmentID, doctorID, startedAt, source.EndedAt, string(encounterContext), string(sourceReferences)).Scan(&recordID); err != nil {
+		if err != pgx.ErrNoRows {
+			return nil, false, fmt.Errorf("create emr record from recording: %w", err)
+		}
+		if err := tx.QueryRow(ctx, `SELECT id FROM emr_records WHERE tenant_id=$1 AND encounter_id=$2 FOR UPDATE`, source.TenantID, source.EncounterID).Scan(&recordID); err != nil {
+			return nil, false, fmt.Errorf("load concurrently created emr record: %w", err)
+		}
+		record, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", recordID, source.TenantID))
+		return record, false, err
+	}
+	record, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", recordID, source.TenantID))
+	if err != nil {
+		return nil, false, fmt.Errorf("load created emr record: %w", err)
+	}
+	return record, true, nil
+}
+
+func cloneObject(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	result := make(map[string]any, len(value))
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
+}
+
 func (s *Store) GetAICandidate(ctx context.Context, tenantID int64, recordID, candidateID string) (*AICandidate, error) {
 	item, err := scanAICandidate(s.pool.QueryRow(ctx, `
 		SELECT c.id, c.record_id, c.section_code, c.content, c.source_evidence,

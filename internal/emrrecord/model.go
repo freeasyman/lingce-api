@@ -98,6 +98,26 @@ type CreateAICandidateRequest struct {
 	SourceEvidence map[string]any `json:"source_evidence"`
 }
 
+type GenerateAICandidatesRequest struct {
+	TenantID      int64                      `json:"tenant_id"`
+	RecordingID   int64                      `json:"recording_id"`
+	GenerationKey string                     `json:"generation_key"`
+	Candidates    []CreateAICandidateRequest `json:"candidates"`
+}
+
+type GenerateAICandidatesOutcome struct {
+	Record     *Record        `json:"record"`
+	Candidates []*AICandidate `json:"candidates"`
+}
+
+type GenerateRealtimeAICandidatesRequest struct {
+	TenantID      int64                      `json:"tenant_id"`
+	RecordID      string                     `json:"record_id"`
+	EncounterID   int64                      `json:"encounter_id"`
+	GenerationKey string                     `json:"generation_key"`
+	Candidates    []CreateAICandidateRequest `json:"candidates"`
+}
+
 type HandleAICandidateRequest struct {
 	Content map[string]any `json:"content,omitempty"`
 	Note    string         `json:"note,omitempty"`

@@ -7,18 +7,17 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/tenancy"
-	"github.com/freeasyman/lingce-api/internal/wecom"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 )
 
 type Service struct {
 	store              *Store
-	wecomService       *wecom.Service
+	messageSender      MessageSender
 	employeeWebBaseURL string
 }
 
-func NewService(store *Store, wecomService *wecom.Service, employeeWebBaseURL string) *Service {
-	return &Service{store: store, wecomService: wecomService, employeeWebBaseURL: strings.TrimRight(strings.TrimSpace(employeeWebBaseURL), "/")}
+func NewService(store *Store, messageSender MessageSender, employeeWebBaseURL string) *Service {
+	return &Service{store: store, messageSender: messageSender, employeeWebBaseURL: strings.TrimRight(strings.TrimSpace(employeeWebBaseURL), "/")}
 }
 
 func (s *Service) ListForAdmin(ctx context.Context, claims *auth.Claims, req AdminListRequest) ([]*AlertResponse, int, error) {
@@ -236,7 +235,7 @@ func (s *Service) CreateAlert(ctx context.Context, input CreateAlertInput) (*Ale
 }
 
 func (s *Service) SendWeCom(ctx context.Context, alertID int64) error {
-	if s.wecomService == nil || !s.wecomService.IsEnabled() {
+	if s.messageSender == nil || !s.messageSender.IsEnabled() {
 		return nil
 	}
 	item, err := s.store.GetByID(ctx, alertID)
@@ -258,7 +257,7 @@ func (s *Service) SendWeCom(ctx context.Context, alertID int64) error {
 	if content == "" {
 		content = "这通沟通里发现一条疑似可补救机会，请及时查看建议。"
 	}
-	_, err = s.wecomService.SendInternalMessage(ctx, wecom.InternalSendMessageRequest{
+	err = s.messageSender.SendInternalMessage(ctx, MessageSendRequest{
 		MessageScene: "opportunity_alert",
 		DedupeKey:    dedupeKey,
 		EmployeeIDs:  recipientIDs,
@@ -279,7 +278,7 @@ func (s *Service) SendWeCom(ctx context.Context, alertID int64) error {
 }
 
 func (s *Service) ResendWeCom(ctx context.Context, alertID int64, employeeIDs []int64) error {
-	if s.wecomService == nil || !s.wecomService.IsEnabled() {
+	if s.messageSender == nil || !s.messageSender.IsEnabled() {
 		return nil
 	}
 	item, err := s.store.GetByID(ctx, alertID)
@@ -324,7 +323,7 @@ func (s *Service) ResendWeCom(ctx context.Context, alertID int64, employeeIDs []
 		content = "这通沟通里发现一条疑似可补救机会，请及时查看建议。"
 	}
 	dedupeKey := fmt.Sprintf("opportunity_alert:%d:resend:%d", item.ID, time.Now().UnixNano())
-	_, err = s.wecomService.SendInternalMessage(ctx, wecom.InternalSendMessageRequest{
+	err = s.messageSender.SendInternalMessage(ctx, MessageSendRequest{
 		MessageScene: "opportunity_alert",
 		DedupeKey:    dedupeKey,
 		EmployeeIDs:  targetIDs,

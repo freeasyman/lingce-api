@@ -42,13 +42,18 @@ type RecordingDetail struct {
 }
 
 type SplitRequest struct {
-	RecordingID   int64    `json:"recording_id"`
-	Model         string   `json:"model"`
-	SystemPrompt  string   `json:"system_prompt"`
-	UserPrompt    string   `json:"user_prompt"`
-	PromptVersion string   `json:"prompt_version"`
-	Temperature   *float64 `json:"temperature,omitempty"`
-	MaxChunkChars *int     `json:"max_chunk_chars,omitempty"`
+	RecordingID        int64    `json:"recording_id"`
+	Model              string   `json:"model"`
+	SystemPrompt       string   `json:"system_prompt"`
+	UserPrompt         string   `json:"user_prompt"`
+	ScanSystemPrompt   string   `json:"scan_system_prompt,omitempty"`
+	ScanUserPrompt     string   `json:"scan_user_prompt,omitempty"`
+	JudgeSystemPrompt  string   `json:"judge_system_prompt,omitempty"`
+	JudgeUserPrompt    string   `json:"judge_user_prompt,omitempty"`
+	PromptVersion      string   `json:"prompt_version"`
+	UseTwoPass         *bool    `json:"use_two_pass,omitempty"`
+	Temperature        *float64 `json:"temperature,omitempty"`
+	MaxChunkChars      *int     `json:"max_chunk_chars,omitempty"`
 }
 
 type SplitRunRecord struct {
@@ -214,6 +219,8 @@ type SplitJob struct {
 	SummaryTotal    int            `json:"summary_total"`
 	SummaryDone     int            `json:"summary_done"`
 	CurrentSummary  int            `json:"current_summary"`
+	TotalCandidates int            `json:"total_candidates"`
+	JudgedCandidates int           `json:"judged_candidates"`
 	PartialSegments int            `json:"partial_segments"`
 	CreatedAt       string         `json:"created_at"`
 	UpdatedAt       string         `json:"updated_at"`
@@ -224,15 +231,32 @@ type SplitJob struct {
 }
 
 type SplitProgress struct {
-	Stage           string
-	Message         string
-	TotalChunks     int
-	CompletedChunks int
-	CurrentChunk    int
-	SummaryTotal    int
-	SummaryDone     int
-	CurrentSummary  int
-	PartialSegments int
+	Stage            string
+	Message          string
+	TotalChunks      int
+	CompletedChunks  int
+	CurrentChunk     int
+	SummaryTotal     int
+	SummaryDone      int
+	CurrentSummary   int
+	TotalCandidates  int
+	JudgedCandidates int
+	PartialSegments  int
+}
+
+type CandidateBoundary struct {
+	AtSeconds  int    `json:"at_seconds"`
+	SignalType string `json:"signal_type"`
+	SignalText string `json:"signal_text"`
+}
+
+type BoundaryJudgment struct {
+	AtSeconds  int     `json:"at_seconds"`
+	IsBoundary bool    `json:"is_boundary"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+	SignalType string  `json:"signal_type"`
+	SignalText string  `json:"signal_text"`
 }
 
 type EncounterSummary struct {
@@ -473,7 +497,12 @@ type SyntheticRunRequest struct {
 	Model            string   `json:"model"`
 	SystemPrompt     string   `json:"system_prompt"`
 	UserPrompt       string   `json:"user_prompt"`
+	ScanSystemPrompt string   `json:"scan_system_prompt,omitempty"`
+	ScanUserPrompt   string   `json:"scan_user_prompt,omitempty"`
+	JudgeSystemPrompt string  `json:"judge_system_prompt,omitempty"`
+	JudgeUserPrompt   string  `json:"judge_user_prompt,omitempty"`
 	PromptVersion    string   `json:"prompt_version"`
+	UseTwoPass       *bool    `json:"use_two_pass,omitempty"`
 	Temperature      *float64 `json:"temperature,omitempty"`
 	MaxChunkChars    *int     `json:"max_chunk_chars,omitempty"`
 	ToleranceSeconds *int     `json:"tolerance_seconds,omitempty"`

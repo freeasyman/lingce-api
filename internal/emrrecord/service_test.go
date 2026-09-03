@@ -16,6 +16,16 @@ func TestCreateAICandidateValidatesRequiredFieldsBeforeStore(t *testing.T) {
 	}
 }
 
+func TestGenerateRecordingAICandidatesRejectsEmptyCandidatesBeforeStore(t *testing.T) {
+	service := &Service{}
+
+	if _, err := service.GenerateRecordingAICandidates(context.Background(), GenerateAICandidatesRequest{
+		TenantID: 1, RecordingID: 2, GenerationKey: "generation-1",
+	}); err == nil {
+		t.Fatal("expected empty candidates validation error")
+	}
+}
+
 func TestHandleAICandidateRejectsUnknownDecisionBeforeStore(t *testing.T) {
 	service := &Service{}
 

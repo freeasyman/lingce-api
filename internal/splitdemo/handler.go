@@ -382,6 +382,8 @@ func (h *Handler) runSplitJob(jobID string, req SplitRequest) {
 			job.SummaryTotal = progress.SummaryTotal
 			job.SummaryDone = progress.SummaryDone
 			job.CurrentSummary = progress.CurrentSummary
+			job.TotalCandidates = progress.TotalCandidates
+			job.JudgedCandidates = progress.JudgedCandidates
 			job.PartialSegments = progress.PartialSegments
 		})
 	})
@@ -432,12 +434,17 @@ func (h *Handler) runSyntheticJob(jobID string, req SyntheticRunRequest) {
 		job.CaseID = req.CaseID
 	})
 	result, caseData, err := h.service.SplitSyntheticCase(context.Background(), req.CaseID, SplitRequest{
-		Model:         req.Model,
-		SystemPrompt:  req.SystemPrompt,
-		UserPrompt:    req.UserPrompt,
-		PromptVersion: req.PromptVersion,
-		Temperature:   req.Temperature,
-		MaxChunkChars: req.MaxChunkChars,
+		Model:             req.Model,
+		SystemPrompt:      req.SystemPrompt,
+		UserPrompt:        req.UserPrompt,
+		ScanSystemPrompt:  req.ScanSystemPrompt,
+		ScanUserPrompt:    req.ScanUserPrompt,
+		JudgeSystemPrompt: req.JudgeSystemPrompt,
+		JudgeUserPrompt:   req.JudgeUserPrompt,
+		PromptVersion:     req.PromptVersion,
+		UseTwoPass:        req.UseTwoPass,
+		Temperature:       req.Temperature,
+		MaxChunkChars:     req.MaxChunkChars,
 	}, func(progress SplitProgress) {
 		h.jobs.Update(jobID, func(job *SplitJob) {
 			job.Status = SplitJobRunning
@@ -449,6 +456,8 @@ func (h *Handler) runSyntheticJob(jobID string, req SyntheticRunRequest) {
 			job.SummaryTotal = progress.SummaryTotal
 			job.SummaryDone = progress.SummaryDone
 			job.CurrentSummary = progress.CurrentSummary
+			job.TotalCandidates = progress.TotalCandidates
+			job.JudgedCandidates = progress.JudgedCandidates
 			job.PartialSegments = progress.PartialSegments
 		})
 	})

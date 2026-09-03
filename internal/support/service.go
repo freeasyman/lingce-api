@@ -382,13 +382,6 @@ func (s *Service) CreateLLMModelConfig(ctx context.Context, createdBy int64, req
 	if strings.TrimSpace(req.FunctionType) == "" {
 		return nil, fmt.Errorf("function_type is required")
 	}
-	if strings.TrimSpace(req.APIEndpoint) == "" {
-		return nil, fmt.Errorf("api_endpoint is required")
-	}
-	if req.APIKey == "" {
-		return nil, fmt.Errorf("api_key is required")
-	}
-
 	config, err := s.store.CreateLLMModelConfig(ctx, createdBy, req)
 	if err != nil {
 		return nil, err
