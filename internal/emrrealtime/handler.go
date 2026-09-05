@@ -184,6 +184,25 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 	}, func(err error) {
 		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "ai_generation_error", "error": err.Error()}))
 	})
+	corrector := newRealtimeTranscriptCorrector(h.service, tenantID, encounterID, func(result realtimeTranscriptCorrection) {
+		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{
+			"type":           "transcript_correction",
+			"sequence":       result.Sequence,
+			"original_text":  result.OriginalText,
+			"corrected_text": result.CorrectedText,
+			"start_time":     result.StartTime,
+			"end_time":       result.EndTime,
+			"status":         "completed",
+		}))
+	}, func(item realtimeASRResult, err error) {
+		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{
+			"type":          "transcript_correction",
+			"sequence":      item.Sequence,
+			"original_text": item.Text,
+			"status":        "failed",
+			"error":         err.Error(),
+		}))
+	})
 	done := make(chan struct{})
 	upstreamDone := make(chan struct{})
 	var once sync.Once
@@ -210,7 +229,7 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 					stop()
 					return
 				}
-				generator.Add(*result.Result)
+				corrector.Add(*result.Result)
 				continue
 			}
 			if messageType == websocket.TextMessage && json.Unmarshal(payload, &message) == nil && (message.Type == "end" || message.Type == "error") {
@@ -273,6 +292,9 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 				stop()
 				return
 			}
+			correctionContext, correctionCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			corrector.FlushContext(correctionContext)
+			correctionCancel()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			generator.FlushContext(ctx)
 			cancel()
@@ -291,8 +313,8 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "recording_save_error", "error": finalizeErr.Error()}))
 				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "end", "recording_saved": false}))
 			} else {
-				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "recording_saved", "recording": finalized}))
-				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "end", "recording_saved": true, "recording_id": finalized.RecordingID}))
+				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "recording_saved", "recording": finalized, "queue_error": finalized.QueueError}))
+				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "end", "recording_saved": true, "recording_id": finalized.RecordingID, "queue_error": finalized.QueueError}))
 			}
 			stop()
 			return

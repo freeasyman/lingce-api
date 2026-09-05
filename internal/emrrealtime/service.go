@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var realtimeTranscriptProtectedTokenPattern = regexp.MustCompile(`\d+(?:[.．:：/／-]\d+)*|[零〇一二三四五六七八九十百千万两]+`)
 
 type Service struct {
 	store       *Store
@@ -114,6 +117,15 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 		OrderNo: orderNo, OSSKey: ossKey, Source: "realtime", BusinessScope: "doctor", Scene: "consultation", TriggerSource: "realtime_end",
 	})
 	if err != nil {
+		if result != nil && result.ID > 0 {
+			return &FinalizeResponse{
+				EncounterID: encounterID,
+				RecordID:    recordID,
+				RecordingID: result.ID,
+				Queued:      false,
+				QueueError:  err.Error(),
+			}, nil
+		}
 		_ = s.ossClient.DeleteFile(ctx, ossKey)
 		return nil, err
 	}
@@ -238,6 +250,56 @@ func (s *Service) GenerateRealtimeAICandidates(ctx context.Context, tenantID int
 	return out, nil
 }
 
+func (s *Service) CorrectRealtimeTranscript(ctx context.Context, tenantID, encounterID int64, item realtimeASRResult, previous string) (*realtimeTranscriptCorrection, error) {
+	original := strings.TrimSpace(item.Text)
+	if original == "" {
+		return nil, fmt.Errorf("实时转写纠错输入为空")
+	}
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("实时转写纠错网关未配置")
+	}
+	model, err := s.store.GetTranscriptCorrectionModel(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	prompt, err := s.store.GetTranscriptCorrectionPrompt(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	userPrompt := strings.ReplaceAll(prompt.UserPrompt, "{{transcript}}", original)
+	if previous = strings.TrimSpace(previous); previous != "" {
+		if len([]rune(previous)) > 300 {
+			previous = string([]rune(previous)[len([]rune(previous))-300:])
+		}
+		userPrompt += "\n\n上一句仅作断句参考，不得把其中内容添加到当前文字：\n" + previous
+	}
+	if !strings.Contains(userPrompt, original) {
+		userPrompt += "\n\n原始 ASR 文字：\n" + original
+	}
+	traceID := uuid.NewString()
+	resp, err := s.llmClient.TextInference(ctx, llmgateway.TextInferenceRequest{
+		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.realtime_transcript_correction",
+		TraceID: traceID, FunctionType: "realtime_transcript_correction", Provider: model.Provider, ModelCode: model.ModelCode,
+		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: encounterID, BillingSubject: "realtime_transcript_correction", BillingScene: "realtime"},
+		Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: userPrompt}},
+		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 500, TimeoutSeconds: 15, ResponseFormat: "json"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("调用实时转写纠错网关失败: %w", err)
+	}
+	corrected, err := parseTranscriptCorrectionJSON(resp.Content)
+	if err != nil {
+		return nil, err
+	}
+	if !preservesRealtimeTranscriptProtectedTokens(original, corrected) {
+		return nil, fmt.Errorf("实时转写纠错结果修改了数字或中文数值")
+	}
+	return &realtimeTranscriptCorrection{
+		Sequence: item.Sequence, OriginalText: original, CorrectedText: corrected,
+		StartTime: item.StartTime, EndTime: item.EndTime,
+	}, nil
+}
+
 func parseCandidateJSON(raw string) ([]map[string]any, error) {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
@@ -251,6 +313,39 @@ func parseCandidateJSON(raw string) ([]map[string]any, error) {
 		return nil, fmt.Errorf("电子病历生成结果不是合法 JSON: %w", err)
 	}
 	return wrapper.Candidates, nil
+}
+
+func parseTranscriptCorrectionJSON(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+	var result struct {
+		CorrectedText string `json:"corrected_text"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return "", fmt.Errorf("实时转写纠错结果不是合法 JSON: %w", err)
+	}
+	corrected := strings.TrimSpace(result.CorrectedText)
+	if corrected == "" {
+		return "", fmt.Errorf("实时转写纠错结果为空")
+	}
+	return corrected, nil
+}
+
+func preservesRealtimeTranscriptProtectedTokens(original, corrected string) bool {
+	originalTokens := realtimeTranscriptProtectedTokenPattern.FindAllString(original, -1)
+	correctedTokens := realtimeTranscriptProtectedTokenPattern.FindAllString(corrected, -1)
+	if len(originalTokens) != len(correctedTokens) {
+		return false
+	}
+	for index, token := range originalTokens {
+		if token != correctedTokens[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func stringValue(value any) string {

@@ -62,6 +62,51 @@ func (s *Store) GetCandidatePrompt(ctx context.Context, tenantID int64) (*realti
 	return item, nil
 }
 
+func (s *Store) GetTranscriptCorrectionModel(ctx context.Context, tenantID int64) (*modelSelection, error) {
+	item := &modelSelection{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT provider, model_code
+		FROM llm_model_configs
+		WHERE function_type='realtime_transcript_correction'
+		  AND COALESCE(is_active, true)
+		  AND deleted_at IS NULL
+		  AND (tenant_id=$1 OR tenant_id=0 OR tenant_id IS NULL)
+		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END,
+		         COALESCE(is_default, false) DESC, id DESC
+		LIMIT 1
+	`, tenantID).Scan(&item.Provider, &item.ModelCode)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("实时转写纠错模型尚未配置")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load realtime transcript correction model: %w", err)
+	}
+	if strings.TrimSpace(item.Provider) == "" || strings.TrimSpace(item.ModelCode) == "" {
+		return nil, fmt.Errorf("实时转写纠错模型配置不完整")
+	}
+	return item, nil
+}
+
+func (s *Store) GetTranscriptCorrectionPrompt(ctx context.Context, tenantID int64) (*realtimePrompt, error) {
+	item := &realtimePrompt{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(system_prompt, ''), COALESCE(user_prompt_template, '')
+		FROM recording_analysis_prompts
+		WHERE code='realtime_transcript_correction_v1' AND is_active=true
+		LIMIT 1
+	`).Scan(&item.SystemPrompt, &item.UserPrompt)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("实时转写纠错提示词尚未配置")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load realtime transcript correction prompt: %w", err)
+	}
+	if strings.TrimSpace(item.SystemPrompt) == "" || strings.TrimSpace(item.UserPrompt) == "" {
+		return nil, fmt.Errorf("实时转写纠错提示词配置不完整")
+	}
+	return item, nil
+}
+
 func (s *Store) ListCandidateSections(ctx context.Context, tenantID int64, recordID string) (map[string]string, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT section.code, section.name

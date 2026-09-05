@@ -45,6 +45,28 @@ func TestParseCandidateJSONRejectsInvalidAndReadsCandidates(t *testing.T) {
 	}
 }
 
+func TestParseTranscriptCorrectionJSON(t *testing.T) {
+	corrected, err := parseTranscriptCorrectionJSON("```json\n{\"corrected_text\":\"咽部充血。\"}\n```")
+	if err != nil || corrected != "咽部充血。" {
+		t.Fatalf("parse correction: corrected=%q err=%v", corrected, err)
+	}
+	if _, err := parseTranscriptCorrectionJSON(`{"corrected_text":""}`); err == nil {
+		t.Fatal("expected empty correction error")
+	}
+}
+
+func TestRealtimeTranscriptCorrectionPreservesNumbers(t *testing.T) {
+	if !preservesRealtimeTranscriptProtectedTokens("体温三十八度二，血压138/86，每日两次。", "体温三十八度二，血压138/86，每日两次。") {
+		t.Fatal("expected unchanged protected tokens to pass")
+	}
+	if preservesRealtimeTranscriptProtectedTokens("体温三十八度二，血压138/86。", "体温三十八度五，血压138/86。") {
+		t.Fatal("expected changed Chinese number to fail")
+	}
+	if preservesRealtimeTranscriptProtectedTokens("血压138/86。", "血压128/86。") {
+		t.Fatal("expected changed Arabic number to fail")
+	}
+}
+
 func TestRealtimeCandidateGeneratorFlushReturnsWhenIdle(t *testing.T) {
 	generator := newRealtimeCandidateGenerator(nil, 1, 2, "record", nil, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

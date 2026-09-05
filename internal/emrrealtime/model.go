@@ -29,6 +29,7 @@ type FinalizeResponse struct {
 	RecordID    string `json:"record_id"`
 	RecordingID int64  `json:"recording_id"`
 	Queued      bool   `json:"queued"`
+	QueueError  string `json:"queue_error,omitempty"`
 }
 
 type modelSelection struct {
@@ -58,6 +59,14 @@ type realtimeTranscriptSegment struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"start_time,omitempty"`
 	EndTime   float64 `json:"end_time,omitempty"`
+}
+
+type realtimeTranscriptCorrection struct {
+	Sequence      int     `json:"sequence"`
+	OriginalText  string  `json:"original_text"`
+	CorrectedText string  `json:"corrected_text"`
+	StartTime     float64 `json:"start_time,omitempty"`
+	EndTime       float64 `json:"end_time,omitempty"`
 }
 
 type realtimePrompt struct {
