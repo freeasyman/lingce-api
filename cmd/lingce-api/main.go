@@ -15,8 +15,6 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
-	"github.com/freeasyman/lingce-api/internal/compliance"
-	"github.com/freeasyman/lingce-api/internal/complianceguard"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
@@ -253,20 +251,6 @@ func main() {
 			slog.Warn("failed to create OSS client", "error", err)
 		}
 	}
-
-	complianceStore := compliance.NewStore(pool)
-	complianceService := compliance.NewService(complianceStore)
-	if err := complianceService.EnsureBuiltinRules(ctx); err != nil {
-		slog.Error("failed to ensure compliance builtin rules", "error", err)
-		os.Exit(1)
-	}
-	complianceHandler := compliance.NewHandler(complianceService)
-	complianceHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
-	// Register the new Compliance Guard domain separately from legacy compliance.
-	// It only reads source systems in phase 1 and never writes compliance_* tables.
-	complianceGuardHandler := complianceguard.NewHandler(pool)
-	complianceGuardHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	delegatedWeComModule := wecomdelegated.NewModule(pool, cfg.WeCom, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
