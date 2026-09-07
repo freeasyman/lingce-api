@@ -57,7 +57,7 @@ func evaluateRequirement(item binding, data checkContext, trigger string) evalua
 	}
 
 	if item.ExecutionMode != "程序判断" {
-		result.IncompleteReason = "执行方式未接入"
+		result.IncompleteReason = "人工待处理"
 		result.Explanation = fmt.Sprintf("当前配置为%s，当前版本未调用该执行器。", item.ExecutionMode)
 		result.Suggested = "转人工判断或在执行器接入后重新检查。"
 		result.MeetsDeadline = boolPtr(false)
@@ -124,7 +124,7 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 		}
 		return failResult(result, "尚未找到责任医生确认记录。", "请由责任医生确认病历。")
 	default:
-		result.IncompleteReason = "程序规则未实现"
+		result.IncompleteReason = "人工待处理"
 		result.Explanation = "当前版本没有为这条质量要求配置确定性程序判断。"
 		result.Suggested = "转人工判断或接入相应执行器后重新检查。"
 		return result

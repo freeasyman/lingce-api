@@ -2,19 +2,17 @@ package emrrealtime
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
+	"github.com/freeasyman/lingce-api/internal/encounter"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
@@ -27,6 +25,7 @@ var realtimeTranscriptProtectedTokenPattern = regexp.MustCompile(`\d+(?:[.．:�
 
 type Service struct {
 	store       *Store
+	encounters  *encounter.Store
 	records     *emrrecord.Service
 	recordings  *recording.Service
 	permissions *emrpermission.Service
@@ -38,7 +37,7 @@ type Service struct {
 
 func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *recording.Service, permissions *emrpermission.Service, gatewayURL, gatewayKey string, llmClient *llmgateway.Client, ossClient *ossutil.Client) *Service {
 	return &Service{
-		store: NewStore(pool), records: records, recordings: recordings, permissions: permissions,
+		store: NewStore(pool), encounters: encounter.NewStore(pool), records: records, recordings: recordings, permissions: permissions,
 		gatewayURL: strings.TrimRight(strings.TrimSpace(gatewayURL), "/"), gatewayKey: gatewayKey,
 		llmClient: llmClient, ossClient: ossClient,
 	}
@@ -58,7 +57,7 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 		return nil, fmt.Errorf("录音存储未配置")
 	}
 	record, err := s.records.Get(ctx, tenantID, recordID)
-	if err != nil || record == nil || record.EncounterID == nil || *record.EncounterID != encounterID {
+	if err != nil || record == nil || record.EncounterID != encounterID {
 		return nil, fmt.Errorf("实时病历与接诊不匹配")
 	}
 	if strings.TrimSpace(mimeType) == "" {
@@ -163,93 +162,6 @@ func pcmToWAV(pcm []byte, sampleRate, channels, bitsPerSample int) []byte {
 	return output
 }
 
-func (s *Service) GenerateRealtimeAICandidates(ctx context.Context, tenantID int64, encounterID int64, recordID string, transcript string, segments []realtimeTranscriptSegment) ([]*emrrecord.AICandidate, error) {
-	transcript = strings.TrimSpace(transcript)
-	if transcript == "" {
-		return nil, nil
-	}
-	if s.llmClient == nil {
-		return nil, fmt.Errorf("电子病历生成网关未配置")
-	}
-	model, err := s.store.GetCandidateModel(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	prompt, err := s.store.GetCandidatePrompt(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	sections, err := s.store.ListCandidateSections(ctx, tenantID, recordID)
-	if err != nil {
-		return nil, err
-	}
-	allowed := make([]string, 0, len(sections))
-	for code, name := range sections {
-		allowed = append(allowed, code+"（"+name+"）")
-	}
-	sort.Strings(allowed)
-	userPrompt := strings.ReplaceAll(prompt.UserPrompt, "{{recording_id}}", fmt.Sprintf("实时接诊:%d", encounterID))
-	userPrompt = strings.ReplaceAll(userPrompt, "{{pipeline_code}}", "realtime")
-	userPrompt = strings.ReplaceAll(userPrompt, "{{transcript}}", transcript)
-	userPrompt = strings.ReplaceAll(userPrompt, "chief_complaint、present_illness、past_history、personal_history、family_history、allergy_history、physical_exam、auxiliary_exam、diagnosis、prescription、disposition、medical_advice、followup、supplement", strings.Join(allowed, "、"))
-	if !strings.Contains(userPrompt, transcript) {
-		userPrompt += "\n\n接诊转写：\n" + transcript
-	}
-	systemPrompt := prompt.SystemPrompt + "\n\n允许的病历栏目编码：\n" + strings.Join(allowed, "、")
-	traceID := uuid.NewString()
-	resp, err := s.llmClient.TextInference(ctx, llmgateway.TextInferenceRequest{
-		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.realtime_candidate_generation",
-		TraceID: traceID, FunctionType: "emr_candidate_generation", Provider: model.Provider, ModelCode: model.ModelCode,
-		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: encounterID, BillingSubject: "emr_candidate_generation", BillingScene: "realtime"},
-		Messages: []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}},
-		Params:   &llmgateway.Params{Temperature: 0.1, MaxTokens: 4000, TimeoutSeconds: 120, ResponseFormat: "json"},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("调用电子病历生成网关失败: %w", err)
-	}
-	parsed, err := parseCandidateJSON(resp.Content)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]emrrecord.CreateAICandidateRequest, 0, len(parsed))
-	for _, item := range parsed {
-		sectionCode := strings.TrimSpace(stringValue(item["section_code"]))
-		if _, ok := sections[sectionCode]; !ok {
-			continue
-		}
-		content := objectValue(item["content"])
-		if len(content) == 0 {
-			if text := strings.TrimSpace(stringValue(item["content"])); text != "" {
-				content = map[string]any{"text": text}
-			}
-		}
-		if len(content) == 0 {
-			continue
-		}
-		evidence := objectValue(item["source_evidence"])
-		if evidence == nil {
-			evidence = map[string]any{}
-		}
-		evidence["encounter_id"] = encounterID
-		evidence["transcript_excerpt"] = evidenceExcerpt(evidence, transcript)
-		if len(segments) > 0 {
-			evidence["segments"] = segments
-		}
-		items = append(items, emrrecord.CreateAICandidateRequest{SectionCode: sectionCode, Content: content, SourceEvidence: evidence})
-	}
-	if len(items) == 0 {
-		return nil, nil
-	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", encounterID, transcript)))
-	out, err := s.records.GenerateRealtimeAICandidates(ctx, emrrecord.GenerateRealtimeAICandidatesRequest{
-		TenantID: tenantID, RecordID: recordID, EncounterID: encounterID, GenerationKey: hex.EncodeToString(digest[:]), Candidates: items,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (s *Service) CorrectRealtimeTranscript(ctx context.Context, tenantID, encounterID int64, item realtimeASRResult, previous string) (*realtimeTranscriptCorrection, error) {
 	original := strings.TrimSpace(item.Text)
 	if original == "" {
@@ -300,21 +212,6 @@ func (s *Service) CorrectRealtimeTranscript(ctx context.Context, tenantID, encou
 	}, nil
 }
 
-func parseCandidateJSON(raw string) ([]map[string]any, error) {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-	var wrapper struct {
-		Candidates []map[string]any `json:"candidates"`
-	}
-	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
-		return nil, fmt.Errorf("电子病历生成结果不是合法 JSON: %w", err)
-	}
-	return wrapper.Candidates, nil
-}
-
 func parseTranscriptCorrectionJSON(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "```json")
@@ -348,29 +245,6 @@ func preservesRealtimeTranscriptProtectedTokens(original, corrected string) bool
 	return true
 }
 
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func objectValue(value any) map[string]any {
-	item, _ := value.(map[string]any)
-	return item
-}
-
-func evidenceExcerpt(evidence map[string]any, transcript string) string {
-	if value := strings.TrimSpace(stringValue(evidence["transcript_excerpt"])); value != "" {
-		if len(value) > 500 {
-			return value[:500]
-		}
-		return value
-	}
-	if len(transcript) > 500 {
-		return transcript[:500]
-	}
-	return transcript
-}
-
 func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, req StartRequest) (*SessionResponse, error) {
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" {
@@ -389,7 +263,7 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		return nil, fmt.Errorf("emr record access denied")
 	}
 
-	encounterID, found, err := s.store.GetEncounterByRequestID(ctx, tenantID, req.ClientRequestID)
+	encounterID, found, err := s.encounters.GetRealtimeByRequestID(ctx, tenantID, req.ClientRequestID)
 	if err != nil {
 		return nil, err
 	}
@@ -413,14 +287,17 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 	}
 	startedAt := time.Now().UTC()
 	if !found {
-		encounterID, err = s.store.CreateEncounter(ctx, tenantID, actorID, req.DepartmentID, req.ClientRequestID, patient, startedAt)
+		encounterID, err = s.encounters.EnsureRealtime(ctx, encounter.RealtimeRequest{
+			TenantID: tenantID, ProviderID: actorID, DepartmentID: req.DepartmentID,
+			ClientRequestID: req.ClientRequestID, PatientID: patientID(patient), PatientName: patientName(patient), StartedAt: startedAt,
+		})
 		if err != nil {
 			return nil, err
 		}
 	}
 	departmentID := req.DepartmentID
 	result, err := s.records.Create(ctx, tenantID, actorID, emrrecord.CreateRequest{
-		EncounterID:       &encounterID,
+		EncounterID:       encounterID,
 		PatientID:         patientID(patient),
 		PatientSnapshot:   patientSnapshot(patient),
 		TemplateVersionID: templateVersionID,
@@ -450,6 +327,13 @@ func patientID(patient *patientInfo) *int64 {
 		return nil
 	}
 	return patient.PatientID
+}
+
+func patientName(patient *patientInfo) string {
+	if patient == nil {
+		return ""
+	}
+	return patient.Name
 }
 
 func (s *Service) loadExistingSession(ctx context.Context, tenantID, encounterID int64, access *emrpermission.Access) (*SessionResponse, error) {

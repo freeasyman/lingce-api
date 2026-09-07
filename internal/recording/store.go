@@ -1888,7 +1888,7 @@ func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIng
 			SELECT
 				$1::bigint, $2::bigint, $3::bigint, $4::bigint, $5::bigint, $6::text, $7::text, NULLIF($8::integer, 0), $9::text,
 				$10::text, $11::text, $12::text, 'uploaded',
-				'queued', 'pending', 'pending',
+				'pending', 'pending', 'pending',
 				$13::timestamp, NULLIF($14::text, ''), NULLIF($15::text, ''), NOW(), NOW()
 		WHERE ($3::bigint IS NULL OR EXISTS (
 			SELECT 1 FROM encounters e WHERE e.id = $3::bigint AND e.tenant_id = $1::bigint

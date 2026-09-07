@@ -18,7 +18,6 @@ type ProcessRecord struct {
 	BeforeSnapshotID *string        `json:"before_snapshot_id,omitempty"`
 	AfterSnapshotID  *string        `json:"after_snapshot_id,omitempty"`
 	CheckRunID       *string        `json:"check_run_id,omitempty"`
-	AICandidateID    *string        `json:"ai_candidate_id,omitempty"`
 	OutputInfo       map[string]any `json:"output_info,omitempty"`
 	FailureReason    string         `json:"failure_reason,omitempty"`
 	ActionNote       string         `json:"action_note,omitempty"`
@@ -39,7 +38,6 @@ type AppendRequest struct {
 	BeforeSnapshotID *string
 	AfterSnapshotID  *string
 	CheckRunID       *string
-	AICandidateID    *string
 	OutputInfo       map[string]any
 	FailureReason    string
 	ActionNote       string

@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
-	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -43,93 +43,10 @@ func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, 
 	return s.store.Get(ctx, tenantID, id)
 }
 
-func (s *Service) ListAICandidates(ctx context.Context, tenantID int64, recordID string, activeOnly bool) ([]*AICandidate, error) {
-	return s.store.ListAICandidates(ctx, tenantID, recordID, activeOnly)
-}
-
-func (s *Service) CreateAICandidate(ctx context.Context, tenantID int64, recordID string, req CreateAICandidateRequest) (*AICandidate, error) {
-	if strings.TrimSpace(req.SectionCode) == "" {
-		return nil, fmt.Errorf("section_code is required")
-	}
-	if req.Content == nil {
-		return nil, fmt.Errorf("content is required")
-	}
-	return s.store.CreateAICandidate(ctx, tenantID, recordID, req)
-}
-
-func (s *Service) GenerateRecordingAICandidates(ctx context.Context, req GenerateAICandidatesRequest) (*GenerateAICandidatesOutcome, error) {
-	if req.TenantID <= 0 || req.RecordingID <= 0 {
-		return nil, fmt.Errorf("tenant_id and recording_id are required")
-	}
-	if strings.TrimSpace(req.GenerationKey) == "" {
-		return nil, fmt.Errorf("generation_key is required")
-	}
-	if len(req.Candidates) == 0 {
-		return nil, fmt.Errorf("candidates must not be empty")
-	}
-	for _, candidate := range req.Candidates {
-		if strings.TrimSpace(candidate.SectionCode) == "" || candidate.Content == nil {
-			return nil, fmt.Errorf("candidate section_code and content are required")
-		}
-	}
-	outcome, created, err := s.store.GenerateRecordingAICandidates(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if created && outcome != nil && outcome.Record != nil {
-		recordID := outcome.Record.ID
-		if _, err := s.process.Append(ctx, emrprocess.AppendRequest{
-			TenantID: req.TenantID, RecordID: &recordID, ActionType: "生成病历", ActionResult: "成功",
-			ActorType: "系统", Source: "录音分析", AfterStatus: &outcome.Record.Status,
-			OutputInfo: map[string]any{"recording_id": req.RecordingID, "generation_key": req.GenerationKey},
-		}); err != nil {
-			return nil, fmt.Errorf("record generated but process record failed: %w", err)
-		}
-	}
-	return outcome, nil
-}
-
-func (s *Service) GenerateRealtimeAICandidates(ctx context.Context, req GenerateRealtimeAICandidatesRequest) ([]*AICandidate, error) {
-	if req.TenantID <= 0 || strings.TrimSpace(req.RecordID) == "" || req.EncounterID <= 0 {
-		return nil, fmt.Errorf("tenant_id, record_id and encounter_id are required")
-	}
-	if strings.TrimSpace(req.GenerationKey) == "" {
-		return nil, fmt.Errorf("generation_key is required")
-	}
-	if len(req.Candidates) == 0 {
-		return nil, fmt.Errorf("candidates must not be empty")
-	}
-	for _, candidate := range req.Candidates {
-		if strings.TrimSpace(candidate.SectionCode) == "" || candidate.Content == nil {
-			return nil, fmt.Errorf("candidate section_code and content are required")
-		}
-	}
-	return s.store.GenerateRealtimeAICandidates(ctx, req)
-}
-
-func (s *Service) HandleAICandidate(ctx context.Context, tenantID, actorID int64, recordID, candidateID, decision string, req HandleAICandidateRequest) (*AICandidate, *Record, error) {
-	if decision != "已采纳" && decision != "已拒绝" {
-		return nil, nil, fmt.Errorf("invalid ai candidate decision")
-	}
-	candidate, record, err := s.store.ApplyAICandidateDecision(ctx, tenantID, actorID, recordID, candidateID, decision, req.Content, func(ctx context.Context, tx pgx.Tx, candidate *AICandidate, record *Record, beforeContent map[string]any) error {
-		changes := []any{}
-		if decision == "已采纳" {
-			changes = diffTopLevel(beforeContent, record.WorkingContent)
-		}
-		_, err := s.process.AppendTx(ctx, tx, emrprocess.AppendRequest{
-			TenantID: tenantID, RecordID: &recordID, ActionType: "AI" + decision,
-			ActionResult: "成功", ActorType: "人工", ActorID: &actorID, Source: "病历详情",
-			ActionNote: req.Note, AICandidateID: &candidate.ID, ContentChanges: changes,
-		})
-		return err
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return candidate, record, nil
-}
-
 func (s *Service) Create(ctx context.Context, tenantID, actorID int64, req CreateRequest) (*Record, error) {
+	if req.EncounterID <= 0 {
+		return s.createFailed(ctx, tenantID, actorID, "encounter_id is required")
+	}
 	if strings.TrimSpace(req.TemplateVersionID) == "" {
 		return s.createFailed(ctx, tenantID, actorID, "template_version_id is required")
 	}
@@ -161,6 +78,9 @@ func (s *Service) createFailed(ctx context.Context, tenantID, actorID int64, rea
 }
 
 func (s *Service) createFailedRecord(ctx context.Context, tenantID, actorID int64, cause error) error {
+	if s.process == nil {
+		return nil
+	}
 	_, err := s.process.Append(ctx, emrprocess.AppendRequest{
 		TenantID: tenantID, ActionType: "创建", ActionResult: "失败", ActorType: "人工", ActorID: &actorID,
 		Source: "外部接口", FailureReason: cause.Error(),
@@ -269,7 +189,7 @@ func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64
 			outcome.Record = updated
 			outcome.AfterStatus = "需补全"
 		}
-		if processErr := s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, run, fmt.Errorf("检查结果需要处理")); processErr != nil {
+		if processErr := s.appendProcessResult(ctx, tenantID, id, actorID, action, outcome, req.Note, run, "阻断", "检查结果需要处理"); processErr != nil {
 			return nil, processErr
 		}
 		return outcome, fmt.Errorf("病历存在需要处理的质量问题")
@@ -352,6 +272,10 @@ func (s *Service) appendProcess(ctx context.Context, tenantID int64, id string, 
 		result = "失败"
 		failure = cause.Error()
 	}
+	return s.appendProcessResult(ctx, tenantID, id, actorID, action, outcome, note, run, result, failure)
+}
+
+func (s *Service) appendProcessResult(ctx context.Context, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, run *emrcheck.CheckRun, result, failure string) error {
 	var runID *string
 	if run != nil {
 		runID = &run.ID
@@ -363,21 +287,45 @@ func (s *Service) appendProcess(ctx context.Context, tenantID int64, id string, 
 
 func diffTopLevel(before, after map[string]any) []any {
 	changes := make([]any, 0)
-	keys := map[string]bool{}
+	keys := make(map[string]bool, len(before)+len(after))
 	for key := range before {
 		keys[key] = true
 	}
 	for key := range after {
 		keys[key] = true
 	}
+	orderedKeys := make([]string, 0, len(keys))
 	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	for _, key := range orderedKeys {
 		oldValue, oldOK := before[key]
 		newValue, newOK := after[key]
 		oldRaw, _ := json.Marshal(oldValue)
 		newRaw, _ := json.Marshal(newValue)
-		if oldOK != newOK || string(oldRaw) != string(newRaw) {
-			changes = append(changes, map[string]any{"field": key, "before": oldValue, "after": newValue})
+		if oldOK && newOK && string(oldRaw) == string(newRaw) {
+			continue
 		}
+		changeType := "修改"
+		if !oldOK {
+			changeType = "新增"
+		} else if !newOK {
+			changeType = "删除"
+		}
+		var beforeValue, afterValue any
+		if oldOK {
+			beforeValue = oldValue
+		}
+		if newOK {
+			afterValue = newValue
+		}
+		changes = append(changes, map[string]any{
+			"section_code": key,
+			"change_type":  changeType,
+			"before":       beforeValue,
+			"after":        afterValue,
+		})
 	}
 	return changes
 }

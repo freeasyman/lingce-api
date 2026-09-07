@@ -34,7 +34,7 @@ func TestEvaluateProgramChiefComplaintDurationRemainsUnimplemented(t *testing.T)
 	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
 		t.Fatalf("duration result = %#v", result)
 	}
-	if result.IncompleteReason != "程序规则未实现" {
+	if result.IncompleteReason != "人工待处理" {
 		t.Fatalf("duration incomplete reason = %q", result.IncompleteReason)
 	}
 }

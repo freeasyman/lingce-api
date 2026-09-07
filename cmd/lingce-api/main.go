@@ -235,7 +235,6 @@ func main() {
 	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-	emrRecordHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 	var ossClient *oss.Client
 	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {

@@ -9,7 +9,7 @@ import (
 type Record struct {
 	ID                  string         `json:"id"`
 	TenantID            int64          `json:"tenant_id"`
-	EncounterID         *int64         `json:"encounter_id,omitempty"`
+	EncounterID         int64          `json:"encounter_id"`
 	PatientID           *int64         `json:"patient_id,omitempty"`
 	PatientSnapshot     map[string]any `json:"patient_snapshot"`
 	TemplateVersionID   string         `json:"template_version_id"`
@@ -43,6 +43,7 @@ type Record struct {
 type Snapshot struct {
 	ID                string         `json:"id"`
 	RecordID          string         `json:"record_id"`
+	EncounterID       int64          `json:"encounter_id"`
 	RevisionNo        int            `json:"revision_no"`
 	SnapshotNo        int            `json:"snapshot_no"`
 	TemplateVersionID string         `json:"template_version_id"`
@@ -54,20 +55,19 @@ type Snapshot struct {
 	FormedAt          time.Time      `json:"formed_at"`
 }
 
-type AICandidate struct {
-	ID             string         `json:"id"`
-	RecordID       string         `json:"record_id"`
-	SectionCode    string         `json:"section_code"`
-	Content        map[string]any `json:"content"`
-	SourceEvidence map[string]any `json:"source_evidence"`
-	Status         string         `json:"status"`
-	GeneratedAt    time.Time      `json:"generated_at"`
-	HandledAt      *time.Time     `json:"handled_at,omitempty"`
-	HandledBy      *int64         `json:"handled_by,omitempty"`
+type AIGeneration struct {
+	ID                 string         `json:"id"`
+	RecordID           string         `json:"record_id"`
+	GenerationKey      string         `json:"generation_key"`
+	InputBasis         map[string]any `json:"input_basis"`
+	SectionUpdates     map[string]any `json:"section_updates"`
+	SourceEvidence     map[string]any `json:"source_evidence"`
+	GeneratedAt        time.Time      `json:"generated_at"`
+	ModelCallReference map[string]any `json:"model_call_reference"`
 }
 
 type CreateRequest struct {
-	EncounterID       *int64         `json:"encounter_id,omitempty"`
+	EncounterID       int64          `json:"encounter_id"`
 	PatientID         *int64         `json:"patient_id,omitempty"`
 	PatientSnapshot   map[string]any `json:"patient_snapshot"`
 	TemplateVersionID string         `json:"template_version_id"`
@@ -92,35 +92,9 @@ type ActionRequest struct {
 	Note    string         `json:"note,omitempty"`
 }
 
-type CreateAICandidateRequest struct {
-	SectionCode    string         `json:"section_code"`
-	Content        map[string]any `json:"content"`
-	SourceEvidence map[string]any `json:"source_evidence"`
-}
-
-type GenerateAICandidatesRequest struct {
-	TenantID      int64                      `json:"tenant_id"`
-	RecordingID   int64                      `json:"recording_id"`
-	GenerationKey string                     `json:"generation_key"`
-	Candidates    []CreateAICandidateRequest `json:"candidates"`
-}
-
-type GenerateAICandidatesOutcome struct {
-	Record     *Record        `json:"record"`
-	Candidates []*AICandidate `json:"candidates"`
-}
-
-type GenerateRealtimeAICandidatesRequest struct {
-	TenantID      int64                      `json:"tenant_id"`
-	RecordID      string                     `json:"record_id"`
-	EncounterID   int64                      `json:"encounter_id"`
-	GenerationKey string                     `json:"generation_key"`
-	Candidates    []CreateAICandidateRequest `json:"candidates"`
-}
-
-type HandleAICandidateRequest struct {
-	Content map[string]any `json:"content,omitempty"`
-	Note    string         `json:"note,omitempty"`
+type GenerateAIGenerationOutcome struct {
+	Record     *Record       `json:"record"`
+	Generation *AIGeneration `json:"generation"`
 }
 
 type WriteOutcome struct {

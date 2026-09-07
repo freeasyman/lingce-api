@@ -22,6 +22,12 @@ type realtimeTranscriptCorrector struct {
 	previous  string
 }
 
+func closedChannel() chan struct{} {
+	channel := make(chan struct{})
+	close(channel)
+	return channel
+}
+
 func newRealtimeTranscriptCorrector(service *Service, tenantID, encounterID int64, onSuccess func(realtimeTranscriptCorrection), onError func(realtimeASRResult, error)) *realtimeTranscriptCorrector {
 	return &realtimeTranscriptCorrector{
 		service: service, tenantID: tenantID, encounterID: encounterID, onSuccess: onSuccess, onError: onError,

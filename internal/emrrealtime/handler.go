@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
-	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -179,11 +178,6 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 		payload, _ := json.Marshal(map[string]any{"type": "error", "error": message})
 		_ = writeClient(websocket.TextMessage, payload)
 	}
-	generator := newRealtimeCandidateGenerator(h.service, tenantID, encounterID, recordID, func(items []*emrrecord.AICandidate) {
-		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "ai_candidates", "candidates": items}))
-	}, func(err error) {
-		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "ai_generation_error", "error": err.Error()}))
-	})
 	corrector := newRealtimeTranscriptCorrector(h.service, tenantID, encounterID, func(result realtimeTranscriptCorrection) {
 		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{
 			"type":           "transcript_correction",
@@ -295,9 +289,6 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 			correctionContext, correctionCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			corrector.FlushContext(correctionContext)
 			correctionCancel()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			generator.FlushContext(ctx)
-			cancel()
 			var end struct {
 				Type            string `json:"type"`
 				DurationSeconds int    `json:"duration_seconds"`

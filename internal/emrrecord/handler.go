@@ -31,9 +31,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.ListByPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/emr/records/{id}/ai-candidates", Handler: h.ListAICandidates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/records/{id}/ai-candidates/{candidate_id}/accept", Handler: h.AcceptAICandidate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/records/{id}/ai-candidates/{candidate_id}/reject", Handler: h.RejectAICandidate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/versions", Handler: h.Snapshots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/working-draft", Handler: h.AutoSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/save", Handler: h.ManualSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -43,70 +40,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/revise", Handler: h.Revise, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/void", Handler: h.Void, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
-}
-
-func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
-	router.Register(mux, []router.Route{
-		{Method: "POST", Path: "/api/v1/internal/emr/recording-ai-candidates", Handler: h.GenerateRecordingAICandidates, AuthMode: "internal"},
-	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
-}
-
-func (h *Handler) GenerateRecordingAICandidates(w http.ResponseWriter, r *http.Request) {
-	var req GenerateAICandidatesRequest
-	if decodeBody(r, &req) != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	outcome, err := h.service.GenerateRecordingAICandidates(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"data": outcome})
-}
-
-func (h *Handler) ListAICandidates(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, err := h.authorizeRecord(r, "record.read")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	activeOnly := r.URL.Query().Get("active_only") != "false"
-	items, err := h.service.ListAICandidates(r.Context(), tenantID, recordID(r), activeOnly)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
-}
-
-func (h *Handler) AcceptAICandidate(w http.ResponseWriter, r *http.Request) {
-	h.handleAICandidate(w, r, "已采纳")
-}
-
-func (h *Handler) RejectAICandidate(w http.ResponseWriter, r *http.Request) {
-	h.handleAICandidate(w, r, "已拒绝")
-}
-
-func (h *Handler) handleAICandidate(w http.ResponseWriter, r *http.Request, decision string) {
-	access, tenantID, err := h.authorizeRecord(r, "record.edit")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusForbidden)
-		return
-	}
-	var req HandleAICandidateRequest
-	if r.Body != nil && r.ContentLength != 0 {
-		if decodeBody(r, &req) != nil {
-			httputil.WriteBadRequest(w, "invalid request body")
-			return
-		}
-	}
-	candidate, record, err := h.service.HandleAICandidate(r.Context(), tenantID, access.UserID, recordID(r), strings.TrimSpace(r.PathValue("candidate_id")), decision, req)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"data": map[string]any{"candidate": candidate, "record": record}})
 }
 
 func (h *Handler) tenant(r *http.Request) (int64, int64, error) {

@@ -312,8 +312,13 @@ func (s *Store) SaveBindings(ctx context.Context, tenantID int64, versionID stri
 		return nil, err
 	}
 	for _, item := range items {
-		if _, err = tx.Exec(ctx, `INSERT INTO emr_template_quality_requirements(template_version_id,quality_requirement_id,execution_mode,deadline_action,display_order) SELECT $1,id,$3,$4,$5 FROM emr_quality_requirements WHERE id=$2 AND (tenant_id IS NULL OR tenant_id=$6) AND status='published'`, versionID, item.QualityRequirementID, item.ExecutionMode, item.DeadlineAction, item.DisplayOrder, tenantID); err != nil {
+		command, execErr := tx.Exec(ctx, `INSERT INTO emr_template_quality_requirements(template_version_id,quality_requirement_id,execution_mode,deadline_action,display_order) SELECT $1,id,$3,$4,$5 FROM emr_quality_requirements WHERE id=$2 AND (tenant_id IS NULL OR tenant_id=$6) AND status='published'`, versionID, item.QualityRequirementID, item.ExecutionMode, item.DeadlineAction, item.DisplayOrder, tenantID)
+		if execErr != nil {
+			err = execErr
 			return nil, err
+		}
+		if command.RowsAffected() != 1 {
+			return nil, fmt.Errorf("质量要求不存在、已停用或不属于当前机构")
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {

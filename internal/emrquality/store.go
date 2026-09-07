@@ -72,44 +72,6 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*QualityReq
 	return item, nil
 }
 
-func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req SaveRequest) (*QualityRequirement, error) {
-	status := req.Status
-	if status == "" {
-		status = "draft"
-	}
-	var id string
-	err := s.pool.QueryRow(ctx, `INSERT INTO emr_quality_requirements
- (tenant_id, code, name, rule_type, quality_group, source_name, source_version, evaluated_fact, pass_condition, precondition, evidence_basis, status, created_by, published_at, published_by)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $12='published' THEN NOW() END,CASE WHEN $12='published' THEN $13 END) RETURNING id`, tenantID, req.Code, req.Name, req.RuleType, req.QualityGroup, req.SourceName, req.SourceVersion, req.EvaluatedFact, req.PassCondition, req.Precondition, req.EvidenceBasis, status, actorID).Scan(&id)
-	if err != nil {
-		return nil, fmt.Errorf("create emr quality requirement: %w", err)
-	}
-	return s.Get(ctx, tenantID, id)
-}
-
-func (s *Store) Update(ctx context.Context, tenantID int64, id string, actorID int64, req SaveRequest) (*QualityRequirement, error) {
-	cmd, err := s.pool.Exec(ctx, `UPDATE emr_quality_requirements SET name=$3, rule_type=$4, quality_group=$5, source_name=$6, source_version=$7, evaluated_fact=$8, pass_condition=$9, precondition=$10, evidence_basis=$11 WHERE id=$1 AND tenant_id=$2 AND status='draft'`, id, tenantID, req.Name, req.RuleType, req.QualityGroup, req.SourceName, req.SourceVersion, req.EvaluatedFact, req.PassCondition, req.Precondition, req.EvidenceBasis)
-	if err != nil {
-		return nil, fmt.Errorf("update emr quality requirement: %w", err)
-	}
-	if cmd.RowsAffected() == 0 {
-		return nil, fmt.Errorf("quality requirement not found or not editable")
-	}
-	_ = actorID
-	return s.Get(ctx, tenantID, id)
-}
-
-func (s *Store) Disable(ctx context.Context, tenantID int64, id string, actorID int64) error {
-	cmd, err := s.pool.Exec(ctx, `UPDATE emr_quality_requirements SET status='disabled', disabled_at=NOW(), disabled_by=$3 WHERE id=$1 AND (tenant_id IS NULL OR tenant_id=$2) AND status <> 'disabled'`, id, tenantID, actorID)
-	if err != nil {
-		return fmt.Errorf("disable emr quality requirement: %w", err)
-	}
-	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("quality requirement not found")
-	}
-	return nil
-}
-
 func (s *Store) EnsureBuiltin(ctx context.Context) error {
 	for _, item := range builtinSeeds() {
 		_, err := s.pool.Exec(ctx, `INSERT INTO emr_quality_requirements (tenant_id, code, name, rule_type, quality_group, source_name, evaluated_fact, pass_condition, precondition, evidence_basis, status, created_by, published_at)
@@ -117,20 +79,6 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("seed emr quality requirement %s: %w", item.Code, err)
 		}
-	}
-	return nil
-}
-
-func validateRequest(req SaveRequest) error {
-	if strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" {
-		return fmt.Errorf("code and name are required")
-	}
-	validType := map[string]bool{"缺项": true, "逻辑冲突": true, "风险提醒": true, "归档拦截": true, "专科要求": true}
-	if !validType[req.RuleType] {
-		return fmt.Errorf("invalid rule_type")
-	}
-	if strings.TrimSpace(req.EvaluatedFact) == "" || strings.TrimSpace(req.PassCondition) == "" || strings.TrimSpace(req.EvidenceBasis) == "" {
-		return fmt.Errorf("evaluated_fact, pass_condition and evidence_basis are required")
 	}
 	return nil
 }

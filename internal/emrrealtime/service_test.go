@@ -18,16 +18,6 @@ func TestGatewayWebSocketURL(t *testing.T) {
 	}
 }
 
-func TestSourceIDIsStableAndPositive(t *testing.T) {
-	first := sourceID("request-1")
-	if first <= 0 {
-		t.Fatalf("sourceID must be positive, got %d", first)
-	}
-	if got := sourceID("request-1"); got != first {
-		t.Fatalf("sourceID must be stable, got %d want %d", got, first)
-	}
-}
-
 func TestPCMIsWrappedAsWAVForSavedRecording(t *testing.T) {
 	pcm := make([]byte, 320)
 	wav := pcmToWAV(pcm, 16000, 1, 16)

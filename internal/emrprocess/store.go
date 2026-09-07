@@ -38,19 +38,19 @@ func appendRecord(ctx context.Context, db queryRower, req AppendRequest) (*Proce
 	var outputRaw, changesRaw []byte
 	err = db.QueryRow(ctx, `INSERT INTO emr_process_records
 	(tenant_id, record_id, action_type, action_result, actor_type, actor_id, source, before_status, after_status,
-	 action_snapshot_id, before_snapshot_id, after_snapshot_id, check_run_id, ai_candidate_id, output_info,
+	 action_snapshot_id, before_snapshot_id, after_snapshot_id, check_run_id, output_info,
 	 failure_reason, action_note, content_changes)
-	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18::jsonb)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17::jsonb)
 	RETURNING id, tenant_id, record_id, action_type, action_result, occurred_at, actor_type, actor_id, source,
 	 before_status, after_status, action_snapshot_id, before_snapshot_id, after_snapshot_id, check_run_id,
-	 ai_candidate_id, output_info, failure_reason, action_note, content_changes`,
+	 output_info, failure_reason, action_note, content_changes`,
 		req.TenantID, req.RecordID, req.ActionType, req.ActionResult, req.ActorType, req.ActorID, req.Source,
 		req.BeforeStatus, req.AfterStatus, req.ActionSnapshotID, req.BeforeSnapshotID, req.AfterSnapshotID,
-		req.CheckRunID, req.AICandidateID, string(output), req.FailureReason, req.ActionNote, string(changes)).Scan(
+		req.CheckRunID, string(output), req.FailureReason, req.ActionNote, string(changes)).Scan(
 		&item.ID, &item.TenantID, &item.RecordID, &item.ActionType, &item.ActionResult, &item.OccurredAt,
 		&item.ActorType, &item.ActorID, &item.Source, &item.BeforeStatus, &item.AfterStatus,
 		&item.ActionSnapshotID, &item.BeforeSnapshotID, &item.AfterSnapshotID, &item.CheckRunID,
-		&item.AICandidateID, &outputRaw, &item.FailureReason, &item.ActionNote, &changesRaw)
+		&outputRaw, &item.FailureReason, &item.ActionNote, &changesRaw)
 	if err != nil {
 		return nil, fmt.Errorf("append emr process record: %w", err)
 	}
@@ -64,7 +64,7 @@ func appendRecord(ctx context.Context, db queryRower, req AppendRequest) (*Proce
 func (s *Store) List(ctx context.Context, tenantID int64, recordID string) ([]*ProcessRecord, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, record_id, action_type, action_result, occurred_at,
 	 actor_type, actor_id, source, before_status, after_status, action_snapshot_id, before_snapshot_id,
-	 after_snapshot_id, check_run_id, ai_candidate_id, output_info, failure_reason, action_note, content_changes
+	 after_snapshot_id, check_run_id, output_info, failure_reason, action_note, content_changes
 	 FROM emr_process_records WHERE tenant_id=$1 AND record_id=$2 ORDER BY occurred_at DESC, id DESC`, tenantID, recordID)
 	if err != nil {
 		return nil, fmt.Errorf("list emr process records: %w", err)
@@ -77,7 +77,7 @@ func (s *Store) List(ctx context.Context, tenantID int64, recordID string) ([]*P
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.RecordID, &item.ActionType, &item.ActionResult, &item.OccurredAt,
 			&item.ActorType, &item.ActorID, &item.Source, &item.BeforeStatus, &item.AfterStatus,
 			&item.ActionSnapshotID, &item.BeforeSnapshotID, &item.AfterSnapshotID, &item.CheckRunID,
-			&item.AICandidateID, &outputRaw, &item.FailureReason, &item.ActionNote, &changesRaw); err != nil {
+			&outputRaw, &item.FailureReason, &item.ActionNote, &changesRaw); err != nil {
 			return nil, err
 		}
 		item.OutputInfo = map[string]any{}

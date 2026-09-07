@@ -23,17 +23,3 @@ type QualityRequirement struct {
 	DisabledBy    *int64     `json:"disabled_by,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
-
-type SaveRequest struct {
-	Code          string `json:"code"`
-	Name          string `json:"name"`
-	RuleType      string `json:"rule_type"`
-	QualityGroup  string `json:"quality_group"`
-	SourceName    string `json:"source_name"`
-	SourceVersion string `json:"source_version"`
-	EvaluatedFact string `json:"evaluated_fact"`
-	PassCondition string `json:"pass_condition"`
-	Precondition  string `json:"precondition"`
-	EvidenceBasis string `json:"evidence_basis"`
-	Status        string `json:"status"`
-}
