@@ -2,12 +2,15 @@ package emrrecord
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -30,6 +33,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/emr/records", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.ListByPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/records/import-from-recording", Handler: h.ImportFromRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/versions", Handler: h.Snapshots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/working-draft", Handler: h.AutoSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -150,6 +154,143 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
+
+func (h *Handler) ImportFromRecording(w http.ResponseWriter, r *http.Request) {
+	access, tenantID, err := h.authorize(r, "record.create")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	var req struct {
+		RecordingID       int64  `json:"recording_id"`
+		EncounterID       *int64 `json:"encounter_id,omitempty"`
+		TemplateVersionID string `json:"template_version_id"`
+		DocumentType      string `json:"document_type"`
+		VisitType         string `json:"visit_type"`
+	}
+	if decodeBody(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if req.RecordingID <= 0 {
+		httputil.WriteBadRequest(w, "recording_id is required")
+		return
+	}
+	var rec struct {
+		EncounterID    sql.NullInt64
+		CustomerID     sql.NullInt64
+		PatientID      sql.NullInt64
+		PatientName    string
+		PatientPhone   sql.NullString
+		PatientGender  sql.NullString
+		PatientAge     sql.NullInt64
+		TranscriptText sql.NullString
+		RecordedAt     sql.NullTime
+		Status         string
+	}
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT
+			COALESCE(r.encounter_id, 0),
+			COALESCE(r.customer_id, 0),
+			COALESCE(r.patient_id, 0),
+			COALESCE(NULLIF(c.name, ''), ''),
+			COALESCE(c.phone, ''),
+			COALESCE(c.gender, ''),
+			COALESCE(c.age, 0),
+			COALESCE(r.transcription_text, ''),
+			r.recorded_at,
+			COALESCE(r.status, '')
+		FROM recordings r
+		LEFT JOIN customers c ON c.id = r.customer_id
+		WHERE r.id = $1 AND r.deleted_at IS NULL
+	`, req.RecordingID).Scan(
+		&rec.EncounterID,
+		&rec.CustomerID,
+		&rec.PatientID,
+		&rec.PatientName,
+		&rec.PatientPhone,
+		&rec.PatientGender,
+		&rec.PatientAge,
+		&rec.TranscriptText,
+		&rec.RecordedAt,
+		&rec.Status,
+	); err != nil {
+		httputil.WriteNotFound(w, "recording not found")
+		return
+	}
+	transcript := strings.TrimSpace(rec.TranscriptText.String)
+	encounterID := req.EncounterID
+	if encounterID == nil && rec.EncounterID.Valid && rec.EncounterID.Int64 > 0 {
+		value := rec.EncounterID.Int64
+		encounterID = &value
+	}
+	var customerID *int64
+	if rec.CustomerID.Valid && rec.CustomerID.Int64 > 0 {
+		value := rec.CustomerID.Int64
+		customerID = &value
+	}
+	var patientID *int64
+	if rec.PatientID.Valid && rec.PatientID.Int64 > 0 {
+		value := rec.PatientID.Int64
+		patientID = &value
+	}
+	patient := &emrinput.Patient{
+		CustomerID: customerID,
+		PatientID:  patientID,
+		Name:       rec.PatientName,
+	}
+	if rec.PatientPhone.Valid && strings.TrimSpace(rec.PatientPhone.String) != "" {
+		value := rec.PatientPhone.String
+		patient.Phone = &value
+	}
+	if rec.PatientGender.Valid && strings.TrimSpace(rec.PatientGender.String) != "" {
+		value := rec.PatientGender.String
+		patient.Gender = &value
+	}
+	if rec.PatientAge.Valid && rec.PatientAge.Int64 > 0 {
+		value := int(rec.PatientAge.Int64)
+		patient.Age = &value
+	}
+	input := emrinput.NewHistoricalInput(
+		strconv.FormatInt(req.RecordingID, 10),
+		tenantID,
+		encounterID,
+		nil,
+		patient,
+		transcript,
+		transcript,
+		nil,
+		strconv.FormatInt(req.RecordingID, 10),
+		strconv.FormatInt(req.RecordingID, 10),
+		map[string]any{"recording_id": req.RecordingID, "recording_status": rec.Status},
+		time.Now(),
+	)
+	item, err := h.service.CreateFromHistoricalRecording(r.Context(), tenantID, access.UserID, CreateRequest{
+		EncounterID:       func() int64 { if encounterID == nil { return 0 }; return *encounterID }(),
+		PatientID:         patientID,
+		PatientSnapshot:   map[string]any{"name": rec.PatientName, "phone": rec.PatientPhone.String, "gender": rec.PatientGender.String, "age": rec.PatientAge.Int64},
+		TemplateVersionID: req.TemplateVersionID,
+		DocumentType:      req.DocumentType,
+		VisitType:         req.VisitType,
+		DoctorID:          &access.UserID,
+		StartedAt:         timePtr(rec.RecordedAt),
+		Content:           map[string]any{},
+	}, input)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": item})
+}
+
+func timePtr(value sql.NullTime) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	t := value.Time
+	return &t
+}
+
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	_, tenantID, err := h.authorizeRecord(r, "record.read")
 	if err != nil {

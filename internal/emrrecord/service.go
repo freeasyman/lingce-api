@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
@@ -67,6 +68,44 @@ func (s *Service) Create(ctx context.Context, tenantID, actorID int64, req Creat
 		ActorType: "人工", ActorID: &actorID, Source: "外部接口", AfterStatus: &record.Status,
 	}); err != nil {
 		return nil, fmt.Errorf("record create succeeded but process record failed: %w", err)
+	}
+	return record, nil
+}
+
+func (s *Service) CreateFromHistoricalRecording(ctx context.Context, tenantID, actorID int64, req CreateRequest, input emrinput.Input) (*Record, error) {
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if req.EncounterID <= 0 {
+		if input.EncounterID == nil || *input.EncounterID <= 0 {
+			return s.createFailed(ctx, tenantID, actorID, "encounter_id is required")
+		}
+		req.EncounterID = *input.EncounterID
+	}
+	if req.PatientID == nil && input.Patient != nil && input.Patient.CustomerID != nil {
+		req.PatientID = input.Patient.CustomerID
+	}
+	if req.PatientSnapshot == nil {
+		req.PatientSnapshot = map[string]any{}
+	}
+	if len(req.EncounterContext) == 0 {
+		req.EncounterContext = input.EncounterContext()
+	}
+	if len(req.SourceReferences) == 0 {
+		req.SourceReferences = input.SourceReferences()
+	}
+	req.StandardInput = input.StandardInput()
+	record, err := s.store.Create(ctx, tenantID, actorID, req)
+	if err != nil {
+		_ = s.createFailedRecord(ctx, tenantID, actorID, err)
+		return nil, err
+	}
+	recordID := record.ID
+	if _, err := s.process.Append(ctx, emrprocess.AppendRequest{
+		TenantID: tenantID, RecordID: &recordID, ActionType: "历史导入", ActionResult: "成功",
+		ActorType: "人工", ActorID: &actorID, Source: "外部接口", AfterStatus: &record.Status,
+	}); err != nil {
+		return nil, fmt.Errorf("record historical import succeeded but process record failed: %w", err)
 	}
 	return record, nil
 }

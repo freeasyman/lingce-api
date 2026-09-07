@@ -81,6 +81,7 @@ type CreateRequest struct {
 	EncounterContext  map[string]any `json:"encounter_context"`
 	SourceReferences  map[string]any `json:"source_references"`
 	Content           map[string]any `json:"content"`
+	StandardInput     map[string]any `json:"standard_input,omitempty"`
 }
 
 type ContentRequest struct {

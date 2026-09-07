@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/encounter"
@@ -296,6 +297,27 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		}
 	}
 	departmentID := req.DepartmentID
+	standardInput := emrinput.NewRealtimeInput(
+		req.ClientRequestID,
+		tenantID,
+		&encounterID,
+		nil,
+		&emrinput.Patient{
+			CustomerID: req.CustomerID,
+			PatientID:  patientID(patient),
+			Name:       patientName(patient),
+			Phone:      patientPhone(patient),
+			Gender:     patientGender(patient),
+			Age:        patientAge(patient),
+		},
+		"",
+		"",
+		nil,
+		req.ClientRequestID,
+		req.ClientRequestID,
+		map[string]any{"source_type": "realtime", "channel": "realtime", "visit_type": req.VisitType},
+		startedAt,
+	)
 	result, err := s.records.Create(ctx, tenantID, actorID, emrrecord.CreateRequest{
 		EncounterID:       encounterID,
 		PatientID:         patientID(patient),
@@ -306,8 +328,9 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		DepartmentID:      departmentID,
 		DoctorID:          &actorID,
 		StartedAt:         &startedAt,
-		EncounterContext:  map[string]any{"channel": "realtime", "source": "microphone"},
-		SourceReferences:  map[string]any{"source_type": "realtime", "encounter_id": encounterID},
+		EncounterContext:  standardInput.EncounterContext(),
+		SourceReferences:  standardInput.SourceReferences(),
+		StandardInput:     standardInput.StandardInput(),
 		Content:           map[string]any{},
 	})
 	if err != nil {
@@ -334,6 +357,36 @@ func patientName(patient *patientInfo) string {
 		return ""
 	}
 	return patient.Name
+}
+
+func patientPhone(patient *patientInfo) *string {
+	if patient == nil || patient.Phone == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*patient.Phone)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func patientGender(patient *patientInfo) *string {
+	if patient == nil || patient.Gender == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*patient.Gender)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func patientAge(patient *patientInfo) *int {
+	if patient == nil || patient.Age == nil || *patient.Age < 0 {
+		return nil
+	}
+	value := *patient.Age
+	return &value
 }
 
 func (s *Service) loadExistingSession(ctx context.Context, tenantID, encounterID int64, access *emrpermission.Access) (*SessionResponse, error) {

@@ -158,6 +158,16 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 		}
 	}
 	resp := toRecordingResponse(recording)
+	if input := standardInputFromRequest(req, recordingID); input != nil {
+		resp.AnalysisResult = mergeStandardInputMetadata(resp.AnalysisResult, req.EMRInput)
+		resp.AnalysisDisplay = mergeStandardInputMetadata(resp.AnalysisDisplay, req.EMRInput)
+		resp.AnalysisResult["standard_input"] = input
+		resp.AnalysisDisplay["standard_input"] = input
+		if req.EMRInput != nil {
+			resp.AnalysisResult["standard_input_source"] = strings.TrimSpace(req.EMRInput.SourceKind)
+			resp.AnalysisDisplay["standard_input_source"] = strings.TrimSpace(req.EMRInput.SourceKind)
+		}
+	}
 	if created {
 		triggerSource := strings.TrimSpace(req.TriggerSource)
 		if triggerSource == "" {
@@ -168,6 +178,72 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 		}
 	}
 	return resp, created, nil
+}
+
+func standardInputFromRequest(req OwnedAudioIngestRequest, recordingID int64) map[string]any {
+	if req.EMRInput == nil {
+		return nil
+	}
+	input := req.EMRInput
+	result := map[string]any{
+		"recording_id": recordingID,
+	}
+	for key, value := range input.StandardInput() {
+		result[key] = value
+	}
+	if req.TenantID > 0 {
+		result["tenant_id"] = req.TenantID
+	}
+	return result
+}
+
+func mergeStandardInputMetadata(target map[string]any, input *EMRStandardInput) map[string]any {
+	if target == nil {
+		target = map[string]any{}
+	}
+	if input == nil {
+		return target
+	}
+	if strings.TrimSpace(input.SourceKind) != "" {
+		target["emr_source_kind"] = strings.TrimSpace(input.SourceKind)
+	}
+	if strings.TrimSpace(input.SourceID) != "" {
+		target["emr_source_id"] = strings.TrimSpace(input.SourceID)
+	}
+	if input.EncounterID != nil {
+		target["emr_encounter_id"] = *input.EncounterID
+	}
+	if input.RecordID != nil && strings.TrimSpace(*input.RecordID) != "" {
+		target["emr_record_id"] = strings.TrimSpace(*input.RecordID)
+	}
+	if input.CustomerID != nil {
+		target["emr_customer_id"] = *input.CustomerID
+	}
+	if len(input.Patient) > 0 {
+		target["emr_patient"] = input.Patient
+	}
+	if strings.TrimSpace(input.BatchID) != "" {
+		target["emr_batch_id"] = strings.TrimSpace(input.BatchID)
+	}
+	if strings.TrimSpace(input.IdempotencyKey) != "" {
+		target["emr_idempotency_key"] = strings.TrimSpace(input.IdempotencyKey)
+	}
+	if strings.TrimSpace(input.FinalText) != "" {
+		target["emr_final_text"] = strings.TrimSpace(input.FinalText)
+	}
+	if strings.TrimSpace(input.CorrectedText) != "" {
+		target["emr_corrected_text"] = strings.TrimSpace(input.CorrectedText)
+	}
+	if len(input.Segments) > 0 {
+		target["emr_segments"] = input.Segments
+	}
+	if len(input.SourceEvidence) > 0 {
+		target["emr_source_evidence"] = input.SourceEvidence
+	}
+	if !input.CompletedAt.IsZero() {
+		target["emr_completed_at"] = input.CompletedAt
+	}
+	return target
 }
 
 func recordingScopeMenuCode(scope RecordingScope) string {

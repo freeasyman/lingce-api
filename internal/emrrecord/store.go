@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
@@ -163,6 +164,10 @@ func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req CreateR
 	patient := encodeObject(req.PatientSnapshot)
 	encounterContext := encodeObject(req.EncounterContext)
 	sourceReferences := encodeObject(req.SourceReferences)
+	if len(req.StandardInput) > 0 {
+		encounterContext = mergeObjectJSON(encounterContext, map[string]any{"standard_input": req.StandardInput})
+		sourceReferences = mergeObjectJSON(sourceReferences, map[string]any{"standard_input": req.StandardInput})
+	}
 	content := encodeObject(req.Content)
 	startedAt := time.Now().UTC()
 	if req.StartedAt != nil {
@@ -453,4 +458,19 @@ func decodeObject(raw []byte) map[string]any {
 	value := map[string]any{}
 	_ = json.Unmarshal(raw, &value)
 	return value
+}
+
+func mergeObjectJSON(base string, patch map[string]any) string {
+	current := map[string]any{}
+	if strings.TrimSpace(base) != "" {
+		_ = json.Unmarshal([]byte(base), &current)
+	}
+	for k, v := range patch {
+		current[k] = v
+	}
+	raw, err := json.Marshal(current)
+	if err != nil {
+		return base
+	}
+	return string(raw)
 }

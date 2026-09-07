@@ -1936,6 +1936,12 @@ func ApplyCompatMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedMorningMeetingModelConfig(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration seed morning meeting model config: %w", err)
 	}
+	if err := seedComplianceCheckPrompt(ctx, conn); err != nil {
+		return fmt.Errorf("compat migration seed compliance check prompt: %w", err)
+	}
+	if err := seedComplianceCheckModelConfig(ctx, conn); err != nil {
+		return fmt.Errorf("compat migration seed compliance check model config: %w", err)
+	}
 	if err := ensureProductLibrarySchema(ctx, conn); err != nil {
 		return fmt.Errorf("compat migration ensure product library schema: %w", err)
 	}
@@ -2581,6 +2587,66 @@ func seedMorningMeetingModelConfig(ctx context.Context, pool compatExecutor) err
 			WHERE deleted_at IS NULL
 			  AND tenant_id = 0
 			  AND function_type = 'recording_morning_meeting_comment'
+		)
+	`)
+	return err
+}
+
+func seedComplianceCheckPrompt(ctx context.Context, pool compatExecutor) error {
+	const promptCode = "compliance_check_v1"
+	const systemPrompt = "你是合规卫士的候选发现助手。只根据给定规则集和输入材料输出候选发现，不要定责，不要处罚，不要编造规则。"
+	const userPrompt = `请根据以下输入和规则集输出候选发现：
+
+tenant_id: {{tenant_id}}
+scene_code: {{scene_code}}
+source_type: {{source_type}}
+source_id: {{source_id}}
+source_version: {{source_version}}
+rule_set_code: {{rule_set_code}}
+rule_set_version: {{rule_set_version}}
+
+输入材料：
+{{input_text}}`
+	const outputSchema = `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["rule_code","found","summary","reason","evidence"],"properties":{"rule_code":{"type":"string"},"found":{"type":"boolean"},"summary":{"type":"string"},"reason":{"type":"string"},"evidence":{"type":"array","items":{"type":"object","required":["quote"],"properties":{"quote":{"type":"string"},"segment_index":{"type":"integer"},"speaker":{"type":"string"},"start_second":{"type":"number"},"end_second":{"type":"number"}}}}}}}}}`
+	_, err := pool.Exec(ctx, `
+		INSERT INTO recording_analysis_prompts (
+			code, name, description, category, system_prompt, user_prompt_template,
+			output_schema, version, is_active, usage_count, created_by, updated_by, created_at, updated_at
+		)
+		SELECT
+			$1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::jsonb, $8::text,
+			true, 0, 1, 1, NOW(), NOW()
+		WHERE NOT EXISTS (SELECT 1 FROM recording_analysis_prompts WHERE code = $1::text)
+	`, promptCode, "合规卫士检查", "根据合规卫士规则集输出候选发现", "analysis", systemPrompt, userPrompt, outputSchema, "v1")
+	return err
+}
+
+func seedComplianceCheckModelConfig(ctx context.Context, pool compatExecutor) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO llm_model_configs (
+			tenant_id, model_code, function_type, model_name, provider,
+			model_params, extra_params, is_default, is_active, description, created_by, created_at, updated_at
+		)
+		SELECT
+			0,
+			'qwen-max',
+			'compliance_check',
+			'通义千问 Max',
+			'dashscope',
+			'{"temperature":0.0,"max_tokens":4000,"timeout_seconds":120}'::json,
+			'{}'::json,
+			true,
+			true,
+			'合规卫士平台默认模型配置',
+			0,
+			NOW(),
+			NOW()
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM llm_model_configs
+			WHERE deleted_at IS NULL
+			  AND tenant_id = 0
+			  AND function_type = 'compliance_check'
 		)
 	`)
 	return err

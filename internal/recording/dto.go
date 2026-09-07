@@ -1,6 +1,9 @@
 package recording
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type OwnedAudioIngestRequest struct {
 	TenantID        int64
@@ -19,6 +22,86 @@ type OwnedAudioIngestRequest struct {
 	BusinessScope   string
 	Scene           string
 	TriggerSource   string
+	EMRInput        *EMRStandardInput
+	AnalysisResult  map[string]any
+	AnalysisDisplay map[string]any
+}
+
+type EMRStandardInput struct {
+	SourceKind     string          `json:"source_kind"`
+	SourceID       string          `json:"source_id"`
+	TenantID       int64           `json:"tenant_id"`
+	EncounterID    *int64          `json:"encounter_id,omitempty"`
+	RecordID       *string         `json:"record_id,omitempty"`
+	CustomerID     *int64          `json:"customer_id,omitempty"`
+	Patient        map[string]any  `json:"patient,omitempty"`
+	BatchID        string          `json:"batch_id,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	FinalText      string          `json:"final_text,omitempty"`
+	CorrectedText  string          `json:"corrected_text,omitempty"`
+	Segments       []map[string]any `json:"segments,omitempty"`
+	SourceEvidence map[string]any  `json:"source_evidence,omitempty"`
+	CompletedAt    time.Time       `json:"completed_at"`
+}
+
+func (i *EMRStandardInput) StandardInput() map[string]any {
+	if i == nil {
+		return nil
+	}
+	result := map[string]any{
+		"source_kind":     strings.TrimSpace(i.SourceKind),
+		"source_id":       strings.TrimSpace(i.SourceID),
+		"tenant_id":       i.TenantID,
+		"idempotency_key": strings.TrimSpace(i.IdempotencyKey),
+		"completed_at":    i.CompletedAt,
+	}
+	if i.EncounterID != nil {
+		result["encounter_id"] = *i.EncounterID
+	}
+	if i.RecordID != nil && strings.TrimSpace(*i.RecordID) != "" {
+		result["record_id"] = strings.TrimSpace(*i.RecordID)
+	}
+	if i.CustomerID != nil {
+		result["customer_id"] = *i.CustomerID
+	}
+	if len(i.Patient) > 0 {
+		result["patient"] = i.Patient
+	}
+	if strings.TrimSpace(i.BatchID) != "" {
+		result["batch_id"] = strings.TrimSpace(i.BatchID)
+	}
+	if strings.TrimSpace(i.FinalText) != "" {
+		result["final_text"] = strings.TrimSpace(i.FinalText)
+	}
+	if strings.TrimSpace(i.CorrectedText) != "" {
+		result["corrected_text"] = strings.TrimSpace(i.CorrectedText)
+	}
+	if len(i.Segments) > 0 {
+		result["segments"] = i.Segments
+	}
+	if len(i.SourceEvidence) > 0 {
+		result["source_evidence"] = i.SourceEvidence
+	}
+	return result
+}
+
+func NewEMRStandardInput(sourceKind, sourceID string, tenantID int64, encounterID *int64, recordID *string, customerID *int64, patient map[string]any, batchID, idempotencyKey, finalText, correctedText string, segments []map[string]any, sourceEvidence map[string]any, completedAt time.Time) *EMRStandardInput {
+	return &EMRStandardInput{
+		SourceKind:     sourceKind,
+		SourceID:       sourceID,
+		TenantID:       tenantID,
+		EncounterID:    encounterID,
+		RecordID:       recordID,
+		CustomerID:     customerID,
+		Patient:        patient,
+		BatchID:        batchID,
+		IdempotencyKey: idempotencyKey,
+		FinalText:      finalText,
+		CorrectedText:  correctedText,
+		Segments:       segments,
+		SourceEvidence: sourceEvidence,
+		CompletedAt:    completedAt,
+	}
 }
 
 // CreateRecordingRequest represents a request to create a medical recording
