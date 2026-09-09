@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
+	"github.com/freeasyman/lingce-api/internal/complianceguard"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
@@ -28,6 +29,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrrealtime"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
+	"github.com/freeasyman/lingce-api/internal/followup"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
@@ -231,11 +233,16 @@ func main() {
 	emrCheckHandler := emrcheck.NewHandler(emrCheckService, emrPermissionService)
 	emrCheckHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 	emrRecordStore := emrrecord.NewStore(pool)
 	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
-	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
+	emrRecordDebugService := emrrecord.NewDebugService(emrRecordStore, emrCheckService, llmClient)
+	emrRecordHandler := emrrecord.NewHandlerWithDebug(emrRecordService, emrPermissionService, emrRecordDebugService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+
+	complianceGuardService := complianceguard.NewService(pool, llmClient)
+	complianceGuardHandler := complianceguard.NewHandler(complianceGuardService)
+	complianceGuardHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	var ossClient *oss.Client
 	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
 		var err error
@@ -383,6 +390,10 @@ func main() {
 	sandboxHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	delegatedWeComModule.RegisterRoutes(mux, cfg.JWT.Secret, pool, cfg.External.InternalWorkerToken)
+
+	// Register followup worker module
+	followupModule := followup.NewModule(llmClient, pool)
+	followupModule.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)

@@ -66,6 +66,14 @@ type AIGeneration struct {
 	ModelCallReference map[string]any `json:"model_call_reference"`
 }
 
+type GenerateRequest struct {
+	GenerationKey string         `json:"generation_key"`
+	Input         map[string]any `json:"input"`
+	SourceKind    string         `json:"source_kind,omitempty"`
+	SourceID      string         `json:"source_id,omitempty"`
+	PromptCode    string         `json:"prompt_code,omitempty"`
+}
+
 type CreateRequest struct {
 	EncounterID       int64          `json:"encounter_id"`
 	PatientID         *int64         `json:"patient_id,omitempty"`

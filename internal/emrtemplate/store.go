@@ -249,6 +249,25 @@ func (s *Store) GetVersion(ctx context.Context, tenantID int64, versionID string
 	return v, err
 }
 
+func (s *Store) GetPublishedVersionDetail(ctx context.Context, tenantID int64, versionID string) (*PublishedVersionDetail, error) {
+	version, err := s.GetVersion(ctx, tenantID, versionID)
+	if err != nil || version == nil {
+		return nil, err
+	}
+	if version.Status != "published" {
+		return nil, fmt.Errorf("template version is not published")
+	}
+	sections, err := s.listSections(ctx, version.ID)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := s.listBindings(ctx, version.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &PublishedVersionDetail{Version: version, Sections: sections, Bindings: bindings}, nil
+}
+
 func (s *Store) CreateTemplate(ctx context.Context, tenantID, actorID int64, req SaveTemplateRequest) (*TemplateDetail, error) {
 	var id string
 	err := s.pool.QueryRow(ctx, `INSERT INTO emr_templates(tenant_id,code,name,status,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$5) RETURNING id`, tenantID, req.Code, req.Name, req.Status, actorID).Scan(&id)

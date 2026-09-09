@@ -2048,6 +2048,123 @@ func newRecordingBillingMetadata(recordingID int64, subject, scene string) *llmg
 	}
 }
 
+func (s *Service) GenerateFollowUpDraft(ctx context.Context, req GenerateFollowUpDraftRequest) (*GenerateFollowUpDraftResponse, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("llm client is not configured")
+	}
+	tenantID := int64(0)
+	if req.TenantID != nil {
+		tenantID = *req.TenantID
+	}
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	recordingID := int64(0)
+	if req.RecordingID != nil {
+		recordingID = *req.RecordingID
+	}
+	if recordingID <= 0 {
+		return nil, fmt.Errorf("recording_id is required")
+	}
+	transcript := strings.TrimSpace(req.Transcript)
+	if transcript == "" {
+		return nil, fmt.Errorf("transcript is required")
+	}
+
+	systemPrompt := strings.TrimSpace(`
+你是医疗机构随访任务生成器。
+只输出 JSON。
+目标：根据真实接诊转写，生成医院可执行的随访任务草案。
+规则：
+1. 只写患者后续要联系的具体事项，不要写空泛方案。
+2. 不改诊断、药物、剂量和医生原意。
+3. 联系时间要自然，避免奇怪分钟秒数。
+4. 一个任务只写一件事，若同一天同一联系时点有多个事项，可合并成一个任务。
+5. 执行人默认为护士或指定随访人员，表述里可体现医生助理身份。
+6. 输出格式必须是：
+{"tasks":[{"title":"","contact_time":"","purpose":"","background":"","script":"","evidence":"","contact_method":"","executor":"","editable_fields":["expression","contact_time"]}]}
+`)
+	userPayload := map[string]any{
+		"tenant_id":     tenantID,
+		"recording_id":  recordingID,
+		"encounter_id":  req.EncounterID,
+		"doctor_name":   strings.TrimSpace(req.DoctorName),
+		"patient_name":  strings.TrimSpace(req.PatientName),
+		"recorded_at":   strings.TrimSpace(req.RecordedAt),
+		"background":    strings.TrimSpace(req.Background),
+		"transcript":    transcript,
+		"instructions":  req.Instructions,
+	}
+	userJSON, _ := json.MarshalIndent(userPayload, "", "  ")
+
+	model := struct {
+		FunctionType string
+		Provider     string
+		ModelCode    string
+		ModelParams  JSONObject
+	}{
+		FunctionType: "task_script_generation",
+		Provider:     "dashscope",
+		ModelCode:    "qwen-max",
+		ModelParams:  JSONObject{},
+	}
+	reqLLM := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "recording.followup",
+		FunctionType:  model.FunctionType,
+		Provider:      model.Provider,
+		ModelCode:     model.ModelCode,
+		Billing:       newRecordingBillingMetadata(recordingID, "followup_draft_generation", "followup"),
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: string(userJSON)},
+		},
+		Params: &llmgateway.Params{
+			Temperature:    0.2,
+			MaxTokens:      1800,
+			TimeoutSeconds: 45,
+			ResponseFormat: "json",
+		},
+	}
+	resp, err := s.llmClient.TextInference(ctx, reqLLM)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		return nil, fmt.Errorf("empty follow-up draft response")
+	}
+	var payload struct {
+		Tasks []GenerateFollowUpTaskItem `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(resp.Content), &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse follow-up draft: %w", err)
+	}
+	if len(payload.Tasks) == 0 {
+		return nil, fmt.Errorf("follow-up draft returned no tasks")
+	}
+	return &GenerateFollowUpDraftResponse{
+		RequestID: resp.RequestID,
+		Provider:  resp.Provider,
+		ModelCode: resp.ModelCode,
+		PromptCode: "followup_task_generation_v1",
+		RawContent: resp.Content,
+		Tasks:     payload.Tasks,
+		Usage: map[string]int{
+			"input_tokens":  resp.Usage.InputTokens,
+			"output_tokens": resp.Usage.OutputTokens,
+			"total_tokens":  resp.Usage.TotalTokens,
+		},
+		Cost: map[string]any{
+			"input_cost":  resp.Cost.InputCost,
+			"output_cost": resp.Cost.OutputCost,
+			"total_cost":  resp.Cost.TotalCost,
+			"currency":    resp.Cost.Currency,
+		},
+		LatencyMS: resp.LatencyMS,
+	}, nil
+}
+
 func (s *Service) generateBenchmarkCommentAndPoints(ctx context.Context, tenantID int64, item *BenchmarkClip) (string, []string) {
 	// 兜底策略：任一步失败都回退模板，保证收录流程可用。
 	fallbackComment, fallbackPoints := buildBenchmarkCommentAndPoints(item)

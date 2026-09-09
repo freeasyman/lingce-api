@@ -161,6 +161,32 @@ func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext
 	return data, bindings, bindingRows.Err()
 }
 
+func (s *Store) previewBindings(ctx context.Context, tenantID int64, templateVersionID string) ([]binding, error) {
+	bindingRows, err := s.pool.Query(ctx, `
+		SELECT b.quality_requirement_id, q.code, q.name, q.rule_type,
+		       b.execution_mode, b.deadline_action
+		FROM emr_template_quality_requirements b
+		JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id
+		WHERE b.template_version_id=$1
+		  AND q.status='published'
+		  AND (q.tenant_id IS NULL OR q.tenant_id=$2)
+		ORDER BY b.display_order, q.code
+	`, templateVersionID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load preview emr quality bindings: %w", err)
+	}
+	defer bindingRows.Close()
+	bindings := make([]binding, 0)
+	for bindingRows.Next() {
+		item := binding{}
+		if scanErr := bindingRows.Scan(&item.QualityRequirementID, &item.Code, &item.Name, &item.RuleType, &item.ExecutionMode, &item.DeadlineAction); scanErr != nil {
+			return nil, scanErr
+		}
+		bindings = append(bindings, item)
+	}
+	return bindings, bindingRows.Err()
+}
+
 func (s *Store) failRun(ctx context.Context, id string, cause error) (*CheckRun, error) {
 	reason := strings.TrimSpace(cause.Error())
 	_, updateErr := s.pool.Exec(ctx, `UPDATE emr_check_runs SET status='执行失败', overall_result='无法完成', completed_at=NOW(), failure_reason=$2 WHERE id=$1`, id, reason)

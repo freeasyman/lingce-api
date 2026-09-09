@@ -69,6 +69,12 @@ type TemplateDetail struct {
 	Bindings []*RequirementBinding `json:"quality_requirements,omitempty"`
 }
 
+type PublishedVersionDetail struct {
+	Version  *TemplateVersion      `json:"version"`
+	Sections []*Section            `json:"sections"`
+	Bindings []*RequirementBinding `json:"quality_requirements"`
+}
+
 type SaveTemplateRequest struct {
 	Code   string `json:"code"`
 	Name   string `json:"name"`

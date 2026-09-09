@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	ossutil "github.com/freeasyman/lingce-api/pkg/oss"
@@ -1694,4 +1695,60 @@ func (h *Handler) GetRecordingTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, tasks)
+}
+
+func (h *Handler) GenerateFollowUpDraft(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req GenerateFollowUpDraftRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.RecordingID == nil || *req.RecordingID <= 0 {
+		httputil.WriteBadRequest(w, "recording_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Transcript) == "" {
+		httputil.WriteBadRequest(w, "transcript is required")
+		return
+	}
+
+	tenantIDParam := ""
+	if req.TenantID != nil && *req.TenantID > 0 {
+		tenantIDParam = strconv.FormatInt(*req.TenantID, 10)
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, tenantIDParam)
+	if err != nil {
+		if err.Error() == "no tenant access" || err.Error() == "access denied" {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	recordingID := *req.RecordingID
+	recording, err := h.service.store.GetRecordingByID(r.Context(), recordingID)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if recording.TenantID != tenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	req.TenantID = &tenantID
+	resp, err := h.service.GenerateFollowUpDraft(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	httputil.WriteSuccess(w, resp)
 }

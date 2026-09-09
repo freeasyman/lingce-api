@@ -22,10 +22,15 @@ import (
 type Handler struct {
 	service     *Service
 	permissions *emrpermission.Service
+	debug       *DebugService
 }
 
 func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 	return &Handler{service: service, permissions: permissions}
+}
+
+func NewHandlerWithDebug(service *Service, permissions *emrpermission.Service, debug *DebugService) *Handler {
+	return &Handler{service: service, permissions: permissions, debug: debug}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -43,6 +48,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/archive", Handler: h.Archive, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/revise", Handler: h.Revise, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/void", Handler: h.Void, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/records/debug/preview", Handler: h.DebugPreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
@@ -453,4 +459,31 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
+}
+
+func (h *Handler) DebugPreview(w http.ResponseWriter, r *http.Request) {
+	if h.debug == nil {
+		httputil.WriteInternalError(w, "debug service not configured")
+		return
+	}
+	access, tenantID, err := h.authorize(r, "record.read")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	var req DebugTextRequest
+	if decodeBody(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.TenantID = tenantID
+	if req.ConfirmedBy == nil {
+		req.ConfirmedBy = &access.UserID
+	}
+	result, err := h.debug.Preview(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
 }

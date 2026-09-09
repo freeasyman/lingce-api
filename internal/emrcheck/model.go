@@ -46,3 +46,13 @@ type CheckRequest struct {
 	TriggerAction string
 	StartedBy     *int64
 }
+
+type CheckPreviewRequest struct {
+	TenantID          int64          `json:"tenant_id"`
+	TemplateVersionID string         `json:"template_version_id"`
+	VisitType         string         `json:"visit_type"`
+	Specialty         string         `json:"specialty,omitempty"`
+	ConfirmedBy       *int64         `json:"confirmed_by,omitempty"`
+	Content           map[string]any `json:"content"`
+	TriggerAction     string         `json:"trigger_action,omitempty"`
+}

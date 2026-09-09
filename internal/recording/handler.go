@@ -82,6 +82,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/trial-agreements/accept", Handler: h.AcceptTrialAgreement, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/{id}/play-url", Handler: h.GetPlayURL, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/{id}/file-test", Handler: h.TestPlayback, Auth: true},
+		{Method: "GET", Path: "/api/v1/recordings/{id}/emr", Handler: h.GetRecordingEMR, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/transcribe", Handler: h.TriggerTranscribe, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/analyze", Handler: h.TriggerAnalyze, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/clean", Handler: h.TriggerClean, Auth: true},
@@ -89,6 +90,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/confirm-action", Handler: h.ConfirmFollowUpAction, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/generate-opening", Handler: h.GenerateOpeningScript, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/generate-ops-plan", Handler: h.GenerateOperationsPlan, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/actions/generate-followup-draft", Handler: h.GenerateFollowUpDraft, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/mark-highlight", Handler: h.MarkHighlight, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/reanalyze", Handler: h.ReanalyzeRecording, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/{id}/actions/confirm-follow-ups", Handler: h.ConfirmFollowUpTasks, Auth: true},
@@ -412,6 +414,64 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, recording)
+}
+
+// GetRecordingEMR 返回录音关联的电子病历草稿，供机构端录音详情页使用。
+//
+// 该接口只增加前端实际使用的 URL 兼容层，数据仍由 GetRecording 统一读取和组装；
+// 因此不会改变现有 EMR 表结构、分析链路或确认保存逻辑。
+//
+// 署名：Codex
+// 时间：2026-09-09
+func (h *Handler) GetRecordingEMR(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	recording, err := h.service.GetRecording(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, recording.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.service.ValidateBusinessScopeAccess(r.Context(), claims.UserType, claims.UserID, recording.BusinessScope); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+
+	draft := recording.EMRDraft
+	content := map[string]interface{}{}
+	status := "draft"
+	if draft != nil {
+		if value, ok := draft["emr_content"].(map[string]interface{}); ok {
+			content = value
+		} else if value, ok := draft["content"].(map[string]interface{}); ok {
+			content = value
+		}
+		if confirmed, ok := draft["is_confirmed"].(bool); ok && confirmed {
+			status = "confirmed"
+		}
+	}
+
+	httputil.WriteSuccess(w, RecordingEMRResponse{
+		Status:      status,
+		Content:     content,
+		EMRDraft:    draft,
+		RecordingID: id,
+	})
 }
 
 func (h *Handler) GetTherapistReset(w http.ResponseWriter, r *http.Request) {

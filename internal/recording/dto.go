@@ -28,20 +28,20 @@ type OwnedAudioIngestRequest struct {
 }
 
 type EMRStandardInput struct {
-	SourceKind     string          `json:"source_kind"`
-	SourceID       string          `json:"source_id"`
-	TenantID       int64           `json:"tenant_id"`
-	EncounterID    *int64          `json:"encounter_id,omitempty"`
-	RecordID       *string         `json:"record_id,omitempty"`
-	CustomerID     *int64          `json:"customer_id,omitempty"`
-	Patient        map[string]any  `json:"patient,omitempty"`
-	BatchID        string          `json:"batch_id,omitempty"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
-	FinalText      string          `json:"final_text,omitempty"`
-	CorrectedText  string          `json:"corrected_text,omitempty"`
+	SourceKind     string           `json:"source_kind"`
+	SourceID       string           `json:"source_id"`
+	TenantID       int64            `json:"tenant_id"`
+	EncounterID    *int64           `json:"encounter_id,omitempty"`
+	RecordID       *string          `json:"record_id,omitempty"`
+	CustomerID     *int64           `json:"customer_id,omitempty"`
+	Patient        map[string]any   `json:"patient,omitempty"`
+	BatchID        string           `json:"batch_id,omitempty"`
+	IdempotencyKey string           `json:"idempotency_key,omitempty"`
+	FinalText      string           `json:"final_text,omitempty"`
+	CorrectedText  string           `json:"corrected_text,omitempty"`
 	Segments       []map[string]any `json:"segments,omitempty"`
-	SourceEvidence map[string]any  `json:"source_evidence,omitempty"`
-	CompletedAt    time.Time       `json:"completed_at"`
+	SourceEvidence map[string]any   `json:"source_evidence,omitempty"`
+	CompletedAt    time.Time        `json:"completed_at"`
 }
 
 func (i *EMRStandardInput) StandardInput() map[string]any {
@@ -210,6 +210,20 @@ type RecordingResponse struct {
 	UpdatedAt             string                   `json:"updated_at"`
 }
 
+// RecordingEMRResponse 是录音详情页读取电子病历草稿时使用的兼容响应。
+//
+// 机构端现有页面请求 GET /api/v1/recordings/{id}/emr；该接口复用录音详情
+// 已经组装好的 EMRDraft，不另建一套电子病历数据来源。
+//
+// 署名：Codex
+// 时间：2026-09-09
+type RecordingEMRResponse struct {
+	Status      string                 `json:"status"`
+	Content     map[string]interface{} `json:"content,omitempty"`
+	EMRDraft    map[string]interface{} `json:"emr_draft,omitempty"`
+	RecordingID int64                  `json:"recording_id"`
+}
+
 type TherapistResetResponse struct {
 	RecordingID           int64              `json:"recording_id"`
 	DimensionScores       map[string]float64 `json:"dimension_scores"`
@@ -363,6 +377,42 @@ type GenerateOpeningScriptRequest struct {
 // GenerateOperationsPlanRequest represents the request for generating operations plan
 type GenerateOperationsPlanRequest struct {
 	Context *string `json:"context,omitempty"`
+}
+
+type GenerateFollowUpDraftRequest struct {
+	TenantID     *int64   `json:"tenant_id,omitempty"`
+	RecordingID  *int64   `json:"recording_id,omitempty"`
+	EncounterID  *int64   `json:"encounter_id,omitempty"`
+	DoctorName   string   `json:"doctor_name,omitempty"`
+	PatientName  string   `json:"patient_name,omitempty"`
+	RecordedAt   string   `json:"recorded_at,omitempty"`
+	Transcript   string   `json:"transcript"`
+	Background   string   `json:"background,omitempty"`
+	Instructions []string `json:"instructions,omitempty"`
+}
+
+type GenerateFollowUpTaskItem struct {
+	Title          string   `json:"title"`
+	ContactTime    string   `json:"contact_time"`
+	Purpose        string   `json:"purpose"`
+	Background     string   `json:"background,omitempty"`
+	Script         string   `json:"script"`
+	Evidence       string   `json:"evidence,omitempty"`
+	ContactMethod  string   `json:"contact_method,omitempty"`
+	Executor       string   `json:"executor,omitempty"`
+	EditableFields []string `json:"editable_fields,omitempty"`
+}
+
+type GenerateFollowUpDraftResponse struct {
+	RequestID  string                     `json:"request_id,omitempty"`
+	Provider   string                     `json:"provider,omitempty"`
+	ModelCode  string                     `json:"model_code,omitempty"`
+	PromptCode string                     `json:"prompt_code,omitempty"`
+	RawContent string                     `json:"raw_content,omitempty"`
+	Tasks      []GenerateFollowUpTaskItem `json:"tasks"`
+	Usage      map[string]int             `json:"usage,omitempty"`
+	Cost       map[string]any             `json:"cost,omitempty"`
+	LatencyMS  int                        `json:"latency_ms,omitempty"`
 }
 
 // PlayURLResponse represents the play URL response

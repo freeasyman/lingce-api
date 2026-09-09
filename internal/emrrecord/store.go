@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -412,6 +413,96 @@ func (s *Store) Void(ctx context.Context, tenantID int64, id string) (*Record, e
 		return nil, fmt.Errorf("record not found or cannot be voided")
 	}
 	return s.Get(ctx, tenantID, id)
+}
+
+func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64, versionID string) (*emrtemplate.PublishedVersionDetail, error) {
+	query := `SELECT v.id,v.template_id,v.version_no,v.name,v.document_type,v.visit_type,v.department_id,v.specialty_module,v.print_title,v.description,v.status,v.created_by,v.published_at,v.published_by,v.disabled_at,v.disabled_by,v.created_at
+		FROM emr_template_versions v
+		JOIN emr_templates t ON t.id=v.template_id
+		WHERE v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$2)`
+	var version emrtemplate.TemplateVersion
+	if err := s.pool.QueryRow(ctx, query, versionID, tenantID).Scan(&version.ID, &version.TemplateID, &version.VersionNo, &version.Name, &version.DocumentType, &version.VisitType, &version.DepartmentID, &version.SpecialtyModule, &version.PrintTitle, &version.Description, &version.Status, &version.CreatedBy, &version.PublishedAt, &version.PublishedBy, &version.DisabledAt, &version.DisabledBy, &version.CreatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load emr published template version: %w", err)
+	}
+	if version.Status != "published" {
+		return nil, fmt.Errorf("template version is not published")
+	}
+	sections, err := s.listTemplateSections(ctx, version.ID)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := s.listTemplateBindings(ctx, version.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &emrtemplate.PublishedVersionDetail{
+		Version:  &version,
+		Sections: sections,
+		Bindings: bindings,
+	}, nil
+}
+
+func (s *Store) listTemplateSections(ctx context.Context, versionID string) ([]*emrtemplate.Section, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,template_version_id,code,name,content_category,input_type,is_common,is_visible,display_order,description,options_json,structure_json FROM emr_template_sections WHERE template_version_id=$1 ORDER BY display_order`, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*emrtemplate.Section, 0)
+	for rows.Next() {
+		item := &emrtemplate.Section{}
+		var optionsRaw, structureRaw []byte
+		if err := rows.Scan(&item.ID, &item.TemplateVersionID, &item.Code, &item.Name, &item.ContentCategory, &item.InputType, &item.IsCommon, &item.IsVisible, &item.DisplayOrder, &item.Description, &optionsRaw, &structureRaw); err != nil {
+			return nil, err
+		}
+		item.Options = map[string]any{}
+		item.Structure = map[string]any{}
+		_ = json.Unmarshal(optionsRaw, &item.Options)
+		_ = json.Unmarshal(structureRaw, &item.Structure)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) listTemplateBindings(ctx context.Context, versionID string) ([]*emrtemplate.RequirementBinding, error) {
+	rows, err := s.pool.Query(ctx, `SELECT b.id,b.template_version_id,b.quality_requirement_id,b.execution_mode,b.deadline_action,b.display_order,q.code,q.name,q.rule_type,q.quality_group FROM emr_template_quality_requirements b JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id WHERE b.template_version_id=$1 ORDER BY b.display_order,q.code`, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*emrtemplate.RequirementBinding, 0)
+	for rows.Next() {
+		item := &emrtemplate.RequirementBinding{}
+		if err := rows.Scan(&item.ID, &item.TemplateVersionID, &item.QualityRequirementID, &item.ExecutionMode, &item.DeadlineAction, &item.DisplayOrder, &item.RequirementCode, &item.RequirementName, &item.RequirementRuleType, &item.RequirementQualityGroup); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveAIGeneration(ctx context.Context, recordID, generationKey string, inputBasis, sectionUpdates, sourceEvidence, modelCallReference map[string]any) (*AIGeneration, error) {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO emr_ai_generations
+		(record_id, generation_key, input_basis, section_updates, source_evidence, model_call_reference)
+		VALUES ($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)
+		ON CONFLICT (record_id, generation_key) DO UPDATE SET
+			input_basis = EXCLUDED.input_basis,
+			section_updates = EXCLUDED.section_updates,
+			source_evidence = EXCLUDED.source_evidence,
+			model_call_reference = EXCLUDED.model_call_reference,
+			generated_at = NOW()
+		RETURNING id, generated_at
+	`, recordID, generationKey, encodeObject(inputBasis), encodeObject(sectionUpdates), encodeObject(sourceEvidence), encodeObject(modelCallReference)).Scan(&id, new(time.Time))
+	if err != nil {
+		return nil, fmt.Errorf("save emr ai generation: %w", err)
+	}
+	item := &AIGeneration{ID: id, RecordID: recordID, GenerationKey: generationKey, InputBasis: inputBasis, SectionUpdates: sectionUpdates, SourceEvidence: sourceEvidence, ModelCallReference: modelCallReference}
+	return item, nil
 }
 
 func editable(status string) bool {
