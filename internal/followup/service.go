@@ -33,6 +33,19 @@ type Service struct {
 	pool               *pgxpool.Pool
 }
 
+// InvalidReferenceError 表示请求中的 ID 不存在，或多个 ID 不属于同一条业务链路。
+// 该错误由 Handler 转换为 422 INVALID_REFERENCE，区别于 JSON/字段格式错误。
+//
+// 署名：Codex
+// 时间：2026-09-09
+type InvalidReferenceError struct {
+	Message string
+}
+
+func (e *InvalidReferenceError) Error() string {
+	return e.Message
+}
+
 // NewService 创建随访中心服务。
 //
 // 署名：Codex
@@ -69,7 +82,12 @@ func NewService(llm *llmgateway.Client, pool *pgxpool.Pool) *Service {
 //
 // 署名：Codex
 // 时间：2026-09-09
-func (s *Service) AcceptRequest(_ context.Context, req GenerateRequest) (*GenerateResponse, error) {
+func (s *Service) AcceptRequest(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
+	// ID 关联校验必须在启动异步 LLM 调用之前同步完成，避免接口已经返回
+	// accepted 后才发现录音、Encounter、员工或客户引用错误。
+	if err := s.validateReferences(ctx, req); err != nil {
+		return nil, err
+	}
 	prompt, err := s.loadPrompt()
 	if err != nil {
 		return nil, err
@@ -93,6 +111,60 @@ func (s *Service) AcceptRequest(_ context.Context, req GenerateRequest) (*Genera
 		CustomerName: req.CustomerName,
 		LLMStatus:    "accepted",
 	}, nil
+}
+
+// validateReferences 一次性校验请求中的所有数据库引用及其跨表关系。
+//
+// 不能只分别判断 ID 是否存在：随访任务必须来自同一个租户、同一条录音、
+// 同一个 Encounter，并且录音上的员工和客户也必须与请求体一致。使用一条
+// JOIN 查询可同时保证这些条件，任一条件不满足都会返回 INVALID_REFERENCE。
+//
+// 署名：Codex
+// 时间：2026-09-09
+func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) error {
+	if s.pool == nil {
+		return fmt.Errorf("database pool is not configured")
+	}
+
+	var exists int
+	err := s.pool.QueryRow(ctx, `
+		SELECT 1
+		FROM recordings r
+		JOIN encounters e
+		  ON e.id = r.encounter_id
+		 AND e.tenant_id = r.tenant_id
+		 AND e.source_type = 'recording'
+		 AND e.source_id = r.id
+		JOIN employees emp
+		  ON emp.id = r.employee_id
+		 AND emp.tenant_id = r.tenant_id
+		 AND emp.deleted_at IS NULL
+		JOIN customers c
+		  ON c.id = r.customer_id
+		 AND c.tenant_id = r.tenant_id
+		 AND c.deleted_at IS NULL
+		JOIN tenants t
+		  ON t.id = r.tenant_id
+		 AND t.deleted_at IS NULL
+		WHERE r.id = $1
+		  AND r.tenant_id = $2
+		  AND r.encounter_id = $3
+		  AND r.employee_id = $4
+		  AND r.customer_id = $5
+		LIMIT 1
+	`, req.RecordingID, req.TenantID, req.EncounterID, req.EmployeeID, req.CustomerID).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if err == pgx.ErrNoRows {
+		return &InvalidReferenceError{
+			Message: fmt.Sprintf(
+				"invalid references: tenant_id=%d, recording_id=%d, encounter_id=%d, employee_id=%d, customer_id=%d",
+				req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID,
+			),
+		}
+	}
+	return fmt.Errorf("validate followup references: %w", err)
 }
 
 func (s *Service) processLLM(req GenerateRequest, systemPrompt, userPrompt string) {

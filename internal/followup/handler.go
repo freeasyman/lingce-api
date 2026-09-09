@@ -2,6 +2,7 @@ package followup
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -83,6 +84,11 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.AcceptRequest(r.Context(), req)
 	if err != nil {
+		var invalidRefErr *InvalidReferenceError
+		if errors.As(err, &invalidRefErr) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", invalidRefErr.Error(), nil)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
