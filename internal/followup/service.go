@@ -86,6 +86,10 @@ func (s *Service) AcceptRequest(ctx context.Context, req GenerateRequest) (*Gene
 	// ID 关联校验必须在启动异步 LLM 调用之前同步完成，避免接口已经返回
 	// accepted 后才发现录音、Encounter、员工或客户引用错误。
 	if err := s.validateReferences(ctx, req); err != nil {
+		// 引用校验发生在提示词读取之前，因此这里不伪造提示词内容；
+		// 只把完整请求和校验错误追加到统一调试日志，便于排查 Worker
+		// 传入了哪个 ID、哪组关联不成立。日志写入失败不能改变 422 的业务响应。
+		_ = s.writeLLMLog(req, "", "", nil, nil, err)
 		return nil, err
 	}
 	prompt, err := s.loadPrompt()
