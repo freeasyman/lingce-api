@@ -19,7 +19,7 @@ import (
 // 时间：2026-09-09
 //
 // 说明：
-//  1. 当前阶段只做接收确认，不做任务生成。
+//  1. 接口先同步校验请求引用，再异步调用 LLM 生成随访任务并持久化。
 //  2. 为便于联调，会把接收到的请求内容追加写入随访前端项目的
 //     /Users/yiliiang/Documents/lingce-web/apps/followup/data/log 目录。
 type Service struct {
@@ -185,47 +185,74 @@ func (s *Service) processLLM(req GenerateRequest, systemPrompt, userPrompt strin
 		return
 	}
 	_ = s.writeLLMLog(req, systemPrompt, userPrompt, cfg, resp, nil)
-	if err := s.saveGeneratedTasks(req, resp); err != nil {
-		// LLM 已经成功返回；临时结果文件写入失败只记录错误，不改变模型调用结果。
+	if err := s.saveGeneratedTasks(ctx, req, resp); err != nil {
+		// LLM 已经成功返回；任务入库或结果文件写入失败只记录错误，
+		// 不改变已经返回给 Worker 的 accepted 响应。
 		_ = s.writeLLMLog(req, systemPrompt, userPrompt, cfg, resp, err)
 	}
 }
 
-// saveGeneratedTasks 临时保存 LLM 生成的随访任务结果。
+type generatedTasksPayload struct {
+	Tasks []generatedTask `json:"tasks"`
+}
+
+type generatedTask struct {
+	Title          string   `json:"title"`
+	ContactTime    string   `json:"contact_time"`
+	Purpose        string   `json:"purpose"`
+	Background     string   `json:"background"`
+	Script         string   `json:"script"`
+	Evidence       string   `json:"evidence"`
+	ContactMethod  string   `json:"contact_method"`
+	Executor       string   `json:"executor"`
+	EditableFields []string `json:"editable_fields"`
+}
+
+// saveGeneratedTasks 解析 LLM 生成结果，并把每条任务持久化到 recording_tasks。
 //
-// 当前阶段不直接写 recording_tasks 数据库表，而是把每次成功返回的原始任务
-// JSON 单独追加到 followup_generated_tasks.log。这个函数就是下一步正式入库
-// 的替换位置：后续可以在这里解析 resp.Content、校验任务字段并写入数据库。
+// 一个 LLM 响应中的所有任务使用同一个数据库事务：全部任务都通过校验并成功
+// 插入后才提交，任一条任务失败则全部回滚。入库后仍追加写入独立结果日志，便于
+// 对照数据库记录查看模型原始结果。
 //
 // 署名：Codex
 // 时间：2026-09-09
-func (s *Service) saveGeneratedTasks(req GenerateRequest, response *llmgateway.TextInferenceResponse) error {
+func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse) error {
 	if response == nil {
 		return fmt.Errorf("llm response is nil")
 	}
 	if strings.TrimSpace(response.Content) == "" {
 		return fmt.Errorf("llm response content is empty")
 	}
+
+	payload, err := parseGeneratedTasks(response.Content)
+	if err != nil {
+		return err
+	}
+	if err := s.persistGeneratedTasks(ctx, req, response, payload.Tasks); err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(s.generatedTasksPath), 0o755); err != nil {
 		return fmt.Errorf("create generated tasks log dir: %w", err)
 	}
 
 	entry := map[string]any{
-		"saved_at":        time.Now().Format(time.RFC3339),
-		"tenant_id":       req.TenantID,
-		"recording_id":    req.RecordingID,
-		"encounter_id":    req.EncounterID,
-		"employee_id":     req.EmployeeID,
-		"doctor_name":     req.DoctorName,
-		"customer_id":     req.CustomerID,
-		"customer_name":   req.CustomerName,
-		"recorded_at":     req.RecordedAt,
-		"llm_request_id":  response.RequestID,
-		"provider":        response.Provider,
-		"model_code":      response.ModelCode,
-		"generated_tasks": response.Content,
+		"saved_at":             time.Now().Format(time.RFC3339),
+		"tenant_id":            req.TenantID,
+		"recording_id":         req.RecordingID,
+		"encounter_id":         req.EncounterID,
+		"employee_id":          req.EmployeeID,
+		"doctor_name":          req.DoctorName,
+		"customer_id":          req.CustomerID,
+		"customer_name":        req.CustomerName,
+		"recorded_at":          req.RecordedAt,
+		"llm_request_id":       response.RequestID,
+		"provider":             response.Provider,
+		"model_code":           response.ModelCode,
+		"generated_tasks":      response.Content,
+		"persisted_task_count": len(payload.Tasks),
 	}
-	payload, err := json.MarshalIndent(entry, "", "  ")
+	entryPayload, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal generated tasks: %w", err)
 	}
@@ -236,10 +263,160 @@ func (s *Service) saveGeneratedTasks(req GenerateRequest, response *llmgateway.T
 	}
 	defer file.Close()
 
-	if _, err := fmt.Fprintf(file, "[%s]\n%s\n\n", time.Now().Format(time.RFC3339), strings.TrimSpace(string(payload))); err != nil {
+	if _, err := fmt.Fprintf(file, "[%s]\n%s\n\n", time.Now().Format(time.RFC3339), strings.TrimSpace(string(entryPayload))); err != nil {
 		return fmt.Errorf("write generated tasks file: %w", err)
 	}
 	return nil
+}
+
+// parseGeneratedTasks 解析模型要求的 JSON 结构，并校验入库所需的最小字段。
+//
+// 署名：Codex
+// 时间：2026-09-09
+func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
+	normalized := strings.TrimSpace(content)
+	normalized = strings.TrimPrefix(normalized, "```json")
+	normalized = strings.TrimPrefix(normalized, "```JSON")
+	normalized = strings.TrimSuffix(strings.TrimSpace(normalized), "```")
+	normalized = strings.TrimSpace(normalized)
+
+	var payload generatedTasksPayload
+	if err := json.Unmarshal([]byte(normalized), &payload); err != nil {
+		return nil, fmt.Errorf("decode generated tasks: %w", err)
+	}
+	for index := range payload.Tasks {
+		task := &payload.Tasks[index]
+		if strings.TrimSpace(task.Title) == "" {
+			return nil, fmt.Errorf("generated task %d title is empty", index)
+		}
+		if strings.TrimSpace(task.ContactTime) == "" {
+			return nil, fmt.Errorf("generated task %d contact_time is empty", index)
+		}
+		if _, err := parseContactTime(task.ContactTime); err != nil {
+			return nil, fmt.Errorf("generated task %d contact_time is invalid: %w", index, err)
+		}
+		if strings.TrimSpace(task.Script) == "" {
+			return nil, fmt.Errorf("generated task %d script is empty", index)
+		}
+	}
+	return &payload, nil
+}
+
+func parseContactTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format %q", value)
+}
+
+// persistGeneratedTasks 将已解析的任务写入 recording_tasks。
+//
+// 署名：Codex
+// 时间：2026-09-09
+func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, tasks []generatedTask) error {
+	if s.pool == nil {
+		return fmt.Errorf("database pool is not configured")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin recording task transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for index, task := range tasks {
+		dueAt, err := parseContactTime(task.ContactTime)
+		if err != nil {
+			return fmt.Errorf("parse generated task %d due_at: %w", index, err)
+		}
+		rawTask, err := json.Marshal(task)
+		if err != nil {
+			return fmt.Errorf("marshal generated task %d payload: %w", index, err)
+		}
+		editableFieldsJSON, err := json.Marshal(normalizeEditableFields(task.EditableFields))
+		if err != nil {
+			return fmt.Errorf("marshal generated task %d editable_fields: %w", index, err)
+		}
+		purpose := strings.TrimSpace(task.Purpose)
+		background := strings.TrimSpace(task.Background)
+		description := strings.Join(nonEmptyStrings(purpose, background), "\n")
+		contactReason := purpose
+		if contactReason == "" {
+			contactReason = strings.TrimSpace(task.Title)
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO recording_tasks (
+				tenant_id, recording_id, customer_id, customer_name,
+				title, description, script, status, priority, due_at,
+				source_type, source_detail, contact_reason, encounter_id,
+				purpose, background, evidence, contact_method, doctor_name,
+				editable_fields, generation_source, generation_prompt_version,
+				generation_model, raw_generation_payload
+			)
+			VALUES (
+				$1, $2, $3, $4,
+				$5, NULLIF($6, ''), $7, 'pending', 'medium', $8,
+				'follow_up', 'followup.task-generation', NULLIF($9, ''), $10,
+				NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
+				NULLIF($14, ''), NULLIF($15, ''), $16::jsonb,
+				'ai_generated', $17, NULLIF($18, ''), $19::jsonb
+			)
+		`,
+			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName,
+			strings.TrimSpace(task.Title), description, strings.TrimSpace(task.Script),
+			dueAt, contactReason, req.EncounterID, purpose, background,
+			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
+			strings.TrimSpace(req.DoctorName), editableFieldsJSON, followupPromptVersion,
+			response.ModelCode, rawTask,
+		)
+		if err != nil {
+			return fmt.Errorf("insert generated task %d: %w", index, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit recording task transaction: %w", err)
+	}
+	return nil
+}
+
+func normalizeEditableFields(fields []string) []string {
+	if len(fields) == 0 {
+		return []string{"script", "due_at"}
+	}
+	result := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		switch strings.TrimSpace(field) {
+		case "expression", "script":
+			field = "script"
+		case "contact_time", "due_at":
+			field = "due_at"
+		default:
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		result = append(result, field)
+	}
+	if len(result) == 0 {
+		return []string{"script", "due_at"}
+	}
+	return result
+}
+
+func nonEmptyStrings(values ...string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			result = append(result, strings.TrimSpace(value))
+		}
+	}
+	return result
 }
 
 func (s *Service) loadPrompt() (string, error) {
@@ -279,6 +456,12 @@ type modelConfig struct {
 }
 
 const followupModelFunctionType = "task_script_generation"
+
+// followupPromptVersion 是当前随访提示词文件的版本标识。
+//
+// 署名：Codex
+// 时间：2026-09-09
+const followupPromptVersion = "v1"
 
 func (s *Service) loadModelConfig(ctx context.Context, tenantID int64) (*modelConfig, error) {
 	if s.pool == nil {
