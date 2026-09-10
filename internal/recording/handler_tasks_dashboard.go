@@ -354,6 +354,30 @@ func (h *Handler) CreateEmployeePartnership(w http.ResponseWriter, r *http.Reque
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+
+	// 映射关系中的主责人和执行人必须都是当前租户的有效员工。
+	// 这里在写入 employee_partnerships 之前做跨租户校验，避免仅凭请求体中的
+	// employee_id/partner_id 建立跨租户关系，进而把任务分配给错误的员工。
+	//
+	// 署名：Codex
+	// 时间：2026-09-11
+	var employeeCount int
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM employees
+		WHERE tenant_id = $1
+		  AND id IN ($2, $3)
+		  AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
+		  AND deleted_at IS NULL
+	`, tenantID, req.EmployeeID, req.PartnerID).Scan(&employeeCount); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if employeeCount != 2 {
+		httputil.WriteBadRequest(w, "employee_id and partner_id must be active employees in the same tenant")
+		return
+	}
+
 	var item EmployeePartnership
 	err = h.service.store.pool.QueryRow(r.Context(), `
 		INSERT INTO employee_partnerships (tenant_id, primary_employee_id, partner_employee_id, relationship_type, is_primary, is_active, created_at, updated_at)
@@ -381,6 +405,13 @@ func (h *Handler) CreateEmployeePartnership(w http.ResponseWriter, r *http.Reque
 		WHERE tenant_id = $1
 		  AND status IN ('pending', 'assigned', 'overdue')
 		  AND (assigned_to IS NULL OR assigned_to = $2)
+		  AND EXISTS (
+			SELECT 1
+			FROM recordings r
+			WHERE r.id = recording_tasks.recording_id
+			  AND r.tenant_id = $1
+			  AND r.employee_id = $2
+		  )
 	`, tenantID, req.EmployeeID, req.PartnerID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -413,11 +444,19 @@ func (h *Handler) DeleteEmployeePartnership(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
 	if _, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE employee_partnerships
 		SET is_active = false, updated_at = NOW()
-		WHERE id = $1 AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
-	`, id); err != nil {
+		WHERE id = $1
+		  AND tenant_id = $2
+		  AND lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
+	`, id, tenantID); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

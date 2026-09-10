@@ -727,6 +727,22 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		return err
 	}
 
+	// 随访任务的执行人来自“录音归属员工 → 执行员工”的长期映射。
+	// 这里使用事务连接查询并写入，保证本次任务删除、执行人解析和新任务
+	// 插入处于同一个数据库事务中。没有有效映射时返回 nil，任务仍然生成，
+	// 只是 assigned_to 保持 NULL，交给后续手工分配。
+	//
+	// 署名：Codex
+	// 时间：2026-09-11
+	assigneeID, err := resolveFollowupTaskAssignee(ctx, tx, req.TenantID, req.EmployeeID)
+	if err != nil {
+		return err
+	}
+	var assignedTo any
+	if assigneeID != nil {
+		assignedTo = *assigneeID
+	}
+
 	for index, task := range tasks {
 		dueAt, err := parseContactTime(task.ContactTime)
 		if err != nil {
@@ -754,6 +770,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				title, description, script, status, priority, due_at,
 				source_type, source_detail, contact_reason, encounter_id,
 				purpose, background, evidence, contact_method, doctor_name,
+				assigned_to, assigned_by,
 				editable_fields, generation_source, generation_prompt_version,
 				generation_model, raw_generation_payload
 			)
@@ -762,15 +779,16 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				$5, NULLIF($6, ''), $7, 'pending', 'medium', $8,
 				'follow_up', 'followup.task-generation', NULLIF($9, ''), $10,
 				NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
-				NULLIF($14, ''), NULLIF($15, ''), $16::jsonb,
-				'ai_generated', $17, NULLIF($18, ''), $19::jsonb
+				NULLIF($14, ''), NULLIF($15, ''),
+				$16::integer, CASE WHEN $16::integer IS NULL THEN NULL ELSE 'partnership' END,
+				$17::jsonb, 'ai_generated', $18, NULLIF($19, ''), $20::jsonb
 			)
 		`,
 			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName,
 			strings.TrimSpace(task.Title), description, strings.TrimSpace(task.Script),
 			dueAt, contactReason, req.EncounterID, purpose, background,
 			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
-			strings.TrimSpace(req.DoctorName), editableFieldsJSON, promptVersion,
+			strings.TrimSpace(req.DoctorName), assignedTo, editableFieldsJSON, promptVersion,
 			response.ModelCode, rawTask,
 		)
 		if err != nil {
@@ -781,6 +799,43 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		return fmt.Errorf("commit recording task transaction: %w", err)
 	}
 	return nil
+}
+
+// resolveFollowupTaskAssignee 根据租户和录音归属员工解析随访任务执行人。
+//
+// employee_partnerships 是随访中心与机构端共同复用的映射表：
+// primary_employee_id 表示录音归属员工，partner_employee_id 表示实际执行员工。
+// 查询同时校验租户、映射有效性和执行员工有效性，避免把其他租户或已停用员工
+// 写入 recording_tasks.assigned_to。没有映射不是错误，返回 nil 让任务进入未分配状态。
+//
+// 署名：Codex
+// 时间：2026-09-11
+func resolveFollowupTaskAssignee(ctx context.Context, tx pgx.Tx, tenantID, ownerEmployeeID int64) (*int64, error) {
+	var assigneeID int64
+	err := tx.QueryRow(ctx, `
+		SELECT ep.partner_employee_id
+		FROM employee_partnerships ep
+		JOIN employees e
+		  ON e.id = ep.partner_employee_id
+		 AND e.tenant_id = ep.tenant_id
+		 AND lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes')
+		 AND e.deleted_at IS NULL
+		WHERE ep.tenant_id = $1
+		  AND ep.primary_employee_id = $2
+		  AND COALESCE(ep.is_active, true) = true
+		ORDER BY COALESCE(ep.is_primary, false) DESC, ep.id DESC
+		LIMIT 1
+	`, tenantID, ownerEmployeeID).Scan(&assigneeID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve followup task assignee: %w", err)
+	}
+	if assigneeID <= 0 {
+		return nil, nil
+	}
+	return &assigneeID, nil
 }
 
 // deletePendingFollowupTasks 删除本次重新生成前、当前录音已有的未完成随访任务。
