@@ -314,8 +314,13 @@ func parseContactTime(value string) (time.Time, error) {
 
 // persistGeneratedTasks 将已解析的任务写入 recording_tasks。
 //
+// 只有 LLM 返回内容已经完成 JSON 和字段校验后，才会进入这个事务。
+// 因此 LLM 调用失败、返回空内容或返回非法任务时，不会触碰已有随访任务。
+// 事务内先清理当前录音旧的未完成 follow_up 任务，再插入本次生成的全部任务；
+// 任一删除或插入操作失败都会回滚，避免旧任务被删掉但新任务只写入一部分。
+//
 // 署名：Codex
-// 时间：2026-09-09
+// 时间：2026-09-10
 func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, tasks []generatedTask) error {
 	if s.pool == nil {
 		return fmt.Errorf("database pool is not configured")
@@ -325,6 +330,10 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		return fmt.Errorf("begin recording task transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	if err := deletePendingFollowupTasks(ctx, tx, req.TenantID, req.RecordingID); err != nil {
+		return err
+	}
 
 	for index, task := range tasks {
 		dueAt, err := parseContactTime(task.ContactTime)
@@ -378,6 +387,36 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit recording task transaction: %w", err)
+	}
+	return nil
+}
+
+// deletePendingFollowupTasks 删除本次重新生成前、当前录音已有的未完成随访任务。
+//
+// 删除范围严格限制为：
+//  1. 当前租户；
+//  2. 当前录音；
+//  3. source_type = 'follow_up'；
+//  4. 状态不是 completed 或 canceled。
+//
+// completed 和 canceled 必须保留，因为它们代表已经完成、已经联系或明确
+// 取消/退回的历史业务记录，不能被后续重新分析覆盖。status 为 NULL 的历史
+// 随访任务没有明确完成状态，按未完成处理，避免它们在任务列表中长期残留。
+//
+// 函数接收事务对象而不是连接池，确保删除和后续插入处于同一个事务。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func deletePendingFollowupTasks(ctx context.Context, tx pgx.Tx, tenantID, recordingID int64) error {
+	_, err := tx.Exec(ctx, `
+		DELETE FROM recording_tasks
+		WHERE tenant_id = $1
+		  AND recording_id = $2
+		  AND source_type = 'follow_up'
+		  AND (status IS NULL OR status NOT IN ('completed', 'canceled'))
+	`, tenantID, recordingID)
+	if err != nil {
+		return fmt.Errorf("delete previous pending followup tasks: %w", err)
 	}
 	return nil
 }
