@@ -32,6 +32,16 @@ type Service struct {
 	pool               *pgxpool.Pool
 }
 
+const (
+	followupRunStatusPending    = "pending"
+	followupRunStatusProcessing = "processing"
+	followupRunStatusRetryWait  = "retry_wait"
+	followupRunStatusSucceeded  = "succeeded"
+	followupRunStatusFailed     = "failed"
+
+	followupRunMaxAttempts = 3
+)
+
 // InvalidReferenceError 表示请求中的 ID 不存在，或多个 ID 不属于同一条业务链路。
 // 该错误由 Handler 转换为 422 INVALID_REFERENCE，区别于 JSON/字段格式错误。
 //
@@ -50,7 +60,7 @@ func (e *InvalidReferenceError) Error() string {
 // 署名：Codex
 // 时间：2026-09-09
 func NewService(llm *llmgateway.Client, pool *pgxpool.Pool) *Service {
-	return &Service{
+	service := &Service{
 		// 日志必须落在随访中心前端项目的 data/log 目录，便于在同一个业务目录
 		// 中查看 Worker 传给随访 API 的原始请求内容。这里使用绝对路径，避免
 		// API 从不同工作目录启动时把日志写到错误的 data 目录。
@@ -67,6 +77,8 @@ func NewService(llm *llmgateway.Client, pool *pgxpool.Pool) *Service {
 		llm:  llm,
 		pool: pool,
 	}
+	service.startRetryWorker(context.Background())
+	return service
 }
 
 // AcceptRequest 读取提示词、记录拼接内容，并启动后台 LLM 调用。
@@ -90,21 +102,18 @@ func (s *Service) AcceptRequest(ctx context.Context, req GenerateRequest) (*Gene
 		_ = s.writeLLMLog(req, "", "", nil, nil, err)
 		return nil, err
 	}
-	prompt, err := s.loadPrompt(ctx, req.TenantID)
+	requestID := fmt.Sprintf("followup-%d", time.Now().UnixNano())
+	runID, err := s.createGenerationRun(ctx, requestID, req)
 	if err != nil {
 		return nil, err
 	}
-	userPrompt := renderUserPrompt(prompt.UserPromptTemplate, req)
-	if err := s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, nil, nil, nil); err != nil {
-		return nil, err
-	}
-	go s.processLLM(req, prompt, userPrompt)
+	go s.processRun(context.Background(), runID)
 
 	return &GenerateResponse{
 		Code:         "ACCEPTED",
 		Status:       "accepted",
 		Message:      "received",
-		RequestID:    fmt.Sprintf("followup-%d", time.Now().UnixNano()),
+		RequestID:    requestID,
 		TenantID:     req.TenantID,
 		RecordingID:  req.RecordingID,
 		EncounterID:  req.EncounterID,
@@ -169,25 +178,404 @@ func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) e
 	return fmt.Errorf("validate followup references: %w", err)
 }
 
-func (s *Service) processLLM(req GenerateRequest, prompt *promptConfig, userPrompt string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+// followupGenerationRun 是 followup_generation_runs 表中的一条业务处理记录。
+//
+// 这张表同时承担随访生成的业务日志和补偿队列：API 收到 Worker 请求后
+// 先写入 pending 记录，再异步推进到 processing / succeeded / retry_wait / failed。
+//
+// 署名：Codex
+// 时间：2026-09-10
+type followupGenerationRun struct {
+	ID                 int64
+	RequestID          string
+	Request            GenerateRequest
+	AttemptCount       int
+	MaxAttempts        int
+	PromptVersion      string
+	GenerationModel    string
+	LLMResponsePayload []byte
+}
+
+// createGenerationRun 持久化 Worker 请求，作为随访生成的正式业务日志起点。
+//
+// 只有请求体字段和跨表引用都通过校验后，才会进入本函数。写入成功后接口
+// 才能返回 ACCEPTED，这样即使 API 随后重启，也可以由补偿扫描继续处理。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) createGenerationRun(ctx context.Context, requestID string, req GenerateRequest) (int64, error) {
+	if s.pool == nil {
+		return 0, fmt.Errorf("database pool is not configured")
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return 0, fmt.Errorf("marshal followup generation request: %w", err)
+	}
+	recordedAt, err := parseOptionalRecordedAt(req.RecordedAt)
+	if err != nil {
+		return 0, err
+	}
+
+	var runID int64
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO followup_generation_runs (
+			tenant_id, recording_id, encounter_id, employee_id, customer_id,
+			customer_name, doctor_name, recorded_at, request_id, request_payload,
+			prompt_code, status, attempt_count, max_attempts, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5,
+			NULLIF($6, ''), NULLIF($7, ''), $8, $9, $10::jsonb,
+			$11, 'pending', 0, $12, NOW(), NOW()
+		)
+		RETURNING id
+	`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID,
+		strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.DoctorName), recordedAt,
+		requestID, payload, followupPromptCode, followupRunMaxAttempts).Scan(&runID)
+	if err != nil {
+		return 0, fmt.Errorf("create followup generation run: %w", err)
+	}
+	return runID, nil
+}
+
+// startRetryWorker 启动随访生成补偿扫描。
+//
+// API 进程内每 30 秒扫描一次 pending / retry_wait 记录。它解决的是：
+// 请求已经被 API 接收，但后台 LLM 调用、JSON 解析或任务入库失败后的恢复。
+// 这里不是 Worker 到 API 的 HTTP 重试；Worker 只负责把请求送达。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) startRetryWorker(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.processDueRetryRuns(context.Background())
+			}
+		}
+	}()
+}
+
+// processDueRetryRuns 处理到期的随访补偿记录。
+//
+// pending 代表已接收但尚未处理；retry_wait 代表上次处理失败但仍允许重试。
+// processing 超过 10 分钟则视为 API 进程中断留下的孤儿记录，也重新纳入补偿。
+// 每次只取少量记录，避免补偿扫描长期占用 API 资源。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) processDueRetryRuns(ctx context.Context) {
+	if s.pool == nil {
+		return
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id
+		FROM followup_generation_runs
+		WHERE (
+			(status IN ('pending', 'retry_wait')
+			 AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+			OR
+			(status = 'processing'
+			 AND started_at IS NOT NULL
+			 AND started_at <= NOW() - INTERVAL '10 minutes')
+		)
+		ORDER BY created_at ASC
+		LIMIT 10
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		s.processRun(context.Background(), id)
+	}
+}
+
+// processRun 执行一条随访生成记录。
+//
+// 如果记录中已经保存了 LLM 返回内容，则直接复用该结果解析并入库，不再重复
+// 调用大模型；只有没有 LLM 返回内容时，才重新读取提示词并调用 LLM 网关。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) processRun(parent context.Context, runID int64) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
+
+	run, err := s.claimGenerationRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	req := run.Request
+
+	prompt, userPrompt, err := s.preparePrompt(ctx, req)
+	if err != nil {
+		s.markRunFailure(ctx, run, "", "", nil, nil, "PROMPT_ERROR", err, false)
+		_ = s.writeLLMLog(req, "", "", nil, nil, err)
+		return
+	}
+
 	cfg, err := s.loadModelConfig(ctx, req.TenantID)
 	if err != nil {
+		s.markRunFailure(ctx, run, prompt.Version, "", nil, nil, "MODEL_CONFIG_ERROR", err, false)
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, nil, nil, err)
 		return
 	}
-	resp, err := s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
-	if err != nil {
-		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
-		return
+
+	var resp *llmgateway.TextInferenceResponse
+	if len(run.LLMResponsePayload) > 0 {
+		resp, err = decodeSavedLLMResponse(run.LLMResponsePayload)
+		if err != nil {
+			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, nil, nil, "LLM_RESPONSE_DECODE_ERROR", err, false)
+			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
+			return
+		}
+	} else {
+		resp, err = s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
+		if err != nil {
+			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, nil, nil, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
+			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
+			return
+		}
+		if err := s.saveRunLLMResponse(ctx, run.ID, prompt.Version, cfg.ModelCode, resp); err != nil {
+			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, resp, nil, "RUN_LOG_ERROR", err, true)
+			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
+			return
+		}
 	}
 	_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, nil)
-	if err := s.saveGeneratedTasks(ctx, req, resp, prompt.Version); err != nil {
+	taskCount, generatedPayload, err := s.saveGeneratedTasks(ctx, req, resp, prompt.Version)
+	if err != nil {
 		// LLM 已经成功返回；任务入库或结果文件写入失败只记录错误，
 		// 不改变已经返回给 Worker 的 accepted 响应。
+		s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, resp, generatedPayload, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
+		return
 	}
+	s.markRunSucceeded(ctx, run.ID, prompt.Version, cfg.ModelCode, resp, generatedPayload, taskCount)
+}
+
+// preparePrompt 读取全局提示词和租户覆盖，并渲染本次请求的用户提示词。
+//
+// 该函数集中保留原有提示词读取逻辑，补偿重试和首次处理都使用同一份逻辑，
+// 保证两条路径不会出现提示词来源不一致。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) preparePrompt(ctx context.Context, req GenerateRequest) (*promptConfig, string, error) {
+	prompt, err := s.loadPrompt(ctx, req.TenantID)
+	if err != nil {
+		return nil, "", err
+	}
+	return prompt, renderUserPrompt(prompt.UserPromptTemplate, req), nil
+}
+
+// claimGenerationRun 把一条待处理记录原子地领取为 processing，并读取请求内容。
+//
+// UPDATE 条件限制在 pending/retry_wait 以及超时 processing，避免多个补偿扫描
+// 协程同时处理同一条记录；超时 processing 用于恢复 API 重启或协程中断留下的记录。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) claimGenerationRun(ctx context.Context, runID int64) (*followupGenerationRun, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var run followupGenerationRun
+	var requestPayload []byte
+	var llmResponse []byte
+	err := s.pool.QueryRow(ctx, `
+		UPDATE followup_generation_runs
+		SET status = 'processing', started_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+		  AND (
+			status IN ('pending', 'retry_wait')
+			OR (
+				status = 'processing'
+				AND started_at IS NOT NULL
+				AND started_at <= NOW() - INTERVAL '10 minutes'
+			)
+		  )
+		RETURNING id, request_id, request_payload, attempt_count, max_attempts,
+		          COALESCE(llm_response_payload, '{}'::jsonb)
+	`, runID).Scan(&run.ID, &run.RequestID, &requestPayload, &run.AttemptCount, &run.MaxAttempts, &llmResponse)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(requestPayload, &run.Request); err != nil {
+		return nil, fmt.Errorf("decode followup generation request: %w", err)
+	}
+	if string(llmResponse) != "{}" && string(llmResponse) != "null" {
+		run.LLMResponsePayload = llmResponse
+	}
+	return &run, nil
+}
+
+// saveRunLLMResponse 在业务日志表中保存 LLM 原始响应。
+//
+// 这个保存动作必须发生在任务解析和任务入库之前。后续如果任务入库失败，
+// 补偿逻辑可以复用该响应而不再次消耗 LLM。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) saveRunLLMResponse(ctx context.Context, runID int64, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse) error {
+	if response == nil {
+		return fmt.Errorf("llm response is nil")
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("marshal llm response: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE followup_generation_runs
+		SET prompt_version = $2,
+		    generation_model = NULLIF($3, ''),
+		    llm_request_id = NULLIF($4, ''),
+		    llm_response_payload = $5::jsonb,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, runID, promptVersion, modelCode, response.RequestID, payload)
+	return err
+}
+
+// markRunSucceeded 将业务处理记录标记为成功。
+//
+// 只有任务已经成功写入 recording_tasks 后才进入 succeeded。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) markRunSucceeded(ctx context.Context, runID int64, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, taskCount int) {
+	var responsePayload []byte
+	responseRequestID := ""
+	if response != nil {
+		responsePayload, _ = json.Marshal(response)
+		responseRequestID = response.RequestID
+	}
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE followup_generation_runs
+		SET status = 'succeeded',
+		    prompt_version = $2,
+		    generation_model = NULLIF($3, ''),
+		    llm_request_id = NULLIF($4, ''),
+		    llm_response_payload = COALESCE(NULLIF($5::jsonb, 'null'::jsonb), llm_response_payload),
+		    generated_tasks_payload = NULLIF($6::jsonb, 'null'::jsonb),
+		    persisted_task_count = $7,
+		    completed_at = NOW(),
+		    next_retry_at = NULL,
+		    last_error_code = NULL,
+		    last_error_message = NULL,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, runID, promptVersion, modelCode, responseRequestID, responsePayload, generatedPayload, taskCount)
+}
+
+// markRunFailure 记录失败并决定进入 retry_wait 或最终 failed。
+//
+// retryable=true 且未超过 max_attempts 时，使用递增退避安排下一次扫描；
+// 不可重试错误或超过次数则直接进入 failed。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) markRunFailure(ctx context.Context, run *followupGenerationRun, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, code string, cause error, retryable bool) {
+	if run == nil || s.pool == nil {
+		return
+	}
+	nextAttempt := run.AttemptCount + 1
+	status := followupRunStatusFailed
+	var nextRetry any
+	if retryable && nextAttempt < run.MaxAttempts {
+		status = followupRunStatusRetryWait
+		nextRetry = time.Now().Add(time.Duration(nextAttempt*nextAttempt) * time.Minute)
+	}
+	message := ""
+	if cause != nil {
+		message = cause.Error()
+	}
+	var responsePayload []byte
+	responseRequestID := ""
+	if response != nil {
+		responsePayload, _ = json.Marshal(response)
+		responseRequestID = response.RequestID
+	}
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE followup_generation_runs
+		SET status = $2,
+		    attempt_count = $3,
+		    prompt_version = NULLIF($4, ''),
+		    generation_model = NULLIF($5, ''),
+		    llm_request_id = NULLIF($6, ''),
+		    llm_response_payload = COALESCE(NULLIF($7::jsonb, 'null'::jsonb), llm_response_payload),
+		    generated_tasks_payload = COALESCE(NULLIF($8::jsonb, 'null'::jsonb), generated_tasks_payload),
+		    next_retry_at = $9,
+		    last_error_code = NULLIF($10, ''),
+		    last_error_message = NULLIF($11, ''),
+		    failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, run.ID, status, nextAttempt, promptVersion, modelCode, responseRequestID,
+		responsePayload, generatedPayload, nextRetry, code, message)
+}
+
+func decodeSavedLLMResponse(payload []byte) (*llmgateway.TextInferenceResponse, error) {
+	var response llmgateway.TextInferenceResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return nil, fmt.Errorf("decode saved llm response: %w", err)
+	}
+	return &response, nil
+}
+
+func parseOptionalRecordedAt(value string) (any, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid recorded_at %q", value)
+}
+
+func classifyFollowupErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "timeout"), strings.Contains(message, "context deadline"), strings.Contains(message, "context canceled"):
+		return "TIMEOUT"
+	case strings.Contains(message, "insert generated task"), strings.Contains(message, "recording task"):
+		return "TASK_PERSIST_ERROR"
+	case strings.Contains(message, "decode generated tasks"):
+		return "LLM_OUTPUT_INVALID"
+	default:
+		return "PROCESSING_ERROR"
+	}
+}
+
+func isRetryableFollowupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "timeout") ||
+		strings.Contains(message, "context deadline") ||
+		strings.Contains(message, "context canceled") ||
+		strings.Contains(message, "connection") ||
+		strings.Contains(message, "temporarily unavailable") ||
+		strings.Contains(message, "insert generated task") ||
+		strings.Contains(message, "recording task")
 }
 
 type generatedTasksPayload struct {
@@ -210,28 +598,34 @@ type generatedTask struct {
 //
 // 一个 LLM 响应中的所有任务使用同一个数据库事务：全部任务都通过校验并成功
 // 插入后才提交，任一条任务失败则全部回滚。入库后仍追加写入独立结果日志，便于
-// 对照数据库记录查看模型原始结果。
+// 对照数据库记录查看模型原始结果。返回任务数量和结构化任务载荷，供
+// followup_generation_runs 保存正式业务处理结果。
 //
 // 署名：Codex
 // 时间：2026-09-09
-func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, promptVersion string) error {
+func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, promptVersion string) (int, []byte, error) {
 	if response == nil {
-		return fmt.Errorf("llm response is nil")
+		return 0, nil, fmt.Errorf("llm response is nil")
 	}
 	if strings.TrimSpace(response.Content) == "" {
-		return fmt.Errorf("llm response content is empty")
+		return 0, nil, fmt.Errorf("llm response content is empty")
 	}
 
 	payload, err := parseGeneratedTasks(response.Content)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	if err := s.persistGeneratedTasks(ctx, req, response, promptVersion, payload.Tasks); err != nil {
-		return err
+		rawPayload, _ := json.Marshal(payload)
+		return 0, rawPayload, err
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("marshal generated tasks payload: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(s.generatedTasksPath), 0o755); err != nil {
-		return fmt.Errorf("create generated tasks log dir: %w", err)
+		return 0, rawPayload, fmt.Errorf("create generated tasks log dir: %w", err)
 	}
 
 	entry := map[string]any{
@@ -252,19 +646,19 @@ func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, r
 	}
 	entryPayload, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal generated tasks: %w", err)
+		return 0, rawPayload, fmt.Errorf("marshal generated tasks: %w", err)
 	}
 
 	file, err := os.OpenFile(s.generatedTasksPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("open generated tasks file: %w", err)
+		return 0, rawPayload, fmt.Errorf("open generated tasks file: %w", err)
 	}
 	defer file.Close()
 
 	if _, err := fmt.Fprintf(file, "[%s]\n%s\n\n", time.Now().Format(time.RFC3339), strings.TrimSpace(string(entryPayload))); err != nil {
-		return fmt.Errorf("write generated tasks file: %w", err)
+		return 0, rawPayload, fmt.Errorf("write generated tasks file: %w", err)
 	}
-	return nil
+	return len(payload.Tasks), rawPayload, nil
 }
 
 // parseGeneratedTasks 解析模型要求的 JSON 结构，并校验入库所需的最小字段。
@@ -566,12 +960,6 @@ type modelConfig struct {
 }
 
 const followupModelFunctionType = "task_script_generation"
-
-// followupPromptVersion 是当前随访提示词文件的版本标识。
-//
-// 署名：Codex
-// 时间：2026-09-09
-const followupPromptVersion = "v1"
 
 func (s *Service) loadModelConfig(ctx context.Context, tenantID int64) (*modelConfig, error) {
 	if s.pool == nil {
