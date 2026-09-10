@@ -2727,11 +2727,18 @@ func (s *Store) GetRecordingPromptByCode(ctx context.Context, code string) (*Rec
 	return &p, nil
 }
 
-// CreateRecordingPrompt creates a new recording prompt
+// CreateRecordingPrompt creates a new recording prompt.
+//
+// usage_count 在数据库中是 NOT NULL 字段，表示该提示词被使用的次数。
+// 新建模板尚未被调用，因此必须显式写入 0；不能依赖数据库默认值，
+// 因为现有开发库该字段没有默认值。
+//
+// 署名：Codex
+// 时间：2026-09-10
 func (s *Store) CreateRecordingPrompt(ctx context.Context, req CreateRecordingPromptRequest) (*RecordingPrompt, error) {
 	query := `
-		INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, created_by, updated_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 1, NOW(), NOW())
+		INSERT INTO recording_analysis_prompts (code, name, description, category, system_prompt, user_prompt_template, output_schema, version, is_active, usage_count, created_by, updated_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 1, 1, NOW(), NOW())
 		RETURNING id, code, name, description, COALESCE(category, 'default') AS category,
 		          COALESCE(system_prompt, '') AS system_prompt,
 		          user_prompt_template AS prompt_text, COALESCE(output_schema, '{}'::json) AS output_schema,

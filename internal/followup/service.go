@@ -28,7 +28,6 @@ type Service struct {
 	// 后续正式入库时，saveGeneratedTasks 可以替换为数据库写入函数，
 	// 不影响提示词和模型调用链路。
 	generatedTasksPath string
-	promptPath         string
 	llm                *llmgateway.Client
 	pool               *pgxpool.Pool
 }
@@ -65,9 +64,8 @@ func NewService(llm *llmgateway.Client, pool *pgxpool.Pool) *Service {
 			"log",
 			"followup_generated_tasks.log",
 		),
-		promptPath: "/Users/yiliiang/Documents/lingce-web/apps/followup/data/followup-prompt.txt",
-		llm:        llm,
-		pool:       pool,
+		llm:  llm,
+		pool: pool,
 	}
 }
 
@@ -92,12 +90,12 @@ func (s *Service) AcceptRequest(ctx context.Context, req GenerateRequest) (*Gene
 		_ = s.writeLLMLog(req, "", "", nil, nil, err)
 		return nil, err
 	}
-	prompt, err := s.loadPrompt()
+	prompt, err := s.loadPrompt(ctx, req.TenantID)
 	if err != nil {
 		return nil, err
 	}
-	userPrompt := buildUserPrompt(req)
-	if err := s.writeLLMLog(req, prompt, userPrompt, nil, nil, nil); err != nil {
+	userPrompt := renderUserPrompt(prompt.UserPromptTemplate, req)
+	if err := s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, nil, nil, nil); err != nil {
 		return nil, err
 	}
 	go s.processLLM(req, prompt, userPrompt)
@@ -171,24 +169,24 @@ func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) e
 	return fmt.Errorf("validate followup references: %w", err)
 }
 
-func (s *Service) processLLM(req GenerateRequest, systemPrompt, userPrompt string) {
+func (s *Service) processLLM(req GenerateRequest, prompt *promptConfig, userPrompt string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cfg, err := s.loadModelConfig(ctx, req.TenantID)
 	if err != nil {
-		_ = s.writeLLMLog(req, systemPrompt, userPrompt, nil, nil, err)
+		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, nil, nil, err)
 		return
 	}
-	resp, err := s.callLLM(ctx, req, systemPrompt, userPrompt, cfg)
+	resp, err := s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
 	if err != nil {
-		_ = s.writeLLMLog(req, systemPrompt, userPrompt, cfg, nil, err)
+		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
 		return
 	}
-	_ = s.writeLLMLog(req, systemPrompt, userPrompt, cfg, resp, nil)
-	if err := s.saveGeneratedTasks(ctx, req, resp); err != nil {
+	_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, nil)
+	if err := s.saveGeneratedTasks(ctx, req, resp, prompt.Version); err != nil {
 		// LLM 已经成功返回；任务入库或结果文件写入失败只记录错误，
 		// 不改变已经返回给 Worker 的 accepted 响应。
-		_ = s.writeLLMLog(req, systemPrompt, userPrompt, cfg, resp, err)
+		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
 	}
 }
 
@@ -216,7 +214,7 @@ type generatedTask struct {
 //
 // 署名：Codex
 // 时间：2026-09-09
-func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse) error {
+func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, promptVersion string) error {
 	if response == nil {
 		return fmt.Errorf("llm response is nil")
 	}
@@ -228,7 +226,7 @@ func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, r
 	if err != nil {
 		return err
 	}
-	if err := s.persistGeneratedTasks(ctx, req, response, payload.Tasks); err != nil {
+	if err := s.persistGeneratedTasks(ctx, req, response, promptVersion, payload.Tasks); err != nil {
 		return err
 	}
 
@@ -321,7 +319,7 @@ func parseContactTime(value string) (time.Time, error) {
 //
 // 署名：Codex
 // 时间：2026-09-10
-func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, tasks []generatedTask) error {
+func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest, response *llmgateway.TextInferenceResponse, promptVersion string, tasks []generatedTask) error {
 	if s.pool == nil {
 		return fmt.Errorf("database pool is not configured")
 	}
@@ -378,7 +376,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			strings.TrimSpace(task.Title), description, strings.TrimSpace(task.Script),
 			dueAt, contactReason, req.EncounterID, purpose, background,
 			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
-			strings.TrimSpace(req.DoctorName), editableFieldsJSON, followupPromptVersion,
+			strings.TrimSpace(req.DoctorName), editableFieldsJSON, promptVersion,
 			response.ModelCode, rawTask,
 		)
 		if err != nil {
@@ -458,33 +456,106 @@ func nonEmptyStrings(values ...string) []string {
 	return result
 }
 
-func (s *Service) loadPrompt() (string, error) {
-	prompt, err := os.ReadFile(s.promptPath)
-	if err != nil {
-		return "", fmt.Errorf("read followup prompt %q: %w", s.promptPath, err)
-	}
-	if strings.TrimSpace(string(prompt)) == "" {
-		return "", fmt.Errorf("followup prompt %q is empty", s.promptPath)
-	}
-	return strings.TrimSpace(string(prompt)), nil
+// promptConfig 是运行时从提示词管理表读取的随访提示词。
+//
+// 全局记录提供完整默认提示词；租户配置只对非空字段做覆盖，保持系统
+// 现有 recording_analysis_tenant_configs 的运行规则不变。
+//
+// 署名：Codex
+// 时间：2026-09-10
+type promptConfig struct {
+	SystemPrompt       string
+	UserPromptTemplate string
+	Version            string
 }
 
-func buildUserPrompt(req GenerateRequest) string {
-	return fmt.Sprintf(
-		"本次输入的客观信息：\n"+
-			"tenant_id: %d\nrecording_id: %d\nencounter_id: %d\nemployee_id: %d\n"+
-			"doctor_name: %s\ncustomer_id: %d\ncustomer_name: %s\nrecorded_at: %s\n\n"+
-			"以下是一次 Encounter 的完整清洗后转写：\n%s",
-		req.TenantID,
-		req.RecordingID,
-		req.EncounterID,
-		req.EmployeeID,
-		req.DoctorName,
-		req.CustomerID,
-		req.CustomerName,
-		req.RecordedAt,
-		req.CleanedTranscript,
+const followupPromptCode = "followup_task_generation"
+
+// loadPrompt 从现有提示词管理表读取随访提示词。
+//
+// 读取顺序：
+//  1. recording_analysis_prompts 中的全局激活记录；
+//  2. 当前租户 recording_analysis_tenant_configs 中的激活覆盖；
+//  3. 租户字段为空时保留全局字段。
+//
+// 这里不读取 data 目录下的文本文件。文本文件仅作为提示词迁移和人工备份。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func (s *Service) loadPrompt(ctx context.Context, tenantID int64) (*promptConfig, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+
+	var cfg promptConfig
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(system_prompt, ''), COALESCE(user_prompt_template, ''),
+		       COALESCE(version, 'v1')
+		FROM recording_analysis_prompts
+		WHERE code = $1 AND is_active = true
+		LIMIT 1
+	`, followupPromptCode).Scan(&cfg.SystemPrompt, &cfg.UserPromptTemplate, &cfg.Version)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("followup prompt %q not found or inactive", followupPromptCode)
+		}
+		return nil, fmt.Errorf("load global followup prompt: %w", err)
+	}
+	var customSystemPrompt, customUserPromptTemplate, customOutputSchema, additionalInstructions *string
+	err = s.pool.QueryRow(ctx, `
+		SELECT custom_system_prompt, custom_user_prompt_template,
+		       custom_output_schema, additional_instructions
+		FROM recording_analysis_tenant_configs
+		WHERE tenant_id = $1 AND prompt_code = $2 AND is_enabled = true
+		ORDER BY priority DESC, id DESC
+		LIMIT 1
+	`, tenantID, followupPromptCode).Scan(
+		&customSystemPrompt, &customUserPromptTemplate, &customOutputSchema, &additionalInstructions,
 	)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("load tenant followup prompt override: %w", err)
+	}
+	if err == nil {
+		if customSystemPrompt != nil && strings.TrimSpace(*customSystemPrompt) != "" {
+			cfg.SystemPrompt = strings.TrimSpace(*customSystemPrompt)
+		}
+		if customUserPromptTemplate != nil && strings.TrimSpace(*customUserPromptTemplate) != "" {
+			cfg.UserPromptTemplate = strings.TrimSpace(*customUserPromptTemplate)
+		}
+		if additionalInstructions != nil && strings.TrimSpace(*additionalInstructions) != "" {
+			cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt) + "\n\n" + strings.TrimSpace(*additionalInstructions)
+		}
+		// custom_output_schema 当前由提示词管理模块保存，但随访 API 的任务
+		// 解析仍使用固定的 tasks JSON 结构，因此这里不把它当作执行参数。
+		_ = customOutputSchema
+	}
+	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.UserPromptTemplate) == "" {
+		return nil, fmt.Errorf("followup prompt %q has empty system or user prompt", followupPromptCode)
+	}
+	return &cfg, nil
+}
+
+// renderUserPrompt 将请求字段填入数据库中的用户提示词模板。
+//
+// 署名：Codex
+// 时间：2026-09-10
+func renderUserPrompt(template string, req GenerateRequest) string {
+	values := map[string]string{
+		"tenant_id":          fmt.Sprintf("%d", req.TenantID),
+		"recording_id":       fmt.Sprintf("%d", req.RecordingID),
+		"encounter_id":       fmt.Sprintf("%d", req.EncounterID),
+		"employee_id":        fmt.Sprintf("%d", req.EmployeeID),
+		"doctor_name":        req.DoctorName,
+		"customer_id":        fmt.Sprintf("%d", req.CustomerID),
+		"customer_name":      req.CustomerName,
+		"recorded_at":        req.RecordedAt,
+		"cleaned_transcript": req.CleanedTranscript,
+	}
+	result := template
+	for key, value := range values {
+		result = strings.ReplaceAll(result, "{{"+key+"}}", value)
+	}
+	return strings.TrimSpace(result)
 }
 
 type modelConfig struct {
@@ -592,7 +663,8 @@ func (s *Service) writeLLMLog(req GenerateRequest, systemPrompt, userPrompt stri
 
 	entry := map[string]any{
 		"request":       req,
-		"prompt_path":   s.promptPath,
+		"prompt_source": "recording_analysis_prompts",
+		"prompt_code":   followupPromptCode,
 		"system_prompt": systemPrompt,
 		"user_prompt":   userPrompt,
 		"logged_at":     time.Now().Format(time.RFC3339),
