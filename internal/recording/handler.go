@@ -132,6 +132,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/employee-partnerships", Handler: h.ListEmployeePartnerships, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/employee-partnerships", Handler: h.CreateEmployeePartnership, Auth: true},
 		{Method: "DELETE", Path: "/api/v1/recording-tasks/employee-partnerships/{id}", Handler: h.DeleteEmployeePartnership, Auth: true},
+		// 随访数据可见范围配置接口：只维护查看人到数据归属人的关系。
+		// 署名：Codex
+		// 时间：2026-09-11
+		{Method: "GET", Path: "/api/v1/followup/data-scopes", Handler: h.ListFollowupDataScopes, Auth: true},
+		{Method: "POST", Path: "/api/v1/followup/data-scopes", Handler: h.CreateFollowupDataScope, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/followup/data-scopes/{id}", Handler: h.DeleteFollowupDataScope, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/dashboard/daily-report", Handler: h.GetDailyReport, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/dashboard/diagnosis", Handler: h.GetOperationsDiagnosis, Auth: true},
 		{Method: "PATCH", Path: "/api/v1/recordings/dashboard/target", Handler: h.UpdateMonthlyTarget, Auth: true},
@@ -787,6 +793,9 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.TenantIDs = scope.TenantIDs
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		req.ViewerEmployeeID = &claims.UserID
+	}
 
 	// Parse filters
 	if recordingIDStr := r.URL.Query().Get("recording_id"); recordingIDStr != "" {
@@ -841,6 +850,22 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, tenantID, claims.UserID)
+		if visibilityErr != nil {
+			httputil.WriteInternalError(w, visibilityErr.Error())
+			return
+		}
+		if !allowed {
+			httputil.WriteForbidden(w, "task visibility denied")
+			return
+		}
 	}
 
 	httputil.WriteSuccess(w, task)

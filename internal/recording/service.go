@@ -590,7 +590,7 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 			TertiaryAction:  "查看标杆",
 		})
 	}
-	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil)
+	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil, nil)
 	overdueDetails, _ := s.listOverdueTaskAttentionRows(ctx, tenantID, 3)
 	if taskStats != nil && taskStats.OverdueTasks > 0 {
 		evidence := []string{"存在超时未执行任务，可能导致跟进节奏断裂"}
@@ -2085,15 +2085,15 @@ func (s *Service) GenerateFollowUpDraft(ctx context.Context, req GenerateFollowU
 {"tasks":[{"title":"","contact_time":"","purpose":"","background":"","script":"","evidence":"","contact_method":"","executor":"","editable_fields":["expression","contact_time"]}]}
 `)
 	userPayload := map[string]any{
-		"tenant_id":     tenantID,
-		"recording_id":  recordingID,
-		"encounter_id":  req.EncounterID,
-		"doctor_name":   strings.TrimSpace(req.DoctorName),
-		"patient_name":  strings.TrimSpace(req.PatientName),
-		"recorded_at":   strings.TrimSpace(req.RecordedAt),
-		"background":    strings.TrimSpace(req.Background),
-		"transcript":    transcript,
-		"instructions":  req.Instructions,
+		"tenant_id":    tenantID,
+		"recording_id": recordingID,
+		"encounter_id": req.EncounterID,
+		"doctor_name":  strings.TrimSpace(req.DoctorName),
+		"patient_name": strings.TrimSpace(req.PatientName),
+		"recorded_at":  strings.TrimSpace(req.RecordedAt),
+		"background":   strings.TrimSpace(req.Background),
+		"transcript":   transcript,
+		"instructions": req.Instructions,
 	}
 	userJSON, _ := json.MarshalIndent(userPayload, "", "  ")
 
@@ -2144,12 +2144,12 @@ func (s *Service) GenerateFollowUpDraft(ctx context.Context, req GenerateFollowU
 		return nil, fmt.Errorf("follow-up draft returned no tasks")
 	}
 	return &GenerateFollowUpDraftResponse{
-		RequestID: resp.RequestID,
-		Provider:  resp.Provider,
-		ModelCode: resp.ModelCode,
+		RequestID:  resp.RequestID,
+		Provider:   resp.Provider,
+		ModelCode:  resp.ModelCode,
 		PromptCode: "followup_task_generation_v1",
 		RawContent: resp.Content,
-		Tasks:     payload.Tasks,
+		Tasks:      payload.Tasks,
 		Usage: map[string]int{
 			"input_tokens":  resp.Usage.InputTokens,
 			"output_tokens": resp.Usage.OutputTokens,
@@ -4958,6 +4958,13 @@ func (s *Service) GetTask(ctx context.Context, id int64) (*TaskResponse, error) 
 	return toTaskResponse(task), nil
 }
 
+// CanViewFollowupTask 对外提供任务可见范围校验，供移动端等其他入口复用。
+// 署名：Codex
+// 时间：2026-09-11
+func (s *Service) CanViewFollowupTask(ctx context.Context, taskID, tenantID, viewerID int64) (bool, error) {
+	return s.store.CanViewFollowupTask(ctx, taskID, tenantID, viewerID)
+}
+
 // CompleteTask marks a task as completed
 func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64, req CompleteTaskRequest) error {
 	task, err := s.store.GetTaskByID(ctx, id)
@@ -5038,13 +5045,13 @@ func (s *Service) appendCustomerInteraction(ctx context.Context, tenantID, custo
 }
 
 // GetTaskStats retrieves task statistics
-func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo *int64) (*RecordingTaskStatsResponse, error) {
-	return s.store.GetTaskStats(ctx, tenantID, tenantIDs, assignedTo)
+func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo, viewerEmployeeID *int64) (*RecordingTaskStatsResponse, error) {
+	return s.store.GetTaskStats(ctx, tenantID, tenantIDs, assignedTo, viewerEmployeeID)
 }
 
 // GetDailyBriefing retrieves a daily briefing
-func (s *Service) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time) (*DailyBriefingResponse, error) {
-	return s.store.GetDailyBriefing(ctx, tenantID, assignedTo, date)
+func (s *Service) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time, viewerEmployeeID *int64) (*DailyBriefingResponse, error) {
+	return s.store.GetDailyBriefing(ctx, tenantID, assignedTo, date, viewerEmployeeID)
 }
 
 // Recording Prompt Services

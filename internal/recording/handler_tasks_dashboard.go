@@ -12,6 +12,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/jackc/pgx/v5"
 )
 
 // Recording Task Advanced Handlers
@@ -46,7 +47,11 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 	if scope.TenantID != nil {
 		tenantID = *scope.TenantID
 	}
-	stats, err := h.service.GetTaskStats(r.Context(), tenantID, scope.TenantIDs, assignedTo)
+	var viewerEmployeeID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		viewerEmployeeID = &claims.UserID
+	}
+	stats, err := h.service.GetTaskStats(r.Context(), tenantID, scope.TenantIDs, assignedTo, viewerEmployeeID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -88,7 +93,11 @@ func (h *Handler) GetDailyBriefing(w http.ResponseWriter, r *http.Request) {
 		assignedTo = &claims.UserID
 	}
 
-	briefing, err := h.service.GetDailyBriefing(r.Context(), tenantID, assignedTo, targetDate)
+	var viewerEmployeeID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		viewerEmployeeID = &claims.UserID
+	}
+	briefing, err := h.service.GetDailyBriefing(r.Context(), tenantID, assignedTo, targetDate, viewerEmployeeID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -126,10 +135,11 @@ func (h *Handler) GetMyTasks(w http.ResponseWriter, r *http.Request) {
 
 	assignedTo := claims.UserID
 	req := TaskListRequest{
-		TenantID:   &tenantID,
-		AssignedTo: &assignedTo,
-		Page:       page,
-		PageSize:   pageSize,
+		TenantID:         &tenantID,
+		AssignedTo:       &assignedTo,
+		ViewerEmployeeID: &claims.UserID,
+		Page:             page,
+		PageSize:         pageSize,
 	}
 
 	tasks, total, err := h.service.ListRecordingTasks(r.Context(), req)
@@ -179,6 +189,9 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 	} else {
 		req.TenantIDs = scope.TenantIDs
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		req.ViewerEmployeeID = &claims.UserID
+	}
 	tasks, _, err := h.service.ListRecordingTasks(r.Context(), req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -186,6 +199,103 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 	}
 
 	httputil.WriteSuccess(w, tasks)
+}
+
+// ListFollowupDataScopes 返回当前租户的随访数据查看关系。
+// 署名：Codex
+// 时间：2026-09-11
+func (h *Handler) ListFollowupDataScopes(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+	items, err := h.service.store.ListFollowupDataScopes(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// CreateFollowupDataScope 创建一条查看员工数据的关系。
+// 署名：Codex
+// 时间：2026-09-11
+func (h *Handler) CreateFollowupDataScope(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+	var req CreateFollowupDataScopeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	item, err := h.service.store.CreateFollowupDataScope(r.Context(), tenantID, req.ViewerEmployeeID, req.TargetEmployeeID, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// DeleteFollowupDataScope 删除一条查看员工数据的关系。
+// 署名：Codex
+// 时间：2026-09-11
+func (h *Handler) DeleteFollowupDataScope(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid scope ID")
+		return
+	}
+	if err := h.service.store.DeleteFollowupDataScope(r.Context(), tenantID, id); err != nil {
+		if err == pgx.ErrNoRows {
+			httputil.WriteNotFound(w, "scope not found")
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "scope deleted"})
 }
 
 func getTaskTenantIDFromClaimsOrQuery(claims *auth.Claims, r *http.Request) (int64, error) {

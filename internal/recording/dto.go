@@ -1054,20 +1054,24 @@ type DailyBriefingResponse struct {
 
 // TaskListRequest represents the request for listing tasks
 type TaskListRequest struct {
-	TenantID    *int64      `json:"tenant_id,omitempty"`
-	TenantIDs   []int64     `json:"tenant_ids,omitempty"`
-	RecordingID *int64      `json:"recording_id,omitempty"`
-	AssignedTo  *int64      `json:"assigned_to,omitempty"`
-	Status      *TaskStatus `json:"status,omitempty"`
-	TaskType    *TaskType   `json:"task_type,omitempty"`
-	Keyword     *string     `json:"keyword,omitempty"`
-	Priority    *string     `json:"priority,omitempty"`
-	DueBucket   *string     `json:"due_bucket,omitempty"`
-	Sort        *string     `json:"sort,omitempty"`
-	StartDate   *time.Time  `json:"start_date,omitempty"`
-	EndDate     *time.Time  `json:"end_date,omitempty"`
-	Page        int         `json:"page"`
-	PageSize    int         `json:"page_size"`
+	TenantID  *int64  `json:"tenant_id,omitempty"`
+	TenantIDs []int64 `json:"tenant_ids,omitempty"`
+	// ViewerEmployeeID 用于随访数据可见范围过滤；为空表示沿用原有租户级查询。
+	// 署名：Codex
+	// 时间：2026-09-11
+	ViewerEmployeeID *int64      `json:"viewer_employee_id,omitempty"`
+	RecordingID      *int64      `json:"recording_id,omitempty"`
+	AssignedTo       *int64      `json:"assigned_to,omitempty"`
+	Status           *TaskStatus `json:"status,omitempty"`
+	TaskType         *TaskType   `json:"task_type,omitempty"`
+	Keyword          *string     `json:"keyword,omitempty"`
+	Priority         *string     `json:"priority,omitempty"`
+	DueBucket        *string     `json:"due_bucket,omitempty"`
+	Sort             *string     `json:"sort,omitempty"`
+	StartDate        *time.Time  `json:"start_date,omitempty"`
+	EndDate          *time.Time  `json:"end_date,omitempty"`
+	Page             int         `json:"page"`
+	PageSize         int         `json:"page_size"`
 }
 
 // TaskResponse represents a task response

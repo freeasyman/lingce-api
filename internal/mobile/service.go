@@ -84,12 +84,16 @@ func (s *Service) ListTasks(ctx context.Context, claims *auth.Claims, params Tas
 		return s.listTodoTasks(ctx, me, params)
 	case "done":
 		done := recording.TaskStatusCompleted
+		// 移动端任务列表也必须带上查看人 ID，确保移动端与 Web 端使用同一套可见范围规则。
+		// 署名：Codex
+		// 时间：2026-09-11
 		req := recording.TaskListRequest{
-			TenantID:   &me.TenantID,
-			AssignedTo: &me.ID,
-			Status:     &done,
-			Page:       params.Page,
-			PageSize:   params.PageSize,
+			TenantID:         &me.TenantID,
+			AssignedTo:       &me.ID,
+			ViewerEmployeeID: &me.ID,
+			Status:           &done,
+			Page:             params.Page,
+			PageSize:         params.PageSize,
 		}
 		s.applyTaskFilters(&req, params)
 		return s.recordingService.ListRecordingTasks(ctx, req)
@@ -106,6 +110,16 @@ func (s *Service) GetTask(ctx context.Context, claims *auth.Claims, taskID int64
 	task, err := s.recordingService.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
+	}
+	// 详情接口单独执行可见范围校验，防止绕过列表直接通过任务 ID 读取其他员工的数据。
+	// 署名：Codex
+	// 时间：2026-09-11
+	allowed, err := s.recordingService.CanViewFollowupTask(ctx, taskID, me.TenantID, me.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("task visibility denied")
 	}
 	if err := ensureTaskOwnedByEmployee(task, me); err != nil {
 		return nil, err
@@ -204,11 +218,12 @@ func (s *Service) countTasks(ctx context.Context, claims *auth.Claims, status re
 		return 0, err
 	}
 	_, total, err := s.recordingService.ListRecordingTasks(ctx, recording.TaskListRequest{
-		TenantID:   &me.TenantID,
-		AssignedTo: &me.ID,
-		Status:     &status,
-		Page:       1,
-		PageSize:   1,
+		TenantID:         &me.TenantID,
+		AssignedTo:       &me.ID,
+		ViewerEmployeeID: &me.ID,
+		Status:           &status,
+		Page:             1,
+		PageSize:         1,
 	})
 	return total, err
 }
@@ -250,11 +265,12 @@ func (s *Service) fetchAllTasksByStatus(ctx context.Context, me *EmployeeSummary
 
 	for {
 		req := recording.TaskListRequest{
-			TenantID:   &me.TenantID,
-			AssignedTo: &me.ID,
-			Status:     &status,
-			Page:       page,
-			PageSize:   pageSize,
+			TenantID:         &me.TenantID,
+			AssignedTo:       &me.ID,
+			ViewerEmployeeID: &me.ID,
+			Status:           &status,
+			Page:             page,
+			PageSize:         pageSize,
 		}
 		s.applyTaskFilters(&req, params)
 		items, itemTotal, err := s.recordingService.ListRecordingTasks(ctx, req)
