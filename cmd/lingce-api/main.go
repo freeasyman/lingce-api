@@ -239,10 +239,11 @@ func main() {
 	emrRecordDebugService := emrrecord.NewDebugService(emrRecordStore, emrCheckService, llmClient)
 	emrRecordHandler := emrrecord.NewHandlerWithDebug(emrRecordService, emrPermissionService, emrRecordDebugService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	emrInternalHandler := emrrecord.NewInternalHandler()
+	emrInternalHandler.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
 
-	complianceGuardService := complianceguard.NewService(pool, llmClient)
-	complianceGuardHandler := complianceguard.NewHandler(complianceGuardService)
-	complianceGuardHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	complianceGuardModule := complianceguard.NewModule(pool, llmClient)
+	complianceGuardModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 	var ossClient *oss.Client
 	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
 		var err error
