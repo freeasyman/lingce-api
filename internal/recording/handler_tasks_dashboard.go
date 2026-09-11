@@ -262,6 +262,43 @@ func (h *Handler) CreateFollowupDataScope(w http.ResponseWriter, r *http.Request
 	httputil.WriteSuccess(w, item)
 }
 
+// SaveFollowupDataScopes 保存一个查看员工对应的全部目标员工。
+// 署名：Codex
+// 时间：2026-09-11
+func (h *Handler) SaveFollowupDataScopes(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+	viewerID, err := strconv.ParseInt(r.PathValue("viewer_id"), 10, 64)
+	if err != nil || viewerID <= 0 {
+		httputil.WriteBadRequest(w, "Invalid viewer employee ID")
+		return
+	}
+	var req SaveFollowupDataScopesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.store.SaveFollowupDataScopes(r.Context(), tenantID, viewerID, claims.UserID, req.TargetEmployeeIDs); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "scope saved"})
+}
+
 // DeleteFollowupDataScope 删除一条查看员工数据的关系。
 // 署名：Codex
 // 时间：2026-09-11

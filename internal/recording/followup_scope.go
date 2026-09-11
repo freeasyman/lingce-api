@@ -31,6 +31,14 @@ type CreateFollowupDataScopeRequest struct {
 	TargetEmployeeID int64 `json:"target_employee_id"`
 }
 
+// SaveFollowupDataScopesRequest 表示一个查看员工的完整目标员工集合。
+// 保存时会在同一事务中删除未勾选关系并新增勾选关系。
+// 署名：Codex
+// 时间：2026-09-11
+type SaveFollowupDataScopesRequest struct {
+	TargetEmployeeIDs []int64 `json:"target_employee_ids"`
+}
+
 // ListFollowupDataScopes 查询租户内的查看关系，并同时返回员工姓名。
 // 署名：Codex
 // 时间：2026-09-11
@@ -113,6 +121,72 @@ func (s *Store) CreateFollowupDataScope(ctx context.Context, tenantID, viewerID,
 	return &item, nil
 }
 
+// SaveFollowupDataScopes 以一个事务保存指定查看员工的完整查看范围。
+// 这样前端可以一次提交“一人可查看的多个员工”，避免逐条请求造成中间状态。
+// 署名：Codex
+// 时间：2026-09-11
+func (s *Store) SaveFollowupDataScopes(ctx context.Context, tenantID, viewerID, createdBy int64, targetIDs []int64) error {
+	if viewerID <= 0 {
+		return fmt.Errorf("viewer_employee_id is required")
+	}
+	targetIDs = uniquePositiveIDs(targetIDs)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin save followup data scopes: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var viewerExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM employees
+			WHERE id = $1 AND tenant_id = $2
+			  AND deleted_at IS NULL
+		)
+	`, viewerID, tenantID).Scan(&viewerExists); err != nil {
+		return fmt.Errorf("check followup scope viewer: %w", err)
+	}
+	if !viewerExists {
+		return fmt.Errorf("viewer_employee_id is not an active employee in tenant")
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM followup_data_scopes
+		WHERE tenant_id = $1 AND viewer_employee_id = $2
+	`, tenantID, viewerID); err != nil {
+		return fmt.Errorf("clear followup data scopes: %w", err)
+	}
+
+	for _, targetID := range targetIDs {
+		var targetExists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM employees
+				WHERE id = $1 AND tenant_id = $2
+				  AND deleted_at IS NULL
+			)
+		`, targetID, tenantID).Scan(&targetExists); err != nil {
+			return fmt.Errorf("check followup scope target: %w", err)
+		}
+		if !targetExists {
+			return fmt.Errorf("target_employee_id %d is not an active employee in tenant", targetID)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO followup_data_scopes (
+				tenant_id, viewer_employee_id, target_employee_id, created_by, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, NOW(), NOW())
+			ON CONFLICT (tenant_id, viewer_employee_id, target_employee_id)
+			DO UPDATE SET created_by = EXCLUDED.created_by, updated_at = NOW()
+		`, tenantID, viewerID, targetID, createdBy); err != nil {
+			return fmt.Errorf("insert followup data scope: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit followup data scopes: %w", err)
+	}
+	return nil
+}
+
 // DeleteFollowupDataScope 删除当前租户内的查看关系。
 // 署名：Codex
 // 时间：2026-09-11
@@ -178,4 +252,20 @@ func (s *Store) CanViewFollowupTask(ctx context.Context, taskID, tenantID, viewe
 		return false, fmt.Errorf("check followup task visibility: %w", err)
 	}
 	return allowed, nil
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	result := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
 }

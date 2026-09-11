@@ -137,6 +137,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		// 时间：2026-09-11
 		{Method: "GET", Path: "/api/v1/followup/data-scopes", Handler: h.ListFollowupDataScopes, Auth: true},
 		{Method: "POST", Path: "/api/v1/followup/data-scopes", Handler: h.CreateFollowupDataScope, Auth: true},
+		{Method: "PUT", Path: "/api/v1/followup/data-scopes/{viewer_id}", Handler: h.SaveFollowupDataScopes, Auth: true},
 		{Method: "DELETE", Path: "/api/v1/followup/data-scopes/{id}", Handler: h.DeleteFollowupDataScope, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/dashboard/daily-report", Handler: h.GetDailyReport, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/dashboard/diagnosis", Handler: h.GetOperationsDiagnosis, Auth: true},
