@@ -52,6 +52,12 @@ type CommunicationCheckResponse struct {
 	CustomerID     int64  `json:"customer_id"`
 	RuleSetCode    string `json:"rule_set_code"`
 	RuleSetVersion string `json:"rule_set_version"`
+	PromptCode     string `json:"prompt_code"`
+	PromptVersion  string `json:"prompt_version"`
+	ModelConfigID  int64  `json:"model_config_id"`
+	ModelCode      string `json:"model_code"`
+	RawResponse    string `json:"raw_response"`
+	Findings       []any  `json:"findings"`
 }
 
 type AnalyzeTextResponse struct {

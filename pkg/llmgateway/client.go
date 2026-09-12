@@ -79,6 +79,21 @@ type Params struct {
 	ResponseFormat string  `json:"response_format,omitempty"` // text, json
 }
 
+func (p Params) MarshalJSON() ([]byte, error) {
+	payload := struct {
+		Temperature    float64 `json:"temperature"`
+		MaxTokens      int     `json:"max_tokens,omitempty"`
+		TimeoutSeconds int     `json:"timeout_seconds,omitempty"`
+		ResponseFormat string  `json:"response_format,omitempty"`
+	}{
+		Temperature:    p.Temperature,
+		MaxTokens:      p.MaxTokens,
+		TimeoutSeconds: p.TimeoutSeconds,
+		ResponseFormat: p.ResponseFormat,
+	}
+	return json.Marshal(payload)
+}
+
 // TextInferenceResponse represents a text inference response
 type TextInferenceResponse struct {
 	RequestID string `json:"request_id"`
@@ -88,6 +103,57 @@ type TextInferenceResponse struct {
 	LatencyMS int    `json:"latency_ms"`
 	Provider  string `json:"provider"`
 	ModelCode string `json:"model_code"`
+}
+
+// TextInferenceWithRaw 返回结构化响应及网关原始响应，供需要完整审计链路的业务使用。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-12
+func (c *Client) TextInferenceWithRaw(ctx context.Context, req TextInferenceRequest) (*TextInferenceResponse, []byte, []byte, error) {
+	if req.TraceID == "" {
+		req.TraceID = uuid.New().String()
+	}
+	if req.CallerService == "" {
+		req.CallerService = "lingce-api"
+	}
+	if req.FunctionType == "" {
+		req.FunctionType = "chat"
+	}
+
+	requestBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, requestBody, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/inference/text", bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, requestBody, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, requestBody, nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, requestBody, responseBody, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(responseBody, &errResp); err != nil {
+			return nil, requestBody, responseBody, fmt.Errorf("LLM gateway error (status %d): %s", resp.StatusCode, string(responseBody))
+		}
+		return nil, requestBody, responseBody, fmt.Errorf("LLM gateway error: %s - %s", errResp.Error.Code, errResp.Error.Message)
+	}
+
+	var result TextInferenceResponse
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return nil, requestBody, responseBody, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &result, requestBody, responseBody, nil
 }
 
 // Usage represents token usage

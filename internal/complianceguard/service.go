@@ -20,6 +20,15 @@ type Service struct {
 	processLogMu sync.Mutex
 }
 
+type complianceModelConfig struct {
+	ID           int64
+	TenantID     int64
+	FunctionType string
+	Provider     string
+	ModelCode    string
+	ModelParams  map[string]any
+}
+
 const (
 	complianceDataDir       = "/Users/yiliiang/Documents/lingce-web/apps/compliance/data"
 	compliancePromptPath    = complianceDataDir + "/沟通合规基础提示词-v1.txt"
@@ -45,26 +54,50 @@ func NewService(pool *pgxpool.Pool, llm *llmgateway.Client) *Service {
 	return &Service{pool: pool, llm: llm}
 }
 
-// AcceptCommunicationCheck 是 Worker 调用合规卫士时的最小接收入口。
+// AcceptCommunicationCheck 是 Worker 调用合规卫士时的正式沟通检查入口。
 //
-// 当前阶段只构造请求、提示词、适用规则和最终拼接结果，过程文件由 Handler
-// 统一负责从“收到请求”开始记录到“返回响应”结束。它暂不调用 LLM，也不写
-// 合规业务结果表；这样可以先让产品方直接检查“API 实际拿到了什么、使用了
-// 哪些规则、最终准备发送什么”。
+// 本阶段同步完成一次 LLM 检查并返回候选发现。结果入库和人工复核仍属于后续
+// 业务阶段；过程日志由 Handler 统一负责从“收到请求”记录到“返回响应”结束。
 //
 // 署名：Codex，合规卫士开发 Agent
-// 时间：2026-09-11
-func (s *Service) AcceptCommunicationCheck(_ context.Context, req CommunicationCheckRequest) (*CommunicationCheckResponse, *communicationRuntime, error) {
-	runtime, err := buildCommunicationRuntime(req)
+// 时间：2026-09-12
+func (s *Service) AcceptCommunicationCheck(ctx context.Context, req CommunicationCheckRequest) (*CommunicationCheckResponse, *communicationRuntime, error) {
+	runtime, err := s.buildCommunicationRuntime(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	requestID := fmt.Sprintf("compliance-%d-%d", req.TenantID, time.Now().UnixNano())
+	modelConfig, err := s.loadModelConfig(ctx, req.TenantID)
+	if err != nil {
+		return nil, runtime, err
+	}
+	runtime.ModelConfigID = modelConfig.ID
+	runtime.ModelTenantID = modelConfig.TenantID
+	runtime.ModelFunctionType = modelConfig.FunctionType
+	runtime.Provider = modelConfig.Provider
+	runtime.ModelCode = modelConfig.ModelCode
+	runtime.ModelParamsJSON = mustMarshalIndent(modelConfig.ModelParams)
+
+	llmRequest := buildCommunicationLLMRequest(req.TenantID, fmt.Sprintf("%d", req.RecordingID), runtime.RuleSetCode, runtime.RuleSetCode, runtime.RuleSetVersion, runtime.RuleSetName, modelConfig, runtime)
+	llmResponse, requestJSON, responseJSON, err := s.llm.TextInferenceWithRaw(ctx, llmRequest)
+	runtime.GatewayRequestJSON = string(requestJSON)
+	runtime.GatewayResponseJSON = string(responseJSON)
+	if err != nil {
+		runtime.GatewayError = err.Error()
+		return nil, runtime, err
+	}
+	runtime.FormattedResult = formatJSONText(llmResponse.Content)
+	findings, err := parseFindings(llmResponse.Content)
+	if err != nil {
+		runtime.GatewayError = err.Error()
+		return nil, runtime, err
+	}
+
 	return &CommunicationCheckResponse{
-		Code:           "ACCEPTED",
-		Status:         "accepted",
-		Message:        "received",
+		Code:           "COMPLETED",
+		Status:         "completed",
+		Message:        "communication check completed",
 		RequestID:      requestID,
 		RunID:          requestID,
 		TenantID:       req.TenantID,
@@ -72,20 +105,38 @@ func (s *Service) AcceptCommunicationCheck(_ context.Context, req CommunicationC
 		EncounterID:    req.EncounterID,
 		EmployeeID:     req.EmployeeID,
 		CustomerID:     req.CustomerID,
-		RuleSetCode:    defaultCommunicationRuleSetCode(req.BusinessScope, req.RoleCode),
-		RuleSetVersion: "",
+		RuleSetCode:    runtime.RuleSetCode,
+		RuleSetVersion: runtime.RuleSetVersion,
+		PromptCode:     runtime.PromptCode,
+		PromptVersion:  runtime.PromptVersion,
+		ModelConfigID:  modelConfig.ID,
+		ModelCode:      modelConfig.ModelCode,
+		Findings:       findings,
+		RawResponse:    llmResponse.Content,
 	}, runtime, nil
 }
 
 type communicationRuntime struct {
-	Request        CommunicationCheckRequest
-	RuleSetCode    string
-	RuleSetName    string
-	RuleSetVersion string
-	PromptText     string
-	RulesJSON      string
-	SystemPrompt   string
-	UserPrompt     string
+	Request             CommunicationCheckRequest
+	RuleSetCode         string
+	RuleSetName         string
+	RuleSetVersion      string
+	PromptCode          string
+	PromptVersion       string
+	PromptText          string
+	RulesJSON           string
+	SystemPrompt        string
+	UserPrompt          string
+	ModelConfigID       int64
+	ModelTenantID       int64
+	ModelFunctionType   string
+	Provider            string
+	ModelCode           string
+	ModelParamsJSON     string
+	GatewayRequestJSON  string
+	GatewayResponseJSON string
+	FormattedResult     string
+	GatewayError        string
 }
 
 type communicationRuleDocument struct {
@@ -123,11 +174,17 @@ type communicationRulesDocument struct {
 //
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-11
-func buildCommunicationRuntime(req CommunicationCheckRequest) (*communicationRuntime, error) {
+func (s *Service) buildCommunicationRuntime(ctx context.Context, req CommunicationCheckRequest) (*communicationRuntime, error) {
 	promptBytes, err := os.ReadFile(compliancePromptPath)
 	if err != nil {
 		return nil, fmt.Errorf("read compliance prompt file: %w", err)
 	}
+	promptText := string(promptBytes)
+	promptSystem, promptUserTemplate, err := splitCommunicationPrompt(promptText)
+	if err != nil {
+		return nil, err
+	}
+	promptVersion := extractPromptVersion(promptText)
 	ruleBytes, err := os.ReadFile(complianceRulesPath)
 	if err != nil {
 		return nil, fmt.Errorf("read compliance rules file: %w", err)
@@ -175,11 +232,6 @@ func buildCommunicationRuntime(req CommunicationCheckRequest) (*communicationRun
 		return nil, fmt.Errorf("encode selected communication rules: %w", err)
 	}
 
-	promptText := string(promptBytes)
-	systemPrompt, userPrompt, err := splitCommunicationPrompt(promptText)
-	if err != nil {
-		return nil, err
-	}
 	vars := map[string]string{
 		"tenant_id":        fmt.Sprintf("%d", req.TenantID),
 		"source_type":      "recording",
@@ -194,15 +246,19 @@ func buildCommunicationRuntime(req CommunicationCheckRequest) (*communicationRun
 		"rule_set_version": rulesDoc.Version,
 		"rules_json":       string(selectedRuleBytes),
 		"transcript":       req.CleanedTranscript,
+		"input_text":       req.CleanedTranscript,
 	}
-	systemPrompt = renderCommunicationTemplate(systemPrompt, vars)
-	userPrompt = renderCommunicationTemplate(userPrompt, vars)
+	systemPrompt := renderCommunicationTemplate(promptSystem, vars)
+	userPrompt := renderCommunicationTemplate(promptUserTemplate, vars)
+	userPrompt = ensureCommunicationPromptContext(userPrompt, string(selectedRuleBytes), req.CleanedTranscript)
 
 	return &communicationRuntime{
 		Request:        req,
 		RuleSetCode:    ruleSetCode,
 		RuleSetName:    ruleSet.Name,
 		RuleSetVersion: rulesDoc.Version,
+		PromptCode:     "compliance_check_v1",
+		PromptVersion:  promptVersion,
 		PromptText:     promptText,
 		RulesJSON:      string(selectedRuleBytes),
 		SystemPrompt:   systemPrompt,
@@ -312,7 +368,18 @@ func (s *Service) finishCommunicationProcessLog(path string, requestBody []byte,
 				"===== 原始提示词文件 =====\n%s\n\n"+
 				"===== 本次选用的规则 =====\n%s\n\n"+
 				"===== 最终 System Prompt =====\n%s\n\n"+
-				"===== 最终 User Prompt =====\n%s\n",
+				"===== 最终 User Prompt =====\n%s\n"+
+				"\n===== 模型配置 =====\n"+
+				"配置 ID：%d\n"+
+				"配置租户 ID：%d\n"+
+				"功能类型：%s\n"+
+				"Provider：%s\n"+
+				"模型代码：%s\n"+
+				"模型参数：%s\n"+
+				"\n===== LLM 网关请求原始 JSON =====\n%s\n"+
+				"\n===== LLM 网关响应原始 JSON =====\n%s\n"+
+				"\n===== 格式化审核结果 =====\n%s\n"+
+				"\n===== LLM 调用错误 =====\n%s\n",
 			runtime.RuleSetCode,
 			runtime.RuleSetName,
 			runtime.RuleSetVersion,
@@ -320,6 +387,16 @@ func (s *Service) finishCommunicationProcessLog(path string, requestBody []byte,
 			runtime.RulesJSON,
 			runtime.SystemPrompt,
 			runtime.UserPrompt,
+			runtime.ModelConfigID,
+			runtime.ModelTenantID,
+			runtime.ModelFunctionType,
+			runtime.Provider,
+			runtime.ModelCode,
+			runtime.ModelParamsJSON,
+			runtime.GatewayRequestJSON,
+			runtime.GatewayResponseJSON,
+			runtime.FormattedResult,
+			runtime.GatewayError,
 		)
 	}
 
@@ -370,72 +447,219 @@ func (s *Service) AnalyzeText(ctx context.Context, req AnalyzeTextRequest) (*Ana
 		return nil, fmt.Errorf("llm client is required")
 	}
 
-	promptCode := "compliance_check_v1"
-	promptSystem, promptUserTemplate, promptVersion, err := loadCompliancePrompt(ctx, s.pool, promptCode)
-	if err != nil {
-		return nil, err
-	}
-	ruleSetCode := defaultRuleSetCode(req.SceneCode)
-	ruleSetVersion, ruleSetName, err := loadComplianceRuleSet(ctx, s.pool, req.TenantID, ruleSetCode)
-	if err != nil {
-		return nil, err
-	}
-
-	userPrompt := strings.NewReplacer(
-		"{{tenant_id}}", fmt.Sprintf("%d", req.TenantID),
-		"{{scene_code}}", req.SceneCode,
-		"{{source_type}}", req.SourceType,
-		"{{source_id}}", req.SourceID,
-		"{{source_version}}", req.SourceVersion,
-		"{{rule_set_code}}", ruleSetCode,
-		"{{rule_set_version}}", ruleSetVersion,
-		"{{input_text}}", req.Text,
-	).Replace(promptUserTemplate)
-
-	resp, err := s.llm.TextInference(ctx, llmgateway.TextInferenceRequest{
-		TenantID:      req.TenantID,
-		CallerService: "lingce-api",
-		CallerModule:  "compliance.debug.text",
-		TraceID:       req.SourceID,
-		FunctionType:  "compliance_check",
-		Provider:      "dashscope",
-		ModelCode:     "qwen-max",
-		Billing: &llmgateway.BillingMetadata{
-			BusinessDomain:     "compliance",
-			BusinessObjectType: "debug_text",
-			BillingSubject:     req.SceneCode,
-			BillingScene:       ruleSetName,
-			BillingRuleVersion: ruleSetVersion,
-		},
-		Messages: []llmgateway.Message{
-			{Role: "system", Content: promptSystem},
-			{Role: "user", Content: userPrompt},
-		},
-		Params: &llmgateway.Params{Temperature: 0, MaxTokens: 4000, TimeoutSeconds: 120, ResponseFormat: "json"},
+	runtime, err := s.buildCommunicationRuntime(ctx, CommunicationCheckRequest{
+		TenantID:          req.TenantID,
+		RecordingID:       parseInt64(req.SourceID),
+		BusinessScope:     req.SceneCode,
+		RoleCode:          req.SceneCode,
+		RecordedAt:        req.SourceVersion,
+		CleanedTranscript: req.Text,
 	})
 	if err != nil {
-		return &AnalyzeTextResponse{Status: "failed", PromptCode: promptCode, PromptVersion: promptVersion, RuleSetCode: ruleSetCode, RuleSetVersion: ruleSetVersion, Error: err.Error()}, err
+		return nil, err
+	}
+	modelConfig, err := s.loadModelConfig(ctx, req.TenantID)
+	if err != nil {
+		return nil, err
 	}
 
-	var findings []any
-	if parsed := parseJSON(resp.Content); len(parsed) > 0 {
-		if list, ok := parsed["findings"].([]any); ok {
-			findings = list
-		}
+	llmRequest := buildCommunicationLLMRequest(req.TenantID, req.SourceID, runtime.RuleSetCode, runtime.RuleSetCode, runtime.RuleSetVersion, runtime.RuleSetName, modelConfig, runtime)
+	resp, err := s.llm.TextInference(ctx, llmRequest)
+	if err != nil {
+		return &AnalyzeTextResponse{Status: "failed", PromptCode: runtime.PromptCode, PromptVersion: runtime.PromptVersion, RuleSetCode: runtime.RuleSetCode, RuleSetVersion: runtime.RuleSetVersion, Error: err.Error()}, err
+	}
+
+	findings, err := parseFindings(resp.Content)
+	if err != nil {
+		return &AnalyzeTextResponse{Status: "failed", PromptCode: runtime.PromptCode, PromptVersion: runtime.PromptVersion, RuleSetCode: runtime.RuleSetCode, RuleSetVersion: runtime.RuleSetVersion, RawResponse: resp.Content, Error: err.Error()}, err
 	}
 
 	return &AnalyzeTextResponse{
 		RunID:          req.SourceID,
 		Status:         "completed",
-		PromptCode:     promptCode,
-		PromptVersion:  promptVersion,
+		PromptCode:     runtime.PromptCode,
+		PromptVersion:  runtime.PromptVersion,
 		ModelCode:      resp.ModelCode,
-		RuleSetCode:    ruleSetCode,
-		RuleSetVersion: ruleSetVersion,
+		RuleSetCode:    runtime.RuleSetCode,
+		RuleSetVersion: runtime.RuleSetVersion,
 		RawResponse:    resp.Content,
 		Findings:       findings,
 		FinishedAt:     time.Now().UTC(),
 	}, nil
+}
+
+// loadModelConfig 按功能类型选择当前有效的合规检查模型配置。
+//
+// 当前租户配置优先，全局配置（tenant_id=0）兜底；同一范围内优先默认配置，
+// 再按更新时间和 ID 取最新记录。代码不绑定具体配置 ID 或模型名称。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-12
+func (s *Service) loadModelConfig(ctx context.Context, tenantID int64) (*complianceModelConfig, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+
+	var config complianceModelConfig
+	var rawParams []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT id,
+		       COALESCE(tenant_id, 0),
+		       COALESCE(function_type, ''),
+		       COALESCE(provider, ''),
+		       COALESCE(model_code, ''),
+		       COALESCE(model_params, extra_params, '{}'::json)
+		FROM llm_model_configs
+		WHERE deleted_at IS NULL
+		  AND COALESCE(is_active, true) = true
+		  AND function_type = 'compliance_check'
+		  AND tenant_id IN ($1, 0)
+		ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END,
+		         CASE WHEN COALESCE(is_default, false) THEN 0 ELSE 1 END,
+		         updated_at DESC,
+		         id DESC
+		LIMIT 1
+	`, tenantID).Scan(
+		&config.ID,
+		&config.TenantID,
+		&config.FunctionType,
+		&config.Provider,
+		&config.ModelCode,
+		&rawParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance model config: %w", err)
+	}
+	if strings.TrimSpace(config.Provider) == "" || strings.TrimSpace(config.ModelCode) == "" {
+		return nil, fmt.Errorf("compliance model config is incomplete")
+	}
+	config.ModelParams = map[string]any{}
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &config.ModelParams); err != nil {
+			return nil, fmt.Errorf("decode compliance model params: %w", err)
+		}
+	}
+	return &config, nil
+}
+
+// buildCommunicationLLMRequest 将数据库配置和本次沟通运行时内容转换为网关契约。
+//
+// provider、model_code 和模型参数全部来自数据库配置，不在合规业务代码中指定
+// 具体模型名称。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-12
+func buildCommunicationLLMRequest(tenantID int64, sourceID, sceneCode, ruleSetCode, ruleSetVersion, ruleSetName string, config *complianceModelConfig, runtime *communicationRuntime) llmgateway.TextInferenceRequest {
+	params := &llmgateway.Params{
+		Temperature:    0,
+		MaxTokens:      4000,
+		TimeoutSeconds: 120,
+		ResponseFormat: "json",
+	}
+	applyCommunicationModelParams(params, config.ModelParams)
+	return llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "compliance.communication",
+		TraceID:       fmt.Sprintf("compliance-%d-%s", tenantID, sourceID),
+		FunctionType:  config.FunctionType,
+		Provider:      config.Provider,
+		ModelCode:     config.ModelCode,
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "compliance",
+			BusinessObjectType: "recording",
+			BusinessObjectID:   parseInt64(sourceID),
+			BillingSubject:     "communication_check",
+			BillingScene:       ruleSetCode,
+			BillingRuleVersion: ruleSetVersion,
+		},
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: runtime.SystemPrompt},
+			{Role: "user", Content: runtime.UserPrompt},
+		},
+		Params: params,
+	}
+}
+
+func applyCommunicationModelParams(params *llmgateway.Params, raw map[string]any) {
+	if value, ok := raw["temperature"].(float64); ok {
+		params.Temperature = value
+	}
+	if value, ok := raw["max_tokens"].(float64); ok && value > 0 {
+		params.MaxTokens = int(value)
+	}
+	if value, ok := raw["timeout_seconds"].(float64); ok && value > 0 {
+		params.TimeoutSeconds = int(value)
+	}
+	if value, ok := raw["response_format"].(string); ok && strings.TrimSpace(value) != "" {
+		params.ResponseFormat = value
+	}
+}
+
+func parseFindings(raw string) ([]any, error) {
+	raw = stripJSONCodeFence(raw)
+	var payload struct {
+		Findings []any `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		return nil, fmt.Errorf("parse compliance model JSON: %w", err)
+	}
+	if payload.Findings == nil {
+		return nil, fmt.Errorf("compliance model JSON does not contain findings")
+	}
+	return payload.Findings, nil
+}
+
+func formatJSONText(raw string) string {
+	raw = stripJSONCodeFence(raw)
+	var value any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &value); err != nil {
+		return raw
+	}
+	formatted, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return string(formatted)
+}
+
+func stripJSONCodeFence(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "```") && strings.HasSuffix(trimmed, "```") {
+		lines := strings.Split(trimmed, "\n")
+		if len(lines) >= 3 {
+			lines = lines[1 : len(lines)-1]
+			return strings.TrimSpace(strings.Join(lines, "\n"))
+		}
+	}
+	return trimmed
+}
+
+func ensureCommunicationPromptContext(prompt, rulesJSON, transcript string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if !strings.Contains(trimmed, strings.TrimSpace(transcript)) && strings.TrimSpace(transcript) != "" {
+		trimmed += "\n\n【沟通资料】\n" + transcript
+	}
+	if strings.TrimSpace(rulesJSON) != "" && !strings.Contains(trimmed, strings.TrimSpace(rulesJSON)) {
+		trimmed += "\n\n【本次适用规则】\n" + rulesJSON
+	}
+	return trimmed
+}
+
+func parseInt64(raw string) int64 {
+	var value int64
+	_, _ = fmt.Sscanf(strings.TrimSpace(raw), "%d", &value)
+	return value
+}
+
+func extractPromptVersion(promptText string) string {
+	for _, line := range strings.Split(promptText, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "版本：") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "版本："))
+		}
+	}
+	return ""
 }
 
 func loadCompliancePrompt(ctx context.Context, pool *pgxpool.Pool, code string) (string, string, string, error) {
