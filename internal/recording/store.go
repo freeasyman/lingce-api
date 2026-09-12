@@ -2224,12 +2224,20 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	if req.Keyword != nil && strings.TrimSpace(*req.Keyword) != "" {
 		conditions = append(conditions, fmt.Sprintf(`(
-			COALESCE(title, '') ILIKE $%d OR
-			COALESCE(description, '') ILIKE $%d OR
-			COALESCE(customer_name, '') ILIKE $%d OR
-			COALESCE(script, '') ILIKE $%d OR
-			COALESCE(contact_reason, '') ILIKE $%d
-		)`, argIndex, argIndex, argIndex, argIndex, argIndex))
+			COALESCE(rt.title, '') ILIKE $%d OR
+			COALESCE(rt.description, '') ILIKE $%d OR
+			COALESCE(rt.customer_name, '') ILIKE $%d OR
+			COALESCE(rt.script, '') ILIKE $%d OR
+			COALESCE(rt.contact_reason, '') ILIKE $%d OR
+			COALESCE(rt.doctor_name, '') ILIKE $%d OR
+			EXISTS (
+				SELECT 1
+				FROM recordings owner_recording
+				LEFT JOIN employees owner_employee ON owner_employee.id = owner_recording.employee_id
+				WHERE owner_recording.id = rt.recording_id
+				  AND COALESCE(NULLIF(owner_employee.full_name, ''), COALESCE(owner_employee.name, ''), '') ILIKE $%d
+			)
+		)`, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex, argIndex))
 		args = append(args, "%"+strings.TrimSpace(*req.Keyword)+"%")
 		argIndex++
 	}
@@ -2298,7 +2306,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	orderBy := "created_at DESC"
 	if req.Sort != nil {
 		switch strings.TrimSpace(*req.Sort) {
-		case "due_at_asc":
+		case "due_at_asc", "due_asc":
 			orderBy = "due_at ASC NULLS LAST, created_at DESC"
 		case "due_at_desc":
 			orderBy = "due_at DESC NULLS LAST, created_at DESC"

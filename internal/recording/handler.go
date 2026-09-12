@@ -819,6 +819,14 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 		req.TaskType = &taskType
 	}
 
+	if keyword := strings.TrimSpace(r.URL.Query().Get("keyword")); keyword != "" {
+		req.Keyword = &keyword
+	}
+
+	if sort := strings.TrimSpace(r.URL.Query().Get("sort")); sort != "" {
+		req.Sort = &sort
+	}
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	req.Page = page
