@@ -265,7 +265,16 @@ func (s *Service) getEmployeeEffectiveInstitutionMenus(ctx context.Context, empl
 		return 0, "", nil, nil, err
 	}
 	if len(roleGrantedCodes) == 0 {
-		return tenantID, roleCode, []*InstitutionMenu{}, []string{}, nil
+		if roleCode == "admin" {
+			for _, menu := range menus {
+				if menu.IsDefaultForAdmin {
+					roleGrantedCodes[menu.Code] = struct{}{}
+				}
+			}
+		}
+		if len(roleGrantedCodes) == 0 {
+			return tenantID, roleCode, []*InstitutionMenu{}, []string{}, nil
+		}
 	}
 
 	unrestricted, tenantAllowedCodes, err := s.store.GetTenantAllowedMenuCodes(ctx, tenantID)

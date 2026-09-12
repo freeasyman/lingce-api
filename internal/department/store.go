@@ -74,7 +74,25 @@ func (s *Store) EmployeeHasInstitutionMenuAccess(ctx context.Context, employeeID
 		return false, fmt.Errorf("check role menu grant: %w", err)
 	}
 	if !granted {
-		return false, nil
+		if roleCode != "admin" {
+			return false, nil
+		}
+		if err := s.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM institution_menus
+				WHERE lower(trim(code)) = $1
+				  AND deleted_at IS NULL
+				  AND COALESCE(is_active, true) = true
+				  AND COALESCE(is_default_for_admin, false) = true
+				  AND (tenant_id = $2 OR tenant_id IS NULL)
+			)
+		`, menuCode, tenantID).Scan(&granted); err != nil {
+			return false, fmt.Errorf("check default admin menu: %w", err)
+		}
+		if !granted {
+			return false, nil
+		}
 	}
 
 	var groupID *int64
