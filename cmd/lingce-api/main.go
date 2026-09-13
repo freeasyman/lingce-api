@@ -30,6 +30,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/followup"
+	"github.com/freeasyman/lingce-api/internal/followuppermission"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
@@ -204,6 +205,9 @@ func main() {
 	emrPermissionService := emrpermission.NewService(emrPermissionStore)
 	emrPermissionHandler := emrpermission.NewHandler(emrPermissionService)
 	emrPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+	followupPermissionService := followuppermission.NewService(pool)
+	followupPermissionHandler := followuppermission.NewHandler(followupPermissionService)
+	followupPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrQualityStore := emrquality.NewStore(pool)
 	emrQualityService := emrquality.NewService(emrQualityStore)
@@ -239,7 +243,7 @@ func main() {
 	emrRecordDebugService := emrrecord.NewDebugService(emrRecordStore, emrCheckService, llmClient)
 	emrRecordHandler := emrrecord.NewHandlerWithDebug(emrRecordService, emrPermissionService, emrRecordDebugService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-	emrInternalHandler := emrrecord.NewInternalHandler()
+	emrInternalHandler := emrrecord.NewInternalHandler(pool, emrTemplateStore, llmClient)
 	emrInternalHandler.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
 
 	complianceGuardModule := complianceguard.NewModule(pool, llmClient)
@@ -290,6 +294,7 @@ func main() {
 		AccessKeySecret: cfg.Aliyun.AccessKeySecret,
 		PublicBaseURL:   cfg.Aliyun.OSSPublicBaseURL,
 	})
+	recHandler.SetFollowupPermissionService(followupPermissionService)
 	recHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	mobileService := mobile.NewService(pool, recService)
 	mobileHandler := mobile.NewHandler(mobileService)
