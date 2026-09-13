@@ -26,6 +26,7 @@ type CommunicationCheckRequest struct {
 	EmployeeID        int64  `json:"employee_id"`
 	CustomerID        int64  `json:"customer_id"`
 	CustomerName      string `json:"customer_name"`
+	EmployeeName      string `json:"employee_name"`
 	DoctorName        string `json:"doctor_name"`
 	BusinessScope     string `json:"business_scope"`
 	RoleCode          string `json:"role_code"`

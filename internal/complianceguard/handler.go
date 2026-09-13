@@ -122,7 +122,9 @@ func (h *Handler) CommunicationCheck(w http.ResponseWriter, r *http.Request) {
 	resp, runtime, err := h.service.AcceptCommunicationCheck(r.Context(), req)
 	processRuntime = runtime
 	if err != nil {
-		if invalid, ok := err.(*InvalidReferenceError); ok {
+		if unsupported, ok := err.(*UnsupportedRoleError); ok {
+			httputil.WriteError(loggedWriter, http.StatusUnprocessableEntity, "UNSUPPORTED_ROLE", unsupported.Error(), nil)
+		} else if invalid, ok := err.(*InvalidReferenceError); ok {
 			httputil.WriteError(loggedWriter, http.StatusUnprocessableEntity, "INVALID_REFERENCE", invalid.Error(), nil)
 		} else {
 			httputil.WriteInternalError(loggedWriter, err.Error())
@@ -231,8 +233,8 @@ func validateCommunicationCheckRequest(req CommunicationCheckRequest) error {
 		return fmt.Errorf("customer_id is required")
 	case strings.TrimSpace(req.CustomerName) == "":
 		return fmt.Errorf("customer_name is required")
-	case strings.TrimSpace(req.DoctorName) == "":
-		return fmt.Errorf("doctor_name is required")
+	case strings.TrimSpace(req.EmployeeName) == "" && strings.TrimSpace(req.DoctorName) == "":
+		return fmt.Errorf("employee_name is required")
 	case strings.TrimSpace(req.BusinessScope) == "":
 		return fmt.Errorf("business_scope is required")
 	case strings.TrimSpace(req.RoleCode) == "":
