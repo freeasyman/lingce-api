@@ -2179,6 +2179,20 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	conditions = append(conditions, "1=1")
 
+	// 随访中心只展示医生录音产生的任务。任务表可能保留历史上由其他角色
+	// 产生的记录，因此回到 recordings 校验录音最终角色，而不是只看任务来源。
+	// 兼容 doctor、doctor_patient、doctor_conversion 三个医生分析入口。
+	// 署名：Codex；时间：2026-09-14
+	conditions = append(conditions, `EXISTS (
+		SELECT 1 FROM recordings doctor_recording
+		WHERE doctor_recording.id = rt.recording_id
+		  AND doctor_recording.tenant_id = rt.tenant_id
+		  AND (
+			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
+			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
+		  )
+	)`)
+
 	if len(req.TenantIDs) > 0 {
 		conditions = append(conditions, fmt.Sprintf("rt.tenant_id = ANY($%d)", argIndex))
 		args = append(args, req.TenantIDs)
@@ -2322,7 +2336,9 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
 		       customer_name, priority, script, contact_reason, source_type, source_detail,
 		       assigned_to, NULL::bigint AS assigned_by,
-		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by, NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason, created_at, updated_at
+		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by,
+		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
+		       returned_at, returned_by, return_reason, created_at, updated_at
 		FROM recording_tasks rt
 		WHERE %s
 		ORDER BY %s
@@ -2344,7 +2360,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
 			&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
 			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
-			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.CreatedAt, &t.UpdatedAt,
+			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan task: %w", err)
 		}
@@ -2360,9 +2376,20 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, erro
 		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
 		       customer_name, priority, script, contact_reason, source_type, source_detail,
 		       assigned_to, NULL::bigint AS assigned_by,
-		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by, NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason, created_at, updated_at
+		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by,
+		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
+		       returned_at, returned_by, return_reason, created_at, updated_at
 		FROM recording_tasks
 		WHERE id = $1
+		  AND EXISTS (
+			SELECT 1 FROM recordings doctor_recording
+			WHERE doctor_recording.id = recording_tasks.recording_id
+			  AND doctor_recording.tenant_id = recording_tasks.tenant_id
+			  AND (
+			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
+			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
+			)
+		  )
 	`
 
 	var t RecordingTask
@@ -2370,7 +2397,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, erro
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
 		&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
 		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
-		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.CreatedAt, &t.UpdatedAt,
+		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -2408,10 +2435,10 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 				END
 			),
 			updated_at = NOW()
-		WHERE id = $4 AND status != $5
+		WHERE id = $4 AND status NOT IN ($5, $6, $7)
 	`
 
-	result, err := s.pool.Exec(ctx, query, TaskStatusCompleted, completedByText, completionNote, id, TaskStatusCompleted)
+	result, err := s.pool.Exec(ctx, query, TaskStatusCompleted, completedByText, completionNote, id, TaskStatusCompleted, TaskStatusCancelled, TaskStatusReturned)
 	if err != nil {
 		return fmt.Errorf("failed to complete task: %w", err)
 	}
@@ -2428,10 +2455,10 @@ func (s *Store) CancelTask(ctx context.Context, id int64, reason string) error {
 	query := `
 		UPDATE recording_tasks
 		SET status = $1, feedback = $2, updated_at = NOW()
-		WHERE id = $3 AND status NOT IN ($4, $5)
+		WHERE id = $3 AND status NOT IN ($4, $5, $6)
 	`
 
-	result, err := s.pool.Exec(ctx, query, TaskStatusCancelled, reason, id, TaskStatusCompleted, TaskStatusCancelled)
+	result, err := s.pool.Exec(ctx, query, TaskStatusCancelled, reason, id, TaskStatusCompleted, TaskStatusCancelled, TaskStatusReturned)
 	if err != nil {
 		return fmt.Errorf("failed to cancel task: %w", err)
 	}
@@ -2440,6 +2467,31 @@ func (s *Store) CancelTask(ctx context.Context, id int64, reason string) error {
 		return fmt.Errorf("task not found or cannot be cancelled")
 	}
 
+	return nil
+}
+
+// ReturnTask marks a non-terminal task as returned and stores the executor and reason.
+// 已完成和已取消任务是终态，不能再退回；退回任务本身仍保留在数据库中，便于审计。
+// 署名：Codex
+// 时间：2026-09-12
+func (s *Store) ReturnTask(ctx context.Context, id int64, returnedBy int64, reason string) error {
+	query := `
+		UPDATE recording_tasks
+		SET status = $1,
+			returned_at = NOW(),
+			returned_by = $2,
+			review_action = 'returned',
+			return_reason = $3,
+			updated_at = NOW()
+		WHERE id = $4 AND status NOT IN ($5, $6, $7)
+	`
+	result, err := s.pool.Exec(ctx, query, TaskStatusReturned, returnedBy, reason, id, TaskStatusCompleted, TaskStatusCancelled, TaskStatusReturned)
+	if err != nil {
+		return fmt.Errorf("failed to return task: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("task not found or cannot be returned")
+	}
 	return nil
 }
 
@@ -2458,6 +2510,18 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		args = append(args, tenantID)
 		argIndex++
 	}
+
+	// 统计口径与任务列表一致，只统计医生录音产生的任务。
+	// 署名：Codex；时间：2026-09-14
+	conditions = append(conditions, `EXISTS (
+		SELECT 1 FROM recordings doctor_recording
+		WHERE doctor_recording.id = t.recording_id
+		  AND doctor_recording.tenant_id = t.tenant_id
+		  AND (
+			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
+			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
+			)
+	)`)
 
 	if assignedTo != nil {
 		conditions = append(conditions, fmt.Sprintf("t.assigned_to = $%d", argIndex))
@@ -2493,8 +2557,9 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 			COUNT(CASE WHEN t.status = 'assigned' THEN 1 END) AS assigned_tasks,
 			COUNT(CASE WHEN t.status = 'completed' THEN 1 END) AS completed_tasks,
 			COUNT(CASE WHEN t.status = 'cancelled' THEN 1 END) AS cancelled_tasks,
+			COUNT(CASE WHEN t.status = 'returned' THEN 1 END) AS returned_tasks,
 			COUNT(CASE
-				WHEN t.due_at < NOW() AND t.status NOT IN ('completed', 'cancelled')
+				WHEN t.due_at < NOW() AND t.status NOT IN ('completed', 'cancelled', 'returned')
 				THEN 1
 			END) AS overdue_tasks
 		FROM recording_tasks t
@@ -2522,6 +2587,7 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		&stats.AssignedTasks,
 		&stats.CompletedTasks,
 		&stats.CancelledTasks,
+		&stats.ReturnedTasks,
 		&stats.OverdueTasks,
 	); err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
@@ -2620,6 +2686,18 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 	args = append(args, tenantID)
 	argIndex++
+
+	// 每日简报只统计医生录音任务，避免非医生历史任务污染工作台指标。
+	// 署名：Codex；时间：2026-09-14
+	conditions = append(conditions, `EXISTS (
+		SELECT 1 FROM recordings doctor_recording
+		WHERE doctor_recording.id = recording_tasks.recording_id
+		  AND doctor_recording.tenant_id = recording_tasks.tenant_id
+		  AND (
+			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
+			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
+			)
+	)`)
 
 	if assignedTo != nil {
 		conditions = append(conditions, fmt.Sprintf("assigned_to = $%d", argIndex))
