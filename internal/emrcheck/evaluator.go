@@ -182,6 +182,8 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 		return failResult(result, "主诉超过20个字符。", "请压缩主诉内容。")
 	case "emr.allergy.required.status":
 		return allergyStatusResult(result, data.Content)
+	case "emr.allergy.prescription_risk.known_allergy":
+		return allergyPrescriptionRiskResult(result, data)
 	case "emr.allergy.required.unconfirmed":
 		return allergyConfirmedResult(result, data.Content)
 	case "emr.allergy.required.drug_detail":
@@ -218,11 +220,10 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 }
 
 func allergyStatusResult(result evaluatedResult, content map[string]any) evaluatedResult {
-	allergy := objectValue(content, "allergy_history")
-	status, _ := allergy["status"].(string)
-	status = strings.TrimSpace(status)
+	status, allergy := allergyStatus(content)
 	result.Evidence["field"] = "allergy_history.status"
 	result.Evidence["status"] = status
+	result.Evidence["allergy_history"] = allergy
 	switch status {
 	case "无药物过敏", "具体药物过敏", "其他过敏原", "尚未询问", "待确认":
 		return passResult(result, "过敏史状态已记录。")
@@ -232,11 +233,10 @@ func allergyStatusResult(result evaluatedResult, content map[string]any) evaluat
 }
 
 func allergyConfirmedResult(result evaluatedResult, content map[string]any) evaluatedResult {
-	allergy := objectValue(content, "allergy_history")
-	status, _ := allergy["status"].(string)
-	status = strings.TrimSpace(status)
+	status, allergy := allergyStatus(content)
 	result.Evidence["field"] = "allergy_history.status"
 	result.Evidence["status"] = status
+	result.Evidence["allergy_history"] = allergy
 	if status == "无药物过敏" || status == "具体药物过敏" || status == "其他过敏原" {
 		return passResult(result, "过敏史已完成确认。")
 	}
@@ -244,18 +244,91 @@ func allergyConfirmedResult(result evaluatedResult, content map[string]any) eval
 }
 
 func allergyDetailResult(result evaluatedResult, content map[string]any, expectedStatus, detailKey, suggested string) evaluatedResult {
-	allergy := objectValue(content, "allergy_history")
-	status, _ := allergy["status"].(string)
+	status, allergy := allergyStatus(content)
 	detail := ""
 	if value, ok := allergy[detailKey]; ok && value != nil {
 		detail = strings.TrimSpace(fmt.Sprint(value))
 	}
 	result.Evidence["field"] = "allergy_history." + detailKey
 	result.Evidence["status"] = status
+	result.Evidence["detail"] = detail
 	if status != expectedStatus || detail != "" {
 		return passResult(result, "过敏原信息完整。")
 	}
 	return failResult(result, "过敏原信息缺失。", suggested)
+}
+
+func allergyStatus(content map[string]any) (string, map[string]any) {
+	value, ok := content["allergy_history"]
+	if !ok || value == nil {
+		return "", map[string]any{}
+	}
+	if object, ok := value.(map[string]any); ok {
+		status := strings.TrimSpace(fmt.Sprint(object["status"]))
+		if status == "<nil>" {
+			status = ""
+		}
+		return status, object
+	}
+	status := strings.TrimSpace(fmt.Sprint(value))
+	if status == "<nil>" {
+		status = ""
+	}
+	return status, map[string]any{"status": status}
+}
+
+func allergyPrescriptionRiskResult(result evaluatedResult, data checkContext) evaluatedResult {
+	status, allergy := allergyStatus(data.Content)
+	result.Evidence["allergy_status"] = status
+	result.Evidence["allergy_history"] = allergy
+	if status == "" || status == "尚未询问" || status == "待确认" {
+		return incompleteResult(result, "过敏史状态未完成，无法判断处方风险。", "请先完成过敏史确认。")
+	}
+	if status == "无药物过敏" || status == "其他过敏原" {
+		return passResult(result, "当前没有明确的药物过敏原需要与处方匹配。")
+	}
+	if status != "具体药物过敏" {
+		return incompleteResult(result, "过敏史状态无法用于处方风险判断。", "请修正过敏史状态后重新检查。")
+	}
+
+	conflict, hasConflict := explicitAllergyConflict(data.Content, data.EncounterContext, data.RecordContext)
+	result.Evidence["explicit_conflict_result"] = conflict
+	result.Evidence["has_explicit_conflict_result"] = hasConflict
+	if !hasConflict {
+		return incompleteResult(result, "缺少过敏原与处方药品的明确匹配结果，无法判断。", "请接入药品成分匹配结果后重新检查，或人工复核处方风险。")
+	}
+	if conflict {
+		return failResult(result, "已知药物过敏与处方存在明确匹配冲突。", "请立即核对过敏史和处方，确认是否更换或人工复核。")
+	}
+	return passResult(result, "已知药物过敏与处方没有明确匹配冲突。")
+}
+
+func explicitAllergyConflict(contexts ...map[string]any) (bool, bool) {
+	for _, context := range contexts {
+		for _, key := range []string{
+			"allergy_prescription_conflict",
+			"known_allergy_prescription_conflict",
+			"drug_allergy_conflict",
+		} {
+			value, ok := context[key]
+			if !ok {
+				continue
+			}
+			switch typed := value.(type) {
+			case bool:
+				return typed, true
+			case string:
+				normalized := strings.ToLower(strings.TrimSpace(typed))
+				switch normalized {
+				case "true", "yes", "是", "冲突":
+					return true, true
+				case "false", "no", "否", "无冲突":
+					return false, true
+				}
+			}
+		}
+	}
+	return false, false
 }
 
 func requiredResult(result evaluatedResult, content map[string]any, code, label string) evaluatedResult {

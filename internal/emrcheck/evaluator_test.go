@@ -60,6 +60,42 @@ func TestEvaluateProgramAllergyDetails(t *testing.T) {
 	if result.Conclusion != "符合" {
 		t.Fatalf("complete allergy detail result = %#v", result)
 	}
+
+	result = evaluateRequirement(binding{
+		Code: "emr.allergy.required.status", ExecutionMode: "程序判断",
+	}, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{
+		"allergy_history": "无药物过敏",
+	}}, "手动保存")
+	if result.Conclusion != "符合" {
+		t.Fatalf("string allergy status result = %#v", result)
+	}
+}
+
+func TestEvaluateAllergyPrescriptionRiskRequiresExplicitMatch(t *testing.T) {
+	item := binding{Code: "emr.allergy.prescription_risk.known_allergy", ExecutionMode: "程序判断"}
+	data := checkContext{
+		SnapshotID: "snapshot-1",
+		Content: map[string]any{
+			"allergy_history": map[string]any{"status": "具体药物过敏", "drug_name": "青霉素"},
+			"prescription":    "阿莫西林",
+		},
+	}
+	result := evaluateRequirement(item, data, "手动保存")
+	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
+		t.Fatalf("missing explicit match result = %#v", result)
+	}
+
+	data.EncounterContext = map[string]any{"drug_allergy_conflict": true}
+	result = evaluateRequirement(item, data, "手动保存")
+	if result.Conclusion != "不符合" {
+		t.Fatalf("conflicting prescription result = %#v", result)
+	}
+
+	data.EncounterContext["drug_allergy_conflict"] = false
+	result = evaluateRequirement(item, data, "手动保存")
+	if result.Conclusion != "符合" {
+		t.Fatalf("safe prescription result = %#v", result)
+	}
 }
 
 func TestEvaluateBasicInfoUsesPatientContext(t *testing.T) {
