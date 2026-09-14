@@ -408,3 +408,98 @@ func TestEvaluateSpecialtyStructure(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluatePediatricFeverRules(t *testing.T) {
+	data := checkContext{
+		SnapshotID: "snapshot-1",
+		Specialty:  "儿科",
+		Content: map[string]any{
+			"chief_complaint": "发热2天",
+			"structured": map[string]any{
+				"fever_duration": "2天",
+			},
+		},
+	}
+
+	result := evaluateRequirement(binding{
+		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "不符合" {
+		t.Fatalf("missing fever temperature result = %#v", result)
+	}
+
+	result = evaluateRequirement(binding{
+		Code: "emr.pediatrics.fever_peak.duration", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "符合" {
+		t.Fatalf("fever duration result = %#v", result)
+	}
+
+	data.Content["physical_exam"] = map[string]any{
+		"vitals": map[string]any{"temperature_c": 39.2},
+	}
+	result = evaluateRequirement(binding{
+		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "符合" {
+		t.Fatalf("fever temperature result = %#v", result)
+	}
+
+	data.Content = map[string]any{"chief_complaint": "腹泻1天"}
+	result = evaluateRequirement(binding{
+		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "符合" {
+		t.Fatalf("non-fever result = %#v", result)
+	}
+}
+
+func TestEvaluatePediatricPrescriptionRules(t *testing.T) {
+	data := checkContext{
+		SnapshotID: "snapshot-1",
+		Specialty:  "儿科",
+		PatientContext: map[string]any{
+			"age":       "6岁",
+			"weight_kg": 20,
+		},
+		Content: map[string]any{
+			"prescription": "阿莫西林 250mg，口服，每日三次，疗程5天",
+		},
+		EncounterContext: map[string]any{
+			"prescriptions": []any{
+				map[string]any{
+					"kind":      "prescription",
+					"drug_name": "阿莫西林",
+					"dose":      "250mg",
+					"route":     "口服，每日三次",
+					"course":    "5天",
+				},
+			},
+		},
+	}
+
+	for _, code := range []string{
+		"emr.pediatrics.weight_dose.age",
+		"emr.pediatrics.weight_dose.weight_basis",
+		"emr.pediatrics.weight_dose.dose",
+		"emr.pediatrics.weight_dose.route",
+		"emr.pediatrics.weight_dose.course",
+	} {
+		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("%s result = %#v", code, result)
+		}
+	}
+
+	delete(data.PatientContext, "weight_kg")
+	data.Content["prescription"] = "阿莫西林"
+	data.EncounterContext["prescriptions"] = []any{
+		map[string]any{"kind": "prescription", "drug_name": "阿莫西林"},
+	}
+	result := evaluateRequirement(binding{
+		Code: "emr.pediatrics.weight_dose.weight_basis", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "不符合" {
+		t.Fatalf("missing pediatric weight basis result = %#v", result)
+	}
+}

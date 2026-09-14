@@ -197,7 +197,14 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 		"emr.dental.tooth_plan.tooth_present",
 		"emr.pediatrics.guardian_info.name",
 		"emr.pediatrics.guardian_info.relationship",
-		"emr.pediatrics.guardian_info.contact":
+		"emr.pediatrics.guardian_info.contact",
+		"emr.pediatrics.fever_peak.temperature",
+		"emr.pediatrics.fever_peak.duration",
+		"emr.pediatrics.weight_dose.age",
+		"emr.pediatrics.weight_dose.weight_basis",
+		"emr.pediatrics.weight_dose.dose",
+		"emr.pediatrics.weight_dose.route",
+		"emr.pediatrics.weight_dose.course":
 		return evaluateSpecialtyStructure(item.Code, result, data)
 	case "emr.diagnosis.present":
 		return requiredResult(result, data.Content, "diagnosis", "诊断")
