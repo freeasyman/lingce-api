@@ -13,6 +13,27 @@ type binding struct {
 	RuleType             string
 	ExecutionMode        string
 	DeadlineAction       string
+	QualityGroup         string
+	EvaluatedFact        string
+	PassCondition        string
+	Precondition         string
+	EvidenceBasis        string
+	SourceVersion        string
+}
+
+type qualityRuleInput struct {
+	QualityRequirementID string `json:"quality_requirement_id"`
+	Code                 string `json:"rule_code"`
+	Name                 string `json:"rule_name"`
+	RuleType             string `json:"rule_type"`
+	QualityGroup         string `json:"quality_group"`
+	EvaluatedFact        string `json:"evaluated_fact"`
+	PassCondition        string `json:"pass_condition"`
+	Precondition         string `json:"precondition"`
+	EvidenceBasis        string `json:"evidence_basis"`
+	SourceVersion        string `json:"source_version"`
+	ExecutionMode        string `json:"execution_mode"`
+	DeadlineAction       string `json:"deadline_action"`
 }
 
 type checkContext struct {
@@ -28,6 +49,7 @@ type checkContext struct {
 type evaluatedResult struct {
 	Conclusion       string
 	CheckStatus      string
+	ExecutionStatus  string
 	IncompleteReason string
 	HandlingResult   string
 	MeetsDeadline    *bool
@@ -39,16 +61,18 @@ type evaluatedResult struct {
 
 func evaluateRequirement(item binding, data checkContext, trigger string) evaluatedResult {
 	result := evaluatedResult{
-		Conclusion:     "无法判断",
-		CheckStatus:    "未完成",
-		HandlingResult: "待人工判断",
-		Evidence:       map[string]any{"snapshot_id": data.SnapshotID},
-		ActualMode:     item.ExecutionMode,
+		Conclusion:      "无法判断",
+		CheckStatus:     "未完成",
+		ExecutionStatus: "manual_required",
+		HandlingResult:  "待人工判断",
+		Evidence:        map[string]any{"snapshot_id": data.SnapshotID},
+		ActualMode:      item.ExecutionMode,
 	}
 
 	if notApplicable(item.Code, data) {
 		result.Conclusion = "符合"
 		result.CheckStatus = "已完成"
+		result.ExecutionStatus = "completed"
 		result.HandlingResult = "允许继续"
 		result.MeetsDeadline = boolPtr(true)
 		result.Evidence["前提"] = "当前病历不具备该要求的事实前提"
@@ -57,6 +81,18 @@ func evaluateRequirement(item binding, data checkContext, trigger string) evalua
 	}
 
 	if item.ExecutionMode != "程序判断" {
+		result.ActualMode = item.ExecutionMode
+		if item.ExecutionMode == "人工判断" {
+			result.CheckStatus = "已完成"
+			result.ExecutionStatus = "manual_required"
+			result.IncompleteReason = ""
+			result.HandlingResult = "需要人工复核"
+			result.Explanation = "该质量规则配置为人工判断，需要医生或质控人员复核。"
+			result.Suggested = "请医生或质控人员完成人工复核。"
+			result.MeetsDeadline = boolPtr(false)
+			return result
+		}
+		result.ExecutionStatus = "execution_failed"
 		result.IncompleteReason = "人工待处理"
 		result.Explanation = fmt.Sprintf("当前配置为%s，当前版本未调用该执行器。", item.ExecutionMode)
 		result.Suggested = "转人工判断或在执行器接入后重新检查。"
@@ -69,28 +105,38 @@ func evaluateRequirement(item binding, data checkContext, trigger string) evalua
 	}
 
 	result = evaluateProgram(item, data)
-	result.ActualMode = "程序判断"
+	if result.ActualMode == "" {
+		result.ActualMode = "程序判断"
+	}
 	if result.CheckStatus == "已完成" {
-		result.MeetsDeadline = boolPtr(true)
-		if result.Conclusion == "不符合" {
+		if result.ActualMode == "人工判断" {
 			result.MeetsDeadline = boolPtr(false)
-			result.HandlingResult = handlingForNonconforming(item.DeadlineAction, trigger)
+			result.HandlingResult = "需要人工复核"
 		} else {
-			result.HandlingResult = "允许继续"
+			result.MeetsDeadline = boolPtr(true)
+			if result.Conclusion == "不符合" {
+				result.MeetsDeadline = boolPtr(false)
+				result.HandlingResult = handlingForNonconforming(item.DeadlineAction, trigger)
+			} else {
+				result.HandlingResult = "允许继续"
+			}
 		}
 	} else {
 		result.MeetsDeadline = boolPtr(false)
-		result.HandlingResult = handlingForIncomplete(item.DeadlineAction, trigger)
+		if result.ExecutionStatus == "completed" && (result.HandlingResult == "" || result.HandlingResult == "待人工判断") {
+			result.HandlingResult = handlingForIncomplete(item.DeadlineAction, trigger)
+		}
 	}
 	return result
 }
 
 func evaluateProgram(item binding, data checkContext) evaluatedResult {
 	result := evaluatedResult{
-		Conclusion:     "无法判断",
-		CheckStatus:    "未完成",
-		HandlingResult: "待人工判断",
-		Evidence:       map[string]any{"snapshot_id": data.SnapshotID},
+		Conclusion:      "无法判断",
+		CheckStatus:     "未完成",
+		ExecutionStatus: "completed",
+		HandlingResult:  "待人工判断",
+		Evidence:        map[string]any{"snapshot_id": data.SnapshotID},
 	}
 
 	switch item.Code {
@@ -124,9 +170,22 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 		}
 		return failResult(result, "尚未找到责任医生确认记录。", "请由责任医生确认病历。")
 	default:
-		result.IncompleteReason = "人工待处理"
-		result.Explanation = "当前版本没有为这条质量要求配置确定性程序判断。"
-		result.Suggested = "转人工判断或接入相应执行器后重新检查。"
+		// 署名：Codex；时间：2026-09-14。
+		// 规则表中标记为“程序判断”只代表这条规则理论上可以由确定性
+		// 程序执行；如果当前执行器尚未实现对应 rule_code，不能继续
+		// 伪装成“程序判断未完成”，否则页面会误解为执行中的程序问题，
+		// 总体结论也可能被错误压成“无问题”。这里明确转为人工复核，
+		// 让调试日志和前端都能看到真实原因。
+		result.ActualMode = "程序判断"
+		result.Conclusion = "无法完成"
+		result.CheckStatus = "未完成"
+		result.ExecutionStatus = "executor_not_implemented"
+		result.IncompleteReason = "程序执行器未实现"
+		result.HandlingResult = "系统配置缺失"
+		result.Explanation = "当前版本没有为这条质量要求配置确定性程序判断执行器。"
+		result.Suggested = "请补充该规则的程序执行器后重新检查。"
+		result.Evidence["rule_code"] = item.Code
+		result.Evidence["reason"] = "program_executor_not_implemented"
 		return result
 	}
 }

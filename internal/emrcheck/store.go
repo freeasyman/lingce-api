@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,6 +15,187 @@ import (
 type Store struct{ pool *pgxpool.Pool }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+type previewData struct {
+	TemplateCode          string
+	TemplateName          string
+	TemplateVersion       string
+	TemplateVersionID     string
+	MedicalDepartmentCode string
+	Template              map[string]any
+	TemplateFields        []map[string]any
+	PatientContext        map[string]any
+	EncounterContext      map[string]any
+}
+
+type qualityPrompt struct {
+	Code         string
+	Version      string
+	SystemPrompt string
+	UserPrompt   string
+}
+
+type qualityModelConfig struct {
+	FunctionType string
+	Provider     string
+	ModelCode    string
+	Params       *llmgateway.Params
+}
+
+func (s *Store) loadPreviewData(ctx context.Context, tenantID int64, versionID string) (*previewData, []previewBinding, error) {
+	data := &previewData{TemplateVersionID: versionID}
+	var documentType, visitType, status string
+	var tenantScope int64
+	var isCurrent bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT code, name, version_no, COALESCE(specialty, ''), document_type, visit_type,
+		       tenant_id, status, is_current
+		FROM emr_templates
+		WHERE id=$1 AND tenant_id IN (0,$2)
+	`, versionID, tenantID).Scan(
+		&data.TemplateCode, &data.TemplateName, &data.TemplateVersion, &data.MedicalDepartmentCode,
+		&documentType, &visitType, &tenantScope, &status, &isCurrent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load emr template for quality check: %w", err)
+	}
+	data.Template = map[string]any{
+		"code": data.TemplateCode, "name": data.TemplateName,
+		"version": data.TemplateVersion, "version_id": data.TemplateVersionID,
+		"medical_department_code": data.MedicalDepartmentCode, "document_type": documentType,
+		"visit_type": visitType, "tenant_id": tenantScope, "status": status, "is_current": isCurrent,
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT tf.display_order, f.code, f.name, f.content_category, f.input_type,
+		       tf.is_visible, tf.is_required, COALESCE(tf.description, f.description)
+		FROM emr_template_fields tf
+		JOIN emr_fields f ON f.id=tf.field_id
+		WHERE tf.template_id=$1
+		ORDER BY tf.display_order, f.code
+	`, versionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load emr template fields for quality check: %w", err)
+	}
+	defer rows.Close()
+	data.TemplateFields = make([]map[string]any, 0)
+	for rows.Next() {
+		var order int
+		var code, name, category, inputType, description string
+		var visible, required bool
+		if err := rows.Scan(&order, &code, &name, &category, &inputType, &visible, &required, &description); err != nil {
+			return nil, nil, fmt.Errorf("scan emr template field: %w", err)
+		}
+		data.TemplateFields = append(data.TemplateFields, map[string]any{
+			"display_order": order, "code": code, "name": name, "content_category": category,
+			"input_type": inputType, "is_visible": visible, "is_required": required, "description": description,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	bindings, err := s.loadPreviewBindings(ctx, tenantID, versionID, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, bindings, nil
+}
+
+type previewBinding struct {
+	binding
+	rule qualityRuleInput
+}
+
+func (s *Store) loadPreviewBindings(ctx context.Context, tenantID int64, versionID string, withDetails bool) ([]previewBinding, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT b.quality_rule_id, q.code, q.name, q.rule_type, b.execution_mode,
+		       b.deadline_action, q.quality_group, q.evaluated_fact, q.pass_condition,
+		       q.precondition, q.evidence_basis, q.source_version
+		FROM emr_template_quality_rules b
+		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
+		WHERE b.template_id=$1 AND b.is_enabled=true
+		  AND q.status='published' AND q.tenant_id IN (0,$2)
+		ORDER BY b.display_order, q.code
+	`, versionID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load emr quality bindings: %w", err)
+	}
+	defer rows.Close()
+	items := make([]previewBinding, 0)
+	for rows.Next() {
+		var item previewBinding
+		if err := rows.Scan(&item.QualityRequirementID, &item.Code, &item.Name, &item.RuleType,
+			&item.ExecutionMode, &item.DeadlineAction, &item.QualityGroup, &item.EvaluatedFact,
+			&item.PassCondition, &item.Precondition, &item.EvidenceBasis, &item.SourceVersion); err != nil {
+			return nil, err
+		}
+		item.rule = qualityRuleInput{
+			QualityRequirementID: item.QualityRequirementID, Code: item.Code, Name: item.Name,
+			RuleType: item.RuleType, QualityGroup: item.QualityGroup, EvaluatedFact: item.EvaluatedFact,
+			PassCondition: item.PassCondition, Precondition: item.Precondition, EvidenceBasis: item.EvidenceBasis,
+			SourceVersion: item.SourceVersion, ExecutionMode: item.ExecutionMode, DeadlineAction: item.DeadlineAction,
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) loadQualityPrompt(ctx context.Context) (*qualityPrompt, error) {
+	item := &qualityPrompt{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT code, COALESCE(version,'v1'), COALESCE(system_prompt,''), COALESCE(user_prompt_template,'')
+		FROM recording_analysis_prompts
+		WHERE code='emr_quality_check_v1' AND is_active=true
+		ORDER BY updated_at DESC, id DESC LIMIT 1
+	`).Scan(&item.Code, &item.Version, &item.SystemPrompt, &item.UserPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("load emr quality prompt: %w", err)
+	}
+	if strings.TrimSpace(item.SystemPrompt) == "" || strings.TrimSpace(item.UserPrompt) == "" {
+		return nil, fmt.Errorf("emr quality prompt is incomplete")
+	}
+	return item, nil
+}
+
+func (s *Store) loadQualityModelConfig(ctx context.Context, tenantID int64) (*qualityModelConfig, error) {
+	item := &qualityModelConfig{}
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(function_type,''), COALESCE(provider,''), COALESCE(model_code,''),
+		       COALESCE(model_params, extra_params, '{}'::json)
+		FROM llm_model_configs
+		WHERE deleted_at IS NULL AND COALESCE(is_active,true)=true
+		  AND function_type='emr_quality_check' AND tenant_id IN ($1,0)
+		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END,
+		         CASE WHEN COALESCE(is_default,false) THEN 0 ELSE 1 END,
+		         updated_at DESC, id DESC LIMIT 1
+	`, tenantID).Scan(&item.FunctionType, &item.Provider, &item.ModelCode, &raw)
+	if err != nil {
+		return nil, fmt.Errorf("load emr quality model config: %w", err)
+	}
+	params := &llmgateway.Params{Temperature: 0, MaxTokens: 8192, TimeoutSeconds: 120, ResponseFormat: "json"}
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err == nil {
+		if value, ok := values["temperature"].(float64); ok {
+			params.Temperature = value
+		}
+		if value, ok := values["max_tokens"].(float64); ok && value > 0 {
+			params.MaxTokens = int(value)
+			if params.MaxTokens > 8192 {
+				params.MaxTokens = 8192
+			}
+		}
+		if value, ok := values["timeout_seconds"].(float64); ok && value > 0 {
+			params.TimeoutSeconds = int(value)
+		}
+		if value, ok := values["response_format"].(string); ok && value != "" {
+			params.ResponseFormat = value
+		}
+	}
+	if item.FunctionType == "" || item.Provider == "" || item.ModelCode == "" {
+		return nil, fmt.Errorf("emr quality model config is incomplete")
+	}
+	item.Params = params
+	return item, nil
+}
 
 func (s *Store) CurrentSnapshotID(ctx context.Context, tenantID int64, recordID string) (string, error) {
 	var id *string
@@ -79,11 +261,11 @@ func (s *Store) Run(ctx context.Context, req CheckRequest) (*CheckRun, error) {
 			INSERT INTO emr_check_results
 			(check_run_id, quality_requirement_id, requirement_code, requirement_name,
 			 configured_execution_mode, actual_execution_mode, conclusion, check_status,
-			 incomplete_reason, handling_result, meets_deadline, evidence,
+			 execution_status, incomplete_reason, handling_result, meets_deadline, evidence,
 			 hit_explanation, suggested_handling)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15)
 		`, run.ID, item.QualityRequirementID, item.Code, item.Name, item.ExecutionMode,
-			result.ActualMode, result.Conclusion, result.CheckStatus, result.IncompleteReason,
+			result.ActualMode, result.Conclusion, result.CheckStatus, result.ExecutionStatus, result.IncompleteReason,
 			result.HandlingResult, result.MeetsDeadline, string(evidence), result.Explanation,
 			result.Suggested)
 	}
@@ -145,6 +327,7 @@ func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext
 		FROM emr_template_quality_rules b
 		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
 		WHERE b.template_id=$1 AND b.is_enabled=true AND q.status='published'
+		  AND b.deadline_action <> '模板发布前处理'
 		ORDER BY b.display_order, q.code
 	`, data.TemplateVersionID)
 	if err != nil {
@@ -171,6 +354,7 @@ func (s *Store) previewBindings(ctx context.Context, tenantID int64, templateVer
 		WHERE b.template_id=$1 AND b.is_enabled=true
 		  AND q.status='published'
 		  AND q.tenant_id IN (0,$2)
+		  AND b.deadline_action <> '模板发布前处理'
 		ORDER BY b.display_order, q.code
 	`, templateVersionID, tenantID)
 	if err != nil {
@@ -242,7 +426,7 @@ func (s *Store) listResults(ctx context.Context, runID string) ([]*CheckResult, 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, check_run_id, quality_requirement_id, requirement_code, requirement_name,
 		       configured_execution_mode, actual_execution_mode, conclusion, check_status,
-		       incomplete_reason, handling_result, meets_deadline, evidence,
+		       execution_status, incomplete_reason, handling_result, meets_deadline, evidence,
 		       hit_explanation, suggested_handling, manual_conclusion, manual_by, manual_at
 		FROM emr_check_results WHERE check_run_id=$1 ORDER BY requirement_code
 	`, runID)
@@ -254,7 +438,7 @@ func (s *Store) listResults(ctx context.Context, runID string) ([]*CheckResult, 
 	for rows.Next() {
 		item := &CheckResult{}
 		var rawEvidence []byte
-		if err := rows.Scan(&item.ID, &item.CheckRunID, &item.QualityRequirementID, &item.RequirementCode, &item.RequirementName, &item.ConfiguredExecutionMode, &item.ActualExecutionMode, &item.Conclusion, &item.CheckStatus, &item.IncompleteReason, &item.HandlingResult, &item.MeetsDeadline, &rawEvidence, &item.HitExplanation, &item.SuggestedHandling, &item.ManualConclusion, &item.ManualBy, &item.ManualAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.CheckRunID, &item.QualityRequirementID, &item.RequirementCode, &item.RequirementName, &item.ConfiguredExecutionMode, &item.ActualExecutionMode, &item.Conclusion, &item.CheckStatus, &item.ExecutionStatus, &item.IncompleteReason, &item.HandlingResult, &item.MeetsDeadline, &rawEvidence, &item.HitExplanation, &item.SuggestedHandling, &item.ManualConclusion, &item.ManualBy, &item.ManualAt); err != nil {
 			return nil, err
 		}
 		item.Evidence = map[string]any{}
@@ -274,18 +458,32 @@ func validTrigger(value string) bool {
 }
 
 func overallResult(results []evaluatedResult) string {
+	hasUnimplemented := false
 	for _, result := range results {
+		if result.ExecutionStatus == "executor_not_implemented" {
+			hasUnimplemented = true
+			continue
+		}
 		if result.HandlingResult == "阻断" {
 			return "需要处理"
 		}
 	}
 	for _, result := range results {
+		if result.ExecutionStatus == "executor_not_implemented" {
+			continue
+		}
 		if result.CheckStatus != "已完成" {
 			return "无法完成"
 		}
 		if result.Conclusion == "不符合" {
 			return "存在提示"
 		}
+		if result.Conclusion == "无法判断" {
+			return "存在提示"
+		}
+	}
+	if hasUnimplemented {
+		return "无法完成"
 	}
 	return "无问题"
 }

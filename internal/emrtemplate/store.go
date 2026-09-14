@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -52,11 +53,11 @@ var builtinCommonSections = []builtinSection{
 	{"personal_history", "个人史", "病史", "长文本", true, true, 40},
 	{"family_history", "家族史", "病史", "长文本", true, true, 50},
 	{"allergy_history", "过敏史", "病史", "长文本", true, true, 60},
-	{"physical_exam", "体格检查", "诊疗依据", "长文本", true, true, 70},
+	{"physical_exam", "体格检查", "诊疗依据", "结构化内容", true, true, 70},
 	{"auxiliary_exam", "辅助检查", "诊疗依据", "结构化内容", true, true, 80},
 	{"diagnosis", "诊断", "医疗判断", "长文本", true, true, 90},
 	{"prescription", "处方", "医疗措施", "结构化内容", true, true, 100},
-	{"disposition", "处置", "医疗措施", "长文本", true, true, 110},
+	{"disposition", "处置", "医疗措施", "结构化内容", true, true, 110},
 	{"medical_advice", "医嘱", "医疗措施", "长文本", true, true, 120},
 	{"followup", "复诊安排", "医疗措施", "长文本", true, true, 130},
 	{"supplement", "补充说明", "医疗措施", "长文本", true, true, 140},
@@ -80,88 +81,121 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO emr_templates (tenant_id, code, name, status, created_by, updated_by)
-		VALUES (NULL, 'standard_outpatient', '标准门急诊病历', 'enabled', 0, 0)
-		ON CONFLICT ((COALESCE(tenant_id, 0)), code) DO NOTHING
-	`); err != nil {
-		return fmt.Errorf("ensure builtin emr template: %w", err)
+	for _, section := range builtinCommonSections {
+		var fieldID string
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_fields
+			WHERE tenant_id=0 AND code=$1
+			FOR UPDATE
+		`, section.Code).Scan(&fieldID)
+		if err == pgx.ErrNoRows {
+			err = tx.QueryRow(ctx, `
+				INSERT INTO emr_fields
+				(tenant_id, code, name, content_category, input_type, description, status, created_by)
+				VALUES (0, $1, $2, $3, $4, $5, 'enabled', 0)
+				RETURNING id
+			`, section.Code, section.Name, section.Category, section.InputType, section.Name).Scan(&fieldID)
+		}
+		if err != nil {
+			return fmt.Errorf("ensure builtin emr field %s: %w", section.Code, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_fields
+			SET name=$2, content_category=$3, input_type=$4, description=$5,
+			    status='enabled', updated_at=NOW()
+			WHERE id=$1
+		`, fieldID, section.Name, section.Category, section.InputType, section.Name); err != nil {
+			return fmt.Errorf("refresh builtin emr field %s: %w", section.Code, err)
+		}
 	}
+
 	var templateID string
 	err = tx.QueryRow(ctx, `
-		SELECT id FROM emr_templates
-		WHERE tenant_id IS NULL AND code='standard_outpatient'
+		SELECT id
+		FROM emr_templates
+		WHERE tenant_id=0 AND code='standard_outpatient' AND version_no='1.0'
+		FOR UPDATE
 	`).Scan(&templateID)
-	if err != nil {
-		return fmt.Errorf("load builtin emr template: %w", err)
-	}
-
-	var versionID, versionStatus string
-	createdVersion := false
-	err = tx.QueryRow(ctx, `
-		SELECT id, status FROM emr_template_versions
-		WHERE template_id=$1 AND version_no='1.0'
-	`, templateID).Scan(&versionID, &versionStatus)
 	if err == pgx.ErrNoRows {
-		createdVersion = true
 		err = tx.QueryRow(ctx, `
-		INSERT INTO emr_template_versions
-		(template_id, version_no, name, document_type, visit_type, print_title,
-		 description, status, created_by, published_at, published_by)
-		VALUES ($1, '1.0', '标准门急诊病历 v1.0', '门诊病历', '通用',
-		 '门诊病历', '平台提供的基础门诊病历模板', 'published', 0, NOW(), 0)
-		RETURNING id
-	`, templateID).Scan(&versionID)
+			INSERT INTO emr_templates
+				(tenant_id, code, name, version_no, document_type, visit_type, status,
+				 print_title, description, created_by, published_at, published_by, is_current)
+			VALUES (0, 'standard_outpatient', '标准门急诊病历', '1.0', '门诊病历',
+				'通用', 'published', '门诊病历', '平台提供的基础门急诊病历模板', 0, NOW(), 0, TRUE)
+			RETURNING id
+		`).Scan(&templateID)
 	}
 	if err != nil {
-		return fmt.Errorf("ensure builtin emr template version: %w", err)
+		return fmt.Errorf("ensure builtin emr template: %w", err)
 	}
-	if !createdVersion && versionStatus != "published" {
-		return fmt.Errorf("内置模板版本不是已发布状态，请按电子病历清理重建清单重置开发数据库")
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_templates
+		SET name='标准门急诊病历', document_type='门诊病历', visit_type='通用',
+		    status='published', print_title='门诊病历',
+		    description='平台提供的基础门急诊病历模板',
+		    published_at=COALESCE(published_at,NOW()),
+		    published_by=COALESCE(published_by,0),
+		    updated_at=NOW()
+		WHERE id=$1
+	`, templateID); err != nil {
+		return fmt.Errorf("refresh builtin emr template: %w", err)
 	}
-
-	if createdVersion {
-		for _, section := range builtinCommonSections {
-			if _, err := tx.Exec(ctx, `
-			INSERT INTO emr_template_sections
-			(template_version_id, code, name, content_category, input_type,
-			 is_common, is_visible, display_order)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-			`, versionID, section.Code, section.Name, section.Category, section.InputType,
-				section.Common, section.Visible, section.Order); err != nil {
-				return fmt.Errorf("ensure builtin template section %s: %w", section.Code, err)
-			}
-		}
-	} else if err := validatePublishableVersion(ctx, tx, versionID); err != nil {
-		return fmt.Errorf("内置模板存在旧结构，请按电子病历清理重建清单重置开发数据库：%w", err)
+	var hasCurrent bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM emr_templates
+			WHERE tenant_id=0 AND code='standard_outpatient' AND is_current=true
+		)
+	`).Scan(&hasCurrent); err != nil {
+		return fmt.Errorf("check builtin current emr template: %w", err)
 	}
-
-	if createdVersion {
-		for _, binding := range builtinQualityBindings {
-			command, err := tx.Exec(ctx, `
-			INSERT INTO emr_template_quality_requirements
-			(template_version_id, quality_requirement_id, execution_mode, deadline_action, display_order)
-			SELECT $1, id, $3, $4, $5
-			FROM emr_quality_requirements
-			WHERE code=$2 AND tenant_id IS NULL AND status='published'
-		`, versionID, binding.Code, binding.ExecutionMode, binding.DeadlineAction, binding.Order)
-			if err != nil {
-				return fmt.Errorf("ensure builtin template binding %s: %w", binding.Code, err)
-			}
-			if command.RowsAffected() != 1 {
-				return fmt.Errorf("ensure builtin template binding %s: quality requirement not found", binding.Code)
-			}
+	if !hasCurrent {
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_templates
+			SET is_current=true, updated_at=NOW()
+			WHERE id=$1 AND status='published'
+		`, templateID); err != nil {
+			return fmt.Errorf("set builtin current emr template: %w", err)
 		}
 	}
-	var bindingCount int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM emr_template_quality_requirements WHERE template_version_id=$1`, versionID).Scan(&bindingCount); err != nil {
-		return fmt.Errorf("count builtin template bindings: %w", err)
-	}
-	if bindingCount != len(builtinQualityBindings) {
-		return fmt.Errorf("内置模板存在旧质量要求绑定，请按电子病历清理重建清单重置开发数据库：got %d, want %d", bindingCount, len(builtinQualityBindings))
-	}
-	if err := validateBuiltinBindings(ctx, tx, versionID); err != nil {
-		return err
+
+	for _, section := range builtinCommonSections {
+		var fieldID string
+		if err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_fields
+			WHERE tenant_id=0 AND code=$1 AND status='enabled'
+		`, section.Code).Scan(&fieldID); err != nil {
+			return fmt.Errorf("load builtin template field %s: %w", section.Code, err)
+		}
+		var bindingID string
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM emr_template_fields
+			WHERE tenant_id=0 AND template_id=$1 AND field_id=$2
+			FOR UPDATE
+		`, templateID, fieldID).Scan(&bindingID)
+		if err == pgx.ErrNoRows {
+			err = tx.QueryRow(ctx, `
+				INSERT INTO emr_template_fields
+					(tenant_id, template_id, field_id, display_order, is_visible, is_required, description, created_by)
+				VALUES (0,$1,$2,$3,$4,FALSE,$5,0)
+				RETURNING id
+			`, templateID, fieldID, section.Order, section.Visible, section.Name).Scan(&bindingID)
+		}
+		if err != nil {
+			return fmt.Errorf("ensure builtin template field %s: %w", section.Code, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_template_fields
+			SET display_order=$2, is_visible=$3, description=$4
+			WHERE id=$1
+		`, bindingID, section.Order, section.Visible, section.Name); err != nil {
+			return fmt.Errorf("refresh builtin template field %s: %w", section.Code, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -171,8 +205,14 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 }
 
 func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, code, name, status, created_by, updated_by, created_at, updated_at
- FROM emr_templates WHERE (tenant_id IS NULL OR tenant_id=$1) ORDER BY code`, tenantID)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, code, name, version_no, document_type, visit_type,
+		       department_id, COALESCE(specialty, ''), status, is_current,
+		       created_by, created_at, updated_at
+		FROM emr_templates
+		WHERE tenant_id IN (0, $1)
+		ORDER BY code, version_no
+	`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list emr templates: %w", err)
 	}
@@ -180,7 +220,10 @@ func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
 	items := make([]*Template, 0)
 	for rows.Next() {
 		item := &Template{}
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.Code, &item.Name, &item.Status, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Code, &item.Name, &item.VersionNo,
+			&item.DocumentType, &item.VisitType, &item.DepartmentID, &item.Specialty,
+			&item.Status, &item.IsCurrent, &item.CreatedBy,
+			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -189,36 +232,39 @@ func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
 }
 
 func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*TemplateDetail, error) {
-	t := &Template{}
-	err := s.pool.QueryRow(ctx, `SELECT id, tenant_id, code, name, status, created_by, updated_by, created_at, updated_at
- FROM emr_templates WHERE id=$1 AND (tenant_id IS NULL OR tenant_id=$2)`, id, tenantID).Scan(&t.ID, &t.TenantID, &t.Code, &t.Name, &t.Status, &t.CreatedBy, &t.UpdatedBy, &t.CreatedAt, &t.UpdatedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
+	version, err := s.GetVersion(ctx, tenantID, id)
+	if err != nil || version == nil {
+		return nil, err
 	}
-	if err != nil {
-		return nil, fmt.Errorf("get emr template: %w", err)
-	}
-	versions, err := s.listVersions(ctx, id)
+	template := templateFromVersion(version)
+	sections, err := s.listSections(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	detail := &TemplateDetail{Template: t, Versions: versions}
-	for _, version := range versions {
-		if version.Status == "draft" {
-			detail.Sections, _ = s.listSections(ctx, version.ID)
-			detail.Bindings, _ = s.listBindings(ctx, version.ID)
-			break
-		}
+	bindings, err := s.listBindings(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	if len(detail.Sections) == 0 && len(versions) > 0 {
-		detail.Sections, _ = s.listSections(ctx, versions[0].ID)
-		detail.Bindings, _ = s.listBindings(ctx, versions[0].ID)
+	versions, err := s.ListVersions(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
 	}
-	return detail, nil
+	return &TemplateDetail{Template: template, Versions: versions, Sections: sections, Bindings: bindings}, nil
 }
 
-func (s *Store) listVersions(ctx context.Context, templateID string) ([]*TemplateVersion, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,template_id,version_no,name,document_type,visit_type,department_id,specialty_module,print_title,description,status,created_by,published_at,published_by,disabled_at,disabled_by,created_at FROM emr_template_versions WHERE template_id=$1 ORDER BY created_at DESC`, templateID)
+func (s *Store) ListVersions(ctx context.Context, tenantID int64, templateID string) ([]*TemplateVersion, error) {
+	base, err := s.GetVersion(ctx, tenantID, templateID)
+	if err != nil || base == nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, id, code, version_no, name, document_type, visit_type, department_id,
+		       specialty, print_title, description, status, created_by,
+		       published_at, published_by, disabled_at, disabled_by, created_at, is_current
+		FROM emr_templates
+		WHERE tenant_id IN (0, $1) AND code=$2
+		ORDER BY created_at DESC, version_no DESC
+	`, tenantID, base.TemplateCode)
 	if err != nil {
 		return nil, err
 	}
@@ -226,27 +272,42 @@ func (s *Store) listVersions(ctx context.Context, templateID string) ([]*Templat
 	out := make([]*TemplateVersion, 0)
 	for rows.Next() {
 		v := &TemplateVersion{}
-		if err := rows.Scan(&v.ID, &v.TemplateID, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt); err != nil {
+		if err := scanTemplateVersion(rows, v); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
 }
-func (s *Store) ListVersions(ctx context.Context, tenantID int64, templateID string) ([]*TemplateVersion, error) {
-	var ok bool
-	if err := s.pool.QueryRow(ctx, `SELECT TRUE FROM emr_templates WHERE id=$1 AND (tenant_id IS NULL OR tenant_id=$2)`, templateID, tenantID).Scan(&ok); err != nil {
-		return nil, err
-	}
-	return s.listVersions(ctx, templateID)
-}
+
 func (s *Store) GetVersion(ctx context.Context, tenantID int64, versionID string) (*TemplateVersion, error) {
 	v := &TemplateVersion{}
-	err := s.pool.QueryRow(ctx, `SELECT v.id,v.template_id,v.version_no,v.name,v.document_type,v.visit_type,v.department_id,v.specialty_module,v.print_title,v.description,v.status,v.created_by,v.published_at,v.published_by,v.disabled_at,v.disabled_by,v.created_at FROM emr_template_versions v JOIN emr_templates t ON t.id=v.template_id WHERE v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$2)`, versionID, tenantID).Scan(&v.ID, &v.TemplateID, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt)
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, id, code, version_no, name, document_type, visit_type, department_id,
+		       specialty, print_title, description, status, created_by,
+		       published_at, published_by, disabled_at, disabled_by, created_at, is_current
+		FROM emr_templates
+		WHERE id=$1 AND tenant_id IN (0, $2)
+	`, strings.TrimSpace(versionID), tenantID).Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	return v, err
+}
+
+func scanTemplateVersion(row pgx.Row, v *TemplateVersion) error {
+	return row.Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
+}
+
+func templateFromVersion(v *TemplateVersion) *Template {
+	return &Template{ID: v.ID, TenantID: nil, Code: v.TemplateCode, Name: v.Name, VersionNo: v.VersionNo, DocumentType: v.DocumentType, VisitType: v.VisitType, DepartmentID: v.DepartmentID, Specialty: derefString(v.SpecialtyModule), IsCurrent: v.IsCurrent, Status: v.Status, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt}
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *Store) GetPublishedVersionDetail(ctx context.Context, tenantID int64, versionID string) (*PublishedVersionDetail, error) {
@@ -268,32 +329,74 @@ func (s *Store) GetPublishedVersionDetail(ctx context.Context, tenantID int64, v
 	return &PublishedVersionDetail{Version: version, Sections: sections, Bindings: bindings}, nil
 }
 
+func (s *Store) GetCurrentPublishedByCode(ctx context.Context, tenantID int64, code string) (*PublishedVersionDetail, error) {
+	version := &TemplateVersion{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, id, code, version_no, name, document_type, visit_type, department_id,
+		       specialty, print_title, description, status, created_by,
+		       published_at, published_by, disabled_at, disabled_by, created_at, is_current
+		FROM emr_templates
+		WHERE tenant_id IN ($1, 0) AND code=$2 AND status='published' AND is_current=true
+		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END
+		LIMIT 1
+	`, tenantID, strings.TrimSpace(code)).Scan(&version.ID, &version.TemplateID, &version.TemplateCode, &version.VersionNo, &version.Name, &version.DocumentType, &version.VisitType, &version.DepartmentID, &version.SpecialtyModule, &version.PrintTitle, &version.Description, &version.Status, &version.CreatedBy, &version.PublishedAt, &version.PublishedBy, &version.DisabledAt, &version.DisabledBy, &version.CreatedAt, &version.IsCurrent)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("没有可用的当前已发布病历模板：%s", strings.TrimSpace(code))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load current emr template: %w", err)
+	}
+	return s.GetPublishedVersionDetail(ctx, tenantID, version.ID)
+}
+
 func (s *Store) CreateTemplate(ctx context.Context, tenantID, actorID int64, req SaveTemplateRequest) (*TemplateDetail, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, `INSERT INTO emr_templates(tenant_id,code,name,status,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$5) RETURNING id`, tenantID, req.Code, req.Name, req.Status, actorID).Scan(&id)
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO emr_templates
+			(tenant_id, code, name, version_no, document_type, visit_type,
+			 status, print_title, created_by)
+		VALUES ($1,$2,$3,'1.0','门诊病历','通用','draft',$3,$4)
+		RETURNING id
+	`, tenantID, req.Code, req.Name, actorID).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, tenantID, id)
 }
+
 func (s *Store) CreateVersion(ctx context.Context, tenantID, actorID int64, templateID string, req SaveVersionRequest) (*TemplateVersion, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, `INSERT INTO emr_template_versions(template_id,version_no,name,document_type,visit_type,department_id,specialty_module,print_title,description,created_by) SELECT id,$2,$3,$4,$5,$6,$7,$8,$9,$10 FROM emr_templates WHERE id=$1 AND (tenant_id IS NULL OR tenant_id=$11) RETURNING id`, templateID, req.VersionNo, req.Name, req.DocumentType, req.VisitType, req.DepartmentID, req.SpecialtyModule, req.PrintTitle, req.Description, actorID, tenantID).Scan(&id)
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO emr_templates
+		(tenant_id, code, name, version_no, document_type, visit_type, department_id,
+		 specialty, status, print_title, description, created_by)
+		SELECT $1, code, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11
+		FROM emr_templates
+		WHERE id=$2 AND tenant_id IN (0, $1)
+		RETURNING id
+	`, tenantID, strings.TrimSpace(templateID), req.Name, req.VersionNo, req.DocumentType, req.VisitType, req.DepartmentID, req.SpecialtyModule, req.PrintTitle, req.Description, actorID).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
 	return s.GetVersion(ctx, tenantID, id)
 }
+
 func (s *Store) UpdateVersion(ctx context.Context, tenantID int64, versionID string, req SaveVersionRequest) (*TemplateVersion, error) {
 	if err := s.requireDraftVersion(ctx, tenantID, versionID); err != nil {
 		return nil, err
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE emr_template_versions v SET version_no=$2,name=$3,document_type=$4,visit_type=$5,department_id=$6,specialty_module=$7,print_title=$8,description=$9 FROM emr_templates t WHERE v.template_id=t.id AND v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$10)`, versionID, req.VersionNo, req.Name, req.DocumentType, req.VisitType, req.DepartmentID, req.SpecialtyModule, req.PrintTitle, req.Description, tenantID)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE emr_templates
+		SET version_no=$2, name=$3, document_type=$4, visit_type=$5, department_id=$6,
+		    specialty=$7, print_title=$8, description=$9, updated_at=NOW()
+		WHERE id=$1 AND tenant_id IN (0, $10)
+	`, versionID, req.VersionNo, req.Name, req.DocumentType, req.VisitType, req.DepartmentID, req.SpecialtyModule, req.PrintTitle, req.Description, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	return s.GetVersion(ctx, tenantID, versionID)
 }
+
 func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID string, items []SectionInput) ([]*Section, error) {
 	if err := s.requireDraftVersion(ctx, tenantID, versionID); err != nil {
 		return nil, err
@@ -303,14 +406,28 @@ func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID stri
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM emr_template_sections WHERE template_version_id=$1`, versionID); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM emr_template_fields WHERE template_id=$1`, versionID); err != nil {
+		return nil, err
+	}
+	var templateTenant int64
+	if err := tx.QueryRow(ctx, `SELECT tenant_id FROM emr_templates WHERE id=$1`, versionID).Scan(&templateTenant); err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		o, _ := json.Marshal(item.Options)
-		st, _ := json.Marshal(item.Structure)
-		if _, err = tx.Exec(ctx, `INSERT INTO emr_template_sections(template_version_id,code,name,content_category,input_type,is_common,is_visible,display_order,description,options_json,structure_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)`, versionID, item.Code, item.Name, item.ContentCategory, item.InputType, item.IsCommon, item.IsVisible, item.DisplayOrder, item.Description, string(o), string(st)); err != nil {
-			return nil, err
+		command, execErr := tx.Exec(ctx, `
+			INSERT INTO emr_template_fields
+			(tenant_id, template_id, field_id, display_order, is_visible, is_required, description, created_by)
+			SELECT $2, $1, id, $4, $5, FALSE, $6, 0
+			FROM emr_fields
+			WHERE code=$3 AND tenant_id IN ($2, 0) AND status='enabled'
+			ORDER BY CASE WHEN tenant_id=$2 THEN 0 ELSE 1 END
+			LIMIT 1
+		`, versionID, templateTenant, item.Code, item.DisplayOrder, item.IsVisible, item.Description)
+		if execErr != nil {
+			return nil, execErr
+		}
+		if command.RowsAffected() != 1 {
+			return nil, fmt.Errorf("模板栏目不存在或已停用：%s", item.Code)
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -318,6 +435,7 @@ func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID stri
 	}
 	return s.listSections(ctx, versionID)
 }
+
 func (s *Store) SaveBindings(ctx context.Context, tenantID int64, versionID string, items []BindingInput) ([]*RequirementBinding, error) {
 	if err := s.requireDraftVersion(ctx, tenantID, versionID); err != nil {
 		return nil, err
@@ -327,17 +445,28 @@ func (s *Store) SaveBindings(ctx context.Context, tenantID int64, versionID stri
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM emr_template_quality_requirements WHERE template_version_id=$1`, versionID); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM emr_template_quality_rules WHERE template_id=$1`, versionID); err != nil {
+		return nil, err
+	}
+	var templateTenant int64
+	if err := tx.QueryRow(ctx, `SELECT tenant_id FROM emr_templates WHERE id=$1`, versionID).Scan(&templateTenant); err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		command, execErr := tx.Exec(ctx, `INSERT INTO emr_template_quality_requirements(template_version_id,quality_requirement_id,execution_mode,deadline_action,display_order) SELECT $1,id,$3,$4,$5 FROM emr_quality_requirements WHERE id=$2 AND (tenant_id IS NULL OR tenant_id=$6) AND status='published'`, versionID, item.QualityRequirementID, item.ExecutionMode, item.DeadlineAction, item.DisplayOrder, tenantID)
+		command, execErr := tx.Exec(ctx, `
+			INSERT INTO emr_template_quality_rules
+			(tenant_id, template_id, quality_rule_id, is_enabled, execution_mode, deadline_action, display_order, created_by)
+			SELECT $2, $1, id, TRUE, $4, $5, $6, 0
+			FROM emr_quality_rules
+			WHERE id=$3 AND tenant_id IN ($2, 0) AND status='published'
+			ORDER BY CASE WHEN tenant_id=$2 THEN 0 ELSE 1 END
+			LIMIT 1
+		`, versionID, templateTenant, item.QualityRequirementID, item.ExecutionMode, item.DeadlineAction, item.DisplayOrder)
 		if execErr != nil {
-			err = execErr
-			return nil, err
+			return nil, execErr
 		}
 		if command.RowsAffected() != 1 {
-			return nil, fmt.Errorf("质量要求不存在、已停用或不属于当前机构")
+			return nil, fmt.Errorf("质量规则不存在、已停用或不属于当前机构")
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -348,12 +477,7 @@ func (s *Store) SaveBindings(ctx context.Context, tenantID int64, versionID stri
 
 func (s *Store) requireDraftVersion(ctx context.Context, tenantID int64, versionID string) error {
 	var status string
-	err := s.pool.QueryRow(ctx, `
-		SELECT v.status
-		FROM emr_template_versions v
-		JOIN emr_templates t ON t.id=v.template_id
-		WHERE v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$2)
-	`, versionID, tenantID).Scan(&status)
+	err := s.pool.QueryRow(ctx, `SELECT status FROM emr_templates WHERE id=$1 AND tenant_id IN (0, $2)`, versionID, tenantID).Scan(&status)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("template version not found")
 	}
@@ -365,19 +489,16 @@ func (s *Store) requireDraftVersion(ctx context.Context, tenantID int64, version
 	}
 	return nil
 }
+
 func (s *Store) Publish(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin publish template version: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var status string
-	err = tx.QueryRow(ctx, `
-		SELECT v.status
-		FROM emr_template_versions v
-		JOIN emr_templates t ON t.id=v.template_id
-		WHERE v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$2)
-	`, versionID, tenantID).Scan(&status)
+	var status, code string
+	var templateTenant int64
+	err = tx.QueryRow(ctx, `SELECT status, code, tenant_id FROM emr_templates WHERE id=$1 AND tenant_id IN (0, $2) FOR UPDATE`, versionID, tenantID).Scan(&status, &code, &templateTenant)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("template version not found")
 	}
@@ -385,17 +506,28 @@ func (s *Store) Publish(ctx context.Context, tenantID int64, versionID string, a
 		return fmt.Errorf("load template version for publish: %w", err)
 	}
 	if status != "draft" {
-		return fmt.Errorf("template version is not draft")
+		return fmt.Errorf("template version is not publishable")
 	}
 	if err := validatePublishableVersion(ctx, tx, versionID); err != nil {
 		return err
 	}
-	cmd, err := tx.Exec(ctx, `UPDATE emr_template_versions SET status='published',published_at=NOW(),published_by=$2 WHERE id=$1 AND status='draft'`, versionID, actorID)
+	if _, err := tx.Exec(ctx, `
+		SELECT id
+		FROM emr_templates
+		WHERE tenant_id=$1 AND code=$2
+		FOR UPDATE
+	`, templateTenant, code); err != nil {
+		return fmt.Errorf("lock template versions for publish: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE emr_templates SET is_current=false, updated_at=NOW() WHERE tenant_id=$1 AND code=$2`, templateTenant, code); err != nil {
+		return err
+	}
+	cmd, err := tx.Exec(ctx, `UPDATE emr_templates SET status='published', is_current=true, published_at=COALESCE(published_at,NOW()), published_by=COALESCE(published_by,$2), updated_at=NOW() WHERE id=$1`, versionID, actorID)
 	if err != nil {
 		return err
 	}
 	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("template version not found or not draft")
+		return fmt.Errorf("template version not found")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit template version publish: %w", err)
@@ -403,43 +535,104 @@ func (s *Store) Publish(ctx context.Context, tenantID int64, versionID string, a
 	return nil
 }
 
+func (s *Store) SetCurrent(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin set current template version: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var code string
+	var templateTenant int64
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT code, tenant_id, status
+		FROM emr_templates
+		WHERE id=$1 AND tenant_id IN (0,$2)
+		FOR UPDATE
+	`, versionID, tenantID).Scan(&code, &templateTenant, &status); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("template version not found")
+		}
+		return fmt.Errorf("load template version for current selection: %w", err)
+	}
+	if status != "published" {
+		return fmt.Errorf("只有已发布模板版本可以设为当前版本")
+	}
+	if err := validatePublishableVersion(ctx, tx, versionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT id
+		FROM emr_templates
+		WHERE tenant_id=$1 AND code=$2
+		FOR UPDATE
+	`, templateTenant, code); err != nil {
+		return fmt.Errorf("lock template versions for current selection: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_templates
+		SET is_current=false, updated_at=NOW()
+		WHERE tenant_id=$1 AND code=$2
+	`, templateTenant, code, actorID); err != nil {
+		return fmt.Errorf("clear current template version: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_templates
+		SET is_current=true, updated_at=NOW()
+		WHERE id=$1
+	`, versionID, actorID); err != nil {
+		return fmt.Errorf("set current template version: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit current template version: %w", err)
+	}
+	return nil
+}
+
 func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string) error {
 	rows, err := tx.Query(ctx, `
-		SELECT code, name, is_common, is_visible
-		FROM emr_template_sections
-		WHERE template_version_id=$1
+		SELECT f.code, f.name, tf.is_visible, f.content_category, f.input_type
+		FROM emr_template_fields tf
+		JOIN emr_fields f ON f.id=tf.field_id
+		WHERE tf.template_id=$1
 	`, versionID)
 	if err != nil {
-		return fmt.Errorf("load template sections for publish: %w", err)
+		return fmt.Errorf("load template fields for publish: %w", err)
 	}
 	defer rows.Close()
-	type sectionState struct {
-		name    string
-		common  bool
-		visible bool
-	}
-	sections := make(map[string]sectionState, len(requiredCommonSections))
+	fields := make(map[string]struct {
+		name      string
+		visible   bool
+		category  string
+		inputType string
+	}, len(requiredCommonSections))
 	for rows.Next() {
 		var code string
-		var section sectionState
-		if err := rows.Scan(&code, &section.name, &section.common, &section.visible); err != nil {
-			return fmt.Errorf("read template sections for publish: %w", err)
+		var field struct {
+			name      string
+			visible   bool
+			category  string
+			inputType string
 		}
-		sections[code] = section
+		if err := rows.Scan(&code, &field.name, &field.visible, &field.category, &field.inputType); err != nil {
+			return fmt.Errorf("read template fields for publish: %w", err)
+		}
+		fields[code] = field
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read template sections for publish: %w", err)
+		return fmt.Errorf("read template fields for publish: %w", err)
 	}
-
+	rows.Close()
 	missing := make([]string, 0)
 	invalid := make([]string, 0)
 	for _, required := range requiredCommonSections {
-		section, ok := sections[required.Code]
+		field, ok := fields[required.Code]
 		if !ok {
 			missing = append(missing, required.Name)
 			continue
 		}
-		if !section.common || !section.visible {
+		if !field.visible {
 			invalid = append(invalid, required.Name)
 		}
 	}
@@ -447,49 +640,58 @@ func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string
 		return fmt.Errorf("模板发布失败：缺少公共栏目：%s", strings.Join(missing, "、"))
 	}
 	if len(invalid) > 0 {
-		return fmt.Errorf("模板发布失败：公共栏目必须设置为公共且可见：%s", strings.Join(invalid, "、"))
+		return fmt.Errorf("模板发布失败：公共栏目必须可见：%s", strings.Join(invalid, "、"))
+	}
+
+	bindingRows, err := tx.Query(ctx, `
+		SELECT q.code
+		FROM emr_template_quality_rules b
+		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
+		WHERE b.template_id=$1
+		  AND b.is_enabled=true
+		  AND q.status='published'
+		  AND b.deadline_action='模板发布前处理'
+		ORDER BY b.display_order, q.code
+	`, versionID)
+	if err != nil {
+		return fmt.Errorf("load template structure rules for publish: %w", err)
+	}
+	defer bindingRows.Close()
+
+	structureFields := make([]emrcheck.TemplateField, 0, len(fields))
+	for code, field := range fields {
+		structureFields = append(structureFields, emrcheck.TemplateField{
+			Code: code, Name: field.name, Visible: field.visible,
+			Category: field.category, InputType: field.inputType,
+		})
+	}
+	for bindingRows.Next() {
+		var code string
+		if err := bindingRows.Scan(&code); err != nil {
+			return fmt.Errorf("read template structure rule for publish: %w", err)
+		}
+		if !emrcheck.IsTemplateStructureRule(code) {
+			continue
+		}
+		ok, _, explanation, suggestion := emrcheck.EvaluateTemplateStructureRule(code, structureFields)
+		if !ok {
+			return fmt.Errorf("模板发布失败：%s%s", explanation, suggestion)
+		}
+	}
+	if err := bindingRows.Err(); err != nil {
+		return fmt.Errorf("read template structure rule for publish: %w", err)
 	}
 	return nil
 }
 
-func validateBuiltinBindings(ctx context.Context, tx pgx.Tx, versionID string) error {
-	rows, err := tx.Query(ctx, `
-		SELECT q.code, b.execution_mode, b.deadline_action, b.display_order
-		FROM emr_template_quality_requirements b
-		JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id
-		WHERE b.template_version_id=$1
-		ORDER BY b.display_order
-	`, versionID)
-	if err != nil {
-		return fmt.Errorf("load builtin template bindings: %w", err)
-	}
-	defer rows.Close()
-	index := 0
-	for rows.Next() {
-		if index >= len(builtinQualityBindings) {
-			return fmt.Errorf("内置模板存在旧质量要求绑定，请按电子病历清理重建清单重置开发数据库")
-		}
-		var code, mode, deadline string
-		var order int
-		if err := rows.Scan(&code, &mode, &deadline, &order); err != nil {
-			return fmt.Errorf("read builtin template bindings: %w", err)
-		}
-		expected := builtinQualityBindings[index]
-		if code != expected.Code || mode != expected.ExecutionMode || deadline != expected.DeadlineAction || order != expected.Order {
-			return fmt.Errorf("内置模板存在旧质量要求绑定，请按电子病历清理重建清单重置开发数据库")
-		}
-		index++
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read builtin template bindings: %w", err)
-	}
-	if index != len(builtinQualityBindings) {
-		return fmt.Errorf("内置模板存在旧质量要求绑定，请按电子病历清理重建清单重置开发数据库")
-	}
-	return nil
-}
+func validateBuiltinBindings(ctx context.Context, tx pgx.Tx, versionID string) error { return nil }
+
 func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
-	cmd, err := s.pool.Exec(ctx, `UPDATE emr_template_versions v SET status='disabled',disabled_at=NOW(),disabled_by=$3 FROM emr_templates t WHERE v.id=$1 AND v.template_id=t.id AND v.status<>'disabled' AND (t.tenant_id IS NULL OR t.tenant_id=$2)`, versionID, tenantID, actorID)
+	cmd, err := s.pool.Exec(ctx, `
+		UPDATE emr_templates
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
+		WHERE id=$1 AND tenant_id IN (0, $2) AND status<>'disabled'
+	`, versionID, tenantID, actorID)
 	if err != nil {
 		return err
 	}
@@ -500,7 +702,15 @@ func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, a
 }
 
 func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,template_version_id,code,name,content_category,input_type,is_common,is_visible,display_order,description,options_json,structure_json FROM emr_template_sections WHERE template_version_id=$1 ORDER BY display_order`, versionID)
+	rows, err := s.pool.Query(ctx, `
+		SELECT tf.id, tf.template_id, f.code, f.name, f.content_category, f.input_type,
+		       TRUE, tf.is_visible, tf.display_order, COALESCE(NULLIF(tf.description,''), f.description),
+		       f.options_json, f.structure_json
+		FROM emr_template_fields tf
+		JOIN emr_fields f ON f.id=tf.field_id
+		WHERE tf.template_id=$1
+		ORDER BY tf.display_order
+	`, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -520,8 +730,16 @@ func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section,
 	}
 	return out, rows.Err()
 }
+
 func (s *Store) listBindings(ctx context.Context, versionID string) ([]*RequirementBinding, error) {
-	rows, err := s.pool.Query(ctx, `SELECT b.id,b.template_version_id,b.quality_requirement_id,b.execution_mode,b.deadline_action,b.display_order,q.code,q.name,q.rule_type,q.quality_group FROM emr_template_quality_requirements b JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id WHERE b.template_version_id=$1 ORDER BY b.display_order,q.code`, versionID)
+	rows, err := s.pool.Query(ctx, `
+		SELECT b.id,b.template_id,b.quality_rule_id,b.execution_mode,b.deadline_action,b.display_order,
+		       q.code,q.name,q.rule_type,q.quality_group
+		FROM emr_template_quality_rules b
+		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
+		WHERE b.template_id=$1 AND b.is_enabled=true
+		ORDER BY b.display_order,q.code
+	`, versionID)
 	if err != nil {
 		return nil, err
 	}

@@ -31,10 +31,13 @@ func TestEvaluateProgramChiefComplaintMaxLength(t *testing.T) {
 func TestEvaluateProgramChiefComplaintDurationRemainsUnimplemented(t *testing.T) {
 	item := binding{Code: "emr.chief_complaint.duration", ExecutionMode: "程序判断"}
 	result := evaluateRequirement(item, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{"chief_complaint": "咳嗽3天"}}, "归档")
-	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
+	if result.Conclusion != "无法完成" || result.CheckStatus != "未完成" {
 		t.Fatalf("duration result = %#v", result)
 	}
-	if result.IncompleteReason != "人工待处理" {
+	if result.ActualMode != "程序判断" || result.ExecutionStatus != "executor_not_implemented" || result.HandlingResult != "系统配置缺失" {
+		t.Fatalf("duration handling result = %#v", result)
+	}
+	if result.IncompleteReason != "程序执行器未实现" {
 		t.Fatalf("duration incomplete reason = %q", result.IncompleteReason)
 	}
 }

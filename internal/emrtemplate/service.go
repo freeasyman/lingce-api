@@ -28,7 +28,7 @@ func (s *Service) Create(ctx context.Context, tenantID, actorID int64, req SaveT
 		return nil, fmt.Errorf("code and name are required")
 	}
 	if req.Status == "" {
-		req.Status = "enabled"
+		req.Status = "draft"
 	}
 	return s.store.CreateTemplate(ctx, tenantID, actorID, req)
 }
@@ -57,6 +57,9 @@ func (s *Service) SaveBindings(ctx context.Context, tenantID int64, versionID st
 }
 func (s *Service) Publish(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
 	return s.store.Publish(ctx, tenantID, versionID, actorID)
+}
+func (s *Service) SetCurrent(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
+	return s.store.SetCurrent(ctx, tenantID, versionID, actorID)
 }
 func (s *Service) Disable(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
 	return s.store.Disable(ctx, tenantID, versionID, actorID)

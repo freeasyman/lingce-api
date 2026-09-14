@@ -3,26 +3,34 @@ package emrtemplate
 import "time"
 
 type Template struct {
-	ID        string    `json:"id"`
-	TenantID  *int64    `json:"tenant_id,omitempty"`
-	Code      string    `json:"code"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	CreatedBy int64     `json:"created_by"`
-	UpdatedBy int64     `json:"updated_by"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	TenantID     *int64    `json:"tenant_id,omitempty"`
+	Code         string    `json:"code"`
+	Name         string    `json:"name"`
+	VersionNo    string    `json:"version_no"`
+	DocumentType string    `json:"document_type"`
+	VisitType    string    `json:"visit_type"`
+	DepartmentID *int64    `json:"department_id,omitempty"`
+	Specialty    string    `json:"specialty,omitempty"`
+	IsCurrent    bool      `json:"is_current"`
+	Status       string    `json:"status"`
+	CreatedBy    int64     `json:"created_by"`
+	UpdatedBy    int64     `json:"updated_by"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type TemplateVersion struct {
 	ID              string     `json:"id"`
 	TemplateID      string     `json:"template_id"`
+	TemplateCode    string     `json:"-"`
 	VersionNo       string     `json:"version_no"`
 	Name            string     `json:"name"`
 	DocumentType    string     `json:"document_type"`
 	VisitType       string     `json:"visit_type"`
 	DepartmentID    *int64     `json:"department_id,omitempty"`
 	SpecialtyModule *string    `json:"specialty_module,omitempty"`
+	IsCurrent       bool       `json:"is_current"`
 	PrintTitle      string     `json:"print_title"`
 	Description     string     `json:"description"`
 	Status          string     `json:"status"`

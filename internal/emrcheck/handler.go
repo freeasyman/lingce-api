@@ -23,6 +23,7 @@ type Handler struct {
 	logMu            sync.Mutex
 	executionLogPath string
 	resultLogPath    string
+	promptLogPath    string
 }
 
 func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
@@ -31,6 +32,7 @@ func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 		permissions:      permissions,
 		executionLogPath: "/Users/yiliiang/Documents/lingce-web/apps/emr/data/log/emr_program_quality_execution.log",
 		resultLogPath:    "/Users/yiliiang/Documents/lingce-web/apps/emr/data/log/emr_program_quality_result.log",
+		promptLogPath:    "/Users/yiliiang/Documents/lingce-web/apps/emr/data/log/emr_llm_quality_prompt.log",
 	}
 }
 
@@ -40,7 +42,105 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks", Handler: h.ListRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks/{check_id}", Handler: h.GetRun, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/quality-check/program-preview", Handler: h.ProgramPreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/quality-check/preview", Handler: h.CompletePreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
+}
+
+// CompletePreview 是第二阶段完整质检的调试入口：程序规则与大模型规则
+// 均执行，结果返回页面，并将提示词、模型请求和结构化结果写入 EMR
+// data/log，便于核对模板、绑定规则和模型输出是否一致。
+//
+// 署名：Codex
+// 时间：2026-09-14
+func (h *Handler) CompletePreview(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, err := h.authorizeQuality(r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	var req CheckPreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.TenantID = tenantID
+	if req.Content == nil {
+		httputil.WriteBadRequest(w, "content is required")
+		return
+	}
+	startedAt := time.Now().UTC()
+	data, err := h.service.CompletePreview(r.Context(), req)
+	completedAt := time.Now().UTC()
+	response := map[string]any{
+		"code": "EMR_COMPLETE_QUALITY_PREVIEW", "tenant_id": tenantID,
+		"template_version_id": req.TemplateVersionID, "execution_started_at": startedAt.Format(time.RFC3339Nano),
+		"execution_completed_at": completedAt.Format(time.RFC3339Nano),
+		"execution_duration_ms":  completedAt.Sub(startedAt).Milliseconds(),
+		"execution_log_file":     h.executionLogPath, "result_log_file": h.resultLogPath, "prompt_log_file": h.promptLogPath,
+	}
+	if err != nil {
+		response["error"] = err.Error()
+		_ = h.writeCompleteQualityLogs(req, response, nil, err)
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	response["template_code"] = data.Template.TemplateCode
+	response["template_version"] = data.Template.TemplateVersion
+	response["prompt_code"] = data.Prompt.Code
+	response["prompt_version"] = data.Prompt.Version
+	response["model_provider"] = data.Config.Provider
+	response["model_code"] = data.Config.ModelCode
+	response["overall_result"] = data.Overall
+	response["model_check_summary"] = data.Summary
+	response["program_result_count"] = data.ProgramCount
+	response["model_result_count"] = data.ModelCount
+	response["result_count"] = len(data.Results)
+	response["results"] = data.Results
+	if err := h.writeCompleteQualityLogs(req, response, data, nil); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": response})
+}
+
+func (h *Handler) writeCompleteQualityLogs(req CheckPreviewRequest, response map[string]any, data *completePreviewData, callErr error) error {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(h.promptLogPath), 0o755); err != nil {
+		return err
+	}
+	entry := map[string]any{"logged_at": time.Now().UTC().Format(time.RFC3339Nano), "request": req, "response": response}
+	if callErr != nil {
+		entry["error"] = callErr.Error()
+	}
+	raw, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := appendLog(h.executionLogPath, raw); err != nil {
+		return err
+	}
+	resultEntry := map[string]any{"logged_at": time.Now().UTC().Format(time.RFC3339Nano), "response": response}
+	resultRaw, err := json.MarshalIndent(resultEntry, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := appendLog(h.resultLogPath, resultRaw); err != nil {
+		return err
+	}
+	if data == nil {
+		return nil
+	}
+	promptEntry := map[string]any{
+		"logged_at": time.Now().UTC().Format(time.RFC3339Nano), "request": req,
+		"system_prompt": data.Prompt.SystemPrompt, "user_prompt": data.UserPrompt,
+		"gateway_request": string(data.RequestBody), "gateway_response": string(data.ResponseBody),
+	}
+	promptRaw, err := json.MarshalIndent(promptEntry, "", "  ")
+	if err != nil {
+		return err
+	}
+	return appendLog(h.promptLogPath, promptRaw)
 }
 
 // ProgramPreview 是第一阶段程序质检的正式独立入口。
