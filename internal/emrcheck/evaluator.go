@@ -162,6 +162,11 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 	case "emr.time.consistency.fields_present", "emr.time.consistency.order",
 		"emr.time.consistency.last_modified", "emr.time.consistency.abnormal_span":
 		return evaluateTimeConsistency(item.Code, result, data)
+	case "emr.physical_exam.vital_signs", "emr.auxiliary_exam.item_recorded",
+		"emr.auxiliary_exam.result_recorded", "emr.auxiliary_exam.pending_explicit",
+		"emr.diagnosis.followup_plan", "emr.treatment.consistency.recorded",
+		"emr.signature.supervisor":
+		return evaluateRecordCompleteness(item.Code, result, data)
 	case "emr.chief_complaint.required":
 		return requiredResult(result, data.Content, "chief_complaint", "主诉")
 	case "emr.chief_complaint.max_length":

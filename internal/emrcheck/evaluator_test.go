@@ -155,3 +155,131 @@ func TestEvaluateTimeConsistencyRejectsInvalidOrder(t *testing.T) {
 		t.Fatalf("invalid order result = %#v", result)
 	}
 }
+
+func TestEvaluateRecordCompleteness(t *testing.T) {
+	t.Run("vital signs", func(t *testing.T) {
+		item := binding{Code: "emr.physical_exam.vital_signs", ExecutionMode: "程序判断"}
+		result := evaluateRequirement(item, checkContext{
+			SnapshotID: "snapshot-1",
+			Content: map[string]any{
+				"physical_exam": map[string]any{
+					"vitals": map[string]any{"temperature_c": 36.6},
+				},
+			},
+		}, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("vital signs result = %#v", result)
+		}
+
+		result = evaluateRequirement(item, checkContext{
+			SnapshotID: "snapshot-1",
+			Content: map[string]any{
+				"physical_exam": map[string]any{
+					"vitals":              map[string]any{},
+					"not_measured_reason": "患者拒绝测量",
+				},
+			},
+		}, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("not measured reason result = %#v", result)
+		}
+
+		result = evaluateRequirement(item, checkContext{
+			SnapshotID: "snapshot-1",
+			Content:    map[string]any{"physical_exam": map[string]any{"vitals": map[string]any{}}},
+		}, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing vital signs result = %#v", result)
+		}
+	})
+
+	t.Run("auxiliary exam", func(t *testing.T) {
+		item := binding{Code: "emr.auxiliary_exam.result_recorded", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Content:    map[string]any{"auxiliary_exam": "血常规：白细胞正常"},
+			EncounterContext: map[string]any{
+				"auxiliary_exams": []any{
+					map[string]any{"item_name": "血常规", "result_status": "completed", "result_text": "白细胞正常"},
+				},
+			},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("auxiliary result = %#v", result)
+		}
+
+		data.Content = map[string]any{"auxiliary_exam": ""}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing auxiliary result = %#v", result)
+		}
+
+		data.EncounterContext = map[string]any{}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("without external exam object result = %#v", result)
+		}
+	})
+
+	t.Run("pending diagnosis requires plan", func(t *testing.T) {
+		item := binding{Code: "emr.diagnosis.followup_plan", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Content: map[string]any{
+				"diagnosis": map[string]any{"status": "待查", "name": "肺部阴影"},
+			},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing diagnosis plan = %#v", result)
+		}
+
+		data.Content["medical_advice"] = "完善胸部CT检查后复诊"
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("diagnosis plan = %#v", result)
+		}
+	})
+
+	t.Run("treatment records", func(t *testing.T) {
+		item := binding{Code: "emr.treatment.consistency.recorded", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Content:    map[string]any{"prescription": "阿莫西林，口服"},
+			EncounterContext: map[string]any{
+				"prescriptions": []any{
+					map[string]any{"kind": "prescription", "drug_name": "阿莫西林"},
+				},
+			},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("treatment record = %#v", result)
+		}
+
+		data.Content = map[string]any{}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing treatment record = %#v", result)
+		}
+	})
+
+	t.Run("supervisor signature", func(t *testing.T) {
+		item := binding{Code: "emr.signature.supervisor", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID:    "snapshot-1",
+			RecordContext: map[string]any{"supervisor_required": true},
+		}
+		result := evaluateRequirement(item, data, "归档")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing supervisor signature = %#v", result)
+		}
+
+		data.RecordContext["supervisor_id"] = int64(42)
+		result = evaluateRequirement(item, data, "归档")
+		if result.Conclusion != "符合" {
+			t.Fatalf("supervisor signature = %#v", result)
+		}
+	})
+}
