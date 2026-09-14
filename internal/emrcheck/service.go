@@ -66,7 +66,9 @@ func (s *Service) CompletePreview(ctx context.Context, req CheckPreviewRequest) 
 	checkData := checkContext{
 		SnapshotID: "preview", TemplateVersionID: req.TemplateVersionID,
 		VisitType: strings.TrimSpace(req.VisitType), Specialty: strings.TrimSpace(req.Specialty),
-		Content: req.Content, ConfirmedBy: req.ConfirmedBy,
+		Content: req.Content, PatientContext: req.PatientContext,
+		EncounterContext: req.EncounterContext, RecordContext: req.RecordContext,
+		ConfirmedBy: req.ConfirmedBy,
 	}
 	programResults := make([]*CheckResult, 0)
 	llmRules := make([]qualityRuleInput, 0)
@@ -149,6 +151,9 @@ func (s *Service) preview(ctx context.Context, req CheckPreviewRequest, programO
 		VisitType:         strings.TrimSpace(req.VisitType),
 		Specialty:         strings.TrimSpace(req.Specialty),
 		Content:           req.Content,
+		PatientContext:    req.PatientContext,
+		EncounterContext:  req.EncounterContext,
+		RecordContext:     req.RecordContext,
 		ConfirmedBy:       req.ConfirmedBy,
 	}
 	if data.TemplateVersionID == "" {

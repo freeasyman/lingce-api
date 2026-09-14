@@ -61,6 +61,7 @@ type CheckPreviewRequest struct {
 	TriggerAction     string         `json:"trigger_action,omitempty"`
 	PatientContext    map[string]any `json:"patient_context,omitempty"`
 	EncounterContext  map[string]any `json:"encounter_context,omitempty"`
+	RecordContext     map[string]any `json:"record_context,omitempty"`
 }
 
 type CompletePreviewResponse struct {

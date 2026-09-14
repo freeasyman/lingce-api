@@ -1,6 +1,9 @@
 package emrcheck
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestEvaluateProgramChiefComplaint(t *testing.T) {
 	base := binding{Code: "emr.chief_complaint.required", ExecutionMode: "程序判断"}
@@ -56,5 +59,99 @@ func TestEvaluateProgramAllergyDetails(t *testing.T) {
 	}}, "归档")
 	if result.Conclusion != "符合" {
 		t.Fatalf("complete allergy detail result = %#v", result)
+	}
+}
+
+func TestEvaluateBasicInfoUsesPatientContext(t *testing.T) {
+	data := checkContext{
+		SnapshotID: "snapshot-1",
+		PatientContext: map[string]any{
+			"name":   "张三",
+			"gender": "男",
+			"age":    30,
+		},
+		EncounterContext: map[string]any{
+			"medical_department_code": "internal_medicine",
+			"doctor_name":             "李医生",
+		},
+		RecordContext: map[string]any{"started_at": "2026-09-14T10:00:00+08:00"},
+	}
+
+	for _, code := range []string{
+		"emr.patient.basic_info.name",
+		"emr.patient.basic_info.gender",
+		"emr.patient.basic_info.birth_or_age",
+		"emr.patient.basic_info.department",
+		"emr.patient.basic_info.attending_doctor",
+		"emr.patient.basic_info.encounter_time",
+	} {
+		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("%s result = %#v", code, result)
+		}
+	}
+}
+
+func TestEvaluateBasicInfoPendingConfirmation(t *testing.T) {
+	result := evaluateRequirement(binding{
+		Code: "emr.patient.basic_info.pending_confirmation", ExecutionMode: "程序判断",
+	}, checkContext{
+		SnapshotID:     "snapshot-1",
+		PatientContext: map[string]any{"pending_confirmation": true},
+	}, "手动保存")
+	if result.Conclusion != "不符合" || result.CheckStatus != "已完成" {
+		t.Fatalf("pending confirmation result = %#v", result)
+	}
+}
+
+func TestEvaluateTimeConsistency(t *testing.T) {
+	created := time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC)
+	started := created.Add(time.Hour)
+	ended := started.Add(30 * time.Minute)
+	saved := ended.Add(time.Minute)
+	data := checkContext{
+		SnapshotID:  "snapshot-1",
+		Status:      "草稿",
+		CreatedAt:   &created,
+		StartedAt:   &started,
+		EndedAt:     &ended,
+		LastSavedAt: &saved,
+		UpdatedAt:   &saved,
+		RecordContext: map[string]any{
+			"abnormal_span_seconds": float64(7200),
+		},
+	}
+
+	for _, code := range []string{
+		"emr.time.consistency.fields_present",
+		"emr.time.consistency.order",
+		"emr.time.consistency.last_modified",
+		"emr.time.consistency.abnormal_span",
+	} {
+		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("%s result = %#v", code, result)
+		}
+	}
+
+	data.RecordContext = map[string]any{}
+	result := evaluateRequirement(binding{
+		Code: "emr.time.consistency.abnormal_span", ExecutionMode: "程序判断",
+	}, data, "手动保存")
+	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
+		t.Fatalf("missing threshold result = %#v", result)
+	}
+}
+
+func TestEvaluateTimeConsistencyRejectsInvalidOrder(t *testing.T) {
+	created := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	started := created.Add(-time.Minute)
+	result := evaluateRequirement(binding{
+		Code: "emr.time.consistency.order", ExecutionMode: "程序判断",
+	}, checkContext{
+		SnapshotID: "snapshot-1", CreatedAt: &created, StartedAt: &started,
+	}, "手动保存")
+	if result.Conclusion != "不符合" {
+		t.Fatalf("invalid order result = %#v", result)
 	}
 }

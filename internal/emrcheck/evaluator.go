@@ -3,6 +3,7 @@ package emrcheck
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -43,6 +44,17 @@ type checkContext struct {
 	VisitType         string
 	Specialty         string
 	Content           map[string]any
+	PatientContext    map[string]any
+	EncounterContext  map[string]any
+	RecordContext     map[string]any
+	Status            string
+	CreatedAt         *time.Time
+	StartedAt         *time.Time
+	EndedAt           *time.Time
+	SubmittedAt       *time.Time
+	ArchivedAt        *time.Time
+	LastSavedAt       *time.Time
+	UpdatedAt         *time.Time
 	ConfirmedBy       *int64
 }
 
@@ -140,6 +152,16 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 	}
 
 	switch item.Code {
+	case "emr.patient.basic_info.name", "emr.patient.basic_info.gender",
+		"emr.patient.basic_info.birth_or_age", "emr.patient.basic_info.phone",
+		"emr.patient.basic_info.address", "emr.patient.basic_info.ethnicity",
+		"emr.patient.basic_info.marital_status", "emr.patient.basic_info.occupation",
+		"emr.patient.basic_info.encounter_time", "emr.patient.basic_info.department",
+		"emr.patient.basic_info.attending_doctor", "emr.patient.basic_info.pending_confirmation":
+		return evaluateBasicInfo(item.Code, result, data)
+	case "emr.time.consistency.fields_present", "emr.time.consistency.order",
+		"emr.time.consistency.last_modified", "emr.time.consistency.abnormal_span":
+		return evaluateTimeConsistency(item.Code, result, data)
 	case "emr.chief_complaint.required":
 		return requiredResult(result, data.Content, "chief_complaint", "主诉")
 	case "emr.chief_complaint.max_length":

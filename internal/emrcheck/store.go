@@ -306,21 +306,46 @@ func (s *Store) Run(ctx context.Context, req CheckRequest) (*CheckRun, error) {
 
 func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext, []binding, error) {
 	data := checkContext{RecordID: req.RecordID, SnapshotID: req.SnapshotID, Content: map[string]any{}}
-	var rawContent []byte
+	var rawContent, rawPatient, rawEncounter []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT r.template_id, r.visit_type, COALESCE(t.specialty,''),
-		       COALESCE(snapshot.content,'{}'::jsonb), r.confirmed_by
+		       COALESCE(snapshot.content,'{}'::jsonb),
+		       COALESCE(r.patient_snapshot_json,'{}'::jsonb),
+		       COALESCE(r.encounter_context_json,'{}'::jsonb),
+		       r.status, r.created_at, r.started_at, r.ended_at,
+		       r.submitted_at, r.archived_at, r.last_saved_at, r.updated_at,
+		       r.confirmed_by
 		FROM emr_records r
 		JOIN emr_templates t ON t.id=r.template_id
 		JOIN emr_record_snapshots snapshot ON snapshot.id=$3 AND snapshot.record_id=r.id
 		WHERE r.id=$2 AND r.tenant_id=$1
 	`, req.TenantID, req.RecordID, req.SnapshotID).Scan(
 		&data.TemplateVersionID, &data.VisitType, &data.Specialty, &rawContent,
-		&data.ConfirmedBy)
+		&rawPatient, &rawEncounter, &data.Status, &data.CreatedAt, &data.StartedAt,
+		&data.EndedAt, &data.SubmittedAt, &data.ArchivedAt, &data.LastSavedAt,
+		&data.UpdatedAt, &data.ConfirmedBy)
 	if err != nil {
 		return data, nil, fmt.Errorf("load emr check context: %w", err)
 	}
 	_ = json.Unmarshal(rawContent, &data.Content)
+	_ = json.Unmarshal(rawPatient, &data.PatientContext)
+	_ = json.Unmarshal(rawEncounter, &data.EncounterContext)
+	data.RecordContext = map[string]any{
+		"record_id":     data.RecordID,
+		"snapshot_id":   data.SnapshotID,
+		"status":        data.Status,
+		"template_id":   data.TemplateVersionID,
+		"visit_type":    data.VisitType,
+		"specialty":     data.Specialty,
+		"confirmed_by":  data.ConfirmedBy,
+		"created_at":    data.CreatedAt,
+		"started_at":    data.StartedAt,
+		"ended_at":      data.EndedAt,
+		"submitted_at":  data.SubmittedAt,
+		"archived_at":   data.ArchivedAt,
+		"last_saved_at": data.LastSavedAt,
+		"updated_at":    data.UpdatedAt,
+	}
 	bindingRows, err := s.pool.Query(ctx, `
 		SELECT b.quality_rule_id, q.code, q.name, q.rule_type,
 		       b.execution_mode, b.deadline_action

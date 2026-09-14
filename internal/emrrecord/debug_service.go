@@ -13,11 +13,11 @@ import (
 )
 
 type DebugTextRequest struct {
-	TenantID         int64          `json:"tenant_id"`
+	TenantID          int64          `json:"tenant_id"`
 	TemplateVersionID string         `json:"template_version_id"`
-	PromptCode       string         `json:"prompt_code,omitempty"`
-	GenerationKey    string         `json:"generation_key,omitempty"`
-	Text             string         `json:"text"`
+	PromptCode        string         `json:"prompt_code,omitempty"`
+	GenerationKey     string         `json:"generation_key,omitempty"`
+	Text              string         `json:"text"`
 	PatientSnapshot   map[string]any `json:"patient_snapshot,omitempty"`
 	EncounterContext  map[string]any `json:"encounter_context,omitempty"`
 	SourceReferences  map[string]any `json:"source_references,omitempty"`
@@ -41,9 +41,9 @@ type DebugTextResponse struct {
 }
 
 type DebugService struct {
-	store *Store
+	store  *Store
 	checks *emrcheck.Service
-	llm   *llmgateway.Client
+	llm    *llmgateway.Client
 }
 
 func NewDebugService(store *Store, checks *emrcheck.Service, llm *llmgateway.Client) *DebugService {
@@ -84,10 +84,10 @@ func (s *DebugService) Preview(ctx context.Context, req DebugTextRequest) (*Debu
 		Provider:      "dashscope",
 		ModelCode:     "qwen-plus",
 		Billing: &llmgateway.BillingMetadata{
-			BusinessDomain:    "emr",
+			BusinessDomain:     "emr",
 			BusinessObjectType: "record",
-			BillingSubject:    "emr_debug_text",
-			BillingScene:      "manual",
+			BillingSubject:     "emr_debug_text",
+			BillingScene:       "manual",
 		},
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: promptSystem},
@@ -111,7 +111,16 @@ func (s *DebugService) Preview(ctx context.Context, req DebugTextRequest) (*Debu
 		Specialty:         req.Specialty,
 		ConfirmedBy:       req.ConfirmedBy,
 		Content:           workingContent,
-		TriggerAction:     "手动保存",
+		PatientContext:    req.PatientSnapshot,
+		EncounterContext:  req.EncounterContext,
+		RecordContext: map[string]any{
+			"status":                  "草稿",
+			"medical_department_code": req.Specialty,
+			"doctor_name":             lookupDebugContext(req.EncounterContext, "doctor_name"),
+			"employee_id":             lookupDebugContext(req.EncounterContext, "employee_id"),
+			"recorded_at":             lookupDebugContext(req.EncounterContext, "recorded_at"),
+		},
+		TriggerAction: "手动保存",
 	})
 	if err != nil {
 		return nil, err
@@ -126,6 +135,13 @@ func (s *DebugService) Preview(ctx context.Context, req DebugTextRequest) (*Debu
 		PromptVersion:    promptVersion,
 		RawModelResponse: resp.Content,
 	}, nil
+}
+
+func lookupDebugContext(context map[string]any, key string) any {
+	if context == nil {
+		return nil
+	}
+	return context[key]
 }
 
 func (s *DebugService) loadPrompt(ctx context.Context, code string) (string, string, string, error) {
