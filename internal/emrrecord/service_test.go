@@ -33,3 +33,38 @@ func TestDiffTopLevelCapturesContentChanges(t *testing.T) {
 		t.Fatalf("third change = %#v, want structured addition", third)
 	}
 }
+
+func TestValidateContentChangeAudit(t *testing.T) {
+	before := map[string]any{"chief_complaint": "咳嗽"}
+	after := map[string]any{"chief_complaint": "咳嗽5天"}
+
+	if err := validateContentChangeAudit(117, before, after, ""); err == nil {
+		t.Fatal("expected modification reason requirement")
+	}
+	if err := validateContentChangeAudit(117, before, after, "补充症状持续时间"); err != nil {
+		t.Fatalf("expected modification reason to pass: %v", err)
+	}
+	if err := validateContentChangeAudit(117, before, before, ""); err != nil {
+		t.Fatalf("unchanged content should not require a reason: %v", err)
+	}
+	if err := validateContentChangeAudit(0, before, after, "补充症状持续时间"); err == nil {
+		t.Fatal("expected missing actor error")
+	}
+}
+
+func TestValidateAuditTrail(t *testing.T) {
+	outcome := &WriteOutcome{Snapshot: &Snapshot{ID: "snapshot-1"}}
+	changes := diffTopLevel(
+		map[string]any{"chief_complaint": "咳嗽"},
+		map[string]any{"chief_complaint": "咳嗽5天"},
+	)
+	if err := validateAuditTrail(117, "补充症状持续时间", outcome, changes); err != nil {
+		t.Fatalf("valid audit trail rejected: %v", err)
+	}
+	if err := validateAuditTrail(117, "", outcome, changes); err == nil {
+		t.Fatal("expected missing audit reason error")
+	}
+	if err := validateAuditTrail(117, "补充症状持续时间", &WriteOutcome{}, changes); err == nil {
+		t.Fatal("expected missing after snapshot error")
+	}
+}

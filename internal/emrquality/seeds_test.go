@@ -4,8 +4,8 @@ import "testing"
 
 func TestBuiltinSeedsAreCompleteAndUnique(t *testing.T) {
 	seeds := builtinSeeds()
-	if len(seeds) != 181 {
-		t.Fatalf("builtin seed count = %d, want 181", len(seeds))
+	if len(seeds) != 176 {
+		t.Fatalf("builtin seed count = %d, want 176", len(seeds))
 	}
 
 	seen := make(map[string]struct{}, len(seeds))

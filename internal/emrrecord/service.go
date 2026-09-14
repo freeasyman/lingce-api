@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
+	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 )
@@ -132,12 +132,15 @@ func (s *Service) AutoSave(ctx context.Context, tenantID, actorID int64, id stri
 }
 
 func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id string, content map[string]any, note string) (*WriteOutcome, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
 	if content == nil {
-		current, err := s.store.Get(ctx, tenantID, id)
-		if err != nil || current == nil {
-			return nil, fmt.Errorf("record not found")
-		}
 		content = current.WorkingContent
+	}
+	if err := validateContentChangeAudit(actorID, current.WorkingContent, content, note); err != nil {
+		return nil, err
 	}
 	outcome, err := s.store.SaveFormal(ctx, tenantID, actorID, id, content)
 	if err != nil {
@@ -192,6 +195,9 @@ func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64
 	content := req.Content
 	if content == nil {
 		content = current.WorkingContent
+	}
+	if err := validateContentChangeAudit(actorID, current.WorkingContent, content, req.Note); err != nil {
+		return nil, err
 	}
 	var outcome *WriteOutcome
 	if action == "提交" {
@@ -320,6 +326,9 @@ func (s *Service) appendProcessResult(ctx context.Context, tenantID int64, id st
 		runID = &run.ID
 	}
 	changes := diffTopLevel(outcome.BeforeContent, outcome.Record.WorkingContent)
+	if err := validateAuditTrail(actorID, note, outcome, changes); err != nil {
+		return err
+	}
 	_, err := s.process.Append(ctx, emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), CheckRunID: runID, FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: map[string]any{"check_run_id": runID, "failure": failure}})
 	return err
 }
