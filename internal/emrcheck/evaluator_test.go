@@ -319,3 +319,92 @@ func TestEvaluateRecordCompleteness(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluateSpecialtyStructure(t *testing.T) {
+	t.Run("tcm diagnosis", func(t *testing.T) {
+		item := binding{Code: "emr.tcm.elements.tcm_diagnosis", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Specialty:  "中医",
+			Content:    map[string]any{"tcm_diagnosis": "肩痹，气滞血瘀证"},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("tcm diagnosis result = %#v", result)
+		}
+		data.Content = map[string]any{}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing tcm diagnosis result = %#v", result)
+		}
+	})
+
+	t.Run("gynecology applicability", func(t *testing.T) {
+		item := binding{Code: "emr.gynecology.menstrual_history.applicability", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID:     "snapshot-1",
+			Specialty:      "妇科",
+			PatientContext: map[string]any{"gender": "女", "age": 32},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("gynecology applicable result = %#v", result)
+		}
+		data.PatientContext["gender"] = "男"
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("gynecology not applicable result = %#v", result)
+		}
+		delete(data.PatientContext, "gender")
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
+			t.Fatalf("gynecology incomplete result = %#v", result)
+		}
+	})
+
+	t.Run("dental tooth position", func(t *testing.T) {
+		item := binding{Code: "emr.dental.tooth_plan.tooth_present", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Specialty:  "口腔",
+			Content: map[string]any{
+				"oral_treatment_plan": "拔除患牙",
+				"oral_tooth_position": "26",
+			},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("dental tooth result = %#v", result)
+		}
+		delete(data.Content, "oral_tooth_position")
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing dental tooth result = %#v", result)
+		}
+		data.Content = map[string]any{}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("no dental plan result = %#v", result)
+		}
+	})
+
+	t.Run("pediatric guardian", func(t *testing.T) {
+		item := binding{Code: "emr.pediatrics.guardian_info.relationship", ExecutionMode: "程序判断"}
+		data := checkContext{
+			SnapshotID: "snapshot-1",
+			Specialty:  "儿科",
+			PatientContext: map[string]any{
+				"guardian": map[string]any{"relationship": "母亲"},
+			},
+		}
+		result := evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "符合" {
+			t.Fatalf("guardian relationship result = %#v", result)
+		}
+		data.PatientContext["guardian"] = map[string]any{}
+		result = evaluateRequirement(item, data, "手动保存")
+		if result.Conclusion != "不符合" {
+			t.Fatalf("missing guardian relationship result = %#v", result)
+		}
+	})
+}

@@ -190,6 +190,15 @@ func evaluateProgram(item binding, data checkContext) evaluatedResult {
 		return allergyDetailResult(result, data.Content, "具体药物过敏", "drug_name", "请补充具体的过敏药物名称。")
 	case "emr.allergy.required.other_detail":
 		return allergyDetailResult(result, data.Content, "其他过敏原", "other_allergen", "请补充其他过敏原说明。")
+	case "emr.gynecology.menstrual_history.applicability",
+		"emr.tcm.elements.tcm_diagnosis",
+		"emr.tcm.elements.location_allowed",
+		"emr.tcm.western_diagnosis_prompt.present",
+		"emr.dental.tooth_plan.tooth_present",
+		"emr.pediatrics.guardian_info.name",
+		"emr.pediatrics.guardian_info.relationship",
+		"emr.pediatrics.guardian_info.contact":
+		return evaluateSpecialtyStructure(item.Code, result, data)
 	case "emr.diagnosis.present":
 		return requiredResult(result, data.Content, "diagnosis", "诊断")
 	case "emr.signature.doctor":
