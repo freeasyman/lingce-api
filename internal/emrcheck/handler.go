@@ -1,9 +1,14 @@
 package emrcheck
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -13,12 +18,20 @@ import (
 )
 
 type Handler struct {
-	service     *Service
-	permissions *emrpermission.Service
+	service          *Service
+	permissions      *emrpermission.Service
+	logMu            sync.Mutex
+	executionLogPath string
+	resultLogPath    string
 }
 
 func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
-	return &Handler{service: service, permissions: permissions}
+	return &Handler{
+		service:          service,
+		permissions:      permissions,
+		executionLogPath: "/Users/yiliiang/Documents/lingce-web/apps/emr/data/log/emr_program_quality_execution.log",
+		resultLogPath:    "/Users/yiliiang/Documents/lingce-web/apps/emr/data/log/emr_program_quality_result.log",
+	}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -26,7 +39,145 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/checks", Handler: h.RunManual, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks", Handler: h.ListRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks/{check_id}", Handler: h.GetRun, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/quality-check/program-preview", Handler: h.ProgramPreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
+}
+
+// ProgramPreview 是第一阶段程序质检的正式独立入口。
+//
+// 请求直接携带结构化病历和模板版本 ID，接口读取该模板绑定的规则，
+// 只执行 execution_mode=程序判断 的规则。结果不写正式质检表，不调用
+// 大模型；请求和返回会追加保存到 API 仓库 data/log，便于重复触发和核对。
+//
+// 署名：Codex
+// 时间：2026-09-14
+func (h *Handler) ProgramPreview(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, err := h.authorizeQuality(r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	var req CheckPreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.TenantID = tenantID
+	if req.Content == nil {
+		httputil.WriteBadRequest(w, "content is required")
+		return
+	}
+
+	startedAt := time.Now().UTC()
+	results, overall, err := h.service.PreviewProgram(r.Context(), req)
+	completedAt := time.Now().UTC()
+	response := map[string]any{
+		"code":                   "EMR_PROGRAM_QUALITY_PREVIEW",
+		"tenant_id":              tenantID,
+		"template_version_id":    req.TemplateVersionID,
+		"overall_result":         overall,
+		"results":                results,
+		"result_count":           len(results),
+		"execution_started_at":   startedAt.Format(time.RFC3339Nano),
+		"execution_completed_at": completedAt.Format(time.RFC3339Nano),
+		"execution_duration_ms":  completedAt.Sub(startedAt).Milliseconds(),
+		"execution_log_file":     h.executionLogPath,
+		"result_log_file":        h.resultLogPath,
+	}
+	if err != nil {
+		response["error"] = err.Error()
+		if logErr := h.writeProgramQualityLogs(req, response, err); logErr != nil {
+			httputil.WriteInternalError(w, logErr.Error())
+			return
+		}
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if logErr := h.writeProgramQualityLogs(req, response, nil); logErr != nil {
+		httputil.WriteInternalError(w, logErr.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": response})
+}
+
+func (h *Handler) authorizeQuality(r *http.Request) (int64, int64, error) {
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		return 0, 0, err
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, "quality.manage")
+	if err != nil {
+		return 0, 0, err
+	}
+	return tenantID, access.UserID, nil
+}
+
+// writeProgramQualityLogs 将一次执行拆成两个独立文件：
+// execution 文件记录输入、执行时间、规则数量和异常；
+// result 文件只记录程序质检的结构化结果。
+//
+// 两个文件均采用追加写入，保证重复点击时不会覆盖历史记录。当前文件
+// 包含完整病历内容，仅用于开发环境调试，生产环境不得继续记录敏感信息。
+//
+// 署名：Codex
+// 时间：2026-09-14
+func (h *Handler) writeProgramQualityLogs(req CheckPreviewRequest, response map[string]any, callErr error) error {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(h.executionLogPath), 0o755); err != nil {
+		return err
+	}
+
+	executionEntry := map[string]any{
+		"logged_at": time.Now().UTC().Format(time.RFC3339Nano),
+		"request":   req,
+		"execution": map[string]any{
+			"started_at":   response["execution_started_at"],
+			"completed_at": response["execution_completed_at"],
+			"duration_ms":  response["execution_duration_ms"],
+			"result_count": response["result_count"],
+		},
+	}
+	if callErr != nil {
+		executionEntry["error"] = callErr.Error()
+	}
+	executionRaw, err := json.MarshalIndent(executionEntry, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := appendLog(h.executionLogPath, executionRaw); err != nil {
+		return err
+	}
+
+	resultEntry := map[string]any{
+		"logged_at":           time.Now().UTC().Format(time.RFC3339Nano),
+		"tenant_id":           req.TenantID,
+		"template_version_id": req.TemplateVersionID,
+		"overall_result":      response["overall_result"],
+		"result_count":        response["result_count"],
+		"results":             response["results"],
+	}
+	if callErr != nil {
+		resultEntry["error"] = callErr.Error()
+	}
+	resultRaw, err := json.MarshalIndent(resultEntry, "", "  ")
+	if err != nil {
+		return err
+	}
+	return appendLog(h.resultLogPath, resultRaw)
+}
+
+func appendLog(path string, raw []byte) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(append(raw, []byte("\n\n")...))
+	return err
 }
 
 func (h *Handler) RunManual(w http.ResponseWriter, r *http.Request) {

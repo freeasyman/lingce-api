@@ -126,9 +126,10 @@ func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext
 	data := checkContext{RecordID: req.RecordID, SnapshotID: req.SnapshotID, Content: map[string]any{}}
 	var rawContent []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.template_version_id, r.visit_type, COALESCE(r.specialty_module,''),
+		SELECT r.template_id, r.visit_type, COALESCE(t.specialty,''),
 		       COALESCE(snapshot.content,'{}'::jsonb), r.confirmed_by
 		FROM emr_records r
+		JOIN emr_templates t ON t.id=r.template_id
 		JOIN emr_record_snapshots snapshot ON snapshot.id=$3 AND snapshot.record_id=r.id
 		WHERE r.id=$2 AND r.tenant_id=$1
 	`, req.TenantID, req.RecordID, req.SnapshotID).Scan(
@@ -139,11 +140,11 @@ func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext
 	}
 	_ = json.Unmarshal(rawContent, &data.Content)
 	bindingRows, err := s.pool.Query(ctx, `
-		SELECT b.quality_requirement_id, q.code, q.name, q.rule_type,
+		SELECT b.quality_rule_id, q.code, q.name, q.rule_type,
 		       b.execution_mode, b.deadline_action
-		FROM emr_template_quality_requirements b
-		JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id
-		WHERE b.template_version_id=$1 AND q.status='published'
+		FROM emr_template_quality_rules b
+		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
+		WHERE b.template_id=$1 AND b.is_enabled=true AND q.status='published'
 		ORDER BY b.display_order, q.code
 	`, data.TemplateVersionID)
 	if err != nil {
@@ -163,13 +164,13 @@ func (s *Store) loadContext(ctx context.Context, req CheckRequest) (checkContext
 
 func (s *Store) previewBindings(ctx context.Context, tenantID int64, templateVersionID string) ([]binding, error) {
 	bindingRows, err := s.pool.Query(ctx, `
-		SELECT b.quality_requirement_id, q.code, q.name, q.rule_type,
+		SELECT b.quality_rule_id, q.code, q.name, q.rule_type,
 		       b.execution_mode, b.deadline_action
-		FROM emr_template_quality_requirements b
-		JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id
-		WHERE b.template_version_id=$1
+		FROM emr_template_quality_rules b
+		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
+		WHERE b.template_id=$1 AND b.is_enabled=true
 		  AND q.status='published'
-		  AND (q.tenant_id IS NULL OR q.tenant_id=$2)
+		  AND q.tenant_id IN (0,$2)
 		ORDER BY b.display_order, q.code
 	`, templateVersionID, tenantID)
 	if err != nil {
