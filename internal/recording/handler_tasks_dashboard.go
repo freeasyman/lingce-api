@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/followuppermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -23,6 +24,17 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	scope, err := getTaskTenantScope(claims, r, h)
@@ -48,10 +60,24 @@ func (h *Handler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 		tenantID = *scope.TenantID
 	}
 	var viewerEmployeeID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		viewerEmployeeID = &claims.UserID
+	if isFollowupTaskType(r.URL.Query().Get("task_type")) && claims.UserType != auth.UserTypeAdmin {
+		access, accessErr := h.resolveFollowupAccess(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead)
+		if accessErr != nil {
+			httputil.WriteForbidden(w, accessErr.Error())
+			return
+		}
+		if !isFollowupManager(access) {
+			viewerEmployeeID = &claims.UserID
+		}
 	}
-	stats, err := h.service.GetTaskStats(r.Context(), tenantID, scope.TenantIDs, assignedTo, viewerEmployeeID)
+	stats, err := h.service.GetTaskStats(
+		r.Context(),
+		tenantID,
+		scope.TenantIDs,
+		assignedTo,
+		viewerEmployeeID,
+		isFollowupTaskType(r.URL.Query().Get("task_type")),
+	)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -66,6 +92,17 @@ func (h *Handler) GetDailyBriefing(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
@@ -89,15 +126,26 @@ func (h *Handler) GetDailyBriefing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var assignedTo *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		assignedTo = &claims.UserID
-	}
-
 	var viewerEmployeeID *int64
-	if claims.UserType != auth.UserTypeAdmin {
-		viewerEmployeeID = &claims.UserID
+	if isFollowupTaskType(r.URL.Query().Get("task_type")) && claims.UserType != auth.UserTypeAdmin {
+		access, accessErr := h.resolveFollowupAccess(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead)
+		if accessErr != nil {
+			httputil.WriteForbidden(w, accessErr.Error())
+			return
+		}
+		if !isFollowupManager(access) {
+			assignedTo = &claims.UserID
+			viewerEmployeeID = &claims.UserID
+		}
 	}
-	briefing, err := h.service.GetDailyBriefing(r.Context(), tenantID, assignedTo, targetDate, viewerEmployeeID)
+	briefing, err := h.service.GetDailyBriefing(
+		r.Context(),
+		tenantID,
+		assignedTo,
+		targetDate,
+		viewerEmployeeID,
+		isFollowupTaskType(r.URL.Query().Get("task_type")),
+	)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -112,6 +160,17 @@ func (h *Handler) GetMyTasks(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
+	}
+	if isFollowupTaskType(r.URL.Query().Get("task_type")) && claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -141,6 +200,20 @@ func (h *Handler) GetMyTasks(w http.ResponseWriter, r *http.Request) {
 		Page:             page,
 		PageSize:         pageSize,
 	}
+	if taskType := strings.TrimSpace(r.URL.Query().Get("task_type")); taskType != "" {
+		parsedTaskType := TaskType(taskType)
+		req.TaskType = &parsedTaskType
+	}
+	if statusStr := strings.TrimSpace(r.URL.Query().Get("status")); statusStr != "" {
+		status := TaskStatus(statusStr)
+		req.Status = &status
+	}
+	if sort := strings.TrimSpace(r.URL.Query().Get("sort")); sort != "" {
+		req.Sort = &sort
+	}
+	if keyword := strings.TrimSpace(r.URL.Query().Get("keyword")); keyword != "" {
+		req.Keyword = &keyword
+	}
 
 	tasks, total, err := h.service.ListRecordingTasks(r.Context(), req)
 	if err != nil {
@@ -163,6 +236,17 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	scope, err := getTaskTenantScope(claims, r, h)
@@ -189,8 +273,24 @@ func (h *Handler) GetRecordingTasksByRecordingID(w http.ResponseWriter, r *http.
 	} else {
 		req.TenantIDs = scope.TenantIDs
 	}
+	if isFollowupTaskType(r.URL.Query().Get("task_type")) {
+		taskType := TaskType("follow_up")
+		req.TaskType = &taskType
+	}
 	if claims.UserType != auth.UserTypeAdmin {
-		req.ViewerEmployeeID = &claims.UserID
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		access, accessErr := h.resolveFollowupAccess(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead)
+		if accessErr != nil {
+			httputil.WriteForbidden(w, accessErr.Error())
+			return
+		}
+		if !isFollowupManager(access) {
+			req.ViewerEmployeeID = &claims.UserID
+		}
 	}
 	tasks, _, err := h.service.ListRecordingTasks(r.Context(), req)
 	if err != nil {
@@ -216,7 +316,7 @@ func (h *Handler) ListFollowupDataScopes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityScope); err != nil {
 			httputil.WriteForbidden(w, err.Error())
 			return
 		}
@@ -244,7 +344,7 @@ func (h *Handler) CreateFollowupDataScope(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityScope); err != nil {
 			httputil.WriteForbidden(w, err.Error())
 			return
 		}
@@ -277,7 +377,7 @@ func (h *Handler) SaveFollowupDataScopes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
-		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityScope); err != nil {
 			httputil.WriteForbidden(w, err.Error())
 			return
 		}
@@ -312,6 +412,12 @@ func (h *Handler) DeleteFollowupDataScope(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityScope); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 	if claims.UserType != auth.UserTypeAdmin {
 		if err := h.requireInstitutionMenuAccess(r.Context(), claims, "tasks_partnerships"); err != nil {
@@ -349,6 +455,17 @@ func (h *Handler) ListTaskEmployees(w http.ResponseWriter, r *http.Request) {
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskAssign); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	scope, err := getTaskTenantScope(claims, r, h)
@@ -424,6 +541,12 @@ func (h *Handler) BatchAssignTasks(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskAssign); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
 
 	for _, id := range req.TaskIDs {
 		_, err := h.service.store.pool.Exec(r.Context(), `
@@ -454,6 +577,12 @@ func (h *Handler) ListEmployeePartnerships(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityPartnership); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 	rows, err := h.service.store.pool.Query(r.Context(), `
 		SELECT id, tenant_id, primary_employee_id AS employee_id, partner_employee_id AS partner_id, COALESCE(relationship_type, 'assistant') AS relationship, created_at
@@ -500,6 +629,12 @@ func (h *Handler) CreateEmployeePartnership(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityPartnership); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	// 映射关系中的主责人和执行人必须都是当前租户的有效员工。
@@ -595,6 +730,12 @@ func (h *Handler) DeleteEmployeePartnership(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityPartnership); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	if _, err := h.service.store.pool.Exec(r.Context(), `

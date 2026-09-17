@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/followuppermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -18,6 +19,7 @@ import (
 
 type Handler struct {
 	service             *Service
+	followupPermissions *followuppermission.Service
 	playURLRequireOwned bool
 	ossConfig           RecordingOSSConfig
 }
@@ -32,6 +34,10 @@ type RecordingOSSConfig struct {
 
 func NewHandler(service *Service, playURLRequireOwned bool, ossConfig RecordingOSSConfig) *Handler {
 	return &Handler{service: service, playURLRequireOwned: playURLRequireOwned, ossConfig: ossConfig}
+}
+
+func (h *Handler) SetFollowupPermissionService(service *followuppermission.Service) {
+	h.followupPermissions = service
 }
 
 func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth.Claims, menuCode string) error {
@@ -57,6 +63,44 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 	return nil
 }
 
+func (h *Handler) requireFollowupAbility(ctx context.Context, claims *auth.Claims, tenantID int64, ability string) error {
+	_, err := h.resolveFollowupAccess(ctx, claims, tenantID, ability)
+	return err
+}
+
+func (h *Handler) resolveFollowupAccess(ctx context.Context, claims *auth.Claims, tenantID int64, ability string) (*followuppermission.Access, error) {
+	if claims == nil {
+		return nil, fmt.Errorf("invalid token")
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return &followuppermission.Access{
+			UserID:   claims.UserID,
+			TenantID: tenantID,
+			Admin:    true,
+			Enabled:  true,
+		}, nil
+	}
+	if h.followupPermissions == nil {
+		return nil, fmt.Errorf("followup permission service is not configured")
+	}
+	return h.followupPermissions.Authorize(ctx, claims, tenantID, ability)
+}
+
+func isFollowupManager(access *followuppermission.Access) bool {
+	if access == nil {
+		return false
+	}
+	return access.Admin ||
+		access.Has(followuppermission.AbilityTaskAssign) ||
+		access.Has(followuppermission.AbilityScope) ||
+		access.Has(followuppermission.AbilityPermission)
+}
+
+func isFollowupTaskType(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "follow_up" || value == "followup"
+}
+
 // RegisterRoutes registers medical recording routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
@@ -73,6 +117,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/{id}", Handler: h.GetTask, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/actions/complete", Handler: h.CompleteTask, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/actions/cancel", Handler: h.CancelTask, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/actions/return", Handler: h.ReturnTask, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/stats/by-tenant", Handler: h.GetStatsByTenant, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/stats/duration-distribution", Handler: h.GetDurationDistribution, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/stats/daily", Handler: h.GetDailyStats, Auth: true},
@@ -765,8 +810,22 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-
 	var req TaskListRequest
+	followupRequest := isFollowupTaskType(r.URL.Query().Get("task_type"))
+	followupManager := followupRequest && claims.UserType == auth.UserTypeAdmin
+	if followupRequest && claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		access, err := h.resolveFollowupAccess(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead)
+		if err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		followupManager = isFollowupManager(access)
+	}
 
 	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, r.URL.Query().Get("tenant_id"))
 	if err != nil {
@@ -794,8 +853,12 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.TenantIDs = scope.TenantIDs
 	}
-	if claims.UserType != auth.UserTypeAdmin {
+	if !followupManager && followupRequest {
 		req.ViewerEmployeeID = &claims.UserID
+	}
+	if isFollowupTaskType(r.URL.Query().Get("task_type")) {
+		taskType := TaskType("follow_up")
+		req.TaskType = &taskType
 	}
 
 	// Parse filters
@@ -855,7 +918,13 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.service.GetTask(r.Context(), id)
+	followupOnly := isFollowupTaskType(r.URL.Query().Get("task_type"))
+	var task *TaskResponse
+	if followupOnly {
+		task, err = h.service.GetFollowupTask(r.Context(), id)
+	} else {
+		task, err = h.service.GetTask(r.Context(), id)
+	}
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
@@ -866,14 +935,25 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteForbidden(w, tenantErr.Error())
 			return
 		}
-		allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, tenantID, claims.UserID)
-		if visibilityErr != nil {
-			httputil.WriteInternalError(w, visibilityErr.Error())
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
 			return
 		}
-		if !allowed {
-			httputil.WriteForbidden(w, "task visibility denied")
+		access, accessErr := h.resolveFollowupAccess(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead)
+		if accessErr != nil {
+			httputil.WriteForbidden(w, accessErr.Error())
 			return
+		}
+		if followupOnly && !isFollowupManager(access) {
+			allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, tenantID, claims.UserID)
+			if visibilityErr != nil {
+				httputil.WriteInternalError(w, visibilityErr.Error())
+				return
+			}
+			if !allowed {
+				httputil.WriteForbidden(w, "task visibility denied")
+				return
+			}
 		}
 	}
 
@@ -892,6 +972,17 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid task ID")
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 
 	var req CompleteTaskRequest
@@ -921,6 +1012,17 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid task ID")
 		return
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
 
 	var req CancelTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -934,6 +1036,45 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Task cancelled successfully"})
+}
+
+// ReturnTask handles returning an unsuitable follow-up task.
+// 该接口与完成、取消使用同样的租户和随访执行权限校验，但不会删除任务，
+// 而是把任务状态标记为 returned，并保留退回原因供后续处理和审计。
+// 署名：Codex
+// 时间：2026-09-12
+func (h *Handler) ReturnTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid task ID")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+		if tenantErr != nil {
+			httputil.WriteForbidden(w, tenantErr.Error())
+			return
+		}
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+	var req ReturnTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.ReturnTask(r.Context(), id, claims.UserID, req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "Task returned successfully"})
 }
 
 // Recording Prompt Handlers
