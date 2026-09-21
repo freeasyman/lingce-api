@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
+	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
@@ -128,6 +130,7 @@ func (s *Service) createFailedRecord(ctx context.Context, tenantID, actorID int6
 }
 
 func (s *Service) AutoSave(ctx context.Context, tenantID, actorID int64, id string, content map[string]any) (*Record, error) {
+	// 自动保存只更新工作稿，不生成正式快照，也不写入正式操作留痕。
 	return s.store.SaveWorking(ctx, tenantID, actorID, id, content)
 }
 
@@ -146,13 +149,17 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 	if err != nil {
 		return nil, err
 	}
-	run, checkErr := s.checks.Run(ctx, emrcheck.CheckRequest{TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID, TriggerAction: "手动保存", StartedBy: &actorID})
-	if checkErr == nil {
-		outcome.CheckRunID = &run.ID
-		outcome.CheckRun = run
+	run, checkErr := s.checks.StartAsync(context.WithoutCancel(ctx), emrcheck.CheckRequest{
+		TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID,
+		TriggerAction: "手动保存", StartedBy: &actorID,
+	})
+	if checkErr != nil {
+		_ = s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, note, nil, checkErr)
+		return nil, checkErr
 	}
-	processErr := s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, note, run, checkErr)
-	if processErr != nil {
+	outcome.CheckRunID = &run.ID
+	outcome.CheckRun = run
+	if processErr := s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, note, run, nil); processErr != nil {
 		return nil, processErr
 	}
 	return outcome, nil
@@ -160,6 +167,90 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 
 func (s *Service) Submit(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
 	return s.checkedTransition(ctx, tenantID, actorID, id, req, "提交", "待确认", false)
+}
+
+// Complete performs the doctor-facing "完成病历" action.
+// The internal audit trail remains two records: 提交 followed by 确认.
+func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
+	if !allowedTransition(current.Status, "待确认") {
+		return nil, fmt.Errorf("record status %s cannot be completed", current.Status)
+	}
+	content := req.Content
+	if content == nil {
+		content = current.WorkingContent
+	}
+	if err := validateContentChangeAudit(actorID, current.WorkingContent, content, req.Note); err != nil {
+		return nil, err
+	}
+	outcome, err := s.store.SaveFormal(ctx, tenantID, actorID, id, content)
+	if err != nil {
+		return nil, err
+	}
+
+	checkCtx, cancel := qualityCheckContext(ctx)
+	defer cancel()
+	run, checkErr := s.checks.Run(checkCtx, emrcheck.CheckRequest{
+		TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID,
+		TriggerAction: "提交", StartedBy: &actorID,
+	})
+	if checkErr != nil {
+		_ = s.appendProcess(checkCtx, tenantID, id, actorID, "提交", outcome, req.Note, nil, checkErr)
+		return nil, checkErr
+	}
+	outcome.CheckRunID = &run.ID
+	outcome.CheckRun = run
+	if run.OverallResult == "需要处理" {
+		var updated *Record
+		if transitionErr := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+			var err error
+			updated, err = transitionTx(ctx, tx, tenantID, id, "需补全", actorID, nil, nil, false)
+			if err != nil {
+				return err
+			}
+			return s.appendProcessResultTx(ctx, tx, tenantID, id, actorID, "提交", outcome, req.Note, run, "阻断", "检查结果需要处理")
+		}); transitionErr != nil {
+			return nil, transitionErr
+		}
+		outcome.Record = updated
+		outcome.AfterStatus = "需补全"
+		return outcome, fmt.Errorf("病历存在需要处理的质量问题")
+	}
+
+	snapshotID := outcome.Snapshot.ID
+	var updated *Record
+	if err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		updated, err = transitionTx(ctx, tx, tenantID, id, "待确认", actorID, nil, nil, false)
+		if err != nil {
+			return err
+		}
+		outcome.Record = updated
+		outcome.AfterStatus = "待确认"
+		if err := s.appendProcessResultTx(ctx, tx, tenantID, id, actorID, "提交", outcome, req.Note, run, "成功", ""); err != nil {
+			return err
+		}
+		updated, err = transitionTx(ctx, tx, tenantID, id, "已确认", actorID, &snapshotID, &snapshotID, false)
+		if err != nil {
+			return err
+		}
+		outcome.Record = updated
+		outcome.AfterStatus = "已确认"
+		confirmOutcome := *outcome
+		confirmOutcome.BeforeContent = updated.WorkingContent
+		confirmOutcome.BeforeStatus = "待确认"
+		confirmOutcome.AfterStatus = "已确认"
+		confirmOutcome.BeforeSnapshot = &snapshotID
+		return s.appendProcessResultTx(ctx, tx, tenantID, id, actorID, "确认", &confirmOutcome, "", run, "成功", "")
+	}); err != nil {
+		return nil, err
+	}
+	outcome.Record = updated
+	outcome.AfterStatus = "已确认"
+	return outcome, nil
 }
 
 func (s *Service) Confirm(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
@@ -170,7 +261,7 @@ func (s *Service) Confirm(ctx context.Context, tenantID, actorID int64, id strin
 	if current.Status != "待确认" {
 		return nil, fmt.Errorf("record status %s cannot be confirmed", current.Status)
 	}
-	return s.checkedTransition(ctx, tenantID, actorID, id, req, "确认", "已确认", false)
+	return s.confirmOrArchive(ctx, tenantID, actorID, current, "确认", "已确认", false)
 }
 
 func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
@@ -181,7 +272,50 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 	if current.Status != "已确认" {
 		return nil, fmt.Errorf("record status %s cannot be archived", current.Status)
 	}
-	return s.checkedTransition(ctx, tenantID, actorID, id, req, "归档", "已归档", false)
+	return s.confirmOrArchive(ctx, tenantID, actorID, current, "归档", "已归档", false)
+}
+
+func (s *Service) confirmOrArchive(ctx context.Context, tenantID, actorID int64, current *Record, action, target string, revisionIncrement bool) (*WriteOutcome, error) {
+	if current.CurrentSnapshotID == nil || strings.TrimSpace(*current.CurrentSnapshotID) == "" {
+		return nil, fmt.Errorf("病历还没有可确认的正式版本，请先保存并提交质检")
+	}
+	snapshot, err := s.store.GetSnapshot(ctx, tenantID, current.ID, *current.CurrentSnapshotID)
+	if err != nil || snapshot == nil {
+		return nil, fmt.Errorf("找不到当前病历版本，无法%s", action)
+	}
+	if snapshotDigest(current, current.WorkingContent) != snapshot.ContentDigest {
+		return nil, fmt.Errorf("病历内容在质检后发生了修改，请先保存并重新提交质检")
+	}
+	run, err := s.checks.LatestCompletedForSnapshot(ctx, tenantID, current.ID, snapshot.ID)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, fmt.Errorf("当前病历版本尚未完成质检，暂不能%s", action)
+	}
+	if run.OverallResult == "需要处理" || run.OverallResult == "无法完成" {
+		return nil, fmt.Errorf("当前病历版本的质检尚未通过，暂不能%s", action)
+	}
+	for _, result := range run.Results {
+		if result != nil && result.HandlingResult == "阻断" {
+			return nil, fmt.Errorf("当前病历版本仍有需要处理的质检问题，暂不能%s", action)
+		}
+	}
+	snapshotID := snapshot.ID
+	updated, err := s.store.Transition(ctx, tenantID, current.ID, target, actorID, &snapshotID, &snapshotID, revisionIncrement)
+	if err != nil {
+		return nil, err
+	}
+	outcome := &WriteOutcome{
+		Record: updated, Snapshot: snapshot, BeforeContent: current.WorkingContent,
+		BeforeStatus: current.Status, AfterStatus: target,
+		BeforeSnapshot: current.CurrentSnapshotID,
+		CheckRunID:     &run.ID, CheckRun: run,
+	}
+	if err := s.appendProcess(ctx, tenantID, current.ID, actorID, action, outcome, "", run, nil); err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
 func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest, action, target string, revisionIncrement bool) (*WriteOutcome, error) {
@@ -218,9 +352,11 @@ func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64
 		}
 		outcome = &WriteOutcome{Record: current, Snapshot: snapshot, BeforeContent: current.WorkingContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: current.CurrentSnapshotID}
 	}
-	run, checkErr := s.checks.Run(ctx, emrcheck.CheckRequest{TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID, TriggerAction: action, StartedBy: &actorID})
+	checkCtx, cancel := qualityCheckContext(ctx)
+	defer cancel()
+	run, checkErr := s.checks.Run(checkCtx, emrcheck.CheckRequest{TenantID: tenantID, RecordID: id, SnapshotID: outcome.Snapshot.ID, TriggerAction: action, StartedBy: &actorID})
 	if checkErr != nil {
-		_ = s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, nil, checkErr)
+		_ = s.appendProcess(checkCtx, tenantID, id, actorID, action, outcome, req.Note, nil, checkErr)
 		return nil, checkErr
 	}
 	outcome.CheckRunID = &run.ID
@@ -234,7 +370,7 @@ func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64
 			outcome.Record = updated
 			outcome.AfterStatus = "需补全"
 		}
-		if processErr := s.appendProcessResult(ctx, tenantID, id, actorID, action, outcome, req.Note, run, "阻断", "检查结果需要处理"); processErr != nil {
+		if processErr := s.appendProcessResult(checkCtx, tenantID, id, actorID, action, outcome, req.Note, run, "阻断", "检查结果需要处理"); processErr != nil {
 			return nil, processErr
 		}
 		return outcome, fmt.Errorf("病历存在需要处理的质量问题")
@@ -245,10 +381,16 @@ func (s *Service) checkedTransition(ctx context.Context, tenantID, actorID int64
 	}
 	outcome.Record = updated
 	outcome.AfterStatus = target
-	if err := s.appendProcess(ctx, tenantID, id, actorID, action, outcome, req.Note, run, nil); err != nil {
+	if err := s.appendProcess(checkCtx, tenantID, id, actorID, action, outcome, req.Note, run, nil); err != nil {
 		return nil, err
 	}
 	return outcome, nil
+}
+
+func qualityCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	// Quality checks may outlive the browser request. Keep the formal run
+	// durable while retaining a bounded upper limit for model calls and writes.
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute+30*time.Second)
 }
 
 func allowedTransition(from, to string) bool {
@@ -321,6 +463,20 @@ func (s *Service) appendProcess(ctx context.Context, tenantID int64, id string, 
 }
 
 func (s *Service) appendProcessResult(ctx context.Context, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, run *emrcheck.CheckRun, result, failure string) error {
+	return s.appendProcessResultWithAppender(ctx, tenantID, id, actorID, action, outcome, note, run, result, failure, func(req emrprocess.AppendRequest) error {
+		_, err := s.process.Append(ctx, req)
+		return err
+	})
+}
+
+func (s *Service) appendProcessResultTx(ctx context.Context, tx pgx.Tx, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, run *emrcheck.CheckRun, result, failure string) error {
+	return s.appendProcessResultWithAppender(ctx, tenantID, id, actorID, action, outcome, note, run, result, failure, func(req emrprocess.AppendRequest) error {
+		_, err := s.process.AppendTx(ctx, tx, req)
+		return err
+	})
+}
+
+func (s *Service) appendProcessResultWithAppender(ctx context.Context, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, run *emrcheck.CheckRun, result, failure string, appendRecord func(emrprocess.AppendRequest) error) error {
 	var runID *string
 	if run != nil {
 		runID = &run.ID
@@ -329,8 +485,7 @@ func (s *Service) appendProcessResult(ctx context.Context, tenantID int64, id st
 	if err := validateAuditTrail(actorID, note, outcome, changes); err != nil {
 		return err
 	}
-	_, err := s.process.Append(ctx, emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), CheckRunID: runID, FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: map[string]any{"check_run_id": runID, "failure": failure}})
-	return err
+	return appendRecord(emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), CheckRunID: runID, FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: map[string]any{"check_run_id": runID, "failure": failure}})
 }
 
 func diffTopLevel(before, after map[string]any) []any {

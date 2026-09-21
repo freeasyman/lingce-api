@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
+	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -22,15 +22,10 @@ import (
 type Handler struct {
 	service     *Service
 	permissions *emrpermission.Service
-	debug       *DebugService
 }
 
 func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 	return &Handler{service: service, permissions: permissions}
-}
-
-func NewHandlerWithDebug(service *Service, permissions *emrpermission.Service, debug *DebugService) *Handler {
-	return &Handler{service: service, permissions: permissions, debug: debug}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -44,11 +39,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/working-draft", Handler: h.AutoSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/save", Handler: h.ManualSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/submit", Handler: h.Submit, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/records/{id}/complete", Handler: h.Complete, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/confirm", Handler: h.Confirm, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/archive", Handler: h.Archive, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/revise", Handler: h.Revise, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/void", Handler: h.Void, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/records/debug/preview", Handler: h.DebugPreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
@@ -272,7 +267,12 @@ func (h *Handler) ImportFromRecording(w http.ResponseWriter, r *http.Request) {
 		time.Now(),
 	)
 	item, err := h.service.CreateFromHistoricalRecording(r.Context(), tenantID, access.UserID, CreateRequest{
-		EncounterID:       func() int64 { if encounterID == nil { return 0 }; return *encounterID }(),
+		EncounterID: func() int64 {
+			if encounterID == nil {
+				return 0
+			}
+			return *encounterID
+		}(),
 		PatientID:         patientID,
 		PatientSnapshot:   map[string]any{"name": rec.PatientName, "phone": rec.PatientPhone.String, "gender": rec.PatientGender.String, "age": rec.PatientAge.Int64},
 		TemplateVersionID: req.TemplateVersionID,
@@ -367,6 +367,19 @@ func (h *Handler) Submit(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "record.submit", h.service.Submit)
 }
 
+func (h *Handler) Complete(w http.ResponseWriter, r *http.Request) {
+	access, tenantID, err := h.authorizeRecord(r, "record.submit")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if !access.Has("record.archive") {
+		httputil.WriteForbidden(w, "emr permission denied")
+		return
+	}
+	h.actionWithAccess(w, r, tenantID, access.UserID, h.service.Complete)
+}
+
 func (h *Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "record.archive", h.service.Confirm)
 }
@@ -388,7 +401,22 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, ability string,
 			return
 		}
 	}
-	item, err := action(r.Context(), tenantID, access.UserID, recordID(r), req)
+	h.actionWithRequest(w, r, tenantID, access.UserID, req, action)
+}
+
+func (h *Handler) actionWithAccess(w http.ResponseWriter, r *http.Request, tenantID, actorID int64, action func(context.Context, int64, int64, string, ActionRequest) (*WriteOutcome, error)) {
+	var req ActionRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if decodeBody(r, &req) != nil {
+			httputil.WriteBadRequest(w, "invalid request body")
+			return
+		}
+	}
+	h.actionWithRequest(w, r, tenantID, actorID, req, action)
+}
+
+func (h *Handler) actionWithRequest(w http.ResponseWriter, r *http.Request, tenantID, actorID int64, req ActionRequest, action func(context.Context, int64, int64, string, ActionRequest) (*WriteOutcome, error)) {
+	item, err := action(r.Context(), tenantID, actorID, recordID(r), req)
 	if err != nil {
 		writeActionError(w, item, err)
 		return
@@ -459,31 +487,4 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
-}
-
-func (h *Handler) DebugPreview(w http.ResponseWriter, r *http.Request) {
-	if h.debug == nil {
-		httputil.WriteInternalError(w, "debug service not configured")
-		return
-	}
-	access, tenantID, err := h.authorize(r, "record.read")
-	if err != nil {
-		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	var req DebugTextRequest
-	if decodeBody(r, &req) != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	req.TenantID = tenantID
-	if req.ConfirmedBy == nil {
-		req.ConfirmedBy = &access.UserID
-	}
-	result, err := h.debug.Preview(r.Context(), req)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"data": result})
 }

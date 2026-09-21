@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,13 +23,17 @@ type Store struct{ pool *pgxpool.Pool }
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 const recordColumns = `
-	r.id, r.tenant_id, r.encounter_id, r.patient_id, r.patient_snapshot,
-	r.template_version_id, r.document_type, r.visit_type, r.department_id, r.doctor_id,
-	r.specialty_module, r.started_at, r.ended_at, r.encounter_context, r.source_references,
-	r.working_content, r.working_digest, r.current_snapshot_id, r.status, r.revision_no,
-	r.confirmed_by, r.confirmed_at, r.confirmed_snapshot_id, r.archived_snapshot_id,
+	r.id, r.tenant_id, r.encounter_id, r.customer_id, r.patient_snapshot_json,
+	r.template_id, r.document_type, r.visit_type, r.department_id, r.doctor_id,
+	NULL::varchar, r.started_at, r.ended_at, r.encounter_context_json, r.source_references_json,
+	r.content_json, ''::varchar,
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
+	r.status, r.revision_no,
+	r.confirmed_by, r.confirmed_at,
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
-	r.last_saved_at, r.updated_at`
+	COALESCE(r.updated_at, r.created_at), r.updated_at`
 
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
@@ -50,6 +54,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	item.EncounterContext = decodeObject(encounterContext)
 	item.SourceReferences = decodeObject(sourceReferences)
 	item.WorkingContent = decodeObject(content)
+	item.WorkingDigest = digest(item.WorkingContent)
 	return item, nil
 }
 
@@ -181,23 +186,22 @@ func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req CreateR
 	var id string
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO emr_records
-		(tenant_id, encounter_id, patient_id, patient_snapshot, template_version_id,
-		 document_type, visit_type, department_id, doctor_id, specialty_module,
-		 started_at, ended_at, encounter_context, source_references, working_content,
-		 working_digest, status, created_by)
-		SELECT $1,$2,$3,$4::jsonb,v.id,COALESCE(NULLIF($16,''),v.document_type),$15,$5,$6,v.specialty_module,
-		       $7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12,'草稿',$13
-		FROM emr_template_versions v
-		JOIN emr_templates t ON t.id=v.template_id
+		(tenant_id, encounter_id, customer_id, patient_snapshot_json, template_id,
+		 document_type, visit_type, department_id, doctor_id,
+		 started_at, ended_at, encounter_context_json, source_references_json, content_json,
+		 status, created_by)
+		SELECT $1,$2,$3,$4::jsonb,t.id,COALESCE(NULLIF($16,''),t.document_type),$15,$5,$6,
+		       $7,$8,$9::jsonb,$10::jsonb,$11::jsonb,'草稿',$13
+		FROM emr_templates t
 		JOIN encounters e ON e.id=$2 AND e.tenant_id=$1
-		WHERE v.id=$14 AND v.status='published' AND t.status='enabled'
-		  AND v.visit_type IN ($15,'通用')
-		  AND ($16='' OR v.document_type=$16)
-		  AND (v.department_id IS NULL OR v.department_id=$5)
-		  AND (t.tenant_id IS NULL OR t.tenant_id=$1)
+		WHERE t.id=$14 AND t.status='published' AND t.is_current=true
+		  AND t.visit_type IN ($15,'通用')
+		  AND ($16='' OR t.document_type=$16)
+		  AND (t.department_id IS NULL OR t.department_id=$5)
+		  AND t.tenant_id IN (0,$1)
 		RETURNING id
 	`, tenantID, req.EncounterID, req.PatientID, patient, req.DepartmentID, doctorID,
-		startedAt, req.EndedAt, encounterContext, sourceReferences, content, digest(req.Content), actorID, req.TemplateVersionID, req.VisitType, req.DocumentType).Scan(&id)
+		startedAt, req.EndedAt, encounterContext, sourceReferences, content, actorID, req.TemplateVersionID, req.VisitType, req.DocumentType).Scan(&id)
 	if err != nil {
 		if isEncounterAlreadyUsed(err) {
 			return nil, fmt.Errorf("该接诊已经创建门急诊病历，不能重复创建")
@@ -219,9 +223,9 @@ func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id str
 	raw := encodeObject(content)
 	cmd, err := s.pool.Exec(ctx, `
 		UPDATE emr_records
-		SET working_content=$3::jsonb, working_digest=$4, last_saved_at=NOW(), updated_at=NOW()
+		SET content_json=$3::jsonb, updated_at=NOW()
 		WHERE id=$1 AND tenant_id=$2 AND status IN ('草稿','需补全','退回')
-	`, id, tenantID, raw, digest(content))
+	`, id, tenantID, raw)
 	if err != nil {
 		return nil, fmt.Errorf("save emr working content: %w", err)
 	}
@@ -230,6 +234,138 @@ func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id str
 	}
 	_ = actorID
 	return s.Get(ctx, tenantID, id)
+}
+
+// SaveGeneratedWorkingDraft 将一次完整录音生成的结构化结果写入病历工作稿。
+//
+// Worker 可能因为重试而重复发送同一接诊，因此这里不能简单执行 INSERT：
+// emr_records 对 tenant_id + encounter_id 有唯一约束。方法在同一事务中
+// 先锁定已有记录；没有记录时创建，有可编辑记录时更新，已经进入正式流程
+// 的记录则拒绝 AI 结果覆盖。这样可以保证并发重试不会产生第二份病历，也
+// 不会破坏医生已经提交、确认或归档的内容。
+//
+// 当前开发库的正式病历表仍使用 customer_id、patient_snapshot_json、
+// template_id 和 content_json 这些列名，本方法严格按照当前表结构写入，
+// 不引入另一套字段，也不通过旧的 Create + SaveWorking 链路绕过状态校验。
+//
+// 署名：Codex
+// 时间：2026-09-13
+func (s *Store) SaveGeneratedWorkingDraft(ctx context.Context, tenantID int64, req GeneratedWorkingDraftRequest) (*GeneratedWorkingDraftOutcome, error) {
+	if s == nil || s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	if req.EncounterID <= 0 {
+		return nil, fmt.Errorf("encounter_id is required")
+	}
+	if strings.TrimSpace(req.TemplateID) == "" {
+		return nil, fmt.Errorf("template_id is required")
+	}
+	if req.DoctorID <= 0 {
+		return nil, fmt.Errorf("doctor_id is required")
+	}
+	documentType := strings.TrimSpace(req.DocumentType)
+	if documentType == "" {
+		documentType = "门诊病历"
+	}
+	if documentType != "门诊病历" && documentType != "急诊病历" {
+		return nil, fmt.Errorf("invalid document_type")
+	}
+	visitType := strings.TrimSpace(req.VisitType)
+	if visitType == "" || visitType == "通用" {
+		visitType = "初诊"
+	}
+	if visitType != "初诊" && visitType != "复诊" {
+		return nil, fmt.Errorf("invalid visit_type")
+	}
+	startedAt := req.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+
+	patient := encodeObject(req.PatientSnapshot)
+	encounterContext := encodeObject(req.EncounterContext)
+	sourceReferences := encodeObject(req.SourceReferences)
+	content := encodeObject(req.Content)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin generated emr save: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var recordID string
+	var beforeStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT id, status
+		FROM emr_records
+		WHERE tenant_id=$1 AND encounter_id=$2
+		FOR UPDATE
+	`, tenantID, req.EncounterID).Scan(&recordID, &beforeStatus)
+	created := false
+	if err == pgx.ErrNoRows {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO emr_records
+				(tenant_id, encounter_id, customer_id, patient_snapshot_json, template_id,
+				 document_type, visit_type, department_id, doctor_id,
+				 started_at, ended_at, encounter_context_json, source_references_json,
+				 content_json, status, created_by)
+			VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,'草稿',$15)
+			RETURNING id
+		`, tenantID, req.EncounterID, req.CustomerID, patient, req.TemplateID,
+			documentType, visitType, req.DepartmentID, req.DoctorID, startedAt, req.EndedAt,
+			encounterContext, sourceReferences, content, req.CreatedBy).Scan(&recordID)
+		if err != nil {
+			return nil, fmt.Errorf("create generated emr record: %w", err)
+		}
+		created = true
+		beforeStatus = ""
+	} else if err != nil {
+		return nil, fmt.Errorf("lock generated emr record: %w", err)
+	}
+
+	if !created {
+		if !editable(beforeStatus) {
+			return nil, fmt.Errorf("病历当前状态为%s，不能被录音生成结果覆盖", beforeStatus)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_records
+			SET customer_id=$3,
+			    patient_snapshot_json=$4::jsonb,
+			    template_id=$5,
+			    document_type=$6,
+			    visit_type=$7,
+			    department_id=$8,
+			    doctor_id=$9,
+			    started_at=$10,
+			    ended_at=$11,
+			    encounter_context_json=$12::jsonb,
+			    source_references_json=$13::jsonb,
+			    content_json=$14::jsonb,
+			    updated_at=NOW()
+			WHERE id=$1 AND tenant_id=$2
+		`, recordID, tenantID, req.CustomerID, patient, req.TemplateID,
+			documentType, visitType, req.DepartmentID, req.DoctorID, startedAt, req.EndedAt,
+			encounterContext, sourceReferences, content); err != nil {
+			return nil, fmt.Errorf("update generated emr record: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit generated emr save: %w", err)
+	}
+	record, err := s.Get(ctx, tenantID, recordID)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("generated emr record disappeared after save")
+	}
+	return &GeneratedWorkingDraftOutcome{
+		Record:       record,
+		Created:      created,
+		BeforeStatus: beforeStatus,
+		AfterStatus:  record.Status,
+	}, nil
 }
 
 func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id string, content map[string]any) (*WriteOutcome, error) {
@@ -250,7 +386,6 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	beforeSnapshot := current.CurrentSnapshotID
 	contentRaw := encodeObject(content)
-	workingDigest := digest(content)
 	snapshotDigest := snapshotDigest(current, content)
 	var snapshot *Snapshot
 	if current.CurrentSnapshotID == nil || !sameSnapshotDigest(ctx, tx, *current.CurrentSnapshotID, snapshotDigest) {
@@ -266,10 +401,9 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE emr_records
-		SET working_content=$3::jsonb, working_digest=$4, current_snapshot_id=$5,
-		    last_saved_at=NOW(), updated_at=NOW()
+		SET content_json=$3::jsonb, updated_at=NOW()
 		WHERE id=$1 AND tenant_id=$2
-	`, id, tenantID, contentRaw, workingDigest, snapshot.ID); err != nil {
+	`, id, tenantID, contentRaw); err != nil {
 		return nil, fmt.Errorf("update formal emr content: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -375,22 +509,17 @@ func (s *Store) GetSnapshot(ctx context.Context, tenantID int64, recordID, snaps
 }
 
 func (s *Store) Transition(ctx context.Context, tenantID int64, id, status string, actorID int64, confirmedSnapshot, archivedSnapshot *string, revisionIncrement bool) (*Record, error) {
-	setRevision := "revision_no=revision_no"
-	if revisionIncrement {
-		setRevision = "revision_no=revision_no+1"
-	}
-	cmd, err := s.pool.Exec(ctx, fmt.Sprintf(`
+	cmd, err := s.pool.Exec(ctx, `
 		UPDATE emr_records
 		SET status=$3::varchar,
 		    confirmed_by=CASE WHEN $3::varchar='已确认' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
 		    confirmed_at=CASE WHEN $3::varchar='已确认' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
-		    confirmed_snapshot_id=CASE WHEN $3::varchar='已确认' THEN $5::uuid WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_snapshot_id END,
-		    archived_snapshot_id=CASE WHEN $3::varchar='已归档' THEN $6::uuid ELSE archived_snapshot_id END,
 		    submitted_at=CASE WHEN $3::varchar='待确认' THEN NOW() ELSE submitted_at END,
 		    archived_at=CASE WHEN $3::varchar='已归档' THEN NOW() ELSE archived_at END,
-		    %s, updated_at=NOW()
+		    revision_no=CASE WHEN $5::boolean THEN revision_no + 1 ELSE revision_no END,
+		    updated_at=NOW()
 		WHERE id=$1 AND tenant_id=$2
-	`, setRevision), id, tenantID, status, actorID, confirmedSnapshot, archivedSnapshot)
+	`, id, tenantID, status, actorID, revisionIncrement)
 	if err != nil {
 		return nil, fmt.Errorf("transition emr record: %w", err)
 	}
@@ -398,6 +527,39 @@ func (s *Store) Transition(ctx context.Context, tenantID int64, id, status strin
 		return nil, fmt.Errorf("record not found")
 	}
 	return s.Get(ctx, tenantID, id)
+}
+
+func (s *Store) WithTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func transitionTx(ctx context.Context, tx pgx.Tx, tenantID int64, id, status string, actorID int64, confirmedSnapshot, archivedSnapshot *string, revisionIncrement bool) (*Record, error) {
+	cmd, err := tx.Exec(ctx, `
+		UPDATE emr_records
+		SET status=$3::varchar,
+		    confirmed_by=CASE WHEN $3::varchar='已确认' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
+		    confirmed_at=CASE WHEN $3::varchar='已确认' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
+		    submitted_at=CASE WHEN $3::varchar='待确认' THEN NOW() ELSE submitted_at END,
+		    archived_at=CASE WHEN $3::varchar='已归档' THEN NOW() ELSE archived_at END,
+		    revision_no=CASE WHEN $5::boolean THEN revision_no + 1 ELSE revision_no END,
+		    updated_at=NOW()
+		WHERE id=$1 AND tenant_id=$2
+	`, id, tenantID, status, actorID, revisionIncrement)
+	if err != nil {
+		return nil, fmt.Errorf("transition emr record: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return nil, fmt.Errorf("record not found")
+	}
+	return scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", id, tenantID))
 }
 
 func (s *Store) Void(ctx context.Context, tenantID int64, id string) (*Record, error) {
@@ -416,18 +578,17 @@ func (s *Store) Void(ctx context.Context, tenantID int64, id string) (*Record, e
 }
 
 func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64, versionID string) (*emrtemplate.PublishedVersionDetail, error) {
-	query := `SELECT v.id,v.template_id,v.version_no,v.name,v.document_type,v.visit_type,v.department_id,v.specialty_module,v.print_title,v.description,v.status,v.created_by,v.published_at,v.published_by,v.disabled_at,v.disabled_by,v.created_at
-		FROM emr_template_versions v
-		JOIN emr_templates t ON t.id=v.template_id
-		WHERE v.id=$1 AND (t.tenant_id IS NULL OR t.tenant_id=$2)`
+	query := `SELECT t.id,t.id,t.code,t.version_no,t.name,t.document_type,t.visit_type,t.department_id,t.specialty,t.print_title,t.description,t.status,t.created_by,t.published_at,t.published_by,t.disabled_at,t.disabled_by,t.created_at,t.is_current
+		FROM emr_templates t
+		WHERE t.id=$1 AND t.tenant_id IN (0,$2)`
 	var version emrtemplate.TemplateVersion
-	if err := s.pool.QueryRow(ctx, query, versionID, tenantID).Scan(&version.ID, &version.TemplateID, &version.VersionNo, &version.Name, &version.DocumentType, &version.VisitType, &version.DepartmentID, &version.SpecialtyModule, &version.PrintTitle, &version.Description, &version.Status, &version.CreatedBy, &version.PublishedAt, &version.PublishedBy, &version.DisabledAt, &version.DisabledBy, &version.CreatedAt); err != nil {
+	if err := s.pool.QueryRow(ctx, query, versionID, tenantID).Scan(&version.ID, &version.TemplateID, &version.TemplateCode, &version.VersionNo, &version.Name, &version.DocumentType, &version.VisitType, &version.DepartmentID, &version.SpecialtyModule, &version.PrintTitle, &version.Description, &version.Status, &version.CreatedBy, &version.PublishedAt, &version.PublishedBy, &version.DisabledAt, &version.DisabledBy, &version.CreatedAt, &version.IsCurrent); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("load emr published template version: %w", err)
 	}
-	if version.Status != "published" {
+	if version.Status != "published" || !version.IsCurrent {
 		return nil, fmt.Errorf("template version is not published")
 	}
 	sections, err := s.listTemplateSections(ctx, version.ID)
@@ -446,7 +607,7 @@ func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64,
 }
 
 func (s *Store) listTemplateSections(ctx context.Context, versionID string) ([]*emrtemplate.Section, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,template_version_id,code,name,content_category,input_type,is_common,is_visible,display_order,description,options_json,structure_json FROM emr_template_sections WHERE template_version_id=$1 ORDER BY display_order`, versionID)
+	rows, err := s.pool.Query(ctx, `SELECT tf.id,tf.template_id,f.code,f.name,f.content_category,f.input_type,TRUE,tf.is_visible,tf.display_order,f.description,f.options_json,f.structure_json FROM emr_template_fields tf JOIN emr_fields f ON f.id=tf.field_id WHERE tf.template_id=$1 ORDER BY tf.display_order`, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +629,7 @@ func (s *Store) listTemplateSections(ctx context.Context, versionID string) ([]*
 }
 
 func (s *Store) listTemplateBindings(ctx context.Context, versionID string) ([]*emrtemplate.RequirementBinding, error) {
-	rows, err := s.pool.Query(ctx, `SELECT b.id,b.template_version_id,b.quality_requirement_id,b.execution_mode,b.deadline_action,b.display_order,q.code,q.name,q.rule_type,q.quality_group FROM emr_template_quality_requirements b JOIN emr_quality_requirements q ON q.id=b.quality_requirement_id WHERE b.template_version_id=$1 ORDER BY b.display_order,q.code`, versionID)
+	rows, err := s.pool.Query(ctx, `SELECT b.id,b.template_id,b.quality_rule_id,b.execution_mode,b.deadline_action,b.display_order,q.code,q.name,q.rule_type,q.quality_group FROM emr_template_quality_rules b JOIN emr_quality_rules q ON q.id=b.quality_rule_id WHERE b.template_id=$1 AND b.is_enabled=true ORDER BY b.display_order,q.code`, versionID)
 	if err != nil {
 		return nil, err
 	}
