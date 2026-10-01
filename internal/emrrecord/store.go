@@ -645,27 +645,6 @@ func (s *Store) listTemplateBindings(ctx context.Context, versionID string) ([]*
 	return out, rows.Err()
 }
 
-func (s *Store) SaveAIGeneration(ctx context.Context, recordID, generationKey string, inputBasis, sectionUpdates, sourceEvidence, modelCallReference map[string]any) (*AIGeneration, error) {
-	var id string
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO emr_ai_generations
-		(record_id, generation_key, input_basis, section_updates, source_evidence, model_call_reference)
-		VALUES ($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)
-		ON CONFLICT (record_id, generation_key) DO UPDATE SET
-			input_basis = EXCLUDED.input_basis,
-			section_updates = EXCLUDED.section_updates,
-			source_evidence = EXCLUDED.source_evidence,
-			model_call_reference = EXCLUDED.model_call_reference,
-			generated_at = NOW()
-		RETURNING id, generated_at
-	`, recordID, generationKey, encodeObject(inputBasis), encodeObject(sectionUpdates), encodeObject(sourceEvidence), encodeObject(modelCallReference)).Scan(&id, new(time.Time))
-	if err != nil {
-		return nil, fmt.Errorf("save emr ai generation: %w", err)
-	}
-	item := &AIGeneration{ID: id, RecordID: recordID, GenerationKey: generationKey, InputBasis: inputBasis, SectionUpdates: sectionUpdates, SourceEvidence: sourceEvidence, ModelCallReference: modelCallReference}
-	return item, nil
-}
-
 func editable(status string) bool {
 	return status == "草稿" || status == "需补全" || status == "退回"
 }

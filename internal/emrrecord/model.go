@@ -55,17 +55,6 @@ type Snapshot struct {
 	FormedAt          time.Time      `json:"formed_at"`
 }
 
-type AIGeneration struct {
-	ID                 string         `json:"id"`
-	RecordID           string         `json:"record_id"`
-	GenerationKey      string         `json:"generation_key"`
-	InputBasis         map[string]any `json:"input_basis"`
-	SectionUpdates     map[string]any `json:"section_updates"`
-	SourceEvidence     map[string]any `json:"source_evidence"`
-	GeneratedAt        time.Time      `json:"generated_at"`
-	ModelCallReference map[string]any `json:"model_call_reference"`
-}
-
 type GenerateRequest struct {
 	GenerationKey string         `json:"generation_key"`
 	Input         map[string]any `json:"input"`
