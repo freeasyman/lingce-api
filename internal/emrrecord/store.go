@@ -219,13 +219,23 @@ func isEncounterAlreadyUsed(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "emr_records_tenant_encounter_uq"
 }
 
-func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id string, content map[string]any) (*Record, error) {
+func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*Record, error) {
 	raw := encodeObject(content)
-	cmd, err := s.pool.Exec(ctx, `
-		UPDATE emr_records
-		SET content_json=$3::jsonb, updated_at=NOW()
-		WHERE id=$1 AND tenant_id=$2 AND status IN ('草稿','需补全','退回')
-	`, id, tenantID, raw)
+	var cmd pgconn.CommandTag
+	var err error
+	if patientSnapshot == nil {
+		cmd, err = s.pool.Exec(ctx, `
+			UPDATE emr_records
+			SET content_json=$3::jsonb, updated_at=NOW()
+			WHERE id=$1 AND tenant_id=$2 AND status IN ('草稿','需补全','退回')
+		`, id, tenantID, raw)
+	} else {
+		cmd, err = s.pool.Exec(ctx, `
+			UPDATE emr_records
+			SET content_json=$3::jsonb, patient_snapshot_json=$4::jsonb, updated_at=NOW()
+			WHERE id=$1 AND tenant_id=$2 AND status IN ('草稿','需补全','退回')
+		`, id, tenantID, raw, encodeObject(patientSnapshot))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("save emr working content: %w", err)
 	}
@@ -350,6 +360,20 @@ func (s *Store) SaveGeneratedWorkingDraft(ctx context.Context, tenantID int64, r
 		}
 	}
 
+	// Keep the generated draft as the first comparison baseline. Automatic
+	// saves update emr_records directly; without this snapshot, the first
+	// manual save would compare the edited working content with itself and
+	// produce an empty audit detail.
+	current, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", recordID, tenantID))
+	if err != nil {
+		return nil, fmt.Errorf("load generated emr record for baseline: %w", err)
+	}
+	if current.CurrentSnapshotID == nil {
+		if _, err := insertSnapshot(ctx, tx, current, req.CreatedBy, req.Content, req.PatientSnapshot, content, snapshotDigest(current, req.Content, req.PatientSnapshot)); err != nil {
+			return nil, fmt.Errorf("create generated emr baseline snapshot: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit generated emr save: %w", err)
 	}
@@ -368,7 +392,7 @@ func (s *Store) SaveGeneratedWorkingDraft(ctx context.Context, tenantID int64, r
 	}, nil
 }
 
-func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id string, content map[string]any) (*WriteOutcome, error) {
+func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*WriteOutcome, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin formal emr save: %w", err)
@@ -385,11 +409,22 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 		return nil, fmt.Errorf("record status %s is not editable", current.Status)
 	}
 	beforeSnapshot := current.CurrentSnapshotID
+	beforeContent := cloneObject(current.WorkingContent)
+	beforePatient := cloneObject(current.PatientSnapshot)
+	if current.CurrentSnapshotID != nil {
+		if previous, snapshotErr := getSnapshotTx(ctx, tx, *current.CurrentSnapshotID); snapshotErr == nil && previous != nil {
+			beforeContent = cloneObject(previous.Content)
+			beforePatient = cloneObject(previous.PatientSnapshot)
+		}
+	}
+	if patientSnapshot == nil {
+		patientSnapshot = current.PatientSnapshot
+	}
 	contentRaw := encodeObject(content)
-	snapshotDigest := snapshotDigest(current, content)
+	snapshotDigest := snapshotDigest(current, content, patientSnapshot)
 	var snapshot *Snapshot
 	if current.CurrentSnapshotID == nil || !sameSnapshotDigest(ctx, tx, *current.CurrentSnapshotID, snapshotDigest) {
-		snapshot, err = insertSnapshot(ctx, tx, current, actorID, content, contentRaw, snapshotDigest)
+		snapshot, err = insertSnapshot(ctx, tx, current, actorID, content, patientSnapshot, contentRaw, snapshotDigest)
 		if err != nil {
 			return nil, err
 		}
@@ -401,9 +436,9 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE emr_records
-		SET content_json=$3::jsonb, updated_at=NOW()
+		SET content_json=$3::jsonb, patient_snapshot_json=$4::jsonb, updated_at=NOW()
 		WHERE id=$1 AND tenant_id=$2
-	`, id, tenantID, contentRaw); err != nil {
+	`, id, tenantID, contentRaw, encodeObject(patientSnapshot)); err != nil {
 		return nil, fmt.Errorf("update formal emr content: %w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -413,11 +448,11 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 	if err != nil {
 		return nil, err
 	}
-	return &WriteOutcome{Record: updated, Snapshot: snapshot, BeforeContent: current.WorkingContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: beforeSnapshot}, nil
+	return &WriteOutcome{Record: updated, Snapshot: snapshot, BeforeContent: beforeContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: beforeSnapshot, BeforePatient: beforePatient}, nil
 }
 
-func insertSnapshot(ctx context.Context, tx pgx.Tx, current *Record, actorID int64, content map[string]any, contentRaw, contentDigest string) (*Snapshot, error) {
-	patient := encodeObject(current.PatientSnapshot)
+func insertSnapshot(ctx context.Context, tx pgx.Tx, current *Record, actorID int64, content, patientSnapshot map[string]any, contentRaw, contentDigest string) (*Snapshot, error) {
+	patient := encodeObject(patientSnapshot)
 	documentContext := encodeObject(snapshotDocumentContext(current))
 	var id string
 	var snapshotNo int
@@ -432,7 +467,7 @@ func insertSnapshot(ctx context.Context, tx pgx.Tx, current *Record, actorID int
 	if err != nil {
 		return nil, fmt.Errorf("create emr snapshot: %w", err)
 	}
-	return &Snapshot{ID: id, RecordID: current.ID, EncounterID: current.EncounterID, RevisionNo: current.RevisionNo, SnapshotNo: snapshotNo, TemplateVersionID: current.TemplateVersionID, PatientSnapshot: current.PatientSnapshot, DocumentContext: decodeObject([]byte(documentContext)), Content: content, ContentDigest: contentDigest, FormedBy: actorID, FormedAt: time.Now().UTC()}, nil
+	return &Snapshot{ID: id, RecordID: current.ID, EncounterID: current.EncounterID, RevisionNo: current.RevisionNo, SnapshotNo: snapshotNo, TemplateVersionID: current.TemplateVersionID, PatientSnapshot: patientSnapshot, DocumentContext: decodeObject([]byte(documentContext)), Content: content, ContentDigest: contentDigest, FormedBy: actorID, FormedAt: time.Now().UTC()}, nil
 }
 
 func sameSnapshotDigest(ctx context.Context, tx pgx.Tx, id, expected string) bool {
@@ -655,12 +690,20 @@ func digest(content map[string]any) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func snapshotDigest(current *Record, content map[string]any) string {
+func snapshotDigest(current *Record, content, patientSnapshot map[string]any) string {
 	return digest(map[string]any{
-		"patient_snapshot": current.PatientSnapshot,
+		"patient_snapshot": patientSnapshot,
 		"document_context": snapshotDocumentContext(current),
 		"content":          content,
 	})
+}
+
+func cloneObject(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	raw, _ := json.Marshal(value)
+	return decodeObject(raw)
 }
 
 func snapshotDocumentContext(current *Record) map[string]any {
