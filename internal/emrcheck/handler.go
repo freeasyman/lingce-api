@@ -3,9 +3,11 @@ package emrcheck
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,9 +40,10 @@ func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
-		{Method: "POST", Path: "/api/v1/emr/records/{id}/checks", Handler: h.RunManual, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks", Handler: h.ListRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/emr/records/{id}/checks/{check_id}", Handler: h.GetRun, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/quality-management/summary", Handler: h.QualityManagementSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/quality-management/findings", Handler: h.QualityManagementFindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/quality-management/findings/{group_key}/records", Handler: h.QualityManagementFindingRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/records/{id}/quality-current", Handler: h.CurrentQuality, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/quality-check/program-preview", Handler: h.ProgramPreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/quality-check/preview", Handler: h.CompletePreview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
@@ -170,10 +173,10 @@ func (h *Handler) ProgramPreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startedAt := time.Now().UTC()
-	results, overall, err := h.service.PreviewProgram(r.Context(), req)
+	results, overall, err := h.service.PreviewFieldCentricProgram(r.Context(), req)
 	completedAt := time.Now().UTC()
 	response := map[string]any{
-		"code":                   "EMR_PROGRAM_QUALITY_PREVIEW",
+		"code":                   "EMR_FIELD_PROGRAM_QUALITY_PREVIEW",
 		"tenant_id":              tenantID,
 		"template_version_id":    req.TemplateVersionID,
 		"overall_result":         overall,
@@ -280,23 +283,139 @@ func appendLog(path string, raw []byte) error {
 	return err
 }
 
-func (h *Handler) RunManual(w http.ResponseWriter, r *http.Request) {
-	tenantID, actorID, err := h.authorizeRecord(r, "record.edit")
+func (h *Handler) QualityManagementSummary(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	tenantID, _, err := h.authorizeQuality(r)
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	recordID := strings.TrimSpace(r.PathValue("id"))
-	if recordID == "" {
-		httputil.WriteBadRequest(w, "invalid record id")
-		return
-	}
-	item, err := h.service.RunManual(r.Context(), tenantID, actorID, recordID)
+	filter, err := parseQualityManagementFilter(r)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	item, err := h.service.QualityManagementSummary(r.Context(), tenantID, filter)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	slog.Info("emr quality management summary loaded", "tenant_id", tenantID, "duration_ms", time.Since(startedAt).Milliseconds())
 	httputil.WriteSuccess(w, map[string]any{"data": item})
+}
+
+func (h *Handler) QualityManagementFindings(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	tenantID, _, err := h.authorizeQuality(r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	filter, err := parseQualityManagementFilter(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, err := h.service.QualityManagementFindings(r.Context(), tenantID, filter)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	slog.Info("emr quality management findings loaded", "tenant_id", tenantID, "scope", filter.Scope, "items", len(items.Items), "total", items.Total, "duration_ms", time.Since(startedAt).Milliseconds())
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) QualityManagementFindingRecords(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, err := h.authorizeQuality(r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	groupKey := strings.TrimSpace(r.PathValue("group_key"))
+	if groupKey == "" {
+		httputil.WriteBadRequest(w, "invalid finding group")
+		return
+	}
+	filter, err := parseQualityManagementFilter(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, err := h.service.QualityManagementFindingRecords(r.Context(), tenantID, groupKey, filter)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func parseQualityManagementFilter(r *http.Request) (QualityManagementFilter, error) {
+	query := r.URL.Query()
+	filter := QualityManagementFilter{Scope: strings.TrimSpace(query.Get("scope"))}
+	if filter.Scope == "" {
+		filter.Scope = "attention"
+	}
+	if filter.Scope != "attention" && filter.Scope != "all" {
+		return filter, fmt.Errorf("invalid scope")
+	}
+	if value := strings.TrimSpace(query.Get("date_from")); value != "" {
+		parsed, err := parseQualityManagementTime(value, false)
+		if err != nil {
+			return filter, fmt.Errorf("invalid date_from")
+		}
+		filter.DateFrom = parsed
+	}
+	if value := strings.TrimSpace(query.Get("date_to")); value != "" {
+		parsed, err := parseQualityManagementTime(value, true)
+		if err != nil {
+			return filter, fmt.Errorf("invalid date_to")
+		}
+		filter.DateTo = parsed
+	}
+	if value := strings.TrimSpace(query.Get("department_id")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			return filter, fmt.Errorf("invalid department_id")
+		}
+		filter.DepartmentID = &parsed
+	}
+	if value := strings.TrimSpace(query.Get("doctor_id")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 {
+			return filter, fmt.Errorf("invalid doctor_id")
+		}
+		filter.DoctorID = &parsed
+	}
+	filter.Status = strings.TrimSpace(query.Get("status"))
+	if value := strings.TrimSpace(query.Get("limit")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return filter, fmt.Errorf("invalid limit")
+		}
+		filter.Limit = parsed
+	}
+	if value := strings.TrimSpace(query.Get("offset")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return filter, fmt.Errorf("invalid offset")
+		}
+		filter.Offset = parsed
+	}
+	return filter, nil
+}
+
+func parseQualityManagementTime(value string, endOfDay bool) (*time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed, nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return nil, err
+	}
+	if endOfDay {
+		parsed = parsed.AddDate(0, 0, 1)
+	}
+	return &parsed, nil
 }
 
 func (h *Handler) tenant(r *http.Request) (int64, error) {
@@ -325,7 +444,7 @@ func (h *Handler) authorizeRecord(r *http.Request, ability string) (int64, int64
 	return tenantID, access.UserID, nil
 }
 
-func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CurrentQuality(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, err := h.authorizeRecord(r, "record.read")
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
@@ -336,33 +455,13 @@ func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid record id")
 		return
 	}
-	items, err := h.service.ListRuns(r.Context(), tenantID, recordID)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
-}
-
-func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
-	tenantID, _, err := h.authorizeRecord(r, "record.read")
-	if err != nil {
-		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	recordID := strings.TrimSpace(r.PathValue("id"))
-	checkID := strings.TrimSpace(r.PathValue("check_id"))
-	if recordID == "" || checkID == "" {
-		httputil.WriteBadRequest(w, "invalid check run id")
-		return
-	}
-	item, err := h.service.GetRun(r.Context(), tenantID, recordID, checkID)
+	item, err := h.service.CurrentQuality(r.Context(), tenantID, recordID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	if item == nil {
-		httputil.WriteNotFound(w, "check run not found")
+		httputil.WriteSuccess(w, map[string]any{"data": nil})
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
