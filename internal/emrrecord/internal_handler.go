@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrprocess"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -19,32 +21,32 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// InternalHandler 是 Worker 调用 EMR 的临时内部接收入口。
+// InternalHandler 是 Worker 调用 EMR 的正式内部生成入口。
 //
-// 当前阶段接收完整工牌录音的清洗转写，完成模板选择、提示词准备和一次
-// LLM 病历生成。生成结果只写入 API 仓库 data/log 下的 Beta 调试日志，
-// 不进入正式的病历表；正式入库由后续阶段单独实现。
+// 接收完整工牌录音的清洗转写后，完成模板选择、提示词拼接、模型调用、
+// 结果校验、病历工作稿写入和过程留痕。完整提示词、模型请求、模型响应
+// 和保存结果会写入电子病历项目 data/log 目录，便于联调核对正式链路。
 //
 // 署名：Codex
 // 时间：2026-09-13
 type InternalHandler struct {
-	logPath       string
-	betaLogPath   string
-	pool          *pgxpool.Pool
-	templateStore *emrtemplate.Store
-	llm           *llmgateway.Client
-	logMu         sync.Mutex
+	logPath     string
+	betaLogPath string
+	pool        *pgxpool.Pool
+	recordStore *Store
+	process     *emrprocess.Service
+	llm         *llmgateway.Client
+	logMu       sync.Mutex
 }
 
-// NewInternalHandler 创建 Worker 接收 Handler。
+// NewInternalHandler 创建 Worker 正式生成 Handler。
 //
-// 日志路径使用绝对路径，避免 API 从不同工作目录启动时把调试文件写到
-// 不同位置。该文件是临时联调日志，不是正式审计日志，也不替代 EMR
-// 操作日志表。
+// 日志路径使用电子病历前端项目的 data/log 目录，避免 API 从不同工作
+// 目录启动时写错位置。文本日志只用于联调观察，不替代 EMR 操作日志表。
 //
 // 署名：Codex
 // 时间：2026-09-13
-func NewInternalHandler(pool *pgxpool.Pool, templateStore *emrtemplate.Store, llm *llmgateway.Client) *InternalHandler {
+func NewInternalHandler(pool *pgxpool.Pool, llm *llmgateway.Client, process *emrprocess.Service) *InternalHandler {
 	return &InternalHandler{
 		logPath: filepath.Join(
 			"/Users/yiliiang/Documents/lingce-web/apps/emr",
@@ -53,14 +55,15 @@ func NewInternalHandler(pool *pgxpool.Pool, templateStore *emrtemplate.Store, ll
 			"emr_worker_debug.log",
 		),
 		betaLogPath: filepath.Join(
-			"/Users/yiliiang/Documents/lingce-api",
+			"/Users/yiliiang/Documents/lingce-web/apps/emr",
 			"data",
 			"log",
 			"emr_generation_beta.log",
 		),
-		pool:          pool,
-		templateStore: templateStore,
-		llm:           llm,
+		pool:        pool,
+		recordStore: NewStore(pool),
+		process:     process,
+		llm:         llm,
 	}
 }
 
@@ -82,7 +85,7 @@ func (h *InternalHandler) RegisterRoutes(mux *http.ServeMux, internalToken strin
 	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
 }
 
-// Generate 接收 Worker 的完整工牌录音分析输入，并同步完成一次病历生成。
+// Generate 接收 Worker 的完整工牌录音分析输入，并同步完成一次正式病历生成。
 //
 // 当前阶段只完成以下业务：
 // 1. 解析 JSON；
@@ -90,11 +93,11 @@ func (h *InternalHandler) RegisterRoutes(mux *http.ServeMux, internalToken strin
 // 3. 校验租户员工、医生角色和医疗科室；
 // 4. 读取当前已发布病历模板及其栏位；
 // 5. 读取提示词文件并注入本次数据；
-// 6. 把完整提示词写入调试日志；
+// 6. 把完整提示词写入电子病历项目日志；
 // 7. 按数据库中的 EMR 模型配置调用 LLM 网关；
 // 8. 校验模型返回的完整病历 JSON；
-// 9. 把模型请求、原始返回和解析结果写入 Beta 日志；
-// 10. 返回生成结果，但暂不写入 emr_records。
+// 9. 把模型请求、原始返回和解析结果写入电子病历项目日志；
+// 10. 把生成结果写入 emr_records 草稿工作稿。
 //
 // 署名：Codex
 // 时间：2026-09-13
@@ -138,10 +141,21 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	startedAt := parseRecordedAt(payload.RecordedAt)
+	writeOutcome, err := h.saveGeneratedWorkingDraft(r.Context(), payload, requestID, prepared, config, llmResponse, workingContent, unresolvedItems, startedAt)
+	if err != nil {
+		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
+		return
+	}
+	if err := h.appendGeneratedProcessRecord(r.Context(), payload, requestID, writeOutcome, llmResponse); err != nil {
+		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
+		return
+	}
+
 	response := map[string]any{
-		"code":             "EMR_GENERATED_BETA",
-		"status":           "generated_beta",
-		"message":          "病历工作稿已生成（Beta）",
+		"code":             "EMR_GENERATED",
+		"status":           "generated",
+		"message":          "病历工作稿已生成并写入 emr_records",
 		"request_id":       requestID,
 		"tenant_id":        payload.TenantID,
 		"recording_id":     payload.RecordingID,
@@ -155,13 +169,23 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		"llm_request_id":   llmResponse.RequestID,
 		"provider":         llmResponse.Provider,
 		"model_code":       llmResponse.ModelCode,
+		"record_id":        writeOutcome.Record.ID,
+		"record_created":   writeOutcome.Created,
+		"before_status":    writeOutcome.BeforeStatus,
+		"after_status":     writeOutcome.AfterStatus,
 		"working_content":  workingContent,
 		"unresolved_items": unresolvedItems,
 	}
 	logRequest := map[string]any{
-		"request":       payload,
-		"employee":      prepared.Employee,
-		"template":      prepared.Template,
+		"request":  payload,
+		"employee": prepared.Employee,
+		"template_summary": map[string]any{
+			"code":          prepared.Template.Version.TemplateCode,
+			"version":       prepared.Template.Version.VersionNo,
+			"document_type": prepared.Template.Version.DocumentType,
+			"visit_type":    prepared.Template.Version.VisitType,
+			"field_count":   len(prepared.Template.Sections),
+		},
 		"system_prompt": prepared.SystemPrompt,
 		"user_prompt":   prepared.UserPrompt,
 	}
@@ -170,10 +194,16 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.appendBetaLog(map[string]any{
-		"request_id":       requestID,
-		"request":          payload,
-		"employee":         prepared.Employee,
-		"template":         prepared.Template,
+		"request_id": requestID,
+		"request":    payload,
+		"employee":   prepared.Employee,
+		"template_summary": map[string]any{
+			"code":          prepared.Template.Version.TemplateCode,
+			"version":       prepared.Template.Version.VersionNo,
+			"document_type": prepared.Template.Version.DocumentType,
+			"visit_type":    prepared.Template.Version.VisitType,
+			"field_count":   len(prepared.Template.Sections),
+		},
 		"prompt_code":      "emr-working-draft-generation",
 		"system_prompt":    prepared.SystemPrompt,
 		"user_prompt":      prepared.UserPrompt,
@@ -181,6 +211,10 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		"gateway_request":  requestJSON,
 		"gateway_response": responseJSON,
 		"llm_response":     llmResponse,
+		"record_id":        writeOutcome.Record.ID,
+		"record_created":   writeOutcome.Created,
+		"before_status":    writeOutcome.BeforeStatus,
+		"after_status":     writeOutcome.AfterStatus,
 		"working_content":  workingContent,
 		"unresolved_items": unresolvedItems,
 	}, nil); err != nil {
@@ -188,6 +222,135 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, response)
+}
+
+// appendGeneratedProcessRecord 为正式写入的病历工作稿追加系统操作记录。
+//
+// 生成写入和操作留痕分别由病历 Store 与过程记录 Store 管理；病历成功
+// 写入后才追加留痕，避免在生成尚未落库时产生“已生成”的假记录。当前
+// 数据库的动作枚举没有单独的“AI生成”，因此使用既有的“导入”动作，
+// 并通过 source=系统任务、output_info 标识这是 Worker 触发的 AI 病历生成。
+//
+// 署名：Codex
+// 时间：2026-09-13
+func (h *InternalHandler) appendGeneratedProcessRecord(ctx context.Context, req EmrWorkerRequest, requestID string, outcome *GeneratedWorkingDraftOutcome, response *llmgateway.TextInferenceResponse) error {
+	if h == nil || h.process == nil {
+		return nil
+	}
+	if outcome == nil || outcome.Record == nil {
+		return fmt.Errorf("generated emr write outcome is empty")
+	}
+	recordID := outcome.Record.ID
+	beforeStatus := outcome.BeforeStatus
+	afterStatus := outcome.AfterStatus
+	_, err := h.process.Append(ctx, emrprocess.AppendRequest{
+		TenantID:     req.TenantID,
+		RecordID:     &recordID,
+		ActionType:   "导入",
+		ActionResult: "成功",
+		ActorType:    "系统",
+		Source:       "系统任务",
+		BeforeStatus: stringPtrIfNotEmpty(beforeStatus),
+		AfterStatus:  stringPtrIfNotEmpty(afterStatus),
+		OutputInfo: map[string]any{
+			"request_id":     requestID,
+			"recording_id":   req.RecordingID,
+			"encounter_id":   req.EncounterID,
+			"record_created": outcome.Created,
+			"llm_request_id": response.RequestID,
+			"model_code":     response.ModelCode,
+			"operation":      "emr_working_draft_generation",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("append generated emr process record: %w", err)
+	}
+	return nil
+}
+
+func stringPtrIfNotEmpty(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func (h *InternalHandler) saveGeneratedWorkingDraft(
+	ctx context.Context,
+	req EmrWorkerRequest,
+	requestID string,
+	prepared *preparedPrompt,
+	config *emrModelConfig,
+	llmResponse *llmgateway.TextInferenceResponse,
+	workingContent map[string]any,
+	unresolvedItems []any,
+	startedAt time.Time,
+) (*GeneratedWorkingDraftOutcome, error) {
+	if h == nil || h.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	visitType := prepared.Template.Version.VisitType
+	if visitType == "通用" {
+		visitType = "初诊"
+	}
+	sourceReferences := map[string]any{
+		"source_kind":        "工牌录音",
+		"recording_id":       req.RecordingID,
+		"request_id":         requestID,
+		"cleaned_transcript": true,
+		"prompt_code":        "emr-working-draft-generation",
+		"template_code":      prepared.Template.Version.TemplateCode,
+		"template_version":   prepared.Template.Version.VersionNo,
+		"model_provider":     config.Provider,
+		"model_code":         config.ModelCode,
+		"llm_request_id":     llmResponse.RequestID,
+		"unresolved_items":   unresolvedItems,
+	}
+	encounterContext := map[string]any{
+		"tenant_id":               req.TenantID,
+		"encounter_id":            req.EncounterID,
+		"recording_id":            req.RecordingID,
+		"employee_id":             req.EmployeeID,
+		"doctor_name":             req.DoctorName,
+		"medical_department_code": prepared.Employee["medical_department_code"],
+		"recorded_at":             req.RecordedAt,
+	}
+	patientSnapshot := map[string]any{
+		"customer_id": req.CustomerID,
+		"name":        req.CustomerName,
+	}
+	return h.recordStore.SaveGeneratedWorkingDraft(ctx, req.TenantID, GeneratedWorkingDraftRequest{
+		EncounterID:      req.EncounterID,
+		CustomerID:       int64PtrIfPositive(req.CustomerID),
+		PatientSnapshot:  patientSnapshot,
+		TemplateID:       prepared.Template.Version.ID,
+		DocumentType:     prepared.Template.Version.DocumentType,
+		VisitType:        visitType,
+		DoctorID:         req.EmployeeID,
+		StartedAt:        startedAt,
+		EncounterContext: encounterContext,
+		SourceReferences: sourceReferences,
+		Content:          workingContent,
+		CreatedBy:        req.EmployeeID,
+	})
+}
+
+func parseRecordedAt(value string) time.Time {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Now().UTC()
+	}
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return parsed.UTC()
+	}
+	return time.Now().UTC()
+}
+
+func int64PtrIfPositive(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
 }
 
 type EmrWorkerRequest struct {
@@ -379,6 +542,18 @@ func parseAndValidateEMRResult(raw string, template *emrtemplate.PublishedVersio
 			return nil, nil, fmt.Errorf("病历生成结果包含模板之外的栏位：%s", code)
 		}
 	}
+	normalizedContent := make(map[string]any, len(template.Sections))
+	for _, section := range template.Sections {
+		if sectionUsesStructuredContent(section) {
+			value, err := validateAndNormalizeStructuredEMRValue(envelope.WorkingContent[section.Code], section.Structure)
+			if err != nil {
+				return nil, nil, fmt.Errorf("栏位 %s 结构化内容无效：%w", section.Code, err)
+			}
+			normalizedContent[section.Code] = value
+		} else {
+			normalizedContent[section.Code] = formatEMRContentValue(envelope.WorkingContent[section.Code])
+		}
+	}
 	unresolvedOutput := make([]any, len(unresolvedItems))
 	for index, item := range unresolvedItems {
 		if strings.TrimSpace(item.FieldCode) == "" {
@@ -395,11 +570,181 @@ func parseAndValidateEMRResult(raw string, template *emrtemplate.PublishedVersio
 			"reason":     item.Reason,
 		}
 	}
-	return envelope.WorkingContent, unresolvedOutput, nil
+	return normalizedContent, unresolvedOutput, nil
+}
+
+func sectionUsesStructuredContent(section *emrtemplate.Section) bool {
+	if section == nil {
+		return false
+	}
+	return strings.Contains(section.InputType, "结构化") && len(section.Structure) > 0
+}
+
+func validateAndNormalizeStructuredEMRValue(value any, structure map[string]any) (any, error) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("必须返回 JSON 对象")
+	}
+	allowed := make(map[string]struct{})
+	collectStructuredKeys(structure, allowed)
+	// text 兼容旧的自由文本查体内容，便于模型保留无法归入子字段的明确描述。
+	allowed["text"] = struct{}{}
+	result := make(map[string]any, len(object))
+	for key, item := range object {
+		if _, ok := allowed[key]; !ok {
+			return nil, fmt.Errorf("包含未定义子字段 %q", key)
+		}
+		result[key] = normalizeStructuredEMRValue(item)
+	}
+	return result, nil
+}
+
+func collectStructuredKeys(value any, allowed map[string]struct{}) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if key, ok := item.(string); ok && strings.TrimSpace(key) != "" {
+				allowed[key] = struct{}{}
+			} else {
+				collectStructuredKeys(item, allowed)
+			}
+		}
+	case map[string]any:
+		for _, item := range typed {
+			collectStructuredKeys(item, allowed)
+		}
+	}
+}
+
+func normalizeStructuredEMRValue(value any) any {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case bool:
+		return typed
+	case float64:
+		return typed
+	case []any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, normalizeStructuredEMRValue(item))
+		}
+		return items
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = normalizeStructuredEMRValue(item)
+		}
+		return result
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func formatEMRContentValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case bool:
+		if typed {
+			return "是"
+		}
+		return "否"
+	case float64:
+		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", typed), "0"), ".")
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := formatEMRContentValue(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "；")
+	case map[string]any:
+		return formatEMRContentMap(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func formatEMRContentMap(value map[string]any) string {
+	if text, ok := value["text"].(string); ok && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
+	}
+	keys := orderedEMRContentKeys(value)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		raw := value[key]
+		text := formatEMRContentValue(raw)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		parts = append(parts, formatEMRContentPair(key, text))
+	}
+	return strings.Join(parts, "；")
+}
+
+func orderedEMRContentKeys(value map[string]any) []string {
+	priority := map[string]int{
+		"望诊": 10, "闻诊": 20, "问诊": 30, "切诊": 40,
+		"舌象": 50, "脉象": 60,
+		"药品": 70, "药材": 80, "剂量": 90, "用法": 100, "频次": 110, "疗程": 120, "数量": 130,
+	}
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		left, leftOK := priority[keys[i]]
+		right, rightOK := priority[keys[j]]
+		if leftOK || rightOK {
+			if left != right {
+				return left < right
+			}
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+func formatEMRContentPair(key, text string) string {
+	key = strings.TrimSpace(key)
+	text = strings.TrimSpace(text)
+	if key == "" {
+		return text
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(text, "未明确") || strings.Contains(text, "不详") || strings.Contains(lower, "unknown") {
+		if strings.Contains(text, "剂量") {
+			return key + "剂量未明确"
+		}
+		return key + text
+	}
+	if strings.HasPrefix(text, key) || strings.Contains(text, "：") {
+		return text
+	}
+	if looksLikeDoseOrQuantity(text) {
+		return key + text
+	}
+	return key + "：" + text
+}
+
+func looksLikeDoseOrQuantity(text string) bool {
+	units := []string{"克", "g", "mg", "ml", "毫升", "片", "粒", "袋", "包", "支", "副", "剂", "次"}
+	for _, unit := range units {
+		if strings.Contains(text, unit) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerRequest) (*preparedPrompt, error) {
-	if h == nil || h.pool == nil || h.templateStore == nil {
+	if h == nil || h.pool == nil || h.recordStore == nil {
 		return nil, fmt.Errorf("emr prompt dependencies are not configured")
 	}
 
@@ -437,9 +782,16 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 		"role_code": roleCode, "medical_department_code": departmentCode,
 	}
 
-	template, err := h.templateStore.GetCurrentPublishedByCode(ctx, req.TenantID, departmentCode)
+	templateID, err := h.currentPublishedTemplateIDByCode(ctx, req.TenantID, departmentCode)
 	if err != nil {
 		return nil, err
+	}
+	template, err := h.recordStore.GetPublishedTemplateVersion(ctx, req.TenantID, templateID)
+	if err != nil {
+		return nil, err
+	}
+	if template == nil || template.Version == nil {
+		return nil, fmt.Errorf("没有可用的当前已发布病历模板：%s", departmentCode)
 	}
 	systemPrompt, userPrompt, err := h.loadPrompt(ctx)
 	if err != nil {
@@ -454,6 +806,27 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 		SystemPrompt: strings.TrimSpace(systemPrompt),
 		UserPrompt:   rendered,
 	}, nil
+}
+
+func (h *InternalHandler) currentPublishedTemplateIDByCode(ctx context.Context, tenantID int64, code string) (string, error) {
+	var templateID string
+	err := h.pool.QueryRow(ctx, `
+		SELECT id
+		FROM emr_templates
+		WHERE code=$2
+		  AND status='published'
+		  AND is_current=true
+		  AND tenant_id IN ($1, 0)
+		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END, updated_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, strings.TrimSpace(code)).Scan(&templateID)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("没有可用的当前已发布病历模板：%s", code)
+	}
+	if err != nil {
+		return "", fmt.Errorf("查询当前已发布病历模板失败：%w", err)
+	}
+	return templateID, nil
 }
 
 func (h *InternalHandler) loadPrompt(ctx context.Context) (string, string, error) {
@@ -481,12 +854,15 @@ func (h *InternalHandler) loadPrompt(ctx context.Context) (string, string, error
 }
 
 func renderPrompt(templateText string, req EmrWorkerRequest, employee map[string]any, template *emrtemplate.PublishedVersionDetail) string {
-	templateJSON, _ := json.MarshalIndent(map[string]any{
-		"code": template.Version.TemplateCode, "name": template.Version.Name,
-		"version": template.Version.VersionNo, "document_type": template.Version.DocumentType,
-		"visit_type": template.Version.VisitType, "specialty": template.Version.SpecialtyModule,
-	}, "", "  ")
-	fieldsJSON, _ := json.MarshalIndent(template.Sections, "", "  ")
+	templateContext := fmt.Sprintf(
+		"模板编码：%s\n模板名称：%s\n版本：%s\n文书类型：%s\n就诊类型：%s\n专科：%s",
+		strings.TrimSpace(template.Version.TemplateCode),
+		strings.TrimSpace(template.Version.Name),
+		strings.TrimSpace(template.Version.VersionNo),
+		strings.TrimSpace(template.Version.DocumentType),
+		strings.TrimSpace(template.Version.VisitType),
+		strings.TrimSpace(stringValue(template.Version.SpecialtyModule)),
+	)
 	patientJSON, _ := json.MarshalIndent(map[string]any{
 		"customer_id": req.CustomerID, "customer_name": req.CustomerName,
 	}, "", "  ")
@@ -498,8 +874,8 @@ func renderPrompt(templateText string, req EmrWorkerRequest, employee map[string
 	}, "", "  ")
 	values := map[string]string{
 		"input_mode":        "完整工牌录音",
-		"template":          string(templateJSON),
-		"template_fields":   string(fieldsJSON),
+		"template":          templateContext,
+		"template_fields":   renderGenerationFieldSpecs(template.Sections),
 		"patient_context":   string(patientJSON),
 		"encounter_context": string(encounterJSON),
 		"transcript":        strings.TrimSpace(req.CleanedTranscript),
@@ -508,6 +884,61 @@ func renderPrompt(templateText string, req EmrWorkerRequest, employee map[string
 		templateText = strings.ReplaceAll(templateText, "{{"+key+"}}", value)
 	}
 	return strings.TrimSpace(templateText)
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
+	lines := make([]string, 0, len(sections)*4)
+	for _, section := range sections {
+		if section == nil || strings.TrimSpace(section.Code) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("【%s】%s", strings.TrimSpace(section.Code), strings.TrimSpace(section.Name)))
+		if sectionUsesStructuredContent(section) {
+			structureJSON, _ := json.Marshal(section.Structure)
+			lines = append(lines, "  结构化字段定义："+string(structureJSON))
+			lines = append(lines, "  结构化栏位必须返回 JSON 对象；未确认的子字段使用空字符串，不要补造数值。")
+		}
+		if requirement := extractGenerationRequirements(section.Description); requirement != "" {
+			lines = append(lines, "  病历生成要求：")
+			for _, line := range strings.Split(requirement, "\n") {
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					lines = append(lines, "  "+trimmed)
+				}
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func extractGenerationRequirements(description string) string {
+	text := strings.ReplaceAll(description, "\r\n", "\n")
+	marker := "病历生成要求："
+	start := strings.Index(text, marker)
+	if start < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(text[start+len(marker):])
+	endMarkers := []string{
+		"\n可执行检查类型：",
+		"\n本栏位相关的多栏位联合质量要求：",
+		"\n## ",
+		"\n### ",
+		"\n质量要求：",
+	}
+	end := len(rest)
+	for _, endMarker := range endMarkers {
+		if index := strings.Index(rest, endMarker); index >= 0 && index < end {
+			end = index
+		}
+	}
+	return strings.TrimSpace(rest[:end])
 }
 
 func (h *InternalHandler) writeFailure(w http.ResponseWriter, req EmrWorkerRequest, cause error) {
@@ -546,7 +977,13 @@ func (h *InternalHandler) writeGenerationFailure(
 	}
 	if prompt != nil {
 		entry["employee"] = prompt.Employee
-		entry["template"] = prompt.Template
+		entry["template_summary"] = map[string]any{
+			"code":          prompt.Template.Version.TemplateCode,
+			"version":       prompt.Template.Version.VersionNo,
+			"document_type": prompt.Template.Version.DocumentType,
+			"visit_type":    prompt.Template.Version.VisitType,
+			"field_count":   len(prompt.Template.Sections),
+		}
 		entry["system_prompt"] = prompt.SystemPrompt
 		entry["user_prompt"] = prompt.UserPrompt
 	}
@@ -575,22 +1012,16 @@ func (h *InternalHandler) appendBetaLog(entry map[string]any, callErr error) err
 	if err := os.MkdirAll(filepath.Dir(h.betaLogPath), 0o755); err != nil {
 		return fmt.Errorf("create emr beta log directory: %w", err)
 	}
-	file, err := os.OpenFile(h.betaLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open emr beta log: %w", err)
-	}
-	defer file.Close()
-	if _, err := file.WriteString(record); err != nil {
+	if err := os.WriteFile(h.betaLogPath, []byte(record), 0o644); err != nil {
 		return fmt.Errorf("write emr beta log: %w", err)
 	}
 	return nil
 }
 
-// appendDebugLog 将一次请求和对应返回追加到同一个文本文件。
+// appendDebugLog 将最近一次请求和对应返回覆盖写入同一个文本文件。
 //
-// 使用互斥锁避免多个 Worker 请求同时到达时交错写入，确保每个调试块
-// 仍然可以按时间完整阅读。日志目录不存在时自动创建；除此之外不执行
-// 数据库写入或任何业务动作。
+// 使用互斥锁避免多个 Worker 请求同时到达时交错写入。日志目录不存在
+// 时自动创建；除此之外不执行数据库写入或任何业务动作。
 //
 // 署名：Codex
 // 时间：2026-09-12
@@ -618,12 +1049,7 @@ func (h *InternalHandler) appendDebugLog(request, response map[string]any) error
 	if err := os.MkdirAll(filepath.Dir(h.logPath), 0o755); err != nil {
 		return fmt.Errorf("create emr debug log directory: %w", err)
 	}
-	file, err := os.OpenFile(h.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open emr debug log: %w", err)
-	}
-	defer file.Close()
-	if _, err := file.WriteString(entry); err != nil {
+	if err := os.WriteFile(h.logPath, []byte(entry), 0o644); err != nil {
 		return fmt.Errorf("write emr debug log: %w", err)
 	}
 	return nil
