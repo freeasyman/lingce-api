@@ -32,7 +32,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/emr/template-versions/{id}", Handler: h.GetVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}", Handler: h.UpdateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}/sections", Handler: h.SaveSections, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}/quality-requirements", Handler: h.SaveBindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/template-versions/{id}/publish", Handler: h.Publish, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/template-versions/{id}/set-current", Handler: h.SetCurrent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/template-versions/{id}/disable", Handler: h.Disable, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -184,24 +183,6 @@ func (h *Handler) SaveSections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := h.service.SaveSections(r.Context(), tid, parseID(r), req)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
-}
-func (h *Handler) SaveBindings(w http.ResponseWriter, r *http.Request) {
-	_, tid, err := h.authorize(r, "template.manage")
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	var req SaveBindingsRequest
-	if decode(r, &req) != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	items, err := h.service.SaveBindings(r.Context(), tid, parseID(r), req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

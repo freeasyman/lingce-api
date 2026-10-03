@@ -31,6 +31,27 @@ func validateContentChangeAudit(actorID int64, before, after map[string]any, not
 	return nil
 }
 
+func validateChangeAudit(actorID int64, current *Record, content, patientSnapshot map[string]any, note string) error {
+	return validateChangeAuditValues(actorID, current.WorkingContent, current.PatientSnapshot, content, patientSnapshot, note)
+}
+
+func validateChangeAuditValues(actorID int64, beforeContent, beforePatient, content, patientSnapshot map[string]any, note string) error {
+	if patientSnapshot == nil {
+		patientSnapshot = beforePatient
+	}
+	changes := append(diffTopLevel(beforeContent, content), diffTopLevelPrefixed("patient", beforePatient, patientSnapshot)...)
+	if len(changes) == 0 {
+		return nil
+	}
+	if actorID <= 0 {
+		return fmt.Errorf("病历内容已修改，缺少有效操作人")
+	}
+	if strings.TrimSpace(note) == "" {
+		return fmt.Errorf("病历内容已修改，必须填写修改原因")
+	}
+	return validateAuditChanges(changes)
+}
+
 // validateAuditTrail 校验正式病历操作写入过程记录前所需的审计元数据。
 //
 // 操作人来自当前登录身份；操作时间由 emr_process_records.occurred_at 的

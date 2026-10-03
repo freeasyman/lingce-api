@@ -16,6 +16,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
 	"github.com/freeasyman/lingce-api/internal/complianceguard"
+	"github.com/freeasyman/lingce-api/internal/compliancepermission"
 	"github.com/freeasyman/lingce-api/internal/config"
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
@@ -25,9 +26,9 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
-	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrrealtime"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
+	"github.com/freeasyman/lingce-api/internal/emrscore"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/followup"
 	"github.com/freeasyman/lingce-api/internal/followuppermission"
@@ -209,15 +210,6 @@ func main() {
 	followupPermissionHandler := followuppermission.NewHandler(followupPermissionService)
 	followupPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	emrQualityStore := emrquality.NewStore(pool)
-	emrQualityService := emrquality.NewService(emrQualityStore)
-	if err := emrQualityService.EnsureBuiltin(ctx); err != nil {
-		slog.Error("failed to ensure EMR quality requirements", "error", err)
-		os.Exit(1)
-	}
-	emrQualityHandler := emrquality.NewHandler(emrQualityService, emrPermissionService)
-	emrQualityHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
 	emrTemplateStore := emrtemplate.NewStore(pool)
 	emrTemplateService := emrtemplate.NewService(emrTemplateStore)
 	if err := emrTemplateService.EnsureBuiltin(ctx); err != nil {
@@ -232,21 +224,28 @@ func main() {
 	emrProcessHandler := emrprocess.NewHandler(emrProcessService, emrPermissionService)
 	emrProcessHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 	emrCheckStore := emrcheck.NewStore(pool)
-	emrCheckService := emrcheck.NewService(emrCheckStore)
+	emrCheckService := emrcheck.NewService(emrCheckStore, llmClient)
 	emrCheckHandler := emrcheck.NewHandler(emrCheckService, emrPermissionService)
 	emrCheckHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+	emrScoreStore := emrscore.NewStore(pool)
+	emrScoreService := emrscore.NewService(emrScoreStore, llmClient)
+	emrScoreHandler := emrscore.NewHandler(emrScoreService, emrPermissionService)
+	emrScoreHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
 	emrRecordStore := emrrecord.NewStore(pool)
-	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService)
-	emrRecordDebugService := emrrecord.NewDebugService(emrRecordStore, emrCheckService, llmClient)
-	emrRecordHandler := emrrecord.NewHandlerWithDebug(emrRecordService, emrPermissionService, emrRecordDebugService)
+	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService, emrScoreService)
+	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-	emrInternalHandler := emrrecord.NewInternalHandler(pool, emrTemplateStore, llmClient)
+	emrInternalHandler := emrrecord.NewInternalHandler(pool, llmClient, emrProcessService)
 	emrInternalHandler.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
 
 	complianceGuardModule := complianceguard.NewModule(pool, llmClient)
+	compliancePermissionModule := compliancepermission.NewModule(pool)
+	compliancePermissionModule.RegisterRoutes(mux, cfg.JWT.Secret)
+	complianceGuardModule.SetPermissionService(compliancePermissionModule.Service())
 	complianceGuardModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 	var ossClient *oss.Client
 	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {
@@ -284,7 +283,7 @@ func main() {
 		llmClient,
 		opportunityAlertService,
 	)
-	emrRealtimeService := emrrealtime.NewService(pool, emrRecordService, recService, emrPermissionService, cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey, llmClient, ossClient)
+	emrRealtimeService := emrrealtime.NewService(pool, emrRecordService, recService, emrPermissionService, cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey, llmClient, ossClient, emrInternalHandler)
 	emrRealtimeHandler := emrrealtime.NewHandler(emrRealtimeService, emrPermissionService)
 	emrRealtimeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	recHandler := recording.NewHandler(recService, cfg.Recording.PlayURLRequireOwnedMedia, recording.RecordingOSSConfig{

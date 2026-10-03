@@ -80,6 +80,24 @@ func TestParseAndValidateEMRResult(t *testing.T) {
 			t.Fatalf("expected unknown structured field error, got %v", err)
 		}
 	})
+
+	t.Run("flattens grouped structured physical exam object", func(t *testing.T) {
+		template := &emrtemplate.PublishedVersionDetail{Sections: []*emrtemplate.Section{
+			{Code: "physical_exam", InputType: "结构化内容", Structure: map[string]any{
+				"vitals":     []any{"temperature", "blood_pressure"},
+				"metrics":    []any{"height", "weight", "bmi"},
+				"text_items": []any{"general_exam", "positive_findings"},
+			}},
+		}}
+		content, _, err := parseAndValidateEMRResult(`{"working_content":{"physical_exam":{"vitals":{"temperature":"36.5","blood_pressure":"120/80"},"metrics":{"height":"170"},"text_items":{"general_exam":"精神可"}}},"unresolved_items":[]}`, template)
+		if err != nil {
+			t.Fatalf("parse grouped structured result: %v", err)
+		}
+		value, ok := content["physical_exam"].(map[string]any)
+		if !ok || value["temperature"] != "36.5" || value["blood_pressure"] != "120/80" || value["height"] != "170" || value["general_exam"] != "精神可" {
+			t.Fatalf("unexpected flattened physical exam: %#v", content["physical_exam"])
+		}
+	})
 }
 
 func TestRenderPromptUsesGenerationRequirementsOnly(t *testing.T) {

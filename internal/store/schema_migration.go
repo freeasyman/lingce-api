@@ -86,7 +86,7 @@ func ApplySchemaMigrations(ctx context.Context, pool *pgxpool.Pool, maxVersion s
 		if err != nil {
 			return fmt.Errorf("begin schema migration %s: %w", migration.Version, err)
 		}
-		if _, err := tx.Exec(ctx, migration.SQL); err != nil {
+		if _, err := tx.Exec(ctx, migrationUpSQL(migration.SQL)); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply schema migration %s (%s): %w", migration.Version, migration.Name, err)
 		}
@@ -146,6 +146,19 @@ func CheckSchemaMigrations(ctx context.Context, pool *pgxpool.Pool, maxVersion s
 	required := migrations[len(migrations)-1]
 	slog.Info("schema migrations verified", "version", required.Version)
 	return nil
+}
+
+func migrationUpSQL(sql string) string {
+	const upMarker = "-- +goose Up"
+	const downMarker = "-- +goose Down"
+
+	if upStart := strings.Index(sql, upMarker); upStart >= 0 {
+		sql = sql[upStart+len(upMarker):]
+	}
+	if downStart := strings.Index(sql, downMarker); downStart >= 0 {
+		sql = sql[:downStart]
+	}
+	return strings.TrimSpace(sql)
 }
 
 func loadEmbeddedSchemaMigrations(maxVersion string) ([]schemaMigration, error) {

@@ -27,7 +27,13 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		client: &http.Client{
-			Timeout: 180 * time.Second,
+			// 业务请求通过 Params.TimeoutSeconds 控制 Gateway 内部超时；
+			// HTTP 客户端必须略大于当前最长业务超时，否则 API 会在
+			// Gateway 返回前先中止请求。质检场景使用 300 秒。
+			//
+			// 署名：Codex
+			// 时间：2026-09-14
+			Timeout: 360 * time.Second,
 		},
 	}
 }

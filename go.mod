@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/go-resty/resty/v2 v2.9.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

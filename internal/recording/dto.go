@@ -6,25 +6,26 @@ import (
 )
 
 type OwnedAudioIngestRequest struct {
-	TenantID        int64
-	EmployeeID      int64
-	EncounterID     *int64
-	CustomerID      *int64
-	PatientID       *int64
-	FileURL         string
-	FileName        string
-	MIMEType        string
-	DurationSeconds int
-	RecordedAt      *time.Time
-	OrderNo         string
-	OSSKey          string
-	Source          string
-	BusinessScope   string
-	Scene           string
-	TriggerSource   string
-	EMRInput        *EMRStandardInput
-	AnalysisResult  map[string]any
-	AnalysisDisplay map[string]any
+	TenantID          int64
+	EmployeeID        int64
+	EncounterID       *int64
+	CustomerID        *int64
+	PatientID         *int64
+	FileURL           string
+	FileName          string
+	MIMEType          string
+	DurationSeconds   int
+	RecordedAt        *time.Time
+	OrderNo           string
+	OSSKey            string
+	Source            string
+	BusinessScope     string
+	Scene             string
+	TriggerSource     string
+	SkipWorkerEnqueue bool
+	EMRInput          *EMRStandardInput
+	AnalysisResult    map[string]any
+	AnalysisDisplay   map[string]any
 }
 
 type EMRStandardInput struct {
@@ -1037,6 +1038,7 @@ type RecordingTaskStatsResponse struct {
 	AssignedTasks   int64            `json:"assigned_tasks"`
 	CompletedTasks  int64            `json:"completed_tasks"`
 	CancelledTasks  int64            `json:"cancelled_tasks"`
+	ReturnedTasks   int64            `json:"returned_tasks"`
 	OverdueTasks    int64            `json:"overdue_tasks"`
 	ByPriority      map[string]int64 `json:"by_priority,omitempty"`
 	ByRecordingRole map[string]int64 `json:"by_recording_role,omitempty"`
@@ -1103,6 +1105,9 @@ type TaskResponse struct {
 	CompletedBy           *int64  `json:"completed_by,omitempty"`
 	CancelledAt           *string `json:"cancelled_at,omitempty"`
 	CancelReason          *string `json:"cancel_reason,omitempty"`
+	ReturnedAt            *string `json:"returned_at,omitempty"`
+	ReturnedBy            *int64  `json:"returned_by,omitempty"`
+	ReturnReason          *string `json:"return_reason,omitempty"`
 	CreatedAt             string  `json:"created_at"`
 	UpdatedAt             string  `json:"updated_at"`
 }
@@ -1120,6 +1125,14 @@ type CompleteTaskRequest struct {
 
 // CancelTaskRequest represents the request for cancelling a task
 type CancelTaskRequest struct {
+	Reason string `json:"reason"`
+}
+
+// ReturnTaskRequest represents the request for returning an unsuitable task.
+// 退回必须提供原因，原因会保存到任务字段并写入统一任务留痕。
+// 署名：Codex
+// 时间：2026-09-12
+type ReturnTaskRequest struct {
 	Reason string `json:"reason"`
 }
 

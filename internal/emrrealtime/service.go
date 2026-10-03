@@ -25,26 +25,37 @@ import (
 var realtimeTranscriptProtectedTokenPattern = regexp.MustCompile(`\d+(?:[.．:：/／-]\d+)*|[零〇一二三四五六七八九十百千万两]+`)
 
 type Service struct {
-	store       *Store
-	encounters  *encounter.Store
-	records     *emrrecord.Service
-	recordings  *recording.Service
-	permissions *emrpermission.Service
-	gatewayURL  string
-	gatewayKey  string
-	llmClient   *llmgateway.Client
-	ossClient   *ossutil.Client
-}
-
-func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *recording.Service, permissions *emrpermission.Service, gatewayURL, gatewayKey string, llmClient *llmgateway.Client, ossClient *ossutil.Client) *Service {
-	return &Service{
-		store: NewStore(pool), encounters: encounter.NewStore(pool), records: records, recordings: recordings, permissions: permissions,
-		gatewayURL: strings.TrimRight(strings.TrimSpace(gatewayURL), "/"), gatewayKey: gatewayKey,
-		llmClient: llmClient, ossClient: ossClient,
+	store        *Store
+	encounters   *encounter.Store
+	records      *emrrecord.Service
+	recordings   *recording.Service
+	permissions  *emrpermission.Service
+	gatewayURL   string
+	gatewayKey   string
+	llmClient    *llmgateway.Client
+	ossClient    *ossutil.Client
+	emrGenerator interface {
+		GenerateDirect(context.Context, emrrecord.EmrWorkerRequest) (map[string]any, error)
 	}
 }
 
-func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, encounterID int64, recordID string, audio []byte, mimeType, fileName string, durationSeconds int, recordedAt time.Time) (*FinalizeResponse, error) {
+func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *recording.Service, permissions *emrpermission.Service, gatewayURL, gatewayKey string, llmClient *llmgateway.Client, ossClient *ossutil.Client, generators ...interface {
+	GenerateDirect(context.Context, emrrecord.EmrWorkerRequest) (map[string]any, error)
+}) *Service {
+	var generator interface {
+		GenerateDirect(context.Context, emrrecord.EmrWorkerRequest) (map[string]any, error)
+	}
+	if len(generators) > 0 {
+		generator = generators[0]
+	}
+	return &Service{
+		store: NewStore(pool), encounters: encounter.NewStore(pool), records: records, recordings: recordings, permissions: permissions,
+		gatewayURL: strings.TrimRight(strings.TrimSpace(gatewayURL), "/"), gatewayKey: gatewayKey,
+		llmClient: llmClient, ossClient: ossClient, emrGenerator: generator,
+	}
+}
+
+func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, encounterID int64, recordID string, audio []byte, mimeType, fileName string, durationSeconds int, recordedAt time.Time, finalTranscript string) (*FinalizeResponse, error) {
 	if s.recordings == nil {
 		return nil, fmt.Errorf("录音服务未配置")
 	}
@@ -114,7 +125,7 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 	result, created, err := s.recordings.IngestOwnedAudioAndEnqueue(ctx, recording.OwnedAudioIngestRequest{
 		TenantID: tenantID, EmployeeID: actorID, EncounterID: &encounterID, CustomerID: customerID, PatientID: patientID,
 		FileURL: fileURL, FileName: fileName, MIMEType: mimeType, DurationSeconds: durationSeconds, RecordedAt: &startAt,
-		OrderNo: orderNo, OSSKey: ossKey, Source: "realtime", BusinessScope: "doctor", Scene: "consultation", TriggerSource: "realtime_end",
+		OrderNo: orderNo, OSSKey: ossKey, Source: "realtime", BusinessScope: "doctor", Scene: "consultation", TriggerSource: "realtime_end", SkipWorkerEnqueue: true,
 	})
 	if err != nil {
 		if result != nil && result.ID > 0 {
@@ -129,7 +140,28 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 		_ = s.ossClient.DeleteFile(ctx, ossKey)
 		return nil, err
 	}
-	return &FinalizeResponse{EncounterID: encounterID, RecordID: recordID, RecordingID: result.ID, Queued: created}, nil
+	if created && s.emrGenerator != nil && strings.TrimSpace(finalTranscript) != "" {
+		_, genErr := s.emrGenerator.GenerateDirect(ctx, emrrecord.EmrWorkerRequest{
+			TenantID: tenantID, RecordingID: result.ID, EncounterID: encounterID, EmployeeID: actorID,
+			CustomerID: derefInt64(customerID), BusinessScope: "doctor", RoleCode: "doctor",
+			RecordedAt: startAt.Format(time.RFC3339), CleanedTranscript: finalTranscript,
+		})
+		if genErr != nil {
+			_ = s.recordings.MarkRealtimeCompleted(ctx, result.ID, finalTranscript, false)
+			return &FinalizeResponse{EncounterID: encounterID, RecordID: recordID, RecordingID: result.ID, QueueError: "实时病历生成失败: " + genErr.Error()}, nil
+		}
+		_ = s.recordings.MarkRealtimeCompleted(ctx, result.ID, finalTranscript, true)
+	} else if created {
+		_ = s.recordings.MarkRealtimeCompleted(ctx, result.ID, finalTranscript, false)
+	}
+	return &FinalizeResponse{EncounterID: encounterID, RecordID: recordID, RecordingID: result.ID, Queued: false}, nil
+}
+
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func isRealtimePCM(mimeType, fileName string) bool {
@@ -247,6 +279,9 @@ func preservesRealtimeTranscriptProtectedTokens(original, corrected string) bool
 }
 
 func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, req StartRequest) (*SessionResponse, error) {
+	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
+		return nil, err
+	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" {
 		return nil, fmt.Errorf("client_request_id is required")

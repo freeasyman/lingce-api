@@ -168,7 +168,7 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 			resp.AnalysisDisplay["standard_input_source"] = strings.TrimSpace(req.EMRInput.SourceKind)
 		}
 	}
-	if created {
+	if created && !req.SkipWorkerEnqueue {
 		triggerSource := strings.TrimSpace(req.TriggerSource)
 		if triggerSource == "" {
 			triggerSource = "external_audio_ingest"
@@ -178,6 +178,10 @@ func (s *Service) IngestOwnedAudioAndEnqueue(ctx context.Context, req OwnedAudio
 		}
 	}
 	return resp, created, nil
+}
+
+func (s *Service) MarkRealtimeCompleted(ctx context.Context, recordingID int64, transcript string, emrGenerated bool) error {
+	return s.store.MarkRealtimeCompleted(ctx, recordingID, transcript, emrGenerated)
 }
 
 func standardInputFromRequest(req OwnedAudioIngestRequest, recordingID int64) map[string]any {
@@ -590,7 +594,7 @@ func (s *Service) GetManagementRisks(ctx context.Context, tenantID int64, period
 			TertiaryAction:  "查看标杆",
 		})
 	}
-	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil, nil)
+	taskStats, _ := s.GetTaskStats(ctx, tenantID, nil, nil, nil, false)
 	overdueDetails, _ := s.listOverdueTaskAttentionRows(ctx, tenantID, 3)
 	if taskStats != nil && taskStats.OverdueTasks > 0 {
 		evidence := []string{"存在超时未执行任务，可能导致跟进节奏断裂"}
@@ -4938,7 +4942,11 @@ func (s *Service) ListRecordingTasks(ctx context.Context, req TaskListRequest) (
 	if err := s.enrichTaskListResponse(ctx, responses); err != nil {
 		return nil, 0, err
 	}
-	shouldCompact := req.RecordingID == nil
+	// 随访任务列表需要保留任务说明，供执行人员在进入详情前判断联系目的；
+	// 其他旧任务列表继续使用精简响应，避免扩大原有接口返回内容。
+	followupTaskList := req.TaskType != nil &&
+		(string(*req.TaskType) == "follow_up" || string(*req.TaskType) == "followup")
+	shouldCompact := req.RecordingID == nil && !followupTaskList
 	if shouldCompact {
 		for _, item := range responses {
 			compactTaskListItem(item)
@@ -4950,7 +4958,15 @@ func (s *Service) ListRecordingTasks(ctx context.Context, req TaskListRequest) (
 
 // GetTask retrieves a recording task by ID
 func (s *Service) GetTask(ctx context.Context, id int64) (*TaskResponse, error) {
-	task, err := s.store.GetTaskByID(ctx, id)
+	return s.getTask(ctx, id, false)
+}
+
+func (s *Service) GetFollowupTask(ctx context.Context, id int64) (*TaskResponse, error) {
+	return s.getTask(ctx, id, true)
+}
+
+func (s *Service) getTask(ctx context.Context, id int64, followupOnly bool) (*TaskResponse, error) {
+	task, err := s.store.GetTaskByID(ctx, id, followupOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -4967,7 +4983,7 @@ func (s *Service) CanViewFollowupTask(ctx context.Context, taskID, tenantID, vie
 
 // CompleteTask marks a task as completed
 func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64, req CompleteTaskRequest) error {
-	task, err := s.store.GetTaskByID(ctx, id)
+	task, err := s.store.GetTaskByID(ctx, id, false)
 	if err != nil {
 		return err
 	}
@@ -4983,7 +4999,7 @@ func (s *Service) CancelTask(ctx context.Context, id int64, req CancelTaskReques
 	if req.Reason == "" {
 		return fmt.Errorf("cancel reason is required")
 	}
-	task, err := s.store.GetTaskByID(ctx, id)
+	task, err := s.store.GetTaskByID(ctx, id, false)
 	if err != nil {
 		return err
 	}
@@ -4991,6 +5007,26 @@ func (s *Service) CancelTask(ctx context.Context, id int64, req CancelTaskReques
 		return err
 	}
 	_ = s.appendTaskInteraction(ctx, task, 0, "task_cancelled", "任务已忽略: "+strings.TrimSpace(req.Reason))
+	return nil
+}
+
+// ReturnTask marks a task as returned when an executor determines it is unsuitable.
+// 退回与取消的业务含义不同：退回表示任务需要被重新处理或修正，取消表示任务不再执行。
+// 署名：Codex
+// 时间：2026-09-12
+func (s *Service) ReturnTask(ctx context.Context, id int64, returnedBy int64, req ReturnTaskRequest) error {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return fmt.Errorf("return reason is required")
+	}
+	task, err := s.store.GetTaskByID(ctx, id, false)
+	if err != nil {
+		return err
+	}
+	if err := s.store.ReturnTask(ctx, id, returnedBy, reason); err != nil {
+		return err
+	}
+	_ = s.appendTaskInteraction(ctx, task, returnedBy, "task_returned", "任务已退回: "+reason)
 	return nil
 }
 
@@ -5045,13 +5081,13 @@ func (s *Service) appendCustomerInteraction(ctx context.Context, tenantID, custo
 }
 
 // GetTaskStats retrieves task statistics
-func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo, viewerEmployeeID *int64) (*RecordingTaskStatsResponse, error) {
-	return s.store.GetTaskStats(ctx, tenantID, tenantIDs, assignedTo, viewerEmployeeID)
+func (s *Service) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo, viewerEmployeeID *int64, followupOnly bool) (*RecordingTaskStatsResponse, error) {
+	return s.store.GetTaskStats(ctx, tenantID, tenantIDs, assignedTo, viewerEmployeeID, followupOnly)
 }
 
 // GetDailyBriefing retrieves a daily briefing
-func (s *Service) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time, viewerEmployeeID *int64) (*DailyBriefingResponse, error) {
-	return s.store.GetDailyBriefing(ctx, tenantID, assignedTo, date, viewerEmployeeID)
+func (s *Service) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time, viewerEmployeeID *int64, followupOnly bool) (*DailyBriefingResponse, error) {
+	return s.store.GetDailyBriefing(ctx, tenantID, assignedTo, date, viewerEmployeeID, followupOnly)
 }
 
 // Recording Prompt Services
@@ -10641,6 +10677,8 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		Status:        string(t.Status),
 		CompletedBy:   t.CompletedBy,
 		CancelReason:  t.CancelReason,
+		ReturnedBy:    t.ReturnedBy,
+		ReturnReason:  t.ReturnReason,
 		CreatedAt:     t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:     t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -10659,6 +10697,10 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 	if t.CancelledAt != nil {
 		formatted := t.CancelledAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.CancelledAt = &formatted
+	}
+	if t.ReturnedAt != nil {
+		formatted := t.ReturnedAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.ReturnedAt = &formatted
 	}
 	if resp.SourceType != nil {
 		if label := sourceTypeLabel(*resp.SourceType); label != "" {

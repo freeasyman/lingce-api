@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,17 +62,6 @@ var builtinCommonSections = []builtinSection{
 	{"supplement", "补充说明", "医疗措施", "长文本", true, true, 140},
 }
 
-var builtinQualityBindings = []builtinBinding{
-	{"emr.chief_complaint.required", "程序判断", "归档前处理", 10},
-	{"emr.chief_complaint.max_length", "程序判断", "归档前处理", 20},
-	{"emr.allergy.required.status", "程序判断", "归档前处理", 30},
-	{"emr.allergy.required.drug_detail", "程序判断", "归档前处理", 40},
-	{"emr.allergy.required.other_detail", "程序判断", "归档前处理", 50},
-	{"emr.allergy.required.unconfirmed", "程序判断", "归档前处理", 60},
-	{"emr.diagnosis.present", "程序判断", "归档前处理", 70},
-	{"emr.signature.doctor", "程序判断", "归档前处理", 80},
-}
-
 func (s *Store) EnsureBuiltin(ctx context.Context) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -92,20 +80,26 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 		if err == pgx.ErrNoRows {
 			err = tx.QueryRow(ctx, `
 				INSERT INTO emr_fields
-				(tenant_id, code, name, content_category, input_type, description, status, created_by)
-				VALUES (0, $1, $2, $3, $4, $5, 'enabled', 0)
+				(tenant_id, code, name, content_category, input_type, description, structure_json, status, created_by)
+				VALUES (0, $1, $2, $3, $4, $5, $6::jsonb, 'enabled', 0)
 				RETURNING id
-			`, section.Code, section.Name, section.Category, section.InputType, section.Name).Scan(&fieldID)
+			`, section.Code, section.Name, section.Category, section.InputType, section.Name, mustJSON(builtinStructure(section.Code))).Scan(&fieldID)
 		}
 		if err != nil {
 			return fmt.Errorf("ensure builtin emr field %s: %w", section.Code, err)
 		}
+		structureJSON := mustJSON(builtinStructure(section.Code))
 		if _, err := tx.Exec(ctx, `
 			UPDATE emr_fields
-			SET name=$2, content_category=$3, input_type=$4, description=$5,
+			SET name=$2, content_category=$3, input_type=$4, structure_json=$6::jsonb,
+			    description=CASE
+			        WHEN BTRIM(COALESCE(description, '')) = '' THEN $5
+			        WHEN BTRIM(description) = $5 THEN $5
+			        ELSE description
+			    END,
 			    status='enabled', updated_at=NOW()
 			WHERE id=$1
-		`, fieldID, section.Name, section.Category, section.InputType, section.Name); err != nil {
+		`, fieldID, section.Name, section.Category, section.InputType, section.Name, structureJSON); err != nil {
 			return fmt.Errorf("refresh builtin emr field %s: %w", section.Code, err)
 		}
 	}
@@ -204,6 +198,32 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 	return nil
 }
 
+func builtinStructure(code string) map[string]any {
+	switch code {
+	case "physical_exam":
+		return map[string]any{"vitals": []any{"temperature", "blood_pressure", "pulse", "respiration", "blood_glucose"}, "metrics": []any{"height", "weight", "bmi"}, "text_items": []any{"general_exam", "positive_findings", "necessary_negative_findings", "specialty_exam", "supplement"}}
+	case "auxiliary_exam":
+		return map[string]any{"items": []any{"exam_name", "exam_time", "result", "source"}}
+	case "prescription":
+		return map[string]any{"items": []any{"drug_name", "specification", "usage", "dose", "frequency", "duration", "quantity", "note"}}
+	case "disposition":
+		return map[string]any{"items": []any{"item", "purpose", "status", "note"}}
+	default:
+		return map[string]any{}
+	}
+}
+
+func mustJSON(value any) string {
+	if value == nil {
+		return "{}"
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || string(raw) == "null" {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, code, name, version_no, document_type, visit_type,
@@ -241,15 +261,11 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*TemplateDe
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := s.listBindings(ctx, id)
-	if err != nil {
-		return nil, err
-	}
 	versions, err := s.ListVersions(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
 	}
-	return &TemplateDetail{Template: template, Versions: versions, Sections: sections, Bindings: bindings}, nil
+	return &TemplateDetail{Template: template, Versions: versions, Sections: sections}, nil
 }
 
 func (s *Store) ListVersions(ctx context.Context, tenantID int64, templateID string) ([]*TemplateVersion, error) {
@@ -322,11 +338,7 @@ func (s *Store) GetPublishedVersionDetail(ctx context.Context, tenantID int64, v
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := s.listBindings(ctx, version.ID)
-	if err != nil {
-		return nil, err
-	}
-	return &PublishedVersionDetail{Version: version, Sections: sections, Bindings: bindings}, nil
+	return &PublishedVersionDetail{Version: version, Sections: sections}, nil
 }
 
 func (s *Store) GetCurrentPublishedByCode(ctx context.Context, tenantID int64, code string) (*PublishedVersionDetail, error) {
@@ -434,45 +446,6 @@ func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID stri
 		return nil, err
 	}
 	return s.listSections(ctx, versionID)
-}
-
-func (s *Store) SaveBindings(ctx context.Context, tenantID int64, versionID string, items []BindingInput) ([]*RequirementBinding, error) {
-	if err := s.requireDraftVersion(ctx, tenantID, versionID); err != nil {
-		return nil, err
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM emr_template_quality_rules WHERE template_id=$1`, versionID); err != nil {
-		return nil, err
-	}
-	var templateTenant int64
-	if err := tx.QueryRow(ctx, `SELECT tenant_id FROM emr_templates WHERE id=$1`, versionID).Scan(&templateTenant); err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		command, execErr := tx.Exec(ctx, `
-			INSERT INTO emr_template_quality_rules
-			(tenant_id, template_id, quality_rule_id, is_enabled, execution_mode, deadline_action, display_order, created_by)
-			SELECT $2, $1, id, TRUE, $4, $5, $6, 0
-			FROM emr_quality_rules
-			WHERE id=$3 AND tenant_id IN ($2, 0) AND status='published'
-			ORDER BY CASE WHEN tenant_id=$2 THEN 0 ELSE 1 END
-			LIMIT 1
-		`, versionID, templateTenant, item.QualityRequirementID, item.ExecutionMode, item.DeadlineAction, item.DisplayOrder)
-		if execErr != nil {
-			return nil, execErr
-		}
-		if command.RowsAffected() != 1 {
-			return nil, fmt.Errorf("质量规则不存在、已停用或不属于当前机构")
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return s.listBindings(ctx, versionID)
 }
 
 func (s *Store) requireDraftVersion(ctx context.Context, tenantID int64, versionID string) error {
@@ -643,48 +616,8 @@ func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string
 		return fmt.Errorf("模板发布失败：公共栏目必须可见：%s", strings.Join(invalid, "、"))
 	}
 
-	bindingRows, err := tx.Query(ctx, `
-		SELECT q.code
-		FROM emr_template_quality_rules b
-		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
-		WHERE b.template_id=$1
-		  AND b.is_enabled=true
-		  AND q.status='published'
-		  AND b.deadline_action='模板发布前处理'
-		ORDER BY b.display_order, q.code
-	`, versionID)
-	if err != nil {
-		return fmt.Errorf("load template structure rules for publish: %w", err)
-	}
-	defer bindingRows.Close()
-
-	structureFields := make([]emrcheck.TemplateField, 0, len(fields))
-	for code, field := range fields {
-		structureFields = append(structureFields, emrcheck.TemplateField{
-			Code: code, Name: field.name, Visible: field.visible,
-			Category: field.category, InputType: field.inputType,
-		})
-	}
-	for bindingRows.Next() {
-		var code string
-		if err := bindingRows.Scan(&code); err != nil {
-			return fmt.Errorf("read template structure rule for publish: %w", err)
-		}
-		if !emrcheck.IsTemplateStructureRule(code) {
-			continue
-		}
-		ok, _, explanation, suggestion := emrcheck.EvaluateTemplateStructureRule(code, structureFields)
-		if !ok {
-			return fmt.Errorf("模板发布失败：%s%s", explanation, suggestion)
-		}
-	}
-	if err := bindingRows.Err(); err != nil {
-		return fmt.Errorf("read template structure rule for publish: %w", err)
-	}
 	return nil
 }
-
-func validateBuiltinBindings(ctx context.Context, tx pgx.Tx, versionID string) error { return nil }
 
 func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
 	cmd, err := s.pool.Exec(ctx, `
@@ -726,30 +659,6 @@ func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section,
 		x.Structure = map[string]any{}
 		_ = json.Unmarshal(o, &x.Options)
 		_ = json.Unmarshal(st, &x.Structure)
-		out = append(out, x)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) listBindings(ctx context.Context, versionID string) ([]*RequirementBinding, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT b.id,b.template_id,b.quality_rule_id,b.execution_mode,b.deadline_action,b.display_order,
-		       q.code,q.name,q.rule_type,q.quality_group
-		FROM emr_template_quality_rules b
-		JOIN emr_quality_rules q ON q.id=b.quality_rule_id
-		WHERE b.template_id=$1 AND b.is_enabled=true
-		ORDER BY b.display_order,q.code
-	`, versionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]*RequirementBinding, 0)
-	for rows.Next() {
-		x := &RequirementBinding{}
-		if err := rows.Scan(&x.ID, &x.TemplateVersionID, &x.QualityRequirementID, &x.ExecutionMode, &x.DeadlineAction, &x.DisplayOrder, &x.RequirementCode, &x.RequirementName, &x.RequirementRuleType, &x.RequirementQualityGroup); err != nil {
-			return nil, err
-		}
 		out = append(out, x)
 	}
 	return out, rows.Err()

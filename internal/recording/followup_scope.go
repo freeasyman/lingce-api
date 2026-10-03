@@ -226,9 +226,10 @@ func (s *Store) FollowupVisibleEmployeeIDs(ctx context.Context, tenantID, viewer
 	return ids, rows.Err()
 }
 
-// CanViewFollowupTask 检查员工是否可以查看任务对应录音归属人的数据。
+// CanViewFollowupTask 检查员工是否可以查看指定随访任务。
+// 明确分配给当前员工的任务直接可见；否则再按录音归属员工的数据查看范围判断。
 // 署名：Codex
-// 时间：2026-09-11
+// 时间：2026-09-17
 func (s *Store) CanViewFollowupTask(ctx context.Context, taskID, tenantID, viewerID int64) (bool, error) {
 	var allowed bool
 	err := s.pool.QueryRow(ctx, `
@@ -244,6 +245,7 @@ func (s *Store) CanViewFollowupTask(ctx context.Context, taskID, tenantID, viewe
 			  AND rt.tenant_id = $2
 			  AND (
 				rt.source_type NOT IN ('follow_up', 'followup')
+				OR rt.assigned_to = $3
 				OR fds.id IS NOT NULL
 			  )
 		)

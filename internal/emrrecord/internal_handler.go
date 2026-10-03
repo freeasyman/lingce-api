@@ -39,6 +39,49 @@ type InternalHandler struct {
 	logMu       sync.Mutex
 }
 
+// GenerateDirect runs the same EMR generation pipeline used by the internal
+// HTTP endpoint, for realtime consultations that already have their final
+// transcript in memory. It intentionally skips the recording Worker.
+func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerRequest) (map[string]any, error) {
+	if err := payload.validateBasic(); err != nil {
+		return nil, err
+	}
+	requestID := fmt.Sprintf("emr-realtime-%d", time.Now().UnixNano())
+	prepared, err := h.preparePrompt(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	config, err := h.loadModelConfig(ctx, payload.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	llmRequest := buildEMRLLMRequest(payload, requestID, prepared, config)
+	llmResponse, _, _, err := h.callLLM(ctx, llmRequest)
+	if err != nil {
+		return nil, err
+	}
+	if llmResponse == nil {
+		return nil, fmt.Errorf("LLM 网关返回为空")
+	}
+	workingContent, unresolvedItems, err := parseAndValidateEMRResult(llmResponse.Content, prepared.Template)
+	if err != nil {
+		return nil, err
+	}
+	startedAt := parseRecordedAt(payload.RecordedAt)
+	outcome, err := h.saveGeneratedWorkingDraft(ctx, payload, requestID, prepared, config, llmResponse, workingContent, unresolvedItems, startedAt)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.appendGeneratedProcessRecord(ctx, payload, requestID, outcome, llmResponse); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"code": "EMR_GENERATED", "status": "generated", "request_id": requestID,
+		"record_id": outcome.Record.ID, "working_content": workingContent,
+		"unresolved_items": unresolvedItems,
+	}, nil
+}
+
 // NewInternalHandler 创建 Worker 正式生成 Handler。
 //
 // 日志路径使用电子病历前端项目的 data/log 目录，避免 API 从不同工作
@@ -587,16 +630,61 @@ func validateAndNormalizeStructuredEMRValue(value any, structure map[string]any)
 	}
 	allowed := make(map[string]struct{})
 	collectStructuredKeys(structure, allowed)
+	groupKeys := make(map[string]map[string]struct{})
+	for group, definition := range structure {
+		children := make(map[string]struct{})
+		collectStructuredKeys(definition, children)
+		if len(children) > 0 {
+			groupKeys[group] = children
+		}
+	}
 	// text 兼容旧的自由文本查体内容，便于模型保留无法归入子字段的明确描述。
 	allowed["text"] = struct{}{}
 	result := make(map[string]any, len(object))
 	for key, item := range object {
-		if _, ok := allowed[key]; !ok {
+		if _, ok := allowed[key]; ok {
+			result[key] = normalizeStructuredEMRValue(item)
+			continue
+		}
+		children, isGroup := groupKeys[key]
+		if !isGroup {
 			return nil, fmt.Errorf("包含未定义子字段 %q", key)
 		}
-		result[key] = normalizeStructuredEMRValue(item)
+		// 兼容模型按模板分组返回的结构，例如
+		// {"vitals":{"temperature":"36.5"},"metrics":{"height":"170"}}。
+		// 详情页使用扁平子字段，因此这里统一展开后保存。
+		if err := flattenStructuredGroup(result, item, children); err != nil {
+			return nil, fmt.Errorf("结构化分组 %q 无效：%w", key, err)
+		}
 	}
 	return result, nil
+}
+
+func flattenStructuredGroup(result map[string]any, value any, allowed map[string]struct{}) error {
+	objects := make([]map[string]any, 0, 1)
+	switch typed := value.(type) {
+	case map[string]any:
+		objects = append(objects, typed)
+	case []any:
+		for _, item := range typed {
+			object, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("必须是对象或对象数组")
+			}
+			objects = append(objects, object)
+		}
+	default:
+		return fmt.Errorf("必须是对象或对象数组")
+	}
+	for _, object := range objects {
+		for key, item := range object {
+			if _, ok := allowed[key]; !ok {
+				return fmt.Errorf("包含未定义子字段 %q", key)
+			}
+			result[key] = normalizeStructuredEMRValue(item)
+		}
+	}
+	return nil
 }
 
 func collectStructuredKeys(value any, allowed map[string]struct{}) {

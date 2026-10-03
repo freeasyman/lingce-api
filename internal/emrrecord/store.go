@@ -190,13 +190,13 @@ func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req CreateR
 		 document_type, visit_type, department_id, doctor_id,
 		 started_at, ended_at, encounter_context_json, source_references_json, content_json,
 		 status, created_by)
-		SELECT $1,$2,$3,$4::jsonb,t.id,COALESCE(NULLIF($16,''),t.document_type),$15,$5,$6,
-		       $7,$8,$9::jsonb,$10::jsonb,$11::jsonb,'草稿',$13
+		SELECT $1,$2,$3,$4::jsonb,t.id,COALESCE(NULLIF($15,''),t.document_type),$14,$5,$6,
+		       $7,$8,$9::jsonb,$10::jsonb,$11::jsonb,'草稿',$12
 		FROM emr_templates t
 		JOIN encounters e ON e.id=$2 AND e.tenant_id=$1
-		WHERE t.id=$14 AND t.status='published' AND t.is_current=true
-		  AND t.visit_type IN ($15,'通用')
-		  AND ($16='' OR t.document_type=$16)
+		WHERE t.id=$13 AND t.status='published' AND t.is_current=true
+		  AND t.visit_type IN ($14,'通用')
+		  AND ($15='' OR t.document_type=$15)
 		  AND (t.department_id IS NULL OR t.department_id=$5)
 		  AND t.tenant_id IN (0,$1)
 		RETURNING id
@@ -547,9 +547,9 @@ func (s *Store) Transition(ctx context.Context, tenantID int64, id, status strin
 	cmd, err := s.pool.Exec(ctx, `
 		UPDATE emr_records
 		SET status=$3::varchar,
-		    confirmed_by=CASE WHEN $3::varchar='已确认' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
-		    confirmed_at=CASE WHEN $3::varchar='已确认' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
-		    submitted_at=CASE WHEN $3::varchar='待确认' THEN NOW() ELSE submitted_at END,
+		    confirmed_by=CASE WHEN $3::varchar='已完成' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
+		    confirmed_at=CASE WHEN $3::varchar='已完成' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
+		    submitted_at=CASE WHEN $3::varchar='已完成' THEN NOW() ELSE submitted_at END,
 		    archived_at=CASE WHEN $3::varchar='已归档' THEN NOW() ELSE archived_at END,
 		    revision_no=CASE WHEN $5::boolean THEN revision_no + 1 ELSE revision_no END,
 		    updated_at=NOW()
@@ -580,9 +580,9 @@ func transitionTx(ctx context.Context, tx pgx.Tx, tenantID int64, id, status str
 	cmd, err := tx.Exec(ctx, `
 		UPDATE emr_records
 		SET status=$3::varchar,
-		    confirmed_by=CASE WHEN $3::varchar='已确认' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
-		    confirmed_at=CASE WHEN $3::varchar='已确认' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
-		    submitted_at=CASE WHEN $3::varchar='待确认' THEN NOW() ELSE submitted_at END,
+		    confirmed_by=CASE WHEN $3::varchar='已完成' THEN $4 WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_by END,
+		    confirmed_at=CASE WHEN $3::varchar='已完成' THEN NOW() WHEN $3::varchar IN ('草稿','需补全','退回') THEN NULL ELSE confirmed_at END,
+		    submitted_at=CASE WHEN $3::varchar='已完成' THEN NOW() ELSE submitted_at END,
 		    archived_at=CASE WHEN $3::varchar='已归档' THEN NOW() ELSE archived_at END,
 		    revision_no=CASE WHEN $5::boolean THEN revision_no + 1 ELSE revision_no END,
 		    updated_at=NOW()
@@ -630,14 +630,9 @@ func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64,
 	if err != nil {
 		return nil, err
 	}
-	bindings, err := s.listTemplateBindings(ctx, version.ID)
-	if err != nil {
-		return nil, err
-	}
 	return &emrtemplate.PublishedVersionDetail{
 		Version:  &version,
 		Sections: sections,
-		Bindings: bindings,
 	}, nil
 }
 
@@ -658,23 +653,6 @@ func (s *Store) listTemplateSections(ctx context.Context, versionID string) ([]*
 		item.Structure = map[string]any{}
 		_ = json.Unmarshal(optionsRaw, &item.Options)
 		_ = json.Unmarshal(structureRaw, &item.Structure)
-		out = append(out, item)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) listTemplateBindings(ctx context.Context, versionID string) ([]*emrtemplate.RequirementBinding, error) {
-	rows, err := s.pool.Query(ctx, `SELECT b.id,b.template_id,b.quality_rule_id,b.execution_mode,b.deadline_action,b.display_order,q.code,q.name,q.rule_type,q.quality_group FROM emr_template_quality_rules b JOIN emr_quality_rules q ON q.id=b.quality_rule_id WHERE b.template_id=$1 AND b.is_enabled=true ORDER BY b.display_order,q.code`, versionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]*emrtemplate.RequirementBinding, 0)
-	for rows.Next() {
-		item := &emrtemplate.RequirementBinding{}
-		if err := rows.Scan(&item.ID, &item.TemplateVersionID, &item.QualityRequirementID, &item.ExecutionMode, &item.DeadlineAction, &item.DisplayOrder, &item.RequirementCode, &item.RequirementName, &item.RequirementRuleType, &item.RequirementQualityGroup); err != nil {
-			return nil, err
-		}
 		out = append(out, item)
 	}
 	return out, rows.Err()

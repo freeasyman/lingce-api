@@ -338,7 +338,7 @@ func (h *Handler) AutoSave(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.AutoSave(r.Context(), tenantID, access.UserID, recordID(r), req.Content)
+	item, err := h.service.AutoSave(r.Context(), tenantID, access.UserID, recordID(r), req.Content, req.PatientSnapshot)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -356,7 +356,7 @@ func (h *Handler) ManualSave(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.ManualSave(r.Context(), tenantID, access.UserID, recordID(r), req.Content, req.Note)
+	item, err := h.service.ManualSave(r.Context(), tenantID, access.UserID, recordID(r), req)
 	if err != nil {
 		writeActionError(w, item, err)
 		return
@@ -430,8 +430,7 @@ func writeActionError(w http.ResponseWriter, item *WriteOutcome, actionErr error
 		return
 	}
 	details := map[string]any{
-		"check_run_id": item.CheckRun.ID,
-		"issues":       checkIssues(item.CheckRun),
+		"issues": checkIssues(item.CheckRun),
 	}
 	if item.Record != nil {
 		details["status"] = item.Record.Status

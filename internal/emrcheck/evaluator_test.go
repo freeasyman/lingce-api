@@ -1,505 +1,266 @@
 package emrcheck
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
-func TestEvaluateProgramChiefComplaint(t *testing.T) {
-	base := binding{Code: "emr.chief_complaint.required", ExecutionMode: "程序判断"}
-
-	result := evaluateRequirement(base, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{}}, "手动保存")
-	if result.Conclusion != "不符合" || result.CheckStatus != "已完成" || result.HandlingResult != "待医生处理" {
-		t.Fatalf("empty chief complaint result = %#v", result)
+func TestFilterLLMRulesByProgramResults(t *testing.T) {
+	rules := []qualityRuleInput{
+		{Code: "duration", FieldCode: "chief_complaint", SkipIf: []RuleDependency{{FieldCode: "chief_complaint", RuleCode: "required", Conclusion: "不符合"}}},
+		{Code: "symptom_sign", FieldCode: "chief_complaint", SkipIf: []RuleDependency{{FieldCode: "chief_complaint", RuleCode: "required", Conclusion: "不符合"}}},
+		{Code: "history_quality", FieldCode: "present_illness"},
+	}
+	program := []*CheckResult{
+		{FieldCode: "chief_complaint", RuleCode: "required", Conclusion: "不符合", CheckStatus: "已完成"},
+	}
+	filtered := filterLLMRulesByProgramResults(rules, program)
+	if len(filtered) != 1 || filtered[0].Code != "history_quality" {
+		t.Fatalf("filtered rules = %#v", filtered)
 	}
 
-	result = evaluateRequirement(base, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{"chief_complaint": "咳嗽"}}, "手动保存")
-	if result.Conclusion != "符合" || result.CheckStatus != "已完成" {
-		t.Fatalf("filled chief complaint result = %#v", result)
+	program[0].Conclusion = "符合"
+	filtered = filterLLMRulesByProgramResults(rules, program)
+	if len(filtered) != 3 {
+		t.Fatalf("a passing prerequisite must not skip rules: %#v", filtered)
+	}
+
+	program[0].Conclusion = "不符合"
+	program[0].CheckStatus = "未完成"
+	filtered = filterLLMRulesByProgramResults(rules, program)
+	if len(filtered) != 3 {
+		t.Fatalf("an incomplete prerequisite must not skip rules: %#v", filtered)
 	}
 }
 
-func TestEvaluateProgramChiefComplaintMaxLength(t *testing.T) {
-	item := binding{Code: "emr.chief_complaint.max_length", ExecutionMode: "程序判断", DeadlineAction: "归档前处理"}
-	content := map[string]any{"chief_complaint": "一二三四五六七八九十一二三四五六七八九十一"}
-	result := evaluateRequirement(item, checkContext{SnapshotID: "snapshot-1", Content: content}, "归档")
+func TestMergeQualityResultsOnlyMergesDeclaredFacts(t *testing.T) {
+	results := mergeQualityResults([]*CheckResult{
+		{FieldCode: "chief_complaint", FactCode: "duration", RuleCode: "duration", ActualExecutionMode: "大模型判断", Conclusion: "符合", CheckStatus: "已完成"},
+		{FieldCode: "chief_complaint", FactCode: "duration", RuleCode: "duration_program", ActualExecutionMode: "程序判断", Conclusion: "不符合", CheckStatus: "已完成", HandlingResult: "阻断"},
+		{FieldCode: "chief_complaint", RuleCode: "not_vague", Conclusion: "不符合", CheckStatus: "已完成"},
+	})
+	if len(results) != 2 {
+		t.Fatalf("merged result count = %d, want 2", len(results))
+	}
+	if results[0].ActualExecutionMode != "程序判断" || results[0].Conclusion != "不符合" {
+		t.Fatalf("program result should win: %+v", results[0])
+	}
+}
+
+func TestConfiguredProgramExecutorsAreRegistered(t *testing.T) {
+	registry := NewExecutorRegistry()
+	configured := []string{
+		"chief_complaint_required",
+		"allergy_history_status_valid",
+		"diagnosis_icd10_match",
+	}
+	for _, name := range configured {
+		if !registry.Has(name) {
+			t.Fatalf("configured executor %q is not registered", name)
+		}
+	}
+}
+
+func executeProgramRuleForTest(rule ExecutableRule, content map[string]any, trigger string) evaluatedResult {
+	data := checkContext{
+		SnapshotID: "snapshot-test",
+		Content:    content,
+		VisitType:  "初诊",
+		Specialty:  "全科",
+	}
+	result := NewExecutorRegistry().Execute(rule, data)
+	normalizeFieldEvaluation(rule, &result, data, trigger)
+	return result
+}
+
+func TestProgramRuleUsesFieldExecutorRegistry(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode:  "chief_complaint",
+		FieldName:  "主诉",
+		RuleCode:   "required",
+		RuleName:   "主诉不能为空",
+		Execution:  "program",
+		Executor:   "chief_complaint_required",
+		Parameters: map[string]any{},
+	}
+
+	result := executeProgramRuleForTest(rule, map[string]any{}, "归档")
 	if result.Conclusion != "不符合" || result.HandlingResult != "阻断" {
-		t.Fatalf("long chief complaint result = %#v", result)
+		t.Fatalf("empty chief complaint: conclusion=%q handling=%q", result.Conclusion, result.HandlingResult)
 	}
-	if result.Evidence["length"] != 21 {
-		t.Fatalf("length evidence = %#v, want 21", result.Evidence["length"])
+
+	result = executeProgramRuleForTest(rule, map[string]any{"chief_complaint": "咳嗽3天"}, "归档")
+	if result.Conclusion != "符合" || result.HandlingResult != "允许继续" {
+		t.Fatalf("filled chief complaint: conclusion=%q handling=%q", result.Conclusion, result.HandlingResult)
 	}
 }
 
-func TestEvaluateProgramChiefComplaintDurationRemainsUnimplemented(t *testing.T) {
-	item := binding{Code: "emr.chief_complaint.duration", ExecutionMode: "程序判断"}
-	result := evaluateRequirement(item, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{"chief_complaint": "咳嗽3天"}}, "归档")
-	if result.Conclusion != "无法完成" || result.CheckStatus != "未完成" {
-		t.Fatalf("duration result = %#v", result)
-	}
-	if result.ActualMode != "程序判断" || result.ExecutionStatus != "executor_not_implemented" || result.HandlingResult != "系统配置缺失" {
-		t.Fatalf("duration handling result = %#v", result)
-	}
-	if result.IncompleteReason != "程序执行器未实现" {
-		t.Fatalf("duration incomplete reason = %q", result.IncompleteReason)
-	}
-}
-
-func TestEvaluateProgramAllergyDetails(t *testing.T) {
-	item := binding{Code: "emr.allergy.required.drug_detail", ExecutionMode: "程序判断", DeadlineAction: "归档前处理"}
-	result := evaluateRequirement(item, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{
-		"allergy_history": map[string]any{"status": "具体药物过敏"},
-	}}, "归档")
-	if result.Conclusion != "不符合" || result.HandlingResult != "阻断" {
-		t.Fatalf("missing allergy detail result = %#v", result)
-	}
-
-	result = evaluateRequirement(item, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{
-		"allergy_history": map[string]any{"status": "具体药物过敏", "drug_name": "青霉素"},
-	}}, "归档")
-	if result.Conclusion != "符合" {
-		t.Fatalf("complete allergy detail result = %#v", result)
-	}
-
-	result = evaluateRequirement(binding{
-		Code: "emr.allergy.required.status", ExecutionMode: "程序判断",
-	}, checkContext{SnapshotID: "snapshot-1", Content: map[string]any{
-		"allergy_history": "无药物过敏",
-	}}, "手动保存")
-	if result.Conclusion != "符合" {
-		t.Fatalf("string allergy status result = %#v", result)
-	}
-}
-
-func TestEvaluateAllergyPrescriptionRiskRequiresExplicitMatch(t *testing.T) {
-	item := binding{Code: "emr.allergy.prescription_risk.known_allergy", ExecutionMode: "程序判断"}
-	data := checkContext{
-		SnapshotID: "snapshot-1",
-		Content: map[string]any{
-			"allergy_history": map[string]any{"status": "具体药物过敏", "drug_name": "青霉素"},
-			"prescription":    "阿莫西林",
+func TestAllergyUsesStructuredStatusOnly(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode: "allergy_history",
+		FieldName: "过敏史",
+		RuleCode:  "status_valid",
+		RuleName:  "过敏史状态合法",
+		Execution: "program",
+		Executor:  "allergy_history_status_valid",
+		Parameters: map[string]any{
+			"allowed_statuses": []any{"无药物过敏", "具体药物过敏", "其他过敏原", "尚未询问", "待确认"},
 		},
 	}
-	result := evaluateRequirement(item, data, "手动保存")
-	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
-		t.Fatalf("missing explicit match result = %#v", result)
+
+	result := executeProgramRuleForTest(rule, map[string]any{
+		"allergy_history": map[string]any{
+			"status":         "其他过敏原",
+			"other_allergen": "海鲜过敏",
+		},
+	}, "提交")
+	if result.Conclusion != "符合" {
+		t.Fatalf("structured other allergen should pass: %+v", result)
 	}
 
-	data.EncounterContext = map[string]any{"drug_allergy_conflict": true}
-	result = evaluateRequirement(item, data, "手动保存")
+	result = executeProgramRuleForTest(rule, map[string]any{
+		"allergy_history": "海鲜过敏",
+	}, "提交")
 	if result.Conclusion != "不符合" {
-		t.Fatalf("conflicting prescription result = %#v", result)
-	}
-
-	data.EncounterContext["drug_allergy_conflict"] = false
-	result = evaluateRequirement(item, data, "手动保存")
-	if result.Conclusion != "符合" {
-		t.Fatalf("safe prescription result = %#v", result)
+		t.Fatalf("free text allergy value must not infer status: %+v", result)
 	}
 }
 
-func TestEvaluateBasicInfoUsesPatientContext(t *testing.T) {
-	data := checkContext{
-		SnapshotID: "snapshot-1",
-		PatientContext: map[string]any{
-			"name":   "张三",
-			"gender": "男",
-			"age":    30,
-		},
-		EncounterContext: map[string]any{
-			"medical_department_code": "internal_medicine",
-			"doctor_name":             "李医生",
-		},
-		RecordContext: map[string]any{"started_at": "2026-09-14T10:00:00+08:00"},
-	}
-
-	for _, code := range []string{
-		"emr.patient.basic_info.name",
-		"emr.patient.basic_info.gender",
-		"emr.patient.basic_info.birth_or_age",
-		"emr.patient.basic_info.department",
-		"emr.patient.basic_info.attending_doctor",
-		"emr.patient.basic_info.encounter_time",
-	} {
-		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("%s result = %#v", code, result)
-		}
-	}
-}
-
-func TestEvaluateBasicInfoPendingConfirmation(t *testing.T) {
-	result := evaluateRequirement(binding{
-		Code: "emr.patient.basic_info.pending_confirmation", ExecutionMode: "程序判断",
-	}, checkContext{
-		SnapshotID:     "snapshot-1",
-		PatientContext: map[string]any{"pending_confirmation": true},
-	}, "手动保存")
-	if result.Conclusion != "不符合" || result.CheckStatus != "已完成" {
-		t.Fatalf("pending confirmation result = %#v", result)
-	}
-}
-
-func TestEvaluateTimeConsistency(t *testing.T) {
-	created := time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC)
-	started := created.Add(time.Hour)
-	ended := started.Add(30 * time.Minute)
-	saved := ended.Add(time.Minute)
-	data := checkContext{
-		SnapshotID:  "snapshot-1",
-		Status:      "草稿",
-		CreatedAt:   &created,
-		StartedAt:   &started,
-		EndedAt:     &ended,
-		LastSavedAt: &saved,
-		UpdatedAt:   &saved,
-		RecordContext: map[string]any{
-			"abnormal_span_seconds": float64(7200),
+func TestAllergyDetailAppliesOnlyToSelectedStatus(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode: "allergy_history",
+		FieldName: "过敏史",
+		RuleCode:  "other_detail",
+		RuleName:  "其他过敏原已记录",
+		Execution: "program",
+		Executor:  "allergy_history_other_detail",
+		Parameters: map[string]any{
+			"required_when_status": "其他过敏原",
+			"required_key":         "other_allergen",
 		},
 	}
 
-	for _, code := range []string{
-		"emr.time.consistency.fields_present",
-		"emr.time.consistency.order",
-		"emr.time.consistency.last_modified",
-		"emr.time.consistency.abnormal_span",
-	} {
-		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("%s result = %#v", code, result)
-		}
-	}
-
-	data.RecordContext = map[string]any{}
-	result := evaluateRequirement(binding{
-		Code: "emr.time.consistency.abnormal_span", ExecutionMode: "程序判断",
-	}, data, "手动保存")
-	if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
-		t.Fatalf("missing threshold result = %#v", result)
-	}
-}
-
-func TestEvaluateTimeConsistencyRejectsInvalidOrder(t *testing.T) {
-	created := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
-	started := created.Add(-time.Minute)
-	result := evaluateRequirement(binding{
-		Code: "emr.time.consistency.order", ExecutionMode: "程序判断",
-	}, checkContext{
-		SnapshotID: "snapshot-1", CreatedAt: &created, StartedAt: &started,
-	}, "手动保存")
+	result := executeProgramRuleForTest(rule, map[string]any{
+		"allergy_history": map[string]any{
+			"status": "其他过敏原",
+		},
+	}, "提交")
 	if result.Conclusion != "不符合" {
-		t.Fatalf("invalid order result = %#v", result)
+		t.Fatalf("missing other allergen detail should fail: %+v", result)
 	}
-}
 
-func TestEvaluateRecordCompleteness(t *testing.T) {
-	t.Run("vital signs", func(t *testing.T) {
-		item := binding{Code: "emr.physical_exam.vital_signs", ExecutionMode: "程序判断"}
-		result := evaluateRequirement(item, checkContext{
-			SnapshotID: "snapshot-1",
-			Content: map[string]any{
-				"physical_exam": map[string]any{
-					"vitals": map[string]any{"temperature_c": 36.6},
-				},
-			},
-		}, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("vital signs result = %#v", result)
-		}
-
-		result = evaluateRequirement(item, checkContext{
-			SnapshotID: "snapshot-1",
-			Content: map[string]any{
-				"physical_exam": map[string]any{
-					"vitals":              map[string]any{},
-					"not_measured_reason": "患者拒绝测量",
-				},
-			},
-		}, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("not measured reason result = %#v", result)
-		}
-
-		result = evaluateRequirement(item, checkContext{
-			SnapshotID: "snapshot-1",
-			Content:    map[string]any{"physical_exam": map[string]any{"vitals": map[string]any{}}},
-		}, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing vital signs result = %#v", result)
-		}
-	})
-
-	t.Run("auxiliary exam", func(t *testing.T) {
-		item := binding{Code: "emr.auxiliary_exam.result_recorded", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Content:    map[string]any{"auxiliary_exam": "血常规：白细胞正常"},
-			EncounterContext: map[string]any{
-				"auxiliary_exams": []any{
-					map[string]any{"item_name": "血常规", "result_status": "completed", "result_text": "白细胞正常"},
-				},
-			},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("auxiliary result = %#v", result)
-		}
-
-		data.Content = map[string]any{"auxiliary_exam": ""}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing auxiliary result = %#v", result)
-		}
-
-		data.EncounterContext = map[string]any{}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("without external exam object result = %#v", result)
-		}
-	})
-
-	t.Run("pending diagnosis requires plan", func(t *testing.T) {
-		item := binding{Code: "emr.diagnosis.followup_plan", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Content: map[string]any{
-				"diagnosis": map[string]any{"status": "待查", "name": "肺部阴影"},
-			},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing diagnosis plan = %#v", result)
-		}
-
-		data.Content["medical_advice"] = "完善胸部CT检查后复诊"
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("diagnosis plan = %#v", result)
-		}
-	})
-
-	t.Run("treatment records", func(t *testing.T) {
-		item := binding{Code: "emr.treatment.consistency.recorded", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Content:    map[string]any{"prescription": "阿莫西林，口服"},
-			EncounterContext: map[string]any{
-				"prescriptions": []any{
-					map[string]any{"kind": "prescription", "drug_name": "阿莫西林"},
-				},
-			},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("treatment record = %#v", result)
-		}
-
-		data.Content = map[string]any{}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing treatment record = %#v", result)
-		}
-	})
-
-	t.Run("supervisor signature", func(t *testing.T) {
-		item := binding{Code: "emr.signature.supervisor", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID:    "snapshot-1",
-			RecordContext: map[string]any{"supervisor_required": true},
-		}
-		result := evaluateRequirement(item, data, "归档")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing supervisor signature = %#v", result)
-		}
-
-		data.RecordContext["supervisor_id"] = int64(42)
-		result = evaluateRequirement(item, data, "归档")
-		if result.Conclusion != "符合" {
-			t.Fatalf("supervisor signature = %#v", result)
-		}
-	})
-}
-
-func TestEvaluateSpecialtyStructure(t *testing.T) {
-	t.Run("tcm diagnosis", func(t *testing.T) {
-		item := binding{Code: "emr.tcm.elements.tcm_diagnosis", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Specialty:  "中医",
-			Content:    map[string]any{"tcm_diagnosis": "肩痹，气滞血瘀证"},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("tcm diagnosis result = %#v", result)
-		}
-		data.Content = map[string]any{}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing tcm diagnosis result = %#v", result)
-		}
-	})
-
-	t.Run("gynecology applicability", func(t *testing.T) {
-		item := binding{Code: "emr.gynecology.menstrual_history.applicability", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID:     "snapshot-1",
-			Specialty:      "妇科",
-			PatientContext: map[string]any{"gender": "女", "age": 32},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("gynecology applicable result = %#v", result)
-		}
-		data.PatientContext["gender"] = "男"
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("gynecology not applicable result = %#v", result)
-		}
-		delete(data.PatientContext, "gender")
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "无法判断" || result.CheckStatus != "未完成" {
-			t.Fatalf("gynecology incomplete result = %#v", result)
-		}
-	})
-
-	t.Run("dental tooth position", func(t *testing.T) {
-		item := binding{Code: "emr.dental.tooth_plan.tooth_present", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Specialty:  "口腔",
-			Content: map[string]any{
-				"oral_treatment_plan": "拔除患牙",
-				"oral_tooth_position": "26",
-			},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("dental tooth result = %#v", result)
-		}
-		delete(data.Content, "oral_tooth_position")
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing dental tooth result = %#v", result)
-		}
-		data.Content = map[string]any{}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("no dental plan result = %#v", result)
-		}
-	})
-
-	t.Run("pediatric guardian", func(t *testing.T) {
-		item := binding{Code: "emr.pediatrics.guardian_info.relationship", ExecutionMode: "程序判断"}
-		data := checkContext{
-			SnapshotID: "snapshot-1",
-			Specialty:  "儿科",
-			PatientContext: map[string]any{
-				"guardian": map[string]any{"relationship": "母亲"},
-			},
-		}
-		result := evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("guardian relationship result = %#v", result)
-		}
-		data.PatientContext["guardian"] = map[string]any{}
-		result = evaluateRequirement(item, data, "手动保存")
-		if result.Conclusion != "不符合" {
-			t.Fatalf("missing guardian relationship result = %#v", result)
-		}
-	})
-}
-
-func TestEvaluatePediatricFeverRules(t *testing.T) {
-	data := checkContext{
-		SnapshotID: "snapshot-1",
-		Specialty:  "儿科",
-		Content: map[string]any{
-			"chief_complaint": "发热2天",
-			"structured": map[string]any{
-				"fever_duration": "2天",
-			},
+	result = executeProgramRuleForTest(rule, map[string]any{
+		"allergy_history": map[string]any{
+			"status":         "其他过敏原",
+			"other_allergen": "海鲜过敏",
 		},
-	}
-
-	result := evaluateRequirement(binding{
-		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
-	}, data, "手动保存")
-	if result.Conclusion != "不符合" {
-		t.Fatalf("missing fever temperature result = %#v", result)
-	}
-
-	result = evaluateRequirement(binding{
-		Code: "emr.pediatrics.fever_peak.duration", ExecutionMode: "程序判断",
-	}, data, "手动保存")
+	}, "提交")
 	if result.Conclusion != "符合" {
-		t.Fatalf("fever duration result = %#v", result)
+		t.Fatalf("other allergen detail should pass: %+v", result)
 	}
 
-	data.Content["physical_exam"] = map[string]any{
-		"vitals": map[string]any{"temperature_c": 39.2},
-	}
-	result = evaluateRequirement(binding{
-		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
-	}, data, "手动保存")
+	result = executeProgramRuleForTest(rule, map[string]any{
+		"allergy_history": map[string]any{
+			"status": "无药物过敏",
+		},
+	}, "提交")
 	if result.Conclusion != "符合" {
-		t.Fatalf("fever temperature result = %#v", result)
-	}
-
-	data.Content = map[string]any{"chief_complaint": "腹泻1天"}
-	result = evaluateRequirement(binding{
-		Code: "emr.pediatrics.fever_peak.temperature", ExecutionMode: "程序判断",
-	}, data, "手动保存")
-	if result.Conclusion != "符合" {
-		t.Fatalf("non-fever result = %#v", result)
+		t.Fatalf("other detail must not apply to no-drug-allergy: %+v", result)
 	}
 }
 
-func TestEvaluatePediatricPrescriptionRules(t *testing.T) {
-	data := checkContext{
-		SnapshotID: "snapshot-1",
-		Specialty:  "儿科",
-		PatientContext: map[string]any{
-			"age":       "6岁",
-			"weight_kg": 20,
-		},
-		Content: map[string]any{
-			"prescription": "阿莫西林 250mg，口服，每日三次，疗程5天",
-		},
-		EncounterContext: map[string]any{
-			"prescriptions": []any{
-				map[string]any{
-					"kind":      "prescription",
-					"drug_name": "阿莫西林",
-					"dose":      "250mg",
-					"route":     "口服，每日三次",
-					"course":    "5天",
-				},
-			},
-		},
+func TestFollowupDateFormatRequiresValidDateAndAllowsNotes(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode:  "followup",
+		FieldName:  "复诊安排",
+		RuleCode:   "date_format",
+		RuleName:   "复诊日期格式有效",
+		Execution:  "program",
+		Executor:   "followup_date_format",
+		Parameters: map[string]any{},
 	}
 
-	for _, code := range []string{
-		"emr.pediatrics.weight_dose.age",
-		"emr.pediatrics.weight_dose.weight_basis",
-		"emr.pediatrics.weight_dose.dose",
-		"emr.pediatrics.weight_dose.route",
-		"emr.pediatrics.weight_dose.course",
-	} {
-		result := evaluateRequirement(binding{Code: code, ExecutionMode: "程序判断"}, data, "手动保存")
-		if result.Conclusion != "符合" {
-			t.Fatalf("%s result = %#v", code, result)
-		}
+	cases := []struct {
+		name       string
+		value      string
+		conclusion string
+	}{
+		{name: "date only", value: "2026-10-01", conclusion: "符合"},
+		{name: "date with note", value: "2026-10-01 两周后复诊", conclusion: "符合"},
+		{name: "chinese date with note", value: "2026年10月1日复查", conclusion: "符合"},
+		{name: "relative date only", value: "下周复诊", conclusion: "不符合"},
+		{name: "invalid date", value: "2026-99-99复诊", conclusion: "不符合"},
 	}
 
-	delete(data.PatientContext, "weight_kg")
-	data.Content["prescription"] = "阿莫西林"
-	data.EncounterContext["prescriptions"] = []any{
-		map[string]any{"kind": "prescription", "drug_name": "阿莫西林"},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := executeProgramRuleForTest(rule, map[string]any{"followup": tc.value}, "提交")
+			if result.Conclusion != tc.conclusion {
+				t.Fatalf("conclusion=%q, want %q, result=%+v", result.Conclusion, tc.conclusion, result)
+			}
+		})
 	}
-	result := evaluateRequirement(binding{
-		Code: "emr.pediatrics.weight_dose.weight_basis", ExecutionMode: "程序判断",
-	}, data, "手动保存")
-	if result.Conclusion != "不符合" {
-		t.Fatalf("missing pediatric weight basis result = %#v", result)
+}
+
+func TestLastMenstrualPeriodValidDateAllowsUnknownButRejectsInvalidDate(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode:  "last_menstrual_period",
+		FieldName:  "末次月经",
+		RuleCode:   "valid_date",
+		RuleName:   "末次月经日期合法",
+		Execution:  "program",
+		Executor:   "last_menstrual_period_valid_date",
+		Parameters: map[string]any{},
+	}
+
+	cases := []struct {
+		name       string
+		value      string
+		conclusion string
+	}{
+		{name: "valid date", value: "2026-10-01", conclusion: "符合"},
+		{name: "unknown", value: "不详", conclusion: "符合"},
+		{name: "unclear", value: "记不清", conclusion: "符合"},
+		{name: "invalid date", value: "2026-99-99", conclusion: "不符合"},
+		{name: "free text", value: "上个月", conclusion: "不符合"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := executeProgramRuleForTest(rule, map[string]any{"last_menstrual_period": tc.value}, "提交")
+			if result.Conclusion != tc.conclusion {
+				t.Fatalf("conclusion=%q, want %q, result=%+v", result.Conclusion, tc.conclusion, result)
+			}
+		})
+	}
+}
+
+func TestPediatricWeightValueAndUnitAllowsKilogramOnly(t *testing.T) {
+	rule := ExecutableRule{
+		FieldCode:  "pediatric_weight",
+		FieldName:  "儿童体重",
+		RuleCode:   "value_and_unit",
+		RuleName:   "儿童体重有明确数值和单位",
+		Execution:  "program",
+		Executor:   "pediatric_weight_value_and_unit",
+		Parameters: map[string]any{},
+	}
+
+	cases := []struct {
+		name       string
+		value      string
+		conclusion string
+	}{
+		{name: "kg lower", value: "15kg", conclusion: "符合"},
+		{name: "kg upper", value: "15KG", conclusion: "符合"},
+		{name: "gongjin", value: "15公斤", conclusion: "符合"},
+		{name: "qianke", value: "15千克", conclusion: "符合"},
+		{name: "jin", value: "30斤", conclusion: "不符合"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := executeProgramRuleForTest(rule, map[string]any{"pediatric_weight": tc.value}, "提交")
+			if result.Conclusion != tc.conclusion {
+				t.Fatalf("conclusion=%q, want %q, result=%+v", result.Conclusion, tc.conclusion, result)
+			}
+		})
 	}
 }

@@ -140,6 +140,13 @@ func (h *Handler) Proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	// Existing consultation pages connect directly over WebSocket and do not
+	// call POST /sessions. Enforce the same doctor-only generation boundary
+	// here so that this entry point cannot bypass the rule.
+	if err := h.service.store.ValidateDoctor(r.Context(), tenantID, claims.UserID); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	client, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -178,7 +185,12 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 		payload, _ := json.Marshal(map[string]any{"type": "error", "error": message})
 		_ = writeClient(websocket.TextMessage, payload)
 	}
+	var transcriptMu sync.Mutex
+	finalTranscript := make([]string, 0, 32)
 	corrector := newRealtimeTranscriptCorrector(h.service, tenantID, encounterID, func(result realtimeTranscriptCorrection) {
+		transcriptMu.Lock()
+		finalTranscript = append(finalTranscript, result.CorrectedText)
+		transcriptMu.Unlock()
 		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{
 			"type":           "transcript_correction",
 			"sequence":       result.Sequence,
@@ -189,6 +201,9 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 			"status":         "completed",
 		}))
 	}, func(item realtimeASRResult, err error) {
+		transcriptMu.Lock()
+		finalTranscript = append(finalTranscript, item.Text)
+		transcriptMu.Unlock()
 		_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{
 			"type":          "transcript_correction",
 			"sequence":      item.Sequence,
@@ -296,9 +311,12 @@ func (h *Handler) proxyWebSockets(client, upstream *websocket.Conn, tenantID, ac
 				FileName        string `json:"file_name"`
 			}
 			_ = json.Unmarshal(payload, &end)
+			transcriptMu.Lock()
+			transcript := strings.TrimSpace(strings.Join(finalTranscript, "\n"))
+			transcriptMu.Unlock()
 			finalized, finalizeErr := h.service.FinalizeRecording(
 				context.Background(), tenantID, actorID, encounterID, recordID, audio.Bytes(),
-				end.MIMEType, end.FileName, end.DurationSeconds, time.Now().UTC(),
+				end.MIMEType, end.FileName, end.DurationSeconds, time.Now().UTC(), transcript,
 			)
 			if finalizeErr != nil {
 				_ = writeClient(websocket.TextMessage, mustJSON(map[string]any{"type": "recording_save_error", "error": finalizeErr.Error()}))

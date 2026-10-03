@@ -54,6 +54,10 @@ const (
 	TaskStatusAssigned  TaskStatus = "assigned"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusCancelled TaskStatus = "cancelled"
+	// TaskStatusReturned 表示一线执行人员认为任务不合适或无法执行，将任务退回处理。
+	// 署名：Codex
+	// 时间：2026-09-12
+	TaskStatusReturned TaskStatus = "returned"
 )
 
 // TaskType represents the type of a recording task
@@ -124,6 +128,9 @@ type RecordingTask struct {
 	CompletedBy   *int64     `json:"completed_by,omitempty"`
 	CancelledAt   *time.Time `json:"cancelled_at,omitempty"`
 	CancelReason  *string    `json:"cancel_reason,omitempty"`
+	ReturnedAt    *time.Time `json:"returned_at,omitempty"`
+	ReturnedBy    *int64     `json:"returned_by,omitempty"`
+	ReturnReason  *string    `json:"return_reason,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }

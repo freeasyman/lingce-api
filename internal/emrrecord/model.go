@@ -82,17 +82,14 @@ type CreateRequest struct {
 }
 
 type ContentRequest struct {
-	Content map[string]any `json:"content"`
+	Content         map[string]any `json:"content"`
+	PatientSnapshot map[string]any `json:"patient_snapshot,omitempty"`
 }
 
 type ActionRequest struct {
-	Content map[string]any `json:"content,omitempty"`
-	Note    string         `json:"note,omitempty"`
-}
-
-type GenerateAIGenerationOutcome struct {
-	Record     *Record       `json:"record"`
-	Generation *AIGeneration `json:"generation"`
+	Content         map[string]any `json:"content,omitempty"`
+	PatientSnapshot map[string]any `json:"patient_snapshot,omitempty"`
+	Note            string         `json:"note,omitempty"`
 }
 
 type WriteOutcome struct {
@@ -103,5 +100,29 @@ type WriteOutcome struct {
 	BeforeStatus   string
 	AfterStatus    string
 	BeforeSnapshot *string
-	CheckRunID     *string
+	BeforePatient  map[string]any
+}
+
+type GeneratedWorkingDraftRequest struct {
+	EncounterID      int64
+	CustomerID       *int64
+	PatientSnapshot  map[string]any
+	TemplateID       string
+	DocumentType     string
+	VisitType        string
+	DepartmentID     *int64
+	DoctorID         int64
+	StartedAt        time.Time
+	EndedAt          *time.Time
+	EncounterContext map[string]any
+	SourceReferences map[string]any
+	Content          map[string]any
+	CreatedBy        int64
+}
+
+type GeneratedWorkingDraftOutcome struct {
+	Record       *Record
+	Created      bool
+	BeforeStatus string
+	AfterStatus  string
 }

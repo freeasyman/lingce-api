@@ -1935,6 +1935,27 @@ func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIng
 	return recordingID, created, nil
 }
 
+func (s *Store) MarkRealtimeCompleted(ctx context.Context, recordingID int64, transcript string, emrGenerated bool) error {
+	markerJSON, err := json.Marshal(map[string]any{"source": "realtime_emr", "emr_generated": emrGenerated})
+	if err != nil {
+		return fmt.Errorf("marshal realtime marker: %w", err)
+	}
+	cleanedJSON, err := json.Marshal(map[string]any{"text": strings.TrimSpace(transcript), "source": "realtime"})
+	if err != nil {
+		return fmt.Errorf("marshal realtime transcript: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE recordings SET transcription_text=$2, transcription_status='completed',
+		cleaned_transcription_status='completed', cleaned_transcription=$3::jsonb,
+		analysis_status='completed', analysis_result=$4::jsonb, analysis_display=$4::jsonb,
+		updated_at=NOW() WHERE id=$1
+	`, recordingID, strings.TrimSpace(transcript), string(cleanedJSON), string(markerJSON))
+	if err != nil {
+		return fmt.Errorf("mark realtime recording completed: %w", err)
+	}
+	return nil
+}
+
 // CreateRecording creates a new medical recording
 func (s *Store) CreateRecording(ctx context.Context, req CreateRecordingRequest) (*MedicalRecording, error) {
 	fileName := req.RecordingURL
@@ -2203,12 +2224,14 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		argIndex++
 	}
 
-	// 随访员工查询时，只允许查看 followup_data_scopes 配置的录音归属员工。
+	// 随访员工查询时，明确分配给自己的任务应直接可见；未分配或团队视角任务
+	// 再按 followup_data_scopes 校验录音归属员工的数据查看范围。
 	// 署名：Codex
-	// 时间：2026-09-11
+	// 时间：2026-09-17
 	if req.ViewerEmployeeID != nil {
 		conditions = append(conditions, fmt.Sprintf(`(
 			rt.source_type NOT IN ('follow_up', 'followup')
+			OR rt.assigned_to = $%d
 			OR EXISTS (
 				SELECT 1
 				FROM recordings scope_recording
@@ -2219,7 +2242,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 				WHERE scope_recording.id = rt.recording_id
 				  AND scope_recording.tenant_id = rt.tenant_id
 			)
-		)`, argIndex))
+		)`, argIndex, argIndex))
 		args = append(args, *req.ViewerEmployeeID)
 		argIndex++
 	}
@@ -2263,9 +2286,13 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 
 	if req.TaskType != nil {
-		conditions = append(conditions, fmt.Sprintf("source_type = $%d", argIndex))
-		args = append(args, string(*req.TaskType))
-		argIndex++
+		if *req.TaskType == TaskType("follow_up") || *req.TaskType == TaskType("followup") {
+			conditions = append(conditions, "rt.source_type IN ('follow_up', 'followup')")
+		} else {
+			conditions = append(conditions, fmt.Sprintf("rt.source_type = $%d", argIndex))
+			args = append(args, string(*req.TaskType))
+			argIndex++
+		}
 	}
 
 	if req.Priority != nil && strings.TrimSpace(*req.Priority) != "" {
@@ -2317,19 +2344,21 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	// Query tasks
 	offset := (req.Page - 1) * req.PageSize
-	orderBy := "created_at DESC"
+	orderBy := "created_at DESC, id DESC"
 	if req.Sort != nil {
 		switch strings.TrimSpace(*req.Sort) {
+		case "created_desc", "created_at_desc":
+			orderBy = "created_at DESC, id DESC"
 		case "due_at_asc", "due_asc":
-			orderBy = "due_at ASC NULLS LAST, created_at DESC"
+			orderBy = "due_at ASC NULLS LAST, created_at DESC, id DESC"
 		case "due_at_desc":
-			orderBy = "due_at DESC NULLS LAST, created_at DESC"
+			orderBy = "due_at DESC NULLS LAST, created_at DESC, id DESC"
 		case "priority_desc":
 			orderBy = `CASE
 				WHEN lower(COALESCE(priority, 'medium')) IN ('high', 'h', '1', '高') THEN 3
 				WHEN lower(COALESCE(priority, 'medium')) IN ('low', 'l', '3', '低') THEN 1
 				ELSE 2
-			END DESC, due_at ASC NULLS LAST, created_at DESC`
+			END DESC, due_at ASC NULLS LAST, created_at DESC, id DESC`
 		}
 	}
 	query := fmt.Sprintf(`
@@ -2371,7 +2400,11 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 }
 
 // GetTaskByID retrieves a recording task by ID
-func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, error) {
+func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*RecordingTask, error) {
+	sourceCondition := ""
+	if followupOnly {
+		sourceCondition = " AND source_type IN ('follow_up', 'followup')"
+	}
 	query := `
 		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
 		       customer_name, priority, script, contact_reason, source_type, source_detail,
@@ -2380,7 +2413,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64) (*RecordingTask, erro
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
 		       returned_at, returned_by, return_reason, created_at, updated_at
 		FROM recording_tasks
-		WHERE id = $1
+		WHERE id = $1` + sourceCondition + `
 		  AND EXISTS (
 			SELECT 1 FROM recordings doctor_recording
 			WHERE doctor_recording.id = recording_tasks.recording_id
@@ -2496,7 +2529,7 @@ func (s *Store) ReturnTask(ctx context.Context, id int64, returnedBy int64, reas
 }
 
 // GetTaskStats retrieves task statistics for a tenant
-func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo, viewerEmployeeID *int64) (*RecordingTaskStatsResponse, error) {
+func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []int64, assignedTo, viewerEmployeeID *int64, followupOnly bool) (*RecordingTaskStatsResponse, error) {
 	var conditions []string
 	var args []interface{}
 	argIndex := 1
@@ -2520,8 +2553,12 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		  AND (
 			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
 			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
-			)
+		)
 	)`)
+	if followupOnly {
+		// 随访中心统计只包含随访来源任务，避免混入旧分析链路或人工任务。
+		conditions = append(conditions, "t.source_type IN ('follow_up', 'followup')")
+	}
 
 	if assignedTo != nil {
 		conditions = append(conditions, fmt.Sprintf("t.assigned_to = $%d", argIndex))
@@ -2532,6 +2569,7 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		conditions = append(conditions, fmt.Sprintf(`
 			(
 			t.source_type NOT IN ('follow_up', 'followup')
+			OR t.assigned_to = $%d
 			OR EXISTS (
 				SELECT 1
 				FROM recordings scope_recording
@@ -2543,7 +2581,7 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 				  AND scope_recording.tenant_id = t.tenant_id
 			)
 			)
-		`, argIndex))
+		`, argIndex, argIndex))
 		args = append(args, *viewerEmployeeID)
 		argIndex++
 	}
@@ -2678,7 +2716,7 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 }
 
 // GetDailyBriefing retrieves daily task briefing for a tenant
-func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time, viewerEmployeeID *int64) (*DailyBriefingResponse, error) {
+func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo *int64, date time.Time, viewerEmployeeID *int64, followupOnly bool) (*DailyBriefingResponse, error) {
 	var conditions []string
 	var args []interface{}
 	argIndex := 1
@@ -2686,6 +2724,11 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	conditions = append(conditions, fmt.Sprintf("tenant_id = $%d", argIndex))
 	args = append(args, tenantID)
 	argIndex++
+
+	if followupOnly {
+		// 随访中心每日简报只统计随访来源任务。
+		conditions = append(conditions, "source_type IN ('follow_up', 'followup')")
+	}
 
 	// 每日简报只统计医生录音任务，避免非医生历史任务污染工作台指标。
 	// 署名：Codex；时间：2026-09-14
@@ -2706,7 +2749,9 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	}
 	if viewerEmployeeID != nil {
 		conditions = append(conditions, fmt.Sprintf(`
-			EXISTS (
+			(
+			assigned_to = $%d
+			OR EXISTS (
 				SELECT 1
 				FROM recordings scope_recording
 				JOIN followup_data_scopes scope
@@ -2716,7 +2761,8 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 				WHERE scope_recording.id = recording_tasks.recording_id
 				  AND scope_recording.tenant_id = recording_tasks.tenant_id
 			)
-		`, argIndex))
+			)
+		`, argIndex, argIndex))
 		args = append(args, *viewerEmployeeID)
 		argIndex++
 	}

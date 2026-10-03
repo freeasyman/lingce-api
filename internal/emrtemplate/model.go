@@ -57,30 +57,15 @@ type Section struct {
 	Structure         map[string]any `json:"structure,omitempty"`
 }
 
-type RequirementBinding struct {
-	ID                      string `json:"id"`
-	TemplateVersionID       string `json:"template_version_id"`
-	QualityRequirementID    string `json:"quality_requirement_id"`
-	ExecutionMode           string `json:"execution_mode"`
-	DeadlineAction          string `json:"deadline_action"`
-	DisplayOrder            int    `json:"display_order"`
-	RequirementCode         string `json:"requirement_code"`
-	RequirementName         string `json:"requirement_name"`
-	RequirementRuleType     string `json:"requirement_rule_type"`
-	RequirementQualityGroup string `json:"requirement_quality_group"`
-}
-
 type TemplateDetail struct {
-	Template *Template             `json:"template"`
-	Versions []*TemplateVersion    `json:"versions"`
-	Sections []*Section            `json:"sections,omitempty"`
-	Bindings []*RequirementBinding `json:"quality_requirements,omitempty"`
+	Template *Template          `json:"template"`
+	Versions []*TemplateVersion `json:"versions"`
+	Sections []*Section         `json:"sections,omitempty"`
 }
 
 type PublishedVersionDetail struct {
-	Version  *TemplateVersion      `json:"version"`
-	Sections []*Section            `json:"sections"`
-	Bindings []*RequirementBinding `json:"quality_requirements"`
+	Version  *TemplateVersion `json:"version"`
+	Sections []*Section       `json:"sections"`
 }
 
 type SaveTemplateRequest struct {
@@ -114,14 +99,4 @@ type SectionInput struct {
 	Description     string         `json:"description"`
 	Options         map[string]any `json:"options"`
 	Structure       map[string]any `json:"structure"`
-}
-
-type SaveBindingsRequest struct {
-	Items []BindingInput `json:"items"`
-}
-type BindingInput struct {
-	QualityRequirementID string `json:"quality_requirement_id"`
-	ExecutionMode        string `json:"execution_mode"`
-	DeadlineAction       string `json:"deadline_action"`
-	DisplayOrder         int    `json:"display_order"`
 }

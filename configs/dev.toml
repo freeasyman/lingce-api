@@ -13,8 +13,8 @@ port = 5432
 name = "lingce_dev"
 user = "freeasyman"
 sslmode = "disable"
-max_conns = 2
-min_conns = 1
+max_conns = 10
+min_conns = 2
 
 [schema]
 # 开发环境默认不设上限，加载全部版本化 migration。

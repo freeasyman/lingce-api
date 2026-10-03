@@ -3,6 +3,8 @@ package emrrecord
 import (
 	"context"
 	"testing"
+
+	"github.com/freeasyman/lingce-api/internal/emrcheck"
 )
 
 func TestCreateRequiresEncounter(t *testing.T) {
@@ -49,6 +51,63 @@ func TestValidateContentChangeAudit(t *testing.T) {
 	}
 	if err := validateContentChangeAudit(0, before, after, "补充症状持续时间"); err == nil {
 		t.Fatal("expected missing actor error")
+	}
+}
+
+func TestPatientSnapshotChangesAreAuditedSeparately(t *testing.T) {
+	before := map[string]any{"name": "张某某", "phone": "13800000000"}
+	after := map[string]any{"name": "张某某", "phone": "13900000000", "address": "北京市朝阳区"}
+
+	changes := diffTopLevelPrefixed("patient", before, after)
+	if len(changes) != 2 {
+		t.Fatalf("changes = %#v, want two patient changes", changes)
+	}
+	first, ok := changes[0].(map[string]any)
+	if !ok || first["section_code"] != "patient.address" || first["change_type"] != "新增" {
+		t.Fatalf("first change = %#v, want patient.address addition", first)
+	}
+	second, ok := changes[1].(map[string]any)
+	if !ok || second["section_code"] != "patient.phone" || second["change_type"] != "修改" {
+		t.Fatalf("second change = %#v, want patient.phone modification", second)
+	}
+}
+
+func TestValidateChangeAuditIncludesPatientSnapshot(t *testing.T) {
+	current := &Record{
+		WorkingContent:  map[string]any{"chief_complaint": "咳嗽"},
+		PatientSnapshot: map[string]any{"name": "张某某"},
+	}
+	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, "更正患者姓名"); err != nil {
+		t.Fatalf("expected patient snapshot change to pass with note: %v", err)
+	}
+	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, ""); err == nil {
+		t.Fatal("expected patient snapshot change to require a note")
+	}
+}
+
+func TestCheckBlocksTransitionIncludesBothQualityHandlingEnums(t *testing.T) {
+	for _, handling := range []string{"阻断", "需要医生处理"} {
+		run := &emrcheck.CheckRun{
+			OverallResult: "存在提示",
+			Results: []*emrcheck.CheckResult{{
+				HandlingResult: handling,
+			}},
+		}
+		if !checkBlocksTransition(run) {
+			t.Fatalf("handling result %q should block completion", handling)
+		}
+	}
+}
+
+func TestCheckBlocksTransitionAllowsNonBlockingFinding(t *testing.T) {
+	run := &emrcheck.CheckRun{
+		OverallResult: "存在提示",
+		Results: []*emrcheck.CheckResult{{
+			HandlingResult: "待医生处理",
+		}},
+	}
+	if checkBlocksTransition(run) {
+		t.Fatal("non-blocking finding should not block completion")
 	}
 }
 

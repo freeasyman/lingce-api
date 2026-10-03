@@ -49,12 +49,6 @@ func (s *Service) SaveSections(ctx context.Context, tenantID int64, versionID st
 	}
 	return s.store.SaveSections(ctx, tenantID, versionID, req.Items)
 }
-func (s *Service) SaveBindings(ctx context.Context, tenantID int64, versionID string, req SaveBindingsRequest) ([]*RequirementBinding, error) {
-	if err := validateBindings(req.Items); err != nil {
-		return nil, err
-	}
-	return s.store.SaveBindings(ctx, tenantID, versionID, req.Items)
-}
 func (s *Service) Publish(ctx context.Context, tenantID int64, versionID string, actorID int64) error {
 	return s.store.Publish(ctx, tenantID, versionID, actorID)
 }
@@ -92,34 +86,6 @@ func validateSections(items []SectionInput) error {
 			return fmt.Errorf("模板栏目展示顺序重复：%d", item.DisplayOrder)
 		}
 		seenCodes[code] = true
-		seenOrders[item.DisplayOrder] = true
-	}
-	return nil
-}
-
-func validateBindings(items []BindingInput) error {
-	validModes := map[string]bool{"程序判断": true, "大模型判断": true, "人工判断": true}
-	validDeadlines := map[string]bool{"仅提示": true, "提交前处理": true, "确认前处理": true, "归档前处理": true, "归档后质控": true}
-	seenRequirements := make(map[string]bool, len(items))
-	seenOrders := make(map[int]bool, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.QualityRequirementID)
-		if id == "" {
-			return fmt.Errorf("质量要求标识不能为空")
-		}
-		if seenRequirements[id] {
-			return fmt.Errorf("模板版本不能重复选用同一质量要求")
-		}
-		if seenOrders[item.DisplayOrder] {
-			return fmt.Errorf("质量要求展示顺序重复：%d", item.DisplayOrder)
-		}
-		if !validModes[item.ExecutionMode] {
-			return fmt.Errorf("无效的主要判断方式：%s", item.ExecutionMode)
-		}
-		if !validDeadlines[item.DeadlineAction] {
-			return fmt.Errorf("无效的处理截止动作：%s", item.DeadlineAction)
-		}
-		seenRequirements[id] = true
 		seenOrders[item.DisplayOrder] = true
 	}
 	return nil

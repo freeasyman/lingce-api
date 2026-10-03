@@ -18,12 +18,37 @@ type CheckRun struct {
 	Results           []*CheckResult `json:"results,omitempty"`
 }
 
+type CurrentQuality struct {
+	*CheckRun
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+type currentQualityPackage struct {
+	Status            string         `json:"status"`
+	OverallResult     string         `json:"overall_result"`
+	TriggerAction     string         `json:"trigger_action"`
+	SnapshotID        string         `json:"snapshot_id,omitempty"`
+	TemplateVersionID string         `json:"template_version_id,omitempty"`
+	StartedAt         time.Time      `json:"started_at,omitempty"`
+	CompletedAt       *time.Time     `json:"completed_at,omitempty"`
+	CheckedAt         time.Time      `json:"checked_at"`
+	FailureReason     string         `json:"failure_reason,omitempty"`
+	ResultCount       int            `json:"result_count"`
+	AttentionCount    int            `json:"attention_count"`
+	BlockingCount     int            `json:"blocking_count"`
+	Results           []*CheckResult `json:"results"`
+}
+
 type CheckResult struct {
 	ID                      string         `json:"id"`
-	CheckRunID              string         `json:"check_run_id"`
 	QualityRequirementID    string         `json:"quality_requirement_id"`
 	RequirementCode         string         `json:"requirement_code"`
 	RequirementName         string         `json:"requirement_name"`
+	FieldCode               string         `json:"field_code,omitempty"`
+	FieldName               string         `json:"field_name,omitempty"`
+	FactCode                string         `json:"fact_code,omitempty"`
+	RuleCode                string         `json:"rule_code,omitempty"`
+	RuleName                string         `json:"rule_name,omitempty"`
 	ConfiguredExecutionMode string         `json:"configured_execution_mode"`
 	ActualExecutionMode     string         `json:"actual_execution_mode"`
 	ExecutionStatus         string         `json:"execution_status"`
