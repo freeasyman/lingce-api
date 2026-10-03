@@ -11,22 +11,16 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
-	"github.com/freeasyman/lingce-api/internal/emrscore"
 	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
 	store   *Store
 	process *emrprocess.Service
-	score   *emrscore.Service
 }
 
-func NewService(store *Store, process *emrprocess.Service, score ...*emrscore.Service) *Service {
-	service := &Service{store: store, process: process}
-	if len(score) > 0 {
-		service.score = score[0]
-	}
-	return service
+func NewService(store *Store, process *emrprocess.Service) *Service {
+	return &Service{store: store, process: process}
 }
 
 func (s *Service) List(ctx context.Context, tenantID int64, status string) ([]*Record, error) {
@@ -223,9 +217,6 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	outcome.Record = updated
 	outcome.AfterStatus = "已完成"
-	if s.score != nil {
-		s.score.StartFullAsync(tenantID, id)
-	}
 	return outcome, nil
 }
 

@@ -47,5 +47,4 @@ ALTER TABLE IF EXISTS public.emr_fields
   DROP COLUMN IF EXISTS quality_rules;
 
 DELETE FROM public.recording_analysis_prompts
-WHERE code = 'emr_quality_check_v1'
-   OR function_type = 'emr_quality_check';
+WHERE code = 'emr_quality_check_v1';

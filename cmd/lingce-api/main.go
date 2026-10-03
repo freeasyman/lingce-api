@@ -225,12 +225,12 @@ func main() {
 
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
 	emrScoreStore := emrscore.NewStore(pool)
-	emrScoreService := emrscore.NewService(emrScoreStore, llmClient)
+	emrScoreService := emrscore.NewService(emrScoreStore)
 	emrScoreHandler := emrscore.NewHandler(emrScoreService, emrPermissionService)
 	emrScoreHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrRecordStore := emrrecord.NewStore(pool)
-	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService, emrScoreService)
+	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	emrInternalHandler := emrrecord.NewInternalHandler(pool, llmClient, emrProcessService)
