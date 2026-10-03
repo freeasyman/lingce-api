@@ -372,10 +372,6 @@ func (h *Handler) Complete(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	if !access.Has("record.archive") {
-		httputil.WriteForbidden(w, "emr permission denied")
-		return
-	}
 	h.actionWithAccess(w, r, tenantID, access.UserID, h.service.Complete)
 }
 
