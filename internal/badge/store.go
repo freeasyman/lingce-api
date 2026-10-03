@@ -282,9 +282,14 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	if err != nil {
 		return nil, fmt.Errorf("resolve callback employee business scope: %w", err)
 	}
+	encounterID, err := s.resolveRecentRecordingEncounter(ctx, core.DeviceNo, tenantID, employeeID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve callback encounter: %w", err)
+	}
 	recordingID, created, err := recordingStore.CreateOwnedAudioRecording(ctx, recording.OwnedAudioIngestRequest{
 		TenantID:        tenantID,
 		EmployeeID:      employeeID,
+		EncounterID:     encounterID,
 		FileURL:         fileURL,
 		FileName:        core.FileName,
 		MIMEType:        "audio/mpeg",
@@ -312,15 +317,17 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		)
 		return nil, fmt.Errorf("upsert recording from callback: %w", err)
 	}
-	if _, err := recordingStore.EnsureEncounterForRecording(ctx, tenantID, recordingID, &employeeID, nil, "", "", "store", "consultation", core.StartTime); err != nil {
-		slog.Error("audio callback encounter ensure failed",
-			"device_no", core.DeviceNo,
-			"tenant_id", tenantID,
-			"employee_id", employeeID,
-			"recording_id", recordingID,
-			"error", err,
-		)
-		return nil, fmt.Errorf("ensure encounter from audio callback: %w", err)
+	if encounterID == nil {
+		if _, err := recordingStore.EnsureEncounterForRecording(ctx, tenantID, recordingID, &employeeID, nil, "", "", "store", "consultation", core.StartTime); err != nil {
+			slog.Error("audio callback encounter ensure failed",
+				"device_no", core.DeviceNo,
+				"tenant_id", tenantID,
+				"employee_id", employeeID,
+				"recording_id", recordingID,
+				"error", err,
+			)
+			return nil, fmt.Errorf("ensure encounter from audio callback: %w", err)
+		}
 	}
 
 	if _, err := s.pool.Exec(ctx, `
@@ -374,6 +381,27 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		TenantID:    tenantID,
 		Created:     created,
 	}, nil
+}
+
+func (s *Store) resolveRecentRecordingEncounter(ctx context.Context, deviceNo string, tenantID, employeeID int64) (*int64, error) {
+	var encounterID int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT NULLIF(extra_data->>'encounter_id', '')::bigint
+		FROM badge_recording_control_logs
+		WHERE device_no = $1 AND action = 'start' AND status = 'success'
+		  AND operator_id = $2
+		  AND created_at >= NOW() - INTERVAL '12 hours'
+		  AND NULLIF(extra_data->>'encounter_id', '') IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM encounters e WHERE e.id = NULLIF(extra_data->>'encounter_id', '')::bigint AND e.tenant_id = $3 AND e.provider_id = $2)
+		ORDER BY created_at DESC LIMIT 1
+	`, deviceNo, employeeID, tenantID).Scan(&encounterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &encounterID, nil
 }
 
 func (s *Store) resolveAudioCallbackBadgeBinding(ctx context.Context, deviceNo string) (int64, int64, error) {
