@@ -61,3 +61,17 @@ func TestLoadEmbeddedSchemaMigrations(t *testing.T) {
 		t.Fatalf("expected baseline migration 20260807_001")
 	}
 }
+
+func TestMigrationUpSQLExcludesDownSections(t *testing.T) {
+	t.Parallel()
+
+	sql := "-- +goose Up\nCREATE TABLE example (id BIGINT);\n-- +goose Down\nDROP TABLE example;"
+	if got := migrationUpSQL(sql); got != "CREATE TABLE example (id BIGINT);" {
+		t.Fatalf("unexpected up migration SQL: %q", got)
+	}
+
+	withoutMarkers := "SELECT 1;"
+	if got := migrationUpSQL(withoutMarkers); got != withoutMarkers {
+		t.Fatalf("migration without goose markers changed: %q", got)
+	}
+}

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -425,37 +424,11 @@ func (h *Handler) actionWithRequest(w http.ResponseWriter, r *http.Request, tena
 }
 
 func writeActionError(w http.ResponseWriter, item *WriteOutcome, actionErr error) {
-	if item == nil || item.CheckRun == nil {
-		httputil.WriteBadRequest(w, actionErr.Error())
-		return
-	}
-	details := map[string]any{
-		"issues": checkIssues(item.CheckRun),
-	}
+	details := map[string]any{}
 	if item.Record != nil {
 		details["status"] = item.Record.Status
 	}
-	httputil.WriteError(w, http.StatusBadRequest, "EMR_CHECK_BLOCKED", actionErr.Error(), details)
-}
-
-func checkIssues(run *emrcheck.CheckRun) []map[string]any {
-	issues := make([]map[string]any, 0)
-	for _, result := range run.Results {
-		if result.Conclusion == "符合" && result.HandlingResult == "允许继续" {
-			continue
-		}
-		issues = append(issues, map[string]any{
-			"code":            result.RequirementCode,
-			"name":            result.RequirementName,
-			"conclusion":      result.Conclusion,
-			"check_status":    result.CheckStatus,
-			"handling_result": result.HandlingResult,
-			"explanation":     result.HitExplanation,
-			"suggested":       result.SuggestedHandling,
-			"evidence":        result.Evidence,
-		})
-	}
-	return issues
+	httputil.WriteError(w, http.StatusBadRequest, "EMR_ACTION_FAILED", actionErr.Error(), details)
 }
 func (h *Handler) Revise(w http.ResponseWriter, r *http.Request) {
 	access, tenantID, err := h.authorizeRecord(r, "record.edit")

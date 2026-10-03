@@ -2,8 +2,6 @@ package emrrecord
 
 import (
 	"time"
-
-	"github.com/freeasyman/lingce-api/internal/emrcheck"
 )
 
 type Record struct {
@@ -95,7 +93,6 @@ type ActionRequest struct {
 type WriteOutcome struct {
 	Record         *Record
 	Snapshot       *Snapshot
-	CheckRun       *emrcheck.CheckRun `json:"check_run,omitempty"`
 	BeforeContent  map[string]any
 	BeforeStatus   string
 	AfterStatus    string

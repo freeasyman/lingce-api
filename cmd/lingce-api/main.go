@@ -23,7 +23,6 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
-	"github.com/freeasyman/lingce-api/internal/emrcheck"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 	"github.com/freeasyman/lingce-api/internal/emrrealtime"
@@ -225,18 +224,13 @@ func main() {
 	emrProcessHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
-	emrCheckStore := emrcheck.NewStore(pool)
-	emrCheckService := emrcheck.NewService(emrCheckStore, llmClient)
-	emrCheckHandler := emrcheck.NewHandler(emrCheckService, emrPermissionService)
-	emrCheckHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
 	emrScoreStore := emrscore.NewStore(pool)
 	emrScoreService := emrscore.NewService(emrScoreStore, llmClient)
 	emrScoreHandler := emrscore.NewHandler(emrScoreService, emrPermissionService)
 	emrScoreHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrRecordStore := emrrecord.NewStore(pool)
-	emrRecordService := emrrecord.NewService(emrRecordStore, emrCheckService, emrProcessService, emrScoreService)
+	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService, emrScoreService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	emrInternalHandler := emrrecord.NewInternalHandler(pool, llmClient, emrProcessService)

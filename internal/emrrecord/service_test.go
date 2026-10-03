@@ -3,8 +3,6 @@ package emrrecord
 import (
 	"context"
 	"testing"
-
-	"github.com/freeasyman/lingce-api/internal/emrcheck"
 )
 
 func TestCreateRequiresEncounter(t *testing.T) {
@@ -82,32 +80,6 @@ func TestValidateChangeAuditIncludesPatientSnapshot(t *testing.T) {
 	}
 	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, ""); err == nil {
 		t.Fatal("expected patient snapshot change to require a note")
-	}
-}
-
-func TestCheckBlocksTransitionIncludesBothQualityHandlingEnums(t *testing.T) {
-	for _, handling := range []string{"阻断", "需要医生处理"} {
-		run := &emrcheck.CheckRun{
-			OverallResult: "存在提示",
-			Results: []*emrcheck.CheckResult{{
-				HandlingResult: handling,
-			}},
-		}
-		if !checkBlocksTransition(run) {
-			t.Fatalf("handling result %q should block completion", handling)
-		}
-	}
-}
-
-func TestCheckBlocksTransitionAllowsNonBlockingFinding(t *testing.T) {
-	run := &emrcheck.CheckRun{
-		OverallResult: "存在提示",
-		Results: []*emrcheck.CheckResult{{
-			HandlingResult: "待医生处理",
-		}},
-	}
-	if checkBlocksTransition(run) {
-		t.Fatal("non-blocking finding should not block completion")
 	}
 }
 
