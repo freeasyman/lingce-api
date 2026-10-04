@@ -289,6 +289,10 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
 		return nil, err
 	}
+	doctorName, departmentCode, err := s.store.DoctorContext(ctx, tenantID, actorID)
+	if err != nil {
+		return nil, err
+	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" {
 		return nil, fmt.Errorf("client_request_id is required")
@@ -357,7 +361,7 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		nil,
 		req.ClientRequestID,
 		req.ClientRequestID,
-		map[string]any{"source_type": "realtime", "channel": "realtime", "visit_type": req.VisitType},
+		map[string]any{"source_type": "realtime", "channel": "realtime", "visit_type": req.VisitType, "doctor_name": doctorName, "medical_department_code": departmentCode},
 		startedAt,
 	)
 	result, err := s.records.Create(ctx, tenantID, actorID, emrrecord.CreateRequest{

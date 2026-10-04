@@ -96,6 +96,18 @@ func (s *Store) ValidateDoctor(ctx context.Context, tenantID, employeeID int64) 
 	return nil
 }
 
+func (s *Store) DoctorContext(ctx context.Context, tenantID, employeeID int64) (string, string, error) {
+	var name, department string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(NULLIF(e.full_name, ''), 'unknown'), NULLIF(e.name, ''), NULLIF(e.username, ''), ''), COALESCE(NULLIF(e.medical_department_code, ''), '')
+		FROM employees e WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
+	`, employeeID, tenantID).Scan(&name, &department)
+	if err != nil {
+		return "", "", fmt.Errorf("查询医生信息失败：%w", err)
+	}
+	return name, department, nil
+}
+
 func (s *Store) GetRecordByEncounter(ctx context.Context, tenantID, encounterID int64) (string, error) {
 	var recordID string
 	err := s.pool.QueryRow(ctx, `

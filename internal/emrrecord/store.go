@@ -66,6 +66,58 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, er
 	if err != nil {
 		return nil, fmt.Errorf("get emr record: %w", err)
 	}
+	if item.DoctorID > 0 {
+		var doctorName, departmentCode string
+		err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(NULLIF(e.full_name, ''), 'unknown'), NULLIF(e.name, ''), NULLIF(e.username, ''), ''),
+			       COALESCE(NULLIF(e.medical_department_code, ''), '')
+			FROM employees e WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
+		`, item.DoctorID, tenantID).Scan(&doctorName, &departmentCode)
+		if err == nil {
+			if strings.TrimSpace(doctorName) != "" {
+				item.EncounterContext["doctor_name"] = doctorName
+			}
+			if strings.TrimSpace(departmentCode) != "" {
+				item.EncounterContext["medical_department_code"] = departmentCode
+			}
+		}
+	}
+	customerID := int64(0)
+	if item.PatientID != nil {
+		customerID = *item.PatientID
+	}
+	if customerID == 0 {
+		switch value := item.PatientSnapshot["customer_id"].(type) {
+		case float64:
+			customerID = int64(value)
+		case int:
+			customerID = int64(value)
+		case int64:
+			customerID = value
+		}
+	}
+	if customerID > 0 {
+		var name, phone, gender string
+		var age *int
+		var extra []byte
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(name,''), COALESCE(phone,''), COALESCE(gender,''), age, COALESCE(extra_data,'{}'::jsonb) FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, customerID, tenantID).Scan(&name, &phone, &gender, &age, &extra); err == nil {
+			for key, value := range decodeObject(extra) {
+				item.PatientSnapshot[key] = value
+			}
+			if item.PatientSnapshot["name"] == nil || strings.TrimSpace(fmt.Sprint(item.PatientSnapshot["name"])) == "" {
+				item.PatientSnapshot["name"] = name
+			}
+			if item.PatientSnapshot["phone"] == nil || strings.TrimSpace(fmt.Sprint(item.PatientSnapshot["phone"])) == "" {
+				item.PatientSnapshot["phone"] = phone
+			}
+			if item.PatientSnapshot["gender"] == nil || strings.TrimSpace(fmt.Sprint(item.PatientSnapshot["gender"])) == "" {
+				item.PatientSnapshot["gender"] = gender
+			}
+			if item.PatientSnapshot["age"] == nil && age != nil {
+				item.PatientSnapshot["age"] = *age
+			}
+		}
+	}
 	return item, nil
 }
 

@@ -358,9 +358,13 @@ func (h *InternalHandler) saveGeneratedWorkingDraft(
 		"medical_department_code": prepared.Employee["medical_department_code"],
 		"recorded_at":             req.RecordedAt,
 	}
-	patientSnapshot := map[string]any{
-		"customer_id": req.CustomerID,
-		"name":        req.CustomerName,
+	patientSnapshot := map[string]any{}
+	for key, value := range req.PatientSnapshot {
+		patientSnapshot[key] = value
+	}
+	patientSnapshot["customer_id"] = req.CustomerID
+	if strings.TrimSpace(req.CustomerName) != "" {
+		patientSnapshot["name"] = req.CustomerName
 	}
 	return h.recordStore.SaveGeneratedWorkingDraft(ctx, req.TenantID, GeneratedWorkingDraftRequest{
 		EncounterID:      req.EncounterID,
