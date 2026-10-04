@@ -156,10 +156,10 @@ func (s *Store) BindCustomer(ctx context.Context, tenantID, encounterID int64, r
 func (s *Store) GetPatient(ctx context.Context, tenantID, customerID int64) (*patientInfo, error) {
 	item := &patientInfo{ID: customerID}
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, patient_id, COALESCE(name, ''), phone, gender, age
+		SELECT id, patient_id, COALESCE(name, ''), phone, gender, age, COALESCE(extra_data, '{}'::jsonb)
 		FROM customers
 		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL
-	`, tenantID, customerID).Scan(&item.ID, &item.PatientID, &item.Name, &item.Phone, &item.Gender, &item.Age)
+	`, tenantID, customerID).Scan(&item.ID, &item.PatientID, &item.Name, &item.Phone, &item.Gender, &item.Age, &item.ExtraData)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("customer not found")
 	}
@@ -230,7 +230,7 @@ func patientSnapshot(patient *patientInfo) map[string]any {
 	if patient == nil {
 		return map[string]any{}
 	}
-	return map[string]any{
+	snapshot := map[string]any{
 		"customer_id": patient.ID,
 		"patient_id":  patient.PatientID,
 		"name":        patient.Name,
@@ -238,4 +238,8 @@ func patientSnapshot(patient *patientInfo) map[string]any {
 		"gender":      patient.Gender,
 		"age":         patient.Age,
 	}
+	for key, value := range patient.ExtraData {
+		snapshot[key] = value
+	}
+	return snapshot
 }

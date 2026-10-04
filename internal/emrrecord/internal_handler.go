@@ -397,17 +397,18 @@ func int64PtrIfPositive(value int64) *int64 {
 }
 
 type EmrWorkerRequest struct {
-	TenantID          int64  `json:"tenant_id"`
-	RecordingID       int64  `json:"recording_id"`
-	EncounterID       int64  `json:"encounter_id"`
-	EmployeeID        int64  `json:"employee_id"`
-	CustomerID        int64  `json:"customer_id"`
-	CustomerName      string `json:"customer_name"`
-	DoctorName        string `json:"doctor_name"`
-	BusinessScope     string `json:"business_scope"`
-	RoleCode          string `json:"role_code"`
-	RecordedAt        string `json:"recorded_at"`
-	CleanedTranscript string `json:"cleaned_transcript"`
+	TenantID          int64          `json:"tenant_id"`
+	RecordingID       int64          `json:"recording_id"`
+	EncounterID       int64          `json:"encounter_id"`
+	EmployeeID        int64          `json:"employee_id"`
+	CustomerID        int64          `json:"customer_id"`
+	CustomerName      string         `json:"customer_name"`
+	DoctorName        string         `json:"doctor_name"`
+	BusinessScope     string         `json:"business_scope"`
+	RoleCode          string         `json:"role_code"`
+	RecordedAt        string         `json:"recorded_at"`
+	CleanedTranscript string         `json:"cleaned_transcript"`
+	PatientSnapshot   map[string]any `json:"patient_snapshot,omitempty"`
 }
 
 func (r EmrWorkerRequest) validateBasic() error {
@@ -951,9 +952,13 @@ func renderPrompt(templateText string, req EmrWorkerRequest, employee map[string
 		strings.TrimSpace(template.Version.VisitType),
 		strings.TrimSpace(stringValue(template.Version.SpecialtyModule)),
 	)
-	patientJSON, _ := json.MarshalIndent(map[string]any{
+	patientContext := map[string]any{
 		"customer_id": req.CustomerID, "customer_name": req.CustomerName,
-	}, "", "  ")
+	}
+	for key, value := range req.PatientSnapshot {
+		patientContext[key] = value
+	}
+	patientJSON, _ := json.MarshalIndent(patientContext, "", "  ")
 	encounterJSON, _ := json.MarshalIndent(map[string]any{
 		"tenant_id": req.TenantID, "recording_id": req.RecordingID,
 		"encounter_id": req.EncounterID, "employee_id": req.EmployeeID,
@@ -988,6 +993,9 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("【%s】%s", strings.TrimSpace(section.Code), strings.TrimSpace(section.Name)))
+		if !sectionUsesStructuredContent(section) {
+			lines = append(lines, "  输出要求：返回简洁连贯的自然语言字符串，禁止 JSON 对象、数组或名称/备注/状态等键值对。")
+		}
 		if sectionUsesStructuredContent(section) {
 			structureJSON, _ := json.Marshal(section.Structure)
 			lines = append(lines, "  结构化字段定义："+string(structureJSON))

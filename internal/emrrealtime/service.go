@@ -143,8 +143,8 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 	if created && s.emrGenerator != nil && strings.TrimSpace(finalTranscript) != "" {
 		_, genErr := s.emrGenerator.GenerateDirect(ctx, emrrecord.EmrWorkerRequest{
 			TenantID: tenantID, RecordingID: result.ID, EncounterID: encounterID, EmployeeID: actorID,
-			CustomerID: derefInt64(customerID), BusinessScope: "doctor", RoleCode: "doctor",
-			RecordedAt: startAt.Format(time.RFC3339), CleanedTranscript: finalTranscript,
+			CustomerID: derefInt64(customerID), CustomerName: patientNameFromSnapshot(record.PatientSnapshot), BusinessScope: "doctor", RoleCode: "doctor",
+			RecordedAt: startAt.Format(time.RFC3339), CleanedTranscript: finalTranscript, PatientSnapshot: record.PatientSnapshot,
 		})
 		if genErr != nil {
 			_ = s.recordings.MarkRealtimeCompleted(ctx, result.ID, finalTranscript, false)
@@ -162,6 +162,13 @@ func derefInt64(value *int64) int64 {
 		return 0
 	}
 	return *value
+}
+
+func patientNameFromSnapshot(snapshot map[string]any) string {
+	if value, ok := snapshot["name"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func isRealtimePCM(mimeType, fileName string) bool {

@@ -44,6 +44,7 @@ type patientInfo struct {
 	Phone     *string
 	Gender    *string
 	Age       *int
+	ExtraData map[string]any
 }
 
 type realtimeASRResult struct {
