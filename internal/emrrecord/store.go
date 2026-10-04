@@ -102,7 +102,9 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, er
 		var extra []byte
 		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(name,''), COALESCE(phone,''), COALESCE(gender,''), age, COALESCE(extra_data,'{}'::jsonb) FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, customerID, tenantID).Scan(&name, &phone, &gender, &age, &extra); err == nil {
 			for key, value := range decodeObject(extra) {
-				item.PatientSnapshot[key] = value
+				if _, exists := item.PatientSnapshot[key]; !exists {
+					item.PatientSnapshot[key] = value
+				}
 			}
 			if item.PatientSnapshot["name"] == nil || strings.TrimSpace(fmt.Sprint(item.PatientSnapshot["name"])) == "" {
 				item.PatientSnapshot["name"] = name
@@ -450,6 +452,17 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 		return nil, fmt.Errorf("begin formal emr save: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	outcome, err := saveFormalTx(ctx, tx, tenantID, actorID, id, content, patientSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit formal emr save: %w", err)
+	}
+	return outcome, nil
+}
+
+func saveFormalTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*WriteOutcome, error) {
 	current, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2 FOR UPDATE", id, tenantID))
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -493,10 +506,7 @@ func (s *Store) SaveFormal(ctx context.Context, tenantID, actorID int64, id stri
 	`, id, tenantID, contentRaw, encodeObject(patientSnapshot)); err != nil {
 		return nil, fmt.Errorf("update formal emr content: %w", err)
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit formal emr save: %w", err)
-	}
-	updated, err := s.Get(ctx, tenantID, id)
+	updated, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", id, tenantID))
 	if err != nil {
 		return nil, err
 	}
