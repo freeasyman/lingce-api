@@ -70,6 +70,22 @@ func TestPatientSnapshotChangesAreAuditedSeparately(t *testing.T) {
 	}
 }
 
+func TestPatientAuditExcludesSystemAndCalculatedFields(t *testing.T) {
+	before := map[string]any{"anonymous": true, "customer_id": 0, "recording_id": 1835, "source_type": "recording_auto_archive"}
+	after := map[string]any{"customer_id": 8909, "patient_id": nil, "age": 37, "phone": "", "name": "张某某"}
+	changes := diffTopLevelPrefixed("patient", before, after)
+	// Only the human-readable patient fields may enter the clinical audit.
+	for _, raw := range changes {
+		item := raw.(map[string]any)
+		if item["section_code"] != "patient.name" && item["section_code"] != "patient.phone" {
+			t.Fatalf("system/calculated field leaked into audit: %#v", item)
+		}
+	}
+	if len(changes) == 0 {
+		t.Fatal("patient name change must remain auditable")
+	}
+}
+
 func TestValidateChangeAuditIncludesPatientSnapshot(t *testing.T) {
 	current := &Record{
 		WorkingContent:  map[string]any{"chief_complaint": "咳嗽"},

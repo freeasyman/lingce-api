@@ -472,6 +472,29 @@ func diffTopLevel(before, after map[string]any) []any {
 
 func diffTopLevelPrefixed(prefix string, before, after map[string]any) []any {
 	changes := diffTopLevel(before, after)
+	if prefix == "patient" {
+		allowed := map[string]bool{
+			"name": true, "gender": true, "birth_date": true, "ethnicity": true,
+			"marital_status": true, "occupation": true, "employer": true,
+			"phone": true, "address": true, "drug_allergy": true, "id_number": true,
+		}
+		filtered := make([]any, 0, len(changes))
+		for _, raw := range changes {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			field, _ := item["section_code"].(string)
+			if !allowed[field] {
+				continue
+			}
+			if (item["before"] == nil || item["before"] == "") && (item["after"] == nil || item["after"] == "") {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		changes = filtered
+	}
 	for _, raw := range changes {
 		if item, ok := raw.(map[string]any); ok {
 			item["section_code"] = prefix + "." + item["section_code"].(string)
