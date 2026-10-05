@@ -35,7 +35,7 @@ const recordColumns = `
 	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
 	COALESCE(r.updated_at, r.created_at), r.updated_at,
-	r.current_score_status, r.current_total_score, r.current_grade, r.current_score_version, r.current_quality_run_id`
+	r.current_score_status, r.current_total_score, COALESCE(r.current_grade, ''), r.current_score_version, r.current_quality_run_id`
 
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
@@ -586,12 +586,12 @@ func sameSnapshotDigest(ctx context.Context, tx pgx.Tx, id, expected string) boo
 
 const snapshotColumns = `id, record_id, encounter_id, revision_no, snapshot_no, template_version_id,
 	patient_snapshot, document_context, content, content_digest, formed_by, formed_at,
-	score_status, total_score, grade, score_version, quality_run_id`
+	score_status, total_score, COALESCE(grade, ''), score_version, quality_run_id`
 
 const snapshotColumnsWithAlias = `snapshot.id, snapshot.record_id, snapshot.encounter_id, snapshot.revision_no,
 	snapshot.snapshot_no, snapshot.template_version_id, snapshot.patient_snapshot, snapshot.document_context,
 	snapshot.content, snapshot.content_digest, snapshot.formed_by, snapshot.formed_at,
-	snapshot.score_status, snapshot.total_score, snapshot.grade, snapshot.score_version, snapshot.quality_run_id`
+	snapshot.score_status, snapshot.total_score, COALESCE(snapshot.grade, ''), snapshot.score_version, snapshot.quality_run_id`
 
 func scanSnapshot(row pgx.Row) (*Snapshot, error) {
 	item := &Snapshot{}
