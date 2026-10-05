@@ -70,6 +70,7 @@ type CurrentScore struct {
 	FailureReason       string         `json:"failure_reason,omitempty"`
 	ScoredAt            time.Time      `json:"scored_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
+	QualityRunID        *string        `json:"quality_run_id,omitempty"`
 	Sections            []SectionScore `json:"sections"`
 	Findings            []Finding      `json:"findings"`
 }
@@ -77,29 +78,36 @@ type CurrentScore struct {
 func (s *Store) GetCurrent(ctx context.Context, tenantID int64, recordID string) (*CurrentScore, error) {
 	item := &CurrentScore{}
 	var pendingRaw []byte
+	var hasScore bool
 	err := s.pool.QueryRow(ctx, `
-		SELECT c.record_id, c.tenant_id, c.snapshot_id,
-		       COALESCE(r.current_score_version, c.score_version),
-		       COALESCE(NULLIF(r.current_score_status, ''), c.status),
-		       COALESCE(r.current_total_score, c.total_score),
-		       COALESCE(NULLIF(r.current_grade, ''), c.grade),
-		       c.program_score, c.program_deduct_points,
-		       c.major_program_score, c.direct_grade, c.direct_grade_reason,
-		       c.pending_sections, c.failure_reason, c.scored_at, c.updated_at
-		FROM emr_record_score_current c
-		JOIN emr_records r ON r.id=c.record_id AND r.tenant_id=c.tenant_id
-		WHERE c.record_id=$1 AND c.tenant_id=$2
+		SELECT r.id, r.tenant_id, r.current_snapshot_id,
+		       COALESCE(NULLIF(r.current_score_version, ''), c.score_version, ''),
+		       COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分'),
+		       COALESCE(r.current_total_score, c.total_score, 0),
+		       COALESCE(NULLIF(r.current_grade, ''), c.grade, ''),
+		       COALESCE(c.program_score, 0), COALESCE(c.program_deduct_points, 0),
+		       COALESCE(c.major_program_score, 0), c.direct_grade, c.direct_grade_reason,
+		       COALESCE(c.pending_sections, '[]'::jsonb), c.failure_reason,
+		       COALESCE(c.scored_at, r.updated_at, r.created_at),
+		       COALESCE(c.updated_at, r.updated_at, r.created_at), r.current_quality_run_id,
+		       (r.current_quality_run_id IS NOT NULL OR c.record_id IS NOT NULL)
+		FROM emr_records r
+		LEFT JOIN emr_record_score_current c ON c.record_id=r.id AND c.tenant_id=r.tenant_id
+		WHERE r.id=$1 AND r.tenant_id=$2
 	`, recordID, tenantID).Scan(
 		&item.RecordID, &item.TenantID, &item.SnapshotID, &item.ScoreVersion, &item.Status,
 		&item.TotalScore, &item.Grade, &item.ProgramScore, &item.ProgramDeductPoints,
 		&item.MajorProgramScore, &item.DirectGrade, &item.DirectGradeReason,
-		&pendingRaw, &item.FailureReason, &item.ScoredAt, &item.UpdatedAt,
+		&pendingRaw, &item.FailureReason, &item.ScoredAt, &item.UpdatedAt, &item.QualityRunID, &hasScore,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load current emr score: %w", err)
+	}
+	if !hasScore {
+		return nil, nil
 	}
 	_ = json.Unmarshal(pendingRaw, &item.PendingSections)
 	item.Sections, item.Findings, err = s.loadItems(ctx, tenantID, recordID)

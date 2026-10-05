@@ -23,8 +23,26 @@ func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/emr/records/{id}/current-quality", Handler: h.Current, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/score-current", Handler: h.Current, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/icd10-diagnoses", Handler: h.ICD10, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
+}
+
+func (h *Handler) ICD10(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	_ = tenantID
+	items, err := h.service.SearchICD10(r.Context(), r.URL.Query().Get("q"))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": items})
 }
 
 func (h *Handler) authorizeRecord(r *http.Request) (int64, string, error) {
