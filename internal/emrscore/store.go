@@ -59,8 +59,8 @@ type CurrentScore struct {
 	SnapshotID          *string        `json:"snapshot_id,omitempty"`
 	ScoreVersion        string         `json:"score_version"`
 	Status              string         `json:"status"`
-	TotalScore          int            `json:"total_score"`
-	Grade               string         `json:"grade"`
+	TotalScore          *int           `json:"total_score,omitempty"`
+	Grade               *string        `json:"grade,omitempty"`
 	ProgramScore        int            `json:"program_score"`
 	ProgramDeductPoints int            `json:"program_deduct_points"`
 	MajorProgramScore   int            `json:"major_program_score"`
@@ -83,8 +83,8 @@ func (s *Store) GetCurrent(ctx context.Context, tenantID int64, recordID string)
 		SELECT r.id, r.tenant_id, r.current_snapshot_id,
 		       COALESCE(NULLIF(r.current_score_version, ''), c.score_version, ''),
 		       COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分'),
-		       COALESCE(r.current_total_score, c.total_score, 0),
-		       COALESCE(NULLIF(r.current_grade, ''), c.grade, ''),
+			CASE WHEN COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分') IN ('已完成', '待人工复核') THEN COALESCE(r.current_total_score, c.total_score) END,
+			CASE WHEN COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分') IN ('已完成', '待人工复核') THEN NULLIF(COALESCE(NULLIF(r.current_grade, ''), c.grade, ''), '') END,
 		       COALESCE(c.program_score, 0), COALESCE(c.program_deduct_points, 0),
 		       COALESCE(c.major_program_score, 0), COALESCE(c.direct_grade, ''), COALESCE(c.direct_grade_reason, ''),
 		       COALESCE(c.pending_sections, '[]'::jsonb), COALESCE(c.failure_reason, ''),

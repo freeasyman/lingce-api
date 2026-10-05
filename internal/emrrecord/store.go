@@ -528,18 +528,26 @@ func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID i
 	} else if !report.ScoreReady {
 		status = "未评分"
 	}
+	var totalScore any
+	var grade any
+	if status == "已完成" || status == "待人工复核" {
+		totalScore = report.TotalScore
+		if strings.TrimSpace(report.Grade) != "" {
+			grade = report.Grade
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE emr_record_snapshots
 		SET score_status=$2,total_score=$3,grade=$4,score_version=$5,quality_run_id=$6
 		WHERE id=$1
-	`, outcome.Snapshot.ID, status, report.TotalScore, report.Grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+	`, outcome.Snapshot.ID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID)); err != nil {
 		return fmt.Errorf("update snapshot score projection: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE emr_records
 		SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7
 		WHERE id=$1 AND tenant_id=$2
-	`, outcome.Record.ID, tenantID, status, report.TotalScore, report.Grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+	`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID)); err != nil {
 		return fmt.Errorf("update record score projection: %w", err)
 	}
 	return nil
