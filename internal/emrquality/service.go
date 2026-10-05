@@ -674,14 +674,6 @@ func (s *Service) BindRunTx(ctx context.Context, tx pgx.Tx, report *Report, snap
 	return saveCurrentScore(ctx, tx, report)
 }
 
-func (s *Service) ReusableRun(ctx context.Context, tenantID int64, recordID, runID, inputDigest string) (bool, error) {
-	version, _, err := s.store.activeVersion(ctx)
-	if err != nil {
-		return false, err
-	}
-	return s.store.reusableRun(ctx, tenantID, recordID, runID, version, inputDigest)
-}
-
 func inputDigest(input Context) string {
 	raw, _ := json.Marshal(map[string]any{
 		"patient_snapshot": input.Patient,
