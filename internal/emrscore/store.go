@@ -86,8 +86,8 @@ func (s *Store) GetCurrent(ctx context.Context, tenantID int64, recordID string)
 		       COALESCE(r.current_total_score, c.total_score, 0),
 		       COALESCE(NULLIF(r.current_grade, ''), c.grade, ''),
 		       COALESCE(c.program_score, 0), COALESCE(c.program_deduct_points, 0),
-		       COALESCE(c.major_program_score, 0), c.direct_grade, c.direct_grade_reason,
-		       COALESCE(c.pending_sections, '[]'::jsonb), c.failure_reason,
+		       COALESCE(c.major_program_score, 0), COALESCE(c.direct_grade, ''), COALESCE(c.direct_grade_reason, ''),
+		       COALESCE(c.pending_sections, '[]'::jsonb), COALESCE(c.failure_reason, ''),
 		       COALESCE(c.scored_at, r.updated_at, r.created_at),
 		       COALESCE(c.updated_at, r.updated_at, r.created_at), r.current_quality_run_id,
 		       (r.current_quality_run_id IS NOT NULL OR c.record_id IS NOT NULL)
