@@ -335,7 +335,7 @@ func saveCurrentScore(ctx context.Context, db qualityDB, report *Report) error {
 			findings = append(findings, map[string]any{
 				"code": finding.RuleCode, "section": finding.SectionCode, "title": finding.Reason,
 				"message": finding.Message, "evidence": finding.Evidence, "deduct_points": finding.Deduction,
-				"source": finding.ExecutionKind, "needs_manual_review": finding.ManualReview,
+				"source": finding.ExecutionKind, "needs_manual_review": finding.ManualReview, "blocking": finding.Blocking,
 			})
 		}
 		raw, err := json.Marshal(findings)

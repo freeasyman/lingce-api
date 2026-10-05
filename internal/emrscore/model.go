@@ -2,6 +2,11 @@ package emrscore
 
 type SectionCode string
 
+type ICD10Candidate struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 type Finding struct {
 	Code              string      `json:"code"`
 	Section           SectionCode `json:"section"`
@@ -12,6 +17,7 @@ type Finding struct {
 	DeductPoints      int         `json:"deduct_points"`
 	Source            string      `json:"source"`
 	NeedsManualReview bool        `json:"needs_manual_review"`
+	Blocking          bool        `json:"blocking"`
 }
 
 type SectionScore struct {
