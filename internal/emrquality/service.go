@@ -972,13 +972,12 @@ func calculateReport(report *Report) {
 		report.OverallResult = "partial"
 	} else if report.PendingCount > 0 {
 		report.OverallResult = "partial"
-		report.Grade = ""
 	} else if len(findings) > 0 {
 		report.OverallResult = "has_problem"
 	} else {
 		report.OverallResult = "no_problem"
 	}
-	if report.PendingCount > 0 || !report.ScoreReady {
+	if !report.ScoreReady {
 		report.Grade = ""
 	}
 }
