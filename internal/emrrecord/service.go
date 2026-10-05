@@ -11,16 +11,24 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
 	store   *Store
 	process *emrprocess.Service
+	quality *emrquality.Service
 }
 
-func NewService(store *Store, process *emrprocess.Service) *Service {
-	return &Service{store: store, process: process}
+var ErrQualityConfirmationRequired = errors.New("存在非阻断质量问题，请确认是否继续")
+
+func NewService(store *Store, process *emrprocess.Service, quality ...*emrquality.Service) *Service {
+	service := &Service{store: store, process: process}
+	if len(quality) > 0 {
+		service.quality = quality[0]
+	}
+	return service
 }
 
 func (s *Service) List(ctx context.Context, tenantID int64, status string) ([]*Record, error) {
@@ -151,6 +159,13 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 	if err != nil {
 		return nil, err
 	}
+	if s.quality != nil && !(req.AllowNonBlocking && req.QualityRunID != "") {
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionSave, outcome.Record, outcome.Snapshot))
+		if qualityErr != nil {
+			return outcome, qualityErr
+		}
+		outcome.QualityReport = report
+	}
 	if processErr := s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, req.Note, nil); processErr != nil {
 		return nil, processErr
 	}
@@ -158,12 +173,15 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 }
 
 func (s *Service) Submit(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
-	return s.checkedTransition(ctx, tenantID, actorID, id, req, "提交", "已完成", false)
+	return s.Complete(ctx, tenantID, actorID, id, req)
 }
 
 // Complete performs the doctor-facing "完成病历" action.
 // The internal audit trail remains two records: 提交 followed by 确认.
 func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	if strings.TrimSpace(req.Note) == "" {
+		req.Note = "医生完成病历"
+	}
 	current, err := s.store.Get(ctx, tenantID, id)
 	if err != nil || current == nil {
 		return nil, fmt.Errorf("record not found")
@@ -175,22 +193,62 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	if content == nil {
 		content = current.WorkingContent
 	}
-	beforeContent, beforePatient, err := s.formalAuditBaseline(ctx, tenantID, current)
-	if err != nil {
-		return nil, err
+	patient := req.PatientSnapshot
+	if patient == nil {
+		patient = current.PatientSnapshot
 	}
-	if err := validateChangeAuditValues(actorID, beforeContent, beforePatient, content, req.PatientSnapshot, req.Note); err != nil {
-		return nil, err
+	qualityInput := emrquality.Context{TenantID: tenantID, RecordID: current.ID, Action: emrquality.ActionComplete,
+		DocumentType: current.DocumentType, VisitType: current.VisitType, Patient: patient, Content: content,
+		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt}
+	var report *emrquality.Report
+	if req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "" && s.quality != nil {
+		reusable, reuseErr := s.quality.ReusableRun(ctx, tenantID, current.ID, req.QualityRunID, emrquality.InputDigest(qualityInput))
+		if reuseErr != nil || !reusable {
+			return nil, fmt.Errorf("质量检查结果已失效，请重新检查病历")
+		}
 	}
-	outcome, err := s.store.SaveFormal(ctx, tenantID, actorID, id, content, req.PatientSnapshot)
-	if err != nil {
-		return nil, err
+	if s.quality != nil && !(req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "") {
+		report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
+			RecordID: current.ID, Content: content, PatientSnapshot: patient,
+		}))
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(report.FailureReason) != "" {
+			if persistErr := s.quality.Persist(ctx, report); persistErr != nil {
+				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("%s；质量检查记录保存失败：%w", report.FailureReason, persistErr)
+			}
+			return &WriteOutcome{Record: current, QualityReport: report}, errors.New(report.FailureReason)
+		}
+		if report.HasBlocking() {
+			if err := s.quality.Persist(ctx, report); err != nil {
+				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过，检查记录保存失败：%w", err)
+			}
+			return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过")
+		}
+		if report.HasNonBlockingProblems() && !req.AllowNonBlocking {
+			if err := s.quality.Persist(ctx, report); err != nil {
+				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历存在提示项，检查记录保存失败：%w", err)
+			}
+			return &WriteOutcome{Record: current, QualityReport: report}, ErrQualityConfirmationRequired
+		}
 	}
-
-	snapshotID := outcome.Snapshot.ID
+	var outcome *WriteOutcome
 	var updated *Record
 	if err := s.store.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
+		outcome, err = saveFormalTx(ctx, tx, tenantID, actorID, id, content, req.PatientSnapshot)
+		if err != nil {
+			return err
+		}
+		snapshotID := outcome.Snapshot.ID
+		if report != nil {
+			report.SnapshotID = snapshotIDPtr(outcome.Snapshot)
+			if err := s.quality.PersistTx(ctx, tx, report); err != nil {
+				return err
+			}
+			outcome.QualityReport = report
+		}
 		updated, err = transitionTx(ctx, tx, tenantID, id, "已完成", actorID, nil, nil, false)
 		if err != nil {
 			return err
@@ -239,7 +297,49 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 	if current.Status != "已完成" && current.Status != "待归档" {
 		return nil, fmt.Errorf("record status %s cannot be archived", current.Status)
 	}
+	if s.quality != nil {
+		if current.CurrentSnapshotID == nil {
+			return nil, fmt.Errorf("病历没有正式版本，不能归档")
+		}
+		snapshot, snapshotErr := s.store.GetSnapshot(ctx, tenantID, current.ID, *current.CurrentSnapshotID)
+		if snapshotErr != nil || snapshot == nil {
+			return nil, fmt.Errorf("找不到归档版本")
+		}
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionArchive, current, snapshot))
+		if qualityErr != nil {
+			return nil, qualityErr
+		}
+		if strings.TrimSpace(report.FailureReason) != "" {
+			return &WriteOutcome{Record: current, Snapshot: snapshot, QualityReport: report}, errors.New(report.FailureReason)
+		}
+		if report.HasBlocking() {
+			return &WriteOutcome{Record: current, Snapshot: snapshot, QualityReport: report}, fmt.Errorf("病历质量检查未通过，不能归档")
+		}
+		if report.HasNonBlockingProblems() && !req.AllowNonBlocking {
+			return &WriteOutcome{Record: current, Snapshot: snapshot, QualityReport: report}, ErrQualityConfirmationRequired
+		}
+	}
 	return s.confirmOrArchive(ctx, tenantID, actorID, current, "归档", "已归档", false)
+}
+
+func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot) emrquality.Context {
+	content := record.WorkingContent
+	patient := record.PatientSnapshot
+	if snapshot != nil {
+		content = snapshot.Content
+		patient = snapshot.PatientSnapshot
+	}
+	return emrquality.Context{TenantID: tenantID, RecordID: record.ID, SnapshotID: snapshotIDPtr(snapshot), Action: action,
+		DocumentType: record.DocumentType, VisitType: record.VisitType, Patient: patient, Content: content,
+		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt}
+}
+
+func snapshotIDPtr(snapshot *Snapshot) *string {
+	if snapshot == nil || strings.TrimSpace(snapshot.ID) == "" {
+		return nil
+	}
+	id := snapshot.ID
+	return &id
 }
 
 func (s *Service) confirmOrArchive(ctx context.Context, tenantID, actorID int64, current *Record, action, target string, revisionIncrement bool) (*WriteOutcome, error) {

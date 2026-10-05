@@ -2,6 +2,7 @@ package emrquality
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -70,6 +71,7 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		Results:    make([]RuleResult, 0, len(rules)),
 		StartedAt:  time.Now(),
 	}
+	report.InputDigest = inputDigest(input)
 	report.RuleSetVersion, report.ScoreReady, err = s.store.activeVersion(ctx)
 	if err != nil {
 		return nil, err
@@ -652,6 +654,26 @@ func (s *Service) PersistTx(ctx context.Context, tx pgx.Tx, report *Report) erro
 	}
 	return saveReportTx(ctx, tx, report)
 }
+
+func (s *Service) ReusableRun(ctx context.Context, tenantID int64, recordID, runID, inputDigest string) (bool, error) {
+	version, _, err := s.store.activeVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	return s.store.reusableRun(ctx, tenantID, recordID, runID, version, inputDigest)
+}
+
+func inputDigest(input Context) string {
+	raw, _ := json.Marshal(map[string]any{
+		"patient_snapshot": input.Patient,
+		"document_context": map[string]any{"document_type": input.DocumentType, "visit_type": input.VisitType, "department_id": input.DepartmentID, "started_at": input.StartedAt},
+		"content":          input.Content,
+	})
+	hash := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", hash[:])
+}
+
+func InputDigest(input Context) string { return inputDigest(input) }
 
 func policyForAction(policies rulePolicies, action Action) actionPolicy {
 	switch action {

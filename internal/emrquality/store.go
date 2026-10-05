@@ -63,6 +63,19 @@ func (s *Store) activeVersion(ctx context.Context) (string, bool, error) {
 	return version, ready, err
 }
 
+func (s *Store) reusableRun(ctx context.Context, tenantID int64, recordID, runID, version, inputDigest string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM emr_quality_runs r
+			WHERE r.id=$1 AND r.tenant_id=$2 AND r.record_id=$3
+			  AND r.action='complete' AND r.status='completed'
+			  AND r.rule_set_version=$4 AND r.blocking_count=0 AND r.input_digest=$5
+		)
+	`, runID, tenantID, recordID, version, inputDigest).Scan(&ok)
+	return ok, err
+}
+
 func (s *Store) modelConfig(ctx context.Context, tenantID int64) (string, string, error) {
 	var provider, model string
 	err := s.pool.QueryRow(ctx, `SELECT provider,model_code FROM llm_model_configs WHERE tenant_id IN ($1,0) AND function_type='emr_quality_check' AND is_active AND deleted_at IS NULL ORDER BY (tenant_id=$1) DESC,is_default DESC,updated_at DESC,id DESC LIMIT 1`, tenantID).Scan(&provider, &model)
@@ -257,13 +270,14 @@ func saveReportTx(ctx context.Context, db qualityDB, report *Report) error {
 		INSERT INTO emr_quality_runs
 		(tenant_id, record_id, snapshot_id, action, rule_set_version, status,
 		 overall_result, total_score, grade, major_score, blocking_count, pending_count,
-		 model_audit, started_at, completed_at)
-		VALUES ($1,$2,$3,$4,$5,CASE WHEN COALESCE($12::jsonb->>'failure_reason','')<>'' THEN 'failed' ELSE 'completed' END,$6,$7,$8,$9,$10,$11,$12::jsonb,NOW(),NOW())
+		 model_audit, input_digest, started_at, completed_at)
+		VALUES ($1,$2,$3,$4,$5,CASE WHEN COALESCE($12::jsonb->>'failure_reason','')<>'' THEN 'failed' ELSE 'completed' END,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,NOW(),NOW())
 		RETURNING id
 	`, report.TenantID, report.RecordID, report.SnapshotID, string(report.Action), report.RuleSetVersion,
-		report.OverallResult, report.TotalScore, report.Grade, report.MajorScore, report.BlockingCount, report.PendingCount, marshalModelAudit(report.ModelAudit, report.FailureReason)).Scan(&runID); err != nil {
+		report.OverallResult, report.TotalScore, report.Grade, report.MajorScore, report.BlockingCount, report.PendingCount, marshalModelAudit(report.ModelAudit, report.FailureReason), report.InputDigest).Scan(&runID); err != nil {
 		return fmt.Errorf("insert quality run: %w", err)
 	}
+	report.RunID = runID
 	for _, result := range report.Results {
 		evidence, marshalErr := json.Marshal(result.Evidence)
 		if marshalErr != nil {

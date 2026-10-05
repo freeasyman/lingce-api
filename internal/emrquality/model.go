@@ -58,6 +58,8 @@ type SectionScore struct {
 }
 
 type Report struct {
+	RunID           string         `json:"run_id,omitempty"`
+	InputDigest     string         `json:"-"`
 	TenantID        int64          `json:"-"`
 	RecordID        string         `json:"record_id"`
 	SnapshotID      *string        `json:"snapshot_id,omitempty"`
