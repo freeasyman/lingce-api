@@ -83,7 +83,10 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		if rule.Version != report.RuleSetVersion {
 			return nil, fmt.Errorf("quality rule version changed during evaluation")
 		}
-		if rule.ExecutorKind == "llm" {
+		// Manual rules require external records that are not part of the EMR
+		// quality context yet. They must not fall through to the program
+		// executor and be reported as "rule not implemented".
+		if rule.ExecutorKind == "llm" || rule.ExecutorKind == "manual" {
 			continue
 		}
 		result, err := evaluateRule(input, rule)
