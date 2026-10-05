@@ -2,6 +2,8 @@ package emrrecord
 
 import (
 	"time"
+
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 )
 
 type Record struct {
@@ -36,6 +38,11 @@ type Record struct {
 	CreatedAt           time.Time      `json:"created_at"`
 	LastSavedAt         time.Time      `json:"last_saved_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
+	CurrentScoreStatus  string         `json:"current_score_status,omitempty"`
+	CurrentTotalScore   *int           `json:"current_total_score,omitempty"`
+	CurrentGrade        string         `json:"current_grade,omitempty"`
+	CurrentScoreVersion string         `json:"current_score_version,omitempty"`
+	CurrentQualityRunID *string        `json:"current_quality_run_id,omitempty"`
 }
 
 type Snapshot struct {
@@ -51,6 +58,11 @@ type Snapshot struct {
 	ContentDigest     string         `json:"content_digest"`
 	FormedBy          int64          `json:"formed_by"`
 	FormedAt          time.Time      `json:"formed_at"`
+	ScoreStatus       string         `json:"score_status,omitempty"`
+	TotalScore        *int           `json:"total_score,omitempty"`
+	Grade             string         `json:"grade,omitempty"`
+	ScoreVersion      string         `json:"score_version,omitempty"`
+	QualityRunID      *string        `json:"quality_run_id,omitempty"`
 }
 
 type GenerateRequest struct {
@@ -85,9 +97,11 @@ type ContentRequest struct {
 }
 
 type ActionRequest struct {
-	Content         map[string]any `json:"content,omitempty"`
-	PatientSnapshot map[string]any `json:"patient_snapshot,omitempty"`
-	Note            string         `json:"note,omitempty"`
+	Content          map[string]any `json:"content,omitempty"`
+	PatientSnapshot  map[string]any `json:"patient_snapshot,omitempty"`
+	Note             string         `json:"note,omitempty"`
+	AllowNonBlocking bool           `json:"allow_non_blocking,omitempty"`
+	QualityRunID     string         `json:"quality_run_id,omitempty"`
 }
 
 type WriteOutcome struct {
@@ -98,6 +112,7 @@ type WriteOutcome struct {
 	AfterStatus    string
 	BeforeSnapshot *string
 	BeforePatient  map[string]any
+	QualityReport  *emrquality.Report `json:"quality,omitempty"`
 }
 
 type GeneratedWorkingDraftRequest struct {

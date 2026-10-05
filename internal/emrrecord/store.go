@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,7 +34,8 @@ const recordColumns = `
 	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
-	COALESCE(r.updated_at, r.created_at), r.updated_at`
+	COALESCE(r.updated_at, r.created_at), r.updated_at,
+	r.current_score_status, r.current_total_score, r.current_grade, r.current_score_version, r.current_quality_run_id`
 
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
@@ -45,7 +47,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 		&content, &item.WorkingDigest, &item.CurrentSnapshotID, &item.Status, &item.RevisionNo,
 		&item.ConfirmedBy, &item.ConfirmedAt, &item.ConfirmedSnapshotID, &item.ArchivedSnapshotID,
 		&item.SubmittedAt, &item.ArchivedAt, &item.VoidedAt, &item.CreatedBy, &item.CreatedAt,
-		&item.LastSavedAt, &item.UpdatedAt,
+		&item.LastSavedAt, &item.UpdatedAt, &item.CurrentScoreStatus, &item.CurrentTotalScore, &item.CurrentGrade, &item.CurrentScoreVersion, &item.CurrentQualityRunID,
 	)
 	if err != nil {
 		return nil, err
@@ -513,6 +515,43 @@ func saveFormalTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, id st
 	return &WriteOutcome{Record: updated, Snapshot: snapshot, BeforeContent: beforeContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: beforeSnapshot, BeforePatient: beforePatient}, nil
 }
 
+func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, outcome *WriteOutcome, report *emrquality.Report) error {
+	if outcome == nil || outcome.Snapshot == nil || report == nil {
+		return fmt.Errorf("score projection requires formal snapshot and report")
+	}
+	runID := report.RunID
+	status := "已完成"
+	if report.FailureReason != "" {
+		status = "执行失败"
+	} else if report.PendingCount > 0 {
+		status = "待人工复核"
+	} else if !report.ScoreReady {
+		status = "未评分"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_record_snapshots
+		SET score_status=$2,total_score=$3,grade=$4,score_version=$5,quality_run_id=$6
+		WHERE id=$1
+	`, outcome.Snapshot.ID, status, report.TotalScore, report.Grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+		return fmt.Errorf("update snapshot score projection: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_records
+		SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7
+		WHERE id=$1 AND tenant_id=$2
+	`, outcome.Record.ID, tenantID, status, report.TotalScore, report.Grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+		return fmt.Errorf("update record score projection: %w", err)
+	}
+	return nil
+}
+
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
 func insertSnapshot(ctx context.Context, tx pgx.Tx, current *Record, actorID int64, content, patientSnapshot map[string]any, contentRaw, contentDigest string) (*Snapshot, error) {
 	patient := encodeObject(patientSnapshot)
 	documentContext := encodeObject(snapshotDocumentContext(current))
@@ -538,17 +577,19 @@ func sameSnapshotDigest(ctx context.Context, tx pgx.Tx, id, expected string) boo
 }
 
 const snapshotColumns = `id, record_id, encounter_id, revision_no, snapshot_no, template_version_id,
-	patient_snapshot, document_context, content, content_digest, formed_by, formed_at`
+	patient_snapshot, document_context, content, content_digest, formed_by, formed_at,
+	score_status, total_score, grade, score_version, quality_run_id`
 
 const snapshotColumnsWithAlias = `snapshot.id, snapshot.record_id, snapshot.encounter_id, snapshot.revision_no,
 	snapshot.snapshot_no, snapshot.template_version_id, snapshot.patient_snapshot, snapshot.document_context,
-	snapshot.content, snapshot.content_digest, snapshot.formed_by, snapshot.formed_at`
+	snapshot.content, snapshot.content_digest, snapshot.formed_by, snapshot.formed_at,
+	snapshot.score_status, snapshot.total_score, snapshot.grade, snapshot.score_version, snapshot.quality_run_id`
 
 func scanSnapshot(row pgx.Row) (*Snapshot, error) {
 	item := &Snapshot{}
 	var patient, documentContext, content []byte
 	err := row.Scan(&item.ID, &item.RecordID, &item.EncounterID, &item.RevisionNo, &item.SnapshotNo,
-		&item.TemplateVersionID, &patient, &documentContext, &content, &item.ContentDigest, &item.FormedBy, &item.FormedAt)
+		&item.TemplateVersionID, &patient, &documentContext, &content, &item.ContentDigest, &item.FormedBy, &item.FormedAt, &item.ScoreStatus, &item.TotalScore, &item.Grade, &item.ScoreVersion, &item.QualityRunID)
 	if err != nil {
 		return nil, err
 	}

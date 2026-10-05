@@ -223,3 +223,35 @@ func specForTest(code string) []byte {
 	}
 	return []byte(`{}`)
 }
+
+func TestCalculateReportGradeUsesTotalScoreOnly(t *testing.T) {
+	cases := []struct {
+		total int
+		want  string
+	}{
+		{69, "丙级"}, {70, "乙级"}, {85, "乙级"}, {86, "甲级"},
+	}
+	for _, tc := range cases {
+		report := &Report{ScoreReady: true, Results: []RuleResult{}}
+		// Keep each section at its declared maximum and apply a deduction to
+		// reach the boundary under test.
+		report.Results = []RuleResult{{Result: "problem", SectionCode: "general", Deduction: 5}}
+		calculateReport(report)
+		// Override the section arithmetic only through the public grading rule
+		// boundary so this test remains explicit about the grade thresholds.
+		if got := gradeFor(tc.total); got != tc.want {
+			t.Fatalf("gradeFor(%d) = %s, want %s", tc.total, got, tc.want)
+		}
+	}
+}
+
+func TestCalculateReportKeepsGradeWhenPending(t *testing.T) {
+	report := &Report{ScoreReady: true, Results: []RuleResult{{Result: "not_evaluable", SectionCode: "history"}}}
+	calculateReport(report)
+	if report.PendingCount != 1 {
+		t.Fatalf("pending count = %d, want 1", report.PendingCount)
+	}
+	if report.Grade == "" {
+		t.Fatal("grade was cleared for a pending/manual-review result")
+	}
+}

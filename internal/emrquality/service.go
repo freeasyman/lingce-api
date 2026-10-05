@@ -957,18 +957,13 @@ func calculateReport(report *Report) {
 		}
 	}
 	report.Grade = gradeFor(report.TotalScore)
-	if report.MajorScore < 65 {
-		report.Grade = "丙级"
-	} else if report.MajorScore < 70 && report.Grade == "甲级" {
-		report.Grade = "乙级"
-	}
+	// 等级只按总分换算；major_score 仅用于分项分析，不参与降级。
 	if report.FailureReason != "" {
 		report.Grade = ""
 		report.OverallResult = "failed"
 	} else if report.BlockingCount > 0 {
 		report.OverallResult = "blocked"
 	} else if !report.ScoreReady {
-		report.Grade = ""
 		report.OverallResult = "partial"
 	} else if report.PendingCount > 0 {
 		report.OverallResult = "partial"
@@ -977,9 +972,8 @@ func calculateReport(report *Report) {
 	} else {
 		report.OverallResult = "no_problem"
 	}
-	if !report.ScoreReady {
-		report.Grade = ""
-	}
+	// Pending/manual-review items affect the execution status, not the
+	// calculated score result. Keep the grade alongside total_score.
 }
 
 func gradeFor(score int) string {

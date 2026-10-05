@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,6 +13,40 @@ import (
 
 type Store struct {
 	pool *pgxpool.Pool
+}
+
+func (s *Store) SearchICD10(ctx context.Context, query string) ([]ICD10Candidate, error) {
+	query = normalizeICD10Text(query)
+	if query == "" {
+		return []ICD10Candidate{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT diagnosis_code, diagnosis_name
+		FROM emr_icd10_diagnosis_catalog
+		WHERE is_active AND (normalized_name=$1 OR diagnosis_name ILIKE '%' || $2 || '%')
+		ORDER BY CASE WHEN normalized_name=$1 THEN 0 ELSE 1 END, length(diagnosis_name), diagnosis_code
+		LIMIT 20
+	`, query, query)
+	if err != nil {
+		return nil, fmt.Errorf("search ICD-10 diagnoses: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ICD10Candidate, 0)
+	for rows.Next() {
+		var item ICD10Candidate
+		if err := rows.Scan(&item.Code, &item.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func normalizeICD10Text(value string) string {
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.ReplaceAll(value, "\t", "")
+	value = strings.TrimSpace(value)
+	return strings.NewReplacer("（", "(", "）", ")", "，", ",", "；", ";", "：", ":", "　", "").Replace(value)
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -43,12 +78,17 @@ func (s *Store) GetCurrent(ctx context.Context, tenantID int64, recordID string)
 	item := &CurrentScore{}
 	var pendingRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT record_id, tenant_id, snapshot_id, score_version, status,
-		       total_score, grade, program_score, program_deduct_points,
-		       major_program_score, direct_grade, direct_grade_reason,
-		       pending_sections, failure_reason, scored_at, updated_at
-		FROM emr_record_score_current
-		WHERE record_id=$1 AND tenant_id=$2
+		SELECT c.record_id, c.tenant_id, c.snapshot_id,
+		       COALESCE(r.current_score_version, c.score_version),
+		       COALESCE(NULLIF(r.current_score_status, ''), c.status),
+		       COALESCE(r.current_total_score, c.total_score),
+		       COALESCE(NULLIF(r.current_grade, ''), c.grade),
+		       c.program_score, c.program_deduct_points,
+		       c.major_program_score, c.direct_grade, c.direct_grade_reason,
+		       c.pending_sections, c.failure_reason, c.scored_at, c.updated_at
+		FROM emr_record_score_current c
+		JOIN emr_records r ON r.id=c.record_id AND r.tenant_id=c.tenant_id
+		WHERE c.record_id=$1 AND c.tenant_id=$2
 	`, recordID, tenantID).Scan(
 		&item.RecordID, &item.TenantID, &item.SnapshotID, &item.ScoreVersion, &item.Status,
 		&item.TotalScore, &item.Grade, &item.ProgramScore, &item.ProgramDeductPoints,

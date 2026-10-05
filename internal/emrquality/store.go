@@ -300,7 +300,7 @@ func saveReportTx(ctx context.Context, db qualityDB, report *Report) error {
 			return fmt.Errorf("insert quality result %s: %w", result.RuleCode, err)
 		}
 	}
-	if (report.Action == ActionComplete || report.Action == ActionArchive) && report.ScoreReady {
+	if (report.Action == ActionComplete || report.Action == ActionArchive) && report.FailureReason == "" {
 		if err := saveCurrentScore(ctx, db, report); err != nil {
 			return err
 		}
