@@ -145,60 +145,20 @@ func TestPatientReportedContentPassesPresenceChecks(t *testing.T) {
 	}
 }
 
-func TestGeneralMessageSeparatesBlockingFields(t *testing.T) {
-	input := Context{Patient: map[string]any{"name": "患者"}}
-	result, err := evaluateRule(input, ruleDefinition{Code: "GEN-001", StandardPoints: 2, EvaluationSpec: []byte(`{"required_fields":["name","gender","birth_date"],"prompt_fields":["ethnicity","marital_status","occupation","work_unit","address"]}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := actionPolicy{BlockingFields: []string{"name", "gender", "birth_date"}}
-	message := messageForAction([]byte(`{"complete":"请补充{field}，再完成病历。"}`), ActionComplete, result, policy)
-	want := "请补充性别、出生年月，再完成病历。\n民族、婚姻状况、职业、工作单位、住址尚未填写，本次不阻断完成病历。"
-	if message != want {
-		t.Fatalf("message = %q, want %q", message, want)
-	}
-	if !blockingFor(policy, result) {
-		t.Fatal("missing mandatory fields must block")
-	}
-}
-
-func TestOnlyPromptFieldsDoNotBlockCompletion(t *testing.T) {
+func TestGeneralRuleOnlyChecksRequiredPatientFields(t *testing.T) {
 	input := Context{Patient: map[string]any{
 		"name": "患者", "gender": "男", "birth_date": "1990-01-01",
 	}}
 	result, err := evaluateRule(input, ruleDefinition{Code: "GEN-001", StandardPoints: 2,
-		EvaluationSpec: []byte(`{"required_fields":["name","gender","birth_date"],"prompt_fields":["ethnicity","marital_status","occupation","work_unit","address"]}`)})
+		EvaluationSpec: []byte(`{"required_fields":["name","gender","birth_date"]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Result != "problem" {
-		t.Fatalf("missing prompt-only fields should still be recorded as a problem, got %s", result.Result)
+	if result.Result != "pass" {
+		t.Fatalf("missing non-quality patient fields must not create a finding, got %s", result.Result)
 	}
-	policy := actionPolicy{BlockingFields: []string{"name", "gender", "birth_date"}}
-	if blockingFor(policy, result) {
-		t.Fatal("prompt-only fields must not block completion")
-	}
-	message := messageForAction([]byte(`{"complete":"请补充{field}，再完成病历。"}`), ActionComplete, result, policy)
-	want := "民族、婚姻状况、职业、工作单位、住址尚未填写，本次不阻断完成病历。"
-	if message != want {
-		t.Fatalf("message = %q, want %q", message, want)
-	}
-}
-
-func TestPromptMessagesForEachAction(t *testing.T) {
-	result := &RuleResult{RuleCode: "GEN-001", Result: "problem", Evidence: []Evidence{
-		{Path: "patient.marital_status", Excerpt: "婚姻状况"},
-		{Path: "patient.occupation", Excerpt: "职业"},
-		{Path: "patient.work_unit", Excerpt: "工作单位"},
-	}}
-	for action, want := range map[Action]string{
-		ActionSave:     "请填写婚姻状况、职业、工作单位。",
-		ActionComplete: "婚姻状况、职业、工作单位尚未填写，本次不阻断完成病历。",
-		ActionArchive:  "婚姻状况、职业、工作单位尚未填写，本次不阻断归档。",
-	} {
-		if got := messageForAction([]byte(`{}`), action, result, actionPolicy{}); got != want {
-			t.Fatalf("%s: got %q, want %q", action, got, want)
-		}
+	if len(result.Evidence) != 0 || len(result.DefectKeys) != 0 {
+		t.Fatalf("non-quality patient fields must not be reported: evidence=%v defect_keys=%v", result.Evidence, result.DefectKeys)
 	}
 }
 
