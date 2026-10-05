@@ -546,12 +546,28 @@ func baseResult(rule ruleDefinition) *RuleResult {
 
 func diagnosisItems(value any) []map[string]any {
 	if object, ok := value.(map[string]any); ok {
+		if strings.TrimSpace(valueString(object, "diagnosis_name")) == "" {
+			for _, key := range []string{"text", "name", "diagnosis"} {
+				if name := strings.TrimSpace(valueString(object, key)); name != "" {
+					object["diagnosis_name"] = name
+					break
+				}
+			}
+		}
 		return []map[string]any{object}
 	}
 	if list, ok := value.([]any); ok {
 		items := make([]map[string]any, 0, len(list))
 		for _, item := range list {
 			if object, ok := item.(map[string]any); ok {
+				if strings.TrimSpace(valueString(object, "diagnosis_name")) == "" {
+					for _, key := range []string{"text", "name", "diagnosis"} {
+						if name := strings.TrimSpace(valueString(object, key)); name != "" {
+							object["diagnosis_name"] = name
+							break
+						}
+					}
+				}
 				items = append(items, object)
 			}
 		}
