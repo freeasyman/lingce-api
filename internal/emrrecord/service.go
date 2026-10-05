@@ -201,13 +201,15 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		DocumentType: current.DocumentType, VisitType: current.VisitType, Patient: patient, Content: content,
 		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt}
 	var report *emrquality.Report
+	reusedReport := false
 	if req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "" && s.quality != nil {
-		reusable, reuseErr := s.quality.ReusableRun(ctx, tenantID, current.ID, req.QualityRunID, emrquality.InputDigest(qualityInput))
-		if reuseErr != nil || !reusable {
+		report, err = s.quality.ReusableReport(ctx, tenantID, current.ID, req.QualityRunID, emrquality.InputDigest(qualityInput))
+		if err != nil || report == nil {
 			return nil, fmt.Errorf("质量检查结果已失效，请重新检查病历")
 		}
+		reusedReport = true
 	}
-	if s.quality != nil && !(req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "") {
+	if s.quality != nil && !reusedReport {
 		report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
 			RecordID: current.ID, Content: content, PatientSnapshot: patient,
 		}))
@@ -243,8 +245,17 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		}
 		snapshotID := outcome.Snapshot.ID
 		if report != nil {
-			report.SnapshotID = snapshotIDPtr(outcome.Snapshot)
-			if err := s.quality.PersistTx(ctx, tx, report); err != nil {
+			if reusedReport {
+				if err := s.quality.BindRunTx(ctx, tx, report, outcome.Snapshot.ID); err != nil {
+					return err
+				}
+			} else {
+				report.SnapshotID = snapshotIDPtr(outcome.Snapshot)
+				if err := s.quality.PersistTx(ctx, tx, report); err != nil {
+					return err
+				}
+			}
+			if err := updateScoreProjectionTx(ctx, tx, tenantID, actorID, outcome, report); err != nil {
 				return err
 			}
 			outcome.QualityReport = report
@@ -320,6 +331,46 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 		}
 	}
 	return s.confirmOrArchive(ctx, tenantID, actorID, current, "归档", "已归档", false)
+}
+
+// Return sends a completed record back to the doctor for correction. The
+// status transition and its process/audit entry are committed atomically.
+func (s *Service) Return(ctx context.Context, tenantID, actorID int64, id string, req ActionRequest) (*WriteOutcome, error) {
+	if strings.TrimSpace(req.Note) == "" {
+		return nil, fmt.Errorf("退回医生必须填写原因")
+	}
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
+	if current.Status != "已完成" {
+		return nil, fmt.Errorf("record status %s cannot be returned", current.Status)
+	}
+	if current.CurrentSnapshotID == nil {
+		return nil, fmt.Errorf("病历没有正式版本，不能退回")
+	}
+	snapshot, err := s.store.GetSnapshot(ctx, tenantID, id, *current.CurrentSnapshotID)
+	if err != nil || snapshot == nil {
+		return nil, fmt.Errorf("record snapshot not found")
+	}
+	var outcome *WriteOutcome
+	err = s.store.WithTx(ctx, func(tx pgx.Tx) error {
+		updated, transitionErr := transitionTx(ctx, tx, tenantID, id, "退回", actorID, nil, nil, false)
+		if transitionErr != nil {
+			return transitionErr
+		}
+		outcome = &WriteOutcome{
+			Record: updated, Snapshot: snapshot,
+			BeforeContent: current.WorkingContent, BeforeStatus: "已完成",
+			AfterStatus: "退回", BeforeSnapshot: current.CurrentSnapshotID,
+			BeforePatient: cloneObject(current.PatientSnapshot),
+		}
+		return s.appendProcessResultTx(ctx, tx, tenantID, id, actorID, "退回", outcome, strings.TrimSpace(req.Note), "成功", "")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
 func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot) emrquality.Context {

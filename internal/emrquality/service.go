@@ -655,6 +655,25 @@ func (s *Service) PersistTx(ctx context.Context, tx pgx.Tx, report *Report) erro
 	return saveReportTx(ctx, tx, report)
 }
 
+func (s *Service) ReusableReport(ctx context.Context, tenantID int64, recordID, runID, inputDigest string) (*Report, error) {
+	version, _, err := s.store.activeVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.loadReusableReport(ctx, tenantID, recordID, runID, version, inputDigest)
+}
+
+func (s *Service) BindRunTx(ctx context.Context, tx pgx.Tx, report *Report, snapshotID string) error {
+	if report == nil || strings.TrimSpace(report.RunID) == "" {
+		return fmt.Errorf("quality report run is required")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE emr_quality_runs SET snapshot_id=$2 WHERE id=$1`, report.RunID, snapshotID); err != nil {
+		return fmt.Errorf("bind quality run snapshot: %w", err)
+	}
+	report.SnapshotID = &snapshotID
+	return saveCurrentScore(ctx, tx, report)
+}
+
 func (s *Service) ReusableRun(ctx context.Context, tenantID int64, recordID, runID, inputDigest string) (bool, error) {
 	version, _, err := s.store.activeVersion(ctx)
 	if err != nil {

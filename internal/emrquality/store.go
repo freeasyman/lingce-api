@@ -241,6 +241,51 @@ func (s *Store) scoringReady(ctx context.Context, version string) (bool, error) 
 	return ready, nil
 }
 
+func (s *Store) loadReusableReport(ctx context.Context, tenantID int64, recordID, runID, version, inputDigest string) (*Report, error) {
+	report := &Report{RunID: runID, TenantID: tenantID, RecordID: recordID, Action: ActionComplete, RuleSetVersion: version, Results: []RuleResult{}}
+	var modelAudit []byte
+	if err := s.pool.QueryRow(ctx, `
+		SELECT snapshot_id, overall_result, total_score, grade, major_score, blocking_count, pending_count, model_audit
+		FROM emr_quality_runs
+		WHERE id=$1 AND tenant_id=$2 AND record_id=$3 AND action='complete' AND status='completed'
+		  AND rule_set_version=$4 AND input_digest=$5
+	`, runID, tenantID, recordID, version, inputDigest).Scan(&report.SnapshotID, &report.OverallResult, &report.TotalScore, &report.Grade, &report.MajorScore, &report.BlockingCount, &report.PendingCount, &modelAudit); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load reusable quality run: %w", err)
+	}
+	_ = json.Unmarshal(modelAudit, &report.ModelAudit)
+	rows, err := s.pool.Query(ctx, `SELECT rule_code, section_code, result, execution_kind, evidence, reason, deduction, message, blocking, manual_review FROM emr_quality_results WHERE run_id=$1 ORDER BY id`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("load reusable quality results: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item RuleResult
+		var evidence []byte
+		if err := rows.Scan(&item.RuleCode, &item.SectionCode, &item.Result, &item.ExecutionKind, &evidence, &item.Reason, &item.Deduction, &item.Message, &item.Blocking, &item.ManualReview); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(evidence, &item.Evidence)
+		report.Results = append(report.Results, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	report.ScoreReady = true
+	calculateReport(report)
+	if report.PendingCount > 0 {
+		report.PendingSections = []string{}
+		for _, result := range report.Results {
+			if result.Result == "not_evaluable" {
+				report.PendingSections = appendUniqueString(report.PendingSections, result.SectionCode)
+			}
+		}
+	}
+	return report, nil
+}
+
 func (s *Store) saveReport(ctx context.Context, report *Report) error {
 	if report == nil {
 		return fmt.Errorf("quality report is nil")
