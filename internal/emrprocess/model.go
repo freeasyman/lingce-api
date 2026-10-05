@@ -11,6 +11,7 @@ type ProcessRecord struct {
 	OccurredAt       time.Time      `json:"occurred_at"`
 	ActorType        string         `json:"actor_type"`
 	ActorID          *int64         `json:"actor_id,omitempty"`
+	ActorName        string         `json:"actor_name,omitempty"`
 	Source           string         `json:"source"`
 	BeforeStatus     *string        `json:"before_status,omitempty"`
 	AfterStatus      *string        `json:"after_status,omitempty"`

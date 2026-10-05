@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -41,6 +42,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/complete", Handler: h.Complete, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/confirm", Handler: h.Confirm, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/archive", Handler: h.Archive, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/records/{id}/return", Handler: h.Return, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/revise", Handler: h.Revise, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/void", Handler: h.Void, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
@@ -383,6 +385,10 @@ func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "record.archive", h.service.Archive)
 }
 
+func (h *Handler) Return(w http.ResponseWriter, r *http.Request) {
+	h.action(w, r, "record.archive", h.service.Return)
+}
+
 func (h *Handler) action(w http.ResponseWriter, r *http.Request, ability string, action func(context.Context, int64, int64, string, ActionRequest) (*WriteOutcome, error)) {
 	access, tenantID, err := h.authorizeRecord(r, ability)
 	if err != nil {
@@ -421,8 +427,15 @@ func (h *Handler) actionWithRequest(w http.ResponseWriter, r *http.Request, tena
 
 func writeActionError(w http.ResponseWriter, item *WriteOutcome, actionErr error) {
 	details := map[string]any{}
-	if item.Record != nil {
+	if item != nil && item.Record != nil {
 		details["status"] = item.Record.Status
+	}
+	if item != nil && item.QualityReport != nil {
+		details["quality"] = item.QualityReport
+	}
+	if errors.Is(actionErr, ErrQualityConfirmationRequired) {
+		httputil.WriteError(w, http.StatusConflict, "EMR_QUALITY_CONFIRMATION_REQUIRED", actionErr.Error(), details)
+		return
 	}
 	httputil.WriteError(w, http.StatusBadRequest, "EMR_ACTION_FAILED", actionErr.Error(), details)
 }
