@@ -580,6 +580,20 @@ func diagnosisItems(value any) []map[string]any {
 	return []map[string]any{{"diagnosis_name": text}}
 }
 
+func diagnosisContent(content map[string]any) any {
+	if content == nil {
+		return nil
+	}
+	for _, key := range []string{"tcm_diagnosis", "diagnosis"} {
+		for _, item := range diagnosisItems(content[key]) {
+			if strings.TrimSpace(valueString(item, "diagnosis_name")) != "" {
+				return content[key]
+			}
+		}
+	}
+	return nil
+}
+
 func semanticMessage(rule ruleDefinition, action Action, result *RuleResult) string {
 	prefix := ""
 	if action == ActionComplete {
@@ -763,11 +777,13 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.birth_date", Excerpt: birth}}
 		}
 	case "DX-003":
-		if strings.TrimSpace(contentText(input.Content, "diagnosis")) != "" && strings.TrimSpace(contentText(input.Content, "diagnosis_code")) == "" {
+		diagnosis := diagnosisContent(input.Content)
+		diagnosisText := contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")
+		if strings.TrimSpace(diagnosisText) != "" && strings.TrimSpace(contentText(input.Content, "diagnosis_code")) == "" {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "诊断记录没有对应的ICD-10编码"
-			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: contentText(input.Content, "diagnosis")}}
+			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: diagnosisText}}
 		}
 	case "TRT-001":
 		if isEmptyValue(input.Content["prescription"]) && isEmptyValue(input.Content["treatment"]) && isEmptyValue(input.Content["medical_advice"]) && isEmptyValue(input.Content["disposition"]) {
@@ -812,7 +828,9 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.content", Path: "physical_exam", Excerpt: ""}}
 		}
 	case "DX-001":
-		if strings.TrimSpace(contentText(input.Content, "diagnosis")) == "" {
+		diagnosis := diagnosisContent(input.Content)
+		diagnosisText := contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")
+		if strings.TrimSpace(diagnosisText) == "" {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "没有记录诊断"

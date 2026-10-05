@@ -51,6 +51,25 @@ func TestDiagnosisWithoutICD10CodeIsNotAcceptedByProgramRule(t *testing.T) {
 	}
 }
 
+func TestDiagnosisContentUsesDisplayedSpecialtyDiagnosis(t *testing.T) {
+	content := map[string]any{
+		"diagnosis":     "",
+		"tcm_diagnosis": map[string]any{"diagnosis_name": "急性上呼吸道感染"},
+	}
+	items := diagnosisItems(diagnosisContent(content))
+	if len(items) != 1 || valueString(items[0], "diagnosis_name") != "急性上呼吸道感染" {
+		t.Fatalf("diagnosis content = %#v, want displayed specialty diagnosis", items)
+	}
+
+	result, err := evaluateRule(Context{Content: content}, ruleDefinition{Code: "DX-001", SectionCode: "diagnosis", StandardPoints: 10, ExecutorKind: "program"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Result != "pass" {
+		t.Fatalf("DX-001 result = %s, want pass", result.Result)
+	}
+}
+
 func TestBlockingFieldsBlockProblem(t *testing.T) {
 	input := Context{Patient: map[string]any{"name": "", "gender": "女", "birth_date": "2000-01"}}
 	result, err := evaluateRule(input, ruleDefinition{Code: "GEN-001", SectionCode: "general", StandardPoints: 2,

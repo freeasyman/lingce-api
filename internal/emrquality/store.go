@@ -96,7 +96,7 @@ func (s *Store) enrich(ctx context.Context, input *Context) error {
 
 func (s *Store) evaluateICD(ctx context.Context, input Context, rule ruleDefinition) (*RuleResult, error) {
 	r := baseResult(rule)
-	items := diagnosisItems(input.Content["diagnosis"])
+	items := diagnosisItems(diagnosisContent(input.Content))
 	if len(items) == 0 {
 		r.Reason = "没有诊断内容，由DX-001处理"
 		return r, nil
@@ -123,7 +123,7 @@ func (s *Store) evaluateICD(ctx context.Context, input Context, rule ruleDefinit
 				}
 			}
 			if exactCount == 1 {
-				setDiagnosisCode(input.Content["diagnosis"], input.Content, exactCode)
+				setDiagnosisCode(diagnosisContent(input.Content), input.Content, exactCode)
 				continue
 			}
 			r.Result = "problem"
