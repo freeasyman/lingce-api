@@ -22,20 +22,21 @@ type OperationsAdmin struct {
 
 // Employee represents an institution employee
 type Employee struct {
-	ID             int64
-	TenantID       int64
-	Username       string
-	Name           string
-	PasswordHash   string
-	FullName       string
-	Phone          string
-	Email          string
-	DepartmentID   *int64
-	SessionVersion int
-	IsActive       bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	DeletedAt      *time.Time
+	ID                    int64
+	TenantID              int64
+	Username              string
+	Name                  string
+	PasswordHash          string
+	FullName              string
+	Phone                 string
+	Email                 string
+	DepartmentID          *int64
+	MedicalDepartmentCode string
+	SessionVersion        int
+	IsActive              bool
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
 }
 
 // Tenant represents a tenant/institution

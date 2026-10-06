@@ -137,7 +137,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 		           ELSE e.full_name
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
-		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       e.department_id, COALESCE(e.medical_department_code, '') AS medical_department_code, COALESCE(e.session_version, 1) AS session_version,
 		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at,
 		       CASE
@@ -181,6 +181,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 			&match.employee.Phone,
 			&match.employee.Email,
 			&match.employee.DepartmentID,
+			&match.employee.MedicalDepartmentCode,
 			&match.employee.SessionVersion,
 			&match.employee.IsActive,
 			&match.employee.CreatedAt,
@@ -223,7 +224,7 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 		           ELSE e.full_name
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
-		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       e.department_id, COALESCE(e.medical_department_code, '') AS medical_department_code, COALESCE(e.session_version, 1) AS session_version,
 		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
@@ -247,6 +248,7 @@ func (s *Store) GetEmployeeByLoginAnyTenant(ctx context.Context, loginID string)
 		&emp.Phone,
 		&emp.Email,
 		&emp.DepartmentID,
+		&emp.MedicalDepartmentCode,
 		&emp.SessionVersion,
 		&emp.IsActive,
 		&emp.CreatedAt,
@@ -374,7 +376,7 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 		           ELSE e.full_name
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
-		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       e.department_id, COALESCE(e.medical_department_code, '') AS medical_department_code, COALESCE(e.session_version, 1) AS session_version,
 		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
@@ -397,6 +399,7 @@ func (s *Store) GetEmployeeByPhone(ctx context.Context, phone string) (*Employee
 		&emp.Phone,
 		&emp.Email,
 		&emp.DepartmentID,
+		&emp.MedicalDepartmentCode,
 		&emp.SessionVersion,
 		&emp.IsActive,
 		&emp.CreatedAt,
@@ -424,7 +427,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 		           ELSE e.full_name
 		       END AS full_name,
 		       COALESCE(e.phone, '') AS phone, COALESCE(e.email, '') AS email,
-		       e.department_id, COALESCE(e.session_version, 1) AS session_version,
+		       e.department_id, COALESCE(e.medical_department_code, '') AS medical_department_code, COALESCE(e.session_version, 1) AS session_version,
 		       lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       e.created_at, COALESCE(e.updated_at, e.created_at, NOW()) AS updated_at, e.deleted_at
 		FROM employees e
@@ -446,6 +449,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 		&emp.Phone,
 		&emp.Email,
 		&emp.DepartmentID,
+		&emp.MedicalDepartmentCode,
 		&emp.SessionVersion,
 		&emp.IsActive,
 		&emp.CreatedAt,
@@ -461,6 +465,25 @@ func (s *Store) GetEmployeeByID(ctx context.Context, employeeID int64) (*Employe
 	}
 
 	return &emp, nil
+}
+
+func (s *Store) GetLatestEmployeeRoleName(ctx context.Context, tenantID, employeeID int64) (string, error) {
+	var roleName string
+	err := s.pool.QueryRow(ctx, `
+  SELECT COALESCE(NULLIF(ir.name, ''), NULLIF(r.name_cn, ''), er.role_code)
+  FROM institution_employee_roles er
+  LEFT JOIN institution_roles ir ON ir.tenant_id = er.tenant_id AND lower(ir.code) = lower(er.role_code) AND ir.deleted_at IS NULL
+  LEFT JOIN inst_roles r ON lower(r.code) = lower(er.role_code)
+  WHERE er.tenant_id = $1 AND er.employee_id = $2 AND trim(COALESCE(er.role_code, '')) <> ''
+  ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC LIMIT 1
+ `, tenantID, employeeID).Scan(&roleName)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to query employee role name: %w", err)
+	}
+	return strings.TrimSpace(roleName), nil
 }
 
 func (s *Store) GetLatestEmployeeRoleCode(ctx context.Context, tenantID, employeeID int64) (string, error) {

@@ -61,13 +61,14 @@ type Assignment struct {
 }
 
 type EmployeePermissionRow struct {
-	EmployeeID     int64       `json:"employee_id"`
-	Username       string      `json:"username"`
-	FullName       string      `json:"full_name"`
-	Phone          string      `json:"phone"`
-	DepartmentName string      `json:"department_name,omitempty"`
-	OrgRoleCode    string      `json:"org_role_code,omitempty"`
-	OrgRoleName    string      `json:"org_role_name,omitempty"`
-	IsActive       bool        `json:"is_active"`
-	EmrPermission  *Assignment `json:"emr_permission,omitempty"`
+	EmployeeID            int64       `json:"employee_id"`
+	Username              string      `json:"username"`
+	FullName              string      `json:"full_name"`
+	Phone                 string      `json:"phone"`
+	DepartmentName        string      `json:"department_name,omitempty"`
+	MedicalDepartmentCode string      `json:"medical_department_code,omitempty"`
+	OrgRoleCode           string      `json:"org_role_code,omitempty"`
+	OrgRoleName           string      `json:"org_role_name,omitempty"`
+	IsActive              bool        `json:"is_active"`
+	EmrPermission         *Assignment `json:"emr_permission,omitempty"`
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrrealtime"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/emrscore"
@@ -203,8 +204,6 @@ func main() {
 
 	emrPermissionStore := emrpermission.NewStore(pool)
 	emrPermissionService := emrpermission.NewService(emrPermissionStore)
-	emrPermissionHandler := emrpermission.NewHandler(emrPermissionService)
-	emrPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	followupPermissionService := followuppermission.NewService(pool)
 	followupPermissionHandler := followuppermission.NewHandler(followupPermissionService)
 	followupPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
@@ -222,15 +221,18 @@ func main() {
 	emrProcessService := emrprocess.NewService(emrProcessStore)
 	emrProcessHandler := emrprocess.NewHandler(emrProcessService, emrPermissionService)
 	emrProcessHandler.RegisterRoutes(mux, cfg.JWT.Secret)
-
+	emrQualityStore := emrquality.NewStore(pool)
 	llmClient := llmgateway.NewClient(cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey)
+	emrQualityService := emrquality.NewService(emrQualityStore, llmClient)
+	emrQualityQueryHandler := emrquality.NewQueryHandler(emrQualityStore, emrPermissionService)
+	emrQualityQueryHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	emrScoreStore := emrscore.NewStore(pool)
 	emrScoreService := emrscore.NewService(emrScoreStore)
 	emrScoreHandler := emrscore.NewHandler(emrScoreService, emrPermissionService)
 	emrScoreHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	emrRecordStore := emrrecord.NewStore(pool)
-	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService)
+	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService, emrQualityService)
 	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
 	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	emrInternalHandler := emrrecord.NewInternalHandler(pool, llmClient, emrProcessService)
@@ -277,7 +279,16 @@ func main() {
 		llmClient,
 		opportunityAlertService,
 	)
+	followupAPIURL := strings.TrimRight(strings.TrimSpace(cfg.External.FollowupAPIURL), "/")
+	if followupAPIURL == "" {
+		followupAPIURL = "http://127.0.0.1:" + cfg.Server.Port
+	}
 	emrRealtimeService := emrrealtime.NewService(pool, emrRecordService, recService, emrPermissionService, cfg.External.LLMGatewayURL, cfg.External.LLMGatewayAPIKey, llmClient, ossClient, emrInternalHandler)
+	// Enable only after followup accepts realtime encounters and deduplicates recordings.
+	if cfg.External.EMRFollowupDeliveryEnabled {
+		emrRealtimeService.ConfigureFollowupDelivery(followupAPIURL, cfg.External.InternalWorkerToken)
+	}
+	emrInternalHandler.SetResultBinder(emrRealtimeService)
 	emrRealtimeHandler := emrrealtime.NewHandler(emrRealtimeService, emrPermissionService)
 	emrRealtimeHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	recHandler := recording.NewHandler(recService, cfg.Recording.PlayURLRequireOwnedMedia, recording.RecordingOSSConfig{
@@ -306,6 +317,8 @@ func main() {
 	// Register support module
 	supportStore := support.NewStore(pool)
 	supportService := support.NewService(supportStore, llmClient)
+	emrPermissionHandler := emrpermission.NewHandler(emrPermissionService, supportService)
+	emrPermissionHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	supportHandler := support.NewHandler(supportService)
 	supportHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	supportHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
@@ -366,6 +379,7 @@ func main() {
 		cfg.External.LingceWorkerToken,
 		ticketNotifier,
 	)
+	badgeService.SetBadgeSessionBinder(emrRealtimeService)
 	if cfg.External.LingceWorkerURL == "" {
 		slog.Warn("badge callback worker target is not configured; audio callback enqueue will be disabled", "expected_env", "LINGCE_WORKER_URL")
 	} else {

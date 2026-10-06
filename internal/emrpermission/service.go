@@ -117,14 +117,11 @@ func (s *Service) CanAccessRecord(ctx context.Context, access *Access, recordID 
 	return access.CanRecord(doctorID, departmentID), nil
 }
 
-func (s *Service) UpsertAssignment(ctx context.Context, tenantID, employeeID, actorID int64, req UpsertAssignmentRequest) (*AssignmentResponse, error) {
+func (s *Service) UpsertAssignment(ctx context.Context, tenantID, employeeID, actorID int64, req UpsertAssignmentRequest, snapshot ...func(*AssignmentResponse, *AssignmentResponse)) (*AssignmentResponse, error) {
 	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
 		return nil, err
 	}
 	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
-		return nil, err
-	}
-	if err := s.validateUpsertRequest(req); err != nil {
 		return nil, err
 	}
 	exists, err := s.store.EmployeeExistsInTenant(ctx, tenantID, employeeID)
@@ -138,6 +135,13 @@ func (s *Service) UpsertAssignment(ctx context.Context, tenantID, employeeID, ac
 	actor := actorID
 	existing, err := s.store.GetAssignmentByEmployeeID(ctx, tenantID, employeeID)
 	if err != nil {
+		return nil, err
+	}
+
+	if len(snapshot) > 0 {
+		snapshot[0](toAssignmentResponse(existing), nil)
+	}
+	if err := s.validateUpsertRequest(req); err != nil {
 		return nil, err
 	}
 
@@ -159,6 +163,9 @@ func (s *Service) UpsertAssignment(ctx context.Context, tenantID, employeeID, ac
 	saved, err := s.store.UpsertAssignment(ctx, assignment)
 	if err != nil {
 		return nil, err
+	}
+	if len(snapshot) > 0 {
+		snapshot[0](toAssignmentResponse(existing), toAssignmentResponse(saved))
 	}
 	return toAssignmentResponse(saved), nil
 }

@@ -33,6 +33,7 @@ func (s *Store) ListEmployeePermissions(ctx context.Context, tenantID int64) ([]
 			) AS full_name,
 			COALESCE(e.phone, '') AS phone,
 			COALESCE(d.name, '') AS department_name,
+			COALESCE(e.medical_department_code, '') AS medical_department_code,
 			COALESCE((
 				SELECT lower(er.role_code)
 				FROM institution_employee_roles er
@@ -120,6 +121,7 @@ func (s *Store) ListEmployeePermissions(ctx context.Context, tenantID int64) ([]
 			&item.FullName,
 			&item.Phone,
 			&item.DepartmentName,
+			&item.MedicalDepartmentCode,
 			&item.OrgRoleCode,
 			&item.OrgRoleName,
 			&item.IsActive,

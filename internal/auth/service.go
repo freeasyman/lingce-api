@@ -180,6 +180,7 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	}
 
 	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+	roleName, _ := s.store.GetLatestEmployeeRoleName(ctx, employee.TenantID, employee.ID)
 
 	if err := s.store.RecordEmployeeLoginEvent(ctx, employee.TenantID, employee.ID, "institution_web", "", ""); err != nil {
 		return nil, fmt.Errorf("failed to persist login event: %w", err)
@@ -198,18 +199,22 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 			ID:         employee.ID,
 			Name:       firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
 			Phone:      employee.Phone,
-			Role:       firstNonEmpty(roleCode, string(auth.UserTypeEmployee)),
+			Role:       firstNonEmpty(roleName, roleCode, string(auth.UserTypeEmployee)),
+			RoleCode:   roleCode,
+			RoleName:   roleName,
 			TenantID:   &employee.TenantID,
 			TenantName: &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
-			"name":          firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
-			"real_name":     employee.FullName,
-			"full_name":     employee.FullName,
-			"phone":         employee.Phone,
-			"email":         employee.Email,
-			"department_id": employee.DepartmentID,
-			"role_code":     roleCode,
+			"name":                    firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
+			"real_name":               employee.FullName,
+			"full_name":               employee.FullName,
+			"phone":                   employee.Phone,
+			"email":                   employee.Email,
+			"department_id":           employee.DepartmentID,
+			"medical_department_code": employee.MedicalDepartmentCode,
+			"role_code":               roleCode,
+			"role_name":               roleName,
 		},
 	}, nil
 }
@@ -385,13 +390,14 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 			Username: employee.Username,
 			TenantID: &employee.TenantID,
 			UserInfo: map[string]interface{}{
-				"name":          firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
-				"full_name":     employee.FullName,
-				"phone":         employee.Phone,
-				"email":         employee.Email,
-				"department_id": employee.DepartmentID,
-				"is_active":     employee.IsActive,
-				"role_code":     roleCode,
+				"name":                    firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
+				"full_name":               employee.FullName,
+				"phone":                   employee.Phone,
+				"email":                   employee.Email,
+				"department_id":           employee.DepartmentID,
+				"medical_department_code": employee.MedicalDepartmentCode,
+				"is_active":               employee.IsActive,
+				"role_code":               roleCode,
 			},
 		}, nil
 
