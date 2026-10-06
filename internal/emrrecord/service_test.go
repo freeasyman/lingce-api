@@ -2,8 +2,41 @@ package emrrecord
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 )
+
+func TestActionResponseIncludesQualityReport(t *testing.T) {
+	raw, err := json.Marshal(&WriteOutcome{QualityReport: &emrquality.Report{Action: emrquality.ActionSave}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["quality"] == nil {
+		t.Fatalf("quality report is not available under the frontend contract: %s", raw)
+	}
+}
+
+func TestQualityContextBeforeFormalSnapshot(t *testing.T) {
+	record := &Record{ID: "record", WorkingContent: map[string]any{"chief_complaint": "旧内容"}}
+	snapshot := &Snapshot{Content: map[string]any{"chief_complaint": "腰疼伴右腿放射痛1周"}}
+	input := qualityContext(1, emrquality.ActionComplete, record, snapshot)
+	if input.SnapshotID != nil {
+		t.Fatalf("unsaved snapshot must not supply an empty UUID: %+v", input.SnapshotID)
+	}
+	if input.Content["chief_complaint"] != snapshot.Content["chief_complaint"] {
+		t.Fatal("must evaluate requested content rather than old content")
+	}
+	snapshot.ID = "snapshot"
+	if id := snapshotIDPtr(snapshot); id == nil || *id != "snapshot" {
+		t.Fatal("saved snapshot ID should be retained")
+	}
+}
 
 func TestCreateRequiresEncounter(t *testing.T) {
 	service := &Service{}
@@ -38,8 +71,8 @@ func TestValidateContentChangeAudit(t *testing.T) {
 	before := map[string]any{"chief_complaint": "咳嗽"}
 	after := map[string]any{"chief_complaint": "咳嗽5天"}
 
-	if err := validateContentChangeAudit(117, before, after, ""); err == nil {
-		t.Fatal("expected modification reason requirement")
+	if err := validateContentChangeAudit(117, before, after, ""); err != nil {
+		t.Fatalf("content change should not require a reason: %v", err)
 	}
 	if err := validateContentChangeAudit(117, before, after, "补充症状持续时间"); err != nil {
 		t.Fatalf("expected modification reason to pass: %v", err)
@@ -94,8 +127,8 @@ func TestValidateChangeAuditIncludesPatientSnapshot(t *testing.T) {
 	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, "更正患者姓名"); err != nil {
 		t.Fatalf("expected patient snapshot change to pass with note: %v", err)
 	}
-	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, ""); err == nil {
-		t.Fatal("expected patient snapshot change to require a note")
+	if err := validateChangeAudit(117, current, current.WorkingContent, map[string]any{"name": "李某某"}, ""); err != nil {
+		t.Fatalf("patient snapshot change should not require a note: %v", err)
 	}
 }
 
@@ -108,8 +141,8 @@ func TestValidateAuditTrail(t *testing.T) {
 	if err := validateAuditTrail(117, "补充症状持续时间", outcome, changes); err != nil {
 		t.Fatalf("valid audit trail rejected: %v", err)
 	}
-	if err := validateAuditTrail(117, "", outcome, changes); err == nil {
-		t.Fatal("expected missing audit reason error")
+	if err := validateAuditTrail(117, "", outcome, changes); err != nil {
+		t.Fatalf("audit trail should not require a reason: %v", err)
 	}
 	if err := validateAuditTrail(117, "补充症状持续时间", &WriteOutcome{}, changes); err == nil {
 		t.Fatal("expected missing after snapshot error")

@@ -22,9 +22,6 @@ func validateContentChangeAudit(actorID int64, before, after map[string]any, not
 	if actorID <= 0 {
 		return fmt.Errorf("病历内容已修改，缺少有效操作人")
 	}
-	if strings.TrimSpace(note) == "" {
-		return fmt.Errorf("病历内容已修改，必须填写修改原因")
-	}
 	if err := validateAuditChanges(changes); err != nil {
 		return err
 	}
@@ -45,9 +42,6 @@ func validateChangeAuditValues(actorID int64, beforeContent, beforePatient, cont
 	}
 	if actorID <= 0 {
 		return fmt.Errorf("病历内容已修改，缺少有效操作人")
-	}
-	if strings.TrimSpace(note) == "" {
-		return fmt.Errorf("病历内容已修改，必须填写修改原因")
 	}
 	return validateAuditChanges(changes)
 }
@@ -72,9 +66,6 @@ func validateAuditTrail(actorID int64, note string, outcome *WriteOutcome, chang
 	}
 	if outcome == nil || outcome.Snapshot == nil || strings.TrimSpace(outcome.Snapshot.ID) == "" {
 		return fmt.Errorf("病历内容已修改，但缺少修改后快照")
-	}
-	if strings.TrimSpace(note) == "" {
-		return fmt.Errorf("病历内容已修改，必须填写修改原因")
 	}
 	return validateAuditChanges(changes)
 }
