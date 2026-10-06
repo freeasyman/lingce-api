@@ -1108,6 +1108,16 @@ type TaskResponse struct {
 	Evidence              *string `json:"evidence,omitempty"`
 	ContactMethod         *string `json:"contact_method,omitempty"`
 	DoctorName            *string `json:"doctor_name,omitempty"`
+	TaskCategory          *string `json:"task_category,omitempty"`
+	AnonymousPatient      bool    `json:"anonymous_patient"`
+	PatientAge            *int    `json:"patient_age,omitempty"`
+	PatientGender         *string `json:"patient_gender,omitempty"`
+	PhoneScript           *string `json:"phone_script,omitempty"`
+	WechatContent         *string `json:"wechat_content,omitempty"`
+	ExecutionResult       *string `json:"execution_result,omitempty"`
+	ExecutionDifficulty   *string `json:"execution_difficulty,omitempty"`
+	DoctorEscalation      *string `json:"doctor_escalation,omitempty"`
+	NextContactAt         *string `json:"next_contact_at,omitempty"`
 	SourceType            *string `json:"source_type,omitempty"`
 	SourceTypeLabel       *string `json:"source_type_label,omitempty"`
 	SourceDetail          *string `json:"source_detail,omitempty"`
