@@ -881,6 +881,55 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 	return recordings, total, nil
 }
 
+func (s *Store) MatchSmartBadge(ctx context.Context, req SmartBadgeMatchRequest) (*SmartBadgeMatchResponse, error) {
+	deviceNo := strings.TrimSpace(req.DeviceNo)
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id, r.encounter_id, er.id::text
+		FROM recordings r
+		LEFT JOIN emr_records er ON er.tenant_id = r.tenant_id AND er.encounter_id = r.encounter_id
+		WHERE r.tenant_id = $1
+		  AND r.employee_id = $2
+		  AND r.device_no = $3
+		  AND r.recorded_at >= ($4::timestamptz AT TIME ZONE 'Asia/Shanghai')
+		  AND r.recorded_at <= ($5::timestamptz AT TIME ZONE 'Asia/Shanghai')
+		  AND r.deleted_at IS NULL
+		  AND lower(COALESCE(r.source, '')) = lower($6)
+		  AND er.id IS NOT NULL
+		  AND er.source_references_json->>'recording_id' = r.id::text
+		  AND jsonb_typeof(COALESCE(er.content_json, '{}'::jsonb)) = 'object'
+		  AND COALESCE(er.content_json, '{}'::jsonb) <> '{}'::jsonb
+		ORDER BY r.recorded_at ASC, r.id ASC
+	`, req.TenantID, req.EmployeeID, deviceNo,
+		req.StartedFrom.Format(time.RFC3339Nano), req.StoppedTo.Format(time.RFC3339Nano),
+		strings.ToLower(strings.TrimSpace(req.Source)))
+	if err != nil {
+		return nil, fmt.Errorf("match smart badge recording: %w", err)
+	}
+	defer rows.Close()
+	var matches []SmartBadgeMatchResponse
+	for rows.Next() {
+		var item SmartBadgeMatchResponse
+		var encounter sql.NullInt64
+		if err := rows.Scan(&item.RecordingID, &encounter, &item.RecordID); err != nil {
+			return nil, fmt.Errorf("scan smart badge match: %w", err)
+		}
+		if encounter.Valid {
+			item.EncounterID = &encounter.Int64
+		}
+		matches = append(matches, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("本次工牌录音匹配到多条录音")
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+	return &matches[0], nil
+}
+
 func (s *Store) ListManagementEvents(
 	ctx context.Context,
 	tenantID int64,
@@ -2248,13 +2297,13 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 
 	if req.RecordingID != nil {
-		conditions = append(conditions, fmt.Sprintf("recording_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("rt.recording_id = $%d", argIndex))
 		args = append(args, *req.RecordingID)
 		argIndex++
 	}
 
 	if req.AssignedTo != nil {
-		conditions = append(conditions, fmt.Sprintf("assigned_to = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("rt.assigned_to = $%d", argIndex))
 		args = append(args, *req.AssignedTo)
 		argIndex++
 	}
@@ -2280,7 +2329,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 
 	if req.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("rt.status = $%d", argIndex))
 		args = append(args, *req.Status)
 		argIndex++
 	}
@@ -2298,22 +2347,22 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	if req.Priority != nil && strings.TrimSpace(*req.Priority) != "" {
 		switch strings.TrimSpace(*req.Priority) {
 		case "high":
-			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) IN ('high', 'h', '1', '高')")
+			conditions = append(conditions, "lower(COALESCE(rt.priority, 'medium')) IN ('high', 'h', '1', '高')")
 		case "low":
-			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) IN ('low', 'l', '3', '低')")
+			conditions = append(conditions, "lower(COALESCE(rt.priority, 'medium')) IN ('low', 'l', '3', '低')")
 		case "medium":
-			conditions = append(conditions, "lower(COALESCE(priority, 'medium')) NOT IN ('high', 'h', '1', '高', 'low', 'l', '3', '低')")
+			conditions = append(conditions, "lower(COALESCE(rt.priority, 'medium')) NOT IN ('high', 'h', '1', '高', 'low', 'l', '3', '低')")
 		}
 	}
 
 	if req.StartDate != nil {
-		conditions = append(conditions, fmt.Sprintf("due_at >= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("rt.due_at >= $%d", argIndex))
 		args = append(args, *req.StartDate)
 		argIndex++
 	}
 
 	if req.EndDate != nil {
-		conditions = append(conditions, fmt.Sprintf("due_at <= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("rt.due_at <= $%d", argIndex))
 		args = append(args, *req.EndDate)
 		argIndex++
 	}
@@ -2321,15 +2370,15 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	if req.DueBucket != nil && strings.TrimSpace(*req.DueBucket) != "" {
 		switch strings.TrimSpace(*req.DueBucket) {
 		case "overdue":
-			conditions = append(conditions, "due_at IS NOT NULL AND due_at < NOW()")
+			conditions = append(conditions, "rt.due_at IS NOT NULL AND rt.due_at < NOW()")
 		case "today":
-			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) AND due_at < date_trunc('day', NOW()) + INTERVAL '1 day'")
+			conditions = append(conditions, "rt.due_at IS NOT NULL AND rt.due_at >= date_trunc('day', NOW()) AND rt.due_at < date_trunc('day', NOW()) + INTERVAL '1 day'")
 		case "tomorrow":
-			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) + INTERVAL '1 day' AND due_at < date_trunc('day', NOW()) + INTERVAL '2 day'")
+			conditions = append(conditions, "rt.due_at IS NOT NULL AND rt.due_at >= date_trunc('day', NOW()) + INTERVAL '1 day' AND rt.due_at < date_trunc('day', NOW()) + INTERVAL '2 day'")
 		case "this_week":
-			conditions = append(conditions, "due_at IS NOT NULL AND due_at >= date_trunc('day', NOW()) AND due_at < date_trunc('day', NOW()) + INTERVAL '7 day'")
+			conditions = append(conditions, "rt.due_at IS NOT NULL AND rt.due_at >= date_trunc('day', NOW()) AND rt.due_at < date_trunc('day', NOW()) + INTERVAL '7 day'")
 		case "no_due_date":
-			conditions = append(conditions, "due_at IS NULL")
+			conditions = append(conditions, "rt.due_at IS NULL")
 		}
 	}
 
@@ -2344,31 +2393,32 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 
 	// Query tasks
 	offset := (req.Page - 1) * req.PageSize
-	orderBy := "created_at DESC, id DESC"
+	orderBy := "rt.created_at DESC, rt.id DESC"
 	if req.Sort != nil {
 		switch strings.TrimSpace(*req.Sort) {
 		case "created_desc", "created_at_desc":
-			orderBy = "created_at DESC, id DESC"
+			orderBy = "rt.created_at DESC, rt.id DESC"
 		case "due_at_asc", "due_asc":
-			orderBy = "due_at ASC NULLS LAST, created_at DESC, id DESC"
+			orderBy = "rt.due_at ASC NULLS LAST, rt.created_at DESC, rt.id DESC"
 		case "due_at_desc":
-			orderBy = "due_at DESC NULLS LAST, created_at DESC, id DESC"
+			orderBy = "rt.due_at DESC NULLS LAST, rt.created_at DESC, rt.id DESC"
 		case "priority_desc":
 			orderBy = `CASE
-				WHEN lower(COALESCE(priority, 'medium')) IN ('high', 'h', '1', '高') THEN 3
-				WHEN lower(COALESCE(priority, 'medium')) IN ('low', 'l', '3', '低') THEN 1
+				WHEN lower(COALESCE(rt.priority, 'medium')) IN ('high', 'h', '1', '高') THEN 3
+				WHEN lower(COALESCE(rt.priority, 'medium')) IN ('low', 'l', '3', '低') THEN 1
 				ELSE 2
-			END DESC, due_at ASC NULLS LAST, created_at DESC, id DESC`
+			END DESC, rt.due_at ASC NULLS LAST, rt.created_at DESC, rt.id DESC`
 		}
 	}
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
-		       customer_name, priority, script, contact_reason, source_type, source_detail,
-		       assigned_to, NULL::bigint AS assigned_by,
-		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by,
+		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.source_type, rt.source_detail,
+		       rt.assigned_to, NULL::bigint AS assigned_by,
+		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
-		       returned_at, returned_by, return_reason, created_at, updated_at
+		       rt.returned_at, rt.returned_by, rt.return_reason, rt.created_at, rt.updated_at
 		FROM recording_tasks rt
+		LEFT JOIN customers c ON c.id = rt.customer_id AND c.tenant_id = rt.tenant_id
 		WHERE %s
 		ORDER BY %s
 		LIMIT $%d OFFSET $%d
@@ -2387,7 +2437,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		var t RecordingTask
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-			&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
+			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.SourceType, &t.SourceDetail,
 			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
@@ -2406,18 +2456,19 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 		sourceCondition = " AND source_type IN ('follow_up', 'followup')"
 	}
 	query := `
-		SELECT id, tenant_id, recording_id, source_type AS task_type, title, description,
-		       customer_name, priority, script, contact_reason, source_type, source_detail,
-		       assigned_to, NULL::bigint AS assigned_by,
-		       status, due_at AS due_date, completed_at, NULL::bigint AS completed_by,
+		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.source_type, rt.source_detail,
+		       rt.assigned_to, NULL::bigint AS assigned_by,
+		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
-		       returned_at, returned_by, return_reason, created_at, updated_at
-		FROM recording_tasks
-		WHERE id = $1` + sourceCondition + `
+		       rt.returned_at, rt.returned_by, rt.return_reason, rt.created_at, rt.updated_at
+		FROM recording_tasks rt
+		LEFT JOIN customers c ON c.id = rt.customer_id AND c.tenant_id = rt.tenant_id
+		WHERE rt.id = $1` + sourceCondition + `
 		  AND EXISTS (
 			SELECT 1 FROM recordings doctor_recording
-			WHERE doctor_recording.id = recording_tasks.recording_id
-			  AND doctor_recording.tenant_id = recording_tasks.tenant_id
+			WHERE doctor_recording.id = rt.recording_id
+			  AND doctor_recording.tenant_id = rt.tenant_id
 			  AND (
 			  lower(trim(COALESCE(doctor_recording.business_scope, ''))) = 'doctor'
 			  OR lower(trim(COALESCE(doctor_recording.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
@@ -2428,7 +2479,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	var t RecordingTask
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-		&t.CustomerName, &t.Priority, &t.Script, &t.ContactReason, &t.SourceType, &t.SourceDetail,
+		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.SourceType, &t.SourceDetail,
 		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 	)

@@ -115,9 +115,14 @@ type RecordingTask struct {
 	Title         string     `json:"title"`
 	Description   *string    `json:"description,omitempty"`
 	CustomerName  *string    `json:"customer_name,omitempty"`
+	CustomerPhone *string    `json:"customer_phone,omitempty"`
 	Priority      *string    `json:"priority,omitempty"`
 	Script        *string    `json:"script,omitempty"`
 	ContactReason *string    `json:"contact_reason,omitempty"`
+	Background    *string    `json:"background,omitempty"`
+	Evidence      *string    `json:"evidence,omitempty"`
+	ContactMethod *string    `json:"contact_method,omitempty"`
+	DoctorName    *string    `json:"doctor_name,omitempty"`
 	SourceType    *string    `json:"source_type,omitempty"`
 	SourceDetail  *string    `json:"source_detail,omitempty"`
 	AssignedTo    *int64     `json:"assigned_to,omitempty"`

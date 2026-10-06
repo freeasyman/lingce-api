@@ -353,6 +353,10 @@ func (s *Service) ListRecordings(ctx context.Context, req RecordingListRequest) 
 	return responses, total, nil
 }
 
+func (s *Service) MatchSmartBadge(ctx context.Context, req SmartBadgeMatchRequest) (*SmartBadgeMatchResponse, error) {
+	return s.store.MatchSmartBadge(ctx, req)
+}
+
 func compactRecordingListItem(resp *RecordingResponse) {
 	if resp == nil {
 		return
@@ -10667,9 +10671,14 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		Title:         t.Title,
 		Description:   t.Description,
 		CustomerName:  t.CustomerName,
+		CustomerPhone: t.CustomerPhone,
 		Priority:      t.Priority,
 		Script:        t.Script,
 		ContactReason: t.ContactReason,
+		Background:    t.Background,
+		Evidence:      t.Evidence,
+		ContactMethod: t.ContactMethod,
+		DoctorName:    t.DoctorName,
 		SourceType:    t.SourceType,
 		SourceDetail:  t.SourceDetail,
 		AssignedTo:    t.AssignedTo,

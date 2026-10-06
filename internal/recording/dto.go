@@ -280,6 +280,21 @@ type RecordingListRequest struct {
 	PageSize        int              `json:"page_size"`
 }
 
+type SmartBadgeMatchRequest struct {
+	TenantID    int64     `json:"tenant_id"`
+	EmployeeID  int64     `json:"employee_id"`
+	DeviceNo    string    `json:"device_no"`
+	Source      string    `json:"source"`
+	StartedFrom time.Time `json:"started_from"`
+	StoppedTo   time.Time `json:"stopped_to"`
+}
+
+type SmartBadgeMatchResponse struct {
+	RecordingID int64  `json:"recording_id"`
+	EncounterID *int64 `json:"encounter_id,omitempty"`
+	RecordID    string `json:"record_id,omitempty"`
+}
+
 // Recording Statistics DTOs
 
 // RecordingStatsOverviewResponse represents the overview statistics
@@ -1085,9 +1100,14 @@ type TaskResponse struct {
 	Title                 string  `json:"title"`
 	Description           *string `json:"description,omitempty"`
 	CustomerName          *string `json:"customer_name,omitempty"`
+	CustomerPhone         *string `json:"customer_phone,omitempty"`
 	Priority              *string `json:"priority,omitempty"`
 	Script                *string `json:"script,omitempty"`
 	ContactReason         *string `json:"contact_reason,omitempty"`
+	Background            *string `json:"background,omitempty"`
+	Evidence              *string `json:"evidence,omitempty"`
+	ContactMethod         *string `json:"contact_method,omitempty"`
+	DoctorName            *string `json:"doctor_name,omitempty"`
 	SourceType            *string `json:"source_type,omitempty"`
 	SourceTypeLabel       *string `json:"source_type_label,omitempty"`
 	SourceDetail          *string `json:"source_detail,omitempty"`
