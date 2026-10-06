@@ -81,3 +81,63 @@ func TestCommunicationEmployeeNameCompatibility(t *testing.T) {
 		t.Fatalf("communicationEmployeeName() = %q, want legacy fallback", got)
 	}
 }
+
+// TestValidateCommunicationCheckRequestAllowsUnboundCustomer 验证患者尚未绑定时，
+// 实时电脑麦克风录音仍可进入沟通合规检查。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-10-06
+func TestValidateCommunicationCheckRequestAllowsUnboundCustomer(t *testing.T) {
+	req := CommunicationCheckRequest{
+		TenantID:          1,
+		RecordingID:       1834,
+		EncounterID:       123,
+		EmployeeID:        117,
+		EmployeeName:      "测试医生",
+		BusinessScope:     "doctor",
+		RoleCode:          "doctor",
+		RecordedAt:        "2026-10-06T10:00:00+08:00",
+		CleanedTranscript: "患者您好，这是实时录音测试文本。",
+	}
+	if err := validateCommunicationCheckRequest(req); err != nil {
+		t.Fatalf("validateCommunicationCheckRequest() error = %v, want nil", err)
+	}
+}
+
+// TestValidateCommunicationCheckRequestStillRequiresCoreFields 验证放宽患者信息后，
+// 录音、接诊、员工、角色和最终转写仍然必须有效。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-10-06
+func TestValidateCommunicationCheckRequestStillRequiresCoreFields(t *testing.T) {
+	base := CommunicationCheckRequest{
+		TenantID:          1,
+		RecordingID:       1834,
+		EncounterID:       123,
+		EmployeeID:        117,
+		EmployeeName:      "测试医生",
+		BusinessScope:     "doctor",
+		RoleCode:          "doctor",
+		RecordedAt:        "2026-10-06T10:00:00+08:00",
+		CleanedTranscript: "患者您好，这是实时录音测试文本。",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*CommunicationCheckRequest)
+	}{
+		{"missing recording", func(req *CommunicationCheckRequest) { req.RecordingID = 0 }},
+		{"missing encounter", func(req *CommunicationCheckRequest) { req.EncounterID = 0 }},
+		{"missing employee", func(req *CommunicationCheckRequest) { req.EmployeeID = 0 }},
+		{"missing role", func(req *CommunicationCheckRequest) { req.RoleCode = "" }},
+		{"missing transcript", func(req *CommunicationCheckRequest) { req.CleanedTranscript = "" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := base
+			tt.mutate(&req)
+			if err := validateCommunicationCheckRequest(req); err == nil {
+				t.Fatal("validateCommunicationCheckRequest() error = nil, want validation error")
+			}
+		})
+	}
+}

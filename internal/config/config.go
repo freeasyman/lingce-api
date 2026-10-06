@@ -73,6 +73,7 @@ type ExternalConfig struct {
 	InternalWorkerToken        string             `toml:"internal_worker_token"`
 	FollowupAPIURL             string             `toml:"followup_api_url"`
 	EMRFollowupDeliveryEnabled bool               `toml:"emr_followup_delivery_enabled"`
+	ComplianceAPIURL           string             `toml:"compliance_api_url"`
 	EmployeeWebBaseURL         string             `toml:"employee_web_base_url"`
 	TicketNotify               TicketNotifyConfig `toml:"ticket_notify"`
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,8 +41,9 @@ type Service struct {
 	incrementalGenerator interface {
 		GenerateIncrementalDraft(context.Context, int64, int64, emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error)
 	}
-	followupAPIURL string
-	internalToken  string
+	followupAPIURL   string
+	internalToken    string
+	complianceAPIURL string
 }
 
 func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *recording.Service, permissions *emrpermission.Service, gatewayURL, gatewayKey string, llmClient *llmgateway.Client, ossClient *ossutil.Client, generators ...interface {
@@ -74,6 +76,13 @@ func (s *Service) ConfigureFollowupDelivery(baseURL, token string) {
 	s.followupAPIURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	s.internalToken = strings.TrimSpace(token)
 	s.startFollowupRetryLoop()
+}
+
+// ConfigureComplianceDelivery configures the internal compliance submission
+// used only by realtime recordings that intentionally skip Worker dispatch.
+func (s *Service) ConfigureComplianceDelivery(baseURL, token string) {
+	s.complianceAPIURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	s.internalToken = strings.TrimSpace(token)
 }
 
 func (s *Service) GenerateIncrementalDraft(ctx context.Context, tenantID, employeeID int64, input emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error) {
@@ -284,6 +293,11 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 	}
 	if err := s.persistRealtimeFollowup(ctx, tenantID, actorID, encounterID, result.ID, finalTranscript); err != nil {
 		return &FinalizeResponse{EncounterID: encounterID, RecordID: recordID, RecordingID: result.ID, QueueError: "实时转写及随访投递任务保存失败: " + err.Error()}, nil
+	}
+	if err := s.submitRealtimeComplianceCheck(ctx, tenantID, actorID, encounterID, result.ID, record, startAt, finalTranscript); err != nil {
+		// Compliance is auxiliary analysis. Never block recording or EMR
+		// persistence when its endpoint is unavailable or rejects input.
+		slog.Warn("realtime compliance submission failed", "tenant_id", tenantID, "recording_id", result.ID, "encounter_id", encounterID, "error", err)
 	}
 	if created && s.emrGenerator != nil && strings.TrimSpace(finalTranscript) != "" {
 		_, genErr := s.emrGenerator.GenerateDirect(ctx, emrrecord.EmrWorkerRequest{
