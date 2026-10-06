@@ -55,7 +55,7 @@ import (
 )
 
 var (
-	version     = "1.1.1"
+	version     = "2.0.0"
 	gitSHA      = "unknown"
 	buildTime   = "unknown"
 	releaseNote = "API单体治理重大更新：统一租户访问模型，收口路由鉴权、租户隔离与服务层边界校验"
@@ -123,6 +123,7 @@ func main() {
 
 	// Setup HTTP router
 	mux := http.NewServeMux()
+	testcleanup.NewHandler(pool).RegisterRoutes(mux)
 
 	// Health check endpoint
 	healthHandler := func(w http.ResponseWriter, r *http.Request) {
