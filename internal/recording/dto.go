@@ -1150,7 +1150,11 @@ type BatchAssignTasksRequest struct {
 
 // CompleteTaskRequest represents the request for completing a task
 type CompleteTaskRequest struct {
-	Notes *string `json:"notes,omitempty"`
+	Notes               *string    `json:"notes,omitempty"`
+	ExecutionResult     *string    `json:"execution_result,omitempty"`
+	ExecutionDifficulty *string    `json:"execution_difficulty,omitempty"`
+	DoctorEscalation    *string    `json:"doctor_escalation,omitempty"`
+	NextContactAt       *time.Time `json:"next_contact_at,omitempty"`
 }
 
 // CancelTaskRequest represents the request for cancelling a task

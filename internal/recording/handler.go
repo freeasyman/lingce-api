@@ -105,6 +105,7 @@ func isFollowupTaskType(value string) bool {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/recordings", Handler: h.ListRecordings, Auth: true},
+		{Method: "POST", Path: "/api/v1/recordings/smart-badge/match", Handler: h.MatchSmartBadge, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/{id}", Handler: h.GetRecording, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings", Handler: h.CreateRecording, Auth: true},
 		{Method: "PUT", Path: "/api/v1/recordings/{id}", Handler: h.UpdateRecording, Auth: true},
@@ -171,6 +172,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/stats", Handler: h.GetTaskStats, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/daily-briefing", Handler: h.GetDailyBriefing, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/my-tasks", Handler: h.GetMyTasks, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/incomplete-patients", Handler: h.ListIncompletePatients, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/employees", Handler: h.ListTaskEmployees, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/assign", Handler: h.BatchAssignTasks, Auth: true},
@@ -228,6 +230,75 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Lingce Sales endpoints
 	h.RegisterSalesRoutes(mux, jwtSecret)
+}
+
+func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	rows, err := h.service.store.pool.Query(r.Context(), `SELECT id, COALESCE(customer_name,''), COALESCE(customer_phone,''), anonymous_patient, patient_age, patient_gender FROM recording_tasks WHERE tenant_id=$1 AND source_type IN ('follow_up','followup') AND (anonymous_patient=true OR NULLIF(customer_name,'') IS NULL OR NULLIF(customer_phone,'') IS NULL) AND status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 100`, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID        int64   `json:"id"`
+		Name      string  `json:"customer_name"`
+		Phone     string  `json:"customer_phone"`
+		Anonymous bool    `json:"anonymous_patient"`
+		Age       *int    `json:"patient_age,omitempty"`
+		Gender    *string `json:"patient_gender,omitempty"`
+	}
+	items := []item{}
+	for rows.Next() {
+		var v item
+		if err := rows.Scan(&v.ID, &v.Name, &v.Phone, &v.Anonymous, &v.Age, &v.Gender); err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+		items = append(items, v)
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) MatchSmartBadge(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req SmartBadgeMatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if req.TenantID <= 0 || req.EmployeeID <= 0 || strings.TrimSpace(req.DeviceNo) == "" || req.StartedFrom.IsZero() || req.StoppedTo.IsZero() || req.StartedFrom.After(req.StoppedTo) {
+		httputil.WriteBadRequest(w, "tenant_id, employee_id, device_no, started_from and stopped_to are required")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin && claims.UserID != req.EmployeeID {
+		httputil.WriteForbidden(w, "employee access denied")
+		return
+	}
+	scope, err := tenancy.ResolveScope(r.Context(), h.service.store.pool, claims, strconv.FormatInt(req.TenantID, 10))
+	if err != nil || len(scope.TenantIDs) == 0 {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	result, err := h.service.MatchSmartBadge(r.Context(), req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, result)
 }
 
 // ListRecordings handles listing medical recordings
