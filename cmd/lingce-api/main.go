@@ -289,6 +289,13 @@ func main() {
 	if cfg.External.EMRFollowupDeliveryEnabled {
 		emrRealtimeService.ConfigureFollowupDelivery(followupAPIURL, cfg.External.InternalWorkerToken)
 	}
+	complianceAPIURL := strings.TrimRight(strings.TrimSpace(cfg.External.ComplianceAPIURL), "/")
+	if complianceAPIURL == "" {
+		complianceAPIURL = "http://127.0.0.1:" + cfg.Server.Port
+	}
+	// Realtime microphone recordings skip Worker, so EMR submits their final
+	// transcript to the internal compliance endpoint after persistence.
+	emrRealtimeService.ConfigureComplianceDelivery(complianceAPIURL, cfg.External.InternalWorkerToken)
 	emrInternalHandler.SetResultBinder(emrRealtimeService)
 	emrRealtimeHandler := emrrealtime.NewHandler(emrRealtimeService, emrPermissionService)
 	emrRealtimeHandler.RegisterRoutes(mux, cfg.JWT.Secret)

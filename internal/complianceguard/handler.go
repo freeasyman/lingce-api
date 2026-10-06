@@ -229,10 +229,9 @@ func validateCommunicationCheckRequest(req CommunicationCheckRequest) error {
 		return fmt.Errorf("encounter_id is required")
 	case req.EmployeeID <= 0:
 		return fmt.Errorf("employee_id is required")
-	case req.CustomerID <= 0:
-		return fmt.Errorf("customer_id is required")
-	case strings.TrimSpace(req.CustomerName) == "":
-		return fmt.Errorf("customer_name is required")
+	// Patient identity is optional for realtime communication checks. The
+	// recording, encounter, employee, role and final transcript remain required;
+	// when a patient is known, EMR sends both customer_id and customer_name.
 	case strings.TrimSpace(req.EmployeeName) == "" && strings.TrimSpace(req.DoctorName) == "":
 		return fmt.Errorf("employee_name is required")
 	case strings.TrimSpace(req.BusinessScope) == "":
