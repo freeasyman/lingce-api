@@ -61,18 +61,20 @@ type RecordingConfig struct {
 }
 
 type ExternalConfig struct {
-	LLMGatewayURL             string             `toml:"llm_gateway_url"`
-	LLMGatewayAPIKey          string             `toml:"llm_gateway_api_key"`
-	BadgeMiddlewareURL        string             `toml:"badge_middleware_url"`
-	BadgeMiddlewareToken      string             `toml:"badge_middleware_token"`
-	BadgeCallbackGatewayToken string             `toml:"badge_callback_gateway_token"`
-	RecordingWorkerURL        string             `toml:"recording_worker_url"`
-	RecordingWorkerToken      string             `toml:"recording_worker_token"`
-	LingceWorkerURL           string             `toml:"lingce_worker_url"`
-	LingceWorkerToken         string             `toml:"lingce_worker_token"`
-	InternalWorkerToken       string             `toml:"internal_worker_token"`
-	EmployeeWebBaseURL        string             `toml:"employee_web_base_url"`
-	TicketNotify              TicketNotifyConfig `toml:"ticket_notify"`
+	LLMGatewayURL              string             `toml:"llm_gateway_url"`
+	LLMGatewayAPIKey           string             `toml:"llm_gateway_api_key"`
+	BadgeMiddlewareURL         string             `toml:"badge_middleware_url"`
+	BadgeMiddlewareToken       string             `toml:"badge_middleware_token"`
+	BadgeCallbackGatewayToken  string             `toml:"badge_callback_gateway_token"`
+	RecordingWorkerURL         string             `toml:"recording_worker_url"`
+	RecordingWorkerToken       string             `toml:"recording_worker_token"`
+	LingceWorkerURL            string             `toml:"lingce_worker_url"`
+	LingceWorkerToken          string             `toml:"lingce_worker_token"`
+	InternalWorkerToken        string             `toml:"internal_worker_token"`
+	FollowupAPIURL             string             `toml:"followup_api_url"`
+	EMRFollowupDeliveryEnabled bool               `toml:"emr_followup_delivery_enabled"`
+	EmployeeWebBaseURL         string             `toml:"employee_web_base_url"`
+	TicketNotify               TicketNotifyConfig `toml:"ticket_notify"`
 }
 
 type TicketNotifyConfig struct {

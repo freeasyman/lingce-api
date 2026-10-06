@@ -32,6 +32,8 @@ llm_gateway_url = "http://localhost:8080"
 badge_middleware_url = "http://localhost:18082"
 recording_worker_url = "http://localhost:18090"
 lingce_worker_url = "http://localhost:18083"
+# 开发环境默认开启实时麦克风录音的随访投递；生产环境请按联调结果显式配置。
+emr_followup_delivery_enabled = true
 
 [external.ticket_notify]
 smtp_port = 25

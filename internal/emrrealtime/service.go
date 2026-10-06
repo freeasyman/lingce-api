@@ -37,6 +37,11 @@ type Service struct {
 	emrGenerator interface {
 		GenerateDirect(context.Context, emrrecord.EmrWorkerRequest) (map[string]any, error)
 	}
+	incrementalGenerator interface {
+		GenerateIncrementalDraft(context.Context, int64, int64, emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error)
+	}
+	followupAPIURL string
+	internalToken  string
 }
 
 func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *recording.Service, permissions *emrpermission.Service, gatewayURL, gatewayKey string, llmClient *llmgateway.Client, ossClient *ossutil.Client, generators ...interface {
@@ -45,14 +50,145 @@ func NewService(pool *pgxpool.Pool, records *emrrecord.Service, recordings *reco
 	var generator interface {
 		GenerateDirect(context.Context, emrrecord.EmrWorkerRequest) (map[string]any, error)
 	}
+	var incrementalGenerator interface {
+		GenerateIncrementalDraft(context.Context, int64, int64, emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error)
+	}
 	if len(generators) > 0 {
 		generator = generators[0]
+		if candidate, ok := generators[0].(interface {
+			GenerateIncrementalDraft(context.Context, int64, int64, emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error)
+		}); ok {
+			incrementalGenerator = candidate
+		}
 	}
-	return &Service{
+	service := &Service{
 		store: NewStore(pool), encounters: encounter.NewStore(pool), records: records, recordings: recordings, permissions: permissions,
 		gatewayURL: strings.TrimRight(strings.TrimSpace(gatewayURL), "/"), gatewayKey: gatewayKey,
-		llmClient: llmClient, ossClient: ossClient, emrGenerator: generator,
+		llmClient: llmClient, ossClient: ossClient, emrGenerator: generator, incrementalGenerator: incrementalGenerator,
 	}
+	return service
+}
+
+// ConfigureFollowupDelivery must run during startup, before accepting requests.
+func (s *Service) ConfigureFollowupDelivery(baseURL, token string) {
+	s.followupAPIURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	s.internalToken = strings.TrimSpace(token)
+	s.startFollowupRetryLoop()
+}
+
+func (s *Service) GenerateIncrementalDraft(ctx context.Context, tenantID, employeeID int64, input emrrecord.IncrementalDraftInput) (*emrrecord.IncrementalDraftResult, error) {
+	if s.incrementalGenerator == nil {
+		return nil, fmt.Errorf("实验病历生成器未配置")
+	}
+	return s.incrementalGenerator.GenerateIncrementalDraft(ctx, tenantID, employeeID, input)
+}
+
+func (s *Service) StartBadgeSession(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, req StartBadgeSessionRequest) (*BadgeSessionResponse, error) {
+	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
+		return nil, err
+	}
+	if req.CustomerID == nil || *req.CustomerID <= 0 {
+		return nil, fmt.Errorf("请先绑定患者后再开始接诊")
+	}
+	deviceNo := strings.TrimSpace(req.DeviceNo)
+	if deviceNo == "" {
+		return nil, fmt.Errorf("智能工牌编号不能为空")
+	}
+	if req.CustomerID != nil {
+		if _, err := s.store.GetPatient(ctx, tenantID, *req.CustomerID); err != nil {
+			return nil, err
+		}
+	}
+	row, err := s.store.CreateBadgeSession(ctx, tenantID, actorID, deviceNo, req.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+	return badgeSessionResponse(row), nil
+}
+
+func (s *Service) BindBadgeRecordingByOrderNo(ctx context.Context, tenantID int64, orderNo string, recordingID int64) error {
+	return s.store.BindBadgeRecordingByOrderNo(ctx, tenantID, orderNo, recordingID)
+}
+
+func (s *Service) BindBadgeRecording(ctx context.Context, tenantID, employeeID int64, deviceNo string, recordingID int64) error {
+	return s.store.BindBadgeRecording(ctx, tenantID, employeeID, deviceNo, recordingID, nil)
+}
+
+// BindWorkerResult binds the authoritative Worker result to the workbench.
+func (s *Service) BindWorkerResult(ctx context.Context, tenantID, recordingID, encounterID int64, recordID string) error {
+	if recordingID <= 0 || encounterID <= 0 || strings.TrimSpace(recordID) == "" {
+		return fmt.Errorf("Worker 返回的录音、接诊或病历标识无效")
+	}
+	return s.store.BindWorkerResult(ctx, tenantID, recordingID, encounterID, recordID)
+}
+
+func (s *Service) StopBadgeSession(ctx context.Context, tenantID, actorID int64, sessionID uuid.UUID) (*BadgeSessionResponse, error) {
+	if err := s.store.StopBadgeSession(ctx, tenantID, actorID, sessionID); err != nil {
+		return nil, err
+	}
+	return s.GetBadgeSession(ctx, tenantID, actorID, nil, sessionID)
+}
+
+func (s *Service) GetBadgeSession(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, sessionID uuid.UUID) (*BadgeSessionResponse, error) {
+	row, err := s.store.GetBadgeSession(ctx, tenantID, actorID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	result := badgeSessionResponse(row)
+	if row.RecordingID == nil {
+		if row.State == "recording" {
+			result.Status = "recording"
+		} else {
+			result.Status = "waiting_upload"
+			result.Message = "工牌录音已停止，正在等待录音回传"
+		}
+		return result, nil
+	}
+	if row.EncounterID <= 0 {
+		result.Status = "uploaded"
+		result.Message = "录音已回传，正在等待接诊记录"
+		return result, nil
+	}
+	if row.Status != "completed" || strings.TrimSpace(row.Transcript) == "" {
+		result.Status = "transcribing"
+		result.Message = "录音已回传，正在等待转写完成"
+		return result, nil
+	}
+	if row.RecordID == "" {
+		result.Status = "generating"
+		result.Message = "转写已完成，正在生成病历"
+		return result, nil
+	}
+	record, err := s.records.Get(ctx, tenantID, row.RecordID)
+	if err != nil || record == nil || !generatedBadgeDraft(record, *row.RecordingID) {
+		result.Status = "generating"
+		result.Message = "正在生成病历"
+		return result, nil
+	}
+	if access != nil {
+		ok, err := s.permissions.CanAccessRecord(ctx, access, row.RecordID)
+		if err != nil || !ok {
+			return nil, fmt.Errorf("无权访问当前病历")
+		}
+	}
+	if row.CustomerID != nil && (record.PatientID == nil || *record.PatientID != *row.CustomerID) {
+		if _, err := s.BindCustomer(ctx, tenantID, row.EncounterID, row.RecordID, *row.CustomerID); err != nil {
+			return nil, err
+		}
+	}
+	result.Status = "generated"
+	result.Message = "病历已生成"
+	return result, nil
+}
+
+func badgeSessionResponse(row *badgeSessionRow) *BadgeSessionResponse {
+	result := &BadgeSessionResponse{ID: row.ID, OrderNo: row.OrderNo, Status: row.State, DeviceNo: row.DeviceNo, CustomerID: row.CustomerID, StartedAt: row.StartedAt, StoppedAt: row.StoppedAt}
+	if row.RecordingID != nil {
+		result.RecordingID = *row.RecordingID
+	}
+	result.EncounterID = row.EncounterID
+	result.RecordID = row.RecordID
+	return result
 }
 
 func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, encounterID int64, recordID string, audio []byte, mimeType, fileName string, durationSeconds int, recordedAt time.Time, finalTranscript string) (*FinalizeResponse, error) {
@@ -116,6 +252,12 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 		return nil, fmt.Errorf("上传实时录音失败: %w", err)
 	}
 	var customerID, patientID *int64
+	// Record.PatientID maps to emr_records.customer_id in the current schema.
+	// Prefer this durable identity; JSON snapshots may decode IDs as int64 or float64.
+	if record.PatientID != nil && *record.PatientID > 0 {
+		value := *record.PatientID
+		customerID = &value
+	}
 	if value, ok := record.PatientSnapshot["customer_id"].(float64); ok && int64(value) > 0 {
 		value := int64(value)
 		customerID = &value
@@ -139,6 +281,9 @@ func (s *Service) FinalizeRecording(ctx context.Context, tenantID, actorID, enco
 		}
 		_ = s.ossClient.DeleteFile(ctx, ossKey)
 		return nil, err
+	}
+	if err := s.persistRealtimeFollowup(ctx, tenantID, actorID, encounterID, result.ID, finalTranscript); err != nil {
+		return &FinalizeResponse{EncounterID: encounterID, RecordID: recordID, RecordingID: result.ID, QueueError: "实时转写及随访投递任务保存失败: " + err.Error()}, nil
 	}
 	if created && s.emrGenerator != nil && strings.TrimSpace(finalTranscript) != "" {
 		_, genErr := s.emrGenerator.GenerateDirect(ctx, emrrecord.EmrWorkerRequest{
@@ -288,6 +433,9 @@ func preservesRealtimeTranscriptProtectedTokens(original, corrected string) bool
 func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, req StartRequest) (*SessionResponse, error) {
 	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
 		return nil, err
+	}
+	if req.CustomerID == nil || *req.CustomerID <= 0 {
+		return nil, fmt.Errorf("请先绑定患者后再开始接诊")
 	}
 	doctorName, departmentCode, err := s.store.DoctorContext(ctx, tenantID, actorID)
 	if err != nil {
@@ -486,6 +634,33 @@ func (s *Service) BindCustomer(ctx context.Context, tenantID, encounterID int64,
 		PatientID:       patient.PatientID,
 		PatientSnapshot: patientSnapshot(patient),
 	}, nil
+}
+
+func (s *Service) FinalizeBadge(ctx context.Context, tenantID, actorID int64, access *emrpermission.Access, req FinalizeBadgeRequest) (*FinalizeBadgeResponse, error) {
+	if strings.TrimSpace(req.SessionID) != "" {
+		sessionID, err := uuid.Parse(strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return nil, fmt.Errorf("工牌接诊会话标识无效")
+		}
+		result, err := s.GetBadgeSession(ctx, tenantID, actorID, access, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		return &FinalizeBadgeResponse{Status: result.Status, RecordingID: result.RecordingID, EncounterID: result.EncounterID, RecordID: result.RecordID, Message: result.Message}, nil
+	}
+	return &FinalizeBadgeResponse{Status: "pending", Message: "缺少工牌接诊会话"}, nil
+}
+
+func generatedBadgeDraft(record *emrrecord.Record, recordingID int64) bool {
+	if record == nil || recordingID <= 0 {
+		return false
+	}
+	requestID, _ := record.SourceReferences["llm_request_id"].(string)
+	if strings.TrimSpace(requestID) == "" {
+		return false
+	}
+	// JSON reads use float64; in-memory references can use integer types.
+	return fmt.Sprint(record.SourceReferences["recording_id"]) == fmt.Sprint(recordingID)
 }
 
 func (s *Service) DialGateway(ctx context.Context, tenantID int64) (*websocket.Conn, string, error) {
