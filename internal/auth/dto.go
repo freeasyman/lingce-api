@@ -30,6 +30,8 @@ type LoginUser struct {
 	Name       string  `json:"name"`
 	Phone      string  `json:"phone,omitempty"`
 	Role       string  `json:"role"`
+	RoleCode   string  `json:"role_code,omitempty"`
+	RoleName   string  `json:"role_name,omitempty"`
 	TenantID   *int64  `json:"tenant_id"`
 	TenantName *string `json:"tenant_name,omitempty"`
 }
