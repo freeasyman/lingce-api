@@ -1459,6 +1459,55 @@ func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, p
 	return records, total, nil
 }
 
+// GetCustomer360Data returns the real visit, recording and EMR history for a
+// single Customer ID. It intentionally reads the canonical customer_id links;
+// encounters.patient_id is included only as the legacy patient mirror.
+func (s *Store) GetCustomer360Data(ctx context.Context, customerID int64) (map[string]interface{}, error) {
+	data := map[string]interface{}{}
+	recordings, total, err := s.ListConsultationRecords(ctx, customerID, 1, 100)
+	if err != nil {
+		return nil, err
+	}
+	data["recordings"] = recordings
+	data["recordings_total"] = total
+
+	medical := make([]map[string]interface{}, 0)
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.id::text, r.encounter_id, r.status, r.document_type, r.visit_type,
+		       r.started_at, r.updated_at, COALESCE(e.patient_name, c.name, '')
+		FROM emr_records r
+		LEFT JOIN encounters e ON e.id=r.encounter_id AND e.tenant_id=r.tenant_id
+		LEFT JOIN customers c ON c.id=r.customer_id AND c.tenant_id=r.tenant_id
+		WHERE r.customer_id=$1
+		ORDER BY r.started_at DESC NULLS LAST, r.updated_at DESC
+		LIMIT 100
+	`, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("query customer medical records: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, status, documentType, visitType, patientName string
+		var encounterID int64
+		var startedAt, updatedAt interface{}
+		if err := rows.Scan(&id, &encounterID, &status, &documentType, &visitType, &startedAt, &updatedAt, &patientName); err != nil {
+			return nil, err
+		}
+		medical = append(medical, map[string]interface{}{"id": id, "encounter_id": encounterID, "status": status, "document_type": documentType, "visit_type": visitType, "started_at": startedAt, "updated_at": updatedAt, "patient_name": patientName})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	data["medical_records"] = medical
+
+	var visits int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM encounters e WHERE e.patient_id IN (SELECT patient_id FROM customers WHERE id=$1 AND patient_id IS NOT NULL) OR EXISTS (SELECT 1 FROM emr_records r WHERE r.customer_id=$1 AND r.encounter_id=e.id)`, customerID).Scan(&visits); err != nil {
+		return nil, err
+	}
+	data["statistics"] = map[string]interface{}{"total_visits": visits, "total_recordings": total, "total_medical_records": len(medical)}
+	return data, nil
+}
+
 func buildCustomerConsultationRecord(analysisRaw string, recordedAt interface{}) map[string]interface{} {
 	result := map[string]interface{}{}
 	analysis := map[string]interface{}{}

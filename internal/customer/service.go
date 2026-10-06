@@ -525,6 +525,10 @@ func (s *Service) ListConsultationRecords(ctx context.Context, customerID int64,
 	return s.store.ListConsultationRecords(ctx, customerID, page, pageSize)
 }
 
+func (s *Service) GetCustomer360Data(ctx context.Context, customerID int64) (map[string]interface{}, error) {
+	return s.store.GetCustomer360Data(ctx, customerID)
+}
+
 func (s *Service) BatchTagCustomers(ctx context.Context, tenantID *int64, req BatchTagRequest) (int64, error) {
 	return s.store.BatchTagCustomers(ctx, tenantID, req)
 }

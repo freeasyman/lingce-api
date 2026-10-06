@@ -21,6 +21,23 @@ type Service struct {
 	quality *emrquality.Service
 }
 
+func anonymousPatient(snapshot map[string]any) bool {
+	if snapshot == nil {
+		return false
+	}
+	if value, ok := snapshot["anonymous"]; ok && (value == true || strings.EqualFold(fmt.Sprint(value), "true")) {
+		return true
+	}
+	if value, ok := snapshot["extra_data"].(map[string]any); ok && (value["anonymous"] == true || strings.EqualFold(fmt.Sprint(value["anonymous"]), "true")) {
+		return true
+	}
+	if value, ok := snapshot["extraData"].(map[string]any); ok && (value["anonymous"] == true || strings.EqualFold(fmt.Sprint(value["anonymous"]), "true")) {
+		return true
+	}
+	name := strings.TrimSpace(fmt.Sprint(snapshot["name"]))
+	return strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") && strings.Contains(name, "接待的客户")
+}
+
 var ErrQualityConfirmationRequired = errors.New("存在非阻断质量问题，请确认是否继续")
 
 func NewService(store *Store, process *emrprocess.Service, quality ...*emrquality.Service) *Service {
@@ -189,6 +206,9 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	if !allowedTransition(current.Status, "已完成") {
 		return nil, fmt.Errorf("record status %s cannot be completed", current.Status)
 	}
+	if anonymousPatient(current.PatientSnapshot) {
+		return nil, fmt.Errorf("患者身份尚未确认，不能完成病历")
+	}
 	content := req.Content
 	if content == nil {
 		content = current.WorkingContent
@@ -307,6 +327,9 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 	}
 	if current.Status != "已完成" && current.Status != "待归档" {
 		return nil, fmt.Errorf("record status %s cannot be archived", current.Status)
+	}
+	if anonymousPatient(current.PatientSnapshot) {
+		return nil, fmt.Errorf("患者身份尚未确认，不能归档病历")
 	}
 	if s.quality != nil {
 		if current.CurrentSnapshotID == nil {

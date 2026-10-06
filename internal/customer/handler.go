@@ -450,17 +450,14 @@ func (h *Handler) GetCustomer360View(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteSuccess(w, map[string]interface{}{
-		"patient":         customer,
-		"visit_history":   []interface{}{},
-		"recordings":      []interface{}{},
-		"medical_records": []interface{}{},
-		"statistics": map[string]interface{}{
-			"total_visits":   0,
-			"total_spending": 0.0,
-			"last_visit":     nil,
-		},
-	})
+	history, err := h.service.GetCustomer360Data(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	history["patient"] = customer
+	history["visit_history"] = history["medical_records"]
+	httputil.WriteSuccess(w, history)
 }
 
 // AddCustomerIdentity handles adding customer identity
