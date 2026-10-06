@@ -103,11 +103,14 @@ func (s *Service) AcceptRequest(ctx context.Context, req GenerateRequest) (*Gene
 		return nil, err
 	}
 	requestID := fmt.Sprintf("followup-%d", time.Now().UnixNano())
-	runID, err := s.createGenerationRun(ctx, requestID, req)
+	runID, originalRequestID, created, err := s.acceptGenerationRun(ctx, requestID, req)
 	if err != nil {
 		return nil, err
 	}
-	go s.processRun(context.Background(), runID)
+	requestID = originalRequestID
+	if created {
+		go s.processRun(context.Background(), runID)
+	}
 
 	return &GenerateResponse{
 		Code:         "ACCEPTED",
@@ -144,16 +147,28 @@ func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) e
 		JOIN encounters e
 		  ON e.id = r.encounter_id
 		 AND e.tenant_id = r.tenant_id
-		 AND e.source_type = 'recording'
-		 AND e.source_id = r.id
+		 AND (
+			(e.source_type = 'recording' AND e.source_id = r.id)
+			OR (e.source_type = 'realtime'
+			    AND e.provider_id = r.employee_id)
+		 )
 		JOIN employees emp
 		  ON emp.id = r.employee_id
 		 AND emp.tenant_id = r.tenant_id
 		 AND emp.deleted_at IS NULL
+		 AND (e.source_type <> 'realtime' OR (
+			SELECT lower(trim(er.role_code)) FROM institution_employee_roles er
+			WHERE er.tenant_id = emp.tenant_id AND er.employee_id = emp.id
+			ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC LIMIT 1
+		 ) = 'doctor')
 		JOIN customers c
 		  ON c.id = r.customer_id
 		 AND c.tenant_id = r.tenant_id
 		 AND c.deleted_at IS NULL
+		 AND (e.source_type <> 'realtime'
+		      OR e.patient_id IS NULL
+		      OR c.patient_id IS NULL
+		      OR e.patient_id = c.patient_id)
 		JOIN tenants t
 		  ON t.id = r.tenant_id
 		 AND t.deleted_at IS NULL
@@ -203,21 +218,46 @@ type followupGenerationRun struct {
 //
 // 署名：Codex
 // 时间：2026-09-10
-func (s *Service) createGenerationRun(ctx context.Context, requestID string, req GenerateRequest) (int64, error) {
+// acceptGenerationRun 使用录音行锁串行化同一 tenant_id + recording_id 的接收。
+// 锁与查询、插入在同一事务中，适用于多个 API 实例；历史重复记录取最早一条。
+// 重复投递不修改原请求、不重启生成；failed 也返回原接收记录，由业务补偿管理。
+// 署名：Codex；时间：2026-10-06。
+func (s *Service) acceptGenerationRun(ctx context.Context, requestID string, req GenerateRequest) (int64, string, bool, error) {
 	if s.pool == nil {
-		return 0, fmt.Errorf("database pool is not configured")
+		return 0, "", false, fmt.Errorf("database pool is not configured")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, "", false, err
+	}
+	defer tx.Rollback(ctx)
+	var recordingID int64
+	if err := tx.QueryRow(ctx, `SELECT id FROM recordings WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, req.TenantID, req.RecordingID).Scan(&recordingID); err != nil {
+		return 0, "", false, fmt.Errorf("lock followup recording: %w", err)
+	}
+	var existingID int64
+	var existingRequestID string
+	err = tx.QueryRow(ctx, `SELECT id, request_id FROM followup_generation_runs WHERE tenant_id=$1 AND recording_id=$2 ORDER BY id ASC LIMIT 1`, req.TenantID, req.RecordingID).Scan(&existingID, &existingRequestID)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return 0, "", false, err
+		}
+		return existingID, existingRequestID, false, nil
+	}
+	if err != pgx.ErrNoRows {
+		return 0, "", false, err
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return 0, fmt.Errorf("marshal followup generation request: %w", err)
+		return 0, "", false, fmt.Errorf("marshal followup generation request: %w", err)
 	}
 	recordedAt, err := parseOptionalRecordedAt(req.RecordedAt)
 	if err != nil {
-		return 0, err
+		return 0, "", false, err
 	}
 
 	var runID int64
-	err = s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO followup_generation_runs (
 			tenant_id, recording_id, encounter_id, employee_id, customer_id,
 			customer_name, doctor_name, recorded_at, request_id, request_payload,
@@ -233,9 +273,12 @@ func (s *Service) createGenerationRun(ctx context.Context, requestID string, req
 		strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.DoctorName), recordedAt,
 		requestID, payload, followupPromptCode, followupRunMaxAttempts).Scan(&runID)
 	if err != nil {
-		return 0, fmt.Errorf("create followup generation run: %w", err)
+		return 0, "", false, fmt.Errorf("create followup generation run: %w", err)
 	}
-	return runID, nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, "", false, err
+	}
+	return runID, requestID, true, nil
 }
 
 // startRetryWorker 启动随访生成补偿扫描。
@@ -583,6 +626,7 @@ type generatedTasksPayload struct {
 }
 
 type generatedTask struct {
+	Category       string   `json:"category"`
 	Title          string   `json:"title"`
 	ContactTime    string   `json:"contact_time"`
 	Purpose        string   `json:"purpose"`
@@ -593,6 +637,8 @@ type generatedTask struct {
 	Executor       string   `json:"executor"`
 	EditableFields []string `json:"editable_fields"`
 }
+
+const maxGeneratedFollowupTasks = 2
 
 // saveGeneratedTasks 解析 LLM 生成结果，并把每条任务持久化到 recording_tasks。
 //
@@ -676,6 +722,9 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 	if err := json.Unmarshal([]byte(normalized), &payload); err != nil {
 		return nil, fmt.Errorf("decode generated tasks: %w", err)
 	}
+	if len(payload.Tasks) > maxGeneratedFollowupTasks {
+		return nil, fmt.Errorf("generated task count %d exceeds maximum %d", len(payload.Tasks), maxGeneratedFollowupTasks)
+	}
 	for index := range payload.Tasks {
 		task := &payload.Tasks[index]
 		if strings.TrimSpace(task.Title) == "" {
@@ -747,6 +796,10 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 	if assigneeID != nil {
 		assignedTo = *assigneeID
 	}
+	var customerPhone string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(phone, '') FROM customers WHERE tenant_id=$1 AND id=$2`, req.TenantID, req.CustomerID).Scan(&customerPhone); err != nil {
+		return fmt.Errorf("load customer phone: %w", err)
+	}
 
 	for index, task := range tasks {
 		dueAt, err := parseContactTime(task.ContactTime)
@@ -768,10 +821,24 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		if contactReason == "" {
 			contactReason = strings.TrimSpace(task.Title)
 		}
+		category := strings.TrimSpace(task.Category)
+		if category == "" {
+			category = "care"
+		}
+		if category == "sales" || category == "surgery_decision" {
+			return fmt.Errorf("generated task %d contains prohibited category", index)
+		}
+		var duplicate bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM recording_tasks WHERE tenant_id=$1 AND customer_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('cancelled','returned') AND title=$3 AND created_at >= NOW() - INTERVAL '7 days')`, req.TenantID, req.CustomerID, strings.TrimSpace(task.Title)).Scan(&duplicate); err != nil {
+			return fmt.Errorf("check duplicate followup task: %w", err)
+		}
+		if duplicate {
+			continue
+		}
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO recording_tasks (
-				tenant_id, recording_id, customer_id, customer_name,
+				tenant_id, recording_id, customer_id, customer_name, customer_phone,
 				title, description, script, status, priority, due_at,
 				source_type, source_detail, contact_reason, encounter_id,
 				purpose, background, evidence, contact_method, doctor_name,
@@ -781,21 +848,24 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			)
 			VALUES (
 				$1, $2, $3, $4,
-				$5, NULLIF($6, ''), $7, 'pending', 'medium', $8,
-				'follow_up', 'followup.task-generation', NULLIF($9, ''), $10,
-				NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, ''),
-				NULLIF($14, ''), NULLIF($15, ''),
-				$16::integer, CASE WHEN $16::integer IS NULL THEN NULL ELSE 'partnership' END,
-				$17::jsonb, 'ai_generated', $18, NULLIF($19, ''), $20::jsonb
+				$5, NULLIF($6, ''), $7, NULLIF($8, ''), 'pending', 'medium', $9,
+				'follow_up', 'followup.task-generation', NULLIF($10, ''), $11,
+				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
+				NULLIF($15, ''), NULLIF($16, ''),
+				$17::integer, CASE WHEN $17::integer IS NULL THEN NULL ELSE 'partnership' END,
+				$18::jsonb, 'ai_generated', $19, NULLIF($20, ''), $21::jsonb
 			)
 		`,
-			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName,
+			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName, customerPhone,
 			strings.TrimSpace(task.Title), description, strings.TrimSpace(task.Script),
 			dueAt, contactReason, req.EncounterID, purpose, background,
 			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
 			strings.TrimSpace(req.DoctorName), assignedTo, editableFieldsJSON, promptVersion,
 			response.ModelCode, rawTask,
 		)
+		if err == nil {
+			_, err = tx.Exec(ctx, `UPDATE recording_tasks SET task_category=$1 WHERE tenant_id=$2 AND recording_id=$3 AND title=$4 AND id=(SELECT MAX(id) FROM recording_tasks WHERE tenant_id=$2 AND recording_id=$3 AND title=$4)`, category, req.TenantID, req.RecordingID, strings.TrimSpace(task.Title))
+		}
 		if err != nil {
 			return fmt.Errorf("insert generated task %d: %w", index, err)
 		}
