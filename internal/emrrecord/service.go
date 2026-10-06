@@ -25,6 +25,13 @@ func anonymousPatient(snapshot map[string]any) bool {
 	if snapshot == nil {
 		return false
 	}
+	name := strings.TrimSpace(fmt.Sprint(snapshot["name"]))
+	placeholder := strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") && strings.Contains(name, "接待的客户")
+	// A real name entered by the doctor is the confirmation event. Older Worker
+	// snapshots may still carry anonymous=true and must not override it.
+	if name != "" && !placeholder {
+		return false
+	}
 	if value, ok := snapshot["anonymous"]; ok && (value == true || strings.EqualFold(fmt.Sprint(value), "true")) {
 		return true
 	}
@@ -34,8 +41,7 @@ func anonymousPatient(snapshot map[string]any) bool {
 	if value, ok := snapshot["extraData"].(map[string]any); ok && (value["anonymous"] == true || strings.EqualFold(fmt.Sprint(value["anonymous"]), "true")) {
 		return true
 	}
-	name := strings.TrimSpace(fmt.Sprint(snapshot["name"]))
-	return strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") && strings.Contains(name, "接待的客户")
+	return placeholder || name == ""
 }
 
 var ErrQualityConfirmationRequired = errors.New("存在非阻断质量问题，请确认是否继续")
