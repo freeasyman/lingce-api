@@ -96,9 +96,6 @@ func (s *Service) StartBadgeSession(ctx context.Context, tenantID, actorID int64
 	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
 		return nil, err
 	}
-	if req.CustomerID == nil || *req.CustomerID <= 0 {
-		return nil, fmt.Errorf("请先绑定患者后再开始接诊")
-	}
 	deviceNo := strings.TrimSpace(req.DeviceNo)
 	if deviceNo == "" {
 		return nil, fmt.Errorf("智能工牌编号不能为空")
