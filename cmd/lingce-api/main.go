@@ -46,6 +46,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/support"
 	"github.com/freeasyman/lingce-api/internal/sysconfig"
 	"github.com/freeasyman/lingce-api/internal/tenant"
+	"github.com/freeasyman/lingce-api/internal/testcleanup"
 	wecomdelegated "github.com/freeasyman/lingce-api/internal/wecomv2/delegated"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
