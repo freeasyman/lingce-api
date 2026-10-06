@@ -2539,6 +2539,11 @@ func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTas
 	return err
 }
 
+func (s *Store) CompletePatient(ctx context.Context, id int64, req CompletePatientRequest) error {
+	_, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id)
+	return err
+}
+
 // CancelTask marks a task as cancelled
 func (s *Store) CancelTask(ctx context.Context, id int64, reason string) error {
 	query := `

@@ -1170,6 +1170,13 @@ type ReturnTaskRequest struct {
 	Reason string `json:"reason"`
 }
 
+type CompletePatientRequest struct {
+	Name   string  `json:"name"`
+	Phone  string  `json:"phone"`
+	Age    *int    `json:"age,omitempty"`
+	Gender *string `json:"gender,omitempty"`
+}
+
 // EmployeePartnershipListRequest represents the request for listing partnerships
 type EmployeePartnershipListRequest struct {
 	EmployeeID   *int64  `json:"employee_id,omitempty"`

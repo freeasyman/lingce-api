@@ -173,6 +173,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/daily-briefing", Handler: h.GetDailyBriefing, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/my-tasks", Handler: h.GetMyTasks, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/incomplete-patients", Handler: h.ListIncompletePatients, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/patient", Handler: h.CompletePatient, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/employees", Handler: h.ListTaskEmployees, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/assign", Handler: h.BatchAssignTasks, Auth: true},
@@ -230,6 +231,29 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Lingce Sales endpoints
 	h.RegisterSalesRoutes(mux, jwtSecret)
+}
+
+func (h *Handler) CompletePatient(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid task ID")
+		return
+	}
+	var req CompletePatientRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Phone) == "" {
+		httputil.WriteBadRequest(w, "name and phone are required")
+		return
+	}
+	if err := h.service.store.CompletePatient(r.Context(), id, req); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"message": "patient completed"})
 }
 
 func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request) {
