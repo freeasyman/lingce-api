@@ -1048,21 +1048,22 @@ type RecordingAnalysisSettingsResponse struct {
 
 // RecordingTaskStatsResponse represents task statistics
 type RecordingTaskStatsResponse struct {
-	TotalTasks      int64            `json:"total_tasks"`
-	PendingTasks    int64            `json:"pending_tasks"`
-	AssignedTasks   int64            `json:"assigned_tasks"`
-	CompletedTasks  int64            `json:"completed_tasks"`
-	CancelledTasks  int64            `json:"cancelled_tasks"`
-	ReturnedTasks   int64            `json:"returned_tasks"`
-	OverdueTasks    int64            `json:"overdue_tasks"`
-	ConnectedTasks  int64            `json:"connected_tasks"`
-	HelpNeededTasks int64            `json:"help_needed_tasks"`
-	EscalatedTasks  int64            `json:"escalated_tasks"`
-	CompletionRate  float64          `json:"completion_rate"`
-	ByTaskCategory  map[string]int64 `json:"by_task_category,omitempty"`
-	AnonymousTasks  int64            `json:"anonymous_tasks"`
-	ByPriority      map[string]int64 `json:"by_priority,omitempty"`
-	ByRecordingRole map[string]int64 `json:"by_recording_role,omitempty"`
+	TotalTasks         int64            `json:"total_tasks"`
+	PendingTasks       int64            `json:"pending_tasks"`
+	AssignedTasks      int64            `json:"assigned_tasks"`
+	CompletedTasks     int64            `json:"completed_tasks"`
+	CancelledTasks     int64            `json:"cancelled_tasks"`
+	ReturnedTasks      int64            `json:"returned_tasks"`
+	OverdueTasks       int64            `json:"overdue_tasks"`
+	ConnectedTasks     int64            `json:"connected_tasks"`
+	HelpNeededTasks    int64            `json:"help_needed_tasks"`
+	EscalatedTasks     int64            `json:"escalated_tasks"`
+	PendingEscalations int64            `json:"pending_escalations"`
+	CompletionRate     float64          `json:"completion_rate"`
+	ByTaskCategory     map[string]int64 `json:"by_task_category,omitempty"`
+	AnonymousTasks     int64            `json:"anonymous_tasks"`
+	ByPriority         map[string]int64 `json:"by_priority,omitempty"`
+	ByRecordingRole    map[string]int64 `json:"by_recording_role,omitempty"`
 }
 
 // DailyBriefingResponse represents daily briefing

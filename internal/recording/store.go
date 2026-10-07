@@ -2742,6 +2742,9 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.anonymous_patient=true`, whereClause), args...).Scan(&stats.AnonymousTasks); err != nil {
 		return nil, err
 	}
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.escalation_status='pending'`, whereClause), args...).Scan(&stats.PendingEscalations); err != nil {
+		return nil, err
+	}
 
 	priorityQuery := fmt.Sprintf(`
 		SELECT
