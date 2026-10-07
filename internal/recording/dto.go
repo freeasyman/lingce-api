@@ -1123,6 +1123,8 @@ type TaskResponse struct {
 	ExecutionResult       *string `json:"execution_result,omitempty"`
 	ExecutionDifficulty   *string `json:"execution_difficulty,omitempty"`
 	DoctorEscalation      *string `json:"doctor_escalation,omitempty"`
+	EscalationStatus      *string `json:"escalation_status,omitempty"`
+	EscalationResolution  *string `json:"escalation_resolution,omitempty"`
 	NextContactAt         *string `json:"next_contact_at,omitempty"`
 	SourceType            *string `json:"source_type,omitempty"`
 	SourceTypeLabel       *string `json:"source_type_label,omitempty"`
