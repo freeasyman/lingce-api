@@ -729,6 +729,23 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 	}
 	for index := range payload.Tasks {
 		task := &payload.Tasks[index]
+		if task.PhoneScript == "" {
+			task.PhoneScript = task.Script
+		}
+		if task.Script == "" {
+			task.Script = task.PhoneScript
+		}
+		switch strings.TrimSpace(task.Category) {
+		case "", "care", "execution", "understanding", "milestone":
+		default:
+			return nil, fmt.Errorf("generated task %d category is invalid", index)
+		}
+		if strings.TrimSpace(task.Purpose) == "" || strings.TrimSpace(task.Evidence) == "" {
+			return nil, fmt.Errorf("generated task %d purpose or evidence is empty", index)
+		}
+		if len([]rune(task.PhoneScript)) > 120 || len([]rune(task.WechatContent)) > 600 {
+			return nil, fmt.Errorf("generated task %d channel content exceeds length limit", index)
+		}
 		if strings.TrimSpace(task.Title) == "" {
 			return nil, fmt.Errorf("generated task %d title is empty", index)
 		}
@@ -776,6 +793,11 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		return fmt.Errorf("begin recording task transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 按患者锁串行化不同录音的生成，防止并发请求绕过重复检查。
+	var lockedCustomerID int64
+	if err := tx.QueryRow(ctx, `SELECT id FROM customers WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, req.TenantID, req.CustomerID).Scan(&lockedCustomerID); err != nil {
+		return fmt.Errorf("lock followup patient: %w", err)
+	}
 
 	if len(tasks) > 0 {
 		if err := deletePendingFollowupTasks(ctx, tx, req.TenantID, req.RecordingID); err != nil {

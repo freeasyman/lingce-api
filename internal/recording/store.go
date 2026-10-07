@@ -2495,7 +2495,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 }
 
 // CompleteTask marks a task as completed
-func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, notes *string) error {
+func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, notes *string, execution ...CompleteTaskRequest) error {
 	completionNote := ""
 	completedByText := strconv.FormatInt(completedBy, 10)
 	if notes != nil {
@@ -2522,7 +2522,12 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 		WHERE id = $4 AND status NOT IN ($5, $6, $7)
 	`
 
-	result, err := s.pool.Exec(ctx, query, TaskStatusCompleted, completedByText, completionNote, id, TaskStatusCompleted, TaskStatusCancelled, TaskStatusReturned)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, query, TaskStatusCompleted, completedByText, completionNote, id, TaskStatusCompleted, TaskStatusCancelled, TaskStatusReturned)
 	if err != nil {
 		return fmt.Errorf("failed to complete task: %w", err)
 	}
@@ -2531,7 +2536,13 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 		return fmt.Errorf("task not found or already completed")
 	}
 
-	return nil
+	if len(execution) > 0 {
+		req := execution[0]
+		if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, doctor_escalation=$3, next_contact_at=$4 WHERE id=$5`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTaskRequest) error {
@@ -2539,8 +2550,11 @@ func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTas
 	return err
 }
 
-func (s *Store) CompletePatient(ctx context.Context, id int64, req CompletePatientRequest) error {
-	_, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id)
+func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req CompletePatientRequest) error {
+	result, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5 AND tenant_id=$6 AND source_type IN ('follow_up','followup')`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID)
+	if err == nil && result.RowsAffected() == 0 {
+		return fmt.Errorf("task not found")
+	}
 	return err
 }
 

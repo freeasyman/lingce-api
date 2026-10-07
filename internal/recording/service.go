@@ -4991,10 +4991,7 @@ func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64,
 	if err != nil {
 		return err
 	}
-	if err := s.store.CompleteTask(ctx, id, completedBy, req.Notes); err != nil {
-		return err
-	}
-	if err := s.store.SaveTaskExecution(ctx, id, req); err != nil {
+	if err := s.store.CompleteTask(ctx, id, completedBy, req.Notes, req); err != nil {
 		return err
 	}
 	_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")

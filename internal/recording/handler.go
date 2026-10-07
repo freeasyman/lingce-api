@@ -245,11 +245,27 @@ func (h *Handler) CompletePatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CompletePatientRequest
+	tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if tenantErr != nil {
+		httputil.WriteForbidden(w, tenantErr.Error())
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+		allowed, err := h.service.store.CanViewFollowupTask(r.Context(), id, tenantID, claims.UserID)
+		if err != nil || !allowed {
+			httputil.WriteForbidden(w, "task visibility denied")
+			return
+		}
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Phone) == "" {
 		httputil.WriteBadRequest(w, "name and phone are required")
 		return
 	}
-	if err := h.service.store.CompletePatient(r.Context(), id, req); err != nil {
+	if err := h.service.store.CompletePatient(r.Context(), tenantID, id, req); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -266,6 +282,12 @@ func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		httputil.WriteForbidden(w, err.Error())
 		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
 	}
 	rows, err := h.service.store.pool.Query(r.Context(), `SELECT id, COALESCE(customer_name,''), COALESCE(customer_phone,''), anonymous_patient, patient_age, patient_gender FROM recording_tasks WHERE tenant_id=$1 AND source_type IN ('follow_up','followup') AND (anonymous_patient=true OR NULLIF(customer_name,'') IS NULL OR NULLIF(customer_phone,'') IS NULL) AND status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 100`, tenantID)
 	if err != nil {
@@ -287,6 +309,16 @@ func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request)
 		if err := rows.Scan(&v.ID, &v.Name, &v.Phone, &v.Anonymous, &v.Age, &v.Gender); err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
+		}
+		if claims.UserType != auth.UserTypeAdmin {
+			allowed, err := h.service.store.CanViewFollowupTask(r.Context(), v.ID, tenantID, claims.UserID)
+			if err != nil {
+				httputil.WriteInternalError(w, err.Error())
+				return
+			}
+			if !allowed {
+				continue
+			}
 		}
 		items = append(items, v)
 	}
