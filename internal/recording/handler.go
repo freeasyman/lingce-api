@@ -174,6 +174,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/my-tasks", Handler: h.GetMyTasks, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/incomplete-patients", Handler: h.ListIncompletePatients, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/patient", Handler: h.CompletePatient, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/escalation/resolve", Handler: h.ResolveTaskEscalation, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/employees", Handler: h.ListTaskEmployees, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/assign", Handler: h.BatchAssignTasks, Auth: true},
