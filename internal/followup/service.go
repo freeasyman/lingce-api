@@ -821,7 +821,10 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		assignedTo = *assigneeID
 	}
 	var customerPhone string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(phone, '') FROM customers WHERE tenant_id=$1 AND id=$2`, req.TenantID, req.CustomerID).Scan(&customerPhone); err != nil {
+	var patientAge *int
+	var patientGender *string
+	var anonymousPatient bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(phone, ''), age, gender, COALESCE(extra_data->>'anonymous','false')='true' OR trim(COALESCE(name,'')) IN ('','匿名患者','匿名客户','未命名患者','未命名客户','未知患者') FROM customers WHERE tenant_id=$1 AND id=$2`, req.TenantID, req.CustomerID).Scan(&customerPhone, &patientAge, &patientGender, &anonymousPatient); err != nil {
 		return fmt.Errorf("load customer phone: %w", err)
 	}
 
@@ -868,7 +871,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				purpose, background, evidence, contact_method, doctor_name,
 				assigned_to, assigned_by,
 				editable_fields, generation_source, generation_prompt_version,
-				generation_model, raw_generation_payload, phone_script, wechat_content, task_category
+				generation_model, raw_generation_payload, phone_script, wechat_content, task_category, patient_age, patient_gender, anonymous_patient
 			)
 			VALUES (
 				$1, $2, $3, $4,
@@ -877,7 +880,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
 				NULLIF($15, ''), NULLIF($16, ''),
 				$17::integer, CASE WHEN $17::integer IS NULL THEN NULL ELSE 'partnership' END,
-				$18::jsonb, 'ai_generated', $19, NULLIF($20, ''), $21::jsonb, NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, '')
+				$18::jsonb, 'ai_generated', $19, NULLIF($20, ''), $21::jsonb, NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, ''), $25, $26, $27
 			)
 		`,
 			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName, customerPhone,
@@ -885,7 +888,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			dueAt, contactReason, req.EncounterID, purpose, background,
 			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
 			strings.TrimSpace(req.DoctorName), assignedTo, editableFieldsJSON, promptVersion,
-			response.ModelCode, rawTask, strings.TrimSpace(task.PhoneScript), strings.TrimSpace(task.WechatContent), category,
+			response.ModelCode, rawTask, strings.TrimSpace(task.PhoneScript), strings.TrimSpace(task.WechatContent), category, patientAge, patientGender, anonymousPatient,
 		)
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE recording_tasks SET task_category=$1 WHERE tenant_id=$2 AND recording_id=$3 AND title=$4 AND id=(SELECT MAX(id) FROM recording_tasks WHERE tenant_id=$2 AND recording_id=$3 AND title=$4)`, category, req.TenantID, req.RecordingID, strings.TrimSpace(task.Title))

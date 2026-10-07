@@ -2337,6 +2337,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	if req.TaskType != nil {
 		if *req.TaskType == TaskType("follow_up") || *req.TaskType == TaskType("followup") {
 			conditions = append(conditions, "rt.source_type IN ('follow_up', 'followup')")
+			conditions = append(conditions, "rt.anonymous_patient=false AND NULLIF(trim(rt.customer_name),'') IS NOT NULL AND NULLIF(trim(rt.customer_phone),'') IS NOT NULL")
 		} else {
 			conditions = append(conditions, fmt.Sprintf("rt.source_type = $%d", argIndex))
 			args = append(args, string(*req.TaskType))
