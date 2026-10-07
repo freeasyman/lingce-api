@@ -223,6 +223,42 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	return customers, total, nil
 }
 
+// SearchCandidates is the low-latency lookup used by typeahead controls. It
+// deliberately avoids the customer list's aggregate joins and total count.
+func (s *Store) SearchCandidates(ctx context.Context, tenantID int64, keyword string, limit int) ([]*Customer, error) {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return []*Customer{}, nil
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 8
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, phone, gender, age, extra_data
+		FROM customers
+		WHERE tenant_id=$1 AND deleted_at IS NULL
+		  AND (name ILIKE $2 OR phone ILIKE $2)
+		ORDER BY CASE WHEN name=$3 OR phone=$3 THEN 0 ELSE 1 END, updated_at DESC, id DESC
+		LIMIT $4
+	`, tenantID, "%"+keyword+"%", keyword, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search customer candidates: %w", err)
+	}
+	defer rows.Close()
+	result := make([]*Customer, 0, limit)
+	for rows.Next() {
+		item := &Customer{}
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.Phone, &item.Gender, &item.Age, &item.ExtraData); err != nil {
+			return nil, fmt.Errorf("scan customer candidate: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetCustomerStats retrieves customer statistics
 func (s *Store) GetCustomerStats(ctx context.Context, tenantID *int64) (*CustomerStatsResponse, error) {
 	var conditions []string

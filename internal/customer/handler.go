@@ -61,6 +61,7 @@ func resolveCustomerOptionalTenantID(claims *auth.Claims, tenantIDParam string) 
 // RegisterRoutes registers customer module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/customers/search-candidates", Handler: h.SearchCandidates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers", Handler: h.ListCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/stats/overview", Handler: h.GetCustomerStats, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/{id}", Handler: h.GetCustomerByID, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -99,6 +100,30 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/customers/groups/rules/operators", Handler: h.GetRuleOperators, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
+}
+
+func (h *Handler) SearchCandidates(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	if keyword == "" {
+		keyword = strings.TrimSpace(r.URL.Query().Get("search"))
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.service.SearchCandidates(r.Context(), tenantID, keyword, limit)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 
 // Customer Handlers

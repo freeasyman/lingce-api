@@ -42,6 +42,18 @@ func (s *Service) ListCustomers(ctx context.Context, req CustomerListRequest) ([
 	return responses, total, nil
 }
 
+func (s *Service) SearchCandidates(ctx context.Context, tenantID int64, keyword string, limit int) ([]*CustomerResponse, error) {
+	items, err := s.store.SearchCandidates(ctx, tenantID, keyword, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*CustomerResponse, len(items))
+	for i, item := range items {
+		result[i] = toCustomerResponse(item)
+	}
+	return result, nil
+}
+
 // GetCustomerStats retrieves customer statistics
 func (s *Service) GetCustomerStats(ctx context.Context, tenantID *int64) (*CustomerStatsResponse, error) {
 	return s.store.GetCustomerStats(ctx, tenantID)
