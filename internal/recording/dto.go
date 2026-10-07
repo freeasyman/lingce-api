@@ -1059,6 +1059,8 @@ type RecordingTaskStatsResponse struct {
 	HelpNeededTasks int64            `json:"help_needed_tasks"`
 	EscalatedTasks  int64            `json:"escalated_tasks"`
 	CompletionRate  float64          `json:"completion_rate"`
+	ByTaskCategory  map[string]int64 `json:"by_task_category,omitempty"`
+	AnonymousTasks  int64            `json:"anonymous_tasks"`
 	ByPriority      map[string]int64 `json:"by_priority,omitempty"`
 	ByRecordingRole map[string]int64 `json:"by_recording_role,omitempty"`
 }

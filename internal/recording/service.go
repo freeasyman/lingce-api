@@ -10700,6 +10700,10 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		resp.DueDate = &formatted
 		resp.DueAt = &formatted
 	}
+	if t.NextContactAt != nil {
+		formatted := t.NextContactAt.Format(time.RFC3339)
+		resp.NextContactAt = &formatted
+	}
 
 	if t.CompletedAt != nil {
 		formatted := t.CompletedAt.Format("2006-01-02T15:04:05Z07:00")

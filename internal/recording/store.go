@@ -2715,6 +2715,28 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if stats.TotalTasks > 0 {
 		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
 	}
+	stats.ByTaskCategory = map[string]int64{}
+	categoryRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT COALESCE(NULLIF(t.task_category,''),'uncategorized'), COUNT(*) FROM recording_tasks t WHERE %s GROUP BY 1`, whereClause), args...)
+	if err != nil {
+		return nil, err
+	}
+	for categoryRows.Next() {
+		var category string
+		var count int64
+		if err := categoryRows.Scan(&category, &count); err != nil {
+			categoryRows.Close()
+			return nil, err
+		}
+		stats.ByTaskCategory[category] = count
+	}
+	categoryErr := categoryRows.Err()
+	categoryRows.Close()
+	if categoryErr != nil {
+		return nil, categoryErr
+	}
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.anonymous_patient=true`, whereClause), args...).Scan(&stats.AnonymousTasks); err != nil {
+		return nil, err
+	}
 
 	priorityQuery := fmt.Sprintf(`
 		SELECT
