@@ -2542,6 +2542,11 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 		if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, doctor_escalation=$3, next_contact_at=$4 WHERE id=$5`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, id); err != nil {
 			return err
 		}
+		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
+			if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET status='pending', completed_at=NULL, due_at=$1 WHERE id=$2`, req.NextContactAt, id); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit(ctx)
 }

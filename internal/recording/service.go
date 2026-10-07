@@ -4987,6 +4987,9 @@ func (s *Service) CanViewFollowupTask(ctx context.Context, taskID, tenantID, vie
 
 // CompleteTask marks a task as completed
 func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64, req CompleteTaskRequest) error {
+	if err := validateTaskExecution(req, time.Now()); err != nil {
+		return err
+	}
 	task, err := s.store.GetTaskByID(ctx, id, false)
 	if err != nil {
 		return err
@@ -4994,7 +4997,28 @@ func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64,
 	if err := s.store.CompleteTask(ctx, id, completedBy, req.Notes, req); err != nil {
 		return err
 	}
-	_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")
+	if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
+		_ = s.appendTaskInteraction(ctx, task, completedBy, "task_contact_attempt", "未接通，已安排再次联系")
+	} else {
+		_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")
+	}
+	return nil
+}
+
+func validateTaskExecution(req CompleteTaskRequest, now time.Time) error {
+	if req.ExecutionResult != nil {
+		switch *req.ExecutionResult {
+		case "connected", "no_answer", "needs_help":
+		default:
+			return fmt.Errorf("invalid execution result")
+		}
+		if *req.ExecutionResult == "no_answer" && req.NextContactAt == nil {
+			return fmt.Errorf("next contact time is required for unanswered contact")
+		}
+	}
+	if req.NextContactAt != nil && !req.NextContactAt.After(now) {
+		return fmt.Errorf("next contact time must be in the future")
+	}
 	return nil
 }
 
