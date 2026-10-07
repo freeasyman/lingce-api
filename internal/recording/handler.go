@@ -1112,6 +1112,34 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	task, taskErr := h.service.GetTask(r.Context(), id)
+	if taskErr != nil {
+		httputil.WriteNotFound(w, "task not found")
+		return
+	}
+	scope, scopeErr := getTaskTenantScope(claims, r, h)
+	if scopeErr != nil {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	tenantAllowed := false
+	for _, tenantID := range scope.TenantIDs {
+		if tenantID == task.TenantID {
+			tenantAllowed = true
+		}
+	}
+	if !tenantAllowed {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, task.TenantID, claims.UserID)
+		if visibilityErr != nil || !allowed {
+			httputil.WriteForbidden(w, "task visibility denied")
+			return
+		}
+	}
+
 	var req CompleteTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -1147,6 +1175,34 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
 			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
+
+	task, taskErr := h.service.GetTask(r.Context(), id)
+	if taskErr != nil {
+		httputil.WriteNotFound(w, "task not found")
+		return
+	}
+	scope, scopeErr := getTaskTenantScope(claims, r, h)
+	if scopeErr != nil {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	tenantAllowed := false
+	for _, tenantID := range scope.TenantIDs {
+		if tenantID == task.TenantID {
+			tenantAllowed = true
+		}
+	}
+	if !tenantAllowed {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, task.TenantID, claims.UserID)
+		if visibilityErr != nil || !allowed {
+			httputil.WriteForbidden(w, "task visibility denied")
 			return
 		}
 	}
@@ -1192,6 +1248,34 @@ func (h *Handler) ReturnTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	task, taskErr := h.service.GetTask(r.Context(), id)
+	if taskErr != nil {
+		httputil.WriteNotFound(w, "task not found")
+		return
+	}
+	scope, scopeErr := getTaskTenantScope(claims, r, h)
+	if scopeErr != nil {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	tenantAllowed := false
+	for _, tenantID := range scope.TenantIDs {
+		if tenantID == task.TenantID {
+			tenantAllowed = true
+		}
+	}
+	if !tenantAllowed {
+		httputil.WriteForbidden(w, "tenant access denied")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		allowed, visibilityErr := h.service.store.CanViewFollowupTask(r.Context(), id, task.TenantID, claims.UserID)
+		if visibilityErr != nil || !allowed {
+			httputil.WriteForbidden(w, "task visibility denied")
+			return
+		}
+	}
+
 	var req ReturnTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")

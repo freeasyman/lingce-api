@@ -759,6 +759,23 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 			return nil, fmt.Errorf("generated task %d script is empty", index)
 		}
 	}
+	// 同一次输出中相同渠道和时间的事项合并为一次联系，保留全部事实依据。
+	if len(payload.Tasks) == 2 {
+		first, second := payload.Tasks[0], payload.Tasks[1]
+		if first.ContactTime == second.ContactTime && first.ContactMethod == second.ContactMethod && first.Executor == second.Executor {
+			first.Title = first.Title + "；" + second.Title
+			first.Purpose = strings.Join(nonEmptyStrings(first.Purpose, second.Purpose), "；")
+			first.Background = strings.Join(nonEmptyStrings(first.Background, second.Background), "\n")
+			first.Evidence = strings.Join(nonEmptyStrings(first.Evidence, second.Evidence), "\n")
+			first.PhoneScript = strings.Join(nonEmptyStrings(first.PhoneScript, second.PhoneScript), "\n")
+			first.WechatContent = strings.Join(nonEmptyStrings(first.WechatContent, second.WechatContent), "\n\n")
+			first.Script = first.PhoneScript
+			if len([]rune(first.PhoneScript)) > 120 || len([]rune(first.WechatContent)) > 600 {
+				return nil, fmt.Errorf("merged task channel content exceeds length limit")
+			}
+			payload.Tasks = []generatedTask{first}
+		}
+	}
 	return &payload, nil
 }
 

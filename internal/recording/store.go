@@ -2675,7 +2675,10 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 			COUNT(CASE
 				WHEN t.due_at < NOW() AND t.status NOT IN ('completed', 'cancelled', 'returned')
 				THEN 1
-			END) AS overdue_tasks
+			END) AS overdue_tasks,
+			COUNT(CASE WHEN t.execution_result = 'connected' THEN 1 END) AS connected_tasks,
+			COUNT(CASE WHEN t.execution_result = 'needs_help' THEN 1 END) AS help_needed_tasks,
+			COUNT(CASE WHEN NULLIF(trim(COALESCE(t.doctor_escalation,'')), '') IS NOT NULL THEN 1 END) AS escalated_tasks
 		FROM recording_tasks t
 		WHERE %s
 	`, whereClause)
@@ -2703,8 +2706,14 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		&stats.CancelledTasks,
 		&stats.ReturnedTasks,
 		&stats.OverdueTasks,
+		&stats.ConnectedTasks,
+		&stats.HelpNeededTasks,
+		&stats.EscalatedTasks,
 	); err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
+	}
+	if stats.TotalTasks > 0 {
+		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
 	}
 
 	priorityQuery := fmt.Sprintf(`
