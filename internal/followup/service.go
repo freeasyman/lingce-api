@@ -629,6 +629,7 @@ type generatedTask struct {
 	Category       string   `json:"category"`
 	PhoneScript    string   `json:"phone_script"`
 	WechatContent  string   `json:"wechat_content"`
+	TimeBasis      string   `json:"time_basis"`
 	Title          string   `json:"title"`
 	ContactTime    string   `json:"contact_time"`
 	Purpose        string   `json:"purpose"`
@@ -888,7 +889,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				purpose, background, evidence, contact_method, doctor_name,
 				assigned_to, assigned_by,
 				editable_fields, generation_source, generation_prompt_version,
-				generation_model, raw_generation_payload, phone_script, wechat_content, task_category, patient_age, patient_gender, anonymous_patient
+				generation_model, raw_generation_payload, phone_script, wechat_content, task_category, patient_age, patient_gender, anonymous_patient, time_basis
 			)
 			VALUES (
 				$1, $2, $3, $4,
@@ -897,7 +898,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
 				NULLIF($15, ''), NULLIF($16, ''),
 				$17::integer, CASE WHEN $17::integer IS NULL THEN NULL ELSE 'partnership' END,
-				$18::jsonb, 'ai_generated', $19, NULLIF($20, ''), $21::jsonb, NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, ''), $25, $26, $27
+				$18::jsonb, 'ai_generated', $19, NULLIF($20, ''), $21::jsonb, NULLIF($22, ''), NULLIF($23, ''), NULLIF($24, ''), $25, $26, $27, NULLIF($28, '')
 			)
 		`,
 			req.TenantID, req.RecordingID, req.CustomerID, req.CustomerName, customerPhone,
@@ -905,7 +906,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			dueAt, contactReason, req.EncounterID, purpose, background,
 			strings.TrimSpace(task.Evidence), strings.TrimSpace(task.ContactMethod),
 			strings.TrimSpace(req.DoctorName), assignedTo, editableFieldsJSON, promptVersion,
-			response.ModelCode, rawTask, strings.TrimSpace(task.PhoneScript), strings.TrimSpace(task.WechatContent), category, patientAge, patientGender, anonymousPatient,
+			response.ModelCode, rawTask, strings.TrimSpace(task.PhoneScript), strings.TrimSpace(task.WechatContent), category, patientAge, patientGender, anonymousPatient, strings.TrimSpace(task.TimeBasis),
 		)
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE recording_tasks SET task_category=$1 WHERE tenant_id=$2 AND recording_id=$3 AND title=$4 AND id=(SELECT MAX(id) FROM recording_tasks WHERE tenant_id=$2 AND recording_id=$3 AND title=$4)`, category, req.TenantID, req.RecordingID, strings.TrimSpace(task.Title))

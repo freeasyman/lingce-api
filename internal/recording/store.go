@@ -2413,7 +2413,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 	query := fmt.Sprintf(`
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
-		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.source_type, rt.source_detail,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.time_basis, rt.source_type, rt.source_detail,
 		       rt.assigned_to, NULL::bigint AS assigned_by,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
@@ -2438,7 +2438,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		var t RecordingTask
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.SourceType, &t.SourceDetail,
+			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.TimeBasis, &t.SourceType, &t.SourceDetail,
 			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
@@ -2458,7 +2458,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	}
 	query := `
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
-		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.source_type, rt.source_detail,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.time_basis, rt.source_type, rt.source_detail,
 		       rt.assigned_to, NULL::bigint AS assigned_by,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
@@ -2480,7 +2480,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	var t RecordingTask
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.SourceType, &t.SourceDetail,
+		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.TimeBasis, &t.SourceType, &t.SourceDetail,
 		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 	)

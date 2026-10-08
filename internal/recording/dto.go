@@ -1134,6 +1134,7 @@ type TaskResponse struct {
 	EscalationStatus      *string `json:"escalation_status,omitempty"`
 	EscalationResolution  *string `json:"escalation_resolution,omitempty"`
 	NextContactAt         *string `json:"next_contact_at,omitempty"`
+	TimeBasis             *string `json:"time_basis,omitempty"`
 	PatientReplied        *bool   `json:"patient_replied,omitempty"`
 	RevisitAttended       *bool   `json:"revisit_attended,omitempty"`
 	IssueResolved         *bool   `json:"issue_resolved,omitempty"`
@@ -1175,6 +1176,7 @@ type CompleteTaskRequest struct {
 	ExecutionDifficulty  *string    `json:"execution_difficulty,omitempty"`
 	DoctorEscalation     *string    `json:"doctor_escalation,omitempty"`
 	NextContactAt        *time.Time `json:"next_contact_at,omitempty"`
+	TimeBasis            *string    `json:"time_basis,omitempty"`
 	PatientReplied       *bool      `json:"patient_replied,omitempty"`
 	RevisitAttended      *bool      `json:"revisit_attended,omitempty"`
 	IssueResolved        *bool      `json:"issue_resolved,omitempty"`
