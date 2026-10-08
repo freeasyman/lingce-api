@@ -877,7 +877,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			return fmt.Errorf("generated task %d contains prohibited category", index)
 		}
 		var duplicate bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM recording_tasks WHERE tenant_id=$1 AND customer_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('cancelled','returned') AND regexp_replace(lower(trim(title)), '[[:punct:][:space:]]+', '', 'g') = regexp_replace(lower(trim($3)), '[[:punct:][:space:]]+', '', 'g') AND created_at >= NOW() - INTERVAL '7 days')`, req.TenantID, req.CustomerID, strings.TrimSpace(task.Title)).Scan(&duplicate); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM recording_tasks WHERE tenant_id=$1 AND customer_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('cancelled','returned') AND COALESCE(task_category,'care')=COALESCE($4,'care') AND regexp_replace(lower(trim(title)), '[[:punct:][:space:]]+', '', 'g') = regexp_replace(lower(trim($3)), '[[:punct:][:space:]]+', '', 'g') AND due_at BETWEEN $5::timestamptz - INTERVAL '7 days' AND $5::timestamptz + INTERVAL '7 days')`, req.TenantID, req.CustomerID, strings.TrimSpace(task.Title), category, dueAt).Scan(&duplicate); err != nil {
 			return fmt.Errorf("check duplicate followup task: %w", err)
 		}
 		if duplicate {

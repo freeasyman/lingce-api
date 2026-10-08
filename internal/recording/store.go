@@ -2553,11 +2553,23 @@ func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTas
 }
 
 func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req CompletePatientRequest) error {
-	result, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5 AND tenant_id=$6 AND source_type IN ('follow_up','followup')`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID)
-	if err == nil && result.RowsAffected() == 0 {
-		return fmt.Errorf("task not found")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return err
+	defer tx.Rollback(ctx)
+	var customerID int64
+	if err = tx.QueryRow(ctx, `SELECT customer_id FROM recording_tasks WHERE id=$1 AND tenant_id=$2 AND source_type IN ('follow_up','followup') FOR UPDATE`, id, tenantID).Scan(&customerID); err != nil {
+		return fmt.Errorf("task not found: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE customers SET name=NULLIF($1,''), phone=NULLIF($2,''), age=$3, gender=$4, extra_data=COALESCE(extra_data,'{}'::jsonb)-'anonymous' WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, customerID, tenantID); err != nil {
+		return fmt.Errorf("update patient: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID); err != nil {
+		return err
+	}
+	_, _ = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'patient_completed',jsonb_build_object('customer_id',$3,'age',$4,'gender',$5))`, tenantID, id, customerID, req.Age, req.Gender)
+	return tx.Commit(ctx)
 }
 
 // CancelTask marks a task as cancelled

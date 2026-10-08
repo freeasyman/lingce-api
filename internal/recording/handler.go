@@ -266,6 +266,14 @@ func (h *Handler) CompletePatient(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "name and phone are required")
 		return
 	}
+	if req.Age != nil && (*req.Age < 0 || *req.Age > 130) {
+		httputil.WriteBadRequest(w, "age must be between 0 and 130")
+		return
+	}
+	if req.Gender != nil && !strings.Contains("|男|女|其他|未知|", "|"+strings.TrimSpace(*req.Gender)+"|") {
+		httputil.WriteBadRequest(w, "invalid gender")
+		return
+	}
 	if err := h.service.store.CompletePatient(r.Context(), tenantID, id, req); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
