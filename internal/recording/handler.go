@@ -246,6 +246,12 @@ func (h *Handler) ListTaskEscalations(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
+			httputil.WriteForbidden(w, err.Error())
+			return
+		}
+	}
 	rows, err := h.service.store.pool.Query(r.Context(), `SELECT id, COALESCE(customer_name,''), COALESCE(title,''), COALESCE(doctor_escalation,''), escalation_status, COALESCE(escalation_resolution,''), escalation_resolved_by, escalation_resolved_at FROM recording_tasks WHERE tenant_id=$1 AND source_type IN ('follow_up','followup') AND NULLIF(trim(COALESCE(doctor_escalation,'')),'') IS NOT NULL ORDER BY CASE WHEN escalation_status='pending' THEN 0 ELSE 1 END, updated_at DESC LIMIT 100`, tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -268,6 +274,16 @@ func (h *Handler) ListTaskEscalations(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&v.ID, &v.CustomerName, &v.Title, &v.Escalation, &v.Status, &v.Resolution, &v.ResolvedBy, &v.ResolvedAt); err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
+		}
+		if claims.UserType != auth.UserTypeAdmin {
+			allowed, err := h.service.store.CanViewFollowupTask(r.Context(), v.ID, tenantID, claims.UserID)
+			if err != nil {
+				httputil.WriteInternalError(w, err.Error())
+				return
+			}
+			if !allowed {
+				continue
+			}
 		}
 		items = append(items, v)
 	}
