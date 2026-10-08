@@ -173,6 +173,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/daily-briefing", Handler: h.GetDailyBriefing, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/my-tasks", Handler: h.GetMyTasks, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/incomplete-patients", Handler: h.ListIncompletePatients, Auth: true},
+		{Method: "GET", Path: "/api/v1/recording-tasks/escalations", Handler: h.ListTaskEscalations, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/patient", Handler: h.CompletePatient, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/escalation/resolve", Handler: h.ResolveTaskEscalation, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
@@ -232,6 +233,45 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 
 	// Lingce Sales endpoints
 	h.RegisterSalesRoutes(mux, jwtSecret)
+}
+
+func (h *Handler) ListTaskEscalations(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	rows, err := h.service.store.pool.Query(r.Context(), `SELECT id, COALESCE(customer_name,''), COALESCE(title,''), COALESCE(doctor_escalation,''), escalation_status, COALESCE(escalation_resolution,''), escalation_resolved_by, escalation_resolved_at FROM recording_tasks WHERE tenant_id=$1 AND source_type IN ('follow_up','followup') AND NULLIF(trim(COALESCE(doctor_escalation,'')),'') IS NOT NULL ORDER BY CASE WHEN escalation_status='pending' THEN 0 ELSE 1 END, updated_at DESC LIMIT 100`, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID           int64      `json:"id"`
+		CustomerName string     `json:"customer_name"`
+		Title        string     `json:"title"`
+		Escalation   string     `json:"doctor_escalation"`
+		Status       string     `json:"escalation_status"`
+		Resolution   string     `json:"escalation_resolution"`
+		ResolvedBy   *int64     `json:"escalation_resolved_by,omitempty"`
+		ResolvedAt   *time.Time `json:"escalation_resolved_at,omitempty"`
+	}
+	items := []item{}
+	for rows.Next() {
+		var v item
+		if err := rows.Scan(&v.ID, &v.CustomerName, &v.Title, &v.Escalation, &v.Status, &v.Resolution, &v.ResolvedBy, &v.ResolvedAt); err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+		items = append(items, v)
+	}
+	httputil.WriteSuccess(w, items)
 }
 
 func (h *Handler) CompletePatient(w http.ResponseWriter, r *http.Request) {
