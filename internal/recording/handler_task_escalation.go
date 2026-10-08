@@ -45,7 +45,7 @@ func (h *Handler) ResolveTaskEscalation(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteBadRequest(w, "resolution is required")
 		return
 	}
-	result, err := h.service.store.pool.Exec(r.Context(), `UPDATE recording_tasks SET escalation_status='resolved', escalation_resolution=$1, escalation_resolved_by=$2, escalation_resolved_at=NOW(), updated_at=NOW() WHERE tenant_id=$3 AND id=$4 AND source_type IN ('follow_up','followup') AND escalation_status='pending'`, strings.TrimSpace(req.Resolution), claims.UserID, tenantID, id)
+	result, err := h.service.store.pool.Exec(r.Context(), `WITH updated AS (UPDATE recording_tasks SET escalation_status='resolved', escalation_resolution=$1, escalation_resolved_by=$2, escalation_resolved_at=NOW(), updated_at=NOW() WHERE tenant_id=$3 AND id=$4 AND source_type IN ('follow_up','followup') AND escalation_status='pending' RETURNING id) INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) SELECT $3,id,'escalation_resolved',jsonb_build_object('resolution',$1,'resolved_by',$2) FROM updated`, strings.TrimSpace(req.Resolution), claims.UserID, tenantID, id)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

@@ -17,7 +17,7 @@ func TestGeneratedTaskQuality(t *testing.T) {
 		{"missing_evidence", strings.Replace(valid, "患者说不知道怎么使用", "", 1), true},
 		{"missing_purpose", strings.Replace(valid, `"purpose":"了解困难"`, `"purpose":""`, 1), true},
 		{"long_phone", strings.Replace(valid, "您好，请问使用时还有什么困难？", strings.Repeat("字", 121), 1), true},
-		{"invalid_date", strings.Replace(valid, "2026-10-09T10:00:00+08:00", "三天后", 1), true},
+		{"invalid_date", strings.Replace(valid, "2026-10-09T10:00:00+08:00", "尽快", 1), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -29,5 +29,16 @@ func TestGeneratedTaskQuality(t *testing.T) {
 				t.Fatal("phone compatibility script is empty")
 			}
 		})
+	}
+}
+
+func TestParseContactTimeRelativeNodes(t *testing.T) {
+	for _, value := range []string{"今天", "明天", "后天", "三天后", "一周后", "7天后", "两周后", "14天后"} {
+		if _, err := parseContactTime(value); err != nil {
+			t.Fatalf("%s: %v", value, err)
+		}
+	}
+	if _, err := parseContactTime("尽快"); err == nil {
+		t.Fatal("模糊时间必须拒绝")
 	}
 }
