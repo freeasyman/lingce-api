@@ -2413,7 +2413,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 	query := fmt.Sprintf(`
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
-		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.source_type, rt.source_detail,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.source_type, rt.source_detail,
 		       rt.assigned_to, NULL::bigint AS assigned_by,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
@@ -2438,7 +2438,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		var t RecordingTask
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.SourceType, &t.SourceDetail,
+			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.SourceType, &t.SourceDetail,
 			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
@@ -2458,7 +2458,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	}
 	query := `
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
-		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.source_type, rt.source_detail,
+		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.source_type, rt.source_detail,
 		       rt.assigned_to, NULL::bigint AS assigned_by,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
@@ -2480,7 +2480,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	var t RecordingTask
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
-		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.SourceType, &t.SourceDetail,
+		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.SourceType, &t.SourceDetail,
 		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
 		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 	)
@@ -2535,7 +2535,7 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 
 	if len(execution) > 0 {
 		req := execution[0]
-		if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, escalation_status=CASE WHEN NULLIF(trim(COALESCE($3,'')),'') IS NOT NULL THEN 'pending' ELSE escalation_status END, doctor_escalation=$3, next_contact_at=$4 WHERE id=$5`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, id); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, escalation_status=CASE WHEN NULLIF(trim(COALESCE($3,'')),'') IS NOT NULL THEN 'pending' ELSE escalation_status END, doctor_escalation=$3, next_contact_at=$4, patient_replied=$5, revisit_attended=$6, issue_resolved=$7, patient_understanding=$8 WHERE id=$9`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, req.PatientReplied, req.RevisitAttended, req.IssueResolved, req.PatientUnderstanding, id); err != nil {
 			return err
 		}
 		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
@@ -2716,14 +2716,6 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if stats.TotalTasks > 0 {
 		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
 	}
-	stats.ContactableTasks = stats.ConnectedTasks + stats.HelpNeededTasks
-	if stats.ContactableTasks > 0 {
-		stats.ConnectionRate = float64(stats.ConnectedTasks) / float64(stats.ContactableTasks) * 100
-		stats.HelpRate = float64(stats.HelpNeededTasks) / float64(stats.ContactableTasks) * 100
-	}
-	if stats.EscalatedTasks > 0 {
-		stats.EscalationResolveRate = float64(stats.EscalatedTasks-stats.PendingEscalations) / float64(stats.EscalatedTasks) * 100
-	}
 	stats.ByTaskCategory = map[string]int64{}
 	categoryRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT COALESCE(NULLIF(t.task_category,''),'uncategorized'), COUNT(*) FROM recording_tasks t WHERE %s GROUP BY 1`, whereClause), args...)
 	if err != nil {
@@ -2748,6 +2740,49 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	}
 	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.escalation_status='pending'`, whereClause), args...).Scan(&stats.PendingEscalations); err != nil {
 		return nil, err
+	}
+
+	var unanswered int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.execution_result='no_answer'`, whereClause), args...).Scan(&unanswered); err != nil {
+		return nil, err
+	}
+	stats.ContactableTasks = stats.ConnectedTasks + stats.HelpNeededTasks + unanswered
+	if stats.ContactableTasks > 0 {
+		stats.ConnectionRate = float64(stats.ConnectedTasks+stats.HelpNeededTasks) / float64(stats.ContactableTasks) * 100
+		stats.HelpRate = float64(stats.HelpNeededTasks) / float64(stats.ContactableTasks) * 100
+	}
+	var resolved int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.escalation_status='resolved'`, whereClause), args...).Scan(&resolved); err != nil {
+		return nil, err
+	}
+	if stats.EscalatedTasks > 0 {
+		stats.EscalationResolveRate = float64(resolved) / float64(stats.EscalatedTasks) * 100
+	}
+	var replied, replyBase, attended, attendBase, resolvedCount, resolveBase int64
+	queries := []struct {
+		q   string
+		dst *int64
+	}{
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.patient_replied IS NOT NULL`, whereClause), &replyBase},
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.patient_replied=true`, whereClause), &replied},
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.revisit_attended IS NOT NULL`, whereClause), &attendBase},
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.revisit_attended=true`, whereClause), &attended},
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.issue_resolved IS NOT NULL`, whereClause), &resolveBase},
+		{fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t WHERE %s AND t.issue_resolved=true`, whereClause), &resolvedCount},
+	}
+	for _, item := range queries {
+		if err := s.pool.QueryRow(ctx, item.q, args...).Scan(item.dst); err != nil {
+			return nil, err
+		}
+	}
+	if replyBase > 0 {
+		stats.PatientReplyRate = float64(replied) / float64(replyBase) * 100
+	}
+	if attendBase > 0 {
+		stats.RevisitAttendanceRate = float64(attended) / float64(attendBase) * 100
+	}
+	if resolveBase > 0 {
+		stats.IssueResolutionRate = float64(resolvedCount) / float64(resolveBase) * 100
 	}
 
 	priorityQuery := fmt.Sprintf(`

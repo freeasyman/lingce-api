@@ -135,6 +135,10 @@ type RecordingTask struct {
 	EscalationStatus     *string    `json:"escalation_status,omitempty"`
 	EscalationResolution *string    `json:"escalation_resolution,omitempty"`
 	NextContactAt        *time.Time `json:"next_contact_at,omitempty"`
+	PatientReplied       *bool      `json:"patient_replied,omitempty"`
+	RevisitAttended      *bool      `json:"revisit_attended,omitempty"`
+	IssueResolved        *bool      `json:"issue_resolved,omitempty"`
+	PatientUnderstanding *string    `json:"patient_understanding,omitempty"`
 	SourceType           *string    `json:"source_type,omitempty"`
 	SourceDetail         *string    `json:"source_detail,omitempty"`
 	AssignedTo           *int64     `json:"assigned_to,omitempty"`

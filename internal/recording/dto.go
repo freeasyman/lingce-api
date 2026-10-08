@@ -1064,6 +1064,9 @@ type RecordingTaskStatsResponse struct {
 	ConnectionRate        float64          `json:"connection_rate"`
 	HelpRate              float64          `json:"help_rate"`
 	EscalationResolveRate float64          `json:"escalation_resolve_rate"`
+	PatientReplyRate      float64          `json:"patient_reply_rate"`
+	RevisitAttendanceRate float64          `json:"revisit_attendance_rate"`
+	IssueResolutionRate   float64          `json:"issue_resolution_rate"`
 	ByTaskCategory        map[string]int64 `json:"by_task_category,omitempty"`
 	AnonymousTasks        int64            `json:"anonymous_tasks"`
 	ByPriority            map[string]int64 `json:"by_priority,omitempty"`
@@ -1131,6 +1134,10 @@ type TaskResponse struct {
 	EscalationStatus      *string `json:"escalation_status,omitempty"`
 	EscalationResolution  *string `json:"escalation_resolution,omitempty"`
 	NextContactAt         *string `json:"next_contact_at,omitempty"`
+	PatientReplied        *bool   `json:"patient_replied,omitempty"`
+	RevisitAttended       *bool   `json:"revisit_attended,omitempty"`
+	IssueResolved         *bool   `json:"issue_resolved,omitempty"`
+	PatientUnderstanding  *string `json:"patient_understanding,omitempty"`
 	SourceType            *string `json:"source_type,omitempty"`
 	SourceTypeLabel       *string `json:"source_type_label,omitempty"`
 	SourceDetail          *string `json:"source_detail,omitempty"`
@@ -1163,11 +1170,15 @@ type BatchAssignTasksRequest struct {
 
 // CompleteTaskRequest represents the request for completing a task
 type CompleteTaskRequest struct {
-	Notes               *string    `json:"notes,omitempty"`
-	ExecutionResult     *string    `json:"execution_result,omitempty"`
-	ExecutionDifficulty *string    `json:"execution_difficulty,omitempty"`
-	DoctorEscalation    *string    `json:"doctor_escalation,omitempty"`
-	NextContactAt       *time.Time `json:"next_contact_at,omitempty"`
+	Notes                *string    `json:"notes,omitempty"`
+	ExecutionResult      *string    `json:"execution_result,omitempty"`
+	ExecutionDifficulty  *string    `json:"execution_difficulty,omitempty"`
+	DoctorEscalation     *string    `json:"doctor_escalation,omitempty"`
+	NextContactAt        *time.Time `json:"next_contact_at,omitempty"`
+	PatientReplied       *bool      `json:"patient_replied,omitempty"`
+	RevisitAttended      *bool      `json:"revisit_attended,omitempty"`
+	IssueResolved        *bool      `json:"issue_resolved,omitempty"`
+	PatientUnderstanding *string    `json:"patient_understanding,omitempty"`
 }
 
 // CancelTaskRequest represents the request for cancelling a task
