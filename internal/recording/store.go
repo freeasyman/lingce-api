@@ -2716,6 +2716,14 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if stats.TotalTasks > 0 {
 		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
 	}
+	stats.ContactableTasks = stats.ConnectedTasks + stats.HelpNeededTasks
+	if stats.ContactableTasks > 0 {
+		stats.ConnectionRate = float64(stats.ConnectedTasks) / float64(stats.ContactableTasks) * 100
+		stats.HelpRate = float64(stats.HelpNeededTasks) / float64(stats.ContactableTasks) * 100
+	}
+	if stats.EscalatedTasks > 0 {
+		stats.EscalationResolveRate = float64(stats.EscalatedTasks-stats.PendingEscalations) / float64(stats.EscalatedTasks) * 100
+	}
 	stats.ByTaskCategory = map[string]int64{}
 	categoryRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT COALESCE(NULLIF(t.task_category,''),'uncategorized'), COUNT(*) FROM recording_tasks t WHERE %s GROUP BY 1`, whereClause), args...)
 	if err != nil {
