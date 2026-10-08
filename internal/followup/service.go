@@ -744,6 +744,9 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 		if strings.TrimSpace(task.Purpose) == "" || strings.TrimSpace(task.Evidence) == "" {
 			return nil, fmt.Errorf("generated task %d purpose or evidence is empty", index)
 		}
+		if strings.TrimSpace(task.TimeBasis) == "" {
+			return nil, fmt.Errorf("generated task %d time_basis is empty", index)
+		}
 		if len([]rune(task.PhoneScript)) > 120 || len([]rune(task.WechatContent)) > 600 {
 			return nil, fmt.Errorf("generated task %d channel content exceeds length limit", index)
 		}

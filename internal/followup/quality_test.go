@@ -6,7 +6,7 @@ import (
 )
 
 func TestGeneratedTaskQuality(t *testing.T) {
-	valid := `{"tasks":[{"title":"了解用药困难","category":"understanding","contact_time":"2026-10-09T10:00:00+08:00","purpose":"了解困难","evidence":"患者说不知道怎么使用","phone_script":"您好，请问使用时还有什么困难？","wechat_content":"您好，想了解您使用时是否还有困难。"}]}`
+	valid := `{"tasks":[{"title":"了解用药困难","category":"understanding","time_basis":"doctor_explicit","contact_time":"2026-10-09T10:00:00+08:00","purpose":"了解困难","evidence":"患者说不知道怎么使用","phone_script":"您好，请问使用时还有什么困难？","wechat_content":"您好，想了解您使用时是否还有困难。"}]}`
 	cases := []struct {
 		name, input string
 		invalid     bool
