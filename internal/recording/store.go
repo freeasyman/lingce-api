@@ -2506,10 +2506,6 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 		UPDATE recording_tasks
 		SET status = $1,
 			completed_at = NOW(),
-			description = CASE
-				WHEN NULLIF($3, '') IS NULL THEN description
-				ELSE $3
-			END,
 			feedback = CONCAT(
 				COALESCE(feedback, ''),
 				CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END,
