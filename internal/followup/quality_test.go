@@ -34,11 +34,21 @@ func TestGeneratedTaskQuality(t *testing.T) {
 
 func TestParseContactTimeRelativeNodes(t *testing.T) {
 	for _, value := range []string{"今天", "明天", "后天", "三天后", "一周后", "7天后", "两周后", "14天后"} {
-		if _, err := parseContactTime(value); err != nil {
+		if _, err := resolveContactTime(value, "2026-10-06T15:00:00+08:00"); err != nil {
 			t.Fatalf("%s: %v", value, err)
 		}
 	}
 	if _, err := parseContactTime("尽快"); err == nil {
 		t.Fatal("模糊时间必须拒绝")
+	}
+}
+
+func TestRelativeDateAnchoredToEncounter(t *testing.T) {
+	got, err := resolveContactTime("三天后", "2026-10-06T15:00:00+08:00")
+	if err != nil || got.Format("2006-01-02T15:04:05Z07:00") != "2026-10-09T10:00:00+08:00" {
+		t.Fatalf("unexpected date %v: %v", got, err)
+	}
+	if _, err := resolveContactTime("明天", "invalid"); err == nil {
+		t.Fatal("missing encounter time accepted")
 	}
 }

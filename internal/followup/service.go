@@ -756,7 +756,7 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 		if strings.TrimSpace(task.ContactTime) == "" {
 			return nil, fmt.Errorf("generated task %d contact_time is empty", index)
 		}
-		if _, err := parseContactTime(task.ContactTime); err != nil {
+		if _, err := resolveContactTime(task.ContactTime, "2000-01-01T10:00:00+08:00"); err != nil {
 			return nil, fmt.Errorf("generated task %d contact_time is invalid: %w", index, err)
 		}
 		if strings.TrimSpace(task.Script) == "" {
@@ -788,16 +788,6 @@ func parseContactTime(value string) (time.Time, error) {
 	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
 			return parsed, nil
-		}
-	}
-	// 允许模型输出有明确依据的相对节点；基准时间取当前时间，统一落到医院工作日上午。
-	for _, item := range []struct {
-		suffix string
-		days   int
-	}{{"今天", 0}, {"明天", 1}, {"后天", 2}, {"三天后", 3}, {"一周后", 7}, {"7天后", 7}, {"两周后", 14}, {"14天后", 14}} {
-		if value == item.suffix {
-			now := time.Now()
-			return time.Date(now.Year(), now.Month(), now.Day()+item.days, 10, 0, 0, 0, now.Location()), nil
 		}
 	}
 	return time.Time{}, fmt.Errorf("unsupported time format %q", value)
@@ -860,7 +850,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 	}
 
 	for index, task := range tasks {
-		dueAt, err := parseContactTime(task.ContactTime)
+		dueAt, err := resolveContactTime(task.ContactTime, req.RecordedAt)
 		if err != nil {
 			return fmt.Errorf("parse generated task %d due_at: %w", index, err)
 		}
