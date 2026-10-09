@@ -52,3 +52,22 @@ func TestRelativeDateAnchoredToEncounter(t *testing.T) {
 		t.Fatal("missing encounter time accepted")
 	}
 }
+
+func TestHospitalDefaultContactTime(t *testing.T) {
+	got, err := hospitalDefaultContactTime("2026-10-09T15:00:00+08:00")
+	if err != nil || got.Format("2006-01-02 15:04") != "2026-10-12 10:00" {
+		t.Fatalf("unexpected default: %v %v", got, err)
+	}
+}
+
+func TestSubjectSynonyms(t *testing.T) {
+	if followupSubjectKey("复查提醒") != followupSubjectKey("复诊提醒") {
+		t.Fatal("synonyms must match")
+	}
+	if followupSubjectKey("用药困难") == followupSubjectKey("复诊提醒") {
+		t.Fatal("different subjects merged")
+	}
+	if followupSubjectKey("术后第3天复查") == followupSubjectKey("术后第7天复查") {
+		t.Fatal("different nodes merged")
+	}
+}

@@ -2543,6 +2543,10 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 				return err
 			}
 		}
+		_, auditErr := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) SELECT tenant_id,id,'execution_recorded',jsonb_build_object('execution_result',$1,'difficulty',$2,'doctor_escalation',$3,'next_contact_at',$4,'patient_replied',$5,'revisit_attended',$6,'issue_resolved',$7) FROM recording_tasks WHERE id=$8`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, req.PatientReplied, req.RevisitAttended, req.IssueResolved, id)
+		if auditErr != nil {
+			return auditErr
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -2568,7 +2572,10 @@ func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req Com
 	if _, err = tx.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID); err != nil {
 		return err
 	}
-	_, _ = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'patient_completed',jsonb_build_object('customer_id',$3,'age',$4,'gender',$5))`, tenantID, id, customerID, req.Age, req.Gender)
+	_, auditErr := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'patient_completed',jsonb_build_object('customer_id',$3,'age',$4,'gender',$5))`, tenantID, id, customerID, req.Age, req.Gender)
+	if auditErr != nil {
+		return auditErr
+	}
 	return tx.Commit(ctx)
 }
 

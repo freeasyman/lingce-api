@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -877,9 +878,26 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			return fmt.Errorf("generated task %d contains prohibited category", index)
 		}
 		var duplicate bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM recording_tasks WHERE tenant_id=$1 AND customer_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('cancelled','returned') AND COALESCE(task_category,'care')=COALESCE($4,'care') AND regexp_replace(lower(trim(title)), '[[:punct:][:space:]]+', '', 'g') = regexp_replace(lower(trim($3)), '[[:punct:][:space:]]+', '', 'g') AND due_at BETWEEN $5::timestamptz - INTERVAL '7 days' AND $5::timestamptz + INTERVAL '7 days')`, req.TenantID, req.CustomerID, strings.TrimSpace(task.Title), category, dueAt).Scan(&duplicate); err != nil {
-			return fmt.Errorf("check duplicate followup task: %w", err)
+		rows, err := tx.Query(ctx, `SELECT title FROM recording_tasks WHERE tenant_id=$1 AND customer_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('cancelled','returned') AND COALESCE(task_category,'care')=$3 AND assigned_to IS NOT DISTINCT FROM $4::integer AND due_at BETWEEN $5::timestamptz - INTERVAL '7 days' AND $5::timestamptz + INTERVAL '7 days'`, req.TenantID, req.CustomerID, category, assignedTo, dueAt)
+		if err != nil {
+			return err
 		}
+		for rows.Next() {
+			var title string
+			if err := rows.Scan(&title); err != nil {
+				rows.Close()
+				return err
+			}
+			if followupSubjectKey(title) == followupSubjectKey(task.Title) {
+				duplicate = true
+			}
+		}
+		rowErr := rows.Err()
+		rows.Close()
+		if rowErr != nil {
+			return rowErr
+		}
+
 		if duplicate {
 			continue
 		}
@@ -927,6 +945,14 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 		return fmt.Errorf("commit recording task transaction: %w", err)
 	}
 	return nil
+}
+
+func followupSubjectKey(title string) string {
+	v := strings.ToLower(strings.TrimSpace(title))
+	for _, pair := range [][2]string{{"复查", "复诊"}, {"回访", "随访"}, {"用药问题", "用药困难"}, {"药物使用", "用药"}} {
+		v = strings.ReplaceAll(v, pair[0], pair[1])
+	}
+	return regexp.MustCompile(`[[:punct:][:space:]]+`).ReplaceAllString(v, "")
 }
 
 // resolveFollowupTaskAssignee 根据租户和录音归属员工解析随访任务执行人。
