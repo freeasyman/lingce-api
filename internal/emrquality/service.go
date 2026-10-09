@@ -82,6 +82,9 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		}
 	}
 	for _, rule := range rules {
+		if strings.HasPrefix(rule.Code, "TCM-") && strings.TrimSpace(input.TemplateCode) != "tcm" {
+			continue
+		}
 		if rule.Version != report.RuleSetVersion {
 			return nil, fmt.Errorf("quality rule version changed during evaluation")
 		}
@@ -152,11 +155,16 @@ const semanticSystemPrompt = `你是医院门诊电子病历质量审核引擎�
 只有明确完成本次检查且checked_rule_codes覆盖全部给出的规则时，系统才会将未出现在results中的规则补写为pass。正常通过的规则可以直接返回pass，也可以只在checked_rule_codes中列出；不能漏列未检查的规则。
 problem 必须有具体证据和具体依据。不要返回 deduction，扣分由程序根据规则标准计算。提示必须说明哪一段内容、哪一个药物或哪一项信息存在什么问题，禁止使用只有“可能不完整”“可能不准确”的笼统句子。
 DX-002必须同时比较主诉、现病史、辅助检查和诊断。若主要症状、身体部位或检查结论与诊断明显不一致，必须返回problem，并引用诊断和至少一个对照字段的原文，明确写出哪两端不一致。
-TRT-002必须同时比较处方、处置、医嘱与诊断、现病史和必要检查。没有处方时仍然检查处置和医嘱；若治疗目标、身体部位或疾病与诊断明显不一致，必须返回problem，并引用治疗内容和诊断或病史两端原文。对处方与诊断、科别不一致的情况，只提示请核对，不要作临床禁用结论。`
+TRT-002必须同时比较处方、处置、医嘱与西医诊断、现病史和必要检查。没有处方时仍然检查处置和医嘱；若治疗目标、身体部位或疾病与诊断明显不一致，必须返回problem，并引用治疗内容和西医诊断或病史两端原文。对处方与诊断、科别不一致的情况，只提示请核对，不要作临床禁用结论。
+diagnosis是西医诊断，tcm_diagnosis是中医诊断，二者独立，禁止替代、翻译或补造诊断。DX-001、DX-002和DX-003仅判断diagnosis；ICD-10仅适用于西医诊断。
+TCM-DX-002仅中医模板适用，比较tcm_diagnosis与tcm_four_examinations的具体证据；TCM-DX-003比较中医诊断与治法、中药处方或处置的治疗关联。只有明确矛盾才判problem，必须引用中医诊断和相应四诊或治疗字段两端原文；缺少判断依据返回not_evaluable，医学推断标记manual_review，不替医生决定治疗。`
 
 func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rules []ruleDefinition, report *Report) error {
 	semanticRules := make([]ruleDefinition, 0)
 	for _, rule := range rules {
+		if strings.HasPrefix(rule.Code, "TCM-") && input.TemplateCode != "tcm" {
+			continue
+		}
 		if rule.ExecutorKind == "llm" || rule.ExecutorKind == "hybrid" {
 			alreadyEvaluated := false
 			for _, result := range report.Results {
@@ -216,6 +224,7 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		})
 	}
 	payload := map[string]any{
+		"template_code":   input.TemplateCode,
 		"patient":         input.Patient,
 		"visit_type":      input.VisitType,
 		"department":      input.Encounter["medical_department_code"],
@@ -385,7 +394,7 @@ func semanticPrerequisite(input Context, rule ruleDefinition, report *Report) *R
 	if followup && rule.Code != "CC-004" && len(input.History) == 0 {
 		return &RuleResult{RuleCode: rule.Code, SectionCode: rule.SectionCode, Result: "not_evaluable", ExecutionKind: rule.ExecutorKind, Reason: "没有可关联的既往病历，不能对照复诊变化。", ManualReview: true}
 	}
-	dependencies := map[string]string{"CC-002": "CC-001", "CC-003": "CC-001", "GEN-006": "GEN-005", "HIS-010": "HIS-009", "DX-002": "DX-001", "EXAM-002": "EXAM-001", "EXAM-003": "EXAM-001", "EXAM-004": "EXAM-001", "EXAM-005": "EXAM-001"}
+	dependencies := map[string]string{"CC-002": "CC-001", "CC-003": "CC-001", "GEN-006": "GEN-005", "HIS-010": "HIS-009", "DX-002": "DX-001", "TCM-DX-002": "TCM-DX-001", "TCM-DX-003": "TCM-DX-001", "EXAM-002": "EXAM-001", "EXAM-003": "EXAM-001", "EXAM-004": "EXAM-001", "EXAM-005": "EXAM-001"}
 	if initial {
 		dependencies[rule.Code] = "HIS-001"
 	}
@@ -548,49 +557,30 @@ func baseResult(rule ruleDefinition) *RuleResult {
 
 func diagnosisItems(value any) []map[string]any {
 	if object, ok := value.(map[string]any); ok {
-		if strings.TrimSpace(valueString(object, "diagnosis_name")) == "" {
-			for _, key := range []string{"text", "name", "diagnosis"} {
-				if name := strings.TrimSpace(valueString(object, key)); name != "" {
-					object["diagnosis_name"] = name
-					break
-				}
-			}
-		}
 		return []map[string]any{object}
 	}
-	if list, ok := value.([]any); ok {
-		items := make([]map[string]any, 0, len(list))
-		for _, item := range list {
-			if object, ok := item.(map[string]any); ok {
-				if strings.TrimSpace(valueString(object, "diagnosis_name")) == "" {
-					for _, key := range []string{"text", "name", "diagnosis"} {
-						if name := strings.TrimSpace(valueString(object, key)); name != "" {
-							object["diagnosis_name"] = name
-							break
-						}
-					}
-				}
-				items = append(items, object)
-			}
-		}
-		return items
-	}
-	text := strings.TrimSpace(fmt.Sprint(value))
-	if text == "" || text == "<nil>" {
-		return nil
-	}
-	return []map[string]any{{"diagnosis_name": text}}
+	return nil
 }
 
 func diagnosisContent(content map[string]any) any {
 	if content == nil {
 		return nil
 	}
-	for _, key := range []string{"tcm_diagnosis", "diagnosis"} {
-		for _, item := range diagnosisItems(content[key]) {
-			if strings.TrimSpace(valueString(item, "diagnosis_name")) != "" {
-				return content[key]
-			}
+	for _, item := range diagnosisItems(content["diagnosis"]) {
+		if strings.TrimSpace(valueString(item, "diagnosis_name")) != "" {
+			return content["diagnosis"]
+		}
+	}
+	return nil
+}
+
+func tcmDiagnosisContent(content map[string]any) any {
+	if content == nil {
+		return nil
+	}
+	for _, item := range diagnosisItems(content["tcm_diagnosis"]) {
+		if strings.TrimSpace(valueString(item, "diagnosis_name")) != "" {
+			return content["tcm_diagnosis"]
 		}
 	}
 	return nil
@@ -677,7 +667,7 @@ func (s *Service) BindRunTx(ctx context.Context, tx pgx.Tx, report *Report, snap
 func inputDigest(input Context) string {
 	raw, _ := json.Marshal(map[string]any{
 		"patient_snapshot": input.Patient,
-		"document_context": map[string]any{"document_type": input.DocumentType, "visit_type": input.VisitType, "department_id": input.DepartmentID, "started_at": input.StartedAt},
+		"document_context": map[string]any{"document_type": input.DocumentType, "visit_type": input.VisitType, "template_code": input.TemplateCode, "department_id": input.DepartmentID, "started_at": input.StartedAt},
 		"content":          input.Content,
 	})
 	hash := sha256.Sum256(raw)
@@ -812,7 +802,13 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 	case "DX-003":
 		diagnosis := diagnosisContent(input.Content)
 		diagnosisText := contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")
-		if strings.TrimSpace(diagnosisText) != "" && strings.TrimSpace(contentText(input.Content, "diagnosis_code")) == "" {
+		missing := false
+		for _, item := range diagnosisItems(diagnosis) {
+			if strings.TrimSpace(valueString(item, "icd10_code")) == "" {
+				missing = true
+			}
+		}
+		if strings.TrimSpace(diagnosisText) != "" && missing {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "诊断记录没有对应的ICD-10编码"
@@ -868,6 +864,14 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Deduction = rule.StandardPoints
 			result.Reason = "没有记录诊断"
 			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
+		}
+	case "TCM-DX-001":
+		diagnosis := tcmDiagnosisContent(input.Content)
+		if strings.TrimSpace(contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")) == "" {
+			result.Result = "problem"
+			result.Deduction = rule.StandardPoints
+			result.Reason = "没有记录中医诊断"
+			result.Evidence = []Evidence{{Source: "record.content", Path: "tcm_diagnosis", Excerpt: ""}}
 		}
 	default:
 		implemented = false

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrdiagnosis"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -30,13 +31,183 @@ import (
 // 署名：Codex
 // 时间：2026-09-13
 type InternalHandler struct {
-	logPath     string
-	betaLogPath string
-	pool        *pgxpool.Pool
-	recordStore *Store
-	process     *emrprocess.Service
-	llm         *llmgateway.Client
-	logMu       sync.Mutex
+	logPath      string
+	betaLogPath  string
+	pool         *pgxpool.Pool
+	recordStore  *Store
+	process      *emrprocess.Service
+	llm          *llmgateway.Client
+	logMu        sync.Mutex
+	resultBinder interface {
+		BindWorkerResult(context.Context, int64, int64, int64, string) error
+	}
+}
+
+// IncrementalDraftInput is used only by the isolated EMR consultation lab.
+// The endpoint returns field-level suggestions; it never writes the record.
+type IncrementalDraftInput struct {
+	EncounterID     int64          `json:"encounter_id"`
+	RecordID        string         `json:"record_id"`
+	TranscriptDelta string         `json:"transcript_delta"`
+	CurrentContent  map[string]any `json:"current_content"`
+	LockedFields    []string       `json:"locked_fields,omitempty"`
+}
+
+type IncrementalDraftResult struct {
+	Updates         map[string]any `json:"updates"`
+	UnresolvedItems []any          `json:"unresolved_items"`
+}
+
+func truncateForError(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 600 {
+		return value[:600] + "..."
+	}
+	return value
+}
+
+// GenerateIncrementalDraft produces a small field patch for the experimental
+// workbench. The normal Worker generation pipeline remains unchanged.
+func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID, employeeID int64, input IncrementalDraftInput) (*IncrementalDraftResult, error) {
+	if tenantID <= 0 || employeeID <= 0 || input.EncounterID <= 0 || strings.TrimSpace(input.RecordID) == "" {
+		return nil, fmt.Errorf("增量病历参数无效")
+	}
+	delta := strings.TrimSpace(input.TranscriptDelta)
+	if delta == "" {
+		return &IncrementalDraftResult{Updates: map[string]any{}}, nil
+	}
+	record, err := h.recordStore.Get(ctx, tenantID, input.RecordID)
+	if err != nil || record == nil || record.EncounterID != input.EncounterID {
+		return nil, fmt.Errorf("实验病案不存在或接诊不匹配")
+	}
+	prepared, err := h.preparePrompt(ctx, EmrWorkerRequest{
+		TenantID: tenantID, RecordingID: 1, EncounterID: input.EncounterID, EmployeeID: employeeID,
+		BusinessScope: "doctor", RoleCode: "doctor", RecordedAt: record.StartedAt.Format(time.RFC3339),
+		PatientSnapshot: record.PatientSnapshot,
+	})
+	if err != nil {
+		return nil, err
+	}
+	config, err := h.loadModelConfig(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	currentJSON, _ := json.Marshal(input.CurrentContent)
+	lockedJSON, _ := json.Marshal(input.LockedFields)
+	fieldDefinitions := make([]string, 0, len(prepared.Template.Sections))
+	fieldNames := make(map[string]string, len(prepared.Template.Sections))
+	for _, section := range prepared.Template.Sections {
+		fieldDefinitions = append(fieldDefinitions, fmt.Sprintf("%s=%s", section.Code, section.Name))
+		fieldNames[strings.TrimSpace(section.Name)] = section.Code
+	}
+	fieldDefinitionText := strings.Join(fieldDefinitions, ", ")
+	userPrompt := "你正在为电子病历实验页生成字段增量。只根据本次新增转写，返回需要新增或修正的病历栏位。不得编造未说出的事实，不得修改已锁定栏位。\n\n新增转写：\n" + delta +
+		"\n\n当前病历草稿(JSON)：\n" + string(currentJSON) +
+		"\n\n已锁定栏位(JSON数组)：\n" + string(lockedJSON) +
+		"\n\n可用栏位（必须使用左侧 code，右侧只是说明）：\n" + fieldDefinitionText +
+		"\n\n只返回 JSON：{\"updates\":{\"模板栏位编码\":\"增量后的完整栏位内容\"},\"unresolved_items\":[]}。updates 只能包含上面列出的栏位 code。"
+	requestID := fmt.Sprintf("emr-incremental-%d", time.Now().UnixNano())
+	const incrementalSystemPrompt = `你是电子病历实时增量整理助手。
+你的任务是根据新增的医患转写和当前病历草稿，只返回本次新增或修正的病历栏位。
+不要编造转写中没有出现的事实；不要修改已锁定栏位；不要输出解释文字。
+必须返回合法 JSON，格式为：{"updates":{"模板栏位编码":"更新后的完整栏位内容"},"unresolved_items":[]}。
+updates 只能使用当前模板中的栏位编码。没有足够信息时返回空 updates。`
+	response, _, _, err := h.callLLM(ctx, llmgateway.TextInferenceRequest{
+		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.experimental_incremental_draft",
+		TraceID: requestID, FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode,
+		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: input.EncounterID, BillingSubject: "emr_incremental_draft", BillingScene: "outpatient"},
+		Messages: []llmgateway.Message{{Role: "system", Content: incrementalSystemPrompt}, {Role: "user", Content: userPrompt}},
+		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 1800, TimeoutSeconds: 30, ResponseFormat: "json"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Updates         map[string]any `json:"updates"`
+		WorkingContent  map[string]any `json:"working_content"`
+		UnresolvedItems []any          `json:"unresolved_items"`
+	}
+	trimmed := strings.TrimSpace(response.Content)
+	trimmed = strings.TrimPrefix(strings.TrimPrefix(trimmed, "```json"), "```")
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	trimmed = strings.TrimSpace(trimmed)
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		// 模型偶尔会在 JSON 后追加一个多余的右括号或解释文本。
+		// 只截取最外层 JSON 对象，避免整次增量更新因尾部噪声失败。
+		if start := strings.Index(trimmed, "{"); start >= 0 {
+			if end := strings.LastIndex(trimmed, "}"); end > start {
+				candidate := strings.TrimSpace(trimmed[start : end+1])
+				if retryErr := json.Unmarshal([]byte(candidate), &envelope); retryErr == nil {
+					trimmed = candidate
+				} else {
+					return nil, fmt.Errorf("增量病历结果不是合法 JSON：%w；原始片段：%s", err, truncateForError(trimmed))
+				}
+			} else {
+				return nil, fmt.Errorf("增量病历结果不是合法 JSON：%w；原始片段：%s", err, truncateForError(trimmed))
+			}
+		} else {
+			return nil, fmt.Errorf("增量病历结果不是合法 JSON：%w；原始片段：%s", err, truncateForError(trimmed))
+		}
+	}
+	// Some model configurations still follow the historical full-draft shape.
+	// Accept it here and reduce it to a field patch so the experiment does not
+	// silently render an empty result.
+	if len(envelope.Updates) == 0 && len(envelope.WorkingContent) > 0 {
+		envelope.Updates = make(map[string]any)
+		for code, value := range envelope.WorkingContent {
+			before, exists := input.CurrentContent[code]
+			beforeJSON, _ := json.Marshal(before)
+			afterJSON, _ := json.Marshal(value)
+			if !exists || string(beforeJSON) != string(afterJSON) {
+				envelope.Updates[code] = value
+			}
+		}
+	}
+	allowed := make(map[string]*emrtemplate.Section, len(prepared.Template.Sections))
+	for _, section := range prepared.Template.Sections {
+		allowed[section.Code] = section
+	}
+	locked := make(map[string]bool, len(input.LockedFields))
+	for _, field := range input.LockedFields {
+		locked[strings.TrimSpace(field)] = true
+	}
+	updates := make(map[string]any)
+	for code, value := range envelope.Updates {
+		// 模型偶尔会返回栏位中文名称；将名称转换为模板 code，避免合法内容
+		// 在严格 code 校验时被全部过滤掉。
+		if mapped, ok := fieldNames[strings.TrimSpace(code)]; ok {
+			code = mapped
+		}
+		section, ok := allowed[code]
+		if !ok || locked[code] {
+			continue
+		}
+		if code == "diagnosis" || code == "tcm_diagnosis" {
+			if err := emrdiagnosis.ValidateField(code, value); err != nil {
+				return nil, err
+			}
+			updates[code] = value
+			continue
+		}
+		if sectionUsesStructuredContent(section) {
+			normalized, normalizeErr := validateAndNormalizeStructuredEMRValue(value, section.Structure)
+			if normalizeErr != nil {
+				continue
+			}
+			updates[code] = normalized
+		} else {
+			updates[code] = formatEMRContentValue(value)
+		}
+	}
+	return &IncrementalDraftResult{Updates: updates, UnresolvedItems: envelope.UnresolvedItems}, nil
+}
+
+// SetResultBinder connects Worker results to the realtime workbench using the
+// authoritative recording_id + encounter_id pair.
+func (h *InternalHandler) SetResultBinder(binder interface {
+	BindWorkerResult(context.Context, int64, int64, int64, string) error
+}) {
+	h.resultBinder = binder
 }
 
 // GenerateDirect runs the same EMR generation pipeline used by the internal
@@ -193,6 +364,12 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 	if err := h.appendGeneratedProcessRecord(r.Context(), payload, requestID, writeOutcome, llmResponse); err != nil {
 		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
 		return
+	}
+	if h.resultBinder != nil {
+		if err := h.resultBinder.BindWorkerResult(r.Context(), payload.TenantID, payload.RecordingID, payload.EncounterID, writeOutcome.Record.ID); err != nil {
+			h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
+			return
+		}
 	}
 
 	response := map[string]any{
@@ -592,7 +769,13 @@ func parseAndValidateEMRResult(raw string, template *emrtemplate.PublishedVersio
 	}
 	normalizedContent := make(map[string]any, len(template.Sections))
 	for _, section := range template.Sections {
-		if sectionUsesStructuredContent(section) {
+		if section.Code == "diagnosis" || section.Code == "tcm_diagnosis" {
+			value := envelope.WorkingContent[section.Code]
+			if err := emrdiagnosis.ValidateField(section.Code, value); err != nil {
+				return nil, nil, err
+			}
+			normalizedContent[section.Code] = value
+		} else if sectionUsesStructuredContent(section) {
 			value, err := validateAndNormalizeStructuredEMRValue(envelope.WorkingContent[section.Code], section.Structure)
 			if err != nil {
 				return nil, nil, fmt.Errorf("栏位 %s 结构化内容无效：%w", section.Code, err)
@@ -997,6 +1180,10 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("【%s】%s", strings.TrimSpace(section.Code), strings.TrimSpace(section.Name)))
+		if section.Code == "diagnosis" || section.Code == "tcm_diagnosis" {
+			lines = append(lines, "  诊断必须为结构化对象：仅保留医生明确表达的诊断名称和依据。西医诊断使用diagnosis_name、icd10_code、basis；中医诊断使用diagnosis_name、pattern_name、basis。两者独立，禁止互相替代、翻译或推断；未明确的值填空字符串，并记录到unresolved_items。禁止text、name等别名和顶层诊断编码。")
+			continue
+		}
 		if !sectionUsesStructuredContent(section) {
 			lines = append(lines, "  输出要求：返回简洁连贯的自然语言字符串，禁止 JSON 对象、数组或名称/备注/状态等键值对。")
 		}

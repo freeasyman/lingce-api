@@ -116,27 +116,21 @@ func (s *Store) evaluateICD(ctx context.Context, input Context, rule ruleDefinit
 	}
 	for _, item := range items {
 		name, code := valueString(item, "diagnosis_name"), valueString(item, "icd10_code")
-		if code == "" {
-			code = valueString(input.Content, "diagnosis_code")
-		}
-		if code == "" {
-			code = valueString(input.Content, "icd10_code")
-		}
 		if strings.TrimSpace(code) == "" {
 			candidates, err := s.findICD10Candidates(ctx, name)
 			if err != nil {
 				return nil, err
 			}
 			exactCount := 0
-			var exactCode string
 			for _, candidate := range candidates {
 				if candidate.Exact {
 					exactCount++
-					exactCode = candidate.Code
 				}
 			}
 			if exactCount == 1 {
-				setDiagnosisCode(diagnosisContent(input.Content), input.Content, exactCode)
+				// The quality check is read-only. A unique catalog match is
+				// reported as valid for this run; the doctor's structured content
+				// is never rewritten by quality evaluation.
 				continue
 			}
 			r.Result = "problem"
@@ -171,23 +165,6 @@ func (s *Store) evaluateICD(ctx context.Context, input Context, rule ruleDefinit
 		}
 	}
 	return r, nil
-}
-
-func setDiagnosisCode(value any, content map[string]any, code string) {
-	switch item := value.(type) {
-	case map[string]any:
-		item["icd10_code"] = code
-	case []any:
-		for _, entry := range item {
-			if object, ok := entry.(map[string]any); ok && strings.TrimSpace(valueString(object, "icd10_code")) == "" {
-				object["icd10_code"] = code
-			}
-		}
-	default:
-		if content != nil {
-			content["diagnosis_code"] = code
-		}
-	}
 }
 
 type icdCandidate struct {

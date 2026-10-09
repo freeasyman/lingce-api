@@ -18,6 +18,7 @@ type Record struct {
 	DepartmentID        *int64         `json:"department_id,omitempty"`
 	DoctorID            int64          `json:"doctor_id"`
 	SpecialtyModule     *string        `json:"specialty_module,omitempty"`
+	TemplateCode        string         `json:"template_code,omitempty"`
 	StartedAt           time.Time      `json:"started_at"`
 	EndedAt             *time.Time     `json:"ended_at,omitempty"`
 	EncounterContext    map[string]any `json:"encounter_context"`

@@ -12,12 +12,12 @@ func TestParseAndValidateEMRResult(t *testing.T) {
 	template := &emrtemplate.PublishedVersionDetail{
 		Sections: []*emrtemplate.Section{
 			{Code: "chief_complaint"},
-			{Code: "diagnosis"},
+			{Code: "diagnosis", InputType: "结构化内容", Structure: map[string]any{"items": []any{"diagnosis_name", "icd10_code", "basis"}}},
 		},
 	}
 
 	t.Run("accepts complete fenced JSON", func(t *testing.T) {
-		content, unresolved, err := parseAndValidateEMRResult("```json\n{\n  \"working_content\": {\"chief_complaint\": \"咳嗽\", \"diagnosis\": \"待明确\"},\n  \"unresolved_items\": [{\"field_code\": \"diagnosis\", \"reason\": \"诊断需要医生核对\"}]\n}\n```", template)
+		content, unresolved, err := parseAndValidateEMRResult("```json\n{\n  \"working_content\": {\"chief_complaint\": \"咳嗽\", \"diagnosis\": {\"diagnosis_name\": \"待明确\", \"icd10_code\": \"\", \"basis\": \"\"}},\n  \"unresolved_items\": [{\"field_code\": \"diagnosis\", \"reason\": \"诊断需要医生核对\"}]\n}\n```", template)
 		if err != nil {
 			t.Fatalf("parse result: %v", err)
 		}
@@ -29,6 +29,13 @@ func TestParseAndValidateEMRResult(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects legacy diagnosis aliases", func(t *testing.T) {
+		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":{"text":"咳嗽"}},"unresolved_items":[]}`, template)
+		if err == nil || !strings.Contains(err.Error(), "不允许字段") {
+			t.Fatalf("expected legacy diagnosis field rejection, got %v", err)
+		}
+	})
+
 	t.Run("rejects missing template field", func(t *testing.T) {
 		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽"},"unresolved_items":[]}`, template)
 		if err == nil || !strings.Contains(err.Error(), "diagnosis") {
@@ -37,21 +44,21 @@ func TestParseAndValidateEMRResult(t *testing.T) {
 	})
 
 	t.Run("rejects unknown template field", func(t *testing.T) {
-		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":"","unknown":"不允许"},"unresolved_items":[]}`, template)
+		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":{"diagnosis_name":"","icd10_code":"","basis":""},"unknown":"不允许"},"unresolved_items":[]}`, template)
 		if err == nil || !strings.Contains(err.Error(), "模板之外") {
 			t.Fatalf("expected unknown field error, got %v", err)
 		}
 	})
 
 	t.Run("rejects string unresolved items", func(t *testing.T) {
-		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":""},"unresolved_items":["诊断需要核对"]}`, template)
+		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":{"diagnosis_name":"","icd10_code":"","basis":""}},"unresolved_items":["诊断需要核对"]}`, template)
 		if err == nil || !strings.Contains(err.Error(), "对象数组") {
 			t.Fatalf("expected unresolved item shape error, got %v", err)
 		}
 	})
 
 	t.Run("rejects unresolved item without reason", func(t *testing.T) {
-		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":""},"unresolved_items":[{"field_code":"diagnosis"}]}`, template)
+		_, _, err := parseAndValidateEMRResult(`{"working_content":{"chief_complaint":"咳嗽","diagnosis":{"diagnosis_name":"","icd10_code":"","basis":""}},"unresolved_items":[{"field_code":"diagnosis"}]}`, template)
 		if err == nil || !strings.Contains(err.Error(), "缺少 reason") {
 			t.Fatalf("expected unresolved item reason error, got %v", err)
 		}

@@ -53,10 +53,10 @@ var builtinCommonSections = []builtinSection{
 	{"family_history", "家族史", "病史", "长文本", true, true, 50},
 	{"allergy_history", "过敏史", "病史", "长文本", true, true, 60},
 	{"physical_exam", "体格检查", "诊疗依据", "结构化内容", true, true, 70},
-	{"auxiliary_exam", "辅助检查", "诊疗依据", "结构化内容", true, true, 80},
-	{"diagnosis", "诊断", "医疗判断", "长文本", true, true, 90},
-	{"prescription", "处方", "医疗措施", "结构化内容", true, true, 100},
-	{"disposition", "处置", "医疗措施", "结构化内容", true, true, 110},
+	{"auxiliary_exam", "辅助检查", "诊疗依据", "长文本", true, true, 80},
+	{"diagnosis", "西医诊断", "医疗判断", "结构化内容", true, true, 90},
+	{"prescription", "处方", "医疗措施", "长文本", true, true, 100},
+	{"disposition", "处置", "医疗措施", "长文本", true, true, 110},
 	{"medical_advice", "医嘱", "医疗措施", "长文本", true, true, 120},
 	{"followup", "复诊安排", "医疗措施", "长文本", true, true, 130},
 	{"supplement", "补充说明", "医疗措施", "长文本", true, true, 140},
@@ -200,14 +200,12 @@ func (s *Store) EnsureBuiltin(ctx context.Context) error {
 
 func builtinStructure(code string) map[string]any {
 	switch code {
+	case "diagnosis":
+		return map[string]any{"items": []any{"diagnosis_name", "icd10_code", "basis"}}
+	case "tcm_diagnosis":
+		return map[string]any{"items": []any{"diagnosis_name", "pattern_name", "basis"}}
 	case "physical_exam":
 		return map[string]any{"vitals": []any{"temperature", "blood_pressure", "pulse", "respiration", "blood_glucose"}, "metrics": []any{"height", "weight", "bmi"}, "text_items": []any{"general_exam", "positive_findings", "necessary_negative_findings", "specialty_exam", "supplement"}}
-	case "auxiliary_exam":
-		return map[string]any{"items": []any{"exam_name", "exam_time", "result", "source"}}
-	case "prescription":
-		return map[string]any{"items": []any{"drug_name", "specification", "usage", "dose", "frequency", "duration", "quantity", "note"}}
-	case "disposition":
-		return map[string]any{"items": []any{"item", "purpose", "status", "note"}}
 	default:
 		return map[string]any{}
 	}
@@ -429,12 +427,12 @@ func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID stri
 		command, execErr := tx.Exec(ctx, `
 			INSERT INTO emr_template_fields
 			(tenant_id, template_id, field_id, display_order, is_visible, is_required, description, created_by)
-			SELECT $2, $1, id, $4, $5, FALSE, $6, 0
+			SELECT $2, $1, id, $4, $5, $6, $7, 0
 			FROM emr_fields
 			WHERE code=$3 AND tenant_id IN ($2, 0) AND status='enabled'
 			ORDER BY CASE WHEN tenant_id=$2 THEN 0 ELSE 1 END
 			LIMIT 1
-		`, versionID, templateTenant, item.Code, item.DisplayOrder, item.IsVisible, item.Description)
+		`, versionID, templateTenant, item.Code, item.DisplayOrder, item.IsVisible, item.IsRequired, item.Description)
 		if execErr != nil {
 			return nil, execErr
 		}
@@ -565,7 +563,7 @@ func (s *Store) SetCurrent(ctx context.Context, tenantID int64, versionID string
 
 func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string) error {
 	rows, err := tx.Query(ctx, `
-		SELECT f.code, f.name, tf.is_visible, f.content_category, f.input_type
+		SELECT f.code, f.name, tf.is_visible, tf.is_required, f.content_category, f.input_type
 		FROM emr_template_fields tf
 		JOIN emr_fields f ON f.id=tf.field_id
 		WHERE tf.template_id=$1
@@ -577,6 +575,7 @@ func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string
 	fields := make(map[string]struct {
 		name      string
 		visible   bool
+		required  bool
 		category  string
 		inputType string
 	}, len(requiredCommonSections))
@@ -585,10 +584,11 @@ func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string
 		var field struct {
 			name      string
 			visible   bool
+			required  bool
 			category  string
 			inputType string
 		}
-		if err := rows.Scan(&code, &field.name, &field.visible, &field.category, &field.inputType); err != nil {
+		if err := rows.Scan(&code, &field.name, &field.visible, &field.required, &field.category, &field.inputType); err != nil {
 			return fmt.Errorf("read template fields for publish: %w", err)
 		}
 		fields[code] = field
@@ -615,6 +615,25 @@ func validatePublishableVersion(ctx context.Context, tx pgx.Tx, versionID string
 	if len(invalid) > 0 {
 		return fmt.Errorf("模板发布失败：公共栏目必须可见：%s", strings.Join(invalid, "、"))
 	}
+	var templateCode string
+	if err := tx.QueryRow(ctx, `SELECT code FROM emr_templates WHERE id=$1`, versionID).Scan(&templateCode); err != nil {
+		return err
+	}
+	{
+		if field, ok := fields["diagnosis"]; !ok || !field.visible || !field.required {
+			return fmt.Errorf("模板发布失败：西医诊断必须可见且必填")
+		}
+		if templateCode == "tcm" {
+			for _, code := range []string{"diagnosis", "tcm_diagnosis"} {
+				field, ok := fields[code]
+				if !ok || !field.visible || !field.required {
+					return fmt.Errorf("模板发布失败：中医模板的%s必须可见且必填", code)
+				}
+			}
+		} else if _, ok := fields["tcm_diagnosis"]; ok {
+			return fmt.Errorf("模板发布失败：非中医模板不能包含中医诊断")
+		}
+	}
 
 	return nil
 }
@@ -637,7 +656,7 @@ func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, a
 func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT tf.id, tf.template_id, f.code, f.name, f.content_category, f.input_type,
-		       TRUE, tf.is_visible, tf.display_order, COALESCE(NULLIF(tf.description,''), f.description),
+		       TRUE, tf.is_visible, tf.is_required, tf.display_order, COALESCE(NULLIF(tf.description,''), f.description),
 		       f.options_json, f.structure_json
 		FROM emr_template_fields tf
 		JOIN emr_fields f ON f.id=tf.field_id
@@ -652,7 +671,7 @@ func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section,
 	for rows.Next() {
 		x := &Section{}
 		var o, st []byte
-		if err := rows.Scan(&x.ID, &x.TemplateVersionID, &x.Code, &x.Name, &x.ContentCategory, &x.InputType, &x.IsCommon, &x.IsVisible, &x.DisplayOrder, &x.Description, &o, &st); err != nil {
+		if err := rows.Scan(&x.ID, &x.TemplateVersionID, &x.Code, &x.Name, &x.ContentCategory, &x.InputType, &x.IsCommon, &x.IsVisible, &x.IsRequired, &x.DisplayOrder, &x.Description, &o, &st); err != nil {
 			return nil, err
 		}
 		x.Options = map[string]any{}

@@ -51,6 +51,7 @@ type Section struct {
 	InputType         string         `json:"input_type"`
 	IsCommon          bool           `json:"is_common"`
 	IsVisible         bool           `json:"is_visible"`
+	IsRequired        bool           `json:"is_required"`
 	DisplayOrder      int            `json:"display_order"`
 	Description       string         `json:"description"`
 	Options           map[string]any `json:"options,omitempty"`
@@ -95,6 +96,7 @@ type SectionInput struct {
 	InputType       string         `json:"input_type"`
 	IsCommon        bool           `json:"is_common"`
 	IsVisible       bool           `json:"is_visible"`
+	IsRequired      bool           `json:"is_required"`
 	DisplayOrder    int            `json:"display_order"`
 	Description     string         `json:"description"`
 	Options         map[string]any `json:"options"`

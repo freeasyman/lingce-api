@@ -17,6 +17,7 @@ type Context struct {
 	Action       Action
 	DocumentType string
 	VisitType    string
+	TemplateCode string
 	Patient      map[string]any
 	Content      map[string]any
 	Encounter    map[string]any

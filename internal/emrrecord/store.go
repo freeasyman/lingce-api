@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrdiagnosis"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
@@ -26,7 +27,7 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 const recordColumns = `
 	r.id, r.tenant_id, r.encounter_id, r.customer_id, r.patient_snapshot_json,
 	r.template_id, r.document_type, r.visit_type, r.department_id, r.doctor_id,
-	NULL::varchar, r.started_at, r.ended_at, r.encounter_context_json, r.source_references_json,
+	(SELECT t.code FROM emr_templates t WHERE t.id=r.template_id), NULL::varchar, r.started_at, r.ended_at, r.encounter_context_json, r.source_references_json,
 	r.content_json, ''::varchar,
 	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	r.status, r.revision_no,
@@ -43,7 +44,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	err := row.Scan(
 		&item.ID, &item.TenantID, &item.EncounterID, &item.PatientID, &patient,
 		&item.TemplateVersionID, &item.DocumentType, &item.VisitType, &item.DepartmentID, &item.DoctorID,
-		&item.SpecialtyModule, &item.StartedAt, &item.EndedAt, &encounterContext, &sourceReferences,
+		&item.TemplateCode, &item.SpecialtyModule, &item.StartedAt, &item.EndedAt, &encounterContext, &sourceReferences,
 		&content, &item.WorkingDigest, &item.CurrentSnapshotID, &item.Status, &item.RevisionNo,
 		&item.ConfirmedBy, &item.ConfirmedAt, &item.ConfirmedSnapshotID, &item.ArchivedSnapshotID,
 		&item.SubmittedAt, &item.ArchivedAt, &item.VoidedAt, &item.CreatedBy, &item.CreatedAt,
@@ -174,7 +175,58 @@ func (s *Store) list(ctx context.Context, query string, args ...any) ([]*Record,
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 列表查询使用批量补齐，避免每行单独查一次员工；详情接口已有同等补齐逻辑。
+	if len(items) == 0 || len(args) == 0 {
+		return items, nil
+	}
+	doctorIDs := make([]int64, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		if item.DoctorID > 0 {
+			if _, ok := seen[item.DoctorID]; !ok {
+				doctorIDs = append(doctorIDs, item.DoctorID)
+				seen[item.DoctorID] = struct{}{}
+			}
+		}
+	}
+	if len(doctorIDs) == 0 {
+		return items, nil
+	}
+	doctors, err := s.pool.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(NULLIF(full_name, ''), 'unknown'), NULLIF(name, ''), NULLIF(username, ''), '')
+		FROM employees
+		WHERE tenant_id=$1 AND id = ANY($2::bigint[]) AND deleted_at IS NULL
+	`, args[0], doctorIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list emr records: load doctor names: %w", err)
+	}
+	names := make(map[int64]string, len(doctorIDs))
+	for doctors.Next() {
+		var id int64
+		var name string
+		if err := doctors.Scan(&id, &name); err != nil {
+			doctors.Close()
+			return nil, err
+		}
+		names[id] = strings.TrimSpace(name)
+	}
+	if err := doctors.Err(); err != nil {
+		doctors.Close()
+		return nil, err
+	}
+	doctors.Close()
+	for _, item := range items {
+		if name := names[item.DoctorID]; name != "" {
+			if item.EncounterContext == nil {
+				item.EncounterContext = map[string]any{}
+			}
+			item.EncounterContext["doctor_name"] = name
+		}
+	}
+	return items, nil
 }
 
 func (s *Store) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
@@ -223,6 +275,13 @@ func (s *Store) listByPatient(ctx context.Context, tenantID, patientID int64, pa
 }
 
 func (s *Store) Create(ctx context.Context, tenantID, actorID int64, req CreateRequest) (*Record, error) {
+	var templateCode string
+	if err := s.pool.QueryRow(ctx, `SELECT code FROM emr_templates WHERE id=$1 AND tenant_id IN (0,$2)`, req.TemplateVersionID, tenantID).Scan(&templateCode); err != nil {
+		return nil, fmt.Errorf("load emr template: %w", err)
+	}
+	if err := emrdiagnosis.Validate(templateCode, req.Content, false); err != nil {
+		return nil, err
+	}
 	patient := encodeObject(req.PatientSnapshot)
 	encounterContext := encodeObject(req.EncounterContext)
 	sourceReferences := encodeObject(req.SourceReferences)
@@ -276,6 +335,13 @@ func isEncounterAlreadyUsed(err error) bool {
 }
 
 func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*Record, error) {
+	var templateCode string
+	if err := s.pool.QueryRow(ctx, `SELECT t.code FROM emr_records r JOIN emr_templates t ON t.id=r.template_id WHERE r.id=$1 AND r.tenant_id=$2`, id, tenantID).Scan(&templateCode); err != nil {
+		return nil, fmt.Errorf("load emr template: %w", err)
+	}
+	if err := emrdiagnosis.Validate(templateCode, content, false); err != nil {
+		return nil, err
+	}
 	raw := encodeObject(content)
 	var cmd pgconn.CommandTag
 	var err error
@@ -352,6 +418,13 @@ func (s *Store) SaveGeneratedWorkingDraft(ctx context.Context, tenantID int64, r
 	encounterContext := encodeObject(req.EncounterContext)
 	sourceReferences := encodeObject(req.SourceReferences)
 	content := encodeObject(req.Content)
+	var templateCode string
+	if err := s.pool.QueryRow(ctx, `SELECT code FROM emr_templates WHERE id=$1 AND tenant_id IN (0,$2)`, req.TemplateID, tenantID).Scan(&templateCode); err != nil {
+		return nil, fmt.Errorf("load generated emr template: %w", err)
+	}
+	if err := emrdiagnosis.Validate(templateCode, req.Content, false); err != nil {
+		return nil, err
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -474,6 +547,9 @@ func saveFormalTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, id st
 	}
 	if !editable(current.Status) {
 		return nil, fmt.Errorf("record status %s is not editable", current.Status)
+	}
+	if err := emrdiagnosis.Validate(current.TemplateCode, content, false); err != nil {
+		return nil, err
 	}
 	beforeSnapshot := current.CurrentSnapshotID
 	beforeContent := cloneObject(current.WorkingContent)

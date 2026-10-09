@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrdiagnosis"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
@@ -159,6 +160,13 @@ func (s *Service) createFailedRecord(ctx context.Context, tenantID, actorID int6
 
 func (s *Service) AutoSave(ctx context.Context, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*Record, error) {
 	// 自动保存只更新工作稿，不生成正式快照，也不写入正式操作留痕。
+	current, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("record not found")
+	}
+	if err := validateDiagnosisContract(current.TemplateCode, content, false); err != nil {
+		return nil, err
+	}
 	return s.store.SaveWorking(ctx, tenantID, actorID, id, content, patientSnapshot)
 }
 
@@ -170,6 +178,9 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 	content := req.Content
 	if content == nil {
 		content = current.WorkingContent
+	}
+	if err := validateDiagnosisContract(current.TemplateCode, content, false); err != nil {
+		return nil, err
 	}
 	beforeContent, beforePatient, err := s.formalAuditBaseline(ctx, tenantID, current)
 	if err != nil {
@@ -219,12 +230,15 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	if content == nil {
 		content = current.WorkingContent
 	}
+	if err := validateDiagnosisContract(current.TemplateCode, content, true); err != nil {
+		return nil, err
+	}
 	patient := req.PatientSnapshot
 	if patient == nil {
 		patient = current.PatientSnapshot
 	}
 	qualityInput := emrquality.Context{TenantID: tenantID, RecordID: current.ID, Action: emrquality.ActionComplete,
-		DocumentType: current.DocumentType, VisitType: current.VisitType, Patient: patient, Content: content,
+		DocumentType: current.DocumentType, VisitType: current.VisitType, TemplateCode: current.TemplateCode, Patient: patient, Content: content,
 		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt}
 	var report *emrquality.Report
 	reusedReport := false
@@ -410,8 +424,12 @@ func qualityContext(tenantID int64, action emrquality.Action, record *Record, sn
 		patient = snapshot.PatientSnapshot
 	}
 	return emrquality.Context{TenantID: tenantID, RecordID: record.ID, SnapshotID: snapshotIDPtr(snapshot), Action: action,
-		DocumentType: record.DocumentType, VisitType: record.VisitType, Patient: patient, Content: content,
+		DocumentType: record.DocumentType, VisitType: record.VisitType, TemplateCode: record.TemplateCode, Patient: patient, Content: content,
 		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt}
+}
+
+func validateDiagnosisContract(templateCode string, content map[string]any, requireComplete bool) error {
+	return emrdiagnosis.Validate(templateCode, content, requireComplete)
 }
 
 func snapshotIDPtr(snapshot *Snapshot) *string {

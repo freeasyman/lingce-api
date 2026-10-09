@@ -45,28 +45,26 @@ func TestImplementedRuleWithoutFindingPasses(t *testing.T) {
 }
 
 func TestDiagnosisWithoutICD10CodeIsNotAcceptedByProgramRule(t *testing.T) {
-	items := diagnosisItems("腰椎间盘突出症")
+	items := diagnosisItems(map[string]any{"diagnosis_name": "腰椎间盘突出症"})
 	if len(items) != 1 || valueString(items[0], "diagnosis_name") != "腰椎间盘突出症" {
 		t.Fatalf("unexpected diagnosis normalization: %#v", items)
 	}
 }
 
-func TestDiagnosisContentUsesDisplayedSpecialtyDiagnosis(t *testing.T) {
+func TestDiagnosisContentUsesOnlyWesternDiagnosis(t *testing.T) {
 	content := map[string]any{
 		"diagnosis":     "",
 		"tcm_diagnosis": map[string]any{"diagnosis_name": "急性上呼吸道感染"},
 	}
-	items := diagnosisItems(diagnosisContent(content))
-	if len(items) != 1 || valueString(items[0], "diagnosis_name") != "急性上呼吸道感染" {
-		t.Fatalf("diagnosis content = %#v, want displayed specialty diagnosis", items)
+	if diagnosisContent(content) != nil {
+		t.Fatalf("diagnosis content unexpectedly accepted tcm_diagnosis")
 	}
-
 	result, err := evaluateRule(Context{Content: content}, ruleDefinition{Code: "DX-001", SectionCode: "diagnosis", StandardPoints: 10, ExecutorKind: "program"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Result != "pass" {
-		t.Fatalf("DX-001 result = %s, want pass", result.Result)
+	if result.Result != "problem" {
+		t.Fatalf("DX-001 result = %s, want problem", result.Result)
 	}
 }
 
@@ -135,7 +133,7 @@ func TestPatientReportedContentPassesPresenceChecks(t *testing.T) {
 		"chief_complaint": "腰疼伴右腿放射痛1周",
 		"present_illness": "患者1周前出现腰疼，伴有右腿放射痛。",
 		"physical_exam":   map[string]any{"temperature": "", "positive_findings": "直腿抬高试验阳性，按压腰部疼痛明显。"},
-		"diagnosis":       "椎间盘突出，压迫神经根。",
+		"diagnosis":       map[string]any{"diagnosis_name": "椎间盘突出，压迫神经根。", "icd10_code": "M51.1"},
 	}}
 	for _, code := range []string{"CC-001", "CC-005", "HIS-001", "EXAM-001", "DX-001"} {
 		result, err := evaluateRule(input, ruleDefinition{Code: code})
