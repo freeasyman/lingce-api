@@ -2,7 +2,7 @@
 
 > 适用范围：`lingce-worker` 分析完成后调用随访中心、电子病历、合规卫士及其他业务 API。  
 > 文档维护：Codex  
-> 更新时间：2026-09-10
+> 更新时间：2026-10-12
 
 ## 1. 目的
 
@@ -27,9 +27,9 @@ BusinessAPIDispatcher.Dispatch
         ↓
 重新读取分析完成后的最终录音数据
         ↓
-组装 BusinessAPIInput
+按业务需要组装输入
         ↓
-调用随访、电子病历、合规卫士等业务 API
+分别调用随访、电子病历、合规卫士等业务 API
 ```
 
 标准分析和重新分析最终都调用同一个 `Engine.ExecuteRecording`，因此业务 API 只接入统一完成回调，就能覆盖两种入口。
@@ -139,30 +139,40 @@ func (d *BusinessAPIDispatcher) Dispatch(
 该函数负责：
 
 1. 重新读取分析完成后的录音；
-2. 校验必要的关联数据；
-3. 组装统一的 `BusinessAPIInput`；
-4. 按顺序调用已接入的业务 API。
+2. 为需要完整主数据的业务组装 `BusinessAPIInput`；
+3. 为沟通合规单独组装最小合规输入；
+4. 分别调用已接入的业务 API，单个业务失败不阻断后续业务。
 
 当前调用结构：
 
 ```go
 input, err := d.buildBusinessAPIInput(ctx, recordingID)
-if err != nil {
-    return err
+if err == nil {
+    // 随访和 EMR 使用完整业务输入；各自失败只记录，不阻断合规。
+    d.callFollowupAPI(ctx, input)
+    d.callEMRAPI(ctx, input)
+    d.callComplianceAPI(ctx, input)
+    return nil
 }
 
-if err := d.callFollowupAPI(ctx, input); err != nil {
-    return err
+// 客户主数据不完整时，仍尝试独立的沟通合规投递。
+complianceInput, complianceErr := d.buildComplianceAPIInput(ctx, recordingID)
+if complianceErr != nil {
+    return errors.Join(err, complianceErr)
 }
-
-if err := d.callEMRAPI(ctx, input); err != nil {
-    return err
-}
-
-if err := d.callComplianceAPI(ctx, input); err != nil {
-    return err
-}
+return d.callComplianceAPI(ctx, complianceInput)
 ```
+
+### 4.1 医生和咨询师的触发关系
+
+医生、咨询师仍然使用各自独立的录音分析流程。两条流程成功完成并写回录音结果后，统一完成回调才投递沟通合规：
+
+```text
+医生录音分析 → compliance_doctor_check_v1
+咨询师录音分析 → compliance_check_v1
+```
+
+合规 API 按 `business_scope` 和 `role_code` 选择规则集、提示词和模型；Worker 不拼接提示词、不读取规则、不写合规表。合规投递需要有效转写、员工、录音时间、就诊关联和可识别角色，但不依赖随访/EMR 所需的客户姓名和客户主数据。
 
 后续新增业务，应在这里增加对应的 `callXXXAPI`，不要改动具体分析流程。
 
@@ -527,4 +537,3 @@ InternalToken
 - [ ] 业务 API 的 LLM 调用和补偿不阻塞 Worker 的 HTTP 请求；
 - [ ] 标准分析和 Replay 都能触发该业务；
 - [ ] 单元测试覆盖请求组装、非 2xx 响应和缺失关联数据。
-
