@@ -3689,17 +3689,14 @@ AND position('十三、结构化渠道输出规则' IN system_prompt)=0;
 -- END SAFE TARGET FRAGMENT internal/store/migrations/20261007_003_followup_channel_prompt.sql --
 
 -- BEGIN SAFE TARGET FRAGMENT internal/store/migrations/20261009_002_require_western_diagnosis.sql --
-BEGIN;
 UPDATE public.emr_template_fields tf
 SET is_visible=TRUE,is_required=TRUE,updated_at=NOW()
 WHERE tf.field_id IN (SELECT id FROM public.emr_fields WHERE tenant_id=0 AND code='diagnosis')
   AND tf.template_id IN (SELECT id FROM public.emr_templates WHERE tenant_id=0 AND status='published');
-COMMIT;
 
 -- END SAFE TARGET FRAGMENT internal/store/migrations/20261009_002_require_western_diagnosis.sql --
 
 -- BEGIN SAFE TARGET FRAGMENT internal/store/migrations/20261009_003_tcm_semantic_consistency_rules.sql --
-BEGIN;
 UPDATE public.emr_quality_rule_definitions
 SET executor_kind='llm',
     action_policy=jsonb_build_object(
@@ -3710,7 +3707,6 @@ SET executor_kind='llm',
     evaluation_spec=evaluation_spec || '{"semantic":true}'::jsonb,
     updated_at=NOW()
 WHERE version='2026-10-08-v1' AND rule_code IN ('TCM-DX-002','TCM-DX-003');
-COMMIT;
 
 -- END SAFE TARGET FRAGMENT internal/store/migrations/20261009_003_tcm_semantic_consistency_rules.sql --
 
