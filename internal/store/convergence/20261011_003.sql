@@ -3567,7 +3567,7 @@ UPDATE public.emr_record_snapshots sn SET total_score=s.total_score,grade=s.grad
 -- ICD-10 catalog is intentionally not copied from development execution data. Import the approved 33,263-row catalog separately from the controlled source file, then run the verification below.
 -- Final structural and formal-data checks.
 DO $$ DECLARE t TEXT; BEGIN FOR t IN SELECT unnest(ARRAY['encounters','emr_templates','emr_fields','emr_template_fields','emr_records','emr_record_snapshots','emr_process_records','emr_quality_rule_set_versions','emr_quality_rule_definitions','emr_quality_runs','emr_quality_results','emr_record_score_current','emr_record_score_current_items','emr_score_standards','emr_icd10_diagnosis_catalog','emr_permission_assignments','emr_badge_sessions','emr_followup_deliveries','followup_generation_runs','followup_data_scopes','followup_permission_assignments','compliance_rules','compliance_check_runs','compliance_findings','compliance_permission_assignments']) LOOP IF to_regclass('public.'||t) IS NULL THEN RAISE EXCEPTION '收敛后目标表缺失: %',t; END IF; END LOOP; END $$;
-DO $$ BEGIN IF (SELECT count(*) FROM public.emr_quality_rule_definitions WHERE version='2026-10-04-v2' AND status='published') <> 43 THEN RAISE EXCEPTION '正式门诊质检规则必须为43条'; END IF; IF NOT EXISTS (SELECT 1 FROM public.emr_score_standards WHERE code='outpatient_record_quality' AND version='2017' AND status='published') THEN RAISE EXCEPTION '门诊病历评分标准缺失'; END IF; END $$;
+DO $$ BEGIN IF (SELECT count(*) FROM public.emr_quality_rule_definitions WHERE version='2026-10-04-v2' AND status='published') <> 44 THEN RAISE EXCEPTION '正式门诊质检规则必须为44条'; END IF; IF (SELECT count(*) FROM public.emr_quality_rule_definitions WHERE version='2026-10-08-v1' AND status='published') <> 46 THEN RAISE EXCEPTION '双诊断门诊质检规则必须为46条'; END IF; IF NOT EXISTS (SELECT 1 FROM public.emr_score_standards WHERE code='outpatient_record_quality' AND version='2017' AND status='published') THEN RAISE EXCEPTION '门诊病历评分标准缺失'; END IF; END $$;
 
 
 -- 20261011_003 additive target-state convergence extensions.
@@ -3852,7 +3852,9 @@ SET name='中医诊断', input_type='结构化内容',
     description='tcm_diagnosis：中医诊断；填写中医病名、证候和辨证依据，不填写 ICD-10。', updated_at=NOW()
 WHERE tenant_id=0 AND code='tcm_diagnosis';
 
-USING public.emr_fields f, public.emr_templates t
+UPDATE public.emr_template_fields tf
+SET is_visible=FALSE,is_required=FALSE,description='历史兼容字段，当前模板不展示',updated_at=NOW()
+FROM public.emr_fields f, public.emr_templates t
 WHERE tf.field_id=f.id AND tf.template_id=t.id AND f.tenant_id=0
   AND f.code='tcm_diagnosis' AND t.tenant_id=0 AND t.code<>'tcm';
 
