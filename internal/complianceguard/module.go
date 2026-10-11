@@ -3,6 +3,7 @@ package complianceguard
 import (
 	"net/http"
 
+	"github.com/freeasyman/lingce-api/internal/compliancepermission"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,4 +31,8 @@ func NewModule(pool *pgxpool.Pool, llm *llmgateway.Client) *Module {
 // 时间：2026-09-11
 func (m *Module) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
 	m.handler.RegisterRoutes(mux, jwtSecret, internalToken)
+}
+
+func (m *Module) SetPermissionService(service *compliancepermission.Service) {
+	m.handler.SetPermissionService(service)
 }

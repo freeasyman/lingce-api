@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,1168 @@ type Service struct {
 	processLogMu sync.Mutex
 }
 
+type FindingListFilter struct {
+	TenantID    int64
+	Status      []string
+	Keyword     string
+	SceneCode   string
+	RoleCode    string
+	Department  string
+	EmployeeID  *int64
+	RuleCode    string
+	CreatedFrom *time.Time
+	CreatedTo   *time.Time
+	Page        int
+	PageSize    int
+}
+
+type FindingListResult struct {
+	Items    []FindingListItem
+	Total    int64
+	Page     int
+	PageSize int
+}
+
+type ComplianceRuleListFilter struct {
+	Scope    string
+	RoleCode string
+	Enabled  *bool
+}
+
+var (
+	errComplianceRuleNotFound = fmt.Errorf("compliance rule not found")
+	errComplianceRuleConflict = fmt.Errorf("compliance rule conflict")
+)
+
+// ListRules 查询检查标准。
+//
+// 规则表是平台规则的唯一当前来源；接口返回完整 definition，同时把页面
+// 常用字段单独返回，方便列表筛选和编辑。in_use 通过执行记录和发现记录判断。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) ListRules(ctx context.Context, filter ComplianceRuleListFilter) ([]ComplianceRule, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	conditions := []string{"1 = 1"}
+	args := make([]any, 0, 2)
+	next := 1
+	if value := strings.TrimSpace(filter.Scope); value != "" {
+		conditions = append(conditions, fmt.Sprintf("r.subject = $%d", next))
+		args = append(args, value)
+		next++
+	}
+	if value := strings.TrimSpace(filter.RoleCode); value != "" {
+		conditions = append(conditions, fmt.Sprintf("r.role_codes @> jsonb_build_array($%d::text)", next))
+		args = append(args, value)
+		next++
+	}
+	if filter.Enabled != nil {
+		conditions = append(conditions, fmt.Sprintf("r.is_enabled = $%d", next))
+		args = append(args, *filter.Enabled)
+		next++
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT r.id::text, r.rule_code, r.rule_name, r.subject, r.scene_codes,
+		       r.role_codes, r.version, r.status, r.is_enabled, r.judgment_standard,
+		       r.definition, r.created_by, r.created_at, r.updated_at,
+		       EXISTS (
+		         SELECT 1 FROM compliance_check_runs run
+		         WHERE run.rule_version = r.version
+		           AND run.subject = r.subject
+		       ) OR EXISTS (
+		         SELECT 1 FROM compliance_findings f
+		         WHERE f.rule_code = r.rule_code
+		           AND f.rule_version = r.version
+		       ) AS in_use
+		FROM compliance_rules r
+		WHERE %s
+		ORDER BY r.subject, r.rule_code, r.version DESC, r.updated_at DESC
+	`, strings.Join(conditions, " AND ")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list compliance rules: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]ComplianceRule, 0)
+	for rows.Next() {
+		item, err := scanComplianceRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate compliance rules: %w", err)
+	}
+	return items, nil
+}
+
+// GetRule 查询一条规则。
+//
+// 规则 ID 是版本级 ID，因此历史版本可以独立查看，不会被当前版本覆盖。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) GetRule(ctx context.Context, id string) (*ComplianceRule, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var queryRow interface {
+		Scan(dest ...any) error
+	}
+	queryRow = s.pool.QueryRow(ctx, `
+		SELECT r.id::text, r.rule_code, r.rule_name, r.subject, r.scene_codes,
+		       r.role_codes, r.version, r.status, r.is_enabled, r.judgment_standard,
+		       r.definition, r.created_by, r.created_at, r.updated_at,
+		       EXISTS (
+		         SELECT 1 FROM compliance_check_runs run
+		         WHERE run.rule_version = r.version AND run.subject = r.subject
+		       ) OR EXISTS (
+		         SELECT 1 FROM compliance_findings f
+		         WHERE f.rule_code = r.rule_code AND f.rule_version = r.version
+		       ) AS in_use
+		FROM compliance_rules r
+		WHERE r.id::text = $1
+	`, id)
+	item, err := scanComplianceRuleRow(queryRow)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, errComplianceRuleNotFound
+		}
+		return nil, fmt.Errorf("get compliance rule: %w", err)
+	}
+	return item, nil
+}
+
+// CreateRule 新增规则。
+//
+// 新规则默认发布且启用；版本缺省时由 API 生成。医院后续可以通过规则页面
+// 再停用它，不需要删除数据库记录。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) CreateRule(ctx context.Context, actorID int64, req ComplianceRuleRequest) (*ComplianceRule, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	normalized, err := normalizeComplianceRuleRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	definition := buildComplianceRuleDefinition(normalized)
+	definitionJSON, _ := json.Marshal(definition)
+	sceneCodes := normalized.SceneCodes
+	roleCodes := normalized.RoleCodes
+	version := normalized.Version
+	if version == "" {
+		version = newComplianceRuleVersion()
+	}
+	enabled := true
+	if normalized.Enabled != nil {
+		enabled = *normalized.Enabled
+	}
+	var id string
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO compliance_rules (
+		  rule_code, rule_name, subject, scene_codes, role_codes, version, status,
+		  is_enabled, judgment_standard, definition, created_by, published_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, 'published', $7, $8, $9::jsonb,
+		        $10, NOW(), NOW())
+		RETURNING id::text
+	`, normalized.Code, normalized.Name, normalized.Scope, sceneCodes, roleCodes, version,
+		enabled, normalized.JudgmentStandard, definitionJSON, actorID).Scan(&id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: rule code and version already exist", errComplianceRuleConflict)
+		}
+		return nil, fmt.Errorf("create compliance rule: %w", err)
+	}
+	return s.GetRule(ctx, id)
+}
+
+// UpdateRule 修改规则；如果规则已被使用，则保留旧版本并插入新版本。
+//
+// 该逻辑保证历史检查结果中的 rule_version 永远有对应定义，避免编辑规则
+// 造成历史结果含义漂移。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) UpdateRule(ctx context.Context, actorID int64, id string, req ComplianceRuleRequest) (*ComplianceRule, error) {
+	current, err := s.GetRule(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeComplianceRuleRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	definition := buildComplianceRuleDefinition(normalized)
+	definitionJSON, _ := json.Marshal(definition)
+	enabled := current.Enabled
+	if normalized.Enabled != nil {
+		enabled = *normalized.Enabled
+	}
+	if !current.InUse {
+		_, err = s.pool.Exec(ctx, `
+			UPDATE compliance_rules
+			SET rule_code = $1, rule_name = $2, subject = $3,
+			    scene_codes = $4::jsonb, role_codes = $5::jsonb,
+			    is_enabled = $6, judgment_standard = $7, definition = $8::jsonb,
+			    updated_at = NOW()
+			WHERE id::text = $9
+		`, normalized.Code, normalized.Name, normalized.Scope, normalized.SceneCodes,
+			normalized.RoleCodes, enabled, normalized.JudgmentStandard, definitionJSON, id)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return nil, fmt.Errorf("%w: rule code and version already exist", errComplianceRuleConflict)
+			}
+			return nil, fmt.Errorf("update compliance rule: %w", err)
+		}
+		return s.GetRule(ctx, id)
+	}
+
+	version := normalized.Version
+	if version == "" || version == current.Version {
+		version = newComplianceRuleVersion()
+	}
+	var newID string
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO compliance_rules (
+		  rule_code, rule_name, subject, scene_codes, role_codes, version, status,
+		  is_enabled, judgment_standard, definition, created_by, published_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, 'published', $7, $8, $9::jsonb,
+		        $10, NOW(), NOW())
+		RETURNING id::text
+	`, normalized.Code, normalized.Name, normalized.Scope, normalized.SceneCodes,
+		normalized.RoleCodes, version, enabled, normalized.JudgmentStandard, definitionJSON, actorID).Scan(&newID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: generated rule version already exists", errComplianceRuleConflict)
+		}
+		return nil, fmt.Errorf("create compliance rule version: %w", err)
+	}
+	return s.GetRule(ctx, newID)
+}
+
+func (s *Service) SetRuleEnabled(ctx context.Context, actorID int64, id string, enabled bool) (*ComplianceRule, error) {
+	_, _ = actorID, enabled
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var changedID string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE compliance_rules
+		SET is_enabled = $1, updated_at = NOW()
+		WHERE id::text = $2
+		RETURNING id::text
+	`, enabled, id).Scan(&changedID)
+	if err == pgx.ErrNoRows {
+		return nil, errComplianceRuleNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("set compliance rule enabled: %w", err)
+	}
+	return s.GetRule(ctx, changedID)
+}
+
+// DeleteRule 删除未被使用的规则。已使用规则只能停用或创建新版本。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) DeleteRule(ctx context.Context, actorID int64, id string) error {
+	_, _ = actorID, id
+	rule, err := s.GetRule(ctx, id)
+	if err != nil {
+		return err
+	}
+	if rule.InUse || rule.IsBuiltIn {
+		return fmt.Errorf("%w: rule is already used or built in", errComplianceRuleConflict)
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM compliance_rules WHERE id::text = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete compliance rule: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errComplianceRuleNotFound
+	}
+	return nil
+}
+
+func scanComplianceRule(rows interface{ Scan(...any) error }) (*ComplianceRule, error) {
+	return scanComplianceRuleRow(rows)
+}
+
+func scanComplianceRuleRow(row interface{ Scan(...any) error }) (*ComplianceRule, error) {
+	var item ComplianceRule
+	var sceneCodes, roleCodes, definition []byte
+	var createdBy *int64
+	if err := row.Scan(
+		&item.ID, &item.Code, &item.Name, &item.Scope, &sceneCodes, &roleCodes,
+		&item.Version, &item.Status, &item.Enabled, &item.JudgmentStandard,
+		&definition, &createdBy, &item.CreatedAt, &item.UpdatedAt, &item.InUse,
+	); err != nil {
+		return nil, err
+	}
+	item.IsBuiltIn = createdBy == nil
+	item.SceneCodes = json.RawMessage(defaultJSONArray(sceneCodes))
+	item.RoleCodes = json.RawMessage(defaultJSONArray(roleCodes))
+	item.Definition = json.RawMessage(defaultJSONObject(definition))
+	item.Conditions, item.Examples = ruleDefinitionFields(item.Definition)
+	item.Category = definitionString(item.Definition, "category")
+	item.Description = definitionString(item.Definition, "description")
+	item.LegalBasis = definitionString(item.Definition, "legal_basis")
+	item.SuggestedScript = definitionString(item.Definition, "suggested_script")
+	item.TriggerType = definitionString(item.Definition, "trigger_type")
+	return &item, nil
+}
+
+func normalizeComplianceRuleRequest(req ComplianceRuleRequest) (ComplianceRuleRequest, error) {
+	req.Code = strings.TrimSpace(req.Code)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Scope = strings.TrimSpace(req.Scope)
+	req.Category = strings.TrimSpace(req.Category)
+	req.Severity = strings.TrimSpace(req.Severity)
+	req.TriggerType = strings.TrimSpace(req.TriggerType)
+	req.JudgmentStandard = strings.TrimSpace(req.JudgmentStandard)
+	if req.Scope == "沟通合规" {
+		req.Scope = "communication"
+	}
+	if req.Scope == "内容合规" {
+		req.Scope = "content"
+	}
+	if req.Code == "" || req.Name == "" {
+		return req, fmt.Errorf("code and name are required")
+	}
+	if req.Scope != "communication" && req.Scope != "content" {
+		return req, fmt.Errorf("scope must be communication or content")
+	}
+	if req.Version != "" {
+		req.Version = strings.TrimSpace(req.Version)
+	}
+	if len(req.SceneCodes) == 0 {
+		if req.Scope == "communication" {
+			req.SceneCodes = json.RawMessage(`["communication.doctor.outpatient","communication.consultant.consultation"]`)
+		} else {
+			req.SceneCodes = json.RawMessage(`["content.pre_publish"]`)
+		}
+	}
+	if len(req.RoleCodes) == 0 {
+		if req.Scope == "communication" {
+			req.RoleCodes = json.RawMessage(`["doctor","consultant"]`)
+		} else {
+			req.RoleCodes = json.RawMessage(`[]`)
+		}
+	}
+	return req, nil
+}
+
+func buildComplianceRuleDefinition(req ComplianceRuleRequest) map[string]any {
+	definition := map[string]any{
+		"rule_code":         req.Code,
+		"name":              req.Name,
+		"category":          req.Category,
+		"subject":           req.Scope,
+		"status":            "published",
+		"judgment_standard": req.JudgmentStandard,
+		"description":       req.Description,
+		"legal_basis":       req.LegalBasis,
+		"suggested_script":  req.SuggestedScript,
+		"trigger_type":      req.TriggerType,
+	}
+	if len(req.Conditions) > 0 {
+		var conditions any
+		if json.Unmarshal(req.Conditions, &conditions) == nil {
+			definition["conditions"] = conditions
+		}
+	}
+	if len(req.Examples) > 0 {
+		var examples any
+		if json.Unmarshal(req.Examples, &examples) == nil {
+			definition["examples"] = examples
+		}
+	}
+	return definition
+}
+
+func ruleDefinitionFields(definition json.RawMessage) (json.RawMessage, json.RawMessage) {
+	var object map[string]any
+	if json.Unmarshal(definition, &object) != nil {
+		return json.RawMessage(`{}`), json.RawMessage(`{}`)
+	}
+	conditions, _ := json.Marshal(object["conditions"])
+	examples, _ := json.Marshal(object["examples"])
+	if string(conditions) == "null" {
+		conditions = []byte(`{}`)
+	}
+	if string(examples) == "null" {
+		examples = []byte(`{}`)
+	}
+	return conditions, examples
+}
+
+func definitionString(definition json.RawMessage, key string) string {
+	var object map[string]any
+	if json.Unmarshal(definition, &object) != nil {
+		return ""
+	}
+	value, _ := object[key].(string)
+	return value
+}
+
+func defaultJSONArray(value []byte) []byte {
+	if len(value) == 0 {
+		return []byte(`[]`)
+	}
+	return value
+}
+
+func defaultJSONObject(value []byte) []byte {
+	if len(value) == 0 {
+		return []byte(`{}`)
+	}
+	return value
+}
+
+func newComplianceRuleVersion() string {
+	return time.Now().Format("20060102.150405.000")
+}
+
+func isUniqueViolation(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate key") ||
+		strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+}
+
+func isComplianceRuleConflict(err error) bool {
+	return strings.Contains(err.Error(), errComplianceRuleConflict.Error())
+}
+
+// GetOverview 聚合当前租户的合规发现。
+//
+// 维度统计使用发现表中的稳定字段；员工和科室只用于补齐展示名称。
+// 规则名称本阶段不额外查询，避免依赖历史规则表的非统一字段结构。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) ListCheckItems(ctx context.Context, tenantID int64, status string) ([]CheckItemListItem, error) {
+	query := `SELECT id::text,tenant_id,source_type,source_id,source_version,scene_code,role_code,employee_id,theme_key,question,risk_hypothesis,primary_risk_type,related_risk_types,evidence,check_basis,suggested_actions,priority,status,COALESCE(conclusion,''),COALESCE(process_reason,''),process_actions,COALESCE(process_note,''),created_at,updated_at FROM compliance_check_items WHERE tenant_id=$1`
+	args := []any{tenantID}
+	if strings.TrimSpace(status) != "" {
+		query += " AND status=$2"
+		args = append(args, strings.TrimSpace(status))
+	}
+	query += " ORDER BY created_at DESC"
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CheckItemListItem{}
+	for rows.Next() {
+		var i CheckItemListItem
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+func (s *Service) GetCheckItem(ctx context.Context, tenantID int64, id string) (*CheckItemListItem, error) {
+	var i CheckItemListItem
+	err := s.pool.QueryRow(ctx, `SELECT id::text,tenant_id,source_type,source_id,source_version,scene_code,role_code,employee_id,theme_key,question,risk_hypothesis,primary_risk_type,related_risk_types,evidence,check_basis,suggested_actions,priority,status,COALESCE(conclusion,''),COALESCE(process_reason,''),process_actions,COALESCE(process_note,''),created_at,updated_at FROM compliance_check_items WHERE tenant_id=$1 AND id::text=$2`, tenantID, id).Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id::text,actor_id,conclusion,reason,actions,note,created_at FROM compliance_check_item_process_records WHERE tenant_id=$1 AND item_id=$2::uuid ORDER BY created_at ASC`, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record CheckItemProcessRecord
+		if err := rows.Scan(&record.ID, &record.ActorID, &record.Conclusion, &record.Reason, &record.Actions, &record.Note, &record.CreatedAt); err != nil {
+			return nil, err
+		}
+		i.ProcessRecords = append(i.ProcessRecords, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &i, nil
+}
+func (s *Service) StartCheckItem(ctx context.Context, tenantID int64, id string, actor int64) (*CheckItemListItem, error) {
+	result, err := s.pool.Exec(ctx, `UPDATE compliance_check_items SET status=CASE WHEN status='pending' THEN 'in_progress' ELSE status END, started_by=CASE WHEN started_by IS NULL THEN $3 ELSE started_by END, started_at=CASE WHEN started_at IS NULL THEN NOW() ELSE started_at END, updated_at=NOW() WHERE tenant_id=$1 AND id::text=$2`, tenantID, id, actor)
+	if err != nil {
+		return nil, err
+	}
+	if result.RowsAffected() == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return s.GetCheckItem(ctx, tenantID, id)
+}
+func (s *Service) ProcessCheckItem(ctx context.Context, tenantID int64, id string, actor int64, req CheckItemProcessRequest) (*CheckItemListItem, error) {
+	validConclusion := map[string]bool{"expressions_need_improvement": true, "medical_basis_needed": true, "disclosure_boundary_needed": true, "management_risk_confirmed": true, "insufficient_evidence": true, "refer_to_other_department": true}
+	if !validConclusion[strings.TrimSpace(req.Conclusion)] || strings.TrimSpace(req.Reason) == "" || len(req.Actions) == 0 || strings.TrimSpace(req.IdempotencyKey) == "" {
+		return nil, fmt.Errorf("conclusion, reason and actions are required")
+	}
+	b, _ := json.Marshal(req.Actions)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status FROM compliance_check_items WHERE tenant_id=$1 AND id::text=$2 FOR UPDATE`, tenantID, id).Scan(&status); err != nil {
+		return nil, err
+	}
+	if status == "processed" {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			return nil, err
+		}
+		return s.GetCheckItem(ctx, tenantID, id)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO compliance_check_item_process_records(item_id,tenant_id,actor_id,idempotency_key,conclusion,reason,actions,note) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`, id, tenantID, actor, req.IdempotencyKey, req.Conclusion, req.Reason, string(b), req.Note); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE compliance_check_items SET status='processed',processed_by=$3,processed_at=NOW(),conclusion=$4,process_reason=$5,process_actions=$6::jsonb,process_note=$7,updated_at=NOW() WHERE tenant_id=$1 AND id::text=$2`, tenantID, id, actor, req.Conclusion, req.Reason, string(b), req.Note); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.GetCheckItem(ctx, tenantID, id)
+}
+
+func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceOverview, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+
+	overview := &ComplianceOverview{
+		ByScene:         make([]OverviewBucket, 0),
+		ByDepartment:    make([]OverviewBucket, 0),
+		ByEmployee:      make([]OverviewBucket, 0),
+		ByRule:          make([]OverviewBucket, 0),
+		RecentPending:   make([]CheckItemListItem, 0),
+		RecentReviewed:  make([]CheckItemListItem, 0),
+		RecentConfirmed: make([]CheckItemListItem, 0),
+	}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+		  COUNT(*) FILTER (WHERE f.status IN ('pending','in_progress')),
+		  COUNT(*) FILTER (WHERE f.status = 'processed'),
+		  COUNT(*) FILTER (WHERE f.status = 'processed' AND f.conclusion IN ('management_risk_confirmed','medical_basis_needed'))
+		FROM compliance_check_items f
+		WHERE f.tenant_id = $1
+	`, tenantID).Scan(
+		&overview.PendingCount,
+		&overview.ReviewedCount,
+		&overview.ConfirmedCount,
+	); err != nil {
+		return nil, fmt.Errorf("count compliance overview: %w", err)
+	}
+
+	var err error
+	overview.ByScene, err = s.loadOverviewBuckets(ctx, `
+		SELECT f.scene_code, f.scene_code, COUNT(*)
+		FROM compliance_check_items f
+		WHERE f.tenant_id = $1
+		GROUP BY f.scene_code
+		ORDER BY COUNT(*) DESC, f.scene_code
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance overview scenes: %w", err)
+	}
+	overview.ByDepartment, err = s.loadOverviewBuckets(ctx, `
+		SELECT COALESCE(d.id::text, ''), COALESCE(NULLIF(d.name, ''), '未记录科室'), COUNT(*)
+		FROM compliance_check_items f
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		WHERE f.tenant_id = $1
+		GROUP BY d.id, d.name
+		ORDER BY COUNT(*) DESC, COALESCE(NULLIF(d.name, ''), '未记录科室')
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance overview departments: %w", err)
+	}
+	overview.ByEmployee, err = s.loadOverviewBuckets(ctx, `
+		SELECT COALESCE(f.employee_id::text, ''), COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员'), COUNT(*)
+		FROM compliance_check_items f
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		WHERE f.tenant_id = $1
+		GROUP BY f.employee_id, e.full_name, e.name
+		ORDER BY COUNT(*) DESC, COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员')
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance overview employees: %w", err)
+	}
+	overview.ByRule, err = s.loadOverviewBuckets(ctx, `
+		SELECT src.rule_code, COALESCE(NULLIF(r.rule_name, ''), '其他问题'), COUNT(DISTINCT i.id)
+		FROM compliance_check_items i
+		JOIN compliance_check_item_sources src ON src.item_id = i.id
+		LEFT JOIN LATERAL (
+		    SELECT rule_name
+		    FROM compliance_rules
+			WHERE compliance_rules.rule_code = src.rule_code
+		      AND compliance_rules.status = 'published'
+		      AND (
+				true
+		      )
+		    ORDER BY compliance_rules.updated_at DESC, compliance_rules.id DESC
+		    LIMIT 1
+		) r ON true
+		WHERE i.tenant_id = $1
+		GROUP BY src.rule_code, r.rule_name
+		ORDER BY COUNT(DISTINCT i.id) DESC, COALESCE(NULLIF(r.rule_name, ''), '其他问题')
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance overview rules: %w", err)
+	}
+	overview.RecentPending, err = s.loadRecentCheckItems(ctx, tenantID, "pending")
+	if err != nil {
+		return nil, fmt.Errorf("load recent compliance findings: %w", err)
+	}
+	overview.RecentReviewed, err = s.loadRecentCheckItems(ctx, tenantID, "processed")
+	if err != nil {
+		return nil, fmt.Errorf("load recent reviewed compliance findings: %w", err)
+	}
+	overview.RecentConfirmed, err = s.loadRecentCheckItems(ctx, tenantID, "confirmed")
+	if err != nil {
+		return nil, fmt.Errorf("load recent confirmed compliance findings: %w", err)
+	}
+	return overview, nil
+}
+
+func (s *Service) loadOverviewBuckets(ctx context.Context, query string, tenantID int64) ([]OverviewBucket, error) {
+	rows, err := s.pool.Query(ctx, query, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]OverviewBucket, 0)
+	for rows.Next() {
+		var item OverviewBucket
+		if err := rows.Scan(&item.Key, &item.Label, &item.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Service) loadRecentPendingFindings(ctx context.Context, tenantID int64) ([]FindingListItem, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT f.id::text, f.tenant_id, f.source_type, f.source_id, f.source_version,
+		       f.subject, f.scene_code, f.role_code, f.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') AS employee_name,
+		       COALESCE(NULLIF(c.name, ''), '') AS customer_name,
+		       COALESCE(d.name, '') AS department,
+		       f.rule_code, f.rule_code AS rule_name,
+		       f.rule_version, f.fact, f.summary, f.needs_review, f.status,
+		       f.review_conclusion, f.reviewed_at, f.created_at, f.updated_at
+		FROM compliance_findings f
+		LEFT JOIN recordings rec
+		  ON rec.id::text = f.source_id
+		 AND rec.tenant_id = f.tenant_id
+		 AND f.source_type = 'recording'
+		LEFT JOIN customers c
+		  ON c.id = rec.customer_id AND c.tenant_id = f.tenant_id
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		WHERE f.tenant_id = $1 AND f.status = 'pending'
+		ORDER BY f.created_at DESC, f.id DESC
+		LIMIT 5
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]FindingListItem, 0, 5)
+	for rows.Next() {
+		var item FindingListItem
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.SourceType, &item.SourceID, &item.SourceVersion,
+			&item.Subject, &item.SceneCode, &item.RoleCode, &item.EmployeeID,
+			&item.EmployeeName, &item.CustomerName, &item.Department, &item.RuleCode, &item.RuleName,
+			&item.RuleVersion, &item.Fact, &item.Summary, &item.NeedsReview,
+			&item.Status, &item.ReviewConclusion, &item.ReviewedAt, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Service) loadRecentFindings(ctx context.Context, tenantID int64, confirmedOnly bool) ([]FindingListItem, error) {
+	statusCondition := "f.status IN ('confirmed', 'not_confirmed', 'unable_to_determine')"
+	orderColumn := "f.reviewed_at"
+	if confirmedOnly {
+		statusCondition = "f.status = 'confirmed'"
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT f.id::text, f.tenant_id, f.source_type, f.source_id, f.source_version,
+		       f.subject, f.scene_code, f.role_code, f.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') AS employee_name,
+		       COALESCE(NULLIF(c.name, ''), '') AS customer_name,
+		       COALESCE(d.name, '') AS department,
+		       f.rule_code, COALESCE(NULLIF(r.rule_name, ''), '其他问题') AS rule_name,
+		       f.rule_version, f.fact, f.summary, f.needs_review, f.status,
+		       f.review_conclusion, f.reviewed_at, f.created_at, f.updated_at
+		FROM compliance_findings f
+		LEFT JOIN recordings rec
+		  ON rec.id::text = f.source_id
+		 AND rec.tenant_id = f.tenant_id
+		 AND f.source_type = 'recording'
+		LEFT JOIN customers c
+		  ON c.id = rec.customer_id AND c.tenant_id = f.tenant_id
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+		    SELECT rule_name
+		    FROM compliance_rules
+		    WHERE compliance_rules.rule_code = f.rule_code
+		      AND compliance_rules.status = 'published'
+		      AND (
+		          NULLIF(f.rule_version, '') IS NULL
+		          OR compliance_rules.version = f.rule_version
+		      )
+		    ORDER BY compliance_rules.updated_at DESC, compliance_rules.id DESC
+		    LIMIT 1
+		) r ON true
+		WHERE f.tenant_id = $1 AND %s
+		ORDER BY %s DESC NULLS LAST, f.id DESC
+		LIMIT 5
+	`, statusCondition, orderColumn), tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]FindingListItem, 0, 5)
+	for rows.Next() {
+		var item FindingListItem
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.SourceType, &item.SourceID, &item.SourceVersion,
+			&item.Subject, &item.SceneCode, &item.RoleCode, &item.EmployeeID,
+			&item.EmployeeName, &item.CustomerName, &item.Department, &item.RuleCode, &item.RuleName,
+			&item.RuleVersion, &item.Fact, &item.Summary, &item.NeedsReview, &item.Status,
+			&item.ReviewConclusion, &item.ReviewedAt, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Service) loadRecentCheckItems(ctx context.Context, tenantID int64, status string) ([]CheckItemListItem, error) {
+	condition, args := recentCheckItemsCondition(tenantID, status)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT i.id::text,i.tenant_id,i.source_type,i.source_id,i.source_version,i.scene_code,i.role_code,i.employee_id,i.theme_key,i.question,i.risk_hypothesis,i.primary_risk_type,i.related_risk_types,i.evidence,i.check_basis,i.suggested_actions,i.priority,i.status,COALESCE(i.conclusion,''),COALESCE(i.process_reason,''),i.process_actions,COALESCE(i.process_note,''),i.created_at,i.updated_at FROM compliance_check_items i WHERE i.tenant_id=$1 AND %s ORDER BY i.updated_at DESC,i.id DESC LIMIT 5`, condition), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]CheckItemListItem, 0, 5)
+	for rows.Next() {
+		var i CheckItemListItem
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
+}
+
+func recentCheckItemsCondition(tenantID int64, status string) (string, []any) {
+	if status == "confirmed" {
+		return "i.status = 'processed' AND i.conclusion = 'management_risk_confirmed'", []any{tenantID}
+	}
+	return "i.status = $2", []any{tenantID, status}
+}
+
+var (
+	errFindingNotFound        = fmt.Errorf("compliance finding not found")
+	errFindingAlreadyReviewed = fmt.Errorf("compliance finding has already been reviewed")
+)
+
+// ListFindings 查询用户可见的合规发现。
+//
+// 这里只读 compliance_findings；没有发现的执行记录不进入列表。
+// 员工和科室名称通过现有主数据表补齐，查询始终带租户条件。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) ListFindings(ctx context.Context, filter FindingListFilter) (*FindingListResult, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	if filter.TenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize <= 0 {
+		filter.PageSize = 20
+	}
+	if filter.PageSize > 100 {
+		filter.PageSize = 100
+	}
+
+	conditions, args := findingWhereClause(filter)
+	where := strings.Join(conditions, " AND ")
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM compliance_findings f
+		LEFT JOIN recordings rec
+		  ON rec.id::text = f.source_id
+		 AND rec.tenant_id = f.tenant_id
+		 AND f.source_type = 'recording'
+		LEFT JOIN customers c
+		  ON c.id = rec.customer_id AND c.tenant_id = f.tenant_id
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count compliance findings: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	limitArg := len(queryArgs) + 1
+	offsetArg := len(queryArgs) + 2
+	queryArgs = append(queryArgs, filter.PageSize, (filter.Page-1)*filter.PageSize)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+		SELECT f.id::text, f.tenant_id, f.source_type, f.source_id, f.source_version,
+		       f.subject, f.scene_code, f.role_code, f.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') AS employee_name,
+		       COALESCE(NULLIF(c.name, ''), '') AS customer_name,
+		       COALESCE(d.name, '') AS department,
+		       f.rule_code, COALESCE(r.rule_name, f.rule_code) AS rule_name,
+		       f.rule_version, f.fact, f.summary, f.needs_review, f.status,
+		       f.created_at, f.updated_at
+		FROM compliance_findings f
+		LEFT JOIN recordings rec
+		  ON rec.id::text = f.source_id
+		 AND rec.tenant_id = f.tenant_id
+		 AND f.source_type = 'recording'
+		LEFT JOIN customers c
+		  ON c.id = rec.customer_id AND c.tenant_id = f.tenant_id
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+		    SELECT rule_name
+		    FROM compliance_rules
+		    WHERE compliance_rules.rule_code = f.rule_code
+		      AND compliance_rules.status = 'published'
+		      AND compliance_rules.is_enabled = true
+		      AND (
+		          NULLIF(f.rule_version, '') IS NULL
+		          OR compliance_rules.version = f.rule_version
+		      )
+		    ORDER BY compliance_rules.updated_at DESC, compliance_rules.id DESC
+		    LIMIT 1
+		) r ON true
+		WHERE %s
+		ORDER BY f.created_at DESC, f.id DESC
+		LIMIT $%d OFFSET $%d
+	`, where, limitArg, offsetArg), queryArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list compliance findings: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]FindingListItem, 0, filter.PageSize)
+	for rows.Next() {
+		var item FindingListItem
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.SourceType, &item.SourceID, &item.SourceVersion,
+			&item.Subject, &item.SceneCode, &item.RoleCode, &item.EmployeeID,
+			&item.EmployeeName, &item.CustomerName, &item.Department, &item.RuleCode, &item.RuleName,
+			&item.RuleVersion, &item.Fact, &item.Summary, &item.NeedsReview,
+			&item.Status, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan compliance finding: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate compliance findings: %w", err)
+	}
+	return &FindingListResult{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
+}
+
+func findingWhereClause(filter FindingListFilter) ([]string, []any) {
+	conditions := []string{"f.tenant_id = $1"}
+	args := []any{filter.TenantID}
+	next := 2
+	if len(filter.Status) > 0 {
+		placeholders := make([]string, 0, len(filter.Status))
+		for _, status := range filter.Status {
+			status = strings.TrimSpace(status)
+			if status == "" {
+				continue
+			}
+			placeholders = append(placeholders, fmt.Sprintf("$%d", next))
+			args = append(args, status)
+			next++
+		}
+		if len(placeholders) > 0 {
+			conditions = append(conditions, "f.status IN ("+strings.Join(placeholders, ", ")+")")
+		}
+	}
+	if value := strings.TrimSpace(filter.SceneCode); value != "" {
+		conditions = append(conditions, fmt.Sprintf("f.scene_code = $%d", next))
+		args = append(args, value)
+		next++
+	}
+	if value := strings.TrimSpace(filter.RoleCode); value != "" {
+		conditions = append(conditions, fmt.Sprintf("f.role_code = $%d", next))
+		args = append(args, value)
+		next++
+	}
+	if value := strings.TrimSpace(filter.Department); value != "" {
+		conditions = append(conditions, fmt.Sprintf("d.name ILIKE $%d", next))
+		args = append(args, "%"+value+"%")
+		next++
+	}
+	if value := strings.TrimSpace(filter.Keyword); value != "" {
+		conditions = append(conditions, fmt.Sprintf(`(
+			COALESCE(e.full_name, '') ILIKE $%d OR
+			COALESCE(e.name, '') ILIKE $%d OR
+			COALESCE(c.name, '') ILIKE $%d OR
+			COALESCE(f.summary, '') ILIKE $%d OR
+			COALESCE(f.fact, '') ILIKE $%d OR
+			COALESCE(f.evidence::text, '') ILIKE $%d OR
+			f.source_id ILIKE $%d
+		)`, next, next, next, next, next, next, next))
+		args = append(args, "%"+value+"%")
+		next++
+	}
+	if filter.EmployeeID != nil {
+		conditions = append(conditions, fmt.Sprintf("f.employee_id = $%d", next))
+		args = append(args, *filter.EmployeeID)
+		next++
+	}
+	if value := strings.TrimSpace(filter.RuleCode); value != "" {
+		conditions = append(conditions, fmt.Sprintf("f.rule_code = $%d", next))
+		args = append(args, value)
+		next++
+	}
+	if filter.CreatedFrom != nil {
+		conditions = append(conditions, fmt.Sprintf("f.created_at >= $%d", next))
+		args = append(args, *filter.CreatedFrom)
+		next++
+	}
+	if filter.CreatedTo != nil {
+		conditions = append(conditions, fmt.Sprintf("f.created_at < $%d", next))
+		args = append(args, *filter.CreatedTo)
+	}
+	return conditions, args
+}
+
+// GetFinding 返回单条发现及其证据、核查字段和当前规则判断标准。
+//
+// 详情查询仍以发现表为主，不把执行记录当作用户业务对象。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) GetFinding(ctx context.Context, tenantID int64, id string) (*FindingDetail, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var item FindingDetail
+	err := s.pool.QueryRow(ctx, `
+		SELECT f.id::text, f.tenant_id, f.source_type, f.source_id, f.source_version,
+		       f.subject, f.scene_code, f.role_code, f.employee_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '') AS employee_name,
+		       COALESCE(NULLIF(c.name, ''), '') AS customer_name,
+		       COALESCE(d.name, '') AS department,
+		       f.rule_code, COALESCE(r.rule_name, f.rule_code) AS rule_name,
+		       f.rule_version, f.fact, f.summary, f.needs_review, f.status,
+		       f.created_at, f.updated_at, f.reason, f.evidence, f.missing_facts,
+		       f.review_conclusion, f.review_reason, f.reviewed_by, f.reviewed_at,
+		       COALESCE(r.judgment_standard, '')
+		FROM compliance_findings f
+		LEFT JOIN recordings rec
+		  ON rec.id::text = f.source_id
+		 AND rec.tenant_id = f.tenant_id
+		 AND f.source_type = 'recording'
+		LEFT JOIN customers c
+		  ON c.id = rec.customer_id AND c.tenant_id = f.tenant_id
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+		    SELECT rule_name, judgment_standard
+		    FROM compliance_rules
+		    WHERE compliance_rules.rule_code = f.rule_code
+		      AND compliance_rules.status = 'published'
+		      AND compliance_rules.is_enabled = true
+		      AND (
+		          NULLIF(f.rule_version, '') IS NULL
+		          OR compliance_rules.version = f.rule_version
+		      )
+		    ORDER BY compliance_rules.updated_at DESC, compliance_rules.id DESC
+		    LIMIT 1
+		) r ON true
+		WHERE f.id::text = $1 AND f.tenant_id = $2
+	`, id, tenantID).Scan(
+		&item.ID, &item.TenantID, &item.SourceType, &item.SourceID, &item.SourceVersion,
+		&item.Subject, &item.SceneCode, &item.RoleCode, &item.EmployeeID,
+		&item.EmployeeName, &item.CustomerName, &item.Department, &item.RuleCode, &item.RuleName,
+		&item.RuleVersion, &item.Fact, &item.Summary, &item.NeedsReview, &item.Status,
+		&item.CreatedAt, &item.UpdatedAt, &item.Reason, &item.Evidence, &item.MissingFacts,
+		&item.ReviewConclusion, &item.ReviewReason, &item.ReviewedBy, &item.ReviewedAt,
+		&item.Rule.JudgmentStandard,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, fmt.Errorf("get compliance finding: %w", err)
+	}
+	item.Rule.Code = item.RuleCode
+	item.Rule.Name = item.RuleName
+	item.Rule.Version = item.RuleVersion
+	item.Source = FindingSource{
+		Type: item.SourceType, ID: item.SourceID, Version: item.SourceVersion,
+		Subject: item.Subject, SceneCode: item.SceneCode, RoleCode: item.RoleCode,
+		EmployeeID: item.EmployeeID, EmployeeName: item.EmployeeName, Department: item.Department,
+	}
+	return &item, nil
+}
+
+// ReviewFinding 将一次人工核查和对应审计日志放在同一个事务中提交。
+//
+// 发现只能从 pending 进入最终核查状态；如果已经核查过，返回冲突而不是
+// 覆盖历史结论。system_action_logs 是现有系统操作日志表，本阶段不新增审计表。
+//
+// 署名：Codex，合规卫士开发 Agent
+// 时间：2026-09-14
+func (s *Service) ReviewFinding(ctx context.Context, tenantID int64, id string, actorID int64, actorType string, req ReviewFindingRequest, request *http.Request) (*ReviewFindingResponse, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	if tenantID <= 0 || actorID <= 0 {
+		return nil, fmt.Errorf("review actor is invalid")
+	}
+	if err := validateReviewFindingRequest(req); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin review finding: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var result ReviewFindingResponse
+	err = tx.QueryRow(ctx, `
+		UPDATE compliance_findings
+		SET status = $1,
+		    review_conclusion = $2,
+		    review_reason = $3,
+		    reviewed_by = $4,
+		    reviewed_at = NOW(),
+		    updated_at = NOW()
+		WHERE id::text = $5
+		  AND tenant_id = $6
+		  AND status = 'pending'
+		RETURNING id::text, tenant_id, status, review_conclusion, review_reason,
+		          reviewed_by, reviewed_at
+	`, strings.TrimSpace(req.ReviewConclusion), strings.TrimSpace(req.ReviewConclusion),
+		strings.TrimSpace(req.ReviewReason), actorID, id, tenantID).Scan(
+		&result.ID, &result.TenantID, &result.Status, &result.ReviewConclusion,
+		&result.ReviewReason, &result.ReviewedBy, &result.ReviewedAt,
+	)
+	if err != nil {
+		if err != pgx.ErrNoRows {
+			return nil, fmt.Errorf("update compliance finding review: %w", err)
+		}
+		var currentStatus string
+		err = tx.QueryRow(ctx, `
+			SELECT status
+			FROM compliance_findings
+			WHERE id::text = $1 AND tenant_id = $2
+		`, id, tenantID).Scan(&currentStatus)
+		if err == pgx.ErrNoRows {
+			return nil, errFindingNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("check compliance finding review status: %w", err)
+		}
+		if currentStatus != "pending" {
+			return nil, errFindingAlreadyReviewed
+		}
+		return nil, fmt.Errorf("review finding update affected no rows")
+	}
+
+	requestSummary, _ := json.Marshal(map[string]any{
+		"review_conclusion": result.ReviewConclusion,
+		"review_reason":     result.ReviewReason,
+	})
+	afterSummary, _ := json.Marshal(map[string]any{
+		"status":            result.Status,
+		"review_conclusion": result.ReviewConclusion,
+		"review_reason":     result.ReviewReason,
+		"reviewed_by":       result.ReviewedBy,
+		"reviewed_at":       result.ReviewedAt,
+	})
+	var ipAddress, userAgent string
+	if request != nil {
+		ipAddress = request.RemoteAddr
+		userAgent = request.UserAgent()
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO system_action_logs (
+			tenant_id, actor_id, actor_role_code, log_type, action_code, action_name,
+			result, object_type, object_id, request_summary, after_summary,
+			ip_address, user_agent, request_id, created_at
+		)
+		VALUES ($1, $2, $3, 'compliance', 'compliance_finding_review', '核查合规发现',
+		        'success', 'compliance_finding', $4, $5::jsonb, $6::jsonb,
+		        $7, $8, $9, NOW())
+	`, tenantID, actorID, strings.TrimSpace(actorType), result.ID, string(requestSummary),
+		string(afterSummary), ipAddress, userAgent, request.Header.Get("X-Request-Id"))
+	if err != nil {
+		return nil, fmt.Errorf("write compliance review audit log: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit compliance finding review: %w", err)
+	}
+	return &result, nil
+}
+
 type complianceModelConfig struct {
 	ID           int64
 	TenantID     int64
@@ -33,17 +1197,10 @@ type complianceModelConfig struct {
 }
 
 const (
-	complianceDataDir       = "/Users/yiliiang/Documents/lingce-web/apps/compliance/data"
-	complianceProcessLogDir = complianceDataDir + "/log"
-	compliancePromptCode    = "compliance_check_v1"
-
-	// communicationIdempotencyEnabled 暂时关闭沟通合规结果复用，便于频繁
-	// 调试提示词和规则。幂等实现、结果抢占和唯一执行键逻辑均保留，调试
-	// 完成后改为 true 即可恢复重复请求短路。
-	//
-	// 署名：Codex，合规卫士开发 Agent
-	// 时间：2026-09-14
-	communicationIdempotencyEnabled = false
+	complianceDataDir          = "/Users/yiliiang/Documents/lingce-web/apps/compliance/data"
+	complianceProcessLogDir    = complianceDataDir + "/log"
+	compliancePromptCode       = "compliance_check_v1"
+	complianceDoctorPromptCode = "compliance_doctor_check_v1"
 )
 
 // InvalidReferenceError 表示 Worker 请求中的业务引用无法校验。
@@ -108,12 +1265,6 @@ func (s *Service) AcceptCommunicationCheck(ctx context.Context, req Communicatio
 
 	inputFingerprint := communicationInputFingerprint(req)
 	executionKey := buildCommunicationExecutionKey(req, runtime, modelConfig.ID, inputFingerprint)
-	if !communicationIdempotencyEnabled {
-		// 临时调试模式下每次请求都必须生成新的执行键，否则结果表的唯一约束
-		// 会把本次测试请求短路到历史结果。原始幂等键仍保留在前缀中，便于
-		// 后续恢复幂等或追踪同一输入的多次测试。
-		executionKey = fmt.Sprintf("%s:debug:%d", executionKey, time.Now().UnixNano())
-	}
 	existing, claimed, err := s.claimCommunicationRun(ctx, req, runtime, modelConfig, inputFingerprint, executionKey)
 	if err != nil {
 		return nil, runtime, err
@@ -135,7 +1286,7 @@ func (s *Service) AcceptCommunicationCheck(ctx context.Context, req Communicatio
 		return nil, runtime, err
 	}
 	runtime.FormattedResult = formatJSONText(llmResponse.Content)
-	findings, err := parseFindings(llmResponse.Content)
+	findings, err := parseFindingsForRuntime(llmResponse.Content, req.CleanedTranscript, runtimeRules(runtime), runtime.OutputContract)
 	if err != nil {
 		runtime.GatewayError = err.Error()
 		if persistErr := s.failCommunicationRun(ctx, requestID, runtime, inputFingerprint, executionKey, err); persistErr != nil {
@@ -232,7 +1383,7 @@ func communicationInputFingerprint(req CommunicationCheckRequest) string {
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-14
 func buildCommunicationExecutionKey(req CommunicationCheckRequest, runtime *communicationRuntime, modelConfigID int64, inputFingerprint string) string {
-	return fmt.Sprintf(
+	key := fmt.Sprintf(
 		"communication:%d:recording:%d:%s:%s:%s:%s:%s:%d:%s",
 		req.TenantID,
 		req.RecordingID,
@@ -244,6 +1395,13 @@ func buildCommunicationExecutionKey(req CommunicationCheckRequest, runtime *comm
 		modelConfigID,
 		inputFingerprint,
 	)
+	// Preserve the established delivery key so deployment does not reanalyse all
+	// existing inputs. A manual rerun is distinct, but retries of it are idempotent.
+	if strings.TrimSpace(req.TriggerReason) == "manual_rerun" {
+		sum := sha256.Sum256([]byte(strings.TrimSpace(req.RerunKey)))
+		key += ":manual_rerun:" + hex.EncodeToString(sum[:])
+	}
+	return key
 }
 
 // claimCommunicationRun 先用唯一执行键抢占 processing 记录，再决定是否调用
@@ -421,6 +1579,18 @@ func (s *Service) failCommunicationRun(ctx context.Context, requestID string, ru
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-14
 func (s *Service) completeCommunicationRun(ctx context.Context, response *CommunicationCheckResponse, runtime *communicationRuntime, inputFingerprint, executionKey string) error {
+	// Validate again at the persistence boundary so callers cannot bypass the
+	// parser and write an unverified model result.
+	raw, err := json.Marshal(map[string]any{"findings": response.Findings})
+	if err != nil {
+		return fmt.Errorf("encode findings for validation: %w", err)
+	}
+	if _, err := parseFindingsForRuntime(string(raw), runtime.Request.CleanedTranscript, runtimeRules(runtime), runtime.OutputContract); err != nil {
+		return fmt.Errorf("reject unverified communication result before persistence: %w", err)
+	}
+	if s.pool == nil {
+		return fmt.Errorf("database pool is not configured")
+	}
 	findingRuleCodes := make([]string, 0, len(response.Findings))
 	for _, finding := range response.Findings {
 		if item, ok := finding.(map[string]any); ok {
@@ -472,7 +1642,8 @@ func (s *Service) completeCommunicationRun(ctx context.Context, response *Commun
 		}
 		evidence := jsonArrayOrEmpty(item["evidence"])
 		missingFacts := jsonArrayOrEmpty(item["missing_facts"])
-		_, err = tx.Exec(ctx, `
+		var findingID string
+		err = tx.QueryRow(ctx, `
 			INSERT INTO compliance_findings (
 				run_id, tenant_id, source_type, source_id, source_version,
 				subject, scene_code, role_code, employee_id, rule_code,
@@ -493,6 +1664,7 @@ func (s *Service) completeCommunicationRun(ctx context.Context, response *Commun
 				missing_facts = EXCLUDED.missing_facts,
 				needs_review = EXCLUDED.needs_review,
 				updated_at = NOW()
+			RETURNING id::text
 		`,
 			response.RunID,
 			strings.TrimSpace(ruleCode),
@@ -503,15 +1675,62 @@ func (s *Service) completeCommunicationRun(ctx context.Context, response *Commun
 			missingFacts,
 			boolValue(item["needs_review"], true),
 			executionKey,
-		)
+		).Scan(&findingID)
 		if err != nil {
 			return fmt.Errorf("persist communication finding %s: %w", ruleCode, err)
+		}
+		if runtime.OutputContract == "risk_candidate_v1" {
+			if err := upsertCommunicationCheckItem(ctx, tx, findingID, response.RunID, ruleCode, item); err != nil {
+				return fmt.Errorf("create check item for finding %s: %w", ruleCode, err)
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit communication run: %w", err)
 	}
 	return nil
+}
+
+func upsertCommunicationCheckItem(ctx context.Context, tx pgx.Tx, findingID, runID, ruleCode string, item map[string]any) error {
+	themeKey := stringValue(item["theme_key"])
+	question := stringValue(item["question"])
+	riskHypothesis := stringValue(item["risk_hypothesis"])
+	primaryRisk := stringValue(item["primary_risk_type"])
+	priority := stringValue(item["priority"])
+	if themeKey == "" || question == "" || riskHypothesis == "" || primaryRisk == "" || priority == "" {
+		return fmt.Errorf("missing check item fields")
+	}
+	related := jsonArrayOrEmpty(item["related_risk_types"])
+	evidence := jsonArrayOrEmpty(item["evidence"])
+	basis := jsonArrayOrEmpty(item["check_basis"])
+	actions := jsonArrayOrEmpty(item["suggested_actions"])
+	_, err := tx.Exec(ctx, `
+		INSERT INTO compliance_check_items (
+		 tenant_id, subject, source_type, source_id, source_version, scene_code, role_code, employee_id,
+		 theme_key, question, risk_hypothesis, primary_risk_type, related_risk_types, evidence,
+		 check_basis, suggested_actions, priority
+		)
+		SELECT tenant_id, subject, source_type, source_id, source_version, scene_code, role_code, employee_id,
+		 $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10
+		FROM compliance_findings WHERE id = $1
+		ON CONFLICT (tenant_id, source_type, source_id, source_version, theme_key) DO UPDATE SET
+		 question=EXCLUDED.question, risk_hypothesis=EXCLUDED.risk_hypothesis,
+		 primary_risk_type=EXCLUDED.primary_risk_type, related_risk_types=EXCLUDED.related_risk_types,
+		 evidence=EXCLUDED.evidence, check_basis=EXCLUDED.check_basis,
+		 suggested_actions=EXCLUDED.suggested_actions, priority=EXCLUDED.priority, updated_at=NOW()
+	`, findingID, themeKey, question, riskHypothesis, primaryRisk, related, evidence, basis, actions, priority)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO compliance_check_item_sources (item_id, finding_id, run_id, rule_code)
+		SELECT i.id, $1, $2, $3 FROM compliance_check_items i
+		JOIN compliance_findings f ON f.id=$1
+		WHERE i.tenant_id=f.tenant_id AND i.source_type=f.source_type AND i.source_id=f.source_id
+		  AND i.source_version=f.source_version AND i.theme_key=$4
+		ON CONFLICT (item_id, finding_id) DO UPDATE SET rule_code=EXCLUDED.rule_code
+	`, findingID, runID, ruleCode, themeKey)
+	return err
 }
 
 func jsonObjectOrEmpty(raw string) string {
@@ -559,6 +1778,7 @@ type communicationRuntime struct {
 	RuleSetName         string
 	RuleSetVersion      string
 	PromptCode          string
+	OutputContract      string
 	PromptVersion       string
 	PromptText          string
 	RulesJSON           string
@@ -574,6 +1794,16 @@ type communicationRuntime struct {
 	GatewayResponseJSON string
 	FormattedResult     string
 	GatewayError        string
+}
+
+type communicationPromptRuntime struct {
+	Code           string
+	SystemPrompt   string
+	UserTemplate   string
+	Version        string
+	PromptText     string
+	OutputSchema   []byte
+	OutputContract string
 }
 
 type communicationRuleDocument struct {
@@ -620,11 +1850,11 @@ type communicationRuleSetDocument struct {
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-14
 func (s *Service) buildCommunicationRuntime(ctx context.Context, req CommunicationCheckRequest) (*communicationRuntime, error) {
-	promptSystem, promptUserTemplate, promptVersion, promptText, err := s.loadCommunicationPrompt(ctx, req.TenantID)
+	ruleSetCode := defaultCommunicationRuleSetCode(req.BusinessScope, req.RoleCode)
+	prompt, err := s.loadCommunicationPrompt(ctx, req.TenantID, ruleSetCode)
 	if err != nil {
 		return nil, err
 	}
-	ruleSetCode := defaultCommunicationRuleSetCode(req.BusinessScope, req.RoleCode)
 	ruleSet, selectedRules, ruleSetVersion, err := s.loadCommunicationRules(ctx, req.TenantID, ruleSetCode)
 	if err != nil {
 		return nil, err
@@ -650,18 +1880,19 @@ func (s *Service) buildCommunicationRuntime(ctx context.Context, req Communicati
 		"transcript":       req.CleanedTranscript,
 		"input_text":       req.CleanedTranscript,
 	}
-	systemPrompt := renderCommunicationTemplate(promptSystem, vars)
-	userPrompt := renderCommunicationTemplate(promptUserTemplate, vars)
+	systemPrompt := renderCommunicationTemplate(prompt.SystemPrompt, vars)
+	userPrompt := renderCommunicationTemplate(prompt.UserTemplate, vars)
 	userPrompt = ensureCommunicationPromptContext(userPrompt, string(selectedRuleBytes), req.CleanedTranscript)
 
 	return &communicationRuntime{
 		Request:        req,
+		OutputContract: prompt.OutputContract,
 		RuleSetCode:    ruleSetCode,
 		RuleSetName:    ruleSet.Name,
 		RuleSetVersion: ruleSetVersion,
-		PromptCode:     compliancePromptCode,
-		PromptVersion:  promptVersion,
-		PromptText:     promptText,
+		PromptCode:     prompt.Code,
+		PromptVersion:  prompt.Version,
+		PromptText:     prompt.PromptText,
 		RulesJSON:      string(selectedRuleBytes),
 		SystemPrompt:   systemPrompt,
 		UserPrompt:     userPrompt,
@@ -990,7 +2221,7 @@ func (s *Service) AnalyzeText(ctx context.Context, req AnalyzeTextRequest) (*Ana
 		return &AnalyzeTextResponse{Status: "failed", PromptCode: runtime.PromptCode, PromptVersion: runtime.PromptVersion, RuleSetCode: runtime.RuleSetCode, RuleSetVersion: runtime.RuleSetVersion, Error: err.Error()}, err
 	}
 
-	findings, err := parseFindings(resp.Content)
+	findings, err := parseFindingsForRuntime(resp.Content, req.Text, runtimeRules(runtime), runtime.OutputContract)
 	if err != nil {
 		return &AnalyzeTextResponse{Status: "failed", PromptCode: runtime.PromptCode, PromptVersion: runtime.PromptVersion, RuleSetCode: runtime.RuleSetCode, RuleSetVersion: runtime.RuleSetVersion, RawResponse: resp.Content, Error: err.Error()}, err
 	}
@@ -1117,18 +2348,69 @@ func applyCommunicationModelParams(params *llmgateway.Params, raw map[string]any
 	}
 }
 
-func parseFindings(raw string) ([]any, error) {
+func parseFindings(raw, transcript string, rules []string) ([]any, error) {
+	return decodeCommunicationFindings(raw, transcript, rules)
+}
+
+func parseFindingsForRuntime(raw, transcript string, rules []string, contract string) ([]any, error) {
+	if contract == "risk_candidate_v1" {
+		return parseFindings(raw, transcript, rules)
+	}
+	return parseLegacyFindings(raw, transcript, rules)
+}
+
+func parseLegacyFindings(raw, transcript string, rules []string) ([]any, error) {
 	raw = stripJSONCodeFence(raw)
 	var payload struct {
 		Findings []any `json:"findings"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
-		return nil, fmt.Errorf("parse compliance model JSON: %w", err)
+		return nil, fmt.Errorf("parse legacy compliance model JSON: %w", err)
 	}
 	if payload.Findings == nil {
-		return nil, fmt.Errorf("compliance model JSON does not contain findings")
+		return nil, fmt.Errorf("legacy compliance model JSON does not contain findings")
+	}
+	allowed := map[string]bool{}
+	for _, rule := range rules {
+		allowed[rule] = true
+	}
+	for _, value := range payload.Findings {
+		item, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("legacy finding must be object")
+		}
+		code, ok := item["rule_code"].(string)
+		if !ok || !allowed[code] {
+			return nil, fmt.Errorf("legacy finding rule is not in enabled rules")
+		}
+		evidence, ok := item["evidence"].([]any)
+		if !ok || len(evidence) == 0 {
+			return nil, fmt.Errorf("legacy finding evidence required")
+		}
+		for _, value := range evidence {
+			e, ok := value.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("legacy evidence must be object")
+			}
+			quote, ok := e["quote"].(string)
+			if !ok || strings.TrimSpace(quote) == "" || !strings.Contains(transcript, quote) {
+				return nil, fmt.Errorf("legacy evidence is not verbatim")
+			}
+		}
 	}
 	return payload.Findings, nil
+}
+
+func runtimeRules(runtime *communicationRuntime) []string {
+	var documents []communicationRuleDocument
+	if json.Unmarshal([]byte(runtime.RulesJSON), &documents) != nil {
+		return nil
+	}
+	codes := make([]string, 0, len(documents))
+	for _, rule := range documents {
+		codes = append(codes, rule.RuleCode)
+	}
+	return codes
 }
 
 func formatJSONText(raw string) string {
@@ -1180,49 +2462,98 @@ func parseInt64(raw string) int64 {
 //
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-13
-func (s *Service) loadCommunicationPrompt(ctx context.Context, tenantID int64) (string, string, string, string, error) {
+func communicationPromptCodes(ruleSetCode string) []string {
+	if ruleSetCode == "communication.doctor.outpatient" {
+		return []string{complianceDoctorPromptCode, compliancePromptCode}
+	}
+	return []string{compliancePromptCode}
+}
+
+func (s *Service) loadCommunicationPrompt(ctx context.Context, tenantID int64, ruleSetCode string) (*communicationPromptRuntime, error) {
 	if s.pool == nil {
-		return "", "", "", "", fmt.Errorf("database pool is not configured")
+		return nil, fmt.Errorf("database pool is not configured")
 	}
 
-	var systemPrompt, userPromptTemplate, version string
+	var cfg communicationPromptRuntime
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(system_prompt, ''), COALESCE(user_prompt_template, ''),
-		       COALESCE(version, 'v1')
+		SELECT code, COALESCE(system_prompt, ''), COALESCE(user_prompt_template, ''),
+		       COALESCE(version, 'v1'), output_schema
 		FROM recording_analysis_prompts
-		WHERE code = $1 AND is_active = true
+		WHERE code = ANY($1::text[]) AND is_active = true
+		ORDER BY array_position($1::text[], code::text), id DESC
 		LIMIT 1
-	`, compliancePromptCode).Scan(&systemPrompt, &userPromptTemplate, &version)
+	`, communicationPromptCodes(ruleSetCode)).Scan(&cfg.Code, &cfg.SystemPrompt, &cfg.UserTemplate, &cfg.Version, &cfg.OutputSchema)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("load global compliance prompt: %w", err)
+		return nil, fmt.Errorf("load global compliance prompt: %w", err)
 	}
 
 	var customSystemPrompt, customUserPromptTemplate, additionalInstructions *string
+	var customOutputSchema []byte
 	err = s.pool.QueryRow(ctx, `
-		SELECT custom_system_prompt, custom_user_prompt_template, additional_instructions
+		SELECT custom_system_prompt, custom_user_prompt_template, custom_output_schema, additional_instructions
 		FROM recording_analysis_tenant_configs
 		WHERE tenant_id = $1 AND prompt_code = $2 AND is_enabled = true
 		ORDER BY priority DESC, id DESC
 		LIMIT 1
-	`, tenantID, compliancePromptCode).Scan(
-		&customSystemPrompt, &customUserPromptTemplate, &additionalInstructions,
+	`, tenantID, cfg.Code).Scan(
+		&customSystemPrompt, &customUserPromptTemplate, &customOutputSchema, &additionalInstructions,
 	)
 	if err != nil && err != pgx.ErrNoRows {
-		return "", "", "", "", fmt.Errorf("load tenant compliance prompt override: %w", err)
+		return nil, fmt.Errorf("load tenant compliance prompt override: %w", err)
 	}
 	if err == nil {
 		if customSystemPrompt != nil && strings.TrimSpace(*customSystemPrompt) != "" {
-			systemPrompt = strings.TrimSpace(*customSystemPrompt)
+			cfg.SystemPrompt = strings.TrimSpace(*customSystemPrompt)
 		}
 		if customUserPromptTemplate != nil && strings.TrimSpace(*customUserPromptTemplate) != "" {
-			userPromptTemplate = strings.TrimSpace(*customUserPromptTemplate)
+			cfg.UserTemplate = strings.TrimSpace(*customUserPromptTemplate)
 		}
 		if additionalInstructions != nil && strings.TrimSpace(*additionalInstructions) != "" {
-			systemPrompt = strings.TrimSpace(systemPrompt) + "\n\n" + strings.TrimSpace(*additionalInstructions)
+			cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt) + "\n\n" + strings.TrimSpace(*additionalInstructions)
+		}
+		cfg.OutputSchema = selectCommunicationOutputSchema(cfg.OutputSchema, customOutputSchema)
+	}
+	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.UserTemplate) == "" {
+		return nil, fmt.Errorf("compliance prompt %q has empty system or user prompt", cfg.Code)
+	}
+	contract, err := detectCommunicationOutputContract(cfg.OutputSchema)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OutputContract = contract
+	cfg.PromptText = cfg.SystemPrompt + "\n\n" + cfg.UserTemplate
+	return &cfg, nil
+}
+
+func selectCommunicationOutputSchema(globalSchema, customSchema []byte) []byte {
+	if strings.TrimSpace(string(customSchema)) != "" {
+		return customSchema
+	}
+	return globalSchema
+}
+
+func detectCommunicationOutputContract(schemaJSON []byte) (string, error) {
+	var schema struct {
+		Type       string `json:"type"`
+		Properties struct {
+			Findings struct {
+				Type  string `json:"type"`
+				Items struct {
+					Required []string `json:"required"`
+				} `json:"items"`
+			} `json:"findings"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		return "", fmt.Errorf("invalid configured output schema: %w", err)
+	}
+	if schema.Type != "object" || schema.Properties.Findings.Type != "array" {
+		return "", fmt.Errorf("configured output schema missing findings array")
+	}
+	for _, field := range schema.Properties.Findings.Items.Required {
+		if field == "source_rule_codes" {
+			return "risk_candidate_v1", nil
 		}
 	}
-	if strings.TrimSpace(systemPrompt) == "" || strings.TrimSpace(userPromptTemplate) == "" {
-		return "", "", "", "", fmt.Errorf("compliance prompt %q has empty system or user prompt", compliancePromptCode)
-	}
-	return systemPrompt, userPromptTemplate, version, systemPrompt + "\n\n" + userPromptTemplate, nil
+	return "legacy", nil
 }

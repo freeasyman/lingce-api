@@ -141,3 +141,49 @@ func TestValidateCommunicationCheckRequestStillRequiresCoreFields(t *testing.T) 
 		})
 	}
 }
+
+func TestCommunicationRerunIdentity(t *testing.T) {
+	base := CommunicationCheckRequest{TenantID: 5, RecordingID: 1706, EncounterID: 36, EmployeeID: 104, EmployeeName: "测试医生", BusinessScope: "doctor", RoleCode: "doctor", RecordedAt: "2026-05-28", CleanedTranscript: "医生：保证不会产生血栓。"}
+	runtime := &communicationRuntime{RuleSetCode: "communication.doctor.outpatient", RuleSetVersion: "1", PromptCode: "compliance_check_v1", PromptVersion: "candidate"}
+	fingerprint := communicationInputFingerprint(base)
+	key := buildCommunicationExecutionKey(base, runtime, 29, fingerprint)
+	delivery := base
+	delivery.TriggerReason = "delivery"
+	if got := buildCommunicationExecutionKey(delivery, runtime, 29, communicationInputFingerprint(delivery)); got != key {
+		t.Fatal("explicit delivery changed the existing execution identity")
+	}
+	rerun := base
+	rerun.TriggerReason, rerun.RerunKey = "manual_rerun", "retry-stable-key-1"
+	if err := validateCommunicationCheckRequest(rerun); err != nil {
+		t.Fatal(err)
+	}
+	first := buildCommunicationExecutionKey(rerun, runtime, 29, communicationInputFingerprint(rerun))
+	if first == key || communicationInputFingerprint(rerun) != fingerprint {
+		t.Fatal("rerun must change execution identity, not source identity")
+	}
+	if first != buildCommunicationExecutionKey(rerun, runtime, 29, fingerprint) {
+		t.Fatal("rerun retries must be stable")
+	}
+	rerun.RerunKey = "retry-stable-key-2"
+	if first == buildCommunicationExecutionKey(rerun, runtime, 29, fingerprint) {
+		t.Fatal("a new intentional rerun must have a new identity")
+	}
+	for _, pair := range [][2]string{{"manual_rerun", ""}, {"delivery", "key"}, {"", "key"}, {"debug", "key"}} {
+		req := base
+		req.TriggerReason, req.RerunKey = pair[0], pair[1]
+		if validateCommunicationCheckRequest(req) == nil {
+			t.Fatalf("accepted invalid trigger/key %v", pair)
+		}
+	}
+}
+
+func TestDoctorPromptSelectionKeepsSharedConsultantPrompt(t *testing.T) {
+	doctor := communicationPromptCodes("communication.doctor.outpatient")
+	if len(doctor) != 2 || doctor[0] != complianceDoctorPromptCode || doctor[1] != compliancePromptCode {
+		t.Fatalf("doctor prompt order: %v", doctor)
+	}
+	consultant := communicationPromptCodes("communication.consultant.consultation")
+	if len(consultant) != 1 || consultant[0] != compliancePromptCode {
+		t.Fatalf("consultant prompt order: %v", consultant)
+	}
+}
