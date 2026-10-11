@@ -12,22 +12,22 @@ import (
 // CreateLingceSalesProspect creates a new sales prospect.
 func (s *Service) CreateLingceSalesProspect(ctx context.Context, tenantID int64, req CreateLingceSalesProspectRequest) (*LingceSalesProspect, error) {
 	prospect := &LingceSalesProspect{
-		TenantID:        tenantID,
-		InstitutionName: req.InstitutionName,
-		InstitutionType: req.InstitutionType,
+		TenantID:         tenantID,
+		InstitutionName:  req.InstitutionName,
+		InstitutionType:  req.InstitutionType,
 		InstitutionScale: req.InstitutionScale,
-		Region:          req.Region,
-		ContactName:     req.ContactName,
-		ContactRole:     req.ContactRole,
-		ContactPhone:    req.ContactPhone,
-		ContactWechat:   req.ContactWechat,
-		DecisionStage:   DecisionStage(req.DecisionStage),
-		DealProbability: req.DealProbability,
-		Source:          req.Source,
-		AssignedTo:      req.AssignedTo,
-		NextFollowUpAt:  req.NextFollowUpAt,
-		Status:          ProspectStatusActive,
-		Notes:           req.Notes,
+		Region:           req.Region,
+		ContactName:      req.ContactName,
+		ContactRole:      req.ContactRole,
+		ContactPhone:     req.ContactPhone,
+		ContactWechat:    req.ContactWechat,
+		DecisionStage:    DecisionStage(req.DecisionStage),
+		DealProbability:  req.DealProbability,
+		Source:           req.Source,
+		AssignedTo:       req.AssignedTo,
+		NextFollowUpAt:   req.NextFollowUpAt,
+		Status:           ProspectStatusActive,
+		Notes:            req.Notes,
 	}
 
 	id, err := s.store.CreateLingceSalesProspect(ctx, prospect)
@@ -43,6 +43,7 @@ func (s *Service) CreateLingceSalesProspect(ctx context.Context, tenantID int64,
 func (s *Service) GetLingceSalesProspect(ctx context.Context, tenantID, prospectID int64) (*LingceSalesProspect, error) {
 	return s.store.GetLingceSalesProspect(ctx, tenantID, prospectID)
 }
+
 // ListLingceSalesProspects lists prospects with filters.
 func (s *Service) ListLingceSalesProspects(ctx context.Context, req LingceSalesProspectListRequest) ([]*LingceSalesProspect, int, error) {
 	return s.store.ListLingceSalesProspects(ctx, req)
