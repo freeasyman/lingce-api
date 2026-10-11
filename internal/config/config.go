@@ -47,12 +47,7 @@ type DatabaseConfig struct {
 }
 
 type SchemaConfig struct {
-	// Mode controls database convergence: history replays versioned development migrations,
-	// baseline applies one audited target-state SQL file.
-	Mode                string `toml:"mode"`
 	MaxMigrationVersion string `toml:"max_migration_version"`
-	BaselineVersion     string `toml:"baseline_version"`
-	ConvergenceFile     string `toml:"convergence_file"`
 }
 
 type JWTConfig struct {

@@ -65,9 +65,7 @@ func main() {
 	setupLogger("info")
 
 	configPath := flag.String("config", "./configs/dev.toml", "path to TOML config file")
-	migrateOnly := flag.Bool("migrate-only", false, "apply historical database migrations and exit")
-	convergeOnly := flag.Bool("converge-only", false, "apply the audited target-state convergence script and exit")
-	verifyConvergence := flag.Bool("verify-convergence", false, "verify the audited target-state convergence and exit")
+	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations and exit")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -96,32 +94,6 @@ func main() {
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
 
-	if *convergeOnly || *verifyConvergence {
-		if strings.EqualFold(cfg.Schema.Mode, "history") {
-			slog.Error("convergence mode requires schema.mode=baseline")
-			os.Exit(1)
-		}
-		if strings.TrimSpace(cfg.Schema.BaselineVersion) == "" || strings.TrimSpace(cfg.Schema.ConvergenceFile) == "" {
-			slog.Error("baseline version and convergence file are required")
-			os.Exit(1)
-		}
-		if *convergeOnly {
-			slog.Info("applying audited schema convergence", "version", cfg.Schema.BaselineVersion, "file", cfg.Schema.ConvergenceFile)
-			if err := store.ApplyConvergence(ctx, pool, cfg.Schema.BaselineVersion, cfg.Schema.ConvergenceFile); err != nil {
-				slog.Error("failed to apply schema convergence", "error", err)
-				os.Exit(1)
-			}
-		} else {
-			slog.Info("verifying audited schema convergence", "version", cfg.Schema.BaselineVersion, "file", cfg.Schema.ConvergenceFile)
-			if err := store.CheckConvergence(ctx, pool, cfg.Schema.BaselineVersion, cfg.Schema.ConvergenceFile); err != nil {
-				slog.Error("failed to verify schema convergence", "error", err)
-				os.Exit(1)
-			}
-		}
-		slog.Info("schema convergence complete")
-		return
-	}
-
 	if *migrateOnly {
 		slog.Info("applying schema migrations")
 		if err := store.ApplySchemaMigrations(ctx, pool, cfg.Schema.MaxMigrationVersion); err != nil {
@@ -137,18 +109,10 @@ func main() {
 		return
 	}
 
-	if strings.EqualFold(cfg.Schema.Mode, "baseline") {
-		slog.Info("checking schema convergence", "version", cfg.Schema.BaselineVersion)
-		if err := store.CheckConvergence(ctx, pool, cfg.Schema.BaselineVersion, cfg.Schema.ConvergenceFile); err != nil {
-			slog.Error("failed to verify schema convergence", "error", err)
-			os.Exit(1)
-		}
-	} else {
-		slog.Info("checking schema migrations")
-		if err := store.CheckSchemaMigrations(ctx, pool, cfg.Schema.MaxMigrationVersion); err != nil {
-			slog.Error("failed to verify schema migrations", "error", err)
-			os.Exit(1)
-		}
+	slog.Info("checking schema migrations")
+	if err := store.CheckSchemaMigrations(ctx, pool, cfg.Schema.MaxMigrationVersion); err != nil {
+		slog.Error("failed to verify schema migrations", "error", err)
+		os.Exit(1)
 	}
 	slog.Info("checking compatibility migrations")
 	if err := store.CheckCompatMigrations(ctx, pool); err != nil {

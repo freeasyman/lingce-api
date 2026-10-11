@@ -19,7 +19,7 @@ DEPLOY_LOG_PATH="${DEPLOY_LOG_PATH:-/var/log/lingce-deploy.log}"
 DEPLOY_ACTOR="${DEPLOY_ACTOR:-${USER:-unknown}}"
 LOCAL_BIN="bin/${SERVICE_NAME}"
 
-VERSION="${VERSION:-$(cat VERSION 2>/dev/null || echo "2.0.0")}"
+VERSION="${VERSION:-$(cat VERSION 2>/dev/null || echo "1.0.6")}"
 GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 BUILD_TIME="${BUILD_TIME:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 RELEASE_NOTE="${RELEASE_NOTE:-迁移体系门禁上线：启动只校验版本，DB变更必须同步版本化迁移}"
