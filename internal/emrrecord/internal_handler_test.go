@@ -105,6 +105,32 @@ func TestParseAndValidateEMRResult(t *testing.T) {
 			t.Fatalf("unexpected flattened physical exam: %#v", content["physical_exam"])
 		}
 	})
+
+	t.Run("accepts empty physical exam groups as empty objects", func(t *testing.T) {
+		template := &emrtemplate.PublishedVersionDetail{Sections: []*emrtemplate.Section{
+			{Code: "physical_exam", InputType: "结构化内容", Structure: map[string]any{
+				"vitals": []any{"temperature"}, "metrics": []any{"height"}, "text_items": []any{"general_exam"},
+			}},
+		}}
+		content, _, err := parseAndValidateEMRResult(`{"working_content":{"physical_exam":{"vitals":"","metrics":"","text_items":""}},"unresolved_items":[]}`, template)
+		if err != nil {
+			t.Fatalf("parse empty structured groups: %v", err)
+		}
+		value := content["physical_exam"].(map[string]any)
+		if len(value) != 0 {
+			t.Fatalf("empty groups must not introduce observations: %#v", value)
+		}
+	})
+
+	t.Run("rejects populated malformed physical exam group", func(t *testing.T) {
+		template := &emrtemplate.PublishedVersionDetail{Sections: []*emrtemplate.Section{
+			{Code: "physical_exam", InputType: "结构化内容", Structure: map[string]any{"metrics": []any{"height"}}},
+		}}
+		_, _, err := parseAndValidateEMRResult(`{"working_content":{"physical_exam":{"metrics":"170"}},"unresolved_items":[]}`, template)
+		if err == nil {
+			t.Fatal("populated malformed group must not be silently discarded")
+		}
+	})
 }
 
 func TestRenderPromptUsesGenerationRequirementsOnly(t *testing.T) {
@@ -180,6 +206,22 @@ func TestRenderPromptUsesGenerationRequirementsOnly(t *testing.T) {
 	for _, forbidden := range mustNotContain {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("expected prompt not to contain %q\nprompt:\n%s", forbidden, prompt)
+		}
+	}
+}
+
+func TestRenderGenerationFieldSpecsIncludesDiagnosisRequirements(t *testing.T) {
+	tests := []struct {
+		code string
+		want string
+	}{
+		{"diagnosis", "医生明确说出疾病名称、病理状态、分级结论或诊断判断时必须提取"},
+		{"tcm_diagnosis", "医生明确说出病名或证候时必须提取"},
+	}
+	for _, tc := range tests {
+		got := renderGenerationFieldSpecs([]*emrtemplate.Section{{Code: tc.code, Name: tc.code, Description: "病历生成要求：\n- 模板字段要求"}})
+		if !strings.Contains(got, tc.want) {
+			t.Fatalf("%s prompt missing diagnosis extraction requirement %q: %s", tc.code, tc.want, got)
 		}
 	}
 }

@@ -190,7 +190,7 @@ updates 只能使用当前模板中的栏位编码。没有足够信息时返回
 			continue
 		}
 		if sectionUsesStructuredContent(section) {
-			normalized, normalizeErr := validateAndNormalizeStructuredEMRValue(value, section.Structure)
+			normalized, normalizeErr := validateAndNormalizeSectionValue(value, section)
 			if normalizeErr != nil {
 				continue
 			}
@@ -776,7 +776,7 @@ func parseAndValidateEMRResult(raw string, template *emrtemplate.PublishedVersio
 			}
 			normalizedContent[section.Code] = value
 		} else if sectionUsesStructuredContent(section) {
-			value, err := validateAndNormalizeStructuredEMRValue(envelope.WorkingContent[section.Code], section.Structure)
+			value, err := validateAndNormalizeSectionValue(envelope.WorkingContent[section.Code], section)
 			if err != nil {
 				return nil, nil, fmt.Errorf("栏位 %s 结构化内容无效：%w", section.Code, err)
 			}
@@ -809,6 +809,27 @@ func sectionUsesStructuredContent(section *emrtemplate.Section) bool {
 		return false
 	}
 	return strings.Contains(section.InputType, "结构化") && len(section.Structure) > 0
+}
+
+// Empty physical-exam groups represent missing observations, not text content.
+// Normalize only this known empty representation; populated malformed groups
+// still fail validation, and other structured sections keep their contracts.
+func validateAndNormalizeSectionValue(value any, section *emrtemplate.Section) (any, error) {
+	if section.Code == "physical_exam" {
+		if object, ok := value.(map[string]any); ok {
+			copy := make(map[string]any, len(object))
+			for key, item := range object {
+				copy[key] = item
+				if _, isGroup := section.Structure[key]; isGroup {
+					if text, isText := item.(string); isText && strings.TrimSpace(text) == "" {
+						copy[key] = map[string]any{}
+					}
+				}
+			}
+			value = copy
+		}
+	}
+	return validateAndNormalizeStructuredEMRValue(value, section.Structure)
 }
 
 func validateAndNormalizeStructuredEMRValue(value any, structure map[string]any) (any, error) {
@@ -1181,8 +1202,7 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 		}
 		lines = append(lines, fmt.Sprintf("【%s】%s", strings.TrimSpace(section.Code), strings.TrimSpace(section.Name)))
 		if section.Code == "diagnosis" || section.Code == "tcm_diagnosis" {
-			lines = append(lines, "  诊断必须为结构化对象：仅保留医生明确表达的诊断名称和依据。西医诊断使用diagnosis_name、icd10_code、basis；中医诊断使用diagnosis_name、pattern_name、basis。两者独立，禁止互相替代、翻译或推断；未明确的值填空字符串，并记录到unresolved_items。禁止text、name等别名和顶层诊断编码。")
-			continue
+			lines = append(lines, diagnosisGenerationRequirement(section.Code))
 		}
 		if !sectionUsesStructuredContent(section) {
 			lines = append(lines, "  输出要求：返回简洁连贯的自然语言字符串，禁止 JSON 对象、数组或名称/备注/状态等键值对。")
@@ -1191,6 +1211,9 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 			structureJSON, _ := json.Marshal(section.Structure)
 			lines = append(lines, "  结构化字段定义："+string(structureJSON))
 			lines = append(lines, "  结构化栏位必须返回 JSON 对象；未确认的子字段使用空字符串，不要补造数值。")
+			if section.Code == "physical_exam" {
+				lines = append(lines, "  vitals、metrics、text_items 是分组，不是文本子字段；返回分组时必须使用对象，整个分组没有信息时返回 {}，禁止返回空字符串、null 或数组。只有 temperature、height 等叶子字段缺失时使用空字符串。合法空值示例：{\"vitals\":{},\"metrics\":{},\"text_items\":{}}。有值示例（仅说明结构，不得复制事实）：{\"vitals\":{\"temperature\":\"36.5\"},\"metrics\":{\"height\":\"170\"},\"text_items\":{\"general_exam\":\"明确查体描述\"}}。")
+			}
 		}
 		if requirement := extractGenerationRequirements(section.Description); requirement != "" {
 			lines = append(lines, "  病历生成要求：")
@@ -1202,6 +1225,13 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func diagnosisGenerationRequirement(code string) string {
+	if code == "tcm_diagnosis" {
+		return "  诊断必须为结构化对象：仅保留医生明确表达的中医病名、证候和依据。使用 diagnosis_name、pattern_name、basis 三个字符串键。医生明确说出病名或证候时必须提取；没有明确中医病名或证候时才留空，并记录到 unresolved_items。不得把西医疾病翻译成中医诊断，也不得根据症状推断证候。"
+	}
+	return "  诊断必须为结构化对象：仅保留医生明确表达的西医诊断名称和依据，使用 diagnosis_name、icd10_code、basis 三个字符串键。医生明确说出疾病名称、病理状态、分级结论或诊断判断时必须提取；这不属于模型推断。没有可靠诊断时才留空，并记录到 unresolved_items。没有可靠 ICD-10 编码时只留空 icd10_code，不得清空 diagnosis_name。禁止 text、name、diagnosis_code 等别名和顶层诊断编码。"
 }
 
 func extractGenerationRequirements(description string) string {

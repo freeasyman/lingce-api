@@ -1,0 +1,794 @@
+{
+  "recording_id": 1802,
+  "duration_seconds": 10163,
+  "annotated_at": "2026-08-09T07:41:19.244Z",
+  "annotated_by": "demo",
+  "encounters": [
+    {
+      "seq": 1,
+      "start_seconds": 328,
+      "end_seconds": 1968,
+      "patient_hint": "10岁的宝贝,小名叫帅帅",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "confirmed": true,
+      "merged_from_seqs": [
+        2,
+        3,
+        4
+      ],
+      "chief_complaint": "包茎，包皮无法下翻，存在狭窄环和粘连",
+      "disposition": "建议非手术治疗，先用药软化包皮口，再进行手法分离",
+      "opening_line": "嗯，是这样子的，就是我们呃门店的话需要交一个首诊费88，但是...",
+      "closing_line": "搞完我们刚才也给他看了，那目前为止他发育的还可以，搞完这块才..."
+    },
+    {
+      "seq": 5,
+      "start_seconds": 2108,
+      "end_seconds": 2315,
+      "patient_hint": "宝贝,未提及具体年龄",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "三级重度包茎",
+      "disposition": "手法松解治疗,使用利多卡因乳膏",
+      "opening_line": "等个1~2周，那等他这个包皮松完了之后呢，再进行下一步，就是...",
+      "closing_line": "我可以每次都不一样的医生，呃，如果你正常来说，很多家长他会说..."
+    },
+    {
+      "seq": 6,
+      "start_seconds": 2874,
+      "end_seconds": 3297,
+      "patient_hint": "小宝,6岁",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包茎问题，包皮翻不下去",
+      "disposition": "进行详细体格检查",
+      "opening_line": "你好，是约了三点的小宝的妈妈，来这边沙发操作一下。",
+      "closing_line": "啊，而且算两边睾丸也都在我们这个阴囊里面，是正常，没有很高的..."
+    },
+    {
+      "seq": 7,
+      "start_seconds": 3297,
+      "end_seconds": 3426,
+      "patient_hint": "小孩,3岁以内",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包茎,包皮口狭窄",
+      "disposition": "建议处理方法介绍",
+      "opening_line": "然后我们再看，再量一下哦，他的那个发育尺寸还是正常的，目前他...",
+      "closing_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。"
+    },
+    {
+      "seq": 8,
+      "start_seconds": 3426,
+      "end_seconds": 3806,
+      "patient_hint": "小朋友,6岁",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包皮狭窄，皮与头粘连严重",
+      "disposition": "建议进行手术处理",
+      "opening_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。",
+      "closing_line": "那我是看朋友那边有了解，就想过来有了解。"
+    },
+    {
+      "seq": 9,
+      "start_seconds": 3806,
+      "end_seconds": 4296,
+      "patient_hint": "小朋友,6岁",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包茎问题,需要咨询处理方法",
+      "disposition": "建议非手术治疗,包括涂抹药膏和手法松解",
+      "opening_line": "跟我的观点好像，他说不必要做，过来看这个。",
+      "closing_line": "OK，他现在是属于一个中度的一个包茎，我们可以看到我们根据分..."
+    },
+    {
+      "seq": 10,
+      "start_seconds": 4320,
+      "end_seconds": 4740,
+      "patient_hint": "小朋友,6岁",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "中度包茎,狭窄和粘连",
+      "disposition": "非手术治疗,每天涂药膏",
+      "opening_line": "四分的话是属于我们中度包茎的一个情况。",
+      "closing_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的..."
+    },
+    {
+      "seq": 11,
+      "start_seconds": 4743,
+      "end_seconds": 4762,
+      "patient_hint": "宝贝",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "中度包茎,狭窄环问题",
+      "opening_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的...",
+      "closing_line": "我们现在去处理，跟再过两年处理，当然也是可以。"
+    },
+    {
+      "seq": 12,
+      "start_seconds": 4765,
+      "end_seconds": 4787,
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "opening_line": "但是我们这其实这中间的这个两年，就是牺牲掉了他的一个成长嘛。",
+      "closing_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生..."
+    },
+    {
+      "seq": 13,
+      "start_seconds": 4790,
+      "end_seconds": 4794,
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+      "closing_line": "我们既然都要去干预它了，那是不是我们早一点干预的话，我们宝贝..."
+    },
+    {
+      "seq": 14,
+      "start_seconds": 4794,
+      "end_seconds": 5044,
+      "patient_hint": "男宝",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包皮口未打开,需要进行相关治疗",
+      "disposition": "建议进行一个月左右的治疗周期,并根据孩子疼痛感受调整",
+      "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+      "closing_line": "因为我现在不仅不仅是爸爸，还有爷爷奶奶，就是家庭有很多人说。"
+    },
+    {
+      "seq": 15,
+      "start_seconds": 5616,
+      "end_seconds": 6126,
+      "patient_hint": "两个男孩,家长是两位女士",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "儿童包茎问题,担心影响孩子发育和健康",
+      "disposition": "建议了解孩子的具体情况,并根据严重程度决定是否需要处理",
+      "opening_line": "呃，因为我们不是说男生，我们儿保体检的话也有看小哥的。",
+      "closing_line": "对！"
+    },
+    {
+      "seq": 16,
+      "start_seconds": 6126,
+      "end_seconds": 6420,
+      "patient_hint": "孩子,12岁",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "四级包茎",
+      "disposition": "建议手法治疗",
+      "opening_line": "如果都这么做的呀？",
+      "closing_line": "那我我觉得你们……作为两位、两位、两位父母、两位家长啊，你们..."
+    },
+    {
+      "seq": 17,
+      "start_seconds": 6631,
+      "end_seconds": 7214,
+      "patient_hint": "男孩,四岁多",
+      "source": "ai_confirmed",
+      "source_label": "AI 原样",
+      "chief_complaint": "包皮卡住,疼痛一晚上",
+      "disposition": "建议通过手法扩张解决缩窄环问题",
+      "opening_line": "其实他每个人讲是变化。",
+      "closing_line": "如果现在不处理的话，以后他也许有某一天，你们、你们没看到时候..."
+    }
+  ],
+  "corrections": [
+    {
+      "type": "merge",
+      "encounter_seq": 2,
+      "target_start_seconds": 615,
+      "reason_code": "false_boundary"
+    },
+    {
+      "type": "merge",
+      "encounter_seq": 3,
+      "target_start_seconds": 1124,
+      "reason_code": "false_boundary"
+    },
+    {
+      "type": "merge",
+      "encounter_seq": 4,
+      "target_start_seconds": 1606,
+      "reason_code": "mentioned_patient"
+    }
+  ],
+  "history": [
+    {
+      "recording_id": 1802,
+      "duration_seconds": 10163,
+      "annotated_at": "2026-08-09T07:41:05.245Z",
+      "annotated_by": "demo",
+      "encounters": [
+        {
+          "seq": 1,
+          "start_seconds": 328,
+          "end_seconds": 1968,
+          "patient_hint": "10岁的宝贝,小名叫帅帅",
+          "source": "human_merged",
+          "source_label": "已人工合并",
+          "merged_from_seqs": [
+            2,
+            3,
+            4
+          ],
+          "chief_complaint": "包茎，包皮无法下翻，存在狭窄环和粘连",
+          "disposition": "建议非手术治疗，先用药软化包皮口，再进行手法分离",
+          "opening_line": "嗯，是这样子的，就是我们呃门店的话需要交一个首诊费88，但是...",
+          "closing_line": "搞完我们刚才也给他看了，那目前为止他发育的还可以，搞完这块才..."
+        },
+        {
+          "seq": 5,
+          "start_seconds": 2108,
+          "end_seconds": 2315,
+          "patient_hint": "宝贝,未提及具体年龄",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "三级重度包茎",
+          "disposition": "手法松解治疗,使用利多卡因乳膏",
+          "opening_line": "等个1~2周，那等他这个包皮松完了之后呢，再进行下一步，就是...",
+          "closing_line": "我可以每次都不一样的医生，呃，如果你正常来说，很多家长他会说..."
+        },
+        {
+          "seq": 6,
+          "start_seconds": 2874,
+          "end_seconds": 3297,
+          "patient_hint": "小宝,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题，包皮翻不下去",
+          "disposition": "进行详细体格检查",
+          "opening_line": "你好，是约了三点的小宝的妈妈，来这边沙发操作一下。",
+          "closing_line": "啊，而且算两边睾丸也都在我们这个阴囊里面，是正常，没有很高的..."
+        },
+        {
+          "seq": 7,
+          "start_seconds": 3297,
+          "end_seconds": 3426,
+          "patient_hint": "小孩,3岁以内",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎,包皮口狭窄",
+          "disposition": "建议处理方法介绍",
+          "opening_line": "然后我们再看，再量一下哦，他的那个发育尺寸还是正常的，目前他...",
+          "closing_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。"
+        },
+        {
+          "seq": 8,
+          "start_seconds": 3426,
+          "end_seconds": 3806,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮狭窄，皮与头粘连严重",
+          "disposition": "建议进行手术处理",
+          "opening_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。",
+          "closing_line": "那我是看朋友那边有了解，就想过来有了解。"
+        },
+        {
+          "seq": 9,
+          "start_seconds": 3806,
+          "end_seconds": 4296,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题,需要咨询处理方法",
+          "disposition": "建议非手术治疗,包括涂抹药膏和手法松解",
+          "opening_line": "跟我的观点好像，他说不必要做，过来看这个。",
+          "closing_line": "OK，他现在是属于一个中度的一个包茎，我们可以看到我们根据分..."
+        },
+        {
+          "seq": 10,
+          "start_seconds": 4320,
+          "end_seconds": 4740,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄和粘连",
+          "disposition": "非手术治疗,每天涂药膏",
+          "opening_line": "四分的话是属于我们中度包茎的一个情况。",
+          "closing_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的..."
+        },
+        {
+          "seq": 11,
+          "start_seconds": 4743,
+          "end_seconds": 4762,
+          "patient_hint": "宝贝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄环问题",
+          "opening_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的...",
+          "closing_line": "我们现在去处理，跟再过两年处理，当然也是可以。"
+        },
+        {
+          "seq": 12,
+          "start_seconds": 4765,
+          "end_seconds": 4787,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "但是我们这其实这中间的这个两年，就是牺牲掉了他的一个成长嘛。",
+          "closing_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生..."
+        },
+        {
+          "seq": 13,
+          "start_seconds": 4790,
+          "end_seconds": 4794,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "我们既然都要去干预它了，那是不是我们早一点干预的话，我们宝贝..."
+        },
+        {
+          "seq": 14,
+          "start_seconds": 4794,
+          "end_seconds": 5044,
+          "patient_hint": "男宝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮口未打开,需要进行相关治疗",
+          "disposition": "建议进行一个月左右的治疗周期,并根据孩子疼痛感受调整",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "因为我现在不仅不仅是爸爸，还有爷爷奶奶，就是家庭有很多人说。"
+        },
+        {
+          "seq": 15,
+          "start_seconds": 5616,
+          "end_seconds": 6126,
+          "patient_hint": "两个男孩,家长是两位女士",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "儿童包茎问题,担心影响孩子发育和健康",
+          "disposition": "建议了解孩子的具体情况,并根据严重程度决定是否需要处理",
+          "opening_line": "呃，因为我们不是说男生，我们儿保体检的话也有看小哥的。",
+          "closing_line": "对！"
+        },
+        {
+          "seq": 16,
+          "start_seconds": 6126,
+          "end_seconds": 6420,
+          "patient_hint": "孩子,12岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "四级包茎",
+          "disposition": "建议手法治疗",
+          "opening_line": "如果都这么做的呀？",
+          "closing_line": "那我我觉得你们……作为两位、两位、两位父母、两位家长啊，你们..."
+        },
+        {
+          "seq": 17,
+          "start_seconds": 6631,
+          "end_seconds": 7214,
+          "patient_hint": "男孩,四岁多",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮卡住,疼痛一晚上",
+          "disposition": "建议通过手法扩张解决缩窄环问题",
+          "opening_line": "其实他每个人讲是变化。",
+          "closing_line": "如果现在不处理的话，以后他也许有某一天，你们、你们没看到时候..."
+        }
+      ],
+      "corrections": [
+        {
+          "type": "merge",
+          "encounter_seq": 2,
+          "target_start_seconds": 615,
+          "reason_code": "false_boundary"
+        },
+        {
+          "type": "merge",
+          "encounter_seq": 3,
+          "target_start_seconds": 1124,
+          "reason_code": "false_boundary"
+        },
+        {
+          "type": "merge",
+          "encounter_seq": 4,
+          "target_start_seconds": 1606,
+          "reason_code": "mentioned_patient"
+        }
+      ]
+    },
+    {
+      "recording_id": 1802,
+      "duration_seconds": 10163,
+      "annotated_at": "2026-08-09T07:40:51.535Z",
+      "annotated_by": "demo",
+      "encounters": [
+        {
+          "seq": 1,
+          "start_seconds": 328,
+          "end_seconds": 1606,
+          "patient_hint": "10岁的宝贝,小名叫帅帅",
+          "source": "human_merged",
+          "source_label": "已人工合并",
+          "merged_from_seqs": [
+            2,
+            3
+          ],
+          "chief_complaint": "检查生殖器，存在包茎问题",
+          "disposition": "建议进行非手术治疗，先用药软化包皮",
+          "opening_line": "嗯，是这样子的，就是我们呃门店的话需要交一个首诊费88，但是...",
+          "closing_line": "搞完我们刚才也给他看了，那目前为止他发育的还可以，搞完这块才..."
+        },
+        {
+          "seq": 4,
+          "start_seconds": 1606,
+          "end_seconds": 1968,
+          "patient_hint": "小朋友,4岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮完全包住，不能暴露",
+          "disposition": "用药两周后开始治疗，逐步分离包皮",
+          "opening_line": "那这个两周就看小朋友对药物的吸收情况，有的小朋友快的话，他甚...",
+          "closing_line": "好，拜拜。"
+        },
+        {
+          "seq": 5,
+          "start_seconds": 2108,
+          "end_seconds": 2315,
+          "patient_hint": "宝贝,未提及具体年龄",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "三级重度包茎",
+          "disposition": "手法松解治疗,使用利多卡因乳膏",
+          "opening_line": "等个1~2周，那等他这个包皮松完了之后呢，再进行下一步，就是...",
+          "closing_line": "我可以每次都不一样的医生，呃，如果你正常来说，很多家长他会说..."
+        },
+        {
+          "seq": 6,
+          "start_seconds": 2874,
+          "end_seconds": 3297,
+          "patient_hint": "小宝,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题，包皮翻不下去",
+          "disposition": "进行详细体格检查",
+          "opening_line": "你好，是约了三点的小宝的妈妈，来这边沙发操作一下。",
+          "closing_line": "啊，而且算两边睾丸也都在我们这个阴囊里面，是正常，没有很高的..."
+        },
+        {
+          "seq": 7,
+          "start_seconds": 3297,
+          "end_seconds": 3426,
+          "patient_hint": "小孩,3岁以内",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎,包皮口狭窄",
+          "disposition": "建议处理方法介绍",
+          "opening_line": "然后我们再看，再量一下哦，他的那个发育尺寸还是正常的，目前他...",
+          "closing_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。"
+        },
+        {
+          "seq": 8,
+          "start_seconds": 3426,
+          "end_seconds": 3806,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮狭窄，皮与头粘连严重",
+          "disposition": "建议进行手术处理",
+          "opening_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。",
+          "closing_line": "那我是看朋友那边有了解，就想过来有了解。"
+        },
+        {
+          "seq": 9,
+          "start_seconds": 3806,
+          "end_seconds": 4296,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题,需要咨询处理方法",
+          "disposition": "建议非手术治疗,包括涂抹药膏和手法松解",
+          "opening_line": "跟我的观点好像，他说不必要做，过来看这个。",
+          "closing_line": "OK，他现在是属于一个中度的一个包茎，我们可以看到我们根据分..."
+        },
+        {
+          "seq": 10,
+          "start_seconds": 4320,
+          "end_seconds": 4740,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄和粘连",
+          "disposition": "非手术治疗,每天涂药膏",
+          "opening_line": "四分的话是属于我们中度包茎的一个情况。",
+          "closing_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的..."
+        },
+        {
+          "seq": 11,
+          "start_seconds": 4743,
+          "end_seconds": 4762,
+          "patient_hint": "宝贝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄环问题",
+          "opening_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的...",
+          "closing_line": "我们现在去处理，跟再过两年处理，当然也是可以。"
+        },
+        {
+          "seq": 12,
+          "start_seconds": 4765,
+          "end_seconds": 4787,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "但是我们这其实这中间的这个两年，就是牺牲掉了他的一个成长嘛。",
+          "closing_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生..."
+        },
+        {
+          "seq": 13,
+          "start_seconds": 4790,
+          "end_seconds": 4794,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "我们既然都要去干预它了，那是不是我们早一点干预的话，我们宝贝..."
+        },
+        {
+          "seq": 14,
+          "start_seconds": 4794,
+          "end_seconds": 5044,
+          "patient_hint": "男宝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮口未打开,需要进行相关治疗",
+          "disposition": "建议进行一个月左右的治疗周期,并根据孩子疼痛感受调整",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "因为我现在不仅不仅是爸爸，还有爷爷奶奶，就是家庭有很多人说。"
+        },
+        {
+          "seq": 15,
+          "start_seconds": 5616,
+          "end_seconds": 6126,
+          "patient_hint": "两个男孩,家长是两位女士",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "儿童包茎问题,担心影响孩子发育和健康",
+          "disposition": "建议了解孩子的具体情况,并根据严重程度决定是否需要处理",
+          "opening_line": "呃，因为我们不是说男生，我们儿保体检的话也有看小哥的。",
+          "closing_line": "对！"
+        },
+        {
+          "seq": 16,
+          "start_seconds": 6126,
+          "end_seconds": 6420,
+          "patient_hint": "孩子,12岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "四级包茎",
+          "disposition": "建议手法治疗",
+          "opening_line": "如果都这么做的呀？",
+          "closing_line": "那我我觉得你们……作为两位、两位、两位父母、两位家长啊，你们..."
+        },
+        {
+          "seq": 17,
+          "start_seconds": 6631,
+          "end_seconds": 7214,
+          "patient_hint": "男孩,四岁多",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮卡住,疼痛一晚上",
+          "disposition": "建议通过手法扩张解决缩窄环问题",
+          "opening_line": "其实他每个人讲是变化。",
+          "closing_line": "如果现在不处理的话，以后他也许有某一天，你们、你们没看到时候..."
+        }
+      ],
+      "corrections": [
+        {
+          "type": "merge",
+          "encounter_seq": 2,
+          "target_start_seconds": 615,
+          "reason_code": "false_boundary"
+        },
+        {
+          "type": "merge",
+          "encounter_seq": 3,
+          "target_start_seconds": 1124,
+          "reason_code": "false_boundary"
+        }
+      ]
+    },
+    {
+      "recording_id": 1802,
+      "duration_seconds": 10163,
+      "annotated_at": "2026-08-09T07:34:12.824Z",
+      "annotated_by": "demo",
+      "encounters": [
+        {
+          "seq": 1,
+          "start_seconds": 328,
+          "end_seconds": 1093,
+          "patient_hint": "10岁的宝贝,小名叫帅帅",
+          "source": "human_merged",
+          "source_label": "已人工合并",
+          "merged_from_seqs": [
+            2
+          ],
+          "chief_complaint": "检查包茎情况",
+          "disposition": "建议进行包皮口松开和粘连分离治疗",
+          "opening_line": "嗯，是这样子的，就是我们呃门店的话需要交一个首诊费88，但是...",
+          "closing_line": "搞完我们刚才也给他看了，那目前为止他发育的还可以，搞完这块才..."
+        },
+        {
+          "seq": 3,
+          "start_seconds": 1124,
+          "end_seconds": 1606,
+          "patient_hint": "小朋友",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题,需要治疗",
+          "disposition": "建议非手术治疗,包括居家用药和手法分离",
+          "opening_line": "我刚才讲哈，我们青春期的发育是10岁到14岁，其实有4年左右...",
+          "closing_line": "那有的小朋友慢一点的话，可能需要两周到三周，这个不一定，这个..."
+        },
+        {
+          "seq": 4,
+          "start_seconds": 1606,
+          "end_seconds": 1968,
+          "patient_hint": "小朋友,4岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮完全包住，不能暴露",
+          "disposition": "用药两周后开始治疗，逐步分离包皮",
+          "opening_line": "那这个两周就看小朋友对药物的吸收情况，有的小朋友快的话，他甚...",
+          "closing_line": "好，拜拜。"
+        },
+        {
+          "seq": 5,
+          "start_seconds": 2108,
+          "end_seconds": 2315,
+          "patient_hint": "宝贝,未提及具体年龄",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "三级重度包茎",
+          "disposition": "手法松解治疗,使用利多卡因乳膏",
+          "opening_line": "等个1~2周，那等他这个包皮松完了之后呢，再进行下一步，就是...",
+          "closing_line": "我可以每次都不一样的医生，呃，如果你正常来说，很多家长他会说..."
+        },
+        {
+          "seq": 6,
+          "start_seconds": 2874,
+          "end_seconds": 3297,
+          "patient_hint": "小宝,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题，包皮翻不下去",
+          "disposition": "进行详细体格检查",
+          "opening_line": "你好，是约了三点的小宝的妈妈，来这边沙发操作一下。",
+          "closing_line": "啊，而且算两边睾丸也都在我们这个阴囊里面，是正常，没有很高的..."
+        },
+        {
+          "seq": 7,
+          "start_seconds": 3297,
+          "end_seconds": 3426,
+          "patient_hint": "小孩,3岁以内",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎,包皮口狭窄",
+          "disposition": "建议处理方法介绍",
+          "opening_line": "然后我们再看，再量一下哦，他的那个发育尺寸还是正常的，目前他...",
+          "closing_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。"
+        },
+        {
+          "seq": 8,
+          "start_seconds": 3426,
+          "end_seconds": 3806,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮狭窄，皮与头粘连严重",
+          "disposition": "建议进行手术处理",
+          "opening_line": "啊，后面我会告诉你为什么说到这个年龄还需要处理。",
+          "closing_line": "那我是看朋友那边有了解，就想过来有了解。"
+        },
+        {
+          "seq": 9,
+          "start_seconds": 3806,
+          "end_seconds": 4296,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包茎问题,需要咨询处理方法",
+          "disposition": "建议非手术治疗,包括涂抹药膏和手法松解",
+          "opening_line": "跟我的观点好像，他说不必要做，过来看这个。",
+          "closing_line": "OK，他现在是属于一个中度的一个包茎，我们可以看到我们根据分..."
+        },
+        {
+          "seq": 10,
+          "start_seconds": 4320,
+          "end_seconds": 4740,
+          "patient_hint": "小朋友,6岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄和粘连",
+          "disposition": "非手术治疗,每天涂药膏",
+          "opening_line": "四分的话是属于我们中度包茎的一个情况。",
+          "closing_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的..."
+        },
+        {
+          "seq": 11,
+          "start_seconds": 4743,
+          "end_seconds": 4762,
+          "patient_hint": "宝贝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "中度包茎,狭窄环问题",
+          "opening_line": "就是也确实有一些孩子也会出现这些什么所谓的大了他自然就长好的...",
+          "closing_line": "我们现在去处理，跟再过两年处理，当然也是可以。"
+        },
+        {
+          "seq": 12,
+          "start_seconds": 4765,
+          "end_seconds": 4787,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "但是我们这其实这中间的这个两年，就是牺牲掉了他的一个成长嘛。",
+          "closing_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生..."
+        },
+        {
+          "seq": 13,
+          "start_seconds": 4790,
+          "end_seconds": 4794,
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "我们既然都要去干预它了，那是不是我们早一点干预的话，我们宝贝..."
+        },
+        {
+          "seq": 14,
+          "start_seconds": 4794,
+          "end_seconds": 5044,
+          "patient_hint": "男宝",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮口未打开,需要进行相关治疗",
+          "disposition": "建议进行一个月左右的治疗周期,并根据孩子疼痛感受调整",
+          "opening_line": "那有顶的一个东西去生长的时候，跟我们完全没有束缚、能够自然生...",
+          "closing_line": "因为我现在不仅不仅是爸爸，还有爷爷奶奶，就是家庭有很多人说。"
+        },
+        {
+          "seq": 15,
+          "start_seconds": 5616,
+          "end_seconds": 6126,
+          "patient_hint": "两个男孩,家长是两位女士",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "儿童包茎问题,担心影响孩子发育和健康",
+          "disposition": "建议了解孩子的具体情况,并根据严重程度决定是否需要处理",
+          "opening_line": "呃，因为我们不是说男生，我们儿保体检的话也有看小哥的。",
+          "closing_line": "对！"
+        },
+        {
+          "seq": 16,
+          "start_seconds": 6126,
+          "end_seconds": 6420,
+          "patient_hint": "孩子,12岁",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "四级包茎",
+          "disposition": "建议手法治疗",
+          "opening_line": "如果都这么做的呀？",
+          "closing_line": "那我我觉得你们……作为两位、两位、两位父母、两位家长啊，你们..."
+        },
+        {
+          "seq": 17,
+          "start_seconds": 6631,
+          "end_seconds": 7214,
+          "patient_hint": "男孩,四岁多",
+          "source": "ai_confirmed",
+          "source_label": "AI 原样",
+          "chief_complaint": "包皮卡住,疼痛一晚上",
+          "disposition": "建议通过手法扩张解决缩窄环问题",
+          "opening_line": "其实他每个人讲是变化。",
+          "closing_line": "如果现在不处理的话，以后他也许有某一天，你们、你们没看到时候..."
+        }
+      ],
+      "corrections": [
+        {
+          "type": "merge",
+          "encounter_seq": 2,
+          "target_start_seconds": 615,
+          "reason_code": "false_boundary"
+        }
+      ]
+    }
+  ]
+}
