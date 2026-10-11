@@ -135,7 +135,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
-		       department_id, COALESCE(session_version, 0),
+		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -169,6 +169,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 			&e.RoleCode,
 			&e.RoleName,
 			&e.DepartmentID,
+			&e.MedicalDepartmentCode,
 			&e.SessionVersion,
 			&e.IsActive,
 			&e.CreatedAt,
@@ -229,7 +230,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
-		       department_id, COALESCE(session_version, 0),
+		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -251,6 +252,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		&e.RoleCode,
 		&e.RoleName,
 		&e.DepartmentID,
+		&e.MedicalDepartmentCode,
 		&e.SessionVersion,
 		&e.IsActive,
 		&e.CreatedAt,
@@ -269,11 +271,11 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 }
 
 // CreateEmployee creates a new employee
-func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, passwordHash, fullName, phone, email string, departmentID *int64) (*Employee, error) {
+func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, passwordHash, fullName, phone, email string, departmentID *int64, medicalDepartmentCode *string) (*Employee, error) {
 	query := `
-		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, NOW(), NOW())
-		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, session_version,
+		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, medical_department_code, session_version, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, NOW(), NOW())
+		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, medical_department_code, session_version,
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -282,7 +284,7 @@ func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, pa
 	`
 
 	var e Employee
-	err := s.pool.QueryRow(ctx, query, tenantID, username, passwordHash, fullName, fullName, phone, email, departmentID, "1").Scan(
+	err := s.pool.QueryRow(ctx, query, tenantID, username, passwordHash, fullName, fullName, phone, email, departmentID, medicalDepartmentCode, "1").Scan(
 		&e.ID,
 		&e.TenantID,
 		&e.Username,
@@ -291,6 +293,7 @@ func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, pa
 		&e.Phone,
 		&e.Email,
 		&e.DepartmentID,
+		&e.MedicalDepartmentCode,
 		&e.SessionVersion,
 		&e.IsActive,
 		&e.CreatedAt,
@@ -339,6 +342,17 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		argIndex++
 	}
 
+	if req.MedicalDepartmentCode != nil {
+		setClauses = append(setClauses, fmt.Sprintf("medical_department_code = $%d", argIndex))
+		medicalDepartmentCode := strings.TrimSpace(*req.MedicalDepartmentCode)
+		if medicalDepartmentCode == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, medicalDepartmentCode)
+		}
+		argIndex++
+	}
+
 	if req.IsActive != nil {
 		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", argIndex))
 		if *req.IsActive {
@@ -360,7 +374,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		UPDATE employees
 		SET %s
 		WHERE id = $%d AND deleted_at IS NULL
-		RETURNING id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''), COALESCE(full_name, ''), COALESCE(phone, ''), COALESCE(email, ''), department_id, session_version,
+		RETURNING id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''), COALESCE(full_name, ''), COALESCE(phone, ''), COALESCE(email, ''), department_id, COALESCE(medical_department_code, ''), session_version,
 		          CASE
 		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -378,6 +392,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		&e.Phone,
 		&e.Email,
 		&e.DepartmentID,
+		&e.MedicalDepartmentCode,
 		&e.SessionVersion,
 		&e.IsActive,
 		&e.CreatedAt,
@@ -485,7 +500,7 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		           ORDER BY er.updated_at DESC NULLS LAST, er.created_at DESC, er.id DESC
 		           LIMIT 1
 		       ), '') AS role_name,
-		       department_id, COALESCE(session_version, 0),
+		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
 		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -516,6 +531,7 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 			&e.RoleCode,
 			&e.RoleName,
 			&e.DepartmentID,
+			&e.MedicalDepartmentCode,
 			&e.SessionVersion,
 			&e.IsActive,
 			&e.CreatedAt,

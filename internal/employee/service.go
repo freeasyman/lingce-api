@@ -13,6 +13,44 @@ type Service struct {
 	store *Store
 }
 
+var medicalDepartmentCodes = map[string]struct{}{
+	"general_outpatient": {},
+	"internal_medicine":  {},
+	"surgery":            {},
+	"orthopedics":        {},
+	"gynecology":         {},
+	"obstetrics":         {},
+	"pediatrics":         {},
+	"tcm":                {},
+	"dental":             {},
+	"dermatology":        {},
+	"ophthalmology":      {},
+	"otolaryngology":     {},
+	"rehabilitation":     {},
+	"emergency":          {},
+}
+
+func validateMedicalDepartmentCode(code *string) error {
+	if code == nil || strings.TrimSpace(*code) == "" {
+		return nil
+	}
+	if _, ok := medicalDepartmentCodes[strings.TrimSpace(*code)]; !ok {
+		return fmt.Errorf("invalid medical_department_code")
+	}
+	return nil
+}
+
+func normalizeMedicalDepartmentCode(code *string) *string {
+	if code == nil {
+		return nil
+	}
+	normalized := strings.TrimSpace(*code)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
+}
+
 func NewService(store *Store) *Service {
 	return &Service{store: store}
 }
@@ -71,6 +109,10 @@ func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest)
 	if req.Phone == "" {
 		return nil, fmt.Errorf("phone is required")
 	}
+	if err := validateMedicalDepartmentCode(req.MedicalDepartmentCode); err != nil {
+		return nil, err
+	}
+	req.MedicalDepartmentCode = normalizeMedicalDepartmentCode(req.MedicalDepartmentCode)
 	// Backward compatibility: historical tenants use phone as primary login ID.
 	// If username is empty, default it to phone instead of blocking creation.
 	if strings.TrimSpace(req.Username) == "" {
@@ -83,7 +125,7 @@ func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest)
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	employee, err := s.store.CreateEmployee(ctx, req.TenantID, req.Username, string(hashedPassword), req.FullName, req.Phone, req.Email, req.DepartmentID)
+	employee, err := s.store.CreateEmployee(ctx, req.TenantID, req.Username, string(hashedPassword), req.FullName, req.Phone, req.Email, req.DepartmentID, req.MedicalDepartmentCode)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +135,9 @@ func (s *Service) CreateEmployee(ctx context.Context, req CreateEmployeeRequest)
 
 // UpdateEmployee updates an employee
 func (s *Service) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployeeRequest) (*EmployeeResponse, error) {
+	if err := validateMedicalDepartmentCode(req.MedicalDepartmentCode); err != nil {
+		return nil, err
+	}
 	employee, err := s.store.UpdateEmployee(ctx, id, req)
 	if err != nil {
 		return nil, err
@@ -128,18 +173,19 @@ func (s *Service) DeleteEmployee(ctx context.Context, id int64) error {
 // toEmployeeResponse converts an Employee to EmployeeResponse
 func toEmployeeResponse(e *Employee) *EmployeeResponse {
 	return &EmployeeResponse{
-		ID:             e.ID,
-		TenantID:       e.TenantID,
-		Username:       e.Username,
-		FullName:       e.FullName,
-		Phone:          e.Phone,
-		Email:          e.Email,
-		DepartmentID:   e.DepartmentID,
-		RoleCode:       e.RoleCode,
-		Role:           e.RoleName,
-		SessionVersion: e.SessionVersion,
-		IsActive:       e.IsActive,
-		CreatedAt:      e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:      e.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                    e.ID,
+		TenantID:              e.TenantID,
+		Username:              e.Username,
+		FullName:              e.FullName,
+		Phone:                 e.Phone,
+		Email:                 e.Email,
+		DepartmentID:          e.DepartmentID,
+		MedicalDepartmentCode: e.MedicalDepartmentCode,
+		RoleCode:              e.RoleCode,
+		Role:                  e.RoleName,
+		SessionVersion:        e.SessionVersion,
+		IsActive:              e.IsActive,
+		CreatedAt:             e.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:             e.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
