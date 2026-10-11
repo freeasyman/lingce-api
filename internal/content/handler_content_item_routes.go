@@ -16,6 +16,8 @@ func (h *Handler) registerContentItemRoutes(mux *http.ServeMux, deps router.Rout
 		{Method: "POST", Path: "/api/v1/content-items/actions/generate", Handler: h.GenerateContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/publish", Handler: h.PublishContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/unpublish", Handler: h.UnpublishContent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/confirm-published", Handler: h.ConfirmContentPublished, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/mark-not-adopted", Handler: h.MarkContentNotAdopted, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/generate-images", Handler: h.GenerateImages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/generate-single-image", Handler: h.GenerateSingleImage, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/save-composed-images", Handler: h.SaveComposedImages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

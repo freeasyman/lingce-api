@@ -530,9 +530,9 @@ func (s *Service) CreateContent(ctx context.Context, tenantID, createdBy int64, 
 	if req.Title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	if req.Content == "" {
-		return nil, fmt.Errorf("content is required")
-	}
+	// A Content Center operator can save a titled draft before writing or
+	// generating its body. Requiring content here made the first "保存内容"
+	// action fail for otherwise valid, real drafts.
 	enrichContentRequestExtraData(&req)
 
 	item, err := s.store.CreateContent(ctx, tenantID, createdBy, req)
@@ -544,6 +544,14 @@ func (s *Service) CreateContent(ctx context.Context, tenantID, createdBy int64, 
 
 // UpdateContent updates a content item.
 func (s *Service) UpdateContent(ctx context.Context, id int64, req UpdateContentRequest) (*ContentResponse, error) {
+	// Store.UpdateContent replaces extra_data as a whole. Merge it with the
+	// existing record here so an editor changing a title/body cannot erase the
+	// recording source, generated structure, or manual feedback metadata.
+	existing, err := s.store.GetContentByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	req.ExtraData = mergeJSONObject(existing.ExtraData, req.ExtraData)
 	enrichUpdateContentExtraData(&req)
 	item, err := s.store.UpdateContent(ctx, id, req)
 	if err != nil {
@@ -671,6 +679,8 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		if existing.TenantID != tenantID {
 			return nil, fmt.Errorf("content does not belong to tenant %d", tenantID)
 		}
+		mergedExtra := mergeJSONObject(existing.ExtraData, req.ExtraData)
+		enrichGeneratedContentExtraData(mergedExtra, req)
 
 		updateReq := UpdateContentRequest{
 			Title:           &req.Title,
@@ -680,7 +690,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 			Platform:        req.Platform,
 			ScriptStructure: generatedNoteStructure,
 			NoteStructure:   generatedNoteStructure,
-			ExtraData:       req.ExtraData,
+			ExtraData:       mergedExtra,
 		}
 		enrichUpdateContentExtraData(&updateReq)
 
@@ -691,6 +701,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		return toContentResponse(item), nil
 	}
 
+	enrichGeneratedContentExtraData(createReq.ExtraData, req)
 	item, err := s.store.CreateContent(ctx, tenantID, createdBy, createReq)
 	if err != nil {
 		return nil, err
@@ -1144,6 +1155,78 @@ func (s *Service) UnpublishContent(ctx context.Context, id int64) (*ContentRespo
 	return toContentResponse(item), nil
 }
 
+// ConfirmContentPublished persists an operator's manual publication record.
+// The product is intentionally not connected to external publishing platforms:
+// it records what the operator confirms, rather than a platform verification.
+func (s *Service) ConfirmContentPublished(ctx context.Context, id, confirmedBy int64, req ConfirmContentPublishedRequest) (*ContentResponse, error) {
+	if req.ActualPublishedAt != nil && strings.TrimSpace(*req.ActualPublishedAt) != "" {
+		if _, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.ActualPublishedAt)); err != nil {
+			return nil, fmt.Errorf("actual_published_at must be RFC3339")
+		}
+	}
+	if req.ChangeLevel != nil {
+		switch strings.TrimSpace(*req.ChangeLevel) {
+		case "", "none", "minor", "major":
+		default:
+			return nil, fmt.Errorf("change_level must be none, minor, or major")
+		}
+	}
+
+	existing, err := s.store.GetContentByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	extra := cloneJSONObject(existing.ExtraData)
+	feedback := cloneJSONObjectValue(extra["content_center_feedback"])
+	manualPublication := cloneJSONObjectValue(feedback["manual_publication"])
+
+	platform := strings.TrimSpace(valueOrDefaultStringPtr(req.Platform, ""))
+	if platform == "" && existing.Platform != nil {
+		platform = strings.TrimSpace(*existing.Platform)
+	}
+	setJSONObjectString(manualPublication, "platform", platform)
+	setJSONObjectString(manualPublication, "published_url", valueOrDefaultStringPtr(req.PublishedURL, ""))
+	setJSONObjectString(manualPublication, "actual_published_at", valueOrDefaultStringPtr(req.ActualPublishedAt, ""))
+	setJSONObjectString(manualPublication, "change_level", valueOrDefaultStringPtr(req.ChangeLevel, ""))
+	manualPublication["confirmed_at"] = time.Now().UTC().Format(time.RFC3339)
+	manualPublication["confirmed_by"] = confirmedBy
+	feedback["status"] = "published"
+	feedback["manual_publication"] = manualPublication
+	extra["content_center_feedback"] = feedback
+
+	item, err := s.store.ConfirmContentPublished(ctx, id, extra)
+	if err != nil {
+		return nil, err
+	}
+	return toContentResponse(item), nil
+}
+
+// MarkContentNotAdopted persists an operator's explicit rejection reason.
+func (s *Service) MarkContentNotAdopted(ctx context.Context, id, rejectedBy int64, req MarkContentNotAdoptedRequest) (*ContentResponse, error) {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return nil, fmt.Errorf("reason is required")
+	}
+	existing, err := s.store.GetContentByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	extra := cloneJSONObject(existing.ExtraData)
+	feedback := cloneJSONObjectValue(extra["content_center_feedback"])
+	feedback["status"] = "not_adopted"
+	feedback["not_adopted_reason"] = reason
+	feedback["not_adopted_at"] = time.Now().UTC().Format(time.RFC3339)
+	feedback["not_adopted_by"] = rejectedBy
+	extra["content_center_feedback"] = feedback
+
+	status := "not_adopted"
+	item, err := s.store.UpdateContent(ctx, id, UpdateContentRequest{Status: &status, ExtraData: extra})
+	if err != nil {
+		return nil, err
+	}
+	return toContentResponse(item), nil
+}
+
 // GenerateImages generates multiple image candidates for a content item.
 func (s *Service) GenerateImages(ctx context.Context, contentID int64, req GenerateImagesRequest) (*ImageGenerationResponse, error) {
 	if len(req.Prompts) == 0 {
@@ -1565,6 +1648,41 @@ func cloneJSONObject(src JSONObject) JSONObject {
 		dst[k] = v
 	}
 	return dst
+}
+
+func mergeJSONObject(base, overlay JSONObject) JSONObject {
+	merged := cloneJSONObject(base)
+	for key, value := range overlay {
+		merged[key] = value
+	}
+	return merged
+}
+
+func enrichGeneratedContentExtraData(extra JSONObject, req GenerateContentRequest) {
+	if extra == nil || req.SeedID == nil || *req.SeedID <= 0 {
+		return
+	}
+	if _, exists := extra["source_seed_id"]; !exists {
+		extra["source_seed_id"] = *req.SeedID
+	}
+}
+
+func cloneJSONObjectValue(value interface{}) JSONObject {
+	switch raw := value.(type) {
+	case JSONObject:
+		return cloneJSONObject(raw)
+	case map[string]interface{}:
+		return cloneJSONObject(JSONObject(raw))
+	default:
+		return JSONObject{}
+	}
+}
+
+func setJSONObjectString(dst JSONObject, key, value string) {
+	if dst == nil || strings.TrimSpace(value) == "" {
+		return
+	}
+	dst[key] = strings.TrimSpace(value)
 }
 
 func setIfNonEmpty(dst JSONObject, key string, value *string) {

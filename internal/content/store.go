@@ -571,6 +571,37 @@ func (s *Store) PublishContent(ctx context.Context, id int64) (*ContentItem, err
 	return &item, nil
 }
 
+// ConfirmContentPublished marks content as published and saves its manual
+// publication metadata in the same update. The caller merges existing metadata
+// before this call, preserving recording/seed lineage in extra_data.
+func (s *Store) ConfirmContentPublished(ctx context.Context, id int64, extraData JSONObject) (*ContentItem, error) {
+	query := `
+		UPDATE content_items
+		SET status = 'published', published_at = NOW(), unpublished_at = NULL,
+		    extra_data = $2, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING id, tenant_id, topic_id, content_type, platform, title, content, summary, category, tags, status,
+		          published_at, unpublished_at, view_count, like_count, share_count, images,
+		          extra_data, created_by, created_at, updated_at,
+		          (SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') FROM employees e WHERE e.id = content_items.created_by) AS creator_name
+	`
+
+	var item ContentItem
+	err := s.pool.QueryRow(ctx, query, id, extraData).Scan(
+		&item.ID, &item.TenantID, &item.TopicID, &item.ContentType, &item.Platform, &item.Title, &item.Content, &item.Summary,
+		&item.Category, &item.Tags, &item.Status, &item.PublishedAt, &item.UnpublishedAt,
+		&item.ViewCount, &item.LikeCount, &item.ShareCount, &item.Images, &item.ExtraData,
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CreatorName,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("content not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to confirm content publication: %w", err)
+	}
+	return &item, nil
+}
+
 // UnpublishContent unpublishes a content item
 func (s *Store) UnpublishContent(ctx context.Context, id int64) (*ContentItem, error) {
 	query := `

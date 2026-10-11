@@ -194,6 +194,22 @@ type UpdateContentRequest struct {
 	ExtraData       JSONObject `json:"extra_data,omitempty"`
 }
 
+// ConfirmContentPublishedRequest records an operator's manual confirmation.
+// Content Center does not connect to third-party publishing platforms, so this
+// is an operation record rather than a platform-side verification.
+type ConfirmContentPublishedRequest struct {
+	Platform          *string `json:"platform,omitempty"`
+	PublishedURL      *string `json:"published_url,omitempty"`
+	ActualPublishedAt *string `json:"actual_published_at,omitempty"`
+	ChangeLevel       *string `json:"change_level,omitempty"`
+}
+
+// MarkContentNotAdoptedRequest records why an operator chose not to use a
+// generated content item. This feedback must be tenant data, not browser data.
+type MarkContentNotAdoptedRequest struct {
+	Reason string `json:"reason"`
+}
+
 // GenerateContentRequest represents AI content generation request
 type GenerateContentRequest struct {
 	ContentID              *int64     `json:"content_id,omitempty"`

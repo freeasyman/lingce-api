@@ -8,18 +8,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
-)
-
-var (
-	seedStateMu         sync.RWMutex
-	seedStatusOverrides = map[int64]string{}
-	seedAdoptedBy       = map[int64]int64{}
-	seedDismissedBy     = map[int64]int64{}
 )
 
 // ListSeeds handles listing content seeds
@@ -249,9 +242,10 @@ func (h *Handler) GenerateDraftFromSeed(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	seedStateMu.Lock()
-	seedStatusOverrides[id] = "draft_generated"
-	seedStateMu.Unlock()
+	if err := h.updateRecordingSeedStatus(r.Context(), seed.ID, seed.TenantID, "used", claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Draft generated successfully"})
 }
 
@@ -269,13 +263,18 @@ func (h *Handler) AdoptSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seedStateMu.Lock()
-	seedStatusOverrides[id] = "adopted"
-	seedAdoptedBy[id] = claims.UserID
-	seedStateMu.Unlock()
+	seed, err := h.getSeedForMutation(r.Context(), claims, r, id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := h.updateRecordingSeedStatus(r.Context(), seed.ID, seed.TenantID, "used", claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"id":      id,
-		"status":  "adopted",
+		"status":  "used",
 		"message": "Seed adopted successfully",
 	})
 }
@@ -294,13 +293,18 @@ func (h *Handler) DismissSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seedStateMu.Lock()
-	seedStatusOverrides[id] = "dismissed"
-	seedDismissedBy[id] = claims.UserID
-	seedStateMu.Unlock()
+	seed, err := h.getSeedForMutation(r.Context(), claims, r, id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := h.updateRecordingSeedStatus(r.Context(), seed.ID, seed.TenantID, "ignored", claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"id":      id,
-		"status":  "dismissed",
+		"status":  "ignored",
 		"message": "Seed dismissed successfully",
 	})
 }
@@ -366,13 +370,61 @@ func (h *Handler) UpdateSeedStatus(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "status is required")
 		return
 	}
-	seedStateMu.Lock()
-	seedStatusOverrides[id] = req.Status
-	if req.Status == "adopted" {
-		seedAdoptedBy[id] = claims.UserID
+	seed, err := h.getSeedForMutation(r.Context(), claims, r, id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
 	}
-	seedStateMu.Unlock()
+	status := normalizeRecordingSeedStatus(req.Status)
+	if status == "" {
+		httputil.WriteBadRequest(w, "invalid seed status")
+		return
+	}
+	if err := h.updateRecordingSeedStatus(r.Context(), seed.ID, seed.TenantID, status, claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Seed status updated successfully"})
+}
+
+func (h *Handler) getSeedForMutation(ctx context.Context, claims *auth.Claims, r *http.Request, id int64) (*SeedResponse, error) {
+	scope, err := h.resolveTenantScope(claims, r)
+	if err != nil {
+		return nil, err
+	}
+	return h.getSeedByID(ctx, scope.TenantID, id, scope.TenantIDs...)
+}
+
+func normalizeRecordingSeedStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "used", "adopted", "draft_generated":
+		return "used"
+	case "ignored", "dismissed":
+		return "ignored"
+	case "pending":
+		return "pending"
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) updateRecordingSeedStatus(ctx context.Context, seedID, tenantID int64, status string, actorID int64) error {
+	// The source of truth for recording-derived topics is recording_content_seeds.
+	// We persist only the lifecycle state here; actor attribution is not stored on
+	// this table yet, so it must not be faked in process memory.
+	_ = actorID
+	result, err := h.service.store.pool.Exec(ctx, `
+		UPDATE recording_content_seeds
+		SET status = $3
+		WHERE id = $1 AND tenant_id = $2
+	`, seedID, tenantID, status)
+	if err != nil {
+		return fmt.Errorf("update recording content seed status: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("seed not found")
+	}
+	return nil
 }
 
 func parseSeedID(r *http.Request) (int64, error) {
@@ -417,26 +469,10 @@ func (h *Handler) GetMyStats(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	seedStateMu.RLock()
-	adoptedByMe := 0
-	dismissedByMe := 0
-	for id, uid := range seedAdoptedBy {
-		if uid == claims.UserID {
-			if _, ok := seedStatusOverrides[id]; ok {
-				adoptedByMe++
-			}
-		}
-	}
-	for _, uid := range seedDismissedBy {
-		if uid == claims.UserID {
-			dismissedByMe++
-		}
-	}
-	seedStateMu.RUnlock()
 	httputil.WriteSuccess(w, map[string]interface{}{
 		"total_visible":    len(seeds),
-		"adopted_by_me":    adoptedByMe,
-		"dismissed_by_me":  dismissedByMe,
+		"adopted_by_me":    0,
+		"dismissed_by_me":  0,
 		"inspirations_cnt": len(seeds),
 	})
 }
@@ -449,20 +485,9 @@ func (h *Handler) GetMyAdopted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seeds, err := h.buildSeedsFromRecordingTable(r.Context(), claims.TenantID)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	seedStateMu.RLock()
-	out := []SeedResponse{}
-	for _, seed := range seeds {
-		if uid, ok := seedAdoptedBy[seed.ID]; ok && uid == claims.UserID {
-			out = append(out, seed)
-		}
-	}
-	seedStateMu.RUnlock()
-	httputil.WriteSuccess(w, out)
+	// The recording seed table currently does not retain an adopter ID. Return an
+	// empty result rather than reconstructing a false per-user history in memory.
+	httputil.WriteSuccess(w, []SeedResponse{})
 }
 
 func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *int64, tenantIDs ...int64) ([]SeedResponse, error) {
@@ -502,8 +527,6 @@ func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *in
 	defer rows.Close()
 
 	result := make([]SeedResponse, 0, 64)
-	seedStateMu.RLock()
-	defer seedStateMu.RUnlock()
 	for rows.Next() {
 		var (
 			seedID         int64
@@ -543,9 +566,6 @@ func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *in
 		}
 
 		status := mapRecordingSeedStatusToLegacy(statusRaw)
-		if override, ok := seedStatusOverrides[seedID]; ok {
-			status = mapRecordingSeedStatusToLegacy(override)
-		}
 		suggestedPlatforms := parseJSONStringArray(suggestedRaw)
 
 		seedType = strings.TrimSpace(strings.ToLower(seedType))
@@ -578,10 +598,6 @@ func (h *Handler) buildSeedsFromRecordingTable(ctx context.Context, tenantID *in
 			ExtraData:          seedData,
 			CreatedAt:          createdAt.Format(time.RFC3339),
 			UpdatedAt:          createdAt.Format(time.RFC3339),
-		}
-		if uid, ok := seedAdoptedBy[seedID]; ok {
-			seed.AdoptedBy = &uid
-			seed.AdoptedAt = strPtr(time.Now().Format(time.RFC3339))
 		}
 		result = append(result, seed)
 	}
@@ -682,9 +698,6 @@ func (h *Handler) getSeedByIDFromRecordingTable(ctx context.Context, seedID int6
 	}
 
 	status := mapRecordingSeedStatusToLegacy(statusRaw)
-	if override, ok := seedStatusOverrides[id]; ok {
-		status = mapRecordingSeedStatusToLegacy(override)
-	}
 	seedType = strings.TrimSpace(strings.ToLower(seedType))
 	var seedTypePtr *string
 	if seedType != "" {

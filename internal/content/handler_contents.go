@@ -410,3 +410,81 @@ func (h *Handler) UnpublishContent(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, content)
 }
+
+// ConfirmContentPublished records an operator's manual publication
+// confirmation. It does not verify any external platform because Content
+// Center deliberately does not connect to platform APIs.
+func (h *Handler) ConfirmContentPublished(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+
+	var req ConfirmContentPublishedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.ConfirmContentPublished(r.Context(), id, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
+}
+
+// MarkContentNotAdopted records an operator's decision not to use the draft.
+func (h *Handler) MarkContentNotAdopted(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+
+	var req MarkContentNotAdoptedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	content, err := h.service.MarkContentNotAdopted(r.Context(), id, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
+}
