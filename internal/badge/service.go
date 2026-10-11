@@ -22,6 +22,10 @@ type Service struct {
 	workerToken      string
 	httpClient       *http.Client
 	notifier         *TicketEmailNotifier
+	sessionBinder    interface {
+		BindBadgeRecordingByOrderNo(context.Context, int64, string, int64) error
+		BindBadgeRecording(context.Context, int64, int64, string, int64) error
+	}
 }
 
 func NewService(store *Store, employeeStore *employee.Store) *Service {
@@ -31,6 +35,15 @@ func NewService(store *Store, employeeStore *employee.Store) *Service {
 		middlewareClient: NewMiddlewareClient("", ""),
 		httpClient:       &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// SetBadgeSessionBinder connects callback ingestion to the EMR workbench
+// session without changing the legacy Worker or badge middleware protocol.
+func (s *Service) SetBadgeSessionBinder(binder interface {
+	BindBadgeRecordingByOrderNo(context.Context, int64, string, int64) error
+	BindBadgeRecording(context.Context, int64, int64, string, int64) error
+}) {
+	s.sessionBinder = binder
 }
 
 func NewServiceWithMiddleware(
@@ -424,6 +437,17 @@ func (s *Service) processAudioCallbackAsync(eventRef AudioCallbackEventRef, payl
 	if ingestResult == nil {
 		_ = s.store.MarkAudioCallbackEventCompleted(ctx, eventRef.AppID, eventRef.EventID, 0)
 		return
+	}
+	if s.sessionBinder != nil {
+		if err := s.sessionBinder.BindBadgeRecordingByOrderNo(ctx, ingestResult.TenantID, eventRef.OrderNo, ingestResult.RecordingID); err != nil {
+			slog.Warn("failed to bind badge recording to EMR session", "order_no", eventRef.OrderNo, "recording_id", ingestResult.RecordingID, "error", err)
+		}
+		// Some legacy vendor callbacks replace the workbench order number with
+		// their event id. Bind the only stopped, unbound session for this doctor
+		// and device so the generated Encounter can still be returned to the UI.
+		if err := s.sessionBinder.BindBadgeRecording(ctx, ingestResult.TenantID, ingestResult.EmployeeID, eventRef.DeviceNo, ingestResult.RecordingID); err != nil {
+			slog.Warn("failed to fallback-bind badge recording to EMR session", "device_no", eventRef.DeviceNo, "recording_id", ingestResult.RecordingID, "error", err)
+		}
 	}
 	if err := s.store.MarkAudioCallbackEventCompleted(ctx, eventRef.AppID, eventRef.EventID, ingestResult.RecordingID); err != nil {
 		slog.Warn("audio callback async mark completed failed",
