@@ -10706,7 +10706,7 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		TaskCategory:  t.TaskCategory, AnonymousPatient: t.AnonymousPatient, PatientAge: t.PatientAge, PatientGender: t.PatientGender,
 		PhoneScript: t.PhoneScript, WechatContent: t.WechatContent, ExecutionResult: t.ExecutionResult, ExecutionDifficulty: t.ExecutionDifficulty,
 		DoctorEscalation: t.DoctorEscalation,
-		PatientReplied:   t.PatientReplied, RevisitAttended: t.RevisitAttended, IssueResolved: t.IssueResolved, PatientUnderstanding: t.PatientUnderstanding,
+		PatientReplied:   t.PatientReplied, RevisitAttended: t.RevisitAttended, IssueResolved: t.IssueResolved, PatientUnderstanding: t.PatientUnderstanding, TimeBasis: t.TimeBasis,
 		EscalationStatus: t.EscalationStatus, EscalationResolution: t.EscalationResolution,
 		SourceType:   t.SourceType,
 		SourceDetail: t.SourceDetail,

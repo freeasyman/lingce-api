@@ -269,9 +269,21 @@ func validateNoUnknownAppliedMigrations(applied map[string]string, migrations []
 		known[migration.Version] = struct{}{}
 	}
 	for version := range applied {
+		if retiredSchemaMigrations[version] == applied[version] {
+			continue
+		}
 		if _, ok := known[version]; !ok {
-			return fmt.Errorf("database has unknown schema migration %s; current code does not contain this migration", version)
+			return fmt.Errorf("database has unknown schema migration %s (checksum %s); current code does not contain this migration", version, applied[version])
 		}
 	}
 	return nil
+}
+
+// retiredSchemaMigrations keeps checksums for migrations whose data change was
+// already applied but whose source is intentionally removed from the embedded
+// executable migration set. This is only for historical ledger compatibility;
+// it never executes or changes the database.
+var retiredSchemaMigrations = map[string]string{
+	"20261009_004": "dbea3d463105fd74d108ab7406a79a647955931617ddc7ca8629c5da322b0eef",
+	"20261010_001": "68198b30b2dc3a3b67b1e55a59acee38a177e6f5396f06587fd912e623cae199",
 }

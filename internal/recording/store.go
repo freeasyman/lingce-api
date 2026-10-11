@@ -2538,6 +2538,11 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 		if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, escalation_status=CASE WHEN NULLIF(trim(COALESCE($3,'')),'') IS NOT NULL THEN 'pending' ELSE escalation_status END, doctor_escalation=$3, next_contact_at=$4, patient_replied=$5, revisit_attended=$6, issue_resolved=$7, patient_understanding=$8 WHERE id=$9`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, req.PatientReplied, req.RevisitAttended, req.IssueResolved, req.PatientUnderstanding, id); err != nil {
 			return err
 		}
+		if req.DoctorEscalation != nil && strings.TrimSpace(*req.DoctorEscalation) != "" {
+			if _, err := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) SELECT tenant_id,id,'escalation_created',jsonb_build_object('question',$1,'actor_id',$2) FROM recording_tasks WHERE id=$3`, strings.TrimSpace(*req.DoctorEscalation), completedBy, id); err != nil {
+				return err
+			}
+		}
 		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
 			if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET status='pending', completed_at=NULL, due_at=$1 WHERE id=$2`, req.NextContactAt, id); err != nil {
 				return err
@@ -2554,29 +2559,6 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTaskRequest) error {
 	_, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, doctor_escalation=$3, next_contact_at=$4, updated_at=NOW() WHERE id=$5`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, id)
 	return err
-}
-
-func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req CompletePatientRequest) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	var customerID int64
-	if err = tx.QueryRow(ctx, `SELECT customer_id FROM recording_tasks WHERE id=$1 AND tenant_id=$2 AND source_type IN ('follow_up','followup') FOR UPDATE`, id, tenantID).Scan(&customerID); err != nil {
-		return fmt.Errorf("task not found: %w", err)
-	}
-	if _, err = tx.Exec(ctx, `UPDATE customers SET name=NULLIF($1,''), phone=NULLIF($2,''), age=$3, gender=$4, extra_data=COALESCE(extra_data,'{}'::jsonb)-'anonymous' WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, customerID, tenantID); err != nil {
-		return fmt.Errorf("update patient: %w", err)
-	}
-	if _, err = tx.Exec(ctx, `UPDATE recording_tasks SET customer_name=NULLIF($1,''), customer_phone=NULLIF($2,''), patient_age=$3, patient_gender=$4, anonymous_patient=false, updated_at=NOW() WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID); err != nil {
-		return err
-	}
-	_, auditErr := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'patient_completed',jsonb_build_object('customer_id',$3,'age',$4,'gender',$5))`, tenantID, id, customerID, req.Age, req.Gender)
-	if auditErr != nil {
-		return auditErr
-	}
-	return tx.Commit(ctx)
 }
 
 // CancelTask marks a task as cancelled
@@ -2654,6 +2636,9 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if followupOnly {
 		// 随访中心统计只包含随访来源任务，避免混入旧分析链路或人工任务。
 		conditions = append(conditions, "t.source_type IN ('follow_up', 'followup')")
+		// 统计必须与随访列表的可执行任务口径一致：匿名或缺少姓名/电话的任务
+		// 进入待补全区域，不计入顶部任务数量。
+		conditions = append(conditions, "t.anonymous_patient = false AND NULLIF(trim(t.customer_name), '') IS NOT NULL AND NULLIF(trim(t.customer_phone), '') IS NOT NULL")
 	}
 
 	if assignedTo != nil {

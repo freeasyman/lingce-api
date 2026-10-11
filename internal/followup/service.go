@@ -3,7 +3,9 @@ package followup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -355,23 +357,62 @@ func (s *Service) processDueRetryRuns(ctx context.Context) {
 func (s *Service) processRun(parent context.Context, runID int64) {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
+	var claimedRun *followupGenerationRun
+	completed := false
+	// 处理协程无论以何种原因退出，都必须把 processing 收敛到可重试或失败。
+	// 不能复用已经超时/取消的业务 ctx，否则状态更新会再次失败并留下孤儿记录。
+	defer func() {
+		if claimedRun == nil || completed || s.pool == nil {
+			return
+		}
+		settleCtx, settleCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer settleCancel()
+		if err := s.markRunFailure(settleCtx, claimedRun, "", "", nil, nil, "PROCESS_ABORTED", context.Cause(ctx), true); err != nil {
+			slog.Error("failed to settle followup generation run", "run_id", runID, "error", err)
+		}
+	}()
+	// 后台协程不能把 panic 留在 processing 状态。任何未预期异常都必须
+	// 收敛为 retry_wait/failed，交给补偿扫描继续处理，并保留错误信息。
+	// 署名：Codex
+	// 时间：2026-10-09
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			message := fmt.Sprintf("followup generation panic: %v", recovered)
+			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer failureCancel()
+			var err error
+			if claimedRun != nil {
+				err = s.markRunFailure(failureCtx, claimedRun, "", "", nil, nil, "PANIC", errors.New(message), true)
+			} else if s.pool != nil {
+				_, err = s.pool.Exec(failureCtx, `UPDATE followup_generation_runs SET status='failed', last_error_code='PANIC', last_error_message=$2, failed_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='processing'`, runID, message)
+			}
+			if err != nil {
+				slog.Error("failed to persist followup panic state", "run_id", runID, "error", err)
+			}
+		}
+	}()
 
 	run, err := s.claimGenerationRun(ctx, runID)
 	if err != nil {
 		return
 	}
+	claimedRun = run
 	req := run.Request
 
 	prompt, userPrompt, err := s.preparePrompt(ctx, req)
 	if err != nil {
-		s.markRunFailure(ctx, run, "", "", nil, nil, "PROMPT_ERROR", err, false)
+		failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = s.markRunFailure(failureCtx, run, "", "", nil, nil, "PROMPT_ERROR", err, false)
+		failureCancel()
 		_ = s.writeLLMLog(req, "", "", nil, nil, err)
 		return
 	}
 
 	cfg, err := s.loadModelConfig(ctx, req.TenantID)
 	if err != nil {
-		s.markRunFailure(ctx, run, prompt.Version, "", nil, nil, "MODEL_CONFIG_ERROR", err, false)
+		failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = s.markRunFailure(failureCtx, run, "", "", nil, nil, "MODEL_CONFIG_ERROR", err, false)
+		failureCancel()
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, nil, nil, err)
 		return
 	}
@@ -380,19 +421,25 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 	if len(run.LLMResponsePayload) > 0 {
 		resp, err = decodeSavedLLMResponse(run.LLMResponsePayload)
 		if err != nil {
-			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, nil, nil, "LLM_RESPONSE_DECODE_ERROR", err, false)
+			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, "LLM_RESPONSE_DECODE_ERROR", err, false)
+			failureCancel()
 			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
 			return
 		}
 	} else {
 		resp, err = s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
 		if err != nil {
-			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, nil, nil, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
+			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
+			failureCancel()
 			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
 			return
 		}
 		if err := s.saveRunLLMResponse(ctx, run.ID, prompt.Version, cfg.ModelCode, resp); err != nil {
-			s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, resp, nil, "RUN_LOG_ERROR", err, true)
+			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, resp, nil, "RUN_LOG_ERROR", err, true)
+			failureCancel()
 			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
 			return
 		}
@@ -402,11 +449,14 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 	if err != nil {
 		// LLM 已经成功返回；任务入库或结果文件写入失败只记录错误，
 		// 不改变已经返回给 Worker 的 accepted 响应。
-		s.markRunFailure(ctx, run, prompt.Version, cfg.ModelCode, resp, generatedPayload, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
+		failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, resp, generatedPayload, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
+		failureCancel()
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
 		return
 	}
 	s.markRunSucceeded(ctx, run.ID, prompt.Version, cfg.ModelCode, resp, generatedPayload, taskCount)
+	completed = true
 }
 
 // preparePrompt 读取全局提示词和租户覆盖，并渲染本次请求的用户提示词。
@@ -530,9 +580,9 @@ func (s *Service) markRunSucceeded(ctx context.Context, runID int64, promptVersi
 //
 // 署名：Codex
 // 时间：2026-09-10
-func (s *Service) markRunFailure(ctx context.Context, run *followupGenerationRun, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, code string, cause error, retryable bool) {
+func (s *Service) markRunFailure(ctx context.Context, run *followupGenerationRun, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, code string, cause error, retryable bool) error {
 	if run == nil || s.pool == nil {
-		return
+		return nil
 	}
 	nextAttempt := run.AttemptCount + 1
 	status := followupRunStatusFailed
@@ -551,23 +601,24 @@ func (s *Service) markRunFailure(ctx context.Context, run *followupGenerationRun
 		responsePayload, _ = json.Marshal(response)
 		responseRequestID = response.RequestID
 	}
-	_, _ = s.pool.Exec(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		UPDATE followup_generation_runs
-		SET status = $2,
+		SET status = $2::text,
 		    attempt_count = $3,
-		    prompt_version = NULLIF($4, ''),
-		    generation_model = NULLIF($5, ''),
-		    llm_request_id = NULLIF($6, ''),
+		    prompt_version = NULLIF($4::text, ''),
+		    generation_model = NULLIF($5::text, ''),
+		    llm_request_id = NULLIF($6::text, ''),
 		    llm_response_payload = COALESCE(NULLIF($7::jsonb, 'null'::jsonb), llm_response_payload),
 		    generated_tasks_payload = COALESCE(NULLIF($8::jsonb, 'null'::jsonb), generated_tasks_payload),
-		    next_retry_at = $9,
-		    last_error_code = NULLIF($10, ''),
-		    last_error_message = NULLIF($11, ''),
-		    failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END,
+		    next_retry_at = $9::timestamptz,
+		    last_error_code = NULLIF($10::text, ''),
+		    last_error_message = NULLIF($11::text, ''),
+		    failed_at = CASE WHEN $2::text = 'failed' THEN NOW() ELSE failed_at END,
 		    updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND status = 'processing'
 	`, run.ID, status, nextAttempt, promptVersion, modelCode, responseRequestID,
 		responsePayload, generatedPayload, nextRetry, code, message)
+	return err
 }
 
 func decodeSavedLLMResponse(payload []byte) (*llmgateway.TextInferenceResponse, error) {

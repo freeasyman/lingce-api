@@ -175,6 +175,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/recording-tasks/incomplete-patients", Handler: h.ListIncompletePatients, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/escalations", Handler: h.ListTaskEscalations, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/patient", Handler: h.CompletePatient, Auth: true},
+		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/incomplete/abandon", Handler: h.AbandonIncompletePatient, Auth: true},
 		{Method: "POST", Path: "/api/v1/recording-tasks/{id}/escalation/resolve", Handler: h.ResolveTaskEscalation, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/recordings/{id}/tasks", Handler: h.GetRecordingTasksByRecordingID, Auth: true},
 		{Method: "GET", Path: "/api/v1/recording-tasks/employees", Handler: h.ListTaskEmployees, Auth: true},
@@ -272,106 +273,6 @@ func (h *Handler) ListTaskEscalations(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var v item
 		if err := rows.Scan(&v.ID, &v.CustomerName, &v.Title, &v.Escalation, &v.Status, &v.Resolution, &v.ResolvedBy, &v.ResolvedAt); err != nil {
-			httputil.WriteInternalError(w, err.Error())
-			return
-		}
-		if claims.UserType != auth.UserTypeAdmin {
-			allowed, err := h.service.store.CanViewFollowupTask(r.Context(), v.ID, tenantID, claims.UserID)
-			if err != nil {
-				httputil.WriteInternalError(w, err.Error())
-				return
-			}
-			if !allowed {
-				continue
-			}
-		}
-		items = append(items, v)
-	}
-	httputil.WriteSuccess(w, items)
-}
-
-func (h *Handler) CompletePatient(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "Invalid task ID")
-		return
-	}
-	var req CompletePatientRequest
-	tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
-	if tenantErr != nil {
-		httputil.WriteForbidden(w, tenantErr.Error())
-		return
-	}
-	if claims.UserType != auth.UserTypeAdmin {
-		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskExecute); err != nil {
-			httputil.WriteForbidden(w, err.Error())
-			return
-		}
-		allowed, err := h.service.store.CanViewFollowupTask(r.Context(), id, tenantID, claims.UserID)
-		if err != nil || !allowed {
-			httputil.WriteForbidden(w, "task visibility denied")
-			return
-		}
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Phone) == "" {
-		httputil.WriteBadRequest(w, "name and phone are required")
-		return
-	}
-	if req.Age != nil && (*req.Age < 0 || *req.Age > 130) {
-		httputil.WriteBadRequest(w, "age must be between 0 and 130")
-		return
-	}
-	if req.Gender != nil && !strings.Contains("|男|女|其他|未知|", "|"+strings.TrimSpace(*req.Gender)+"|") {
-		httputil.WriteBadRequest(w, "invalid gender")
-		return
-	}
-	if err := h.service.store.CompletePatient(r.Context(), tenantID, id, req); err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]string{"message": "patient completed"})
-}
-
-func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
-	if err != nil {
-		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	if claims.UserType != auth.UserTypeAdmin {
-		if err := h.requireFollowupAbility(r.Context(), claims, tenantID, followuppermission.AbilityTaskRead); err != nil {
-			httputil.WriteForbidden(w, err.Error())
-			return
-		}
-	}
-	rows, err := h.service.store.pool.Query(r.Context(), `SELECT id, COALESCE(customer_name,''), COALESCE(customer_phone,''), anonymous_patient, patient_age, patient_gender FROM recording_tasks WHERE tenant_id=$1 AND source_type IN ('follow_up','followup') AND (anonymous_patient=true OR NULLIF(customer_name,'') IS NULL OR NULLIF(customer_phone,'') IS NULL) AND status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 100`, tenantID)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	defer rows.Close()
-	type item struct {
-		ID        int64   `json:"id"`
-		Name      string  `json:"customer_name"`
-		Phone     string  `json:"customer_phone"`
-		Anonymous bool    `json:"anonymous_patient"`
-		Age       *int    `json:"patient_age,omitempty"`
-		Gender    *string `json:"patient_gender,omitempty"`
-	}
-	items := []item{}
-	for rows.Next() {
-		var v item
-		if err := rows.Scan(&v.ID, &v.Name, &v.Phone, &v.Anonymous, &v.Age, &v.Gender); err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
 		}
