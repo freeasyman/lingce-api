@@ -16,23 +16,23 @@ type DeviceListRequest struct {
 
 // DeviceResponse represents device response
 type DeviceResponse struct {
-	ID                 int64      `json:"id"`
-	DeviceNo           string     `json:"device_no"`
-	ManufacturerCode   string     `json:"manufacturer_code"`
-	ManufacturerName   string     `json:"manufacturer_name"`
-	HardwareModel      *string    `json:"hardware_model,omitempty"`
-	Status             string     `json:"status"`
-	TenantID           *int64     `json:"tenant_id,omitempty"`
-	TenantName         *string    `json:"tenant_name,omitempty"`
-	EmployeeID         *int64     `json:"employee_id,omitempty"`
-	EmployeeName       *string    `json:"employee_name,omitempty"`
-	AcceptedAt         *string    `json:"accepted_at,omitempty"`
-	LastOnlineAt       *string    `json:"last_online_at,omitempty"`
-	BatteryLevel       *int       `json:"battery_level,omitempty"`
-	FirmwareVersion    *string    `json:"firmware_version,omitempty"`
-	ExtraData          JSONObject `json:"extra_data,omitempty"`
-	CreatedAt          string     `json:"created_at"`
-	UpdatedAt          string     `json:"updated_at"`
+	ID               int64      `json:"id"`
+	DeviceNo         string     `json:"device_no"`
+	ManufacturerCode string     `json:"manufacturer_code"`
+	ManufacturerName string     `json:"manufacturer_name"`
+	HardwareModel    *string    `json:"hardware_model,omitempty"`
+	Status           string     `json:"status"`
+	TenantID         *int64     `json:"tenant_id,omitempty"`
+	TenantName       *string    `json:"tenant_name,omitempty"`
+	EmployeeID       *int64     `json:"employee_id,omitempty"`
+	EmployeeName     *string    `json:"employee_name,omitempty"`
+	AcceptedAt       *string    `json:"accepted_at,omitempty"`
+	LastOnlineAt     *string    `json:"last_online_at,omitempty"`
+	BatteryLevel     *int       `json:"battery_level,omitempty"`
+	FirmwareVersion  *string    `json:"firmware_version,omitempty"`
+	ExtraData        JSONObject `json:"extra_data,omitempty"`
+	CreatedAt        string     `json:"created_at"`
+	UpdatedAt        string     `json:"updated_at"`
 }
 
 // AcceptanceValidateRequest represents acceptance validation request
@@ -195,6 +195,7 @@ type TenantDeviceOverviewResponse struct {
 type RecordingControlRequest struct {
 	DeviceNo   string     `json:"device_no"`
 	EmployeeID *int64     `json:"employee_id,omitempty"`
+	OrderNo    string     `json:"order_no,omitempty"`
 	ExtraData  JSONObject `json:"extra_data,omitempty"`
 }
 

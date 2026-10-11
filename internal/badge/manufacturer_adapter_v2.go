@@ -121,7 +121,6 @@ func (a *middlewareManufacturerAdapter) GetDeviceRealtimeInfo(ctx context.Contex
 	return info, nil
 }
 
-
 func (a *middlewareManufacturerAdapter) StartRecording(ctx context.Context, deviceNo string) error {
 	return a.client.ControlRecording(ctx, recordingActionStart, deviceNo, nil, JSONObject{
 		"vendor_code": a.vendorCode,

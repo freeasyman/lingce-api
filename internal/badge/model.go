@@ -8,33 +8,36 @@ import (
 
 // BadgeDevice represents a badge device
 type BadgeDevice struct {
-	ID                 int64      `json:"id"`
-	DeviceNo           string     `json:"device_no"`
-	ManufacturerCode   string     `json:"manufacturer_code"`
-	ManufacturerName   *string    `json:"manufacturer_name,omitempty"`
-	HardwareModel      *string    `json:"hardware_model,omitempty"`
-	Status             string     `json:"status"` // "pending_acceptance", "in_stock", "assigned", "returned", "retired"
-	HealthStatus       string     `json:"health_status"`
-	HealthCheckResult  JSONObject `json:"health_check_result,omitempty"`
-	TenantID           *int64     `json:"tenant_id,omitempty"`
-	TenantName         *string    `json:"tenant_name,omitempty"`
-	EmployeeID         *int64     `json:"employee_id,omitempty"`
-	EmployeeName       *string    `json:"employee_name,omitempty"`
-	EmployeePhone      *string    `json:"employee_phone,omitempty"`
-	DepartmentID       *int64     `json:"department_id,omitempty"`
-	DepartmentName     *string    `json:"department_name,omitempty"`
-	AssignedAt         *time.Time `json:"assigned_at,omitempty"`
-	AcceptedAt         *time.Time `json:"accepted_at,omitempty"`
-	LastOnlineAt       *time.Time `json:"last_online_at,omitempty"`
-	BatteryLevel       *int       `json:"battery_level,omitempty"`
-	LastCheckAt        *time.Time `json:"last_check_at,omitempty"`
-	FirmwareVersion    *string    `json:"firmware_version,omitempty"`
-	ImportBatchNo      *string    `json:"import_batch_no,omitempty"`
-	Metadata           JSONObject `json:"metadata,omitempty"`
-	ExtraData          JSONObject `json:"extra_data,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
+	ID                int64      `json:"id"`
+	DeviceNo          string     `json:"device_no"`
+	ManufacturerCode  string     `json:"manufacturer_code"`
+	ManufacturerName  *string    `json:"manufacturer_name,omitempty"`
+	HardwareModel     *string    `json:"hardware_model,omitempty"`
+	Status            string     `json:"status"` // "pending_acceptance", "in_stock", "assigned", "returned", "retired"
+	HealthStatus      string     `json:"health_status"`
+	HealthCheckResult JSONObject `json:"health_check_result,omitempty"`
+	TenantID          *int64     `json:"tenant_id,omitempty"`
+	TenantName        *string    `json:"tenant_name,omitempty"`
+	EmployeeID        *int64     `json:"employee_id,omitempty"`
+	EmployeeName      *string    `json:"employee_name,omitempty"`
+	EmployeePhone     *string    `json:"employee_phone,omitempty"`
+	DepartmentID      *int64     `json:"department_id,omitempty"`
+	DepartmentName    *string    `json:"department_name,omitempty"`
+	AssignedAt        *time.Time `json:"assigned_at,omitempty"`
+	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
+	LastOnlineAt      *time.Time `json:"last_online_at,omitempty"`
+	// Online is populated by a realtime vendor probe. It is intentionally not
+	// persisted because badge_devices stores the last-seen timestamp snapshot.
+	Online          *bool      `json:"online,omitempty"`
+	BatteryLevel    *int       `json:"battery_level,omitempty"`
+	LastCheckAt     *time.Time `json:"last_check_at,omitempty"`
+	FirmwareVersion *string    `json:"firmware_version,omitempty"`
+	ImportBatchNo   *string    `json:"import_batch_no,omitempty"`
+	Metadata        JSONObject `json:"metadata,omitempty"`
+	ExtraData       JSONObject `json:"extra_data,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
 }
 
 // BadgeDeviceLog represents v2 device operation logs

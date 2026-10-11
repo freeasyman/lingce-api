@@ -632,9 +632,15 @@ func (h *Handler) StartMyRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "No device assigned to this employee")
 		return
 	}
-	if err := h.service.StartRecording(r.Context(), device.DeviceNo, &claims.UserID, JSONObject{
-		"source": "employee_self",
-	}); err != nil {
+	var req struct {
+		OrderNo string `json:"order_no"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	extra := JSONObject{"source": "employee_self"}
+	if strings.TrimSpace(req.OrderNo) != "" {
+		extra["order_no"] = strings.TrimSpace(req.OrderNo)
+	}
+	if err := h.service.StartRecording(r.Context(), device.DeviceNo, &claims.UserID, extra); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}

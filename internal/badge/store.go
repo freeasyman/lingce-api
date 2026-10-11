@@ -36,6 +36,7 @@ type OSSConfig struct {
 type AudioCallbackIngestResult struct {
 	RecordingID int64
 	TenantID    int64
+	EmployeeID  int64
 	Created     bool
 }
 
@@ -379,6 +380,7 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 	return &AudioCallbackIngestResult{
 		RecordingID: recordingID,
 		TenantID:    tenantID,
+		EmployeeID:  employeeID,
 		Created:     created,
 	}, nil
 }

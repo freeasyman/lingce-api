@@ -516,6 +516,7 @@ func (s *Service) hydrateRealtimeStatus(ctx context.Context, devices []*BadgeDev
 			}
 
 			// Update in-memory device object with fresh data
+			device.Online = &info.Online
 			device.BatteryLevel = info.BatteryLevel
 			device.LastOnlineAt = info.LastOnlineAt
 			if info.HardwareModel != "" {
@@ -575,6 +576,7 @@ func (s *Service) V2RefreshAllRealtimeStatus(ctx context.Context) (JSONObject, e
 				out <- item{deviceID: device.ID, err: fmt.Errorf("device not found from manufacturer")}
 				return
 			}
+			device.Online = &info.Online
 			if info.Online && info.LastOnlineAt == nil {
 				now := time.Now()
 				info.LastOnlineAt = &now
