@@ -517,6 +517,9 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 			return fmt.Errorf("failed to assign institution tenant admin role mirror: %w", err)
 		}
 	}
+	if err := s.ensureTenantAdminEMRPermissionTx(ctx, tx, tenantID, employeeID); err != nil {
+		return err
+	}
 	if hasInstitutionRoleMenus && hasInstitutionMenus {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
@@ -583,6 +586,31 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		}
 	}
 
+	return nil
+}
+
+func (s *Store) ensureTenantAdminEMRPermissionTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID int64) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO emr_permission_assignments (
+			tenant_id, employee_id, enabled, emr_role_code, scope, abilities_json, created_by, updated_by, created_at, updated_at
+		)
+		VALUES (
+			$1, $2, TRUE, 'emr_admin', 'tenant',
+			'["record.read", "record.read_all", "record.create", "record.edit", "record.submit", "record.archive", "record.history.read", "record.export", "template.manage", "quality.manage"]'::jsonb,
+			$2, $2, NOW(), NOW()
+		)
+		ON CONFLICT (tenant_id, employee_id)
+		DO UPDATE SET
+			enabled = TRUE,
+			emr_role_code = 'emr_admin',
+			scope = 'tenant',
+			abilities_json = EXCLUDED.abilities_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = NOW()
+	`, tenantID, employeeID)
+	if err != nil {
+		return fmt.Errorf("failed to initialize tenant admin EMR permission: %w", err)
+	}
 	return nil
 }
 

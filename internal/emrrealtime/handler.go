@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,9 +39,169 @@ func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "POST", Path: "/api/v1/emr/realtime/sessions", Handler: h.Start, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/realtime/experimental/incremental-draft", Handler: h.ExperimentalIncrementalDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/emr/realtime/{encounter_id}/customer", Handler: h.BindCustomer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/realtime/badge/finalize", Handler: h.FinalizeBadge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/realtime/badge/sessions", Handler: h.StartBadgeSession, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/realtime/badge/sessions/{session_id}/stop", Handler: h.StopBadgeSession, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/realtime/badge/sessions/{session_id}", Handler: h.GetBadgeSession, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/realtime/{encounter_id}", Handler: h.Proxy, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
+}
+
+// ExperimentalIncrementalDraft is isolated from the production consultation
+// route. It returns field-level draft updates and never replaces the full EMR
+// record; the experiment page merges and auto-saves the returned patch.
+func (h *Handler) ExperimentalIncrementalDraft(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "未登录", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, "record.create")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if access == nil {
+		http.Error(w, "无权使用实验病历功能", http.StatusForbidden)
+		return
+	}
+	var req emrrecord.IncrementalDraftInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求内容无效", http.StatusBadRequest)
+		return
+	}
+	if err := h.service.store.ValidateDoctor(r.Context(), tenantID, claims.UserID); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	result, err := h.service.GenerateIncrementalDraft(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
+}
+
+func (h *Handler) StartBadgeSession(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "未登录", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, "record.create")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	var req StartBadgeSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求内容无效", http.StatusBadRequest)
+		return
+	}
+	result, err := h.service.StartBadgeSession(r.Context(), tenantID, claims.UserID, access, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
+}
+
+func (h *Handler) StopBadgeSession(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "未登录", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := h.permissions.Authorize(r.Context(), claims, tenantID, "record.create"); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	sessionID, err := uuid.Parse(r.PathValue("session_id"))
+	if err != nil {
+		http.Error(w, "工牌接诊会话标识无效", http.StatusBadRequest)
+		return
+	}
+	result, err := h.service.StopBadgeSession(r.Context(), tenantID, claims.UserID, sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
+}
+
+func (h *Handler) GetBadgeSession(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "未登录", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, "record.create")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	sessionID, err := uuid.Parse(r.PathValue("session_id"))
+	if err != nil {
+		http.Error(w, "工牌接诊会话标识无效", http.StatusBadRequest)
+		return
+	}
+	result, err := h.service.GetBadgeSession(r.Context(), tenantID, claims.UserID, access, sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
+}
+
+func (h *Handler) FinalizeBadge(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	access, err := h.permissions.Authorize(r.Context(), claims, tenantID, "record.create")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	var req FinalizeBadgeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	result, err := h.service.FinalizeBadge(r.Context(), tenantID, claims.UserID, access, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
 }
 
 func (h *Handler) Start(w http.ResponseWriter, r *http.Request) {
