@@ -16,6 +16,8 @@ func TestGeneratedTaskQuality(t *testing.T) {
 		{"sales", strings.Replace(valid, "understanding", "sales", 1), true},
 		{"missing_evidence", strings.Replace(valid, "患者说不知道怎么使用", "", 1), true},
 		{"missing_purpose", strings.Replace(valid, `"purpose":"了解困难"`, `"purpose":""`, 1), true},
+		{"missing_time_basis", strings.Replace(valid, `"time_basis":"doctor_explicit",`, "", 1), true},
+		{"invalid_time_basis", strings.Replace(valid, "doctor_explicit", "invented", 1), true},
 		{"long_phone", strings.Replace(valid, "您好，请问使用时还有什么困难？", strings.Repeat("字", 121), 1), true},
 		{"invalid_date", strings.Replace(valid, "2026-10-09T10:00:00+08:00", "尽快", 1), true},
 	}

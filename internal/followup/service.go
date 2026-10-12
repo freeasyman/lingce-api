@@ -23,13 +23,10 @@ import (
 //
 // 说明：
 //  1. 接口先同步校验请求引用，再异步调用 LLM 生成随访任务并持久化。
-//  2. 为便于联调，会把接收到的请求内容追加写入随访前端项目的
-//     /Users/yiliiang/Documents/lingce-web/apps/followup/data/log 目录。
+//  2. 正式处理记录保存在数据库；可通过 FOLLOWUP_LOG_DIR 开启可选调试文件。
 type Service struct {
 	debugLogPath string
-	// generatedTasksPath 是临时保存 LLM 生成任务结果的独立文件。
-	// 后续正式入库时，saveGeneratedTasks 可以替换为数据库写入函数，
-	// 不影响提示词和模型调用链路。
+	// generatedTasksPath 是可选结果日志，文件写入失败不得改变入库结果。
 	generatedTasksPath string
 	llm                *llmgateway.Client
 	pool               *pgxpool.Pool
@@ -64,24 +61,20 @@ func (e *InvalidReferenceError) Error() string {
 // 时间：2026-09-09
 func NewService(llm *llmgateway.Client, pool *pgxpool.Pool) *Service {
 	service := &Service{
-		// 日志必须落在随访中心前端项目的 data/log 目录，便于在同一个业务目录
-		// 中查看 Worker 传给随访 API 的原始请求内容。这里使用绝对路径，避免
-		// API 从不同工作目录启动时把日志写到错误的 data 目录。
-		debugLogPath: filepath.Join(
-			"/Users/yiliiang/Documents/lingce-web/apps/followup/data",
-			"log",
-			"followup_worker_debug.log",
-		),
-		generatedTasksPath: filepath.Join(
-			"/Users/yiliiang/Documents/lingce-web/apps/followup/data",
-			"log",
-			"followup_generated_tasks.log",
-		),
 		llm:  llm,
 		pool: pool,
 	}
+	service.configureLogDirectory(os.Getenv("FOLLOWUP_LOG_DIR"))
 	service.startRetryWorker(context.Background())
 	return service
+}
+
+func (s *Service) configureLogDirectory(directory string) {
+	s.debugLogPath, s.generatedTasksPath = "", ""
+	if directory = strings.TrimSpace(directory); directory != "" {
+		s.debugLogPath = filepath.Join(directory, "followup_worker_debug.log")
+		s.generatedTasksPath = filepath.Join(directory, "followup_generated_tasks.log")
+	}
 }
 
 // AcceptRequest 读取提示词、记录拼接内容，并启动后台 LLM 调用。
@@ -447,7 +440,7 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 	_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, nil)
 	taskCount, generatedPayload, err := s.saveGeneratedTasks(ctx, req, resp, prompt.Version)
 	if err != nil {
-		// LLM 已经成功返回；任务入库或结果文件写入失败只记录错误，
+		// LLM 已经成功返回；任务校验或入库失败只记录错误，
 		// 不改变已经返回给 Worker 的 accepted 响应。
 		failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, resp, generatedPayload, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
@@ -471,6 +464,8 @@ func (s *Service) preparePrompt(ctx context.Context, req GenerateRequest) (*prom
 	if err != nil {
 		return nil, "", err
 	}
+	// 最后追加当前接口契约，避免旧数据库提示词或租户覆盖遗漏必填字段。
+	prompt.SystemPrompt += followupTimeBasisContract
 	return prompt, renderUserPrompt(prompt.UserPromptTemplate, req), nil
 }
 
@@ -724,9 +719,19 @@ func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, r
 	if err != nil {
 		return 0, nil, fmt.Errorf("marshal generated tasks payload: %w", err)
 	}
+	if err := s.writeGeneratedTasksLog(req, response, payload); err != nil {
+		// 数据库事务已提交。可选诊断文件失败不能把成功任务标记为 failed。
+		slog.Warn("followup result log unavailable; tasks persisted", "tenant_id", req.TenantID, "recording_id", req.RecordingID, "error", err)
+	}
+	return len(payload.Tasks), rawPayload, nil
+}
 
+func (s *Service) writeGeneratedTasksLog(req GenerateRequest, response *llmgateway.TextInferenceResponse, payload *generatedTasksPayload) error {
+	if s.generatedTasksPath == "" {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(s.generatedTasksPath), 0o755); err != nil {
-		return 0, rawPayload, fmt.Errorf("create generated tasks log dir: %w", err)
+		return fmt.Errorf("create generated tasks log dir: %w", err)
 	}
 
 	entry := map[string]any{
@@ -747,19 +752,19 @@ func (s *Service) saveGeneratedTasks(ctx context.Context, req GenerateRequest, r
 	}
 	entryPayload, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		return 0, rawPayload, fmt.Errorf("marshal generated tasks: %w", err)
+		return fmt.Errorf("marshal generated tasks: %w", err)
 	}
 
 	file, err := os.OpenFile(s.generatedTasksPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return 0, rawPayload, fmt.Errorf("open generated tasks file: %w", err)
+		return fmt.Errorf("open generated tasks file: %w", err)
 	}
 	defer file.Close()
 
 	if _, err := fmt.Fprintf(file, "[%s]\n%s\n\n", time.Now().Format(time.RFC3339), strings.TrimSpace(string(entryPayload))); err != nil {
-		return 0, rawPayload, fmt.Errorf("write generated tasks file: %w", err)
+		return fmt.Errorf("write generated tasks file: %w", err)
 	}
-	return len(payload.Tasks), rawPayload, nil
+	return nil
 }
 
 // parseGeneratedTasks 解析模型要求的 JSON 结构，并校验入库所需的最小字段。
@@ -798,6 +803,11 @@ func parseGeneratedTasks(content string) (*generatedTasksPayload, error) {
 		}
 		if strings.TrimSpace(task.TimeBasis) == "" {
 			return nil, fmt.Errorf("generated task %d time_basis is empty", index)
+		}
+		switch strings.TrimSpace(task.TimeBasis) {
+		case "doctor_explicit", "objective_node", "hospital_default":
+		default:
+			return nil, fmt.Errorf("generated task %d time_basis is invalid", index)
 		}
 		if len([]rune(task.PhoneScript)) > 120 || len([]rune(task.WechatContent)) > 600 {
 			return nil, fmt.Errorf("generated task %d channel content exceeds length limit", index)
@@ -1159,6 +1169,17 @@ type promptConfig struct {
 
 const followupPromptCode = "followup_task_generation"
 
+const followupTimeBasisContract = `
+
+【随访接口时间依据契约】
+每条任务必须输出 time_basis，仅允许 doctor_explicit、objective_node、hospital_default。
+doctor_explicit：医生明确指定的日期或相对时间；objective_node：明确复诊、检查或治疗节点；
+hospital_default：存在明确后续执行事项或患者疑问/困难，但医生没有指定联系日期，按医院默认规则联系。
+医院默认规则：就诊后的下一个工作日上午10:00；contact_time 填写“医院默认”，由服务端计算；相对日期以 recorded_at 为基准。
+不得编造医生指定日期或医学依据；没有后续动作、疑问或困难时返回 {"tasks":[]}。
+每条任务字段必须包含 title、contact_time、time_basis、purpose、background、script、phone_script、wechat_content、evidence、contact_method、executor、category、editable_fields。
+`
+
 // loadPrompt 从现有提示词管理表读取随访提示词。
 //
 // 读取顺序：
@@ -1339,6 +1360,9 @@ func (s *Service) callLLM(ctx context.Context, req GenerateRequest, systemPrompt
 }
 
 func (s *Service) writeLLMLog(req GenerateRequest, systemPrompt, userPrompt string, cfg *modelConfig, response *llmgateway.TextInferenceResponse, callErr error) error {
+	if s.debugLogPath == "" {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(s.debugLogPath), 0o755); err != nil {
 		return fmt.Errorf("create debug log dir: %w", err)
 	}

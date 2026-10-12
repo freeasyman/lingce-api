@@ -29,6 +29,7 @@ play_url_require_owned_media = true
 reset_code_dictionary_path = "/opt/lingce/configs/reset_code_dictionary.json"
 
 [external]
+emr_followup_delivery_enabled = true
 llm_gateway_url = "http://127.0.0.1:8080"
 badge_middleware_url = "http://127.0.0.1:18082"
 recording_worker_url = "http://127.0.0.1:18090"
