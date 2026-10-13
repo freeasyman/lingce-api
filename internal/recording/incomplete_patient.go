@@ -30,7 +30,7 @@ type IncompletePatient struct {
 }
 
 func (s *Store) ListIncompletePatients(ctx context.Context, tenants []int64, viewerID *int64) ([]IncompletePatient, error) {
-	query := `SELECT rt.id,rt.tenant_id,COALESCE(rt.customer_name,''),COALESCE(rt.customer_phone,''),rt.anonymous_patient,rt.patient_age,rt.patient_gender,COALESCE(rt.title,''),COALESCE(rt.background,''),COALESCE(rt.evidence,''),COALESCE(rt.phone_script,''),COALESCE(rt.wechat_content,''),COALESCE(rt.contact_method,''),COALESCE(rt.source_type,''),COALESCE(rt.source_detail,''),COALESCE(e.full_name,e.name,''),COALESCE(r.recorded_at,r.created_at),rt.created_at FROM recording_tasks rt LEFT JOIN recordings r ON r.id=rt.recording_id AND r.tenant_id=rt.tenant_id LEFT JOIN employees e ON e.id=r.employee_id WHERE rt.tenant_id=ANY($1) AND rt.source_type IN ('follow_up','followup') AND (rt.anonymous_patient=true OR NULLIF(trim(rt.customer_name),'') IS NULL OR NULLIF(trim(COALESCE(rt.customer_phone,'')),'') IS NULL) AND rt.status NOT IN ('completed','cancelled')`
+	query := `SELECT rt.id,rt.tenant_id,COALESCE(rt.customer_name,''),COALESCE(rt.customer_phone,''),rt.anonymous_patient,rt.patient_age,rt.patient_gender,COALESCE(rt.title,''),COALESCE(rt.background,''),COALESCE(rt.evidence,''),COALESCE(rt.phone_script,''),COALESCE(rt.wechat_content,''),COALESCE(rt.contact_method,''),COALESCE(rt.source_type,''),COALESCE(rt.source_detail,''),COALESCE(e.full_name,e.name,''),COALESCE(r.recorded_at,r.created_at),rt.created_at FROM recording_tasks rt LEFT JOIN recordings r ON r.id=rt.recording_id AND r.tenant_id=rt.tenant_id LEFT JOIN employees e ON e.id=r.employee_id WHERE rt.tenant_id=ANY($1) AND rt.source_type IN ('follow_up','followup') AND (rt.anonymous_patient=true OR NULLIF(trim(rt.customer_name),'') IS NULL OR NULLIF(trim(COALESCE(rt.customer_phone,'')),'') IS NULL) AND COALESCE(rt.execution_status, rt.status) NOT IN ('completed','cancelled')`
 	args := []any{tenants}
 	if viewerID != nil {
 		query += ` AND (rt.assigned_to=$2 OR EXISTS (SELECT 1 FROM recordings vr JOIN followup_data_scopes vs ON vs.tenant_id=rt.tenant_id AND vs.target_employee_id=vr.employee_id AND vs.viewer_employee_id=$2 WHERE vr.id=rt.recording_id))`
@@ -73,7 +73,7 @@ func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req Com
 	}
 	defer tx.Rollback(ctx)
 	var customerID int64
-	if err = tx.QueryRow(ctx, `SELECT customer_id FROM recording_tasks WHERE id=$1 AND tenant_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('completed','cancelled') AND (anonymous_patient=true OR NULLIF(trim(customer_name),'') IS NULL OR NULLIF(trim(COALESCE(customer_phone,'')),'') IS NULL) FOR UPDATE`, id, tenantID).Scan(&customerID); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT customer_id FROM recording_tasks WHERE id=$1 AND tenant_id=$2 AND source_type IN ('follow_up','followup') AND COALESCE(execution_status, status) NOT IN ('completed','cancelled') AND (anonymous_patient=true OR NULLIF(trim(customer_name),'') IS NULL OR NULLIF(trim(COALESCE(customer_phone,'')),'') IS NULL) FOR UPDATE`, id, tenantID).Scan(&customerID); err != nil {
 		return fmt.Errorf("task not found: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE customers SET name=NULLIF($1::text,''),phone=NULLIF($2::text,''),age=$3::integer,gender=$4::text,extra_data=COALESCE(extra_data,'{}'::jsonb)-'anonymous' WHERE id=$5::bigint AND tenant_id=$6::bigint`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, customerID, tenantID); err != nil {
@@ -95,7 +95,7 @@ func (s *Store) AbandonIncompletePatient(ctx context.Context, tenantID, id, acto
 	}
 	defer tx.Rollback(ctx)
 	var status string
-	if err = tx.QueryRow(ctx, `UPDATE recording_tasks SET status='cancelled',feedback=$1,updated_at=NOW() WHERE id=$2 AND tenant_id=$3 AND source_type IN ('follow_up','followup') AND status NOT IN ('completed','cancelled') AND (anonymous_patient=true OR NULLIF(trim(customer_name),'') IS NULL OR NULLIF(trim(COALESCE(customer_phone,'')),'') IS NULL) RETURNING status`, reason, id, tenantID).Scan(&status); err == pgx.ErrNoRows {
+	if err = tx.QueryRow(ctx, `UPDATE recording_tasks SET status='cancelled',feedback=$1,updated_at=NOW() WHERE id=$2 AND tenant_id=$3 AND source_type IN ('follow_up','followup') AND COALESCE(execution_status, status) NOT IN ('completed','cancelled') AND (anonymous_patient=true OR NULLIF(trim(customer_name),'') IS NULL OR NULLIF(trim(COALESCE(customer_phone,'')),'') IS NULL) RETURNING status`, reason, id, tenantID).Scan(&status); err == pgx.ErrNoRows {
 		return fmt.Errorf("incomplete patient lead not found")
 	}
 	if err != nil {

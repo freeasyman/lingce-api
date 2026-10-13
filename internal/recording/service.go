@@ -1317,7 +1317,7 @@ func (s *Service) listOverdueTaskAttentionRows(ctx context.Context, tenantID int
 		FROM recording_tasks t
 		LEFT JOIN employees e ON e.id = t.assigned_to
 		WHERE t.tenant_id = $1
-		  AND t.status IN ('pending', 'assigned')
+		  AND t.status IN ('pending', 'assigned', 'to_execute')
 		  AND t.due_at < NOW()
 		ORDER BY t.due_at ASC
 		LIMIT $2
@@ -3071,7 +3071,7 @@ func (s *Service) rebindOpenTasksCustomer(ctx context.Context, recordingID, cust
 			customer_phone = $3,
 			updated_at = NOW()
 		WHERE recording_id = $4
-		  AND status IN ('pending', 'assigned')
+		  AND status IN ('pending', 'assigned', 'to_execute')
 		  AND COALESCE(source_type, '') IN ('follow_up', 'ai')
 	`, customerID, customerName, customerPhone, recordingID)
 	return err
@@ -3197,7 +3197,7 @@ func (s *Service) dispatchMedicalFollowUpTasksIfPossible(ctx context.Context, re
 				created_at,
 				updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), $11, 'pending', 'follow_up', NULLIF($12, ''), $13, NOW(), NOW())
+			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), NULLIF($10, ''), $11, 'to_execute', 'follow_up', NULLIF($12, ''), $13, NOW(), NOW())
 		`, rec.TenantID, rec.ID, *rec.CustomerID, customerName, customerPhone, title, description, priority, script, contactReason, assigneeID, channel, dueAt)
 		if err != nil {
 			return err
@@ -6370,7 +6370,7 @@ func (s *Service) buildMorningMeetingOverdueTaskLine(ctx context.Context, tenant
 		JOIN recordings r ON r.id = t.recording_id
 		LEFT JOIN employees e ON e.id = t.assigned_to
 		WHERE t.tenant_id = $1
-		  AND t.status IN ('pending', 'assigned')
+		  AND t.status IN ('pending', 'assigned', 'to_execute')
 		  AND t.due_at < NOW()
 		  %s
 		GROUP BY assignee_name
@@ -10708,10 +10708,12 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		DoctorEscalation: t.DoctorEscalation,
 		PatientReplied:   t.PatientReplied, RevisitAttended: t.RevisitAttended, IssueResolved: t.IssueResolved, PatientUnderstanding: t.PatientUnderstanding, TimeBasis: t.TimeBasis,
 		EscalationStatus: t.EscalationStatus, EscalationResolution: t.EscalationResolution,
-		SourceType:   t.SourceType,
-		SourceDetail: t.SourceDetail,
-		AssignedTo:   t.AssignedTo,
-		AssignedBy:   t.AssignedBy,
+		SourceType:       t.SourceType,
+		SourceDetail:     t.SourceDetail,
+		AssignedTo:       t.AssignedTo,
+		AssignedBy:       t.AssignedBy,
+		AssignmentStatus: t.AssignmentStatus, ExecutionStatus: t.ExecutionStatus,
+		IsOverdue:    t.ExecutionStatus != nil && *t.ExecutionStatus == "to_execute" && t.DueDate != nil && t.DueDate.Before(time.Now()),
 		Status:       string(t.Status),
 		CompletedBy:  t.CompletedBy,
 		CancelReason: t.CancelReason,
@@ -10719,6 +10721,10 @@ func toTaskResponse(t *RecordingTask) *TaskResponse {
 		ReturnReason: t.ReturnReason,
 		CreatedAt:    t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:    t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+
+	if t.ExecutionStatus != nil {
+		resp.Status = ""
 	}
 
 	if t.DueDate != nil {

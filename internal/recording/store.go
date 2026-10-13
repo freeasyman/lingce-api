@@ -655,7 +655,6 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		args = append(args, string(*req.Status))
 		argIndex++
 	}
-
 	if req.StartDate != nil {
 		conditions = append(conditions, fmt.Sprintf("COALESCE(r.recorded_at, r.created_at) >= $%d", argIndex))
 		args = append(args, *req.StartDate)
@@ -2102,7 +2101,6 @@ func (s *Store) UpdateRecording(ctx context.Context, id int64, req UpdateRecordi
 		args = append(args, "uploaded")
 		argIndex++
 	}
-
 	if len(setClauses) == 0 {
 		return s.GetRecordingByID(ctx, id)
 	}
@@ -2329,9 +2327,31 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	}
 
 	if req.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("rt.status = $%d", argIndex))
+		statusColumn := "rt.status"
+		if req.TaskType != nil && (string(*req.TaskType) == "follow_up" || string(*req.TaskType) == "followup") {
+			statusColumn = "rt.execution_status"
+		}
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", statusColumn, argIndex))
 		args = append(args, *req.Status)
 		argIndex++
+	}
+
+	if req.AssignmentStatus != nil {
+		conditions = append(conditions, fmt.Sprintf("rt.assignment_status = $%d", argIndex))
+		args = append(args, *req.AssignmentStatus)
+		argIndex++
+	}
+	if req.ExecutionStatus != nil {
+		conditions = append(conditions, fmt.Sprintf("rt.execution_status = $%d", argIndex))
+		args = append(args, *req.ExecutionStatus)
+		argIndex++
+	}
+	if req.IsOverdue != nil {
+		clause := "(rt.execution_status = 'to_execute' AND rt.due_at IS NOT NULL AND rt.due_at < NOW())"
+		if !*req.IsOverdue {
+			clause = "NOT " + clause
+		}
+		conditions = append(conditions, clause)
 	}
 
 	if req.TaskType != nil {
@@ -2414,7 +2434,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 	query := fmt.Sprintf(`
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
 		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.time_basis, rt.source_type, rt.source_detail,
-		       rt.assigned_to, NULL::bigint AS assigned_by,
+		       rt.assigned_to, NULL::bigint AS assigned_by, rt.assignment_status, rt.execution_status,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
 		       rt.returned_at, rt.returned_by, rt.return_reason, rt.created_at, rt.updated_at
@@ -2439,7 +2459,7 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
 			&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.TimeBasis, &t.SourceType, &t.SourceDetail,
-			&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
+			&t.AssignedTo, &t.AssignedBy, &t.AssignmentStatus, &t.ExecutionStatus, &t.Status, &t.DueDate, &t.CompletedAt,
 			&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan task: %w", err)
@@ -2459,7 +2479,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	query := `
 		SELECT rt.id, rt.tenant_id, rt.recording_id, rt.source_type AS task_type, rt.title, rt.description,
 		       rt.customer_name, COALESCE(NULLIF(rt.customer_phone, ''), c.phone), rt.priority, rt.script, rt.contact_reason, rt.background, rt.evidence, rt.contact_method, rt.doctor_name, rt.task_category, rt.anonymous_patient, rt.patient_age, rt.patient_gender, rt.phone_script, rt.wechat_content, rt.execution_result, rt.execution_difficulty, rt.doctor_escalation, rt.escalation_status, rt.escalation_resolution, rt.next_contact_at, rt.patient_replied, rt.revisit_attended, rt.issue_resolved, rt.patient_understanding, rt.time_basis, rt.source_type, rt.source_detail,
-		       rt.assigned_to, NULL::bigint AS assigned_by,
+		       rt.assigned_to, NULL::bigint AS assigned_by, rt.assignment_status, rt.execution_status,
 		       rt.status, rt.due_at AS due_date, rt.completed_at, NULL::bigint AS completed_by,
 		       NULL::timestamp AS cancelled_at, NULL::text AS cancel_reason,
 		       rt.returned_at, rt.returned_by, rt.return_reason, rt.created_at, rt.updated_at
@@ -2481,7 +2501,7 @@ func (s *Store) GetTaskByID(ctx context.Context, id int64, followupOnly bool) (*
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&t.ID, &t.TenantID, &t.RecordingID, &t.TaskType, &t.Title, &t.Description,
 		&t.CustomerName, &t.CustomerPhone, &t.Priority, &t.Script, &t.ContactReason, &t.Background, &t.Evidence, &t.ContactMethod, &t.DoctorName, &t.TaskCategory, &t.AnonymousPatient, &t.PatientAge, &t.PatientGender, &t.PhoneScript, &t.WechatContent, &t.ExecutionResult, &t.ExecutionDifficulty, &t.DoctorEscalation, &t.EscalationStatus, &t.EscalationResolution, &t.NextContactAt, &t.PatientReplied, &t.RevisitAttended, &t.IssueResolved, &t.PatientUnderstanding, &t.TimeBasis, &t.SourceType, &t.SourceDetail,
-		&t.AssignedTo, &t.AssignedBy, &t.Status, &t.DueDate, &t.CompletedAt,
+		&t.AssignedTo, &t.AssignedBy, &t.AssignmentStatus, &t.ExecutionStatus, &t.Status, &t.DueDate, &t.CompletedAt,
 		&t.CompletedBy, &t.CancelledAt, &t.CancelReason, &t.ReturnedAt, &t.ReturnedBy, &t.ReturnReason, &t.CreatedAt, &t.UpdatedAt,
 	)
 
@@ -2544,7 +2564,7 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 			}
 		}
 		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
-			if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET status='pending', completed_at=NULL, due_at=$1 WHERE id=$2`, req.NextContactAt, id); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET status=CASE WHEN source_type IN ('follow_up','followup') THEN 'to_execute' ELSE 'pending' END, completed_at=NULL, due_at=$1 WHERE id=$2`, req.NextContactAt, id); err != nil {
 				return err
 			}
 		}
@@ -2672,13 +2692,15 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*) AS total_tasks,
-			COUNT(CASE WHEN t.status = 'pending' THEN 1 END) AS pending_tasks,
-			COUNT(CASE WHEN t.status = 'assigned' THEN 1 END) AS assigned_tasks,
-			COUNT(CASE WHEN t.status = 'completed' THEN 1 END) AS completed_tasks,
-			COUNT(CASE WHEN t.status = 'cancelled' THEN 1 END) AS cancelled_tasks,
-			COUNT(CASE WHEN t.status = 'returned' THEN 1 END) AS returned_tasks,
+			COUNT(CASE WHEN t.source_type IN ('follow_up','followup') AND t.assignment_status = 'executor_unassigned' AND t.execution_status = 'to_execute' THEN 1 WHEN t.source_type NOT IN ('follow_up','followup') AND t.status = 'pending' THEN 1 END) AS pending_tasks,
+            COUNT(CASE WHEN t.source_type IN ('follow_up','followup') AND t.assignment_status = 'executor_assigned' AND t.execution_status = 'to_execute' THEN 1 WHEN t.source_type NOT IN ('follow_up','followup') AND t.status = 'assigned' THEN 1 END) AS assigned_tasks,
+            COUNT(CASE WHEN t.assignment_status = 'executor_unassigned' AND t.execution_status = 'to_execute' THEN 1 END) AS executor_unassigned_tasks,
+			COUNT(CASE WHEN t.assignment_status = 'executor_assigned' AND t.execution_status = 'to_execute' THEN 1 END) AS executor_assigned_tasks,
+			COUNT(CASE WHEN t.source_type IN ('follow_up','followup') AND t.execution_status = 'completed' OR t.source_type NOT IN ('follow_up','followup') AND t.status = 'completed' THEN 1 END) AS completed_tasks,
+			COUNT(CASE WHEN t.source_type IN ('follow_up','followup') AND t.execution_status = 'cancelled' OR t.source_type NOT IN ('follow_up','followup') AND t.status = 'cancelled' THEN 1 END) AS cancelled_tasks,
+			COUNT(CASE WHEN t.source_type IN ('follow_up','followup') AND t.execution_status = 'returned' OR t.source_type NOT IN ('follow_up','followup') AND t.status = 'returned' THEN 1 END) AS returned_tasks,
 			COUNT(CASE
-				WHEN t.due_at < NOW() AND t.status NOT IN ('completed', 'cancelled', 'returned')
+				WHEN t.due_at < NOW() AND ((t.source_type IN ('follow_up','followup') AND t.execution_status = 'to_execute') OR (t.source_type NOT IN ('follow_up','followup') AND t.status IN ('pending','assigned')))
 				THEN 1
 			END) AS overdue_tasks,
 			COUNT(CASE WHEN t.execution_result = 'connected' THEN 1 END) AS connected_tasks,
@@ -2707,6 +2729,8 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		&stats.TotalTasks,
 		&stats.PendingTasks,
 		&stats.AssignedTasks,
+		&stats.ExecutorUnassignedTasks,
+		&stats.ExecutorAssignedTasks,
 		&stats.CompletedTasks,
 		&stats.CancelledTasks,
 		&stats.ReturnedTasks,
@@ -2716,6 +2740,12 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		&stats.EscalatedTasks,
 	); err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
+	}
+	if followupOnly {
+		// 随访接口只暴露“执行人是否指定”和“执行生命周期”语义，
+		// 不再返回旧 pending/assigned 统计字段。
+		stats.PendingTasks = 0
+		stats.AssignedTasks = 0
 	}
 	if stats.TotalTasks > 0 {
 		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
@@ -2938,12 +2968,12 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(CASE WHEN created_at >= $%d AND created_at < $%d THEN 1 END) AS today_tasks,
-			COUNT(CASE WHEN status = 'completed' AND completed_at >= $%d AND completed_at < $%d THEN 1 END) AS completed_tasks,
-			COUNT(CASE WHEN status IN ('pending', 'assigned') THEN 1 END) AS pending_tasks,
+			COUNT(CASE WHEN ((source_type IN ('follow_up','followup') AND execution_status = 'completed') OR (source_type NOT IN ('follow_up','followup') AND status = 'completed')) AND completed_at >= $%d AND completed_at < $%d THEN 1 END) AS completed_tasks,
+			COUNT(CASE WHEN (source_type IN ('follow_up','followup') AND execution_status = 'to_execute') OR (source_type NOT IN ('follow_up','followup') AND status IN ('pending','assigned')) THEN 1 END) AS to_execute_tasks,
 			COUNT(CASE
 				WHEN due_at IS NOT NULL
 					AND due_at < $%d
-					AND status IN ('pending', 'assigned')
+					AND ((source_type IN ('follow_up','followup') AND execution_status = 'to_execute') OR (source_type NOT IN ('follow_up','followup') AND status IN ('pending','assigned')))
 				THEN 1
 			END) AS high_priority_tasks
 		FROM recording_tasks
@@ -2953,22 +2983,24 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	briefing := &DailyBriefingResponse{
 		Date: dayStart.Format("2006-01-02"),
 	}
+	var toExecuteTasks int64
 	if err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&briefing.TodayTasks,
 		&briefing.CompletedTasks,
-		&briefing.PendingTasks,
+		&toExecuteTasks,
 		&briefing.HighPriorityTasks,
 	); err != nil {
 		return nil, fmt.Errorf("failed to get daily briefing: %w", err)
 	}
-
-	briefing.Summary = fmt.Sprintf(
-		"今日新增%d项任务，完成%d项，待处理%d项，高优先级%d项。",
-		briefing.TodayTasks,
-		briefing.CompletedTasks,
-		briefing.PendingTasks,
-		briefing.HighPriorityTasks,
-	)
+	briefing.ToExecuteTasks = toExecuteTasks
+	if !followupOnly {
+		briefing.PendingTasks = toExecuteTasks
+	}
+	if followupOnly {
+		briefing.Summary = fmt.Sprintf("今日新增%d项任务，完成%d项，待执行%d项，高优先级%d项。", briefing.TodayTasks, briefing.CompletedTasks, toExecuteTasks, briefing.HighPriorityTasks)
+	} else {
+		briefing.Summary = fmt.Sprintf("今日新增%d项任务，完成%d项，待处理%d项，高优先级%d项。", briefing.TodayTasks, briefing.CompletedTasks, toExecuteTasks, briefing.HighPriorityTasks)
+	}
 
 	return briefing, nil
 }

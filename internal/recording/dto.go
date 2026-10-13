@@ -1048,29 +1048,31 @@ type RecordingAnalysisSettingsResponse struct {
 
 // RecordingTaskStatsResponse represents task statistics
 type RecordingTaskStatsResponse struct {
-	TotalTasks            int64            `json:"total_tasks"`
-	PendingTasks          int64            `json:"pending_tasks"`
-	AssignedTasks         int64            `json:"assigned_tasks"`
-	CompletedTasks        int64            `json:"completed_tasks"`
-	CancelledTasks        int64            `json:"cancelled_tasks"`
-	ReturnedTasks         int64            `json:"returned_tasks"`
-	OverdueTasks          int64            `json:"overdue_tasks"`
-	ConnectedTasks        int64            `json:"connected_tasks"`
-	HelpNeededTasks       int64            `json:"help_needed_tasks"`
-	EscalatedTasks        int64            `json:"escalated_tasks"`
-	PendingEscalations    int64            `json:"pending_escalations"`
-	CompletionRate        float64          `json:"completion_rate"`
-	ContactableTasks      int64            `json:"contactable_tasks"`
-	ConnectionRate        float64          `json:"connection_rate"`
-	HelpRate              float64          `json:"help_rate"`
-	EscalationResolveRate float64          `json:"escalation_resolve_rate"`
-	PatientReplyRate      float64          `json:"patient_reply_rate"`
-	RevisitAttendanceRate float64          `json:"revisit_attendance_rate"`
-	IssueResolutionRate   float64          `json:"issue_resolution_rate"`
-	ByTaskCategory        map[string]int64 `json:"by_task_category,omitempty"`
-	AnonymousTasks        int64            `json:"anonymous_tasks"`
-	ByPriority            map[string]int64 `json:"by_priority,omitempty"`
-	ByRecordingRole       map[string]int64 `json:"by_recording_role,omitempty"`
+	PendingTasks            int64            `json:"pending_tasks,omitempty"`
+	AssignedTasks           int64            `json:"assigned_tasks,omitempty"`
+	TotalTasks              int64            `json:"total_tasks"`
+	ExecutorUnassignedTasks int64            `json:"executor_unassigned_tasks"`
+	ExecutorAssignedTasks   int64            `json:"executor_assigned_tasks"`
+	CompletedTasks          int64            `json:"completed_tasks"`
+	CancelledTasks          int64            `json:"cancelled_tasks"`
+	ReturnedTasks           int64            `json:"returned_tasks"`
+	OverdueTasks            int64            `json:"overdue_tasks"`
+	ConnectedTasks          int64            `json:"connected_tasks"`
+	HelpNeededTasks         int64            `json:"help_needed_tasks"`
+	EscalatedTasks          int64            `json:"escalated_tasks"`
+	PendingEscalations      int64            `json:"pending_escalations"`
+	CompletionRate          float64          `json:"completion_rate"`
+	ContactableTasks        int64            `json:"contactable_tasks"`
+	ConnectionRate          float64          `json:"connection_rate"`
+	HelpRate                float64          `json:"help_rate"`
+	EscalationResolveRate   float64          `json:"escalation_resolve_rate"`
+	PatientReplyRate        float64          `json:"patient_reply_rate"`
+	RevisitAttendanceRate   float64          `json:"revisit_attendance_rate"`
+	IssueResolutionRate     float64          `json:"issue_resolution_rate"`
+	ByTaskCategory          map[string]int64 `json:"by_task_category,omitempty"`
+	AnonymousTasks          int64            `json:"anonymous_tasks"`
+	ByPriority              map[string]int64 `json:"by_priority,omitempty"`
+	ByRecordingRole         map[string]int64 `json:"by_recording_role,omitempty"`
 }
 
 // DailyBriefingResponse represents daily briefing
@@ -1078,7 +1080,8 @@ type DailyBriefingResponse struct {
 	Date              string `json:"date"`
 	TodayTasks        int64  `json:"today_tasks"`
 	CompletedTasks    int64  `json:"completed_tasks"`
-	PendingTasks      int64  `json:"pending_tasks"`
+	PendingTasks      int64  `json:"pending_tasks,omitempty"`
+	ToExecuteTasks    int64  `json:"to_execute_tasks"`
 	HighPriorityTasks int64  `json:"high_priority_tasks"`
 	Summary           string `json:"summary"`
 }
@@ -1093,6 +1096,9 @@ type TaskListRequest struct {
 	ViewerEmployeeID *int64      `json:"viewer_employee_id,omitempty"`
 	RecordingID      *int64      `json:"recording_id,omitempty"`
 	AssignedTo       *int64      `json:"assigned_to,omitempty"`
+	AssignmentStatus *string     `json:"assignment_status,omitempty"`
+	ExecutionStatus  *string     `json:"execution_status,omitempty"`
+	IsOverdue        *bool       `json:"is_overdue,omitempty"`
 	Status           *TaskStatus `json:"status,omitempty"`
 	TaskType         *TaskType   `json:"task_type,omitempty"`
 	Keyword          *string     `json:"keyword,omitempty"`
@@ -1146,10 +1152,13 @@ type TaskResponse struct {
 	AssignedTo            *int64  `json:"assigned_to,omitempty"`
 	AssignedToName        *string `json:"assigned_to_name,omitempty"`
 	AssignedBy            *int64  `json:"assigned_by,omitempty"`
+	AssignmentStatus      *string `json:"assignment_status,omitempty"`
+	ExecutionStatus       *string `json:"execution_status,omitempty"`
+	IsOverdue             bool    `json:"is_overdue"`
 	RecordingRoleCategory *string `json:"recording_role_category,omitempty"`
 	RecordingRoleLabel    *string `json:"recording_role_label,omitempty"`
 	RecordingOwnerName    *string `json:"recording_owner_name,omitempty"`
-	Status                string  `json:"status"`
+	Status                string  `json:"status,omitempty"`
 	DueDate               *string `json:"due_date,omitempty"`
 	DueAt                 *string `json:"due_at,omitempty"`
 	CompletedAt           *string `json:"completed_at,omitempty"`

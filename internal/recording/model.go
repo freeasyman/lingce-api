@@ -52,6 +52,7 @@ type TaskStatus string
 const (
 	TaskStatusPending   TaskStatus = "pending"
 	TaskStatusAssigned  TaskStatus = "assigned"
+	TaskStatusToExecute TaskStatus = "to_execute"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusCancelled TaskStatus = "cancelled"
 	// TaskStatusReturned 表示一线执行人员认为任务不合适或无法执行，将任务退回处理。
@@ -144,6 +145,9 @@ type RecordingTask struct {
 	SourceDetail         *string    `json:"source_detail,omitempty"`
 	AssignedTo           *int64     `json:"assigned_to,omitempty"`
 	AssignedBy           *int64     `json:"assigned_by,omitempty"`
+	AssignmentStatus     *string    `json:"assignment_status,omitempty"`
+	ExecutionStatus      *string    `json:"execution_status,omitempty"`
+	IsOverdue            bool       `json:"is_overdue"`
 	Status               TaskStatus `json:"status"`
 	DueDate              *time.Time `json:"due_date,omitempty"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`

@@ -208,6 +208,16 @@ func (h *Handler) GetMyTasks(w http.ResponseWriter, r *http.Request) {
 		status := TaskStatus(statusStr)
 		req.Status = &status
 	}
+	if value := strings.TrimSpace(r.URL.Query().Get("assignment_status")); value != "" {
+		req.AssignmentStatus = &value
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("execution_status")); value != "" {
+		req.ExecutionStatus = &value
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("is_overdue")); value != "" {
+		parsed := value == "true" || value == "1"
+		req.IsOverdue = &parsed
+	}
 	if sort := strings.TrimSpace(r.URL.Query().Get("sort")); sort != "" {
 		req.Sort = &sort
 	}
@@ -553,8 +563,8 @@ func (h *Handler) BatchAssignTasks(w http.ResponseWriter, r *http.Request) {
 			UPDATE recording_tasks
 			SET assigned_to = $1,
 			    assigned_by = $2,
-			    status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END,
-			    updated_at = NOW()
+                status = CASE WHEN source_type NOT IN ('follow_up','followup') AND status = 'pending' THEN 'assigned' ELSE status END,
+			updated_at = NOW()
 			WHERE id = $3 AND tenant_id = $4
 		`, req.AssignedTo, "manual", id, tenantID)
 		if err != nil {
@@ -682,10 +692,10 @@ func (h *Handler) CreateEmployeePartnership(w http.ResponseWriter, r *http.Reque
 		UPDATE recording_tasks
 		SET assigned_to = $3,
 		    assigned_by = 'partnership',
-		    status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END,
+            status = CASE WHEN source_type NOT IN ('follow_up','followup') AND status = 'pending' THEN 'assigned' ELSE status END,
 		    updated_at = NOW()
-		WHERE tenant_id = $1
-		  AND status IN ('pending', 'assigned', 'overdue')
+			WHERE tenant_id = $1
+		  AND status IN ('to_execute','pending','assigned','overdue')
 		  AND (assigned_to IS NULL OR assigned_to = $2)
 		  AND EXISTS (
 			SELECT 1

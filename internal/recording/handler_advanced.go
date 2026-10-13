@@ -1459,7 +1459,7 @@ func (h *Handler) ConfirmFollowUpAction(w http.ResponseWriter, r *http.Request) 
 	result, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE recording_tasks
 		SET status = 'completed', completed_at = NOW(), feedback = CONCAT(COALESCE(feedback, ''), CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END, 'completed_by=', $1::text, E'\n', 'action_note=', $2), updated_at = NOW()
-		WHERE recording_id = $3 AND source_type = 'follow_up' AND status IN ('pending', 'assigned')
+		WHERE recording_id = $3 AND source_type = 'follow_up' AND execution_status = 'to_execute'
 	`, claims.UserID, note, id)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())

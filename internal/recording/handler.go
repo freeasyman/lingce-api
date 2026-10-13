@@ -969,6 +969,16 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 		status := TaskStatus(statusStr)
 		req.Status = &status
 	}
+	if value := strings.TrimSpace(r.URL.Query().Get("assignment_status")); value != "" {
+		req.AssignmentStatus = &value
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("execution_status")); value != "" {
+		req.ExecutionStatus = &value
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get("is_overdue")); value != "" {
+		parsed := value == "true" || value == "1"
+		req.IsOverdue = &parsed
+	}
 
 	if taskTypeStr := r.URL.Query().Get("task_type"); taskTypeStr != "" {
 		taskType := TaskType(taskTypeStr)

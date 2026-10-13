@@ -975,7 +975,7 @@ func (s *Service) persistGeneratedTasks(ctx context.Context, req GenerateRequest
 			)
 			VALUES (
 				$1, $2, $3, $4,
-				$5, NULLIF($6, ''), $7, NULLIF($8, ''), 'pending', 'medium', $9,
+				$5, NULLIF($6, ''), $7, NULLIF($8, ''), 'to_execute', 'medium', $9,
 				'follow_up', 'followup.task-generation', NULLIF($10, ''), $11,
 				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
 				NULLIF($15, ''), NULLIF($16, ''),
@@ -1109,7 +1109,7 @@ func deleteLegacyPendingWorkerTasks(ctx context.Context, tx pgx.Tx, tenantID, re
 		    'consultant_conversion_analysis_v1',
 		    'therapist_reset_analysis'
 		  )
-		  AND status IN ('pending', 'assigned')
+		  AND (execution_status = 'to_execute' OR status IN ('pending', 'assigned'))
 	`, tenantID, recordingID)
 	if err != nil {
 		return fmt.Errorf("delete replaced legacy worker followup tasks: %w", err)
