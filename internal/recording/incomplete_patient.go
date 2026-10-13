@@ -76,13 +76,13 @@ func (s *Store) CompletePatient(ctx context.Context, tenantID, id int64, req Com
 	if err = tx.QueryRow(ctx, `SELECT customer_id FROM recording_tasks WHERE id=$1 AND tenant_id=$2 AND source_type IN ('follow_up','followup') AND status NOT IN ('completed','cancelled') AND (anonymous_patient=true OR NULLIF(trim(customer_name),'') IS NULL OR NULLIF(trim(COALESCE(customer_phone,'')),'') IS NULL) FOR UPDATE`, id, tenantID).Scan(&customerID); err != nil {
 		return fmt.Errorf("task not found: %w", err)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE customers SET name=NULLIF($1,''),phone=NULLIF($2,''),age=$3,gender=$4,extra_data=COALESCE(extra_data,'{}'::jsonb)-'anonymous' WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, customerID, tenantID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE customers SET name=NULLIF($1::text,''),phone=NULLIF($2::text,''),age=$3::integer,gender=$4::text,extra_data=COALESCE(extra_data,'{}'::jsonb)-'anonymous' WHERE id=$5::bigint AND tenant_id=$6::bigint`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, customerID, tenantID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE recording_tasks SET customer_name=$1,customer_phone=$2,patient_age=$3,patient_gender=$4,anonymous_patient=false,updated_at=NOW() WHERE id=$5 AND tenant_id=$6`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE recording_tasks SET customer_name=$1::text,customer_phone=$2::text,patient_age=$3::integer,patient_gender=$4::text,anonymous_patient=false,updated_at=NOW() WHERE id=$5::bigint AND tenant_id=$6::bigint`, strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), req.Age, req.Gender, id, tenantID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'patient_promoted',jsonb_build_object('customer_id',$3,'age',$4,'gender',$5,'actor_id',$6))`, tenantID, id, customerID, req.Age, req.Gender, actorID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1::bigint,$2::bigint,'patient_promoted',jsonb_build_object('customer_id',$3::bigint,'age',$4::integer,'gender',$5::text,'actor_id',$6::bigint))`, tenantID, id, customerID, req.Age, req.Gender, actorID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -101,7 +101,7 @@ func (s *Store) AbandonIncompletePatient(ctx context.Context, tenantID, id, acto
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1,$2,'incomplete_abandoned',jsonb_build_object('reason',$3,'actor_id',$4))`, tenantID, id, reason, actorID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) VALUES($1::bigint,$2::bigint,'incomplete_abandoned',jsonb_build_object('reason',$3::text,'actor_id',$4::bigint))`, tenantID, id, reason, actorID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
