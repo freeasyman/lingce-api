@@ -51,7 +51,7 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 	if source == "" {
 		source = "social_media"
 	}
-	if err := tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,source,lifecycle_stage,status,momentum,created_by,created_at,updated_at,extra_data) VALUES($1,$2,$3,'unknown','lead',50,$4,NOW(),NOW(),jsonb_build_object('prospect',true,'social_account',$5)) RETURNING id`, tenantID, strings.TrimSpace(req.Name), source, employeeID, strings.TrimSpace(req.Account)).Scan(&customerID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,source,lifecycle_stage,status,momentum,created_by,created_at,updated_at,extra_data) VALUES($1,$2,$3,'unknown','lead',50,$4,NOW(),NOW(),jsonb_build_object('prospect',true,'social_account',$5::text)) RETURNING id`, tenantID, strings.TrimSpace(req.Name), source, employeeID, strings.TrimSpace(req.Account)).Scan(&customerID); err != nil {
 		return 0, fmt.Errorf("create prospect: %w", err)
 	}
 	if strings.TrimSpace(req.Account) != "" {
