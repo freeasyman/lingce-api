@@ -14,7 +14,7 @@ SET channel = COALESCE(NULLIF(channel, ''), channel_type),
     channel_id = COALESCE(NULLIF(channel_id, ''), external_id),
     nickname = COALESCE(NULLIF(nickname, ''), external_name),
     avatar = COALESCE(NULLIF(avatar, ''), external_avatar),
-    extra_data = COALESCE(extra_data, metadata_json::jsonb, '{}'::jsonb),
+    extra_data = COALESCE(extra_data, '{}'::jsonb),
     updated_at = COALESCE(updated_at, created_at, NOW())
 WHERE channel IS NULL
    OR channel_id IS NULL
@@ -36,8 +36,7 @@ BEGIN
     NEW.external_name = COALESCE(NULLIF(NEW.external_name, ''), NEW.nickname);
     NEW.avatar = COALESCE(NULLIF(NEW.avatar, ''), NEW.external_avatar);
     NEW.external_avatar = COALESCE(NULLIF(NEW.external_avatar, ''), NEW.avatar);
-    NEW.extra_data = COALESCE(NEW.extra_data, COALESCE(NEW.metadata_json::jsonb, '{}'::jsonb));
-    NEW.metadata_json = COALESCE(NEW.metadata_json, NEW.extra_data::json);
+    NEW.extra_data = COALESCE(NEW.extra_data, '{}'::jsonb);
     NEW.updated_at = COALESCE(NEW.updated_at, NOW());
     IF NEW.created_at IS NULL THEN
         NEW.created_at = NOW();
