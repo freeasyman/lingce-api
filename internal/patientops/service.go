@@ -122,7 +122,7 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	return &ActionResponse{RecordID: id, Status: "saved"}, nil
 }
 
-const screenshotPrompt = `你是医疗机构患者运营助手。请直接阅读这张患者沟通截图，一次完成图片理解、文字识别和运营分析。不要输出 OCR 中间结果，不要臆测未出现的事实。只输出 JSON，字段必须完整：platform, account, patient_utterances(string[]), patient_question, concern, decision_maker, product_interest(string[]), suggested_icebreaker, suggested_reply, next_action, next_contact_at, evidence(string[])。patient_utterances 和 evidence 必须尽量引用图片中可见原话；无法判断的字段用空字符串或空数组。不得把“可能预约/购买/到院”写成已发生事实。`
+const screenshotPrompt = `你是医疗机构患者运营助手。请直接阅读这张患者沟通截图，一次完成图片理解、文字识别和运营分析。不要输出 OCR 中间结果，不要臆测未出现的事实。只输出 JSON，字段必须完整：platform, account, nickname, patient_utterances(string[]), patient_question, concern, decision_maker, product_interest(string[]), suggested_icebreaker, suggested_reply, next_action, next_contact_at, evidence(string[])。platform 是截图所属平台，account 是可见平台账号，nickname 是可见昵称；patient_utterances 和 evidence 必须尽量引用图片中可见原话；无法判断的字段用空字符串或空数组。不得把“可能预约/购买/到院”写成已发生事实。`
 
 func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRequest) (*ScreenshotAnalyzeResponse, error) {
 	if s.pool == nil || s.llm == nil {
@@ -151,7 +151,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 	if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET recognition_payload=$1::jsonb, updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, payload, sourceID, req.TenantID); err != nil {
 		return nil, fmt.Errorf("save screenshot analysis: %w", err)
 	}
-	candidates, err := s.findCandidates(ctx, req.TenantID, analysis.Account, analysis.PatientUtterances)
+	candidates, err := s.findCandidates(ctx, req.TenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
 	if err != nil {
 		return nil, err
 	}
@@ -170,12 +170,14 @@ func matchStatus(v *int64) string {
 	}
 	return "pending"
 }
-func (s *Service) findCandidates(ctx context.Context, tenantID int64, account string, utterances []string) ([]CustomerCandidate, error) {
-	q := strings.TrimSpace(account)
-	if len(q) == 0 && len(utterances) > 0 {
-		q = utterances[0]
+func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, nickname string, utterances []string) ([]CustomerCandidate, error) {
+	account = strings.TrimSpace(account)
+	nickname = strings.TrimSpace(nickname)
+	utterance := ""
+	if len(utterances) > 0 {
+		utterance = strings.TrimSpace(utterances[0])
 	}
-	rows, err := s.pool.Query(ctx, `SELECT c.id,COALESCE(NULLIF(c.name,''),''),COALESCE(NULLIF(ci.nickname,''),''),COALESCE(NULLIF(c.phone,''),'') FROM customers c LEFT JOIN LATERAL (SELECT nickname FROM customer_identities WHERE customer_id=c.id ORDER BY updated_at DESC NULLS LAST LIMIT 1) ci ON TRUE WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND ($2='' OR c.name ILIKE '%'||$2||'%' OR ci.nickname ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%') ORDER BY c.updated_at DESC NULLS LAST LIMIT 10`, tenantID, q)
+	rows, err := s.pool.Query(ctx, `SELECT c.id,COALESCE(NULLIF(c.name,''),''),COALESCE(NULLIF(ci.nickname,''),''),COALESCE(NULLIF(c.phone,''),'') FROM customers c LEFT JOIN LATERAL (SELECT COALESCE(NULLIF(nickname,''),NULLIF(external_name,'')) AS nickname FROM customer_identities WHERE customer_id=c.id ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1) ci ON TRUE WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND (($2<>'' AND (c.name ILIKE '%'||$2||'%' OR ci.nickname ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%')) OR ($3<>'' AND (c.name ILIKE '%'||$3||'%' OR ci.nickname ILIKE '%'||$3||'%' OR c.phone ILIKE '%'||$3||'%')) OR ($4<>'' AND c.name ILIKE '%'||$4||'%')) ORDER BY c.updated_at DESC NULLS LAST LIMIT 10`, tenantID, account, nickname, utterance)
 	if err != nil {
 		return nil, fmt.Errorf("find customer candidates: %w", err)
 	}
