@@ -1,0 +1,151 @@
+package patientops
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/pkg/httputil"
+)
+
+type Handler struct{ service *Service }
+
+func NewHandler(s *Service) *Handler { return &Handler{service: s} }
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
+	router.Register(mux, []router.Route{
+		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/analyze", Handler: h.AnalyzeAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/confirm", Handler: h.ConfirmAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/prospect", Handler: h.CreateProspectAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/sources", Handler: h.ListCustomerSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
+	}, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *Handler) SaveActionAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	customerID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || customerID <= 0 {
+		httputil.WriteBadRequest(w, "invalid customer id")
+		return
+	}
+	var req ActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	result, err := h.service.SaveAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+func (h *Handler) CreateProspectAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	sourceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || sourceID <= 0 {
+		httputil.WriteBadRequest(w, "invalid source id")
+		return
+	}
+	var req CreateProspectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	customerID, err := h.service.CreateProspect(r.Context(), *claims.TenantID, claims.UserID, sourceID, req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"customer_id": customerID, "source_id": sourceID, "match_status": "confirmed"})
+}
+
+func (h *Handler) ListCustomerSources(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	customerID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || customerID <= 0 {
+		httputil.WriteBadRequest(w, "invalid customer id")
+		return
+	}
+	items, err := h.service.ListCustomerSources(r.Context(), *claims.TenantID, customerID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ConfirmAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	var req struct {
+		CustomerID int64 `json:"customer_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CustomerID <= 0 {
+		httputil.WriteBadRequest(w, "customer_id is required")
+		return
+	}
+	sourceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || sourceID <= 0 {
+		httputil.WriteBadRequest(w, "invalid source id")
+		return
+	}
+	if err := h.service.ConfirmScreenshot(r.Context(), *claims.TenantID, sourceID, req.CustomerID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"source_id": sourceID, "customer_id": req.CustomerID, "match_status": "confirmed"})
+}
+
+func (h *Handler) AnalyzeAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	var req ScreenshotAnalyzeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.TenantID = *claims.TenantID
+	req.EmployeeID = claims.UserID
+	h.analyze(w, r, req)
+}
+func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
+	var req ScreenshotAnalyzeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	h.analyze(w, r, req)
+}
+
+func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req ScreenshotAnalyzeRequest) {
+	resp, err := h.service.AnalyzeScreenshot(r.Context(), req)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
