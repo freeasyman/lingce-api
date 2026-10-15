@@ -146,6 +146,7 @@ func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID in
 		if err := json.Unmarshal(raw, &analysis); err != nil {
 			return nil, fmt.Errorf("parse screenshot analysis: %w", err)
 		}
+		analysis.Normalize()
 		status.Analysis = &analysis
 		status.Candidates, _ = s.findCandidates(ctx, tenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
 	}
@@ -200,6 +201,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			if err := json.Unmarshal(existingPayload, &existing.Analysis); err != nil {
 				return nil, fmt.Errorf("parse existing screenshot analysis: %w", err)
 			}
+			existing.Analysis.Normalize()
 			existing.Candidates, err = s.findCandidates(ctx, req.TenantID, existing.Analysis.Account, existing.Analysis.Nickname, existing.Analysis.PatientUtterances)
 			if err != nil {
 				return nil, err
@@ -230,6 +232,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 		var concurrentStatus string
 		if lookupErr := s.pool.QueryRow(ctx, `SELECT id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2`, req.TenantID, contentHash).Scan(&concurrent.SourceID, &concurrent.MatchStatus, &concurrentStatus, &concurrentPayload); lookupErr == nil {
 			if concurrentStatus == "succeeded" && len(concurrentPayload) > 0 && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
+				concurrent.Analysis.Normalize()
 				concurrent.Candidates, _ = s.findCandidates(ctx, req.TenantID, concurrent.Analysis.Account, concurrent.Analysis.Nickname, concurrent.Analysis.PatientUtterances)
 				return &concurrent, nil
 			}
@@ -267,6 +270,7 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 		slog.Error("patient screenshot analysis response parse failed", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
 		return nil, markFailed(fmt.Errorf("parse patient screenshot analysis (source_id=%d, response_bytes=%d): %w", sourceID, len(resp.Content), err))
 	}
+	analysis.Normalize()
 	payload, _ := json.Marshal(analysis)
 	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET recognition_payload=$1::jsonb,updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, payload, sourceID, req.TenantID); err != nil {
 		slog.Error("patient screenshot analysis persistence failed", "source_id", sourceID, "error", err)

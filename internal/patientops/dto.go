@@ -1,5 +1,45 @@
 package patientops
 
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// StringList accepts the two shapes returned by vision models: an array of
+// strings or a single string. The API exposes one stable array shape.
+type StringList []string
+
+func (s StringList) MarshalJSON() ([]byte, error) { return json.Marshal([]string(s)) }
+
+func (s *StringList) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if bytes.Equal(data, []byte("null")) || len(data) == 0 {
+		*s = nil
+		return nil
+	}
+	var values []string
+	if data[0] == '[' {
+		if err := json.Unmarshal(data, &values); err != nil {
+			return err
+		}
+		*s = values
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("expected string or array of strings: %w", err)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		*s = nil
+	} else {
+		*s = []string{value}
+	}
+	return nil
+}
+
 type ScreenshotAnalyzeRequest struct {
 	TenantID     int64  `json:"tenant_id"`
 	EmployeeID   int64  `json:"employee_id"`
@@ -15,21 +55,40 @@ type CreateProspectRequest struct {
 }
 
 type ScreenshotAnalysis struct {
-	ConversationSummary string   `json:"conversation_summary"`
-	Platform            string   `json:"platform"`
-	Account             string   `json:"account"`
-	Nickname            string   `json:"nickname"`
-	PatientUtterances   []string `json:"patient_utterances"`
-	PatientQuestion     string   `json:"patient_question"`
-	Concern             string   `json:"concern"`
-	DecisionMaker       string   `json:"decision_maker"`
-	ProductInterest     []string `json:"product_interest"`
-	SuggestedIcebreaker string   `json:"suggested_icebreaker"`
-	SuggestedReply      string   `json:"suggested_reply"`
-	NextAction          string   `json:"next_action"`
-	NextContactAt       string   `json:"next_contact_at"`
-	Evidence            []string `json:"evidence"`
+	ConversationSummary string     `json:"conversation_summary"`
+	Platform            string     `json:"platform"`
+	Account             string     `json:"account"`
+	Nickname            string     `json:"nickname"`
+	PatientUtterances   StringList `json:"patient_utterances"`
+	PatientQuestion     string     `json:"patient_question"`
+	Concern             string     `json:"concern"`
+	DecisionMaker       string     `json:"decision_maker"`
+	ProductInterest     StringList `json:"product_interest"`
+	SuggestedIcebreaker string     `json:"suggested_icebreaker"`
+	SuggestedReply      string     `json:"suggested_reply"`
+	NextAction          string     `json:"next_action"`
+	NextContactAt       string     `json:"next_contact_at"`
+	Evidence            StringList `json:"evidence"`
 }
+
+func (a *ScreenshotAnalysis) Normalize() {
+	a.PatientUtterances = cleanStringList(a.PatientUtterances)
+	a.ProductInterest = cleanStringList(a.ProductInterest)
+	a.Evidence = cleanStringList(a.Evidence)
+}
+
+func cleanStringList(values StringList) StringList {
+	result := make(StringList, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+// Compile-time assertion documents that StringList remains assignable to the
+// existing []string call sites through its defined slice type.
 
 type CustomerCandidate struct {
 	ID       int64  `json:"id"`
