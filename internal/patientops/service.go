@@ -50,6 +50,17 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	var existingCustomerID *int64
+	var existingMatchStatus string
+	if err := tx.QueryRow(ctx, `SELECT customer_id,match_status FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, sourceID).Scan(&existingCustomerID, &existingMatchStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("screenshot source not found")
+		}
+		return 0, fmt.Errorf("lock screenshot source: %w", err)
+	}
+	if existingCustomerID != nil && (existingMatchStatus == "confirmed" || *existingCustomerID > 0) {
+		return *existingCustomerID, nil
+	}
 	var customerID int64
 	source := strings.TrimSpace(req.Platform)
 	if source == "" {
