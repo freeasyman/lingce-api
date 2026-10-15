@@ -31,7 +31,8 @@ func (s *Service) ConfirmScreenshot(ctx context.Context, tenantID, sourceID, cus
 	result, err := s.pool.Exec(ctx, `
 		UPDATE patient_conversation_sources
 		SET customer_id=$1, match_status='confirmed', updated_at=NOW()
-		WHERE tenant_id=$2 AND id=$3`, customerID, tenantID, sourceID)
+		WHERE tenant_id=$2 AND id=$3
+		  AND EXISTS (SELECT 1 FROM customers c WHERE c.id=$1 AND c.tenant_id=$2)`, customerID, tenantID, sourceID)
 	if err != nil {
 		return fmt.Errorf("confirm screenshot customer: %w", err)
 	}
@@ -74,7 +75,7 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 			return 0, fmt.Errorf("create prospect identity: %w", err)
 		}
 	}
-	result, err := tx.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3`, customerID, tenantID, sourceID)
+	result, err := tx.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3 AND EXISTS (SELECT 1 FROM customers c WHERE c.id=$1 AND c.tenant_id=$2)`, customerID, tenantID, sourceID)
 	if err != nil {
 		return 0, err
 	}
@@ -104,6 +105,30 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 		item.CapturedAt = capturedAt.Format(time.RFC3339)
 		if len(raw) > 0 {
 			_ = json.Unmarshal(raw, &item.Recognition)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]ConversationSourceResponse, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY captured_at DESC,id DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
+	}
+	defer rows.Close()
+	items := []ConversationSourceResponse{}
+	for rows.Next() {
+		var item ConversationSourceResponse
+		var capturedAt time.Time
+		var raw []byte
+		if err := rows.Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw); err != nil {
+			return nil, err
+		}
+		item.CapturedAt = capturedAt.Format(time.RFC3339)
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &item.Recognition)
+			item.Recognition.Normalize()
 		}
 		items = append(items, item)
 	}
