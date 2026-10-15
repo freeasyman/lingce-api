@@ -15,6 +15,7 @@ type CreateProspectRequest struct {
 }
 
 type ScreenshotAnalysis struct {
+	ConversationSummary string   `json:"conversation_summary"`
 	Platform            string   `json:"platform"`
 	Account             string   `json:"account"`
 	Nickname            string   `json:"nickname"`

@@ -2,6 +2,7 @@ package patientops
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -144,6 +145,7 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req ScreenshotAnalyzeRequest) {
 	resp, err := h.service.AnalyzeScreenshot(r.Context(), req)
 	if err != nil {
+		slog.Error("patient screenshot analyze failed", "tenant_id", req.TenantID, "employee_id", req.EmployeeID, "error", err)
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

@@ -2,12 +2,16 @@ package patientops
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -122,8 +126,6 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	return &ActionResponse{RecordID: id, Status: "saved"}, nil
 }
 
-const screenshotPrompt = `你是医疗机构患者运营助手。请直接阅读这张患者沟通截图，一次完成图片理解、文字识别和运营分析。不要输出 OCR 中间结果，不要臆测未出现的事实。只输出 JSON，字段必须完整：platform, account, nickname, patient_utterances(string[]), patient_question, concern, decision_maker, product_interest(string[]), suggested_icebreaker, suggested_reply, next_action, next_contact_at, evidence(string[])。platform 是截图所属平台，account 是可见平台账号，nickname 是可见昵称；patient_utterances 和 evidence 必须尽量引用图片中可见原话；无法判断的字段用空字符串或空数组。不得把“可能预约/购买/到院”写成已发生事实。`
-
 func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRequest) (*ScreenshotAnalyzeResponse, error) {
 	if s.pool == nil || s.llm == nil {
 		return nil, fmt.Errorf("patient operations dependencies are not configured")
@@ -134,28 +136,113 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 	if !strings.HasPrefix(req.ImageData, "data:image/") {
 		return nil, fmt.Errorf("image_data must be a data image URL")
 	}
+	contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.ImageData)))
+	var existing ScreenshotAnalyzeResponse
+	var existingPayload []byte
+	var existingCustomerID *int64
+	var existingStatus string
+	err := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2 LIMIT 1`, req.TenantID, contentHash).Scan(&existing.SourceID, &existingCustomerID, &existing.MatchStatus, &existingStatus, &existingPayload)
+	if err == nil {
+		if existingStatus == "succeeded" && len(existingPayload) > 0 && string(existingPayload) != "{}" {
+			if err := json.Unmarshal(existingPayload, &existing.Analysis); err != nil {
+				return nil, fmt.Errorf("parse existing screenshot analysis: %w", err)
+			}
+			existing.Candidates, err = s.findCandidates(ctx, req.TenantID, existing.Analysis.Account, existing.Analysis.Nickname, existing.Analysis.PatientUtterances)
+			if err != nil {
+				return nil, err
+			}
+			return &existing, nil
+		}
+		if existingStatus == "processing" || existingStatus == "pending" {
+			return nil, fmt.Errorf("screenshot analysis already in progress (source_id=%d)", existing.SourceID)
+		}
+		if existingStatus == "failed" {
+			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET original_name=$1,media_data=$2,created_by=$3,customer_id=$4,recognition_payload='{}'::jsonb,analysis_status='processing',analysis_error='',analysis_started_at=NOW(),analysis_completed_at=NULL,updated_at=NOW() WHERE tenant_id=$5 AND id=$6`, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, req.TenantID, existing.SourceID); err != nil {
+				return nil, fmt.Errorf("restart failed screenshot analysis: %w", err)
+			}
+			return s.analyzeScreenshotSource(ctx, req, existing.SourceID)
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("find duplicate screenshot source: %w", err)
+	}
 	var sourceID int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO patient_conversation_sources(tenant_id,source_type,original_name,media_data,created_by,customer_id) VALUES($1,'screenshot',$2,$3,$4,$5) RETURNING id`, req.TenantID, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID).Scan(&sourceID)
+	err = s.pool.QueryRow(ctx, `INSERT INTO patient_conversation_sources(tenant_id,source_type,original_name,media_data,created_by,customer_id,content_hash,analysis_status,analysis_started_at) VALUES($1,'screenshot',$2,$3,$4,$5,$6,'processing',NOW()) RETURNING id`, req.TenantID, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, contentHash).Scan(&sourceID)
 	if err != nil {
+		// A concurrent identical request may have won the insert race. Return
+		// its current state instead of creating a second source.
+		var concurrent ScreenshotAnalyzeResponse
+		var concurrentPayload []byte
+		var concurrentStatus string
+		if lookupErr := s.pool.QueryRow(ctx, `SELECT id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2`, req.TenantID, contentHash).Scan(&concurrent.SourceID, &concurrent.MatchStatus, &concurrentStatus, &concurrentPayload); lookupErr == nil {
+			if concurrentStatus == "succeeded" && len(concurrentPayload) > 0 && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
+				concurrent.Candidates, _ = s.findCandidates(ctx, req.TenantID, concurrent.Analysis.Account, concurrent.Analysis.Nickname, concurrent.Analysis.PatientUtterances)
+				return &concurrent, nil
+			}
+			return nil, fmt.Errorf("screenshot analysis already in progress (source_id=%d)", concurrent.SourceID)
+		}
 		return nil, fmt.Errorf("save screenshot source: %w", err)
 	}
-	resp, err := s.llm.ImageInference(ctx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: "patient_screenshot_analysis", ModelCode: "qwen3.8-flash", Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: screenshotPrompt}}}}, Params: &llmgateway.Params{MaxTokens: 1800, ResponseFormat: "json"}})
+	return s.analyzeScreenshotSource(ctx, req, sourceID)
+}
+
+func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAnalyzeRequest, sourceID int64) (*ScreenshotAnalyzeResponse, error) {
+	analysisCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	defer cancel()
+	// A browser closing the drawer can cancel the HTTP request. Analysis is a
+	// server-owned operation and must finish or be marked failed independently.
+	markFailed := func(cause error) error {
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer updateCancel()
+		_, updateErr := s.pool.Exec(updateCtx, `UPDATE patient_conversation_sources SET analysis_status='failed',analysis_error=$1,analysis_completed_at=NOW(),updated_at=NOW() WHERE tenant_id=$2 AND id=$3`, cause.Error(), req.TenantID, sourceID)
+		if updateErr != nil {
+			slog.Error("patient screenshot failure status update failed", "source_id", sourceID, "error", updateErr)
+		}
+		return cause
+	}
+	prompt, err := s.loadScreenshotPrompt(analysisCtx)
 	if err != nil {
-		return nil, fmt.Errorf("analyze screenshot through llm gateway: %w", err)
+		return nil, markFailed(err)
+	}
+	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: "patient_screenshot_analysis", ModelCode: "qwen3.8-flash", Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: prompt.UserPrompt}}}}, Params: &llmgateway.Params{MaxTokens: 2200, ResponseFormat: "json"}})
+	if err != nil {
+		return nil, markFailed(fmt.Errorf("analyze screenshot through llm gateway: %w", err))
 	}
 	var analysis ScreenshotAnalysis
 	if err := json.Unmarshal([]byte(resp.Content), &analysis); err != nil {
-		return nil, fmt.Errorf("parse patient screenshot analysis: %w", err)
+		slog.Error("patient screenshot analysis response parse failed", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
+		return nil, markFailed(fmt.Errorf("parse patient screenshot analysis (source_id=%d, response_bytes=%d): %w", sourceID, len(resp.Content), err))
 	}
 	payload, _ := json.Marshal(analysis)
-	if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET recognition_payload=$1::jsonb, updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, payload, sourceID, req.TenantID); err != nil {
-		return nil, fmt.Errorf("save screenshot analysis: %w", err)
+	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET recognition_payload=$1::jsonb,updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, payload, sourceID, req.TenantID); err != nil {
+		slog.Error("patient screenshot analysis persistence failed", "source_id", sourceID, "error", err)
+		return nil, markFailed(fmt.Errorf("save screenshot analysis: %w", err))
 	}
-	candidates, err := s.findCandidates(ctx, req.TenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
+	candidates, err := s.findCandidates(analysisCtx, req.TenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
 	if err != nil {
-		return nil, err
+		slog.Error("patient screenshot customer candidate lookup failed", "source_id", sourceID, "error", err)
+		return nil, markFailed(err)
+	}
+	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET analysis_status='succeeded',analysis_error='',analysis_completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND tenant_id=$2`, sourceID, req.TenantID); err != nil {
+		return nil, markFailed(fmt.Errorf("mark screenshot analysis succeeded: %w", err))
 	}
 	return &ScreenshotAnalyzeResponse{SourceID: sourceID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID)}, nil
+}
+
+type screenshotPromptConfig struct {
+	SystemPrompt string
+	UserPrompt   string
+}
+
+func (s *Service) loadScreenshotPrompt(ctx context.Context) (*screenshotPromptConfig, error) {
+	var p screenshotPromptConfig
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(system_prompt,''), COALESCE(user_prompt_template,'') FROM recording_analysis_prompts WHERE code='patient_screenshot_analysis_v1' AND is_active=true ORDER BY id DESC LIMIT 1`).Scan(&p.SystemPrompt, &p.UserPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("load patient screenshot prompt: %w", err)
+	}
+	if strings.TrimSpace(p.SystemPrompt) == "" || strings.TrimSpace(p.UserPrompt) == "" {
+		return nil, fmt.Errorf("patient screenshot prompt is not configured")
+	}
+	return &p, nil
 }
 
 func valueOrZero(v *int64) int64 {
