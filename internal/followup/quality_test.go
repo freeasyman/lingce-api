@@ -72,4 +72,11 @@ func TestSubjectSynonyms(t *testing.T) {
 	if followupSubjectKey("术后第3天复查") == followupSubjectKey("术后第7天复查") {
 		t.Fatal("different nodes merged")
 	}
+	// 当前重复控制是规则级主题归一化，不宣称医学语义相似度识别。
+	if followupSubjectKey("术后一周恢复情况") == followupSubjectKey("手术后第七天康复状况") {
+		t.Fatal("semantic variants must remain outside the rule-level guarantee")
+	}
+	if followupSubjectKey("  复查!提醒 ") != followupSubjectKey("复诊提醒") {
+		t.Fatal("punctuation and whitespace normalization failed")
+	}
 }
