@@ -18,12 +18,32 @@ func NewHandler(s *Service) *Handler { return &Handler{service: s} }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
 	router.Register(mux, []router.Route{
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/analyze", Handler: h.AnalyzeAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/{id}/status", Handler: h.StatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/confirm", Handler: h.ConfirmAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/prospect", Handler: h.CreateProspectAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/sources", Handler: h.ListCustomerSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
 	}, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *Handler) StatusAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	sourceID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || sourceID <= 0 {
+		httputil.WriteBadRequest(w, "invalid source id")
+		return
+	}
+	result, err := h.service.GetScreenshotStatus(r.Context(), *claims.TenantID, sourceID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, result)
 }
 
 func (h *Handler) SaveActionAuthenticated(w http.ResponseWriter, r *http.Request) {

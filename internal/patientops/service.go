@@ -99,6 +99,29 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 	return items, rows.Err()
 }
 
+func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID int64) (*ScreenshotStatusResponse, error) {
+	if tenantID <= 0 || sourceID <= 0 {
+		return nil, fmt.Errorf("tenant_id and source_id are required")
+	}
+	var status ScreenshotStatusResponse
+	var raw []byte
+	if err := s.pool.QueryRow(ctx, `SELECT id,match_status,analysis_status,analysis_error,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID).Scan(&status.SourceID, &status.MatchStatus, &status.AnalysisStatus, &status.AnalysisError, &raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("screenshot source not found")
+		}
+		return nil, fmt.Errorf("get screenshot status: %w", err)
+	}
+	if len(raw) > 0 && string(raw) != "{}" {
+		var analysis ScreenshotAnalysis
+		if err := json.Unmarshal(raw, &analysis); err != nil {
+			return nil, fmt.Errorf("parse screenshot analysis: %w", err)
+		}
+		status.Analysis = &analysis
+		status.Candidates, _ = s.findCandidates(ctx, tenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
+	}
+	return &status, nil
+}
+
 func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customerID int64, req ActionRequest) (*ActionResponse, error) {
 	if tenantID <= 0 || employeeID <= 0 || customerID <= 0 || strings.TrimSpace(req.Action) == "" || strings.TrimSpace(req.Content) == "" {
 		return nil, fmt.Errorf("customer, action and content are required")

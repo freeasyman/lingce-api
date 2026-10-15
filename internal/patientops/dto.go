@@ -49,6 +49,15 @@ type ScreenshotAnalyzeResponse struct {
 	Reused         bool                `json:"reused,omitempty"`
 }
 
+type ScreenshotStatusResponse struct {
+	SourceID       int64               `json:"source_id"`
+	Analysis       *ScreenshotAnalysis `json:"analysis,omitempty"`
+	Candidates     []CustomerCandidate `json:"candidates,omitempty"`
+	MatchStatus    string              `json:"match_status"`
+	AnalysisStatus string              `json:"analysis_status"`
+	AnalysisError  string              `json:"analysis_error,omitempty"`
+}
+
 type ConversationSourceResponse struct {
 	ID           int64              `json:"id"`
 	SourceType   string             `json:"source_type"`
