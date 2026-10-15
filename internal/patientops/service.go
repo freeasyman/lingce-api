@@ -151,6 +151,8 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			if err != nil {
 				return nil, err
 			}
+			existing.AnalysisStatus = existingStatus
+			existing.Reused = true
 			return &existing, nil
 		}
 		if existingStatus == "processing" || existingStatus == "pending" {
@@ -225,7 +227,7 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET analysis_status='succeeded',analysis_error='',analysis_completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND tenant_id=$2`, sourceID, req.TenantID); err != nil {
 		return nil, markFailed(fmt.Errorf("mark screenshot analysis succeeded: %w", err))
 	}
-	return &ScreenshotAnalyzeResponse{SourceID: sourceID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID)}, nil
+	return &ScreenshotAnalyzeResponse{SourceID: sourceID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID), AnalysisStatus: "succeeded"}, nil
 }
 
 type screenshotPromptConfig struct {

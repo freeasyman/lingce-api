@@ -40,10 +40,13 @@ type CustomerCandidate struct {
 }
 
 type ScreenshotAnalyzeResponse struct {
-	SourceID    int64               `json:"source_id"`
-	Analysis    ScreenshotAnalysis  `json:"analysis"`
-	Candidates  []CustomerCandidate `json:"candidates"`
-	MatchStatus string              `json:"match_status"`
+	SourceID       int64               `json:"source_id"`
+	Analysis       ScreenshotAnalysis  `json:"analysis"`
+	Candidates     []CustomerCandidate `json:"candidates"`
+	MatchStatus    string              `json:"match_status"`
+	AnalysisStatus string              `json:"analysis_status,omitempty"`
+	AnalysisError  string              `json:"analysis_error,omitempty"`
+	Reused         bool                `json:"reused,omitempty"`
 }
 
 type ConversationSourceResponse struct {
