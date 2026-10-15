@@ -110,6 +110,25 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 	return items, rows.Err()
 }
 
+func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID int64) ([]OperationRecordResponse, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,source_id,action_type,record_type,content,status,created_at FROM patient_operation_records WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC,id DESC`, tenantID, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("list patient operation records: %w", err)
+	}
+	defer rows.Close()
+	items := []OperationRecordResponse{}
+	for rows.Next() {
+		var item OperationRecordResponse
+		var createdAt time.Time
+		if err := rows.Scan(&item.ID, &item.SourceID, &item.ActionType, &item.RecordType, &item.Content, &item.Status, &createdAt); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID int64) (*ScreenshotStatusResponse, error) {
 	if tenantID <= 0 || sourceID <= 0 {
 		return nil, fmt.Errorf("tenant_id and source_id are required")

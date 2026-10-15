@@ -83,3 +83,13 @@ type ActionResponse struct {
 	DraftID  int64  `json:"draft_id,omitempty"`
 	Status   string `json:"status"`
 }
+
+type OperationRecordResponse struct {
+	ID         int64  `json:"id"`
+	SourceID   *int64 `json:"source_id,omitempty"`
+	ActionType string `json:"action_type"`
+	RecordType string `json:"record_type"`
+	Content    string `json:"content"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+}
