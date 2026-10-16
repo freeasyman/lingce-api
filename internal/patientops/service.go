@@ -117,7 +117,7 @@ func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]Co
 	// The review page only needs the latest actionable sources. Limiting before
 	// transferring the Base64 image payload prevents old screenshot history from
 	// turning this endpoint into an unbounded sort and response.
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,''::text AS media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY id DESC LIMIT 100`, tenantID)
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,''::text AS media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL LIMIT 100`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
