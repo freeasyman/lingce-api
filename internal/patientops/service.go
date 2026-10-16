@@ -112,7 +112,9 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 }
 
 func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]ConversationSourceResponse, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY captured_at DESC,id DESC`, tenantID)
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY captured_at DESC,id DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
@@ -132,7 +134,10 @@ func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]Co
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read unlinked patient sources: %w", err)
+	}
+	return items, nil
 }
 
 func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID int64) ([]OperationRecordResponse, error) {
