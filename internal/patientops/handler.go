@@ -243,13 +243,14 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	page, pageSize := 1, 50
+	filter := strings.TrimSpace(r.URL.Query().Get("filter"))
 	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
 		page = v
 	}
 	if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 && v <= 100 {
 		pageSize = v
 	}
-	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, claims.UserType == auth.UserTypeAdmin)
+	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, claims.UserType == auth.UserTypeAdmin, filter)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

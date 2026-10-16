@@ -384,8 +384,8 @@ func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID,
 	}
 	if req.NextTask != nil {
 		next := req.NextTask
-		if strings.TrimSpace(next.TaskType) == "" || strings.TrimSpace(next.Goal) == "" || strings.TrimSpace(next.Action) == "" {
-			return fmt.Errorf("next task type, goal and action are required")
+		if strings.TrimSpace(next.TaskType) == "" || strings.TrimSpace(next.Goal) == "" || strings.TrimSpace(next.Action) == "" || strings.TrimSpace(next.DueAt) == "" {
+			return fmt.Errorf("next task type, goal, action and due_at are required")
 		}
 		var dueAt any
 		if strings.TrimSpace(next.DueAt) != "" {
@@ -407,6 +407,9 @@ func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID,
 
 func (s *Service) UpdatePatientTaskStatus(ctx context.Context, tenantID, employeeID, taskID int64, req UpdatePatientTaskRequest) error {
 	status := strings.TrimSpace(req.Status)
+	if status == "已改期" && strings.TrimSpace(req.DueAt) == "" {
+		return fmt.Errorf("due_at is required when rescheduling")
+	}
 	allowed := map[string]bool{"处理中": true, "等待患者": true, "等待内部协作": true, "已改期": true, "暂停联系": true, "待处理": true}
 	if !allowed[status] {
 		return fmt.Errorf("unsupported task status")
@@ -429,7 +432,7 @@ func (s *Service) UpdatePatientTaskStatus(ctx context.Context, tenantID, employe
 	return nil
 }
 
-func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool) ([]PatientTaskResponse, int64, error) {
+func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter string) ([]PatientTaskResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -440,14 +443,31 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	// 历史录音可能归属于已离职员工。此类待办不能继续绑定在已删除账号下，
 	// 应进入当前租户的待办池，供现有运营人员接手；仍保留普通员工只看自己
 	// 负责待办的规则。
-	ownerFilter := "(employee_id=$2 OR employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
+	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
 	if allEmployees {
-		ownerFilter = "TRUE"
+		ownerFilter = "($2::bigint IS NOT NULL)"
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks WHERE tenant_id=$1 AND `+ownerFilter+` AND status NOT IN ('已完成','已取消')`, tenantID, employeeID).Scan(&total); err != nil {
+	dueFilter := ""
+	switch strings.TrimSpace(filter) {
+	case "今天":
+		dueFilter = " AND due_at >= CURRENT_DATE AND due_at < CURRENT_DATE + INTERVAL '1 day'"
+	case "逾期":
+		dueFilter = " AND due_at IS NOT NULL AND due_at < NOW()"
+	case "我负责":
+		dueFilter = " AND t.employee_id=$2"
+	case "需要协作":
+		dueFilter = " AND t.status='等待内部协作'"
+	case "主管交办":
+		dueFilter = " AND FALSE"
+	case "全部", "":
+	default:
+		return nil, 0, fmt.Errorf("unsupported task filter")
+	}
+	baseFilter := "t.tenant_id=$1 AND " + ownerFilter + " AND t.status NOT IN ('已完成','已取消')" + dueFilter
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks t WHERE `+baseFilter, tenantID, employeeID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
 	}
