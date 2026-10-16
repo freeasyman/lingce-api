@@ -114,7 +114,10 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]ConversationSourceResponse, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY captured_at DESC,id DESC`, tenantID)
+	// The review page only needs the latest actionable sources. Limiting before
+	// transferring the Base64 image payload prevents old screenshot history from
+	// turning this endpoint into an unbounded sort and response.
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY id DESC LIMIT 100`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
