@@ -251,11 +251,25 @@ type PatientTaskResponse struct {
 	DueAt        string `json:"due_at,omitempty"`
 	Status       string `json:"status"`
 	CreatedAt    string `json:"created_at"`
+	Result       string `json:"result,omitempty"`
+	ResultNote   string `json:"result_note,omitempty"`
+	CompletedAt  string `json:"completed_at,omitempty"`
+	ParentTaskID *int64 `json:"parent_task_id,omitempty"`
 }
 
 type CompletePatientTaskRequest struct {
-	Result string `json:"result"`
-	Note   string `json:"note,omitempty"`
+	Result   string                  `json:"result"`
+	Note     string                  `json:"note,omitempty"`
+	NextTask *NextPatientTaskRequest `json:"next_task,omitempty"`
+}
+
+type NextPatientTaskRequest struct {
+	TaskType string `json:"task_type"`
+	Goal     string `json:"goal"`
+	Action   string `json:"action"`
+	Content  string `json:"content"`
+	Evidence string `json:"evidence,omitempty"`
+	DueAt    string `json:"due_at,omitempty"`
 }
 
 type PatientTaskListResponse struct {

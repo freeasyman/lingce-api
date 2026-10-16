@@ -369,12 +369,38 @@ func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int6
 func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID, taskID int64, req CompletePatientTaskRequest) error {
 	tag := strings.TrimSpace(req.Result)
 	note := strings.TrimSpace(req.Note)
-	result, err := s.pool.Exec(ctx, `UPDATE patient_operation_tasks t SET status='已完成',employee_id=CASE WHEN t.employee_id=$5 THEN t.employee_id ELSE $5 END,updated_at=NOW(),content=CASE WHEN $1='' THEN t.content ELSE t.content||E'\n\n处理结果：'||$1||CASE WHEN $2='' THEN '' ELSE E'\n备注：'||$2 END END WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消')`, tag, note, taskID, tenantID, employeeID)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin complete patient operation task: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var customerID int64
+	var sourceID *int64
+	if err := tx.QueryRow(ctx, `UPDATE patient_operation_tasks t SET status='已完成',employee_id=CASE WHEN t.employee_id=$5 THEN t.employee_id ELSE $5 END,updated_at=NOW(),result=$1,result_note=$2,completed_at=NOW() WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消') RETURNING customer_id,source_id`, tag, note, taskID, tenantID, employeeID).Scan(&customerID, &sourceID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("patient operation task not found or already completed")
+		}
 		return fmt.Errorf("complete patient operation task: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("patient operation task not found or already completed")
+	if req.NextTask != nil {
+		next := req.NextTask
+		if strings.TrimSpace(next.TaskType) == "" || strings.TrimSpace(next.Goal) == "" || strings.TrimSpace(next.Action) == "" {
+			return fmt.Errorf("next task type, goal and action are required")
+		}
+		var dueAt any
+		if strings.TrimSpace(next.DueAt) != "" {
+			parsed, parseErr := parsePatientDueAt(next.DueAt, time.Now())
+			if parseErr != nil {
+				return fmt.Errorf("invalid next task due_at: %w", parseErr)
+			}
+			dueAt = parsed
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at,parent_task_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, tenantID, customerID, sourceID, employeeID, strings.TrimSpace(next.TaskType), strings.TrimSpace(next.Goal), strings.TrimSpace(next.Action), strings.TrimSpace(next.Content), strings.TrimSpace(next.Evidence), dueAt, taskID); err != nil {
+			return fmt.Errorf("create next patient operation task: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit patient operation task: %w", err)
 	}
 	return nil
 }
@@ -397,7 +423,7 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks WHERE tenant_id=$1 AND `+ownerFilter+` AND status NOT IN ('已完成','已取消')`, tenantID, employeeID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
 	}
@@ -405,7 +431,7 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	items := []PatientTaskResponse{}
 	for rows.Next() {
 		var item PatientTaskResponse
-		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt, &item.ParentTaskID); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, item)
