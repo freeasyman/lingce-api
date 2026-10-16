@@ -13,12 +13,45 @@ import (
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Service struct {
 	pool *pgxpool.Pool
 	llm  *llmgateway.Client
+}
+
+type patientTaskExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type patientTaskInput struct {
+	TenantID   int64
+	CustomerID int64
+	SourceID   *int64
+	EmployeeID int64
+	TaskType   string
+	Goal       string
+	Action     string
+	Content    string
+	Evidence   string
+	DueAt      *time.Time
+	ParentID   *int64
+}
+
+func insertPatientTask(ctx context.Context, execer patientTaskExecer, input patientTaskInput) error {
+	if input.TenantID <= 0 || input.CustomerID <= 0 || input.EmployeeID <= 0 {
+		return fmt.Errorf("tenant, customer and owner are required")
+	}
+	if strings.TrimSpace(input.TaskType) == "" || strings.TrimSpace(input.Goal) == "" || strings.TrimSpace(input.Action) == "" || strings.TrimSpace(input.Content) == "" {
+		return fmt.Errorf("task type, goal, action and content are required")
+	}
+	if input.DueAt == nil {
+		return fmt.Errorf("due_at is required for a formal task")
+	}
+	_, err := execer.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at,parent_task_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, input.TenantID, input.CustomerID, input.SourceID, input.EmployeeID, strings.TrimSpace(input.TaskType), strings.TrimSpace(input.Goal), strings.TrimSpace(input.Action), strings.TrimSpace(input.Content), strings.TrimSpace(input.Evidence), input.DueAt, input.ParentID)
+	return err
 }
 
 var ErrRecordingAnalysisInvalidReference = errors.New("invalid recording analysis references")
@@ -76,15 +109,15 @@ func (s *Service) processRecordingRun(ctx context.Context, tenantID, recordingID
 		}
 		for _, commitment := range analysis.EmployeeCommitments {
 			commitment = strings.TrimSpace(commitment)
-			if commitment == "" {
+			if commitment == "" || dueAt == nil {
 				continue
 			}
 			// A recording commitment is already an explicit employee action. Create the
 			// real work item directly; the employee should only see the resulting task.
-			_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at)
-				SELECT tenant_id,customer_id,$1,employee_id,'员工承诺跟进','完成录音中的员工承诺并记录实际结果',$2,$2,$2,$3
-				FROM patient_operation_recording_runs WHERE id=$4
-				ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, sourceID, commitment, dueAt, runID)
+			if err := insertPatientTask(ctx, s.pool, patientTaskInput{TenantID: tenantID, CustomerID: customerID, SourceID: &sourceID, EmployeeID: employeeID, TaskType: "员工承诺跟进", Goal: "完成录音中的员工承诺并记录实际结果", Action: commitment, Content: commitment, Evidence: commitment, DueAt: dueAt}); err != nil {
+				_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$2,updated_at=NOW() WHERE id=$1`, runID, err.Error())
+				return
+			}
 		}
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='succeeded',updated_at=NOW() WHERE id=$1`, runID)
 	} else {
@@ -387,15 +420,11 @@ func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID,
 		if strings.TrimSpace(next.TaskType) == "" || strings.TrimSpace(next.Goal) == "" || strings.TrimSpace(next.Action) == "" || strings.TrimSpace(next.DueAt) == "" {
 			return fmt.Errorf("next task type, goal, action and due_at are required")
 		}
-		var dueAt any
-		if strings.TrimSpace(next.DueAt) != "" {
-			parsed, parseErr := parsePatientDueAt(next.DueAt, time.Now())
-			if parseErr != nil {
-				return fmt.Errorf("invalid next task due_at: %w", parseErr)
-			}
-			dueAt = parsed
+		parsed, parseErr := parsePatientDueAt(next.DueAt, time.Now())
+		if parseErr != nil {
+			return fmt.Errorf("invalid next task due_at: %w", parseErr)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at,parent_task_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, tenantID, customerID, sourceID, employeeID, strings.TrimSpace(next.TaskType), strings.TrimSpace(next.Goal), strings.TrimSpace(next.Action), strings.TrimSpace(next.Content), strings.TrimSpace(next.Evidence), dueAt, taskID); err != nil {
+		if err := insertPatientTask(ctx, tx, patientTaskInput{TenantID: tenantID, CustomerID: customerID, SourceID: sourceID, EmployeeID: employeeID, TaskType: next.TaskType, Goal: next.Goal, Action: next.Action, Content: next.Content, Evidence: next.Evidence, DueAt: &parsed, ParentID: &taskID}); err != nil {
 			return fmt.Errorf("create next patient operation task: %w", err)
 		}
 	}
