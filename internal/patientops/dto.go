@@ -101,6 +101,7 @@ type CustomerCandidate struct {
 
 type ScreenshotAnalyzeResponse struct {
 	SourceID       int64               `json:"source_id"`
+	CustomerID     *int64              `json:"customer_id,omitempty"`
 	Analysis       ScreenshotAnalysis  `json:"analysis"`
 	Candidates     []CustomerCandidate `json:"candidates"`
 	MatchStatus    string              `json:"match_status"`

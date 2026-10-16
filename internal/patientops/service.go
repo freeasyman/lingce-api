@@ -380,6 +380,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 				return nil, err
 			}
 			existing.AnalysisStatus = existingStatus
+			existing.CustomerID = existingCustomerID
 			existing.Reused = true
 			return &existing, nil
 		}
@@ -402,8 +403,10 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 		// its current state instead of creating a second source.
 		var concurrent ScreenshotAnalyzeResponse
 		var concurrentPayload []byte
+		var concurrentCustomerID *int64
 		var concurrentStatus string
-		if lookupErr := s.pool.QueryRow(ctx, `SELECT id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2`, req.TenantID, contentHash).Scan(&concurrent.SourceID, &concurrent.MatchStatus, &concurrentStatus, &concurrentPayload); lookupErr == nil {
+		if lookupErr := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2`, req.TenantID, contentHash).Scan(&concurrent.SourceID, &concurrentCustomerID, &concurrent.MatchStatus, &concurrentStatus, &concurrentPayload); lookupErr == nil {
+			concurrent.CustomerID = concurrentCustomerID
 			if concurrentStatus == "succeeded" && len(concurrentPayload) > 0 && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
 				concurrent.Analysis.Normalize()
 				concurrent.Candidates, _ = s.findCandidates(ctx, req.TenantID, concurrent.Analysis.Account, concurrent.Analysis.Nickname, concurrent.Analysis.PatientUtterances)
@@ -463,7 +466,7 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET analysis_status='succeeded',analysis_error='',analysis_completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND tenant_id=$2`, sourceID, req.TenantID); err != nil {
 		return nil, markFailed(fmt.Errorf("mark screenshot analysis succeeded: %w", err))
 	}
-	return &ScreenshotAnalyzeResponse{SourceID: sourceID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID), AnalysisStatus: "succeeded"}, nil
+	return &ScreenshotAnalyzeResponse{SourceID: sourceID, CustomerID: req.CustomerID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID), AnalysisStatus: "succeeded"}, nil
 }
 
 type screenshotPromptConfig struct {
