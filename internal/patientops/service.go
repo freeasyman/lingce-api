@@ -47,11 +47,22 @@ func insertPatientTask(ctx context.Context, execer patientTaskExecer, input pati
 	if strings.TrimSpace(input.TaskType) == "" || strings.TrimSpace(input.Goal) == "" || strings.TrimSpace(input.Action) == "" || strings.TrimSpace(input.Content) == "" {
 		return fmt.Errorf("task type, goal, action and content are required")
 	}
-	if input.DueAt == nil {
+	if !validPatientTaskType(strings.TrimSpace(input.TaskType)) {
+		return fmt.Errorf("unsupported task type: %s", input.TaskType)
+	}
+	if input.DueAt == nil || input.DueAt.IsZero() {
 		return fmt.Errorf("due_at is required for a formal task")
 	}
 	_, err := execer.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at,parent_task_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, input.TenantID, input.CustomerID, input.SourceID, input.EmployeeID, strings.TrimSpace(input.TaskType), strings.TrimSpace(input.Goal), strings.TrimSpace(input.Action), strings.TrimSpace(input.Content), strings.TrimSpace(input.Evidence), input.DueAt, input.ParentID)
 	return err
+}
+
+func validPatientTaskType(value string) bool {
+	switch value {
+	case "接住新咨询", "患者问题处理", "咨询推进", "到院后促成", "家属 / 决策人确认", "员工承诺跟进", "专业协作", "投诉和异常", "人工新增", "活动触达":
+		return true
+	}
+	return false
 }
 
 var ErrRecordingAnalysisInvalidReference = errors.New("invalid recording analysis references")
@@ -593,6 +604,20 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 		if taskType == "" {
 			taskType = "咨询推进"
 		}
+		if strings.TrimSpace(req.DueAt) != "" {
+			dueAt, parseErr := parsePatientDueAt(req.DueAt, time.Now())
+			if parseErr != nil {
+				return nil, fmt.Errorf("invalid task due_at: %w", parseErr)
+			}
+			var sourceID *int64
+			if req.SourceID > 0 {
+				sourceID = &req.SourceID
+			}
+			if err := insertPatientTask(ctx, s.pool, patientTaskInput{TenantID: tenantID, CustomerID: customerID, SourceID: sourceID, EmployeeID: employeeID, TaskType: taskType, Goal: req.Goal, Action: req.Action, Content: req.Content, DueAt: &dueAt}); err != nil {
+				return nil, fmt.Errorf("save patient operation task: %w", err)
+			}
+			return &ActionResponse{Status: "saved_with_task"}, nil
+		}
 		var id int64
 		// 同一员工对同一截图重复点击保存时返回原草稿，避免产生重复待办。
 		err := s.pool.QueryRow(ctx, `SELECT id FROM patient_operation_task_drafts WHERE tenant_id=$1 AND customer_id=$2 AND source_id=NULLIF($3,0) AND employee_id=$4 AND task_type=$5 AND content=$6 ORDER BY id DESC LIMIT 1`, tenantID, customerID, req.SourceID, employeeID, taskType, strings.TrimSpace(req.Content)).Scan(&id)
@@ -619,6 +644,20 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 		return nil, fmt.Errorf("save patient operation record: %w", err)
 	}
 	if strings.TrimSpace(req.TaskType) != "" {
+		if strings.TrimSpace(req.DueAt) != "" {
+			dueAt, parseErr := parsePatientDueAt(req.DueAt, time.Now())
+			if parseErr != nil {
+				return nil, fmt.Errorf("invalid task due_at: %w", parseErr)
+			}
+			var sourceID *int64
+			if req.SourceID > 0 {
+				sourceID = &req.SourceID
+			}
+			if err := insertPatientTask(ctx, s.pool, patientTaskInput{TenantID: tenantID, CustomerID: customerID, SourceID: sourceID, EmployeeID: employeeID, TaskType: req.TaskType, Goal: req.Goal, Action: req.Action, Content: req.Content, DueAt: &dueAt}); err != nil {
+				return nil, fmt.Errorf("save patient operation task: %w", err)
+			}
+			return &ActionResponse{RecordID: id, Status: "saved_with_task"}, nil
+		}
 		var draftID int64
 		if err := s.pool.QueryRow(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, strings.TrimSpace(req.TaskType), strings.TrimSpace(req.Goal), strings.TrimSpace(req.Content)).Scan(&draftID); err != nil {
 			return nil, fmt.Errorf("save patient task draft: %w", err)

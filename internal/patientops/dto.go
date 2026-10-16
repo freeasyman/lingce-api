@@ -184,6 +184,7 @@ type ActionRequest struct {
 	RecordType string `json:"record_type,omitempty"`
 	TaskType   string `json:"task_type,omitempty"`
 	Goal       string `json:"goal,omitempty"`
+	DueAt      string `json:"due_at,omitempty"`
 }
 
 type GenerateActionRequest struct {
