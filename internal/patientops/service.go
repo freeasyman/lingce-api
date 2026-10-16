@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -235,7 +236,29 @@ func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID
 		item.CreatedAt = createdAt.Format(time.RFC3339)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	draftRows, err := s.pool.Query(ctx, `SELECT id,source_id,task_type,content,status,created_at FROM patient_operation_task_drafts WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC,id DESC`, tenantID, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("list patient operation task drafts: %w", err)
+	}
+	defer draftRows.Close()
+	for draftRows.Next() {
+		var item OperationRecordResponse
+		var createdAt time.Time
+		if err := draftRows.Scan(&item.ID, &item.SourceID, &item.ActionType, &item.Content, &item.Status, &createdAt); err != nil {
+			return nil, err
+		}
+		item.RecordType = "task_draft"
+		item.CreatedAt = createdAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	if err := draftRows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
+	return items, nil
 }
 
 func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID int64) (*ScreenshotStatusResponse, error) {
