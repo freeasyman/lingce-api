@@ -303,8 +303,9 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	if req.SourceID <= 0 {
 		return nil, fmt.Errorf("source_id is required")
 	}
+	sourceID := int64(req.SourceID)
 	var analysisRaw []byte
-	if err := s.pool.QueryRow(ctx, `SELECT recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND ($3=0 OR customer_id=$3 OR customer_id IS NULL)`, tenantID, req.SourceID, customerID).Scan(&analysisRaw); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND ($3=0 OR customer_id=$3 OR customer_id IS NULL)`, tenantID, sourceID, customerID).Scan(&analysisRaw); err != nil {
 		return nil, fmt.Errorf("load screenshot analysis: %w", err)
 	}
 	var analysis ScreenshotAnalysis
@@ -327,7 +328,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
 	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
 	defer cancel()
-	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: req.SourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
+	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
 	if err != nil {
 		return nil, fmt.Errorf("generate patient action through llm gateway: %w", err)
 	}

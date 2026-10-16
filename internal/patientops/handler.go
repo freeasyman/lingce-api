@@ -72,7 +72,7 @@ func (h *Handler) GenerateScreenshotActionAuthenticated(w http.ResponseWriter, r
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	req.SourceID = sourceID
+	req.SourceID = FlexibleInt64(sourceID)
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, 0, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())

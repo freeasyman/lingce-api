@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -138,8 +139,28 @@ type ActionRequest struct {
 }
 
 type GenerateActionRequest struct {
-	SourceID int64  `json:"source_id"`
-	Action   string `json:"action"`
+	SourceID FlexibleInt64 `json:"source_id"`
+	Action   string        `json:"action"`
+}
+
+type FlexibleInt64 int64
+
+func (v *FlexibleInt64) UnmarshalJSON(data []byte) error {
+	var n int64
+	if err := json.Unmarshal(data, &n); err == nil {
+		*v = FlexibleInt64(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("source_id must be an integer: %w", err)
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return fmt.Errorf("source_id must be an integer: %w", err)
+	}
+	*v = FlexibleInt64(parsed)
+	return nil
 }
 
 type GenerateActionResponse struct {
