@@ -63,15 +63,44 @@ func (s *Service) processRecordingRun(ctx context.Context, tenantID, recordingID
 	var sourceID int64
 	err = s.pool.QueryRow(ctx, `INSERT INTO patient_conversation_sources(tenant_id,source_type,original_name,created_by,customer_id,match_status,recognition_payload) SELECT tenant_id,'audio',$1,employee_id,customer_id,'confirmed',$2::jsonb FROM patient_operation_recording_runs WHERE id=$3 RETURNING id`, fmt.Sprintf("录音 #%d", recordingID), payload, runID).Scan(&sourceID)
 	if err == nil {
-		content := analysis.ConversationSummary
-		if content == "" {
-			content = strings.Join(analysis.PatientUtterances, "；")
-		}
+		content := recordingAnalysisContent(analysis)
 		_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_records(tenant_id,customer_id,source_id,employee_id,action_type,record_type,content,status) SELECT tenant_id,customer_id,$1,employee_id,'录音分析','insight',$2,'pending' FROM patient_operation_recording_runs WHERE id=$3`, sourceID, content, runID)
+		for _, commitment := range analysis.EmployeeCommitments {
+			_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) SELECT tenant_id,customer_id,$1,employee_id,'员工承诺跟进','完成录音中已确认的员工承诺，并记录实际结果',$2 FROM patient_operation_recording_runs WHERE id=$3`, sourceID, commitment, runID)
+		}
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='succeeded',updated_at=NOW() WHERE id=$1`, runID)
 	} else {
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$2,updated_at=NOW() WHERE id=$1`, runID, err.Error())
 	}
+}
+
+func recordingAnalysisContent(analysis *ScreenshotAnalysis) string {
+	parts := []string{}
+	if analysis.ConversationSummary != "" {
+		parts = append(parts, "沟通概括："+analysis.ConversationSummary)
+	}
+	if len(analysis.PatientUtterances) > 0 {
+		parts = append(parts, "患者原话："+strings.Join(analysis.PatientUtterances, "；"))
+	}
+	if analysis.PatientQuestion != "" {
+		parts = append(parts, "患者问题："+analysis.PatientQuestion)
+	}
+	if analysis.Concern != "" {
+		parts = append(parts, "顾虑判断："+analysis.Concern)
+	}
+	if len(analysis.RelationshipClues) > 0 {
+		parts = append(parts, "关系人线索："+strings.Join(analysis.RelationshipClues, "；"))
+	}
+	if len(analysis.EmployeeCommitments) > 0 {
+		parts = append(parts, "员工承诺："+strings.Join(analysis.EmployeeCommitments, "；"))
+	}
+	if len(analysis.SuggestedActions) > 0 {
+		parts = append(parts, "建议动作："+strings.Join(analysis.SuggestedActions, "；"))
+	}
+	if len(analysis.Evidence) > 0 {
+		parts = append(parts, "证据："+strings.Join(analysis.Evidence, "；"))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (s *Service) generateRecordingAnalysis(ctx context.Context, tenantID, recordingID, customerID, employeeID int64, customerName, businessScope, roleCode, transcript string) (*ScreenshotAnalysis, error) {

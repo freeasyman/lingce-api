@@ -88,6 +88,9 @@ type ScreenshotAnalysis struct {
 	PatientQuestion     string     `json:"patient_question"`
 	Concern             string     `json:"concern"`
 	DecisionMaker       string     `json:"decision_maker"`
+	RelationshipClues   StringList `json:"relationship_clues"`
+	EmployeeCommitments StringList `json:"employee_commitments"`
+	SuggestedActions    StringList `json:"suggested_actions"`
 	ProductInterest     StringList `json:"product_interest"`
 	SuggestedIcebreaker string     `json:"suggested_icebreaker"`
 	SuggestedReply      string     `json:"suggested_reply"`
@@ -100,6 +103,9 @@ func (a *ScreenshotAnalysis) Normalize() {
 	a.PatientUtterances = cleanStringList(a.PatientUtterances)
 	a.ProductInterest = cleanStringList(a.ProductInterest)
 	a.Evidence = cleanStringList(a.Evidence)
+	a.RelationshipClues = cleanStringList(a.RelationshipClues)
+	a.EmployeeCommitments = cleanStringList(a.EmployeeCommitments)
+	a.SuggestedActions = cleanStringList(a.SuggestedActions)
 }
 
 func cleanStringList(values StringList) StringList {
