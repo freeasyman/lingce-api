@@ -44,7 +44,63 @@ func (s *Service) AcceptRecordingAnalysis(ctx context.Context, req RecordingAnal
 	if err != nil {
 		return nil, fmt.Errorf("persist recording analysis request: %w", err)
 	}
+	go s.processRecordingRun(context.Background(), req.TenantID, req.RecordingID)
 	return &RecordingAnalyzeResponse{Code: "ACCEPTED", Status: "accepted", RequestID: requestID, TenantID: req.TenantID, RecordingID: req.RecordingID, Inserted: inserted}, nil
+}
+
+func (s *Service) processRecordingRun(ctx context.Context, tenantID, recordingID int64) {
+	var runID, customerID, employeeID int64
+	var transcript, customerName, businessScope, roleCode string
+	if err := s.pool.QueryRow(ctx, `UPDATE patient_operation_recording_runs SET status='processing',updated_at=NOW() WHERE tenant_id=$1 AND recording_id=$2 AND status='pending' RETURNING id,customer_id,employee_id,cleaned_transcript,customer_name,business_scope,role_code`, tenantID, recordingID).Scan(&runID, &customerID, &employeeID, &transcript, &customerName, &businessScope, &roleCode); err != nil {
+		return
+	}
+	analysis, err := s.generateRecordingAnalysis(ctx, tenantID, recordingID, customerID, employeeID, customerName, businessScope, roleCode, transcript)
+	if err != nil {
+		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$3,updated_at=NOW() WHERE tenant_id=$1 AND id=$2`, tenantID, runID, err.Error())
+		return
+	}
+	payload, _ := json.Marshal(analysis)
+	var sourceID int64
+	err = s.pool.QueryRow(ctx, `INSERT INTO patient_conversation_sources(tenant_id,source_type,original_name,created_by,customer_id,match_status,recognition_payload) SELECT tenant_id,'audio',$1,employee_id,customer_id,'confirmed',$2::jsonb FROM patient_operation_recording_runs WHERE id=$3 RETURNING id`, fmt.Sprintf("录音 #%d", recordingID), payload, runID).Scan(&sourceID)
+	if err == nil {
+		content := analysis.ConversationSummary
+		if content == "" {
+			content = strings.Join(analysis.PatientUtterances, "；")
+		}
+		_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_records(tenant_id,customer_id,source_id,employee_id,action_type,record_type,content,status) SELECT tenant_id,customer_id,$1,employee_id,'录音分析','insight',$2,'pending' FROM patient_operation_recording_runs WHERE id=$3`, sourceID, content, runID)
+		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='succeeded',updated_at=NOW() WHERE id=$1`, runID)
+	} else {
+		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$2,updated_at=NOW() WHERE id=$1`, runID, err.Error())
+	}
+}
+
+func (s *Service) generateRecordingAnalysis(ctx context.Context, tenantID, recordingID, customerID, employeeID int64, customerName, businessScope, roleCode, transcript string) (*ScreenshotAnalysis, error) {
+	var systemPrompt, userTemplate string
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(system_prompt,''),COALESCE(user_prompt_template,'') FROM recording_analysis_prompts WHERE code='patient_recording_analysis_v1' AND is_active=true ORDER BY id DESC LIMIT 1`).Scan(&systemPrompt, &userTemplate); err != nil {
+		return nil, fmt.Errorf("load patient recording prompt: %w", err)
+	}
+	config, err := s.loadModelConfig(ctx, tenantID, "patient_recording_analysis")
+	if err != nil {
+		return nil, err
+	}
+	params := &llmgateway.Params{Temperature: .2, MaxTokens: 1800, TimeoutSeconds: 60, ResponseFormat: "json"}
+	applyPatientParams(params, config.Params)
+	user := strings.ReplaceAll(userTemplate, "{{transcript}}", transcript)
+	user = strings.ReplaceAll(user, "{{customer_name}}", customerName)
+	user = strings.ReplaceAll(user, "{{business_scope}}", businessScope)
+	user = strings.ReplaceAll(user, "{{role_code}}", roleCode)
+	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
+	defer cancel()
+	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.recording", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "recording", BusinessObjectID: recordingID, CustomerID: customerID, BillingSubject: "patient_recording_analysis"}, Messages: []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}, Params: params})
+	if err != nil {
+		return nil, fmt.Errorf("analyze patient recording through llm gateway: %w", err)
+	}
+	var analysis ScreenshotAnalysis
+	if err := json.Unmarshal([]byte(strings.TrimSpace(resp.Content)), &analysis); err != nil {
+		return nil, fmt.Errorf("parse patient recording analysis: %w", err)
+	}
+	analysis.Normalize()
+	return &analysis, nil
 }
 
 type patientModelConfig struct {
