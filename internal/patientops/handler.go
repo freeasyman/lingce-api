@@ -3,6 +3,7 @@ package patientops
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,7 +33,40 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions/generate", Handler: h.GenerateActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
+		{Method: "POST", Path: "/api/v1/internal/patient-operations/recordings/analyze", Handler: h.AnalyzeRecording, AuthMode: "internal"},
 	}, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *Handler) AnalyzeRecording(w http.ResponseWriter, r *http.Request) {
+	var req RecordingAnalyzeRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 2*1024*1024)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if err := validateRecordingAnalyzeRequest(req); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	result, err := h.service.AcceptRecordingAnalysis(r.Context(), req)
+	if err != nil {
+		if errors.Is(err, ErrRecordingAnalysisInvalidReference) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", err.Error(), nil)
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+func validateRecordingAnalyzeRequest(req RecordingAnalyzeRequest) error {
+	if req.TenantID <= 0 || req.RecordingID <= 0 || req.EncounterID <= 0 || req.EmployeeID <= 0 || req.CustomerID <= 0 {
+		return fmt.Errorf("tenant_id, recording_id, encounter_id, employee_id and customer_id are required")
+	}
+	if strings.TrimSpace(req.CustomerName) == "" || strings.TrimSpace(req.RecordedAt) == "" || strings.TrimSpace(req.CleanedTranscript) == "" {
+		return fmt.Errorf("customer_name, recorded_at and cleaned_transcript are required")
+	}
+	return nil
 }
 
 func (h *Handler) GenerateActionAuthenticated(w http.ResponseWriter, r *http.Request) {

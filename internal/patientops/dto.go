@@ -49,6 +49,30 @@ type ScreenshotAnalyzeRequest struct {
 	ImageData    string `json:"image_data"`
 }
 
+type RecordingAnalyzeRequest struct {
+	TenantID                int64  `json:"tenant_id"`
+	RecordingID             int64  `json:"recording_id"`
+	EncounterID             int64  `json:"encounter_id"`
+	EmployeeID              int64  `json:"employee_id"`
+	CustomerID              int64  `json:"customer_id"`
+	CustomerName            string `json:"customer_name"`
+	BusinessScope           string `json:"business_scope,omitempty"`
+	RoleCode                string `json:"role_code,omitempty"`
+	RecordedAt              string `json:"recorded_at"`
+	CleanedTranscript       string `json:"cleaned_transcript"`
+	AnalysisPipelineVersion string `json:"analysis_pipeline_version,omitempty"`
+	PromptVersion           string `json:"prompt_version,omitempty"`
+}
+
+type RecordingAnalyzeResponse struct {
+	Code        string `json:"code"`
+	Status      string `json:"status"`
+	RequestID   string `json:"request_id"`
+	TenantID    int64  `json:"tenant_id"`
+	RecordingID int64  `json:"recording_id"`
+	Inserted    bool   `json:"inserted"`
+}
+
 type CreateProspectRequest struct {
 	Name     string `json:"name"`
 	Account  string `json:"account,omitempty"`

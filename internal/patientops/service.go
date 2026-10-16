@@ -21,6 +21,32 @@ type Service struct {
 	llm  *llmgateway.Client
 }
 
+var ErrRecordingAnalysisInvalidReference = errors.New("invalid recording analysis references")
+
+func (s *Service) AcceptRecordingAnalysis(ctx context.Context, req RecordingAnalyzeRequest) (*RecordingAnalyzeResponse, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var valid int
+	err := s.pool.QueryRow(ctx, `SELECT 1 FROM recordings r JOIN encounters e ON e.id=r.encounter_id AND e.tenant_id=r.tenant_id JOIN customers c ON c.id=r.customer_id AND c.tenant_id=r.tenant_id AND c.deleted_at IS NULL JOIN employees emp ON emp.id=r.employee_id AND emp.tenant_id=r.tenant_id AND emp.deleted_at IS NULL WHERE r.id=$1 AND r.tenant_id=$2 AND r.encounter_id=$3 AND r.employee_id=$4 AND r.customer_id=$5`, req.RecordingID, req.TenantID, req.EncounterID, req.EmployeeID, req.CustomerID).Scan(&valid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRecordingAnalysisInvalidReference
+		}
+		return nil, fmt.Errorf("validate recording analysis references: %w", err)
+	}
+	requestID := fmt.Sprintf("patient-recording-%d", req.RecordingID)
+	var inserted bool
+	err = s.pool.QueryRow(ctx, `INSERT INTO patient_operation_recording_runs(tenant_id,recording_id,encounter_id,employee_id,customer_id,customer_name,business_scope,role_code,recorded_at,cleaned_transcript,analysis_pipeline_version,prompt_version,status,request_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10,$11,$12,'pending',$13) ON CONFLICT (tenant_id,recording_id) DO NOTHING RETURNING true`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID, strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.BusinessScope), strings.TrimSpace(req.RoleCode), req.RecordedAt, strings.TrimSpace(req.CleanedTranscript), strings.TrimSpace(req.AnalysisPipelineVersion), strings.TrimSpace(req.PromptVersion), requestID).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return &RecordingAnalyzeResponse{Code: "ACCEPTED", Status: "accepted", RequestID: requestID, TenantID: req.TenantID, RecordingID: req.RecordingID, Inserted: false}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("persist recording analysis request: %w", err)
+	}
+	return &RecordingAnalyzeResponse{Code: "ACCEPTED", Status: "accepted", RequestID: requestID, TenantID: req.TenantID, RecordingID: req.RecordingID, Inserted: inserted}, nil
+}
+
 type patientModelConfig struct {
 	FunctionType, Provider, ModelCode string
 	Params                            map[string]any
