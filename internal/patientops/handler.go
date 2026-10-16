@@ -1,7 +1,10 @@
 package patientops
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -43,9 +46,33 @@ func (h *Handler) GenerateActionAuthenticated(w http.ResponseWriter, r *http.Req
 		httputil.WriteBadRequest(w, "invalid customer id")
 		return
 	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		httputil.WriteBadRequest(w, "read request body: "+err.Error())
+		return
+	}
+	body = bytes.TrimSpace(bytes.TrimPrefix(body, []byte{0xef, 0xbb, 0xbf}))
+	if len(body) == 0 {
+		httputil.WriteBadRequest(w, "request body is empty")
+		return
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body: "+err.Error())
+		return
+	}
+	if nested, ok := envelope["data"]; ok {
+		body = nested
+	} else if nested, ok := envelope["payload"]; ok {
+		body = nested
+	}
 	var req GenerateActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
+	if err := json.Unmarshal(body, &req); err != nil {
+		httputil.WriteBadRequest(w, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.Action == "" {
+		httputil.WriteBadRequest(w, "action is required")
 		return
 	}
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
