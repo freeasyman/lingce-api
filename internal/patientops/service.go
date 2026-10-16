@@ -239,7 +239,7 @@ func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	draftRows, err := s.pool.Query(ctx, `SELECT id,source_id,task_type,content,status,created_at FROM patient_operation_task_drafts WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC,id DESC`, tenantID, customerID)
+	draftRows, err := s.pool.Query(ctx, `SELECT id,source_id,task_type,goal,content,status,created_at FROM patient_operation_task_drafts WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC,id DESC`, tenantID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("list patient operation task drafts: %w", err)
 	}
@@ -247,7 +247,7 @@ func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID
 	for draftRows.Next() {
 		var item OperationRecordResponse
 		var createdAt time.Time
-		if err := draftRows.Scan(&item.ID, &item.SourceID, &item.ActionType, &item.Content, &item.Status, &createdAt); err != nil {
+		if err := draftRows.Scan(&item.ID, &item.SourceID, &item.ActionType, &item.Goal, &item.Content, &item.Status, &createdAt); err != nil {
 			return nil, err
 		}
 		item.RecordType = "task_draft"
@@ -387,7 +387,12 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	if content == "" {
 		return nil, fmt.Errorf("patient action generation returned empty content")
 	}
-	return &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}, nil
+	result := &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}
+	if req.Action == "帮我继续跟" {
+		result.NextAction = strings.TrimSpace(analysis.NextAction)
+		result.NextContactAt = strings.TrimSpace(analysis.NextContactAt)
+	}
+	return result, nil
 }
 
 type patientActionPrompt struct{ SystemPrompt, UserPrompt string }
