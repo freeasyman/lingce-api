@@ -28,7 +28,10 @@ func (s *Service) AcceptRecordingAnalysis(ctx context.Context, req RecordingAnal
 		return nil, fmt.Errorf("database pool is not configured")
 	}
 	var valid int
-	err := s.pool.QueryRow(ctx, `SELECT 1 FROM recordings r JOIN encounters e ON e.id=r.encounter_id AND e.tenant_id=r.tenant_id JOIN customers c ON c.id=r.customer_id AND c.tenant_id=r.tenant_id AND c.deleted_at IS NULL JOIN employees emp ON emp.id=r.employee_id AND emp.tenant_id=r.tenant_id AND emp.deleted_at IS NULL WHERE r.id=$1 AND r.tenant_id=$2 AND r.encounter_id=$3 AND r.employee_id=$4 AND r.customer_id=$5`, req.RecordingID, req.TenantID, req.EncounterID, req.EmployeeID, req.CustomerID).Scan(&valid)
+	// 历史录音可能由已经离职或停用的员工产生。员工的软删除状态不应阻断
+	// 患者运营对历史沟通的沉淀和待办生成；这里只校验员工仍属于同一租户。
+	// 客户仍必须是租户内的有效客户，避免把已删除客户的数据重新写入运营链路。
+	err := s.pool.QueryRow(ctx, `SELECT 1 FROM recordings r JOIN encounters e ON e.id=r.encounter_id AND e.tenant_id=r.tenant_id JOIN customers c ON c.id=r.customer_id AND c.tenant_id=r.tenant_id AND c.deleted_at IS NULL JOIN employees emp ON emp.id=r.employee_id AND emp.tenant_id=r.tenant_id WHERE r.id=$1 AND r.tenant_id=$2 AND r.encounter_id=$3 AND r.employee_id=$4 AND r.customer_id=$5`, req.RecordingID, req.TenantID, req.EncounterID, req.EmployeeID, req.CustomerID).Scan(&valid)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrRecordingAnalysisInvalidReference
@@ -37,7 +40,9 @@ func (s *Service) AcceptRecordingAnalysis(ctx context.Context, req RecordingAnal
 	}
 	requestID := fmt.Sprintf("patient-recording-%d", req.RecordingID)
 	var inserted bool
-	err = s.pool.QueryRow(ctx, `INSERT INTO patient_operation_recording_runs(tenant_id,recording_id,encounter_id,employee_id,customer_id,customer_name,business_scope,role_code,recorded_at,cleaned_transcript,analysis_pipeline_version,prompt_version,status,request_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10,$11,$12,'pending',$13) ON CONFLICT (tenant_id,recording_id) DO NOTHING RETURNING true`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID, strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.BusinessScope), strings.TrimSpace(req.RoleCode), req.RecordedAt, strings.TrimSpace(req.CleanedTranscript), strings.TrimSpace(req.AnalysisPipelineVersion), strings.TrimSpace(req.PromptVersion), requestID).Scan(&inserted)
+	err = s.pool.QueryRow(ctx, `INSERT INTO patient_operation_recording_runs(tenant_id,recording_id,encounter_id,employee_id,customer_id,customer_name,business_scope,role_code,recorded_at,cleaned_transcript,analysis_pipeline_version,prompt_version,status,request_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10,$11,$12,'pending',$13)
+		ON CONFLICT (tenant_id,recording_id) DO UPDATE SET encounter_id=EXCLUDED.encounter_id,employee_id=EXCLUDED.employee_id,customer_id=EXCLUDED.customer_id,customer_name=EXCLUDED.customer_name,business_scope=EXCLUDED.business_scope,role_code=EXCLUDED.role_code,recorded_at=EXCLUDED.recorded_at,cleaned_transcript=EXCLUDED.cleaned_transcript,analysis_pipeline_version=EXCLUDED.analysis_pipeline_version,prompt_version=EXCLUDED.prompt_version,status='pending',error_message='',updated_at=NOW()
+		WHERE patient_operation_recording_runs.status='failed' RETURNING true`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID, strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.BusinessScope), strings.TrimSpace(req.RoleCode), req.RecordedAt, strings.TrimSpace(req.CleanedTranscript), strings.TrimSpace(req.AnalysisPipelineVersion), strings.TrimSpace(req.PromptVersion), requestID).Scan(&inserted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &RecordingAnalyzeResponse{Code: "ACCEPTED", Status: "accepted", RequestID: requestID, TenantID: req.TenantID, RecordingID: req.RecordingID, Inserted: false}, nil
 	}
@@ -65,13 +70,43 @@ func (s *Service) processRecordingRun(ctx context.Context, tenantID, recordingID
 	if err == nil {
 		content := recordingAnalysisContent(analysis)
 		_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_records(tenant_id,customer_id,source_id,employee_id,action_type,record_type,content,status) SELECT tenant_id,customer_id,$1,employee_id,'录音分析','insight',$2,'pending' FROM patient_operation_recording_runs WHERE id=$3`, sourceID, content, runID)
+		var dueAt *time.Time
+		if parsed, parseErr := parsePatientDueAt(analysis.NextContactAt, time.Now()); parseErr == nil {
+			dueAt = &parsed
+		}
 		for _, commitment := range analysis.EmployeeCommitments {
-			_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) SELECT tenant_id,customer_id,$1,employee_id,'员工承诺跟进','完成录音中已确认的员工承诺，并记录实际结果',$2 FROM patient_operation_recording_runs WHERE id=$3`, sourceID, commitment, runID)
+			commitment = strings.TrimSpace(commitment)
+			if commitment == "" {
+				continue
+			}
+			// A recording commitment is already an explicit employee action. Create the
+			// real work item directly; the employee should only see the resulting task.
+			_, _ = s.pool.Exec(ctx, `INSERT INTO patient_operation_tasks(tenant_id,customer_id,source_id,employee_id,task_type,goal,action,content,evidence,due_at)
+				SELECT tenant_id,customer_id,$1,employee_id,'员工承诺跟进','完成录音中的员工承诺并记录实际结果',$2,$2,$2,$3
+				FROM patient_operation_recording_runs WHERE id=$4
+				ON CONFLICT (tenant_id,source_id,task_type,content) DO NOTHING`, sourceID, commitment, dueAt, runID)
 		}
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='succeeded',updated_at=NOW() WHERE id=$1`, runID)
 	} else {
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$2,updated_at=NOW() WHERE id=$1`, runID, err.Error())
 	}
+}
+
+func parsePatientDueAt(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("empty due time")
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+	if strings.Contains(value, "明天") {
+		return time.Date(now.Year(), now.Month(), now.Day()+1, 18, 0, 0, 0, now.Location()), nil
+	}
+	if strings.Contains(value, "今天") {
+		return time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location()), nil
+	}
+	return time.Time{}, fmt.Errorf("unsupported due time: %s", value)
 }
 
 func recordingAnalysisContent(analysis *ScreenshotAnalysis) string {
@@ -329,6 +364,56 @@ func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int6
 		item.Recognition.Normalize()
 	}
 	return &item, nil
+}
+
+func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID, taskID int64, req CompletePatientTaskRequest) error {
+	tag := strings.TrimSpace(req.Result)
+	note := strings.TrimSpace(req.Note)
+	result, err := s.pool.Exec(ctx, `UPDATE patient_operation_tasks t SET status='已完成',employee_id=CASE WHEN t.employee_id=$5 THEN t.employee_id ELSE $5 END,updated_at=NOW(),content=CASE WHEN $1='' THEN t.content ELSE t.content||E'\n\n处理结果：'||$1||CASE WHEN $2='' THEN '' ELSE E'\n备注：'||$2 END END WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消')`, tag, note, taskID, tenantID, employeeID)
+	if err != nil {
+		return fmt.Errorf("complete patient operation task: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("patient operation task not found or already completed")
+	}
+	return nil
+}
+
+func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool) ([]PatientTaskResponse, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
+	var total int64
+	// 历史录音可能归属于已离职员工。此类待办不能继续绑定在已删除账号下，
+	// 应进入当前租户的待办池，供现有运营人员接手；仍保留普通员工只看自己
+	// 负责待办的规则。
+	ownerFilter := "(employee_id=$2 OR employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
+	if allEmployees {
+		ownerFilter = "TRUE"
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks WHERE tenant_id=$1 AND `+ownerFilter+` AND status NOT IN ('已完成','已取消')`, tenantID, employeeID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
+	}
+	defer rows.Close()
+	items := []PatientTaskResponse{}
+	for rows.Next() {
+		var item PatientTaskResponse
+		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID int64) ([]OperationRecordResponse, error) {

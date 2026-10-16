@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -30,6 +31,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/actions/generate", Handler: h.GenerateScreenshotActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/sources", Handler: h.ListCustomerSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/records", Handler: h.ListOperationRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/tasks", Handler: h.ListTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/complete", Handler: h.CompleteTaskAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions/generate", Handler: h.GenerateActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
@@ -184,6 +187,50 @@ func (h *Handler) ListUnlinkedSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) CompleteTaskAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid task id")
+		return
+	}
+	var req CompletePatientTaskRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil || strings.TrimSpace(req.Result) == "" {
+		httputil.WriteBadRequest(w, "result is required")
+		return
+	}
+	if err := h.service.CompletePatientTask(r.Context(), *claims.TenantID, claims.UserID, id, req); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": "已完成"})
+}
+
+func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	page, pageSize := 1, 50
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+		page = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 && v <= 100 {
+		pageSize = v
+	}
+	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, claims.UserType == auth.UserTypeAdmin)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WritePaginated(w, items, total, page, pageSize)
 }
 
 func (h *Handler) ListOperationRecords(w http.ResponseWriter, r *http.Request) {

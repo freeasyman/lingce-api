@@ -12,8 +12,6 @@ import (
 // strings or a single string. The API exposes one stable array shape.
 type StringList []string
 
-func (s StringList) MarshalJSON() ([]byte, error) { return json.Marshal([]string(s)) }
-
 func (s *StringList) UnmarshalJSON(data []byte) error {
 	data = bytes.TrimSpace(data)
 	if bytes.Equal(data, []byte("null")) || len(data) == 0 {
@@ -22,8 +20,27 @@ func (s *StringList) UnmarshalJSON(data []byte) error {
 	}
 	var values []string
 	if data[0] == '[' {
-		if err := json.Unmarshal(data, &values); err != nil {
+		var raw []json.RawMessage
+		if err := json.Unmarshal(data, &raw); err != nil {
 			return err
+		}
+		values = make([]string, 0, len(raw))
+		for _, item := range raw {
+			var text string
+			if err := json.Unmarshal(item, &text); err == nil {
+				values = append(values, text)
+				continue
+			}
+			var object map[string]any
+			if err := json.Unmarshal(item, &object); err != nil {
+				return fmt.Errorf("expected string list item: %w", err)
+			}
+			for _, key := range []string{"action", "content", "text", "description", "value", "title"} {
+				if value, ok := object[key].(string); ok && strings.TrimSpace(value) != "" {
+					values = append(values, value)
+					break
+				}
+			}
 		}
 		*s = values
 		return nil
@@ -219,6 +236,33 @@ type ActionResponse struct {
 	RecordID int64  `json:"record_id,omitempty"`
 	DraftID  int64  `json:"draft_id,omitempty"`
 	Status   string `json:"status"`
+}
+
+type PatientTaskResponse struct {
+	ID           int64  `json:"id"`
+	CustomerID   int64  `json:"customer_id"`
+	CustomerName string `json:"customer_name"`
+	SourceID     *int64 `json:"source_id,omitempty"`
+	TaskType     string `json:"task_type"`
+	Goal         string `json:"goal"`
+	Action       string `json:"action"`
+	Content      string `json:"content"`
+	Evidence     string `json:"evidence,omitempty"`
+	DueAt        string `json:"due_at,omitempty"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+}
+
+type CompletePatientTaskRequest struct {
+	Result string `json:"result"`
+	Note   string `json:"note,omitempty"`
+}
+
+type PatientTaskListResponse struct {
+	Items    []PatientTaskResponse `json:"items"`
+	Total    int64                 `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
 }
 
 type OperationRecordResponse struct {
