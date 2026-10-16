@@ -117,7 +117,7 @@ func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]Co
 	// The review page only needs the latest actionable sources. Limiting before
 	// transferring the Base64 image payload prevents old screenshot history from
 	// turning this endpoint into an unbounded sort and response.
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY id DESC LIMIT 100`, tenantID)
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,''::text AS media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL ORDER BY id DESC LIMIT 100`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
@@ -141,6 +141,25 @@ func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]Co
 		return nil, fmt.Errorf("read unlinked patient sources: %w", err)
 	}
 	return items, nil
+}
+
+func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int64) (*ConversationSourceResponse, error) {
+	var item ConversationSourceResponse
+	var capturedAt time.Time
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND customer_id IS NULL`, tenantID, sourceID).Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("unlinked screenshot source not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get unlinked patient source: %w", err)
+	}
+	item.CapturedAt = capturedAt.Format(time.RFC3339)
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &item.Recognition)
+		item.Recognition.Normalize()
+	}
+	return &item, nil
 }
 
 func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID int64) ([]OperationRecordResponse, error) {
