@@ -111,36 +111,54 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 	return items, rows.Err()
 }
 
-func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64) ([]ConversationSourceResponse, error) {
+type UnlinkedSourcesPage struct {
+	Items    []ConversationSourceResponse `json:"items"`
+	Total    int64                        `json:"total"`
+	Page     int                          `json:"page"`
+	PageSize int                          `json:"page_size"`
+}
+
+func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64, page, pageSize int) (*UnlinkedSourcesPage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	// The review page only needs the latest actionable sources. Limiting before
-	// transferring the Base64 image payload prevents old screenshot history from
-	// turning this endpoint into an unbounded sort and response.
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,''::text AS media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL LIMIT 100`, tenantID)
+	result := &UnlinkedSourcesPage{Items: []ConversationSourceResponse{}, Page: page, PageSize: pageSize}
+	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot'`, tenantID).Scan(&result.Total); err != nil {
+		return nil, fmt.Errorf("count unlinked patient sources: %w", err)
+	}
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,captured_at,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot' ORDER BY captured_at DESC,id DESC LIMIT $2 OFFSET $3`, tenantID, pageSize, int64(page-1)*int64(pageSize))
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
 	defer rows.Close()
-	items := []ConversationSourceResponse{}
 	for rows.Next() {
 		var item ConversationSourceResponse
 		var capturedAt time.Time
 		var raw []byte
-		if err := rows.Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw); err != nil {
+		if err := rows.Scan(&item.ID, &item.SourceType, &item.OriginalName, &capturedAt, &item.MatchStatus, &raw); err != nil {
 			return nil, err
 		}
 		item.CapturedAt = capturedAt.Format(time.RFC3339)
 		if len(raw) > 0 {
-			_ = json.Unmarshal(raw, &item.Recognition)
+			if err := json.Unmarshal(raw, &item.Recognition); err != nil {
+				return nil, fmt.Errorf("decode screenshot %d: %w", item.ID, err)
+			}
 			item.Recognition.Normalize()
 		}
-		items = append(items, item)
+		result.Items = append(result.Items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read unlinked patient sources: %w", err)
 	}
-	return items, nil
+	return result, nil
 }
 
 func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int64) (*ConversationSourceResponse, error) {

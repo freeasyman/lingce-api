@@ -55,12 +55,23 @@ func (h *Handler) ListUnlinkedSources(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
-	items, err := h.service.ListUnlinkedSources(r.Context(), *claims.TenantID)
+	page, pageSize := 1, 20
+	for key, target := range map[string]*int{"page": &page, "page_size": &pageSize} {
+		if raw := r.URL.Query().Get(key); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 || (key == "page_size" && value > 100) {
+				httputil.WriteBadRequest(w, "invalid "+key)
+				return
+			}
+			*target = value
+		}
+	}
+	items, err := h.service.ListUnlinkedSources(r.Context(), *claims.TenantID, page, pageSize)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
+	httputil.WriteSuccess(w, items)
 }
 
 func (h *Handler) ListOperationRecords(w http.ResponseWriter, r *http.Request) {
