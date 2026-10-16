@@ -405,6 +405,30 @@ func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID,
 	return nil
 }
 
+func (s *Service) UpdatePatientTaskStatus(ctx context.Context, tenantID, employeeID, taskID int64, req UpdatePatientTaskRequest) error {
+	status := strings.TrimSpace(req.Status)
+	allowed := map[string]bool{"处理中": true, "等待患者": true, "等待内部协作": true, "已改期": true, "暂停联系": true, "待处理": true}
+	if !allowed[status] {
+		return fmt.Errorf("unsupported task status")
+	}
+	var dueAt any
+	if strings.TrimSpace(req.DueAt) != "" {
+		parsed, err := parsePatientDueAt(req.DueAt, time.Now())
+		if err != nil {
+			return fmt.Errorf("invalid due_at: %w", err)
+		}
+		dueAt = parsed
+	}
+	result, err := s.pool.Exec(ctx, `UPDATE patient_operation_tasks t SET status=$1,due_at=COALESCE($2,due_at),updated_at=NOW() WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消')`, status, dueAt, taskID, tenantID, employeeID)
+	if err != nil {
+		return fmt.Errorf("update patient operation task status: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("patient operation task not found or already completed")
+	}
+	return nil
+}
+
 func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool) ([]PatientTaskResponse, int64, error) {
 	if page < 1 {
 		page = 1

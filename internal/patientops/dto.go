@@ -263,6 +263,11 @@ type CompletePatientTaskRequest struct {
 	NextTask *NextPatientTaskRequest `json:"next_task,omitempty"`
 }
 
+type UpdatePatientTaskRequest struct {
+	Status string `json:"status"`
+	DueAt  string `json:"due_at,omitempty"`
+}
+
 type NextPatientTaskRequest struct {
 	TaskType string `json:"task_type"`
 	Goal     string `json:"goal"`
