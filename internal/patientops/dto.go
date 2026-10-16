@@ -166,11 +166,23 @@ func (v *FlexibleInt64) UnmarshalJSON(data []byte) error {
 }
 
 type GenerateActionResponse struct {
-	Action        string `json:"action"`
-	Content       string `json:"content"`
-	ProductCount  int    `json:"product_count"`
-	NextAction    string `json:"next_action,omitempty"`
-	NextContactAt string `json:"next_contact_at,omitempty"`
+	Action        string            `json:"action"`
+	Content       string            `json:"content"`
+	ProductCount  int               `json:"product_count"`
+	NextAction    string            `json:"next_action,omitempty"`
+	NextContactAt string            `json:"next_contact_at,omitempty"`
+	Products      []ProductEvidence `json:"products,omitempty"`
+}
+
+type ProductEvidence struct {
+	ID           int64    `json:"id"`
+	Name         string   `json:"name"`
+	Aliases      []string `json:"aliases,omitempty"`
+	Price        float64  `json:"price,omitempty"`
+	Applicable   string   `json:"applicable,omitempty"`
+	SellingPoint string   `json:"selling_point,omitempty"`
+	UpgradeTo    string   `json:"upgrade_to,omitempty"`
+	CombineWith  string   `json:"combine_with,omitempty"`
 }
 
 type ActionResponse struct {

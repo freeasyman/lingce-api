@@ -388,6 +388,15 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		return nil, fmt.Errorf("patient action generation returned empty content")
 	}
 	result := &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}
+	if req.Action == "推荐产品解释" && productCount > 0 {
+		var productsJSON []byte
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND is_template=false`, tenantID).Scan(&productsJSON); err != nil {
+			return nil, fmt.Errorf("读取机构产品证据失败：%w", err)
+		}
+		if err := json.Unmarshal(productsJSON, &result.Products); err != nil {
+			return nil, fmt.Errorf("解析机构产品证据失败：%w", err)
+		}
+	}
 	if req.Action == "帮我继续跟" {
 		result.NextAction = strings.TrimSpace(analysis.NextAction)
 		result.NextContactAt = strings.TrimSpace(analysis.NextContactAt)
