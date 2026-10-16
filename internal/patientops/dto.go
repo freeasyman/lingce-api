@@ -166,8 +166,9 @@ func (v *FlexibleInt64) UnmarshalJSON(data []byte) error {
 }
 
 type GenerateActionResponse struct {
-	Action  string `json:"action"`
-	Content string `json:"content"`
+	Action       string `json:"action"`
+	Content      string `json:"content"`
+	ProductCount int    `json:"product_count"`
 }
 
 type ActionResponse struct {

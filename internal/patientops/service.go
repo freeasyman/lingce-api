@@ -349,7 +349,20 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	contextJSON, _ := json.Marshal(analysis)
 	user := strings.ReplaceAll(prompt.UserPrompt, "{{action}}", req.Action)
 	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
-	user = strings.ReplaceAll(user, "{{product_context}}", req.ProductContext)
+	productContext := "此动作未读取产品库。"
+	productCount := 0
+	if req.Action == "推荐产品解释" {
+		var productsJSON []byte
+		err := s.pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND is_template=false`, tenantID).Scan(&productCount, &productsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("读取机构产品库失败：%w", err)
+		}
+		productContext = string(productsJSON)
+		if productCount == 0 {
+			productContext = "当前机构产品库没有可用的在售产品。"
+		}
+	}
+	user = strings.ReplaceAll(user, "{{product_context}}", productContext)
 	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
 	defer cancel()
 	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
@@ -360,7 +373,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	if content == "" {
 		return nil, fmt.Errorf("patient action generation returned empty content")
 	}
-	return &GenerateActionResponse{Action: req.Action, Content: content}, nil
+	return &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}, nil
 }
 
 type patientActionPrompt struct{ SystemPrompt, UserPrompt string }
