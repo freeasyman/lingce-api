@@ -299,13 +299,27 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 			taskType = "咨询推进"
 		}
 		var id int64
-		err := s.pool.QueryRow(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, taskType, strings.TrimSpace(req.Goal), strings.TrimSpace(req.Content)).Scan(&id)
+		// 同一员工对同一截图重复点击保存时返回原草稿，避免产生重复待办。
+		err := s.pool.QueryRow(ctx, `SELECT id FROM patient_operation_task_drafts WHERE tenant_id=$1 AND customer_id=$2 AND source_id=NULLIF($3,0) AND employee_id=$4 AND task_type=$5 AND content=$6 ORDER BY id DESC LIMIT 1`, tenantID, customerID, req.SourceID, employeeID, taskType, strings.TrimSpace(req.Content)).Scan(&id)
+		if err == nil {
+			return &ActionResponse{DraftID: id, Status: "already_saved"}, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("check patient task draft: %w", err)
+		}
+		err = s.pool.QueryRow(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, taskType, strings.TrimSpace(req.Goal), strings.TrimSpace(req.Content)).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("save patient task draft: %w", err)
 		}
 		return &ActionResponse{DraftID: id, Status: "pending_confirmation"}, nil
 	}
 	var id int64
+	// 同一员工对同一截图重复点击保存时返回原记录，避免重复沟通记录。
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM patient_operation_records WHERE tenant_id=$1 AND customer_id=$2 AND source_id=NULLIF($3,0) AND employee_id=$4 AND action_type=$5 AND content=$6 ORDER BY id DESC LIMIT 1`, tenantID, customerID, req.SourceID, employeeID, strings.TrimSpace(req.Action), strings.TrimSpace(req.Content)).Scan(&id); err == nil {
+		return &ActionResponse{RecordID: id, Status: "already_saved"}, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("check patient operation record: %w", err)
+	}
 	if err := s.pool.QueryRow(ctx, `INSERT INTO patient_operation_records(tenant_id,customer_id,source_id,employee_id,action_type,record_type,content,status) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7,CASE WHEN $5 IN ('识别真实顾虑','判断决策人') THEN 'pending' ELSE 'confirmed' END) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, strings.TrimSpace(req.Action), recordType, strings.TrimSpace(req.Content)).Scan(&id); err != nil {
 		return nil, fmt.Errorf("save patient operation record: %w", err)
 	}
