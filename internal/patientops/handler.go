@@ -18,7 +18,7 @@ func NewHandler(s *Service) *Handler { return &Handler{service: s} }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked", Handler: h.ListUnlinkedSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked/{id}", Handler: h.GetUnlinkedSource, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked/{id}/detail", Handler: h.GetUnlinkedSource, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/analyze", Handler: h.AnalyzeAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/{id}/status", Handler: h.StatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/confirm", Handler: h.ConfirmAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
