@@ -20,6 +20,45 @@ type Service struct {
 	llm  *llmgateway.Client
 }
 
+type patientModelConfig struct {
+	FunctionType, Provider, ModelCode string
+	Params                            map[string]any
+}
+
+func (s *Service) loadModelConfig(ctx context.Context, tenantID int64, functionType string) (*patientModelConfig, error) {
+	var c patientModelConfig
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(function_type,''),COALESCE(provider,''),COALESCE(model_code,''),COALESCE(model_params,extra_params,'{}'::json) FROM llm_model_configs WHERE deleted_at IS NULL AND COALESCE(is_active,true)=true AND function_type=$2 AND tenant_id IN ($1,0) ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END,CASE WHEN COALESCE(is_default,false) THEN 0 ELSE 1 END,updated_at DESC,id DESC LIMIT 1`, tenantID, functionType).Scan(&c.FunctionType, &c.Provider, &c.ModelCode, &raw)
+	if err != nil {
+		return nil, fmt.Errorf("load patient model config %s: %w", functionType, err)
+	}
+	if c.Provider == "" || c.ModelCode == "" {
+		return nil, fmt.Errorf("patient model config %s is incomplete", functionType)
+	}
+	c.Params = map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &c.Params); err != nil {
+			return nil, fmt.Errorf("decode patient model params: %w", err)
+		}
+	}
+	return &c, nil
+}
+
+func applyPatientParams(p *llmgateway.Params, raw map[string]any) {
+	if v, ok := raw["temperature"].(float64); ok {
+		p.Temperature = v
+	}
+	if v, ok := raw["max_tokens"].(float64); ok && v > 0 {
+		p.MaxTokens = int(v)
+	}
+	if v, ok := raw["timeout_seconds"].(float64); ok && v > 0 {
+		p.TimeoutSeconds = int(v)
+	}
+	if v, ok := raw["response_format"].(string); ok {
+		p.ResponseFormat = v
+	}
+}
+
 func NewService(pool *pgxpool.Pool, llm *llmgateway.Client) *Service {
 	return &Service{pool: pool, llm: llm}
 }
@@ -250,6 +289,69 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	return &ActionResponse{RecordID: id, Status: "saved"}, nil
 }
 
+func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, customerID int64, req GenerateActionRequest) (*GenerateActionResponse, error) {
+	if s.pool == nil || s.llm == nil {
+		return nil, fmt.Errorf("patient operations dependencies are not configured")
+	}
+	if tenantID <= 0 || employeeID <= 0 || strings.TrimSpace(req.Action) == "" {
+		return nil, fmt.Errorf("customer and action are required")
+	}
+	allowed := map[string]bool{"帮我破冰": true, "帮我回复": true, "帮我继续跟": true, "识别真实顾虑": true, "判断决策人": true, "推荐产品解释": true, "请求主管帮助": true}
+	if !allowed[req.Action] {
+		return nil, fmt.Errorf("unsupported patient action")
+	}
+	if req.SourceID <= 0 {
+		return nil, fmt.Errorf("source_id is required")
+	}
+	var analysisRaw []byte
+	if err := s.pool.QueryRow(ctx, `SELECT recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND ($3=0 OR customer_id=$3 OR customer_id IS NULL)`, tenantID, req.SourceID, customerID).Scan(&analysisRaw); err != nil {
+		return nil, fmt.Errorf("load screenshot analysis: %w", err)
+	}
+	var analysis ScreenshotAnalysis
+	if err := json.Unmarshal(analysisRaw, &analysis); err != nil {
+		return nil, fmt.Errorf("parse screenshot analysis: %w", err)
+	}
+	analysis.Normalize()
+	prompt, err := s.loadActionPrompt(ctx, req.Action)
+	if err != nil {
+		return nil, err
+	}
+	config, err := s.loadModelConfig(ctx, tenantID, "patient_action_generation")
+	if err != nil {
+		return nil, err
+	}
+	params := &llmgateway.Params{Temperature: .3, MaxTokens: 1200, TimeoutSeconds: 45, ResponseFormat: "text"}
+	applyPatientParams(params, config.Params)
+	contextJSON, _ := json.Marshal(analysis)
+	user := strings.ReplaceAll(prompt.UserPrompt, "{{action}}", req.Action)
+	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
+	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
+	defer cancel()
+	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: req.SourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
+	if err != nil {
+		return nil, fmt.Errorf("generate patient action through llm gateway: %w", err)
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return nil, fmt.Errorf("patient action generation returned empty content")
+	}
+	return &GenerateActionResponse{Action: req.Action, Content: content}, nil
+}
+
+type patientActionPrompt struct{ SystemPrompt, UserPrompt string }
+
+func (s *Service) loadActionPrompt(ctx context.Context, action string) (*patientActionPrompt, error) {
+	var p patientActionPrompt
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(system_prompt,''),COALESCE(user_prompt_template,'') FROM recording_analysis_prompts WHERE code='patient_action_generation_v1' AND is_active=true ORDER BY id DESC LIMIT 1`).Scan(&p.SystemPrompt, &p.UserPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("load patient action prompt: %w", err)
+	}
+	if p.SystemPrompt == "" || p.UserPrompt == "" {
+		return nil, fmt.Errorf("patient action prompt is not configured")
+	}
+	return &p, nil
+}
+
 func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRequest) (*ScreenshotAnalyzeResponse, error) {
 	if s.pool == nil || s.llm == nil {
 		return nil, fmt.Errorf("patient operations dependencies are not configured")
@@ -331,7 +433,13 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if err != nil {
 		return nil, markFailed(err)
 	}
-	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: "patient_screenshot_analysis", ModelCode: "qwen3.8-flash", Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: prompt.UserPrompt}}}}, Params: &llmgateway.Params{MaxTokens: 2200, ResponseFormat: "json"}})
+	config, err := s.loadModelConfig(analysisCtx, req.TenantID, "patient_screenshot_analysis")
+	if err != nil {
+		return nil, markFailed(err)
+	}
+	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 60, ResponseFormat: "json"}
+	applyPatientParams(params, config.Params)
+	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: prompt.UserPrompt}}}}, Params: params})
 	if err != nil {
 		return nil, markFailed(fmt.Errorf("analyze screenshot through llm gateway: %w", err))
 	}

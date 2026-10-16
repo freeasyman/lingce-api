@@ -137,6 +137,16 @@ type ActionRequest struct {
 	Goal       string `json:"goal,omitempty"`
 }
 
+type GenerateActionRequest struct {
+	SourceID int64  `json:"source_id"`
+	Action   string `json:"action"`
+}
+
+type GenerateActionResponse struct {
+	Action  string `json:"action"`
+	Content string `json:"content"`
+}
+
 type ActionResponse struct {
 	RecordID int64  `json:"record_id,omitempty"`
 	DraftID  int64  `json:"draft_id,omitempty"`
