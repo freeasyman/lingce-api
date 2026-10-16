@@ -293,7 +293,7 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	if recordType == "" {
 		recordType = "employee"
 	}
-	if req.Action == "帮我继续跟" || strings.TrimSpace(req.TaskType) != "" {
+	if req.Action == "帮我继续跟" {
 		taskType := strings.TrimSpace(req.TaskType)
 		if taskType == "" {
 			taskType = "咨询推进"
@@ -322,6 +322,13 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	}
 	if err := s.pool.QueryRow(ctx, `INSERT INTO patient_operation_records(tenant_id,customer_id,source_id,employee_id,action_type,record_type,content,status) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7,CASE WHEN $5 IN ('识别真实顾虑','判断决策人') THEN 'pending' ELSE 'confirmed' END) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, strings.TrimSpace(req.Action), recordType, strings.TrimSpace(req.Content)).Scan(&id); err != nil {
 		return nil, fmt.Errorf("save patient operation record: %w", err)
+	}
+	if strings.TrimSpace(req.TaskType) != "" {
+		var draftID int64
+		if err := s.pool.QueryRow(ctx, `INSERT INTO patient_operation_task_drafts(tenant_id,customer_id,source_id,employee_id,task_type,goal,content) VALUES($1,$2,NULLIF($3,0),$4,$5,$6,$7) RETURNING id`, tenantID, customerID, req.SourceID, employeeID, strings.TrimSpace(req.TaskType), strings.TrimSpace(req.Goal), strings.TrimSpace(req.Content)).Scan(&draftID); err != nil {
+			return nil, fmt.Errorf("save patient task draft: %w", err)
+		}
+		return &ActionResponse{RecordID: id, DraftID: draftID, Status: "saved_with_draft"}, nil
 	}
 	return &ActionResponse{RecordID: id, Status: "saved"}, nil
 }
