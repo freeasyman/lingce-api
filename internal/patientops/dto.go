@@ -140,8 +140,9 @@ type ActionRequest struct {
 }
 
 type GenerateActionRequest struct {
-	SourceID FlexibleInt64 `json:"source_id"`
-	Action   string        `json:"action"`
+	SourceID       FlexibleInt64 `json:"source_id"`
+	Action         string        `json:"action"`
+	ProductContext string        `json:"product_context,omitempty"`
 }
 
 type FlexibleInt64 int64

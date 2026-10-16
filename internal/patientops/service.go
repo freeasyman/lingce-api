@@ -349,6 +349,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	contextJSON, _ := json.Marshal(analysis)
 	user := strings.ReplaceAll(prompt.UserPrompt, "{{action}}", req.Action)
 	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
+	user = strings.ReplaceAll(user, "{{product_context}}", req.ProductContext)
 	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
 	defer cancel()
 	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
