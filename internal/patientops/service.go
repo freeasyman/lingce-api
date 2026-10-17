@@ -584,6 +584,27 @@ func (s *Service) ListCustomerTasks(ctx context.Context, tenantID, customerID in
 	return items, rows.Err()
 }
 
+func (s *Service) ListCustomerTaskSummary(ctx context.Context, tenantID, employeeID int64, allEmployees bool) ([]CustomerTaskSummary, error) {
+	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
+	if allEmployees {
+		ownerFilter = "$2::bigint IS NOT NULL"
+	}
+	rows, err := s.pool.Query(ctx, `SELECT t.customer_id,COUNT(*)::bigint,COALESCE(MIN(t.due_at)::text,'') FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') GROUP BY t.customer_id ORDER BY t.customer_id`, tenantID, employeeID)
+	if err != nil {
+		return nil, fmt.Errorf("list patient customer task summary: %w", err)
+	}
+	defer rows.Close()
+	items := []CustomerTaskSummary{}
+	for rows.Next() {
+		var item CustomerTaskSummary
+		if err := rows.Scan(&item.CustomerID, &item.PendingCount, &item.NextDueAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID int64) (*ScreenshotStatusResponse, error) {
 	if tenantID <= 0 || sourceID <= 0 {
 		return nil, fmt.Errorf("tenant_id and source_id are required")

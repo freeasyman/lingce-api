@@ -285,6 +285,12 @@ type PatientTaskListResponse struct {
 	PageSize int                   `json:"page_size"`
 }
 
+type CustomerTaskSummary struct {
+	CustomerID   int64  `json:"customer_id"`
+	PendingCount int64  `json:"pending_count"`
+	NextDueAt    string `json:"next_due_at,omitempty"`
+}
+
 type OperationRecordResponse struct {
 	ID         int64  `json:"id"`
 	SourceID   *int64 `json:"source_id,omitempty"`

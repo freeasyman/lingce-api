@@ -32,6 +32,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/sources", Handler: h.ListCustomerSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/records", Handler: h.ListOperationRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/tasks", Handler: h.ListCustomerTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/customers/task-summary", Handler: h.ListCustomerTaskSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks", Handler: h.ListTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/complete", Handler: h.CompleteTaskAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/status", Handler: h.UpdateTaskStatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -290,6 +291,20 @@ func (h *Handler) ListCustomerTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items, err := h.service.ListCustomerTasks(r.Context(), *claims.TenantID, customerID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) ListCustomerTaskSummary(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	items, err := h.service.ListCustomerTaskSummary(r.Context(), *claims.TenantID, claims.UserID, claims.UserType == auth.UserTypeAdmin)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
