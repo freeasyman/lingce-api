@@ -807,6 +807,18 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 	if !strings.HasPrefix(req.ImageData, "data:image/") {
 		return nil, fmt.Errorf("image_data must be a data image URL")
 	}
+	// A customer-context screenshot is already bound to the customer selected
+	// in the customer detail page. Validate that binding on the server instead
+	// of trusting the browser supplied ID.
+	if req.CustomerID != nil {
+		var exists bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL)`, req.TenantID, *req.CustomerID).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("validate screenshot customer: %w", err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("customer does not belong to tenant")
+		}
+	}
 	contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.ImageData)))
 	var existing ScreenshotAnalyzeResponse
 	var existingPayload []byte
@@ -814,6 +826,15 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 	var existingStatus string
 	err := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2 LIMIT 1`, req.TenantID, contentHash).Scan(&existing.SourceID, &existingCustomerID, &existing.MatchStatus, &existingStatus, &existingPayload)
 	if err == nil {
+		if req.CustomerID != nil && existingCustomerID != nil && *existingCustomerID != *req.CustomerID {
+			return nil, fmt.Errorf("screenshot is already associated with another customer")
+		}
+		if req.CustomerID != nil && existingCustomerID == nil {
+			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3 AND customer_id IS NULL`, *req.CustomerID, req.TenantID, existing.SourceID); err != nil {
+				return nil, fmt.Errorf("bind screenshot to customer: %w", err)
+			}
+			existingCustomerID = req.CustomerID
+		}
 		if existingStatus == "succeeded" && len(existingPayload) > 0 && string(existingPayload) != "{}" {
 			if err := json.Unmarshal(existingPayload, &existing.Analysis); err != nil {
 				return nil, fmt.Errorf("parse existing screenshot analysis: %w", err)
