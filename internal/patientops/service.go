@@ -567,6 +567,23 @@ func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID
 	return items, nil
 }
 
+func (s *Service) ListCustomerTasks(ctx context.Context, tenantID, customerID int64) ([]PatientTaskResponse, error) {
+	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND t.customer_id=$2 ORDER BY t.created_at DESC,t.id DESC`, tenantID, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("list patient customer tasks: %w", err)
+	}
+	defer rows.Close()
+	items := []PatientTaskResponse{}
+	for rows.Next() {
+		var item PatientTaskResponse
+		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt, &item.ParentTaskID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID int64) (*ScreenshotStatusResponse, error) {
 	if tenantID <= 0 || sourceID <= 0 {
 		return nil, fmt.Errorf("tenant_id and source_id are required")
