@@ -350,14 +350,13 @@ type UnlinkedSourcesPage struct {
 	PageSize int                          `json:"page_size"`
 }
 
-// CountUnlinkedSources returns only analyzed screenshots that still need an
-// employee to confirm identity. Processing and failed screenshots are shown
-// through their own states and do not add noise to the navigation badge.
+// CountUnlinkedSources returns screenshots that have not yet been associated
+// with a customer. This is the same condition used by the existing queue.
 func (s *Service) CountUnlinkedSources(ctx context.Context, tenantID int64) (int64, error) {
 	var count int64
 	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND source_type='screenshot' AND customer_id IS NULL AND match_status='pending' AND analysis_status='succeeded'`, tenantID).Scan(&count); err != nil {
+	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND source_type='screenshot' AND customer_id IS NULL`, tenantID).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count screenshots awaiting identity confirmation: %w", err)
 	}
 	return count, nil
@@ -376,10 +375,10 @@ func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64, page,
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	result := &UnlinkedSourcesPage{Items: []ConversationSourceResponse{}, Page: page, PageSize: pageSize}
-	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot' AND match_status='pending' AND analysis_status='succeeded'`, tenantID).Scan(&result.Total); err != nil {
+	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot'`, tenantID).Scan(&result.Total); err != nil {
 		return nil, fmt.Errorf("count unlinked patient sources: %w", err)
 	}
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,captured_at,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot' AND match_status='pending' AND analysis_status='succeeded' ORDER BY captured_at DESC,id DESC LIMIT $2 OFFSET $3`, tenantID, pageSize, int64(page-1)*int64(pageSize))
+	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,captured_at,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot' ORDER BY captured_at DESC,id DESC LIMIT $2 OFFSET $3`, tenantID, pageSize, int64(page-1)*int64(pageSize))
 	if err != nil {
 		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
 	}
@@ -410,7 +409,7 @@ func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int6
 	var item ConversationSourceResponse
 	var capturedAt time.Time
 	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND customer_id IS NULL AND source_type='screenshot' AND match_status='pending' AND analysis_status='succeeded'`, tenantID, sourceID).Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw)
+	err := s.pool.QueryRow(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND customer_id IS NULL`, tenantID, sourceID).Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("unlinked screenshot source not found")
 	}
