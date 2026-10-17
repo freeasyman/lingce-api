@@ -22,6 +22,8 @@ type Service struct {
 	llm  *llmgateway.Client
 }
 
+var ErrScreenshotCustomerConflict = errors.New("screenshot is already associated with another customer")
+
 type patientTaskExecer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
@@ -827,7 +829,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 	err := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2 LIMIT 1`, req.TenantID, contentHash).Scan(&existing.SourceID, &existingCustomerID, &existing.MatchStatus, &existingStatus, &existingPayload)
 	if err == nil {
 		if req.CustomerID != nil && existingCustomerID != nil && *existingCustomerID != *req.CustomerID {
-			return nil, fmt.Errorf("screenshot is already associated with another customer")
+			return nil, ErrScreenshotCustomerConflict
 		}
 		if req.CustomerID != nil && existingCustomerID == nil {
 			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3 AND customer_id IS NULL`, *req.CustomerID, req.TenantID, existing.SourceID); err != nil {

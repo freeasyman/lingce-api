@@ -450,6 +450,10 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req ScreenshotAnalyzeRequest) {
 	resp, err := h.service.AnalyzeScreenshot(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrScreenshotCustomerConflict) {
+			httputil.WriteError(w, http.StatusConflict, "SCREENSHOT_CUSTOMER_CONFLICT", "这张截图已经关联了其他客户，请重新选择截图。", nil)
+			return
+		}
 		slog.Error("patient screenshot analyze failed", "tenant_id", req.TenantID, "employee_id", req.EmployeeID, "error", err)
 		httputil.WriteInternalError(w, err.Error())
 		return
