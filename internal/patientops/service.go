@@ -589,7 +589,7 @@ func (s *Service) ListCustomerTaskSummary(ctx context.Context, tenantID, employe
 	if allEmployees {
 		ownerFilter = "$2::bigint IS NOT NULL"
 	}
-	rows, err := s.pool.Query(ctx, `SELECT t.customer_id,COUNT(*)::bigint,COALESCE(MIN(t.due_at)::text,'') FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') GROUP BY t.customer_id ORDER BY t.customer_id`, tenantID, employeeID)
+	rows, err := s.pool.Query(ctx, `SELECT t.customer_id,COUNT(*)::bigint,COALESCE((array_agg(COALESCE(NULLIF(t.action,''),NULLIF(t.goal,''),t.content) ORDER BY t.due_at NULLS LAST,t.created_at,t.id))[1],''),COALESCE((array_agg(t.due_at::text ORDER BY t.due_at NULLS LAST,t.created_at,t.id))[1],'') FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND `+ownerFilter+` AND t.status NOT IN ('已完成','已取消') GROUP BY t.customer_id ORDER BY t.customer_id`, tenantID, employeeID)
 	if err != nil {
 		return nil, fmt.Errorf("list patient customer task summary: %w", err)
 	}
@@ -597,7 +597,7 @@ func (s *Service) ListCustomerTaskSummary(ctx context.Context, tenantID, employe
 	items := []CustomerTaskSummary{}
 	for rows.Next() {
 		var item CustomerTaskSummary
-		if err := rows.Scan(&item.CustomerID, &item.PendingCount, &item.NextDueAt); err != nil {
+		if err := rows.Scan(&item.CustomerID, &item.PendingCount, &item.NextAction, &item.NextDueAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

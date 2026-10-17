@@ -288,6 +288,7 @@ type PatientTaskListResponse struct {
 type CustomerTaskSummary struct {
 	CustomerID   int64  `json:"customer_id"`
 	PendingCount int64  `json:"pending_count"`
+	NextAction   string `json:"next_action,omitempty"`
 	NextDueAt    string `json:"next_due_at,omitempty"`
 }
 
