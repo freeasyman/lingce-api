@@ -22,6 +22,7 @@ type Handler struct{ service *Service }
 func NewHandler(s *Service) *Handler { return &Handler{service: s} }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
 	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked/count", Handler: h.CountUnlinkedSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked", Handler: h.ListUnlinkedSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked/{id}/detail", Handler: h.GetUnlinkedSource, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/analyze", Handler: h.AnalyzeAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -41,6 +42,20 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/recordings/analyze", Handler: h.AnalyzeRecording, AuthMode: "internal"},
 	}, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
+}
+
+func (h *Handler) CountUnlinkedSources(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	count, err := h.service.CountUnlinkedSources(r.Context(), *claims.TenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int64{"count": count})
 }
 
 func (h *Handler) AnalyzeRecording(w http.ResponseWriter, r *http.Request) {
