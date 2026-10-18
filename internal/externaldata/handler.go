@@ -65,6 +65,14 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 			return
 		}
 		defer tx.Rollback(r.Context())
+		var existingStatus, existingResource string
+		var existingID string
+		dupErr := tx.QueryRow(r.Context(), `SELECT id,status,COALESCE(resource_id,'') FROM external_data_deliveries WHERE tenant_id=$1 AND object_type=$2 AND source_system=$3 AND source_record_id=$4`, h.tenantID, kind, e.SourceSystem, e.SourceRecordID).Scan(&existingID, &existingStatus, &existingResource)
+		if dupErr == nil {
+			_ = tx.Rollback(r.Context())
+			write(w, 200, DeliveryResponse{DeliveryID: existingID, Status: "duplicate", TenantID: h.tenantID, ObjectType: kind, SourceRecordID: e.SourceRecordID, ResourceID: existingResource})
+			return
+		}
 		var did string
 		err = tx.QueryRow(r.Context(), `INSERT INTO external_data_deliveries(tenant_id,object_type,source_system,source_record_id,idempotency_key,payload,status,attempts) VALUES($1,$2,$3,$4,$5,$6::jsonb,'delivered',1) ON CONFLICT(tenant_id,object_type,source_system,source_record_id) DO UPDATE SET updated_at=NOW() RETURNING id`, h.tenantID, kind, e.SourceSystem, e.SourceRecordID, e.IdempotencyKey, payload).Scan(&did)
 		if err != nil {
@@ -219,12 +227,24 @@ func (h *Handler) waitingQueues(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var claim struct {
+		DoctorID int64 `json:"doctor_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&claim); err != nil || claim.DoctorID <= 0 {
+		write(w, 400, map[string]string{"error": "doctor_id is required"})
+		return
+	}
 	tx, err := h.pool.Begin(r.Context())
 	if err != nil {
 		write(w, 500, map[string]string{"error": "begin transaction failed"})
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var doctorName string
+	if err := tx.QueryRow(r.Context(), `SELECT COALESCE(NULLIF(full_name,''),NULLIF(name,''),'' ) FROM employees WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND is_active=true`, claim.DoctorID, h.tenantID).Scan(&doctorName); err != nil {
+		write(w, 403, map[string]string{"error": "doctor is not active or not in tenant"})
+		return
+	}
 	var source, ticket string
 	var customer int64
 	var payload []byte
@@ -248,7 +268,7 @@ func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
 		sid = 1
 	}
 	var encounter int64
-	err = tx.QueryRow(r.Context(), `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,channel,visit_type,status,created_at,updated_at) SELECT $1,'external_queue',$2,$3,COALESCE(c.name,''),'external','consultation','new',NOW(),NOW() FROM customers c WHERE c.id=$3 AND c.tenant_id=$1 ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,updated_at=NOW() RETURNING id`, h.tenantID, sid, customer).Scan(&encounter)
+	err = tx.QueryRow(r.Context(), `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,provider_id,provider_name,channel,visit_type,status,created_at,updated_at) SELECT $1,'external_queue',$2,$3,COALESCE(c.name,''),$4,$5,'external','consultation','new',NOW(),NOW() FROM customers c WHERE c.id=$3 AND c.tenant_id=$1 ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,updated_at=NOW() RETURNING id`, h.tenantID, sid, customer, claim.DoctorID, doctorName).Scan(&encounter)
 	if err != nil {
 		write(w, 422, map[string]string{"error": "create encounter failed"})
 		return
@@ -262,7 +282,7 @@ func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
 		write(w, 500, map[string]string{"error": "commit failed"})
 		return
 	}
-	write(w, 200, map[string]any{"status": "claimed", "queue_id": id, "encounter_id": encounter})
+	write(w, 200, map[string]any{"status": "claimed", "queue_id": id, "encounter_id": encounter, "doctor_id": claim.DoctorID})
 }
 
 func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) error {
@@ -287,6 +307,10 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 	var templateID string
 	if err := h.pool.QueryRow(ctx, `SELECT id FROM emr_templates WHERE tenant_id IN ($1,0) AND code='standard_outpatient' AND status='published' AND is_current=true ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END LIMIT 1`, h.tenantID).Scan(&templateID); err != nil {
 		return fmt.Errorf("load outpatient template: %w", err)
+	}
+	var existing string
+	if err := h.pool.QueryRow(ctx, `SELECT id FROM emr_records WHERE tenant_id=$1 AND encounter_id=$2 LIMIT 1`, h.tenantID, eid).Scan(&existing); err == nil {
+		return nil
 	}
 	content := map[string]any{"chief_complaint": fmt.Sprint(e.Data["chief_complaint"]), "auxiliary_exam": fmt.Sprint(e.Data["examination"]), "diagnosis": map[string]any{"diagnosis_name": fmt.Sprint(e.Data["diagnosis"])}, "disposition": fmt.Sprint(e.Data["treatment_plan"]), "external_source_system": e.SourceSystem, "external_updated_at": e.UpdatedAt.Format(time.RFC3339)}
 	if p, ok := e.Data["prescription"]; ok {
