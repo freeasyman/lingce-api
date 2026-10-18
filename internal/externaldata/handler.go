@@ -2,7 +2,9 @@ package externaldata
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -73,10 +75,18 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 			err = h.persistAppointment(r.Context(), tx, did, e)
 		} else if kind == "queues" {
 			err = h.persistQueue(r.Context(), tx, did, e)
+		} else if kind == "visits" {
+			resource, err = h.ensureVisitEncounter(r.Context(), tx, e)
 		}
 		if err != nil {
 			write(w, 422, map[string]string{"error": err.Error()})
 			return
+		}
+		if resource != "" {
+			if _, err := tx.Exec(r.Context(), `UPDATE external_data_deliveries SET resource_id=$1, status='delivered', updated_at=NOW() WHERE id=$2`, resource, did); err != nil {
+				write(w, 500, map[string]string{"error": "update delivery resource failed"})
+				return
+			}
 		}
 		if err := tx.Commit(r.Context()); err != nil {
 			write(w, 500, map[string]string{"error": "commit failed"})
@@ -127,6 +137,41 @@ func (h *Handler) persistQueue(ctx context.Context, tx pgx.Tx, did string, e Env
 	_, err := tx.Exec(ctx, `INSERT INTO external_data_queues(delivery_id,tenant_id,source_system,source_queue_ticket_id,payload,status) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(tenant_id,source_system,source_queue_ticket_id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status`, did, h.tenantID, e.SourceSystem, sid, mustJSON(e.Data), fmt.Sprint(e.Data["status"]))
 	return err
 }
+
+func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelope) (string, error) {
+	sid := strings.TrimSpace(fmt.Sprint(e.Patient["source_patient_id"]))
+	var patientID int64
+	if err := tx.QueryRow(ctx, `SELECT customer_id FROM external_data_source_identities WHERE tenant_id=$1 AND source_system=$2 AND source_patient_id=$3`, h.tenantID, e.SourceSystem, sid).Scan(&patientID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", fmt.Errorf("patient identity not found: %s", sid)
+		}
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(e.SourceSystem + "\x00" + e.SourceRecordID))
+	sourceID := int64(binary.BigEndian.Uint64(sum[:8]) & 0x7fffffffffffffff)
+	if sourceID == 0 {
+		sourceID = 1
+	}
+	var encounterID int64
+	doctorName := strings.TrimSpace(fmt.Sprint(e.Data["doctor"]))
+	department := strings.TrimSpace(fmt.Sprint(e.Data["department"]))
+	patientName := strings.TrimSpace(fmt.Sprint(e.Patient["name"]))
+	visitType := strings.TrimSpace(fmt.Sprint(e.Data["visit_type"]))
+	if visitType == "" {
+		visitType = "初诊"
+	}
+	started := e.OccurredAt
+	if started.IsZero() {
+		started = e.UpdatedAt
+	}
+	err := tx.QueryRow(ctx, `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,provider_name,department_id,channel,visit_type,started_at,status,created_at,updated_at) VALUES($1,'external_data',$2,$3,NULLIF($4,''),$5,NULL,$6,'external',$7,'new',NOW(),NOW()) ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,patient_name=EXCLUDED.patient_name,provider_name=EXCLUDED.provider_name,visit_type=EXCLUDED.visit_type,started_at=EXCLUDED.started_at,updated_at=NOW() RETURNING id`, h.tenantID, sourceID, patientID, patientName, doctorName, visitType, started).Scan(&encounterID)
+	if err != nil {
+		return "", fmt.Errorf("ensure encounter: %w", err)
+	}
+	_ = department
+	return fmt.Sprint(encounterID), nil
+}
+
 func (h *Handler) getDelivery(w http.ResponseWriter, r *http.Request) {
 	var d DeliveryResponse
 	var errReason sql.NullString
