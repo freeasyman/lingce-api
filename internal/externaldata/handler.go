@@ -145,7 +145,7 @@ func (h *Handler) upsertPatient(ctx context.Context, tx pgx.Tx, e Envelope) (str
 		if age == nil {
 			age = nullInt(e.Patient["age"])
 		}
-		err = tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,phone,gender,age,status,momentum,source,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'lead',50,$6,0,NOW(),NOW()) RETURNING id`, h.tenantID, name, phone, gender, age, e.SourceSystem).Scan(&cid)
+		err = tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,phone,gender,age,status,momentum,source,lifecycle_stage,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'lead',50,$6,'unknown',0,NOW(),NOW()) RETURNING id`, h.tenantID, name, phone, gender, age, e.SourceSystem).Scan(&cid)
 		if err != nil {
 			return "", fmt.Errorf("create patient: %w", err)
 		}
