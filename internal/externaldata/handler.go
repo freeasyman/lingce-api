@@ -123,13 +123,28 @@ func (h *Handler) upsertPatient(ctx context.Context, tx pgx.Tx, e Envelope) (str
 	var cid int64
 	err := tx.QueryRow(ctx, `SELECT customer_id FROM external_data_source_identities WHERE tenant_id=$1 AND source_system=$2 AND source_patient_id=$3`, h.tenantID, e.SourceSystem, sid).Scan(&cid)
 	if err == pgx.ErrNoRows {
-		name := strings.TrimSpace(fmt.Sprint(e.Patient["name"]))
+		// Patient identity lives in the envelope; patient master data lives in
+		// data according to the external contract. Keep the envelope values as
+		// a compatibility fallback for older senders.
+		name := strings.TrimSpace(fmt.Sprint(e.Data["name"]))
+		if name == "" {
+			name = strings.TrimSpace(fmt.Sprint(e.Patient["name"]))
+		}
 		if name == "" {
 			return "", fmt.Errorf("patient.name is required")
 		}
-		phone := nullString(e.Patient["phone"])
-		gender := nullString(e.Patient["gender"])
-		age := nullInt(e.Patient["age"])
+		phone := nullString(e.Data["phone"])
+		if phone == nil {
+			phone = nullString(e.Patient["phone"])
+		}
+		gender := nullString(e.Data["gender"])
+		if gender == nil {
+			gender = nullString(e.Patient["gender"])
+		}
+		age := nullInt(e.Data["age"])
+		if age == nil {
+			age = nullInt(e.Patient["age"])
+		}
 		err = tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,phone,gender,age,status,momentum,source,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'lead',50,$6,0,NOW(),NOW()) RETURNING id`, h.tenantID, name, phone, gender, age, e.SourceSystem).Scan(&cid)
 		if err != nil {
 			return "", fmt.Errorf("create patient: %w", err)
@@ -196,7 +211,10 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &departmentID); err != nil {
 		return "", fmt.Errorf("doctor not found: %s", doctorName)
 	}
-	patientName := strings.TrimSpace(fmt.Sprint(e.Patient["name"]))
+	var patientName string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(name,'') FROM customers WHERE tenant_id=$1 AND id=$2`, h.tenantID, patientID).Scan(&patientName); err != nil {
+		return "", fmt.Errorf("load patient customer: %w", err)
+	}
 	visitType := strings.TrimSpace(fmt.Sprint(e.Data["visit_type"]))
 	if visitType == "" {
 		visitType = "初诊"
