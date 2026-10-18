@@ -32,6 +32,8 @@ llm_gateway_url = "http://localhost:8080"
 badge_middleware_url = "http://localhost:18082"
 recording_worker_url = "http://localhost:18090"
 lingce_worker_url = "http://localhost:18083"
+# 阶段 4A 外部 HIS 测试数据固定写入开发租户 1；请求体不能自行指定租户。
+external_data_tenant_id = 1
 # 开发环境默认开启实时麦克风录音的随访投递；生产环境请按联调结果显式配置。
 emr_followup_delivery_enabled = true
 
