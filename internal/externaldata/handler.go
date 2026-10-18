@@ -207,11 +207,17 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	var encounterID int64
 	doctorName := strings.TrimSpace(fmt.Sprint(e.Data["doctor"]))
 	department := strings.TrimSpace(fmt.Sprint(e.Data["department"]))
-	var doctorID, departmentID int64
+	var doctorID int64
+	var departmentID *int64
 	// HIS doctor names are source facts. The local employee directory may not
 	// contain every historical or external provider, so keep the name and let
 	// provider_id remain unset when no tenant employee matches.
-	_ = tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &departmentID)
+	var matchedDepartmentID int64
+	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &matchedDepartmentID); err == nil {
+		if matchedDepartmentID > 0 {
+			departmentID = &matchedDepartmentID
+		}
+	}
 	var patientName string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(name,'') FROM customers WHERE tenant_id=$1 AND id=$2`, h.tenantID, patientID).Scan(&patientName); err != nil {
 		return "", fmt.Errorf("load patient customer: %w", err)
