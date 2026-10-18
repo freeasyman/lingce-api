@@ -18,10 +18,9 @@ import (
 )
 
 type Handler struct {
-	pool      *pgxpool.Pool
-	tenantID  int64
-	emr       *emrrecord.Service
-	templates *emrtemplate.Service
+	pool     *pgxpool.Pool
+	tenantID int64
+	emr      *emrrecord.Service
 }
 
 func NewHandler(pool *pgxpool.Pool, tenantID int64, emr ...*emrrecord.Service) *Handler {
