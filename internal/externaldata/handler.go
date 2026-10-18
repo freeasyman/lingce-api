@@ -29,6 +29,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, token string) {
 		router.Register(mux, []router.Route{{Method: http.MethodPost, Path: path, Handler: h.receive(k), AuthMode: "internal"}}, router.RouteDeps{InternalToken: strings.TrimSpace(token)})
 	}
 	router.Register(mux, []router.Route{{Method: http.MethodGet, Path: "/internal/v1/external-data/deliveries/{id}", Handler: h.getDelivery, AuthMode: "internal"}}, router.RouteDeps{InternalToken: strings.TrimSpace(token)})
+	router.Register(mux, []router.Route{{Method: http.MethodGet, Path: "/internal/v1/external-data/queues/waiting", Handler: h.waitingQueues, AuthMode: "internal"}, {Method: http.MethodPost, Path: "/internal/v1/external-data/queues/{id}/claim", Handler: h.claimQueue, AuthMode: "internal"}}, router.RouteDeps{InternalToken: strings.TrimSpace(token)})
 }
 func (h *Handler) receive(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +171,75 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	}
 	_ = department
 	return fmt.Sprint(encounterID), nil
+}
+
+func (h *Handler) waitingQueues(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.pool.Query(r.Context(), `SELECT id,source_system,source_queue_ticket_id,customer_id,payload,status FROM external_data_queues WHERE tenant_id=$1 AND status IN ('waiting','called','pending') ORDER BY id`, h.tenantID)
+	if err != nil {
+		write(w, 500, map[string]string{"error": "query queues failed"})
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, source, ticket string
+		var customer int64
+		var payload []byte
+		var status string
+		if err := rows.Scan(&id, &source, &ticket, &customer, &payload, &status); err != nil {
+			write(w, 500, map[string]string{"error": "scan queue failed"})
+			return
+		}
+		out = append(out, map[string]any{"id": id, "source_system": source, "source_queue_ticket_id": ticket, "customer_id": customer, "payload": json.RawMessage(payload), "status": status})
+	}
+	write(w, 200, map[string]any{"items": out})
+}
+func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tx, err := h.pool.Begin(r.Context())
+	if err != nil {
+		write(w, 500, map[string]string{"error": "begin transaction failed"})
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var source, ticket string
+	var customer int64
+	var payload []byte
+	var status string
+	err = tx.QueryRow(r.Context(), `SELECT source_system,source_queue_ticket_id,customer_id,payload,status FROM external_data_queues WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, h.tenantID, id).Scan(&source, &ticket, &customer, &payload, &status)
+	if err == pgx.ErrNoRows {
+		write(w, 404, map[string]string{"error": "queue not found"})
+		return
+	}
+	if err != nil {
+		write(w, 500, map[string]string{"error": "load queue failed"})
+		return
+	}
+	if status == "completed" || status == "cancelled" {
+		write(w, 409, map[string]string{"error": "queue is not claimable"})
+		return
+	}
+	sum := sha256.Sum256([]byte(source + "\x00" + ticket))
+	sid := int64(binary.BigEndian.Uint64(sum[:8]) & 0x7fffffffffffffff)
+	if sid == 0 {
+		sid = 1
+	}
+	var encounter int64
+	err = tx.QueryRow(r.Context(), `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,channel,visit_type,status,created_at,updated_at) SELECT $1,'external_queue',$2,$3,COALESCE(c.name,''),'external','consultation','new',NOW(),NOW() FROM customers c WHERE c.id=$3 AND c.tenant_id=$1 ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,updated_at=NOW() RETURNING id`, h.tenantID, sid, customer).Scan(&encounter)
+	if err != nil {
+		write(w, 422, map[string]string{"error": "create encounter failed"})
+		return
+	}
+	_, err = tx.Exec(r.Context(), `UPDATE external_data_queues SET status='called' WHERE tenant_id=$1 AND id=$2`, h.tenantID, id)
+	if err != nil {
+		write(w, 500, map[string]string{"error": "update queue failed"})
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		write(w, 500, map[string]string{"error": "commit failed"})
+		return
+	}
+	write(w, 200, map[string]any{"status": "claimed", "queue_id": id, "encounter_id": encounter})
 }
 
 func (h *Handler) getDelivery(w http.ResponseWriter, r *http.Request) {
