@@ -177,6 +177,16 @@ type ConversationSourceResponse struct {
 	Recognition  ScreenshotAnalysis `json:"recognition"`
 }
 
+type CustomerEncounterResponse struct {
+	ID           int64  `json:"id"`
+	PatientName  string `json:"patient_name,omitempty"`
+	ProviderName string `json:"provider_name,omitempty"`
+	VisitType    string `json:"visit_type,omitempty"`
+	StartedAt    string `json:"started_at"`
+	Status       string `json:"status"`
+	SourceType   string `json:"source_type"`
+}
+
 type ActionRequest struct {
 	SourceID   int64  `json:"source_id"`
 	Action     string `json:"action"`

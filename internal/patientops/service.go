@@ -320,6 +320,25 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 	return customerID, nil
 }
 
+func (s *Service) ListCustomerEncounters(ctx context.Context, tenantID, customerID int64) ([]CustomerEncounterResponse, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,COALESCE(patient_name,''),COALESCE(provider_name,''),COALESCE(visit_type,''),started_at,status,source_type FROM encounters WHERE tenant_id=$1 AND patient_id=$2 ORDER BY started_at DESC,id DESC`, tenantID, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("list customer encounters: %w", err)
+	}
+	defer rows.Close()
+	items := []CustomerEncounterResponse{}
+	for rows.Next() {
+		var x CustomerEncounterResponse
+		var t time.Time
+		if err := rows.Scan(&x.ID, &x.PatientName, &x.ProviderName, &x.VisitType, &t, &x.Status, &x.SourceType); err != nil {
+			return nil, err
+		}
+		x.StartedAt = t.Format(time.RFC3339)
+		items = append(items, x)
+	}
+	return items, rows.Err()
+}
+
 func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID int64) ([]ConversationSourceResponse, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id=$2 ORDER BY captured_at DESC,id DESC`, tenantID, customerID)
 	if err != nil {
