@@ -10,6 +10,7 @@ type Envelope struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 	IdempotencyKey string         `json:"idempotency_key"`
 	Patient        map[string]any `json:"patient"`
+	SourceRawData  map[string]any `json:"source_raw_data,omitempty"`
 	Data           map[string]any `json:"data"`
 }
 type DeliveryResponse struct {
