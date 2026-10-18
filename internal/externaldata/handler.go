@@ -10,18 +10,26 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrrecord"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
-	pool     *pgxpool.Pool
-	tenantID int64
+	pool      *pgxpool.Pool
+	tenantID  int64
+	emr       *emrrecord.Service
+	templates *emrtemplate.Service
 }
 
-func NewHandler(pool *pgxpool.Pool, tenantID int64) *Handler {
-	return &Handler{pool: pool, tenantID: tenantID}
+func NewHandler(pool *pgxpool.Pool, tenantID int64, emr ...*emrrecord.Service) *Handler {
+	h := &Handler{pool: pool, tenantID: tenantID}
+	if len(emr) > 0 {
+		h.emr = emr[0]
+	}
+	return h
 }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, token string) {
 	for _, k := range []string{"patients", "appointments", "queues", "visits"} {
