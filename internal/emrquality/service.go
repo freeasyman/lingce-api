@@ -133,20 +133,20 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 }
 
 type semanticFinding struct {
-	RuleCode     string     `json:"rule_code"`
-	Result       string     `json:"result"`
-	Evidence     []Evidence `json:"evidence"`
-	Reason       string     `json:"reason"`
-	Deduction    int        `json:"deduction"`
-	Message      string     `json:"message"`
-	ManualReview bool       `json:"manual_review"`
-	DefectKeys   []string   `json:"defect_keys"`
+	RuleCode     string       `json:"rule_code"`
+	Result       string       `json:"result"`
+	Evidence     evidenceList `json:"evidence"`
+	Reason       string       `json:"reason"`
+	Deduction    int          `json:"deduction"`
+	Message      string       `json:"message"`
+	ManualReview bool         `json:"manual_review"`
+	DefectKeys   stringList   `json:"defect_keys"`
 }
 
 type semanticResponse struct {
 	Results          []semanticFinding `json:"results"`
 	CheckCompleted   bool              `json:"check_completed"`
-	CheckedRuleCodes []string          `json:"checked_rule_codes"`
+	CheckedRuleCodes stringList        `json:"checked_rule_codes"`
 }
 
 const semanticSystemPrompt = `你是医院门诊电子病历质量审核引擎。你只依据提供的病历原文和结构化数据判断，不替医生作出新的诊断或治疗决定。
@@ -248,52 +248,80 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		}
 		return nil
 	}
-	resp, requestRaw, responseRaw, err := s.llm.TextInferenceWithRaw(ctx, llmgateway.TextInferenceRequest{
-		TenantID:      input.TenantID,
-		CallerService: "lingce-api",
-		CallerModule:  "emr-quality",
-		FunctionType:  "emr_quality_check",
-		Provider:      provider,
-		ModelCode:     model,
-		TraceID:       "emr-quality-" + input.RecordID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
-		Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion},
-		Messages:      []llmgateway.Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
-		Params:        &llmgateway.Params{Temperature: 0, MaxTokens: 8192, TimeoutSeconds: 300, ResponseFormat: "json"},
-	})
-	report.ModelAudit = map[string]any{"request": string(requestRaw), "response": string(responseRaw), "provider": provider, "model": model}
-	if resp != nil {
-		report.ModelAudit["request_id"] = resp.RequestID
-		report.ModelAudit["usage"] = resp.Usage
-		report.ModelAudit["latency_ms"] = resp.LatencyMS
-	}
-	if err != nil {
-		report.FailureReason = "大模型质检执行失败，请稍后重试；本次未完成病历。"
-		report.ModelAudit["error"] = err.Error()
-		for _, rule := range semanticRules {
-			appendSemanticUnavailable(report, rule, "大模型质检执行失败，当前规则未完成判断："+err.Error())
-		}
-		return nil
-	}
-	parsed, err := parseSemanticResponse(resp.Content)
-	if err != nil {
-		report.FailureReason = "大模型质检结果无法解析，请重试；本次未完成病历。"
-		for _, rule := range semanticRules {
-			appendSemanticUnavailable(report, rule, "大模型返回结果无法解析，当前规则未完成判断。")
-		}
-		return nil
-	}
-	byCode := make(map[string]semanticFinding, len(parsed.Results))
 	requested := make(map[string]bool, len(semanticRules))
 	for _, rule := range semanticRules {
 		requested[rule.Code] = true
 	}
+
+	// 大模型返回偶发畸形（evidence 变字符串、规则残缺、顶层字段混入）。
+	// 畸形时重试一次；仍畸形则失败关闭，绝不把未检查的规则当成通过。
+	const semanticMaxAttempts = 2
+	var parsed *semanticResponse
+	for attempt := 1; attempt <= semanticMaxAttempts; attempt++ {
+		resp, requestRaw, responseRaw, callErr := s.llm.TextInferenceWithRaw(ctx, llmgateway.TextInferenceRequest{
+			TenantID:      input.TenantID,
+			CallerService: "lingce-api",
+			CallerModule:  "emr-quality",
+			FunctionType:  "emr_quality_check",
+			Provider:      provider,
+			ModelCode:     model,
+			TraceID:       "emr-quality-" + input.RecordID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion},
+			Messages:      []llmgateway.Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
+			Params:        &llmgateway.Params{Temperature: 0, MaxTokens: 8192, TimeoutSeconds: 300, ResponseFormat: "json"},
+		})
+		report.ModelAudit = map[string]any{"request": string(requestRaw), "response": string(responseRaw), "provider": provider, "model": model, "attempt": attempt}
+		if resp != nil {
+			report.ModelAudit["request_id"] = resp.RequestID
+			report.ModelAudit["usage"] = resp.Usage
+			report.ModelAudit["latency_ms"] = resp.LatencyMS
+		}
+		if callErr != nil {
+			report.ModelAudit["error"] = callErr.Error()
+			if attempt < semanticMaxAttempts {
+				continue
+			}
+			report.FailureReason = "大模型质检执行失败，请稍后重试；本次未完成病历。"
+			for _, rule := range semanticRules {
+				appendSemanticUnavailable(report, rule, "大模型质检执行失败，当前规则未完成判断："+callErr.Error())
+			}
+			return nil
+		}
+		var parseErr error
+		parsed, parseErr = parseSemanticResponse(resp.Content)
+		if parseErr != nil {
+			report.ModelAudit["parse_error"] = parseErr.Error()
+			if attempt < semanticMaxAttempts {
+				continue
+			}
+			report.FailureReason = "大模型质检结果无法解析，请重试；本次未完成病历。"
+			for _, rule := range semanticRules {
+				appendSemanticUnavailable(report, rule, "大模型返回结果无法解析，当前规则未完成判断。")
+			}
+			return nil
+		}
+		malformed := semanticResponseMalformed(parsed, requested)
+		if malformed == "" {
+			break
+		}
+		report.ModelAudit["malformed_reason"] = malformed
+		if attempt < semanticMaxAttempts {
+			continue
+		}
+		report.FailureReason = "大模型质检结果不完整（" + malformed + "），请重试；本次未完成病历。"
+		for _, rule := range semanticRules {
+			appendSemanticUnavailable(report, rule, "大模型返回的规则结果不完整，当前规则未完成判断。")
+		}
+		return nil
+	}
+
+	byCode := make(map[string]semanticFinding, len(parsed.Results))
 	for _, finding := range parsed.Results {
-		if !requested[finding.RuleCode] {
-			report.FailureReason = "大模型返回了未请求的规则结果，请重试。"
+		if strings.TrimSpace(finding.RuleCode) == "" || !requested[finding.RuleCode] {
 			continue
 		}
 		if _, exists := byCode[finding.RuleCode]; exists {
-			report.FailureReason = "大模型重复返回规则结果，请重试；本次未完成病历。"
+			continue
 		}
 		if !semanticFindingHasEvidence(finding, input) && finding.Result == "problem" {
 			finding.Result = "not_evaluable"
@@ -411,6 +439,29 @@ func semanticPrerequisite(input Context, rule ruleDefinition, report *Report) *R
 		return &RuleResult{RuleCode: rule.Code, SectionCode: rule.SectionCode, Result: "not_evaluable", ExecutionKind: rule.ExecutorKind, Reason: "当前系统没有可关联的原始检查结果，不能执行两端比对。", ManualReview: true}
 	}
 	return nil
+}
+
+// semanticResponseMalformed 判断模型返回结构是否明显损坏。
+// 缺规则编号、返回未请求规则、重复返回都视为畸形，触发一次重试。
+func semanticResponseMalformed(parsed *semanticResponse, requested map[string]bool) string {
+	if parsed == nil {
+		return "没有返回结果"
+	}
+	seen := make(map[string]bool, len(parsed.Results))
+	for _, finding := range parsed.Results {
+		code := strings.TrimSpace(finding.RuleCode)
+		if code == "" {
+			return "存在缺少规则编号的结果"
+		}
+		if !requested[code] {
+			return "返回了未请求的规则 " + code
+		}
+		if seen[code] {
+			return "重复返回规则 " + code
+		}
+		seen[code] = true
+	}
+	return ""
 }
 
 func parseSemanticResponse(raw string) (*semanticResponse, error) {
