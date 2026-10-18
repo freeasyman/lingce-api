@@ -76,6 +76,8 @@ type ExternalConfig struct {
 	LingceWorkerURL            string             `toml:"lingce_worker_url"`
 	LingceWorkerToken          string             `toml:"lingce_worker_token"`
 	InternalWorkerToken        string             `toml:"internal_worker_token"`
+	ExternalDataTenantID       int64              `toml:"external_data_tenant_id"`
+	ExternalDataInternalToken  string             `toml:"external_data_internal_token"`
 	FollowupAPIURL             string             `toml:"followup_api_url"`
 	EMRFollowupDeliveryEnabled bool               `toml:"emr_followup_delivery_enabled"`
 	ComplianceAPIURL           string             `toml:"compliance_api_url"`
@@ -110,8 +112,16 @@ type AliyunConfig struct {
 
 type WeComConfig struct {
 	APIBaseURL   string              `toml:"api_base_url"`
+	SmartBot     WeComSmartBotConfig `toml:"smart_bot"`
 	DelegatedApp WeComModeConfig     `toml:"delegated_app"`
 	Provider     WeComProviderConfig `toml:"provider"`
+}
+
+// WeComSmartBotConfig configures the API-mode smart-bot gateway. Credentials
+// are tenant-scoped and must not be placed in the global config file.
+type WeComSmartBotConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	Endpoint string `toml:"endpoint"`
 }
 
 type WeComModeConfig struct {
@@ -163,6 +173,7 @@ type ExternalSecrets struct {
 	RecordingWorkerToken      string             `toml:"recording_worker_token"`
 	LingceWorkerToken         string             `toml:"lingce_worker_token"`
 	InternalWorkerToken       string             `toml:"internal_worker_token"`
+	ExternalDataInternalToken string             `toml:"external_data_internal_token"`
 	EmployeeWebBaseURL        string             `toml:"employee_web_base_url"`
 	TicketNotify              TicketNotifyConfig `toml:"ticket_notify"`
 }
@@ -352,6 +363,9 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	if secrets.External.InternalWorkerToken != "" {
 		cfg.External.InternalWorkerToken = secrets.External.InternalWorkerToken
+	}
+	if secrets.External.ExternalDataInternalToken != "" {
+		cfg.External.ExternalDataInternalToken = secrets.External.ExternalDataInternalToken
 	}
 	if secrets.External.TicketNotify.SMTPHost != "" {
 		cfg.External.TicketNotify.SMTPHost = secrets.External.TicketNotify.SMTPHost

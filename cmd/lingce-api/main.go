@@ -21,6 +21,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/content"
 	"github.com/freeasyman/lingce-api/internal/customer"
 	"github.com/freeasyman/lingce-api/internal/dashboard"
+	"github.com/freeasyman/lingce-api/internal/dealexpert"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
@@ -30,6 +31,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/freeasyman/lingce-api/internal/emrscore"
 	"github.com/freeasyman/lingce-api/internal/emrtemplate"
+	"github.com/freeasyman/lingce-api/internal/externaldata"
 	"github.com/freeasyman/lingce-api/internal/followup"
 	"github.com/freeasyman/lingce-api/internal/followuppermission"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
@@ -37,6 +39,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/mobile"
 	"github.com/freeasyman/lingce-api/internal/opportunityalert"
 	"github.com/freeasyman/lingce-api/internal/organization"
+	"github.com/freeasyman/lingce-api/internal/patientops"
 	"github.com/freeasyman/lingce-api/internal/product"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
@@ -304,6 +307,17 @@ func main() {
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
+	dealExpertStore := dealexpert.NewStore(pool)
+	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore))
+	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
+
+	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID)
+	externalDataToken := cfg.External.ExternalDataInternalToken
+	if strings.TrimSpace(externalDataToken) == "" {
+		externalDataToken = cfg.External.InternalWorkerToken
+	}
+	externalDataHandler.RegisterRoutes(mux, externalDataToken)
+
 	// Register medical recording module
 	recStore := recording.NewStore(pool)
 	recService := recording.NewService(
@@ -452,6 +466,11 @@ func main() {
 	// Register followup worker module
 	followupModule := followup.NewModule(llmClient, pool)
 	followupModule.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
+
+	// Register patient operations screenshot analysis. The module calls only the
+	// private LLM gateway; it never accesses DashScope directly.
+	patientOpsModule := patientops.NewModule(pool, llmClient)
+	patientOpsModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)
