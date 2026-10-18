@@ -299,7 +299,7 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	if started.IsZero() {
 		started = e.UpdatedAt
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,provider_name,department_id,channel,visit_type,started_at,status,created_at,updated_at) VALUES($1,'external_data',$2,$3,NULLIF($4,''),$5,$6,'store',$7,$8,'new',NOW(),NOW()) ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,patient_name=EXCLUDED.patient_name,provider_name=EXCLUDED.provider_name,visit_type=EXCLUDED.visit_type,started_at=EXCLUDED.started_at,updated_at=NOW() RETURNING id`, h.tenantID, sourceID, patientID, patientName, doctorName, departmentID, visitType, started).Scan(&encounterID)
+	err = tx.QueryRow(ctx, `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,patient_candidate_json,provider_name,department_id,channel,visit_type,started_at,status,created_at,updated_at) VALUES($1,'external_data',$2,$3,NULLIF($4,''),$5::jsonb,$6,$7,'store',$8,$9,'new',NOW(),NOW()) ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,patient_name=EXCLUDED.patient_name,provider_name=EXCLUDED.provider_name,visit_type=EXCLUDED.visit_type,started_at=EXCLUDED.started_at,updated_at=NOW() RETURNING id`, h.tenantID, sourceID, patientID, patientName, mustJSON(map[string]any{"chief_complaint": e.Data["chief_complaint"], "diagnosis": e.Data["diagnosis"], "treatment_plan": e.Data["treatment_plan"], "fee": e.Data["fee"]}), doctorName, departmentID, visitType, started).Scan(&encounterID)
 	if err != nil {
 		return "", fmt.Errorf("ensure encounter: %w", err)
 	}
