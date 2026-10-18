@@ -80,7 +80,8 @@ func (s *Store) GetCurrent(ctx context.Context, tenantID int64, recordID string)
 	var pendingRaw []byte
 	var hasScore bool
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.id, r.tenant_id, r.current_snapshot_id,
+		SELECT r.id, r.tenant_id,
+		       (SELECT s.id FROM emr_record_snapshots s WHERE s.record_id = r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 		       COALESCE(NULLIF(r.current_score_version, ''), c.score_version, ''),
 		       COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分'),
 			CASE WHEN COALESCE(NULLIF(r.current_score_status, ''), c.status, '未评分') IN ('已完成', '待人工复核') THEN COALESCE(r.current_total_score, c.total_score) END,
