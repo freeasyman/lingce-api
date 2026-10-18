@@ -143,6 +143,12 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 				write(w, 500, map[string]string{"error": "update delivery resource failed"})
 				return
 			}
+			if kind != "visits" {
+				status = "delivered"
+			}
+		}
+		if kind != "visits" {
+			status = "delivered"
 		}
 		if err := tx.Commit(r.Context()); err != nil {
 			write(w, 500, map[string]string{"error": "commit failed"})
@@ -203,9 +209,9 @@ func (h *Handler) upsertPatient(ctx context.Context, tx pgx.Tx, e Envelope) (str
 	} else if err != nil {
 		return "", err
 	} else {
-		// Preserve the source identity and only update fields that are present;
-		// external data never clears existing manual values.
-		_, err = tx.Exec(ctx, `UPDATE customers SET name=COALESCE(NULLIF($1,''),name),phone=COALESCE($2,phone),gender=COALESCE($3,gender),age=COALESCE($4,age),extra_data=COALESCE(extra_data,'{}'::jsonb)||$5::jsonb,updated_at=NOW() WHERE id=$6 AND tenant_id=$7`, strings.TrimSpace(fmt.Sprint(e.Data["name"])), nullString(e.Data["phone"]), nullString(e.Data["gender"]), nullInt(e.Data["age"]), mustJSON(map[string]any{"external_updated_at": e.UpdatedAt.Format(time.RFC3339), "address": e.Data["address"]}), cid, h.tenantID)
+		// Existing customer facts may have been edited manually. Keep them
+		// unchanged; only append source provenance and the latest raw address.
+		_, err = tx.Exec(ctx, `UPDATE customers SET extra_data=COALESCE(extra_data,'{}'::jsonb)||$1::jsonb,updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, mustJSON(map[string]any{"external_updated_at": e.UpdatedAt.Format(time.RFC3339), "external_address": e.Data["address"]}), cid, h.tenantID)
 		if err != nil {
 			return "", fmt.Errorf("update patient: %w", err)
 		}
@@ -476,7 +482,8 @@ func isRetryableStatus(status string) bool {
 	}
 }
 func validateEnvelope(kind string, e Envelope) error {
-	if !strings.HasPrefix(strings.TrimSpace(e.EventType), strings.TrimSuffix(kind, "s")+".") {
+	prefixes := map[string]string{"patients": "patient", "appointments": "appointment", "queues": "queue", "visits": "visit"}
+	if !strings.HasPrefix(strings.TrimSpace(e.EventType), prefixes[kind]+".") {
 		return fmt.Errorf("event_type does not match object type")
 	}
 	if e.Data == nil {
