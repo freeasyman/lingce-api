@@ -24,7 +24,7 @@ func TestValidateEnvelopeObjectSpecificFields(t *testing.T) {
 	base := Envelope{
 		SourceSystem: "shanghai_his", SourceRecordID: "v-1", EventType: "visit.upsert",
 		IdempotencyKey: "k-1", Patient: map[string]any{"source_patient_id": "p-1"},
-		Data: map[string]any{"doctor": "医生", "department": "科室", "chief_complaint": "主诉", "diagnosis": "诊断"},
+		Data: map[string]any{"source_visit_id": "v-1", "visit_at": "2026-01-01T00:00:00Z", "doctor": "医生", "department": "科室", "chief_complaint": "主诉", "diagnosis": "诊断"},
 	}
 	if err := validateEnvelope("visits", base); err != nil {
 		t.Fatalf("valid visit rejected: %v", err)
@@ -35,7 +35,7 @@ func TestValidateEnvelopeObjectSpecificFields(t *testing.T) {
 	}
 	base.EventType = "visit.upsert"
 	delete(base.Data, "chief_complaint")
-	if err := validateEnvelope("visits", base); err == nil {
-		t.Fatal("missing chief complaint should be rejected")
+	if err := validateEnvelope("visits", base); err != nil {
+		t.Fatalf("missing clinical field should still be accepted: %v", err)
 	}
 }

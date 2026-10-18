@@ -507,7 +507,10 @@ func validateEnvelope(kind string, e Envelope) error {
 	}
 	switch kind {
 	case "visits":
-		for _, key := range []string{"doctor", "department", "chief_complaint", "diagnosis"} {
+		// Incomplete clinical fields do not make a source visit disappear.
+		// Preserve the visit and raw payload; missing clinical values remain
+		// blank and can be completed later.
+		for _, key := range []string{"source_visit_id", "visit_at"} {
 			if !hasExternalValue(e.Data[key]) {
 				return fmt.Errorf("data.%s is required", key)
 			}
