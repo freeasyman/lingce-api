@@ -102,6 +102,7 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 		}
 		if kind == "visits" && h.emr != nil && resource != "" {
 			if err := h.createEMR(r.Context(), e, resource); err != nil {
+				_, _ = h.pool.Exec(r.Context(), `UPDATE external_data_deliveries SET status='failed', error_reason=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, err.Error(), did, h.tenantID)
 				write(w, 422, map[string]string{"error": err.Error()})
 				return
 			}
@@ -174,6 +175,10 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	var encounterID int64
 	doctorName := strings.TrimSpace(fmt.Sprint(e.Data["doctor"]))
 	department := strings.TrimSpace(fmt.Sprint(e.Data["department"]))
+	var doctorID, departmentID int64
+	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &departmentID); err != nil {
+		return "", fmt.Errorf("doctor not found: %s", doctorName)
+	}
 	patientName := strings.TrimSpace(fmt.Sprint(e.Patient["name"]))
 	visitType := strings.TrimSpace(fmt.Sprint(e.Data["visit_type"]))
 	if visitType == "" {
@@ -183,7 +188,7 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	if started.IsZero() {
 		started = e.UpdatedAt
 	}
-	err := tx.QueryRow(ctx, `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,provider_name,department_id,channel,visit_type,started_at,status,created_at,updated_at) VALUES($1,'external_data',$2,$3,NULLIF($4,''),$5,NULL,'external',$6,$7,'new',NOW(),NOW()) ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,patient_name=EXCLUDED.patient_name,provider_name=EXCLUDED.provider_name,visit_type=EXCLUDED.visit_type,started_at=EXCLUDED.started_at,updated_at=NOW() RETURNING id`, h.tenantID, sourceID, patientID, patientName, doctorName, visitType, started).Scan(&encounterID)
+	err := tx.QueryRow(ctx, `INSERT INTO encounters(tenant_id,source_type,source_id,patient_id,patient_name,provider_name,department_id,channel,visit_type,started_at,status,created_at,updated_at) VALUES($1,'external_data',$2,$3,NULLIF($4,''),$5,$6,'external',$7,$8,'new',NOW(),NOW()) ON CONFLICT(tenant_id,source_type,source_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,patient_name=EXCLUDED.patient_name,provider_name=EXCLUDED.provider_name,visit_type=EXCLUDED.visit_type,started_at=EXCLUDED.started_at,updated_at=NOW() RETURNING id`, h.tenantID, sourceID, patientID, patientName, doctorName, departmentID, visitType, started).Scan(&encounterID)
 	if err != nil {
 		return "", fmt.Errorf("ensure encounter: %w", err)
 	}
@@ -265,6 +270,20 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 	if _, err := fmt.Sscan(encounter, &eid); err != nil {
 		return fmt.Errorf("invalid encounter id")
 	}
+	doctorName := strings.TrimSpace(fmt.Sprint(e.Data["doctor"]))
+	var doctorID int64
+	var departmentID *int64
+	var dept int64
+	if err := h.pool.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &dept); err != nil {
+		return fmt.Errorf("doctor not found: %s", doctorName)
+	}
+	if dept > 0 {
+		departmentID = &dept
+	}
+	var patientID int64
+	if err := h.pool.QueryRow(ctx, `SELECT customer_id FROM external_data_source_identities WHERE tenant_id=$1 AND source_system=$2 AND source_patient_id=$3`, h.tenantID, e.SourceSystem, strings.TrimSpace(fmt.Sprint(e.Patient["source_patient_id"]))).Scan(&patientID); err != nil {
+		return fmt.Errorf("patient identity not found")
+	}
 	var templateID string
 	if err := h.pool.QueryRow(ctx, `SELECT id FROM emr_templates WHERE tenant_id IN ($1,0) AND code='standard_outpatient' AND status='published' AND is_current=true ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END LIMIT 1`, h.tenantID).Scan(&templateID); err != nil {
 		return fmt.Errorf("load outpatient template: %w", err)
@@ -274,7 +293,7 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 		content["prescription"] = p
 	}
 	started := e.OccurredAt
-	_, err := h.emr.Create(ctx, h.tenantID, 0, emrrecord.CreateRequest{EncounterID: eid, PatientSnapshot: e.Patient, TemplateVersionID: templateID, DocumentType: "门诊病历", VisitType: fmt.Sprint(e.Data["visit_type"]), StartedAt: &started, SourceReferences: map[string]any{"source_system": e.SourceSystem, "source_record_id": e.SourceRecordID, "updated_at": e.UpdatedAt.Format(time.RFC3339)}, Content: content})
+	_, err := h.emr.Create(ctx, h.tenantID, 0, emrrecord.CreateRequest{EncounterID: eid, PatientID: &patientID, PatientSnapshot: e.Patient, TemplateVersionID: templateID, DocumentType: "门诊病历", VisitType: fmt.Sprint(e.Data["visit_type"]), StartedAt: &started, SourceReferences: map[string]any{"source_system": e.SourceSystem, "source_record_id": e.SourceRecordID, "updated_at": e.UpdatedAt.Format(time.RFC3339)}, DoctorID: &doctorID, DepartmentID: departmentID, Content: content})
 	return err
 }
 
