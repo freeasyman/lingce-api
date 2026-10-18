@@ -501,24 +501,31 @@ func validateEnvelope(kind string, e Envelope) error {
 	switch kind {
 	case "visits":
 		for _, key := range []string{"doctor", "department", "chief_complaint", "diagnosis"} {
-			if strings.TrimSpace(fmt.Sprint(e.Data[key])) == "" {
+			if !hasExternalValue(e.Data[key]) {
 				return fmt.Errorf("data.%s is required", key)
 			}
 		}
 	case "appointments":
 		for _, key := range []string{"source_appointment_id", "appointment_at", "department", "doctor", "project", "status"} {
-			if strings.TrimSpace(fmt.Sprint(e.Data[key])) == "" {
+			if !hasExternalValue(e.Data[key]) {
 				return fmt.Errorf("data.%s is required", key)
 			}
 		}
 	case "queues":
 		for _, key := range []string{"source_queue_ticket_id", "visit_date", "queue_number", "department", "doctor", "status"} {
-			if strings.TrimSpace(fmt.Sprint(e.Data[key])) == "" {
+			if !hasExternalValue(e.Data[key]) {
 				return fmt.Errorf("data.%s is required", key)
 			}
 		}
 	}
 	return nil
+}
+func hasExternalValue(v any) bool {
+	if v == nil {
+		return false
+	}
+	s := strings.TrimSpace(fmt.Sprint(v))
+	return s != "" && s != "<nil>"
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 func write(w http.ResponseWriter, status int, v any) {
