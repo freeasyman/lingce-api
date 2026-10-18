@@ -321,7 +321,7 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 }
 
 func (s *Service) ListCustomerEncounters(ctx context.Context, tenantID, customerID int64) ([]CustomerEncounterResponse, error) {
-	rows, err := s.pool.Query(ctx, `SELECT e.id,COALESCE(e.patient_name,''),COALESCE(e.provider_name,''),COALESCE(e.visit_type,''),e.started_at,e.status,e.source_type,COALESCE(e.patient_candidate_json->>'chief_complaint',er.content_json->>'chief_complaint',''),COALESCE(e.patient_candidate_json->>'diagnosis',er.content_json->'diagnosis'->>'diagnosis_name',''),COALESCE(e.patient_candidate_json->>'treatment_plan',er.content_json->>'disposition',''),NULL::float8 FROM encounters e LEFT JOIN emr_records er ON er.tenant_id=e.tenant_id AND er.encounter_id=e.id WHERE e.tenant_id=$1 AND e.patient_id=$2 ORDER BY e.started_at DESC,e.id DESC`, tenantID, customerID)
+	rows, err := s.pool.Query(ctx, `SELECT e.id,COALESCE(e.patient_name,''),COALESCE(e.provider_name,''),COALESCE(e.visit_type,''),e.started_at,e.status,e.source_type,COALESCE(e.patient_candidate_json->>'chief_complaint',er.content_json->>'chief_complaint',''),COALESCE(e.patient_candidate_json->>'diagnosis',er.content_json->'diagnosis'->>'diagnosis_name',''),COALESCE(e.patient_candidate_json->>'treatment_plan',er.content_json->>'disposition',''),CASE WHEN e.patient_candidate_json->>'fee' ~ '^[0-9]+(\.[0-9]+)?$' THEN (e.patient_candidate_json->>'fee')::float8 ELSE NULL END FROM encounters e LEFT JOIN emr_records er ON er.tenant_id=e.tenant_id AND er.encounter_id=e.id WHERE e.tenant_id=$1 AND e.patient_id=$2 ORDER BY e.started_at DESC,e.id DESC`, tenantID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("list customer encounters: %w", err)
 	}
@@ -330,7 +330,7 @@ func (s *Service) ListCustomerEncounters(ctx context.Context, tenantID, customer
 	for rows.Next() {
 		var x CustomerEncounterResponse
 		var t time.Time
-		if err := rows.Scan(&x.ID, &x.PatientName, &x.ProviderName, &x.VisitType, &t, &x.Status, &x.SourceType); err != nil {
+		if err := rows.Scan(&x.ID, &x.PatientName, &x.ProviderName, &x.VisitType, &t, &x.Status, &x.SourceType, &x.ChiefComplaint, &x.Diagnosis, &x.TreatmentPlan, &x.Fee); err != nil {
 			return nil, err
 		}
 		x.StartedAt = t.Format(time.RFC3339)
