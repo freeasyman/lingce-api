@@ -178,13 +178,17 @@ type ConversationSourceResponse struct {
 }
 
 type CustomerEncounterResponse struct {
-	ID           int64  `json:"id"`
-	PatientName  string `json:"patient_name,omitempty"`
-	ProviderName string `json:"provider_name,omitempty"`
-	VisitType    string `json:"visit_type,omitempty"`
-	StartedAt    string `json:"started_at"`
-	Status       string `json:"status"`
-	SourceType   string `json:"source_type"`
+	ID             int64    `json:"id"`
+	PatientName    string   `json:"patient_name,omitempty"`
+	ProviderName   string   `json:"provider_name,omitempty"`
+	VisitType      string   `json:"visit_type,omitempty"`
+	StartedAt      string   `json:"started_at"`
+	Status         string   `json:"status"`
+	SourceType     string   `json:"source_type"`
+	ChiefComplaint string   `json:"chief_complaint,omitempty"`
+	Diagnosis      string   `json:"diagnosis,omitempty"`
+	TreatmentPlan  string   `json:"treatment_plan,omitempty"`
+	Fee            *float64 `json:"fee,omitempty"`
 }
 
 type ActionRequest struct {
