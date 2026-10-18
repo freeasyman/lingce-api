@@ -208,9 +208,10 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	doctorName := strings.TrimSpace(fmt.Sprint(e.Data["doctor"]))
 	department := strings.TrimSpace(fmt.Sprint(e.Data["department"]))
 	var doctorID, departmentID int64
-	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &departmentID); err != nil {
-		return "", fmt.Errorf("doctor not found: %s", doctorName)
-	}
+	// HIS doctor names are source facts. The local employee directory may not
+	// contain every historical or external provider, so keep the name and let
+	// provider_id remain unset when no tenant employee matches.
+	_ = tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &departmentID)
 	var patientName string
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(name,'') FROM customers WHERE tenant_id=$1 AND id=$2`, h.tenantID, patientID).Scan(&patientName); err != nil {
 		return "", fmt.Errorf("load patient customer: %w", err)
@@ -322,7 +323,10 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 	var departmentID *int64
 	var dept int64
 	if err := h.pool.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &dept); err != nil {
-		return fmt.Errorf("doctor not found: %s", doctorName)
+		// An external visit is still valid when its historical provider is not
+		// present in the current employee directory. Encounter creation already
+		// preserves provider_name; EMR creation waits for a local doctor mapping.
+		return nil
 	}
 	if dept > 0 {
 		departmentID = &dept
