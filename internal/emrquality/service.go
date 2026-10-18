@@ -150,12 +150,16 @@ type semanticResponse struct {
 }
 
 const semanticSystemPrompt = `你是医院门诊电子病历质量审核引擎。你只依据提供的病历原文和结构化数据判断，不替医生作出新的诊断或治疗决定。
+本次请求只包含待检查规则的一部分。你必须为本次请求中的每一条规则返回一个 results 条目，不能遗漏，不能只在 checked_rule_codes 中列出。未返回结果的规则会被系统判定为质检失败。
 逐条执行给出的规则。符合要求返回pass；规则适用且有具体缺陷返回problem；缺少判断所需的外部事实或证据不足返回not_evaluable。适用条件不成立时返回pass并说明不适用，不能把不适用规则判成缺陷或待核实。不能因为没有看到信息就猜测临床事实。
 必须返回严格 JSON，不要 Markdown。格式：{"check_completed":true,"checked_rule_codes":["本次实际检查的全部规则编号"],"results":[{"rule_code":"规则编号","result":"pass|problem|not_evaluable","evidence":[{"source":"record.content|record.patient_snapshot|record.context","path":"content.字段名或patient.字段名","excerpt":"原文或字段值"}],"reason":"具体判断依据","manual_review":true或false,"defect_keys":["同一缺陷的稳定关键词"]}]}
-只有明确完成本次检查且checked_rule_codes覆盖全部给出的规则时，系统才会将未出现在results中的规则补写为pass。正常通过的规则可以直接返回pass，也可以只在checked_rule_codes中列出；不能漏列未检查的规则。
+格式约束：evidence 必须是对象数组，defect_keys 必须是字符串数组；不要输出字符串形式的数组，不要输出逗号拼接的字符串，不要输出对象以外的类型。
 problem 必须有具体证据和具体依据。不要返回 deduction，扣分由程序根据规则标准计算。提示必须说明哪一段内容、哪一个药物或哪一项信息存在什么问题，禁止使用只有“可能不完整”“可能不准确”的笼统句子。
 DX-002必须同时比较主诉、现病史、辅助检查和诊断。若主要症状、身体部位或检查结论与诊断明显不一致，必须返回problem，并引用诊断和至少一个对照字段的原文，明确写出哪两端不一致。
 TRT-002必须同时比较处方、处置、医嘱与西医诊断、现病史和必要检查。没有处方时仍然检查处置和医嘱；若治疗目标、身体部位或疾病与诊断明显不一致，必须返回problem，并引用治疗内容和西医诊断或病史两端原文。对处方与诊断、科别不一致的情况，只提示请核对，不要作临床禁用结论。
+EXAM-002必须逐项对比病史、主诉中的体温、血压、脉搏等数值与体格检查记录的数值。出现明确数值矛盾（如病史39.5℃、体检36.2℃）必须返回problem，并同时引用两端原文。
+TEST-001判断“该做的检查是否缺失”，而不是“病历里有没有写检查”。对胸痛、疑似心梗等需要心电图/心肌酶的场景，辅助检查为空或未包含必要检查时应返回problem；只有确实不属于需要检查的场景才返回pass或not_evaluable。
+TRT-005对急危重症（如急性心肌梗死、ST段抬高等）必须检查是否给出住院或转诊建议。缺少明确住院/转诊建议时应返回problem，不能因为“没有住院建议”就判为不适用。
 diagnosis是西医诊断，tcm_diagnosis是中医诊断，二者独立，禁止替代、翻译或补造诊断。DX-001、DX-002和DX-003仅判断diagnosis；ICD-10仅适用于西医诊断。
 TCM-DX-002仅中医模板适用，比较tcm_diagnosis与tcm_four_examinations的具体证据；TCM-DX-003比较中医诊断与治法、中药处方或处置的治疗关联。只有明确矛盾才判problem，必须引用中医诊断和相应四诊或治疗字段两端原文；缺少判断依据返回not_evaluable，医学推断标记manual_review，不替医生决定治疗。`
 
@@ -213,33 +217,10 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		return nil
 	}
 
-	ruleList := make([]map[string]any, 0, len(semanticRules))
+	requested := make(map[string]bool, len(semanticRules))
 	for _, rule := range semanticRules {
-		ruleList = append(ruleList, map[string]any{
-			"rule_code":       rule.Code,
-			"name":            rule.Name,
-			"section":         rule.SectionCode,
-			"standard":        rule.StandardPoints,
-			"evaluation_spec": json.RawMessage(rule.EvaluationSpec),
-		})
+		requested[rule.Code] = true
 	}
-	payload := map[string]any{
-		"template_code":   input.TemplateCode,
-		"patient":         input.Patient,
-		"visit_type":      input.VisitType,
-		"department":      input.Encounter["medical_department_code"],
-		"content":         input.Content,
-		"rules":           ruleList,
-		"history":         input.History,
-		"program_results": report.Results,
-		"context":         input.Encounter,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal semantic quality input: %w", err)
-	}
-	system := semanticSystemPrompt
-	user := "请审核以下病历：\n" + string(payloadJSON)
 	provider, model, err := s.store.modelConfig(ctx, input.TenantID)
 	if err != nil {
 		report.FailureReason = "未找到可用的大模型质检配置，请联系管理员。"
@@ -248,109 +229,121 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		}
 		return nil
 	}
-	requested := make(map[string]bool, len(semanticRules))
-	for _, rule := range semanticRules {
-		requested[rule.Code] = true
-	}
 
-	// 大模型返回偶发畸形（evidence 变字符串、规则残缺、顶层字段混入）。
-	// 畸形时重试一次；仍畸形则失败关闭，绝不把未检查的规则当成通过。
+	const semanticBatchSize = 10
 	const semanticMaxAttempts = 2
-	var parsed *semanticResponse
-	for attempt := 1; attempt <= semanticMaxAttempts; attempt++ {
-		resp, requestRaw, responseRaw, callErr := s.llm.TextInferenceWithRaw(ctx, llmgateway.TextInferenceRequest{
-			TenantID:      input.TenantID,
-			CallerService: "lingce-api",
-			CallerModule:  "emr-quality",
-			FunctionType:  "emr_quality_check",
-			Provider:      provider,
-			ModelCode:     model,
-			TraceID:       "emr-quality-" + input.RecordID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
-			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion},
-			Messages:      []llmgateway.Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
-			Params:        &llmgateway.Params{Temperature: 0, MaxTokens: 8192, TimeoutSeconds: 300, ResponseFormat: "json"},
-		})
-		report.ModelAudit = map[string]any{"request": string(requestRaw), "response": string(responseRaw), "provider": provider, "model": model, "attempt": attempt}
-		if resp != nil {
-			report.ModelAudit["request_id"] = resp.RequestID
-			report.ModelAudit["usage"] = resp.Usage
-			report.ModelAudit["latency_ms"] = resp.LatencyMS
+
+	byCode := make(map[string]semanticFinding, len(semanticRules))
+	modelAudit := make([]map[string]any, 0, (len(semanticRules)+semanticBatchSize-1)/semanticBatchSize)
+	incomplete := false
+
+	for start := 0; start < len(semanticRules); start += semanticBatchSize {
+		end := start + semanticBatchSize
+		if end > len(semanticRules) {
+			end = len(semanticRules)
 		}
-		if callErr != nil {
-			report.ModelAudit["error"] = callErr.Error()
-			if attempt < semanticMaxAttempts {
+		batch := semanticRules[start:end]
+		batchRequested := make(map[string]bool, len(batch))
+		ruleList := make([]map[string]any, 0, len(batch))
+		for _, rule := range batch {
+			batchRequested[rule.Code] = true
+			ruleList = append(ruleList, map[string]any{
+				"rule_code":       rule.Code,
+				"name":            rule.Name,
+				"section":         rule.SectionCode,
+				"standard":        rule.StandardPoints,
+				"evaluation_spec": json.RawMessage(rule.EvaluationSpec),
+			})
+		}
+		payload := map[string]any{
+			"template_code":   input.TemplateCode,
+			"patient":         input.Patient,
+			"visit_type":      input.VisitType,
+			"department":      input.Encounter["medical_department_code"],
+			"content":         input.Content,
+			"rules":           ruleList,
+			"history":         input.History,
+			"program_results": report.Results,
+			"context":         input.Encounter,
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal semantic quality input: %w", err)
+		}
+		user := "请审核以下病历：\n" + string(payloadJSON)
+
+		var parsed *semanticResponse
+		for attempt := 1; attempt <= semanticMaxAttempts; attempt++ {
+			resp, requestRaw, responseRaw, callErr := s.llm.TextInferenceWithRaw(ctx, llmgateway.TextInferenceRequest{
+				TenantID:      input.TenantID,
+				CallerService: "lingce-api",
+				CallerModule:  "emr-quality",
+				FunctionType:  "emr_quality_check",
+				Provider:      provider,
+				ModelCode:     model,
+				TraceID:       "emr-quality-" + input.RecordID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+				Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion},
+				Messages:      []llmgateway.Message{{Role: "system", Content: semanticSystemPrompt}, {Role: "user", Content: user}},
+				Params:        &llmgateway.Params{Temperature: 0, MaxTokens: 4096, TimeoutSeconds: 300, ResponseFormat: "json"},
+			})
+			entry := map[string]any{"batch": len(modelAudit) + 1, "attempt": attempt, "request": string(requestRaw), "response": string(responseRaw), "provider": provider, "model": model}
+			if resp != nil {
+				entry["request_id"] = resp.RequestID
+				entry["usage"] = resp.Usage
+				entry["latency_ms"] = resp.LatencyMS
+			}
+			if callErr != nil {
+				entry["error"] = callErr.Error()
+				modelAudit = append(modelAudit, entry)
+				parsed = nil
 				continue
 			}
-			report.FailureReason = "大模型质检执行失败，请稍后重试；本次未完成病历。"
-			for _, rule := range semanticRules {
-				appendSemanticUnavailable(report, rule, "大模型质检执行失败，当前规则未完成判断："+callErr.Error())
-			}
-			return nil
-		}
-		var parseErr error
-		parsed, parseErr = parseSemanticResponse(resp.Content)
-		if parseErr != nil {
-			report.ModelAudit["parse_error"] = parseErr.Error()
-			if attempt < semanticMaxAttempts {
+			var parseErr error
+			parsed, parseErr = parseSemanticResponse(resp.Content)
+			if parseErr != nil {
+				entry["parse_error"] = parseErr.Error()
+				modelAudit = append(modelAudit, entry)
+				parsed = nil
 				continue
 			}
-			report.FailureReason = "大模型质检结果无法解析，请重试；本次未完成病历。"
-			for _, rule := range semanticRules {
-				appendSemanticUnavailable(report, rule, "大模型返回结果无法解析，当前规则未完成判断。")
+			if malformed := semanticBatchMalformed(parsed, batchRequested); malformed != "" {
+				entry["malformed_reason"] = malformed
+				modelAudit = append(modelAudit, entry)
+				parsed = nil
+				continue
 			}
-			return nil
-		}
-		malformed := semanticResponseMalformed(parsed, requested)
-		if malformed == "" {
+			modelAudit = append(modelAudit, entry)
 			break
 		}
-		report.ModelAudit["malformed_reason"] = malformed
-		if attempt < semanticMaxAttempts {
+		report.ModelAudit = map[string]any{"batches": modelAudit}
+
+		if parsed == nil {
+			incomplete = true
+			for _, rule := range batch {
+				appendSemanticUnavailable(report, rule, "大模型没有完成本批规则的判断。")
+			}
 			continue
 		}
-		report.FailureReason = "大模型质检结果不完整（" + malformed + "），请重试；本次未完成病历。"
-		for _, rule := range semanticRules {
-			appendSemanticUnavailable(report, rule, "大模型返回的规则结果不完整，当前规则未完成判断。")
+		for _, finding := range parsed.Results {
+			code := strings.TrimSpace(finding.RuleCode)
+			if code == "" || !batchRequested[code] {
+				continue
+			}
+			if _, exists := byCode[code]; exists {
+				continue
+			}
+			if !semanticFindingHasEvidence(finding, input) && finding.Result == "problem" {
+				finding.Result = "not_evaluable"
+				finding.Reason = "大模型未提供能够在本次病历中核对的具体证据。"
+				finding.Deduction = 0
+			}
+			byCode[code] = finding
 		}
-		return nil
 	}
 
-	byCode := make(map[string]semanticFinding, len(parsed.Results))
-	for _, finding := range parsed.Results {
-		if strings.TrimSpace(finding.RuleCode) == "" || !requested[finding.RuleCode] {
-			continue
-		}
-		if _, exists := byCode[finding.RuleCode]; exists {
-			continue
-		}
-		if !semanticFindingHasEvidence(finding, input) && finding.Result == "problem" {
-			finding.Result = "not_evaluable"
-			finding.Reason = "大模型未提供能够在本次病历中核对的具体证据。"
-			finding.Deduction = 0
-		}
-		byCode[finding.RuleCode] = finding
-	}
-	coverageComplete := parsed.CheckCompleted && semanticRulesCovered(parsed.CheckedRuleCodes, requested)
-	if !coverageComplete && len(parsed.CheckedRuleCodes) == 0 && len(byCode) == len(semanticRules) {
-		// Backward-compatible response: an explicit result for every requested
-		// rule is also complete coverage.
-		coverageComplete = true
-	}
 	for _, rule := range semanticRules {
 		finding, ok := byCode[rule.Code]
 		if !ok {
-			result := baseResult(rule)
-			if coverageComplete {
-				result.Reason = "本次检查未发现问题"
-			} else {
-				report.FailureReason = "大模型质检结果不完整，请重试；本次未完成病历。"
-				result.Result = "not_evaluable"
-				result.Reason = "大模型没有完成本条规则的判断。"
-				result.ManualReview = true
-			}
-			if err := appendSemanticResult(report, rule, input.Action, result); err != nil {
-				return err
-			}
 			continue
 		}
 		result := &RuleResult{RuleCode: rule.Code, SectionCode: rule.SectionCode, Result: finding.Result, ExecutionKind: rule.ExecutorKind, Evidence: finding.Evidence, Reason: finding.Reason, ManualReview: finding.ManualReview, DefectKeys: finding.DefectKeys}
@@ -362,6 +355,9 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		if err := appendSemanticResult(report, rule, input.Action, result); err != nil {
 			return err
 		}
+	}
+	if incomplete {
+		report.FailureReason = "大模型质检结果不完整，请重试；本次未完成病历。"
 	}
 	return nil
 }
@@ -441,9 +437,9 @@ func semanticPrerequisite(input Context, rule ruleDefinition, report *Report) *R
 	return nil
 }
 
-// semanticResponseMalformed 判断模型返回结构是否明显损坏。
-// 缺规则编号、返回未请求规则、重复返回都视为畸形，触发一次重试。
-func semanticResponseMalformed(parsed *semanticResponse, requested map[string]bool) string {
+// semanticBatchMalformed 判断单批返回是否可用：缺规则编号、返回未请求规则、
+// 重复返回、或漏掉本批任何一条规则，都视为畸形并触发重试。
+func semanticBatchMalformed(parsed *semanticResponse, requested map[string]bool) string {
 	if parsed == nil {
 		return "没有返回结果"
 	}
@@ -460,6 +456,11 @@ func semanticResponseMalformed(parsed *semanticResponse, requested map[string]bo
 			return "重复返回规则 " + code
 		}
 		seen[code] = true
+	}
+	for code := range requested {
+		if !seen[code] {
+			return "缺少规则 " + code + " 的判断"
+		}
 	}
 	return ""
 }
@@ -769,7 +770,7 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		}
 		if len(missing) > 0 {
 			result.Result = "problem"
-			result.Deduction = minInt(len(missing)*rule.StandardPoints, 5)
+			result.Deduction = len(missing) * rule.StandardPoints
 			result.Reason = "没有记录" + strings.Join(missing, "、")
 		}
 	case "CC-001":
@@ -804,7 +805,11 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		if err := json.Unmarshal(rule.EvaluationSpec, &spec); err != nil {
 			return nil, err
 		}
-		if text == "" || containsAny(text, spec.Uncertain) {
+		uncertain := append([]string{"未询问"}, spec.Uncertain...)
+		if containsAny(text, spec.AcceptedNegative) {
+			break
+		}
+		if text == "" || containsAny(text, uncertain) {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "没有明确记录过敏史"
@@ -834,37 +839,21 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		}
 	case "GEN-002":
 		birth := strings.TrimSpace(valueString(input.Patient, "birth_date"))
-		if birth != "" && !input.StartedAt.IsZero() {
-			if parsed, err := time.Parse("2006-01-02", birth); err == nil && parsed.After(input.StartedAt) {
-				result.Result = "problem"
-				result.DefectKeys = []string{"birth_date"}
-				result.Reason = "出生日期晚于本次就诊日期"
-				result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.birth_date", Excerpt: birth}, {Source: "record.context", Path: "started_at", Excerpt: input.StartedAt.Format("2006-01-02")}}
-			}
+		if parsed, ok := parseBirthDate(birth); ok && !input.StartedAt.IsZero() && parsed.After(input.StartedAt) {
+			result.Result = "problem"
+			result.DefectKeys = []string{"birth_date"}
+			result.Reason = "出生日期晚于本次就诊日期"
+			result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.birth_date", Excerpt: birth}, {Source: "record.context", Path: "started_at", Excerpt: input.StartedAt.Format("2006-01-02")}}
 		}
 	case "GEN-003":
 		birth := strings.TrimSpace(valueString(input.Patient, "birth_date"))
-		if birth != "" && len(birth) >= 4 && !strings.Contains(birth, "-") && !strings.Contains(birth, "/") {
+		if birthHasNoMonth(birth) {
 			result.Result = "problem"
 			result.DefectKeys = []string{"birth_date"}
 			result.Reason = "出生年月没有记录月份"
 			result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.birth_date", Excerpt: birth}}
 		}
-	case "DX-003":
-		diagnosis := diagnosisContent(input.Content)
-		diagnosisText := contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")
-		missing := false
-		for _, item := range diagnosisItems(diagnosis) {
-			if strings.TrimSpace(valueString(item, "icd10_code")) == "" {
-				missing = true
-			}
-		}
-		if strings.TrimSpace(diagnosisText) != "" && missing {
-			result.Result = "problem"
-			result.Deduction = rule.StandardPoints
-			result.Reason = "诊断记录没有对应的ICD-10编码"
-			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: diagnosisText}}
-		}
+	// DX-003 由 store.evaluateICD 处理（需要查询 ICD-10 目录），此处不再重复实现。
 	case "TRT-001":
 		if isEmptyValue(input.Content["prescription"]) && isEmptyValue(input.Content["treatment"]) && isEmptyValue(input.Content["medical_advice"]) && isEmptyValue(input.Content["disposition"]) {
 			result.Result = "problem"
@@ -933,6 +922,35 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		result.ManualReview = true
 	}
 	return result, nil
+}
+
+// parseBirthDate 兼容补零/不补零、横线/斜线/点号等常见出生日期写法。
+func parseBirthDate(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02", "2006-1-2", "2006/01/02", "2006/1/2", "2006.01.02", "2006.1.2"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// birthHasNoMonth 只在“确实只有年份”时返回 true；1980.01、1980/01 等视为已记录月份。
+func birthHasNoMonth(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "-/.") {
+		return false
+	}
+	trimmed := strings.TrimSuffix(value, "年")
+	if len(trimmed) != 4 {
+		return false
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func messageForAction(raw []byte, action Action, result *RuleResult, policy actionPolicy) string {

@@ -111,13 +111,14 @@ func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID
 你的任务是根据新增的医患转写和当前病历草稿，只返回本次新增或修正的病历栏位。
 不要编造转写中没有出现的事实；不要修改已锁定栏位；不要输出解释文字。
 必须返回合法 JSON，格式为：{"updates":{"模板栏位编码":"更新后的完整栏位内容"},"unresolved_items":[]}。
-updates 只能使用当前模板中的栏位编码。没有足够信息时返回空 updates。`
+updates 只能使用当前模板中的栏位编码。没有足够信息时返回空 updates。
+结构化栏位必须返回完整对象，并按模板结构合并子字段，不能只返回字符串。`
 	response, _, _, err := h.callLLM(ctx, llmgateway.TextInferenceRequest{
 		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.experimental_incremental_draft",
 		TraceID: requestID, FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode,
 		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: input.EncounterID, BillingSubject: "emr_incremental_draft", BillingScene: "outpatient"},
 		Messages: []llmgateway.Message{{Role: "system", Content: incrementalSystemPrompt}, {Role: "user", Content: userPrompt}},
-		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 1800, TimeoutSeconds: 30, ResponseFormat: "json"},
+		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 4096, TimeoutSeconds: 60, ResponseFormat: "json"},
 	})
 	if err != nil {
 		return nil, err
