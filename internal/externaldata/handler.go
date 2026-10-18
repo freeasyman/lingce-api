@@ -135,7 +135,12 @@ func (h *Handler) persistQueue(ctx context.Context, tx pgx.Tx, did string, e Env
 	if sid == "" {
 		return fmt.Errorf("data.source_queue_ticket_id is required")
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO external_data_queues(delivery_id,tenant_id,source_system,source_queue_ticket_id,payload,status) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(tenant_id,source_system,source_queue_ticket_id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status`, did, h.tenantID, e.SourceSystem, sid, mustJSON(e.Data), fmt.Sprint(e.Data["status"]))
+	patient := strings.TrimSpace(fmt.Sprint(e.Patient["source_patient_id"]))
+	var customerID int64
+	if err := tx.QueryRow(ctx, `SELECT customer_id FROM external_data_source_identities WHERE tenant_id=$1 AND source_system=$2 AND source_patient_id=$3`, h.tenantID, e.SourceSystem, patient).Scan(&customerID); err != nil {
+		return fmt.Errorf("patient identity not found: %s", patient)
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO external_data_queues(delivery_id,tenant_id,source_system,source_queue_ticket_id,customer_id,payload,status) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) ON CONFLICT(tenant_id,source_system,source_queue_ticket_id) DO UPDATE SET customer_id=EXCLUDED.customer_id,payload=EXCLUDED.payload,status=EXCLUDED.status`, did, h.tenantID, e.SourceSystem, sid, customerID, mustJSON(e.Data), fmt.Sprint(e.Data["status"]))
 	return err
 }
 
