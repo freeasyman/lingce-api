@@ -26,9 +26,7 @@ func Validate(templateCode string, content map[string]any, complete bool) error 
 		return err
 	}
 	if strings.TrimSpace(templateCode) == "tcm" {
-		if complete && name(western) == "" {
-			return fmt.Errorf("请填写西医诊断")
-		}
+		// 中医病历以中医诊断为主；西医诊断仅作鼓励项，在质检中提醒，不阻断完成。
 		if complete && name(tcm) == "" {
 			return fmt.Errorf("请填写中医诊断")
 		}

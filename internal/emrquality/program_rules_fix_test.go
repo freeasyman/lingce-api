@@ -122,3 +122,44 @@ func TestSemanticResponseUnmarshalStringEvidenceStillWorks(t *testing.T) {
 		t.Fatalf("want 1 evidence, got %d", len(response.Results[0].Evidence))
 	}
 }
+
+func TestDX001SkipsTCMWesternDiagnosis(t *testing.T) {
+	rule := programRule("DX-001", 10, `{}`)
+	ctx := Context{
+		TemplateCode: "tcm",
+		Content:      map[string]any{"tcm_diagnosis": map[string]any{"diagnosis_name": "风寒感冒"}},
+	}
+	got, err := evaluateRule(ctx, rule)
+	if err != nil {
+		t.Fatalf("evaluate DX-001: %v", err)
+	}
+	if got.Result != "pass" {
+		t.Fatalf("TCM record without western diagnosis should pass DX-001, got %s", got.Result)
+	}
+}
+
+func TestTCMWD001RemindsWithoutDeduction(t *testing.T) {
+	rule := programRule("TCM-WD-001", 0, `{}`)
+	missingWestern := Context{
+		TemplateCode: "tcm",
+		Content:      map[string]any{"tcm_diagnosis": map[string]any{"diagnosis_name": "风寒感冒"}},
+	}
+	got, err := evaluateRule(missingWestern, rule)
+	if err != nil {
+		t.Fatalf("evaluate TCM-WD-001: %v", err)
+	}
+	if got.Result != "problem" || got.Deduction != 0 {
+		t.Fatalf("want reminder without deduction, got result=%s deduction=%d", got.Result, got.Deduction)
+	}
+	withWestern := Context{
+		TemplateCode: "tcm",
+		Content: map[string]any{
+			"diagnosis":     map[string]any{"diagnosis_name": "感冒"},
+			"tcm_diagnosis": map[string]any{"diagnosis_name": "风寒感冒"},
+		},
+	}
+	got, _ = evaluateRule(withWestern, rule)
+	if got.Result != "pass" {
+		t.Fatalf("western diagnosis present should pass, got %s", got.Result)
+	}
+}

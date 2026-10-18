@@ -12,7 +12,7 @@ func TestValidateDualDiagnosisContract(t *testing.T) {
 		{"western draft", "internal_medicine", map[string]any{"diagnosis": map[string]any{"diagnosis_name": "失眠", "icd10_code": "F51.0", "basis": "主诉"}}, false, false},
 		{"western complete", "internal_medicine", map[string]any{"diagnosis": map[string]any{"diagnosis_name": "失眠", "icd10_code": "F51.0", "basis": "主诉"}}, true, false},
 		{"tcm complete", "tcm", map[string]any{"diagnosis": map[string]any{"diagnosis_name": "失眠", "icd10_code": "F51.0", "basis": "主诉"}, "tcm_diagnosis": map[string]any{"diagnosis_name": "不寐", "pattern_name": "心脾两虚", "basis": "四诊"}}, true, false},
-		{"tcm missing western", "tcm", map[string]any{"tcm_diagnosis": map[string]any{"diagnosis_name": "不寐"}}, true, true},
+		{"tcm western optional", "tcm", map[string]any{"tcm_diagnosis": map[string]any{"diagnosis_name": "不寐"}}, true, false},
 		{"tcm missing tcm", "tcm", map[string]any{"diagnosis": map[string]any{"diagnosis_name": "失眠"}}, true, true},
 		{"basis is not name", "tcm", map[string]any{"diagnosis": map[string]any{"basis": "主诉"}, "tcm_diagnosis": map[string]any{"pattern_name": "气虚"}}, true, true},
 		{"normal cannot contain tcm", "internal_medicine", map[string]any{"diagnosis": map[string]any{"diagnosis_name": "失眠"}, "tcm_diagnosis": map[string]any{}}, false, true},

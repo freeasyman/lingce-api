@@ -897,12 +897,26 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.content", Path: "physical_exam", Excerpt: ""}}
 		}
 	case "DX-001":
+		if input.TemplateCode == "tcm" {
+			// 中医病历以中医诊断为主，西医诊断缺失由 TCM-WD-001 提醒，不阻断、不扣分。
+			break
+		}
 		diagnosis := diagnosisContent(input.Content)
 		diagnosisText := contentText(map[string]any{"diagnosis": diagnosis}, "diagnosis")
 		if strings.TrimSpace(diagnosisText) == "" {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "没有记录诊断"
+			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
+		}
+	case "TCM-WD-001":
+		if input.TemplateCode != "tcm" {
+			break
+		}
+		western := diagnosisContent(input.Content)
+		if strings.TrimSpace(contentText(map[string]any{"diagnosis": western}, "diagnosis")) == "" {
+			result.Result = "problem"
+			result.Reason = "中医病历建议补充西医诊断（非强制，不扣分）"
 			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
 		}
 	case "TCM-DX-001":
