@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
-	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -100,6 +100,12 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 		if err := tx.Commit(r.Context()); err != nil {
 			write(w, 500, map[string]string{"error": "commit failed"})
 			return
+		}
+		if kind == "visits" && h.emr != nil && resource != "" {
+			if err := h.createEMR(r.Context(), e, resource); err != nil {
+				write(w, 422, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 		write(w, 200, DeliveryResponse{DeliveryID: did, Status: status, TenantID: h.tenantID, ObjectType: kind, SourceRecordID: e.SourceRecordID, ResourceID: resource})
 	}
@@ -253,6 +259,24 @@ func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	write(w, 200, map[string]any{"status": "claimed", "queue_id": id, "encounter_id": encounter})
+}
+
+func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) error {
+	var eid int64
+	if _, err := fmt.Sscan(encounter, &eid); err != nil {
+		return fmt.Errorf("invalid encounter id")
+	}
+	var templateID string
+	if err := h.pool.QueryRow(ctx, `SELECT id FROM emr_templates WHERE tenant_id IN ($1,0) AND code='standard_outpatient' AND status='published' AND is_current=true ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END LIMIT 1`, h.tenantID).Scan(&templateID); err != nil {
+		return fmt.Errorf("load outpatient template: %w", err)
+	}
+	content := map[string]any{"chief_complaint": fmt.Sprint(e.Data["chief_complaint"]), "auxiliary_exam": fmt.Sprint(e.Data["examination"]), "diagnosis": map[string]any{"diagnosis_name": fmt.Sprint(e.Data["diagnosis"])}, "disposition": fmt.Sprint(e.Data["treatment_plan"]), "external_source_system": e.SourceSystem, "external_updated_at": e.UpdatedAt.Format(time.RFC3339)}
+	if p, ok := e.Data["prescription"]; ok {
+		content["prescription"] = p
+	}
+	started := e.OccurredAt
+	_, err := h.emr.Create(ctx, h.tenantID, 0, emrrecord.CreateRequest{EncounterID: eid, PatientSnapshot: e.Patient, TemplateVersionID: templateID, DocumentType: "门诊病历", VisitType: fmt.Sprint(e.Data["visit_type"]), StartedAt: &started, SourceReferences: map[string]any{"source_system": e.SourceSystem, "source_record_id": e.SourceRecordID, "updated_at": e.UpdatedAt.Format(time.RFC3339)}, Content: content})
+	return err
 }
 
 func (h *Handler) getDelivery(w http.ResponseWriter, r *http.Request) {

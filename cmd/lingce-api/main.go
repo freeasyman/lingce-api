@@ -311,7 +311,7 @@ func main() {
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore))
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
-	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID)
+	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID, emrRecordService)
 	externalDataToken := cfg.External.ExternalDataInternalToken
 	if strings.TrimSpace(externalDataToken) == "" {
 		externalDataToken = cfg.External.InternalWorkerToken
