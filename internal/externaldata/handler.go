@@ -78,7 +78,14 @@ func (h *Handler) receive(kind string) http.HandlerFunc {
 		var did string
 		dupErr := tx.QueryRow(r.Context(), `SELECT id,status,COALESCE(resource_id,''),COALESCE(source_updated_at,'epoch'::timestamptz) FROM external_data_deliveries WHERE tenant_id=$1 AND object_type=$2 AND source_system=$3 AND source_record_id=$4`, h.tenantID, kind, e.SourceSystem, e.SourceRecordID).Scan(&existingID, &existingStatus, &existingResource, &existingUpdated)
 		if dupErr == nil {
-			if !e.UpdatedAt.After(existingUpdated) && !isRetryableStatus(existingStatus) {
+			needsEMRRepair := false
+			if kind == "visits" && existingResource != "" {
+				var hasEMR bool
+				if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM emr_records WHERE tenant_id=$1 AND encounter_id=$2::bigint)`, h.tenantID, existingResource).Scan(&hasEMR); err == nil {
+					needsEMRRepair = !hasEMR
+				}
+			}
+			if !e.UpdatedAt.After(existingUpdated) && !isRetryableStatus(existingStatus) && !needsEMRRepair {
 				_ = tx.Rollback(r.Context())
 				write(w, 200, DeliveryResponse{DeliveryID: existingID, Status: "duplicate", TenantID: h.tenantID, ObjectType: kind, SourceRecordID: e.SourceRecordID, ResourceID: existingResource})
 				return
@@ -392,10 +399,10 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 	var dept int64
 	matchErr := h.pool.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=1 AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &dept)
 	if matchErr == pgx.ErrNoRows {
-		// An external visit is still valid when its historical provider is not
-		// present in the current employee directory. Encounter creation already
-		// preserves provider_name; EMR creation waits for a local doctor mapping.
-		return nil
+		// Preserve the historical provider on the Encounter, but do not report
+		// delivery as complete when the EMR record cannot be created without a
+		// local doctor identity. The delivery remains retryable as pending_emr.
+		return errEMRDeferred
 	}
 	if matchErr != nil {
 		return fmt.Errorf("resolve external doctor: %w", matchErr)
