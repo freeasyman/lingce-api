@@ -213,7 +213,7 @@ func (h *Handler) ensureVisitEncounter(ctx context.Context, tx pgx.Tx, e Envelop
 	// contain every historical or external provider, so keep the name and let
 	// provider_id remain unset when no tenant employee matches.
 	var matchedDepartmentID int64
-	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &matchedDepartmentID); err == nil {
+	if err := tx.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=1 AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &matchedDepartmentID); err == nil {
 		if matchedDepartmentID > 0 {
 			departmentID = &matchedDepartmentID
 		}
@@ -275,7 +275,7 @@ func (h *Handler) claimQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var doctorName string
-	if err := tx.QueryRow(r.Context(), `SELECT COALESCE(NULLIF(full_name,''),NULLIF(name,''),'' ) FROM employees WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND is_active=true`, claim.DoctorID, h.tenantID).Scan(&doctorName); err != nil {
+	if err := tx.QueryRow(r.Context(), `SELECT COALESCE(NULLIF(full_name,''),NULLIF(name,''),'' ) FROM employees WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL AND is_active=1`, claim.DoctorID, h.tenantID).Scan(&doctorName); err != nil {
 		write(w, 403, map[string]string{"error": "doctor is not active or not in tenant"})
 		return
 	}
@@ -328,7 +328,7 @@ func (h *Handler) createEMR(ctx context.Context, e Envelope, encounter string) e
 	var doctorID int64
 	var departmentID *int64
 	var dept int64
-	if err := h.pool.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=true AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &dept); err != nil {
+	if err := h.pool.QueryRow(ctx, `SELECT id, COALESCE(department_id,0) FROM employees WHERE tenant_id=$1 AND deleted_at IS NULL AND is_active=1 AND (full_name=$2 OR name=$2) LIMIT 1`, h.tenantID, doctorName).Scan(&doctorID, &dept); err != nil {
 		// An external visit is still valid when its historical provider is not
 		// present in the current employee directory. Encounter creation already
 		// preserves provider_name; EMR creation waits for a local doctor mapping.
