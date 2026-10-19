@@ -210,6 +210,24 @@ func (h *Handler) ClosePlan(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]bool{"closed": true})
 }
 
+func (h *Handler) DeletePlan(w http.ResponseWriter, r *http.Request) {
+	tenantID, employeeID, ok := planTenantAndEmployee(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	planID, err := planPathID(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.service.SoftDeletePlan(r.Context(), tenantID, planID, employeeID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"deleted": true})
+}
+
 func (h *Handler) SuggestProductKeywords(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {

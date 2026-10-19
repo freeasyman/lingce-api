@@ -72,7 +72,7 @@ func (s *Service) ListPlans(ctx context.Context, tenantID int64, page, pageSize 
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	conditions := []string{"p.tenant_id=$1"}
+	conditions := []string{"p.tenant_id=$1", "p.deleted_at IS NULL"}
 	args := []any{tenantID}
 	argIdx := 2
 	if strings.TrimSpace(status) != "" {
@@ -107,7 +107,7 @@ func (s *Service) ListPlans(ctx context.Context, tenantID int64, page, pageSize 
 }
 
 func (s *Service) loadPlan(ctx context.Context, tenantID, planID int64) (*Plan, error) {
-	query := fmt.Sprintf("SELECT %s FROM patient_ops_plans p WHERE p.tenant_id=$1 AND p.id=$2", planSelectColumns)
+	query := fmt.Sprintf("SELECT %s FROM patient_ops_plans p WHERE p.tenant_id=$1 AND p.id=$2 AND p.deleted_at IS NULL", planSelectColumns)
 	plan, err := scanPlanRow(s.pool.QueryRow(ctx, query, tenantID, planID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("plan not found")
@@ -343,8 +343,13 @@ func (s *Service) UpdatePlan(ctx context.Context, tenantID, planID int64, req Up
 	if err != nil {
 		return nil, err
 	}
-	if plan.Status != "draft" {
-		return nil, fmt.Errorf("only draft plans can be edited")
+	if plan.Status == "closed" {
+		return nil, fmt.Errorf("closed plans cannot be edited")
+	}
+	if plan.Status == "published" {
+		if req.PlanType != nil || req.Scenario != nil || req.ProductIDs != nil || req.FilterConfig != nil {
+			return nil, fmt.Errorf("published plan only allows name, period and target changes")
+		}
 	}
 	if req.Name != nil {
 		plan.Name = strings.TrimSpace(*req.Name)
@@ -385,13 +390,46 @@ func (s *Service) UpdatePlan(ctx context.Context, tenantID, planID int64, req Up
 		UPDATE patient_ops_plans SET
 			name=$2,plan_type=$3,scenario=$4,period_start=NULLIF($5,'')::date,period_end=NULLIF($6,'')::date,
 			target_count=$7,target_amount=$8,product_ids=$9::jsonb,filter_config=$10::jsonb,updated_at=NOW()
-		WHERE tenant_id=$1 AND id=$11 AND status='draft'
+		WHERE tenant_id=$1 AND id=$11 AND status IN ('draft','published') AND deleted_at IS NULL
 	`, tenantID, plan.Name, plan.PlanType, plan.Scenario, plan.PeriodStart, plan.PeriodEnd,
 		plan.TargetCount, plan.TargetAmount, planJSON(plan.ProductIDs), planJSON(plan.FilterConfig), planID)
 	if err != nil {
 		return nil, fmt.Errorf("update plan: %w", err)
 	}
 	return s.GetPlan(ctx, tenantID, planID)
+}
+
+func (s *Service) SoftDeletePlan(ctx context.Context, tenantID, planID, employeeID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete plan: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	err = tx.QueryRow(ctx, `
+		UPDATE patient_ops_plans
+		SET deleted_at=NOW(), deleted_by=$3, updated_at=NOW()
+		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL
+		RETURNING status
+	`, tenantID, planID, employeeID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("plan not found or already deleted")
+	}
+	if err != nil {
+		return fmt.Errorf("delete plan: %w", err)
+	}
+	// 软删除保留计划、名单和已完成任务；未完成任务取消，避免继续占用客户。
+	if _, err := tx.Exec(ctx, `
+		UPDATE patient_operation_tasks
+		SET status='已取消', updated_at=NOW()
+		WHERE tenant_id=$1 AND plan_id=$2 AND status NOT IN ('已完成','已取消')
+	`, tenantID, planID); err != nil {
+		return fmt.Errorf("cancel tasks of deleted plan: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete plan: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) PreviewPlan(ctx context.Context, tenantID, planID int64) (*PlanPreview, error) {
@@ -720,7 +758,7 @@ func (s *Service) ClosePlan(ctx context.Context, tenantID, planID int64) error {
 		return fmt.Errorf("begin close plan: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE patient_ops_plans SET status='closed',updated_at=NOW() WHERE tenant_id=$1 AND id=$2 AND status IN ('draft','published')`, tenantID, planID)
+	result, err := tx.Exec(ctx, `UPDATE patient_ops_plans SET status='closed',updated_at=NOW() WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL AND status IN ('draft','published')`, tenantID, planID)
 	if err != nil {
 		return fmt.Errorf("close plan: %w", err)
 	}

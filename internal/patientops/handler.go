@@ -48,6 +48,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/patient-operations/plans/{id}/publish", Handler: h.PublishPlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/plans/{id}/members", Handler: h.AddPlanMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/plans/{id}/close", Handler: h.ClosePlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/patient-operations/plans/{id}", Handler: h.DeletePlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/product-keywords/suggest", Handler: h.SuggestProductKeywords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/recordings/analyze", Handler: h.AnalyzeRecording, AuthMode: "internal"},

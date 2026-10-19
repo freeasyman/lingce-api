@@ -101,7 +101,7 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 		         SELECT 1 FROM patient_ops_plan_members m2
 		         JOIN patient_ops_plans p2 ON p2.id=m2.plan_id AND p2.tenant_id=m2.tenant_id
 		         WHERE m2.tenant_id=c.tenant_id AND m2.customer_id=c.id
-		           AND p2.status='published' AND m2.status IN ('selected','published') AND p2.id<>$2
+		           AND p2.status='published' AND p2.deleted_at IS NULL AND m2.status IN ('selected','published') AND p2.id<>$2
 		       ) AS in_other_plan
 		FROM customers c
 		LEFT JOIN LATERAL (
