@@ -37,6 +37,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/task-summary", Handler: h.ListCustomerTaskSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks", Handler: h.ListTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks/summary", Handler: h.SummaryTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/tasks/assignees", Handler: h.TaskAssignees, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/tasks/bulk-reschedule", Handler: h.BulkRescheduleTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/assign", Handler: h.AssignTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/complete", Handler: h.CompleteTaskAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/status", Handler: h.UpdateTaskStatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -268,6 +271,62 @@ func (h *Handler) UpdateTaskStatusAuthenticated(w http.ResponseWriter, r *http.R
 	httputil.WriteSuccess(w, map[string]any{"status": req.Status, "task_id": id})
 }
 
+func (h *Handler) TaskAssignees(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	items, err := h.service.ListTaskAssignees(r.Context(), *claims.TenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) AssignTask(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid task id")
+		return
+	}
+	var req AssignTaskRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if err := h.service.AssignPatientTask(r.Context(), *claims.TenantID, claims.UserID, id, req.EmployeeID, claims.UserType == auth.UserTypeAdmin); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"assigned": true})
+}
+
+func (h *Handler) BulkRescheduleTasks(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	var req BulkRescheduleRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 128*1024)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	count, err := h.service.BulkReschedulePatientTasks(r.Context(), *claims.TenantID, claims.UserID, claims.UserType == auth.UserTypeAdmin, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"updated": count})
+}
+
 func (h *Handler) SummaryTasksAuthenticated(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil || claims.TenantID == nil {
@@ -299,6 +358,7 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 	}
 	page, pageSize := 1, 50
 	filter := strings.TrimSpace(r.URL.Query().Get("filter"))
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
 		page = v
 	}
@@ -314,7 +374,7 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 		}
 		allEmployees = true
 	}
-	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, filter)
+	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, filter, query)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

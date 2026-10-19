@@ -344,10 +344,12 @@ type ProductKeywordSuggestRequest struct {
 }
 
 type PatientTaskCount struct {
-	Total   int `json:"total"`
-	Today   int `json:"today"`
-	Overdue int `json:"overdue"`
-	Future  int `json:"future"`
+	Total     int `json:"total"`
+	Today     int `json:"today"`
+	Overdue   int `json:"overdue"`
+	Future    int `json:"future"`
+	Later     int `json:"later"`
+	Unplanned int `json:"unplanned"`
 }
 
 type PatientTaskSummary struct {

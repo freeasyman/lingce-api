@@ -152,6 +152,11 @@ func parsePatientDueAt(value string, now time.Time) (time.Time, error) {
 	if strings.Contains(value, "今天") {
 		return time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location()), nil
 	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, value, now.Location()); err == nil {
+			return parsed, nil
+		}
+	}
 	return time.Time{}, fmt.Errorf("unsupported due time: %s", value)
 }
 
@@ -529,15 +534,19 @@ func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID i
 			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
 			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at IS NOT NULL AND t.due_at < NOW()),
 			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at IS NULL),
 			COUNT(*),
 			COUNT(*) FILTER (WHERE t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
 			COUNT(*) FILTER (WHERE t.due_at IS NOT NULL AND t.due_at < NOW()),
-			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days')
+			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE t.due_at IS NULL)
 		FROM patient_operation_tasks t
 		WHERE t.tenant_id=$1 AND t.status NOT IN ('已完成','已取消')
 	`, tenantID, employeeID).Scan(
-		&mine.Total, &mine.Today, &mine.Overdue, &mine.Future,
-		&team.Total, &team.Today, &team.Overdue, &team.Future,
+		&mine.Total, &mine.Today, &mine.Overdue, &mine.Future, &mine.Later, &mine.Unplanned,
+		&team.Total, &team.Today, &team.Overdue, &team.Future, &team.Later, &team.Unplanned,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("count patient operation tasks: %w", err)
@@ -549,7 +558,7 @@ func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID i
 	return summary, nil
 }
 
-func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter string) ([]PatientTaskResponse, int64, error) {
+func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter, query string) ([]PatientTaskResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -567,9 +576,15 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	dueFilter := ""
 	switch strings.TrimSpace(filter) {
 	case "今天":
-		dueFilter = " AND due_at >= CURRENT_DATE AND due_at < CURRENT_DATE + INTERVAL '1 day'"
+		dueFilter = " AND t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'"
 	case "逾期":
-		dueFilter = " AND due_at IS NOT NULL AND due_at < NOW()"
+		dueFilter = " AND t.due_at IS NOT NULL AND t.due_at < NOW()"
+	case "未来7天":
+		dueFilter = " AND t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'"
+	case "以后":
+		dueFilter = " AND t.due_at >= CURRENT_DATE + INTERVAL '8 days'"
+	case "未安排":
+		dueFilter = " AND t.due_at IS NULL"
 	case "我负责":
 		dueFilter = " AND t.employee_id=$2"
 	case "需要协作":
@@ -580,11 +595,26 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	default:
 		return nil, 0, fmt.Errorf("unsupported task filter")
 	}
-	baseFilter := "t.tenant_id=$1 AND " + ownerFilter + " AND t.status NOT IN ('已完成','已取消')" + dueFilter
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks t WHERE `+baseFilter, tenantID, employeeID).Scan(&total); err != nil {
+	query = strings.TrimSpace(query)
+	searchFilter := ""
+	if query != "" {
+		searchFilter = " AND (c.name ILIKE '%'||$5::text||'%' OR c.phone ILIKE '%'||$5::text||'%' OR t.goal ILIKE '%'||$5::text||'%' OR t.evidence ILIKE '%'||$5::text||'%' OR COALESCE(p.name,'') ILIKE '%'||$5::text||'%')"
+	}
+	baseFilter := "t.tenant_id=$1 AND " + ownerFilter + " AND t.status NOT IN ('已完成','已取消')" + dueFilter + searchFilter
+	countFilter := baseFilter
+	countArgs := []any{tenantID, employeeID}
+	if query != "" {
+		countFilter = strings.ReplaceAll(baseFilter, "$5", "$3")
+		countArgs = append(countArgs, query)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) `+patientTaskFrom+` WHERE `+countFilter, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
+	listArgs := []any{tenantID, employeeID, pageSize, (page - 1) * pageSize}
+	if query != "" {
+		listArgs = append(listArgs, query)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
 	}

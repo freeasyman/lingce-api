@@ -16,11 +16,13 @@ const (
 
 	PatientOpsAbilityTasksReadAll = "patient_ops.tasks.read_all"
 	PatientOpsAbilityPermission   = "patient_ops.permission.manage"
+	PatientOpsAbilityAssign       = "patient_ops.tasks.assign"
 )
 
 var patientOpsAbilities = map[string]struct{}{
 	PatientOpsAbilityTasksReadAll: {},
 	PatientOpsAbilityPermission:   {},
+	PatientOpsAbilityAssign:       {},
 }
 
 type PatientOpsPermissionAssignment struct {
