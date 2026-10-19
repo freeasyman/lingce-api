@@ -1055,7 +1055,13 @@ func calculateReport(report *Report) {
 		}
 	}
 	report.Grade = gradeFor(report.TotalScore)
-	// 等级只按总分换算；major_score 仅用于分项分析，不参与降级。
+	// 国家标准：主诉、病史、体检、诊断、处理治疗五项标准分合计 80 分。
+	// 五项合计低于 70 分降为乙级，低于 65 分降为丙级；只降不升。
+	if report.MajorScore < 65 {
+		report.Grade = "丙级"
+	} else if report.MajorScore < 70 && report.Grade == "甲级" {
+		report.Grade = "乙级"
+	}
 	if report.FailureReason != "" {
 		report.Grade = ""
 		report.OverallResult = "failed"
