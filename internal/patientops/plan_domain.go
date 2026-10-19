@@ -64,38 +64,41 @@ type PlanDetail struct {
 }
 
 type PlanCandidate struct {
-	CustomerID             int64  `json:"customer_id"`
-	CustomerName           string `json:"customer_name"`
-	Phone                  string `json:"phone,omitempty"`
-	Platform               string `json:"platform,omitempty"`
-	Nickname               string `json:"nickname,omitempty"`
-	Age                    int    `json:"age,omitempty"`
-	Gender                 string `json:"gender,omitempty"`
-	Scenario               string `json:"scenario"`
-	LastVisitAt            string `json:"last_visit_at,omitempty"`
-	LastVisitType          string `json:"last_visit_type,omitempty"`
-	LastActivityAt         string `json:"last_activity_at,omitempty"`
-	Interest               string `json:"interest,omitempty"`
-	Concern                string `json:"concern,omitempty"`
-	ClinicalText           string `json:"clinical_text,omitempty"`
-	Salutation             string `json:"salutation,omitempty"`
-	CustomerType           string `json:"customer_type,omitempty"`
-	DecisionMaker          string `json:"decision_maker,omitempty"`
-	Source                 string `json:"source,omitempty"`
-	RecommendedProductID   *int64 `json:"recommended_product_id,omitempty"`
-	RecommendedProductName string `json:"recommended_product_name,omitempty"`
-	ProductApplicable      string `json:"product_applicable,omitempty"`
-	ProductUpgradeTo       string `json:"product_upgrade_to,omitempty"`
-	ProductCombineWith     string `json:"product_combine_with,omitempty"`
-	MatchScore             *int   `json:"match_score,omitempty"`
-	Reason                 string `json:"reason"`
-	ReasonSource           string `json:"reason_source"`
-	RiskMedical            string `json:"risk_medical"`
-	RiskCommercial         string `json:"risk_commercial"`
-	ExpectedResult         string `json:"expected_result"`
-	TaskType               string `json:"task_type"`
-	TaskSubtype            string `json:"task_subtype"`
-	AssignedTo             *int64 `json:"assigned_to,omitempty"`
+	CustomerID             int64           `json:"customer_id"`
+	CustomerName           string          `json:"customer_name"`
+	Phone                  string          `json:"phone,omitempty"`
+	Platform               string          `json:"platform,omitempty"`
+	Nickname               string          `json:"nickname,omitempty"`
+	Age                    int             `json:"age,omitempty"`
+	Gender                 string          `json:"gender,omitempty"`
+	Scenario               string          `json:"scenario"`
+	LastVisitAt            string          `json:"last_visit_at,omitempty"`
+	LastVisitType          string          `json:"last_visit_type,omitempty"`
+	LastActivityAt         string          `json:"last_activity_at,omitempty"`
+	Interest               string          `json:"interest,omitempty"`
+	Concern                string          `json:"concern,omitempty"`
+	ClinicalText           string          `json:"clinical_text,omitempty"`
+	Salutation             string          `json:"salutation,omitempty"`
+	CustomerType           string          `json:"customer_type,omitempty"`
+	DecisionMaker          string          `json:"decision_maker,omitempty"`
+	Source                 string          `json:"source,omitempty"`
+	ConditionSummary       string          `json:"condition_summary,omitempty"`
+	VisitHistory           []PlanVisitFact `json:"visit_history,omitempty"`
+	RecommendedProductID   *int64          `json:"recommended_product_id,omitempty"`
+	RecommendedProductName string          `json:"recommended_product_name,omitempty"`
+	ProductPrice           float64         `json:"product_price,omitempty"`
+	ProductApplicable      string          `json:"product_applicable,omitempty"`
+	ProductUpgradeTo       string          `json:"product_upgrade_to,omitempty"`
+	ProductCombineWith     string          `json:"product_combine_with,omitempty"`
+	MatchScore             *int            `json:"match_score,omitempty"`
+	Reason                 string          `json:"reason"`
+	ReasonSource           string          `json:"reason_source"`
+	RiskMedical            string          `json:"risk_medical"`
+	RiskCommercial         string          `json:"risk_commercial"`
+	ExpectedResult         string          `json:"expected_result"`
+	TaskType               string          `json:"task_type"`
+	TaskSubtype            string          `json:"task_subtype"`
+	AssignedTo             *int64          `json:"assigned_to,omitempty"`
 
 	// 以下字段由大模型按客户生成；为空时回退到模板内容。
 	Goal    string `json:"goal,omitempty"`
@@ -191,6 +194,17 @@ type planCustomerFact struct {
 	Department      string
 	ClinicalText    string
 	InOtherPlan     bool
+}
+
+type PlanVisitFact struct {
+	VisitAt        string `json:"visit_at,omitempty"`
+	VisitType      string `json:"visit_type,omitempty"`
+	Department     string `json:"department,omitempty"`
+	Doctor         string `json:"doctor,omitempty"`
+	Diagnosis      string `json:"diagnosis,omitempty"`
+	ChiefComplaint string `json:"chief_complaint,omitempty"`
+	TreatmentPlan  string `json:"treatment_plan,omitempty"`
+	Fee            string `json:"fee,omitempty"`
 }
 
 type planProduct struct {

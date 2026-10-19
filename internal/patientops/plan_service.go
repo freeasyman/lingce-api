@@ -576,6 +576,10 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 	if strings.TrimSpace(cand.ExpectedResult) != "" {
 		expected = cand.ExpectedResult
 	}
+	evidence := cand.Reason
+	if strings.TrimSpace(cand.ConditionSummary) != "" {
+		evidence = "病情摘要：" + cand.ConditionSummary + "；匹配依据：" + cand.Reason
+	}
 	dedupeKey := fmt.Sprintf("plan:%d:customer:%d", plan.ID, cand.CustomerID)
 	priority := 5
 	if cand.MatchScore != nil {
@@ -600,7 +604,7 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 		ON CONFLICT DO NOTHING
 		RETURNING id
 	`, plan.TenantID, cand.CustomerID, *owner, taskType, goal, action, content,
-		cand.Reason, due, plan.ID, cand.TaskSubtype, cand.RecommendedProductID, priority, matchScore,
+		evidence, due, plan.ID, cand.TaskSubtype, cand.RecommendedProductID, priority, matchScore,
 		cand.RiskMedical, cand.RiskCommercial, dedupeKey, expected, *owner).Scan(&taskID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.QueryRow(ctx, `SELECT id FROM patient_operation_tasks WHERE tenant_id=$1 AND dedupe_key=$2`, plan.TenantID, dedupeKey).Scan(&taskID); err != nil {

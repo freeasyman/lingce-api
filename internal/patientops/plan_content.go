@@ -3,6 +3,7 @@ package patientops
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -14,39 +15,41 @@ import (
 const patientOpsPlanContentModel = "patient_ops_plan_content"
 
 type planMemberContentInput struct {
-	Salutation        string `json:"salutation"`
-	CustomerType      string `json:"customer_type"`
-	DecisionMaker     string `json:"decision_maker,omitempty"`
-	Source            string `json:"source,omitempty"`
-	Platform          string `json:"platform,omitempty"`
-	Nickname          string `json:"nickname,omitempty"`
-	CustomerID        int64  `json:"customer_id"`
-	Name              string `json:"name"`
-	Age               int    `json:"age"`
-	AgeKnown          bool   `json:"age_known"`
-	Gender            string `json:"gender,omitempty"`
-	Interest          string `json:"interest,omitempty"`
-	Concern           string `json:"concern,omitempty"`
-	ClinicalText      string `json:"clinical_text,omitempty"`
-	Question          string `json:"question,omitempty"`
-	LastVisitAt       string `json:"last_visit_at,omitempty"`
-	LastActivityAt    string `json:"last_activity_at,omitempty"`
-	Reason            string `json:"reason"`
-	ProductName       string `json:"product_name,omitempty"`
-	ProductApplicable string `json:"product_applicable,omitempty"`
-	RiskMedical       string `json:"risk_medical,omitempty"`
-	RiskCommercial    string `json:"risk_commercial,omitempty"`
+	Salutation        string          `json:"salutation"`
+	CustomerType      string          `json:"customer_type"`
+	DecisionMaker     string          `json:"decision_maker,omitempty"`
+	Source            string          `json:"source,omitempty"`
+	Platform          string          `json:"platform,omitempty"`
+	Nickname          string          `json:"nickname,omitempty"`
+	VisitHistory      []PlanVisitFact `json:"visit_history,omitempty"`
+	CustomerID        int64           `json:"customer_id"`
+	Name              string          `json:"name"`
+	Age               int             `json:"age"`
+	AgeKnown          bool            `json:"age_known"`
+	Gender            string          `json:"gender,omitempty"`
+	Interest          string          `json:"interest,omitempty"`
+	Concern           string          `json:"concern,omitempty"`
+	ClinicalText      string          `json:"clinical_text,omitempty"`
+	Question          string          `json:"question,omitempty"`
+	LastVisitAt       string          `json:"last_visit_at,omitempty"`
+	LastActivityAt    string          `json:"last_activity_at,omitempty"`
+	Reason            string          `json:"reason"`
+	ProductName       string          `json:"product_name,omitempty"`
+	ProductApplicable string          `json:"product_applicable,omitempty"`
+	RiskMedical       string          `json:"risk_medical,omitempty"`
+	RiskCommercial    string          `json:"risk_commercial,omitempty"`
 }
 
 type planMemberContentOutput struct {
 	Members []struct {
-		CustomerID     int64  `json:"customer_id"`
-		Goal           string `json:"goal"`
-		Action         string `json:"action"`
-		Content        string `json:"content"`
-		RiskMedical    string `json:"risk_medical"`
-		RiskCommercial string `json:"risk_commercial"`
-		ExpectedResult string `json:"expected_result"`
+		CustomerID       int64  `json:"customer_id"`
+		Goal             string `json:"goal"`
+		Action           string `json:"action"`
+		Content          string `json:"content"`
+		RiskMedical      string `json:"risk_medical"`
+		RiskCommercial   string `json:"risk_commercial"`
+		ExpectedResult   string `json:"expected_result"`
+		ConditionSummary string `json:"condition_summary"`
 	} `json:"members"`
 }
 
@@ -85,6 +88,12 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 		return candidates
 	}
 
+	history := s.loadPlanVisitHistory(ctx, plan.TenantID, candidates)
+	for i := range candidates {
+		if values := history[candidates[i].CustomerID]; len(values) > 0 {
+			candidates[i].VisitHistory = values
+		}
+	}
 	products := planProductSummary(candidates)
 	index := make(map[int64]int, len(candidates))
 	for i := range candidates {
@@ -119,6 +128,7 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 				Source:            cand.Source,
 				Platform:          cand.Platform,
 				Nickname:          cand.Nickname,
+				VisitHistory:      cand.VisitHistory,
 				LastVisitAt:       cand.LastVisitAt,
 				LastActivityAt:    cand.LastActivityAt,
 				Reason:            cand.Reason,
@@ -181,6 +191,9 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 			if strings.TrimSpace(item.ExpectedResult) != "" {
 				candidates[i].ExpectedResult = strings.TrimSpace(item.ExpectedResult)
 			}
+			if strings.TrimSpace(item.ConditionSummary) != "" {
+				candidates[i].ConditionSummary = strings.TrimSpace(item.ConditionSummary)
+			}
 		}
 	}
 	return candidates
@@ -199,6 +212,9 @@ func planProductSummary(candidates []PlanCandidate) string {
 		}
 		seen[name] = struct{}{}
 		line := name
+		if cand.ProductPrice > 0 {
+			line += fmt.Sprintf("；价格：%.0f 元", cand.ProductPrice)
+		}
 		if applicable := strings.TrimSpace(cand.ProductApplicable); applicable != "" {
 			line += "（适用：" + applicable + "）"
 		}
