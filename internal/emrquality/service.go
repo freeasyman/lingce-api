@@ -198,6 +198,10 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 			if !policyForAction(policies, input.Action).Enabled {
 				continue
 			}
+			if rule.Code == "DX-001" && input.VisitType == "复诊" && strings.TrimSpace(contentText(map[string]any{"diagnosis": diagnosisContent(input.Content)}, "diagnosis")) == "" {
+				report.Results = append(report.Results, RuleResult{RuleCode: rule.Code, SectionCode: rule.SectionCode, Result: "pass", ExecutionKind: rule.ExecutorKind, Reason: "复诊未写诊断由 DX-005 判断。"})
+				continue
+			}
 			if result := semanticPrerequisite(input, rule, report); result != nil {
 				ensureResultMessage(input.Action, result)
 				report.Results = append(report.Results, *result)
@@ -897,6 +901,9 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.content", Path: "physical_exam", Excerpt: ""}}
 		}
 	case "DX-001":
+		if input.VisitType == "复诊" && strings.TrimSpace(contentText(map[string]any{"diagnosis": diagnosisContent(input.Content)}, "diagnosis")) == "" {
+			break
+		}
 		if input.TemplateCode == "tcm" {
 			// 中医病历以中医诊断为主，西医诊断缺失由 TCM-WD-001 提醒，不阻断、不扣分。
 			break

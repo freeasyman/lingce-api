@@ -246,3 +246,14 @@ func TestDX006AndDX007NotApplicable(t *testing.T) {
 		}
 	}
 }
+
+func TestDX001SkipsFollowupEmptyDiagnosis(t *testing.T) {
+	rule := programRule("DX-001", 10, `{}`)
+	got, err := evaluateRule(Context{VisitType: "复诊", Content: map[string]any{}}, rule)
+	if err != nil {
+		t.Fatalf("evaluate DX-001: %v", err)
+	}
+	if got.Result != "pass" {
+		t.Fatalf("follow-up empty diagnosis should defer to DX-005, got %s", got.Result)
+	}
+}
