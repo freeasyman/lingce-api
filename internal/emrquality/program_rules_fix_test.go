@@ -207,3 +207,42 @@ func TestGEN007SystemFieldsReminderWithoutDeduction(t *testing.T) {
 		t.Fatalf("complete system fields should pass, got %s", got.Result)
 	}
 }
+
+func TestDX005FollowupDiagnosisUsesHistory(t *testing.T) {
+	rule := programRule("DX-005", 10, `{}`)
+	prior := map[string]any{
+		"content": map[string]any{"diagnosis": map[string]any{"diagnosis_name": "原发性高血压"}},
+	}
+	ctx := Context{VisitType: "复诊", Content: map[string]any{}, History: []map[string]any{prior}}
+	got, err := evaluateRule(ctx, rule)
+	if err != nil {
+		t.Fatalf("evaluate DX-005: %v", err)
+	}
+	applyRuleScoring(rule, got)
+	if got.Result != "problem" || got.Deduction != 10 {
+		t.Fatalf("prior diagnosis + empty current should be problem 10, got %s/%d", got.Result, got.Deduction)
+	}
+	noHistory := Context{VisitType: "复诊", Content: map[string]any{}}
+	got, _ = evaluateRule(noHistory, rule)
+	if got.Result != "not_evaluable" {
+		t.Fatalf("no prior diagnosis should be not_evaluable, got %s", got.Result)
+	}
+	firstVisit := Context{VisitType: "初诊", Content: map[string]any{}}
+	got, _ = evaluateRule(firstVisit, rule)
+	if got.Result != "pass" {
+		t.Fatalf("first visit should pass, got %s", got.Result)
+	}
+}
+
+func TestDX006AndDX007NotApplicable(t *testing.T) {
+	for _, code := range []string{"DX-006", "DX-007"} {
+		rule := programRule(code, 0, `{}`)
+		got, err := evaluateRule(Context{}, rule)
+		if err != nil {
+			t.Fatalf("evaluate %s: %v", code, err)
+		}
+		if got.Result != "pass" || got.Deduction != 0 {
+			t.Fatalf("%s should be not applicable, got %s/%d", code, got.Result, got.Deduction)
+		}
+	}
+}

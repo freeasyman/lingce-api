@@ -909,6 +909,37 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Reason = "没有记录诊断"
 			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
 		}
+	case "DX-005":
+		if input.VisitType != "复诊" {
+			break
+		}
+		currentDiagnosis := contentText(map[string]any{"diagnosis": diagnosisContent(input.Content)}, "diagnosis")
+		if strings.TrimSpace(currentDiagnosis) != "" {
+			break
+		}
+		priorDiagnosis := false
+		for _, history := range input.History {
+			content, ok := history["content"].(map[string]any)
+			if !ok || content == nil {
+				continue
+			}
+			if strings.TrimSpace(contentText(map[string]any{"diagnosis": diagnosisContent(content)}, "diagnosis")) != "" {
+				priorDiagnosis = true
+				break
+			}
+		}
+		if priorDiagnosis {
+			result.Result = "problem"
+			result.Reason = "复诊已明确诊断，但本次未书写诊断"
+			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
+		} else {
+			result.Result = "not_evaluable"
+			result.Reason = "没有可靠的既往诊断记录，无法判断复诊是否已明确诊断"
+			result.ManualReview = true
+		}
+	case "DX-006", "DX-007":
+		result.Result = "pass"
+		result.Reason = "系统没有跨次确诊次数或会诊记录，本条款暂不自动判定（不适用）"
 	case "GEN-007":
 		missing := make([]string, 0, 3)
 		if strings.TrimSpace(input.RecordID) == "" {
