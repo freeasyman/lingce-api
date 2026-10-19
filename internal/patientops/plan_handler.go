@@ -210,6 +210,84 @@ func (h *Handler) ClosePlan(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]bool{"closed": true})
 }
 
+func (h *Handler) patientOpsCanManage(r *http.Request, tenantID, employeeID int64) bool {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims != nil && claims.UserType == auth.UserTypeAdmin {
+		return true
+	}
+	allowed, err := h.service.HasPatientOpsPermission(r.Context(), tenantID, employeeID, PatientOpsAbilityPermission)
+	return err == nil && allowed
+}
+
+func (h *Handler) ListPatientOpsPermissions(w http.ResponseWriter, r *http.Request) {
+	tenantID, employeeID, ok := planTenantAndEmployee(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	if !h.patientOpsCanManage(r, tenantID, employeeID) {
+		httputil.WriteForbidden(w, "patient operations permission management required")
+		return
+	}
+	items, err := h.service.ListPatientOpsPermissions(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+func (h *Handler) GetPatientOpsPermission(w http.ResponseWriter, r *http.Request) {
+	tenantID, employeeID, ok := planTenantAndEmployee(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	target, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
+	if err != nil || target <= 0 {
+		httputil.WriteBadRequest(w, "invalid employee_id")
+		return
+	}
+	if target != employeeID && !h.patientOpsCanManage(r, tenantID, employeeID) {
+		httputil.WriteForbidden(w, "patient operations permission management required")
+		return
+	}
+	item, err := h.service.GetPatientOpsPermission(r.Context(), tenantID, target)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) UpsertPatientOpsPermission(w http.ResponseWriter, r *http.Request) {
+	tenantID, employeeID, ok := planTenantAndEmployee(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	if !h.patientOpsCanManage(r, tenantID, employeeID) {
+		httputil.WriteForbidden(w, "patient operations permission management required")
+		return
+	}
+	target, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
+	if err != nil || target <= 0 {
+		httputil.WriteBadRequest(w, "invalid employee_id")
+		return
+	}
+	var req UpsertPatientOpsPermissionRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.service.UpsertPatientOpsPermission(r.Context(), tenantID, target, employeeID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
 func (h *Handler) DeletePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {

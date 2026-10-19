@@ -49,6 +49,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/patient-operations/plans/{id}/members", Handler: h.AddPlanMembers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/plans/{id}/close", Handler: h.ClosePlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "DELETE", Path: "/api/v1/patient-operations/plans/{id}", Handler: h.DeletePlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/permissions", Handler: h.ListPatientOpsPermissions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/permissions/{employee_id}", Handler: h.GetPatientOpsPermission, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/patient-operations/permissions/{employee_id}", Handler: h.UpsertPatientOpsPermission, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/product-keywords/suggest", Handler: h.SuggestProductKeywords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/screenshots/analyze", Handler: h.Analyze, AuthMode: "internal"},
 		{Method: "POST", Path: "/api/v1/internal/patient-operations/recordings/analyze", Handler: h.AnalyzeRecording, AuthMode: "internal"},
@@ -278,7 +281,16 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 	if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 && v <= 100 {
 		pageSize = v
 	}
-	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, claims.UserType == auth.UserTypeAdmin, filter)
+	allEmployees := claims.UserType == auth.UserTypeAdmin
+	if !allEmployees && strings.TrimSpace(r.URL.Query().Get("all_employees")) == "1" {
+		allowed, err := h.service.HasPatientOpsPermission(r.Context(), *claims.TenantID, claims.UserID, PatientOpsAbilityTasksReadAll)
+		if err != nil || !allowed {
+			httputil.WriteForbidden(w, "patient operations all-employee task permission required")
+			return
+		}
+		allEmployees = true
+	}
+	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, filter)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
