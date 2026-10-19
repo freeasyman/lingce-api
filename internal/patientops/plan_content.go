@@ -10,6 +10,8 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
+const patientOpsPlanContentModel = "patient_ops_plan_content"
+
 type planMemberContentInput struct {
 	CustomerID        int64  `json:"customer_id"`
 	Name              string `json:"name"`
@@ -60,7 +62,7 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 	if strings.TrimSpace(systemPrompt) == "" || strings.TrimSpace(userTemplate) == "" {
 		return candidates
 	}
-	config, err := s.loadModelConfig(ctx, plan.TenantID, "patient_plan_member_content")
+	config, err := s.loadModelConfig(ctx, plan.TenantID, patientOpsPlanContentModel)
 	if err != nil {
 		slog.Warn("plan member model config not available", "error", err)
 		return candidates
@@ -119,7 +121,7 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 			FunctionType:  config.FunctionType,
 			Provider:      config.Provider,
 			ModelCode:     config.ModelCode,
-			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "plan", BusinessObjectID: plan.ID, BillingSubject: "patient_plan_member_content"},
+			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "plan", BusinessObjectID: plan.ID, BillingSubject: patientOpsPlanContentModel},
 			Messages:      []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}},
 			Params:        params,
 		})

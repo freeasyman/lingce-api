@@ -218,8 +218,6 @@ type patientModelConfig struct {
 	Params                            map[string]any
 }
 
-const patientTextModel = "qwen3.8-flash"
-
 func (s *Service) loadModelConfig(ctx context.Context, tenantID int64, functionType string) (*patientModelConfig, error) {
 	var c patientModelConfig
 	var raw []byte
@@ -227,16 +225,8 @@ func (s *Service) loadModelConfig(ctx context.Context, tenantID int64, functionT
 	if err != nil {
 		return nil, fmt.Errorf("load patient model config %s: %w", functionType, err)
 	}
-	if c.Provider == "" {
+	if c.Provider == "" || c.ModelCode == "" {
 		return nil, fmt.Errorf("patient model config %s is incomplete", functionType)
-	}
-	// 患者运营文本分析固定使用 qwen3.8-flash；不调用 Max。
-	// 所有调用只允许经 pkg/llmgateway，业务代码不得直连模型供应商。
-	if c.ModelCode == "" || strings.Contains(strings.ToLower(c.ModelCode), "max") {
-		if c.ModelCode != "" {
-			slog.Warn("patient text model overridden to flash", "function_type", functionType, "configured_model", c.ModelCode)
-		}
-		c.ModelCode = patientTextModel
 	}
 	c.Params = map[string]any{}
 	if len(raw) > 0 {
