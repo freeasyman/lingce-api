@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/records/import-from-recording", Handler: h.ImportFromRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/versions", Handler: h.Snapshots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/records/{id}/export", Handler: h.ExportAudit, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/working-draft", Handler: h.AutoSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/save", Handler: h.ManualSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/submit", Handler: h.Submit, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -328,6 +330,43 @@ func (h *Handler) Snapshots(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
+
+// ExportAudit 导出病历留痕：操作日志、版本正文、字段变更明细三张表。
+func (h *Handler) ExportAudit(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, err := h.authorizeRecord(r, "record.history.read")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	ctx := r.Context()
+	record, err := h.service.Get(ctx, tenantID, recordID(r))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	snapshots, err := h.service.Snapshots(ctx, tenantID, recordID(r))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	processes, err := h.service.ProcessRecords(ctx, tenantID, recordID(r))
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	workbook, err := buildAuditWorkbook(record, snapshots, processes)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	filename := auditExportFilename(record)
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"audit-export.xlsx\"; filename*=UTF-8''%s", url.PathEscape(filename)))
+	if err := workbook.Write(w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (h *Handler) AutoSave(w http.ResponseWriter, r *http.Request) {
 	access, tenantID, err := h.authorizeRecord(r, "record.edit")
 	if err != nil {
