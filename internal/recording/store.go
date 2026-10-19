@@ -2563,12 +2563,12 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 				return err
 			}
 		}
-		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
+		if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" && req.NextContactAt != nil {
 			if _, err := tx.Exec(ctx, `UPDATE recording_tasks SET status=CASE WHEN source_type IN ('follow_up','followup') THEN 'to_execute' ELSE 'pending' END, completed_at=NULL, due_at=$1 WHERE id=$2`, req.NextContactAt, id); err != nil {
 				return err
 			}
 		}
-		_, auditErr := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) SELECT tenant_id,id,'execution_recorded',jsonb_build_object('execution_result',$1,'difficulty',$2,'doctor_escalation',$3,'next_contact_at',$4,'patient_replied',$5,'revisit_attended',$6,'issue_resolved',$7) FROM recording_tasks WHERE id=$8`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, req.PatientReplied, req.RevisitAttended, req.IssueResolved, id)
+		_, auditErr := tx.Exec(ctx, `INSERT INTO followup_task_audits(tenant_id,task_id,action,detail) SELECT tenant_id,id,'execution_recorded',jsonb_build_object('execution_result',$1,'difficulty',$2,'doctor_escalation',$3,'next_contact_at',$4,'requeued',($1::text='no_answer' AND $4::timestamptz IS NOT NULL),'patient_replied',$5,'revisit_attended',$6,'issue_resolved',$7) FROM recording_tasks WHERE id=$8`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, req.PatientReplied, req.RevisitAttended, req.IssueResolved, id)
 		if auditErr != nil {
 			return auditErr
 		}

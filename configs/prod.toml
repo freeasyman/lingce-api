@@ -12,7 +12,7 @@ host = "pgm-2ze5k275270fch1pmo.pg.rds.aliyuncs.com"
 port = 5432
 name = "lingce_prod"
 user = "freeasyman"
-sslmode = "require"
+sslmode = "disable"
 max_conns = 2
 min_conns = 1
 

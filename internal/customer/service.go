@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Service struct {
@@ -178,6 +179,26 @@ func (s *Service) GetCustomerByID(ctx context.Context, id int64) (*CustomerRespo
 			if scanErr := rows.Scan(&identity.ID, &identity.ChannelType, &identity.ExternalID, &identity.ExternalName); scanErr == nil {
 				identity.Status = "active"
 				resp.Identities = append(resp.Identities, identity)
+			}
+		}
+	}
+
+	// External source identity (HIS import): source system and source patient number.
+	if extRows, extErr := s.store.pool.Query(ctx, `
+		SELECT source_system, source_patient_id, COALESCE(match_method, ''), updated_at
+		FROM external_data_source_identities
+		WHERE customer_id = $1
+		ORDER BY id DESC
+	`, id); extErr == nil {
+		defer extRows.Close()
+		resp.ExternalIdentities = make([]ExternalIdentityResponse, 0, 2)
+		for extRows.Next() {
+			var ext ExternalIdentityResponse
+			var updated time.Time
+			if scanErr := extRows.Scan(&ext.SourceSystem, &ext.SourcePatientID, &ext.MatchMethod, &updated); scanErr == nil {
+				t := updated.Format("2006-01-02T15:04:05Z07:00")
+				ext.UpdatedAt = &t
+				resp.ExternalIdentities = append(resp.ExternalIdentities, ext)
 			}
 		}
 	}

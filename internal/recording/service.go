@@ -4998,7 +4998,11 @@ func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64,
 		return err
 	}
 	if req.ExecutionResult != nil && *req.ExecutionResult == "no_answer" {
-		_ = s.appendTaskInteraction(ctx, task, completedBy, "task_contact_attempt", "未接通，已安排再次联系")
+		message := "未接通，本次任务已结束"
+		if req.NextContactAt != nil {
+			message = "未接通，已安排再次联系"
+		}
+		_ = s.appendTaskInteraction(ctx, task, completedBy, "task_contact_attempt", message)
 	} else {
 		_ = s.appendTaskInteraction(ctx, task, completedBy, "task_completed", "任务已完成")
 	}
@@ -5008,12 +5012,9 @@ func (s *Service) CompleteTask(ctx context.Context, id int64, completedBy int64,
 func validateTaskExecution(req CompleteTaskRequest, now time.Time) error {
 	if req.ExecutionResult != nil {
 		switch *req.ExecutionResult {
-		case "connected", "no_answer", "needs_help":
+		case "connected", "wechat_sent", "no_answer", "needs_help":
 		default:
 			return fmt.Errorf("invalid execution result")
-		}
-		if *req.ExecutionResult == "no_answer" && req.NextContactAt == nil {
-			return fmt.Errorf("next contact time is required for unanswered contact")
 		}
 	}
 	if req.NextContactAt != nil && !req.NextContactAt.After(now) {

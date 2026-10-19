@@ -52,6 +52,32 @@ type TextInferenceRequest struct {
 	Params        *Params          `json:"params,omitempty"`
 }
 
+// ImageInferenceRequest is the business-facing contract for gateway-managed
+// multimodal inference. Business modules must send image data here and never
+// call a provider directly.
+type ImageInferenceRequest struct {
+	TenantID      int64            `json:"tenant_id"`
+	CallerService string           `json:"caller_service"`
+	CallerModule  string           `json:"caller_module"`
+	TraceID       string           `json:"trace_id"`
+	FunctionType  string           `json:"function_type"`
+	Provider      string           `json:"provider,omitempty"`
+	ModelCode     string           `json:"model_code,omitempty"`
+	Billing       *BillingMetadata `json:"billing,omitempty"`
+	Messages      []ImageMessage   `json:"messages"`
+	Params        *Params          `json:"params,omitempty"`
+}
+
+type ImageMessage struct {
+	Role    string             `json:"role"`
+	Content []ImageContentPart `json:"content"`
+}
+
+type ImageContentPart struct {
+	Image string `json:"image,omitempty"`
+	Text  string `json:"text,omitempty"`
+}
+
 // BillingMetadata represents business attribution for AI calls.
 type BillingMetadata struct {
 	BusinessDomain     string `json:"business_domain,omitempty"`
@@ -160,6 +186,29 @@ func (c *Client) TextInferenceWithRaw(ctx context.Context, req TextInferenceRequ
 		return nil, requestBody, responseBody, fmt.Errorf("failed to parse response: %w", err)
 	}
 	return &result, requestBody, responseBody, nil
+}
+
+// ImageInference sends provider-neutral image content through the private
+// LLM gateway. The gateway owns provider credentials and model routing.
+func (c *Client) ImageInference(ctx context.Context, req ImageInferenceRequest) (*TextInferenceResponse, error) {
+	if req.TraceID == "" { req.TraceID = uuid.New().String() }
+	if req.CallerService == "" { req.CallerService = "lingce-api" }
+	if req.FunctionType == "" { req.FunctionType = "image_understanding" }
+	body, err := json.Marshal(req)
+	if err != nil { return nil, fmt.Errorf("failed to marshal image request: %w", err) }
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/inference/image", bytes.NewReader(body))
+	if err != nil { return nil, fmt.Errorf("failed to create image request: %w", err) }
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.client.Do(httpReq)
+	if err != nil { return nil, fmt.Errorf("failed to send image request: %w", err) }
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil { return nil, fmt.Errorf("failed to read image response: %w", err) }
+	if resp.StatusCode != http.StatusOK { return nil, fmt.Errorf("LLM gateway image error (status %d): %s", resp.StatusCode, string(responseBody)) }
+	var result TextInferenceResponse
+	if err := json.Unmarshal(responseBody, &result); err != nil { return nil, fmt.Errorf("failed to parse image response: %w", err) }
+	return &result, nil
 }
 
 // Usage represents token usage

@@ -78,6 +78,7 @@ type CustomerResponse struct {
 	PatientID            *int64     `json:"patient_id,omitempty"`
 	LeadID               *int64     `json:"lead_id,omitempty"`
 	Identities           []CustomerIdentityResponse    `json:"identities,omitempty"`
+	ExternalIdentities   []ExternalIdentityResponse    `json:"external_identities,omitempty"`
 	RecentInteractions   []CustomerInteractionSummary  `json:"recent_interactions,omitempty"`
 	Tags                 []string   `json:"tags,omitempty"`
 	Notes                *string    `json:"notes,omitempty"`
@@ -92,6 +93,15 @@ type CustomerIdentityResponse struct {
 	ExternalID   *string `json:"external_id,omitempty"`
 	ExternalName *string `json:"external_name,omitempty"`
 	Status       string  `json:"status"`
+}
+
+// ExternalIdentityResponse is the source-side identity of a customer imported
+// through the external data platform (external_data_source_identities).
+type ExternalIdentityResponse struct {
+	SourceSystem    string  `json:"source_system"`
+	SourcePatientID string  `json:"source_patient_id"`
+	MatchMethod     string  `json:"match_method,omitempty"`
+	UpdatedAt       *string `json:"updated_at,omitempty"`
 }
 
 type CustomerInteractionSummary struct {

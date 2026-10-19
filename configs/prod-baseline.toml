@@ -12,14 +12,14 @@ host = "pgm-2ze5k275270fch1pmo.pg.rds.aliyuncs.com"
 port = 5432
 name = "lingce_prod"
 user = "freeasyman"
-sslmode = "require"
+sslmode = "disable"
 max_conns = 2
 min_conns = 1
 
 [schema]
 mode = "baseline"
-baseline_version = "20261011_003"
-convergence_file = "20261011_003.sql"
+baseline_version = "20261019_008"
+convergence_file = "20261019_008.sql"
 
 [jwt]
 expiry_hours = 24
