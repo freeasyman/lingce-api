@@ -909,6 +909,16 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Reason = "没有记录诊断"
 			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
 		}
+	case "SIGN-001":
+		if input.CreatedBy <= 0 && input.DoctorID <= 0 {
+			result.Result = "problem"
+			result.Deduction = rule.StandardPoints
+			result.Reason = "未检测到登录医生账号，无法确认签名"
+			result.Evidence = []Evidence{{Source: "record.context", Path: "created_by", Excerpt: ""}}
+		}
+	case "WRITE-001":
+		result.Result = "pass"
+		result.Reason = "电子病历不适用字迹、整洁、涂改等书写要求"
 	case "TCM-WD-001":
 		if input.TemplateCode != "tcm" {
 			break

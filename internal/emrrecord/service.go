@@ -239,7 +239,8 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	qualityInput := emrquality.Context{TenantID: tenantID, RecordID: current.ID, Action: emrquality.ActionComplete,
 		DocumentType: current.DocumentType, VisitType: current.VisitType, TemplateCode: current.TemplateCode, Patient: patient, Content: content,
-		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt}
+		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt,
+		DoctorID: current.DoctorID, CreatedBy: current.CreatedBy}
 	var report *emrquality.Report
 	reusedReport := false
 	if req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "" && s.quality != nil {
@@ -425,7 +426,8 @@ func qualityContext(tenantID int64, action emrquality.Action, record *Record, sn
 	}
 	return emrquality.Context{TenantID: tenantID, RecordID: record.ID, SnapshotID: snapshotIDPtr(snapshot), Action: action,
 		DocumentType: record.DocumentType, VisitType: record.VisitType, TemplateCode: record.TemplateCode, Patient: patient, Content: content,
-		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt}
+		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt,
+		DoctorID: record.DoctorID, CreatedBy: record.CreatedBy}
 }
 
 func validateDiagnosisContract(templateCode string, content map[string]any, requireComplete bool) error {

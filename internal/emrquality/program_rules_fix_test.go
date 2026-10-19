@@ -163,3 +163,29 @@ func TestTCMWD001RemindsWithoutDeduction(t *testing.T) {
 		t.Fatalf("western diagnosis present should pass, got %s", got.Result)
 	}
 }
+
+func TestSIGN001LoginCountsAsSignature(t *testing.T) {
+	rule := programRule("SIGN-001", 5, `{}`)
+	got, err := evaluateRule(Context{CreatedBy: 117}, rule)
+	if err != nil {
+		t.Fatalf("evaluate SIGN-001: %v", err)
+	}
+	if got.Result != "pass" {
+		t.Fatalf("logged-in doctor should pass signature, got %s", got.Result)
+	}
+	got, _ = evaluateRule(Context{}, rule)
+	if got.Result != "problem" || got.Deduction != 5 {
+		t.Fatalf("missing login should be problem 5, got %s/%d", got.Result, got.Deduction)
+	}
+}
+
+func TestWRITE001NotApplicableToElectronicRecord(t *testing.T) {
+	rule := programRule("WRITE-001", 0, `{}`)
+	got, err := evaluateRule(Context{}, rule)
+	if err != nil {
+		t.Fatalf("evaluate WRITE-001: %v", err)
+	}
+	if got.Result != "pass" || got.Deduction != 0 {
+		t.Fatalf("writing requirement should be not applicable, got %s/%d", got.Result, got.Deduction)
+	}
+}

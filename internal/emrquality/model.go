@@ -23,6 +23,8 @@ type Context struct {
 	Encounter    map[string]any
 	DepartmentID *int64
 	StartedAt    time.Time
+	DoctorID     int64
+	CreatedBy    int64
 	History      []map[string]any `json:"history,omitempty"`
 }
 
