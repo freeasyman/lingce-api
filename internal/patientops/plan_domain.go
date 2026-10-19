@@ -77,6 +77,7 @@ type PlanCandidate struct {
 	LastActivityAt         string `json:"last_activity_at,omitempty"`
 	Interest               string `json:"interest,omitempty"`
 	Concern                string `json:"concern,omitempty"`
+	ClinicalText           string `json:"clinical_text,omitempty"`
 	RecommendedProductID   *int64 `json:"recommended_product_id,omitempty"`
 	RecommendedProductName string `json:"recommended_product_name,omitempty"`
 	ProductApplicable      string `json:"product_applicable,omitempty"`
@@ -91,6 +92,11 @@ type PlanCandidate struct {
 	TaskType               string `json:"task_type"`
 	TaskSubtype            string `json:"task_subtype"`
 	AssignedTo             *int64 `json:"assigned_to,omitempty"`
+
+	// 以下字段由大模型按客户生成；为空时回退到模板内容。
+	Goal    string `json:"goal,omitempty"`
+	Action  string `json:"action,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type PlanExcluded struct {
@@ -176,6 +182,10 @@ type planCustomerFact struct {
 	Concern         string
 	Question        string
 	DecisionMaker   string
+	Diagnosis       string
+	ChiefComplaint  string
+	Department      string
+	ClinicalText    string
 	InOtherPlan     bool
 }
 

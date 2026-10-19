@@ -66,11 +66,26 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 	extra := ` AND EXISTS (SELECT 1 FROM patient_conversation_sources s2 WHERE s2.tenant_id=c.tenant_id AND s2.customer_id=c.id)`
 	switch {
 	case plan.PlanType == "sales":
-		extra = ` AND EXISTS (SELECT 1 FROM patient_conversation_sources s2 WHERE s2.tenant_id=c.tenant_id AND s2.customer_id=c.id)`
+		extra = ` AND (EXISTS (SELECT 1 FROM patient_conversation_sources s2 WHERE s2.tenant_id=c.tenant_id AND s2.customer_id=c.id) OR EXISTS (SELECT 1 FROM external_data_source_identities i2 WHERE i2.tenant_id=c.tenant_id AND i2.customer_id=c.id))`
 	case plan.Scenario == "post_visit" || plan.Scenario == "followup_due" || plan.Scenario == "dormant_wake":
 		extra = ` AND EXISTS (SELECT 1 FROM encounters e2 WHERE e2.tenant_id=c.tenant_id AND e2.patient_id=c.id)`
 	}
 	query := fmt.Sprintf(`
+		WITH external_visit AS (
+		  SELECT DISTINCT ON (i.customer_id)
+		         i.customer_id,
+		         COALESCE(d.payload->'data'->>'diagnosis','') AS diagnosis,
+		         COALESCE(d.payload->'data'->>'chief_complaint','') AS chief_complaint,
+		         COALESCE(d.payload->'data'->>'department','') AS department
+		  FROM external_data_source_identities i
+		  JOIN external_data_deliveries d
+		    ON d.tenant_id=i.tenant_id
+		   AND d.source_system=i.source_system
+		   AND d.object_type='visits'
+		   AND d.payload->'patient'->>'source_patient_id'=i.source_patient_id
+		  WHERE i.tenant_id=$1
+		  ORDER BY i.customer_id, d.source_updated_at DESC NULLS LAST, d.created_at DESC
+		)
 		SELECT c.id, COALESCE(c.name,''), COALESCE(c.phone,''), COALESCE(c.gender,''),
 		       COALESCE(NULLIF(c.age,0), EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.birth_date))::int, 0),
 		       COALESCE(c.tags::text,'[]'), COALESCE(c.status,''), COALESCE(c.source,''), COALESCE(c.lifecycle_stage,''),
@@ -81,6 +96,7 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 		       COALESCE(to_char(c.last_contacted_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),''),
 		       COALESCE(to_char(s.last_source_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),''), COALESCE(s.platform,''), COALESCE(s.nickname,''),
 		       COALESCE(s.interest,''), COALESCE(s.concern,''), COALESCE(s.question,''), COALESCE(s.decision_maker,''),
+		       COALESCE(xv.diagnosis,''), COALESCE(xv.chief_complaint,''), COALESCE(xv.department,''),
 		       EXISTS (
 		         SELECT 1 FROM patient_ops_plan_members m2
 		         JOIN patient_ops_plans p2 ON p2.id=m2.plan_id AND p2.tenant_id=m2.tenant_id
@@ -109,9 +125,10 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 		  WHERE tenant_id=c.tenant_id AND customer_id=c.id
 		  ORDER BY captured_at DESC, id DESC LIMIT 1
 		) s ON TRUE
+		LEFT JOIN external_visit xv ON xv.customer_id=c.id
 		WHERE c.tenant_id=$1 AND c.deleted_at IS NULL %s
 		ORDER BY c.updated_at DESC NULLS LAST, c.id DESC
-		LIMIT 10000
+		LIMIT 50000
 	`, extra)
 	rows, err := s.pool.Query(ctx, query, plan.TenantID, plan.ID)
 	if err != nil {
@@ -130,10 +147,12 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 			&f.LastContactedAt,
 			&f.LastSourceAt, &f.Platform, &f.Nickname,
 			&f.Interest, &f.Concern, &f.Question, &f.DecisionMaker,
+			&f.Diagnosis, &f.ChiefComplaint, &f.Department,
 			&f.InOtherPlan,
 		); err != nil {
 			return nil, fmt.Errorf("scan plan customer fact: %w", err)
 		}
+		f.ClinicalText = strings.TrimSpace(f.Diagnosis + " " + f.ChiefComplaint)
 		items = append(items, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -319,7 +338,7 @@ func planExclusionReason(f planCustomerFact, filter planFilter, now time.Time, r
 // matchPlanProduct 在所选产品中为单个客户找最合适的一个。没有命中返回 nil。
 func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct, int, string, string) {
 	text := strings.ToLower(strings.Join([]string{
-		f.Interest, f.Concern, f.Question, f.Tags, f.Source, f.Platform, f.Nickname,
+		f.Interest, f.Concern, f.Question, f.Tags, f.Source, f.Platform, f.Nickname, f.ClinicalText,
 	}, " "))
 	if strings.TrimSpace(text) == "" {
 		return nil, 0, "", ""
@@ -336,6 +355,10 @@ func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct,
 			if customerGender != "" && customerGender != p.Gender {
 				continue
 			}
+		}
+		if (p.AgeMin != nil || p.AgeMax != nil) && f.Age <= 0 {
+			// 产品有明确年龄范围但客户年龄未知时，不自动推荐，交由人工确认。
+			continue
 		}
 		ageOK := true
 		if f.Age > 0 {
@@ -401,6 +424,16 @@ func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct,
 			bestReason = strings.Join(reasons, "；")
 			if bestReason == "" {
 				bestReason = "客户事实与产品适用条件匹配"
+			}
+			clinical := strings.TrimSpace(f.Diagnosis)
+			if clinical == "" {
+				clinical = strings.TrimSpace(f.ChiefComplaint)
+			}
+			if clinical == "" {
+				clinical = strings.TrimSpace(f.ClinicalText)
+			}
+			if clinical != "" {
+				bestReason = "就诊：" + truncatePlanText(clinical, 30) + "；" + bestReason
 			}
 			bestRisk = planRiskText(f, p)
 		}
@@ -475,14 +508,19 @@ func (s *Service) buildPlanCandidates(ctx context.Context, plan *Plan) (*PlanPre
 			LastActivityAt: planLastActivity(f),
 			Interest:       planJoinList(f.Interest),
 			Concern:        strings.TrimSpace(f.Concern),
+			ClinicalText:   f.ClinicalText,
 			ReasonSource:   "fact",
 			AssignedTo:     f.AssignedTo,
 		}
 		if plan.PlanType == "sales" {
 			product, score, reason, risk := matchPlanProduct(f, products)
 			if product == nil {
+				reason := "暂无适配套餐（P99）"
+				if f.Age <= 0 && planProductsRequireAge(products) {
+					reason = "年龄未知，需人工确认适用产品"
+				}
 				if len(preview.Excluded) < 200 {
-					preview.Excluded = append(preview.Excluded, PlanExcluded{CustomerID: f.CustomerID, CustomerName: f.Name, Reason: "暂无适配套餐（P99）"})
+					preview.Excluded = append(preview.Excluded, PlanExcluded{CustomerID: f.CustomerID, CustomerName: f.Name, Reason: reason})
 				}
 				preview.ExcludedCount++
 				continue
@@ -695,4 +733,16 @@ func commercialPart(risk string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+func planProductsRequireAge(products []planProduct) bool {
+	if len(products) == 0 {
+		return false
+	}
+	for _, p := range products {
+		if p.AgeMin == nil && p.AgeMax == nil {
+			return false
+		}
+	}
+	return true
 }

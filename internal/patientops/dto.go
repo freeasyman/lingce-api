@@ -257,6 +257,7 @@ type PatientTaskResponse struct {
 	ID              int64    `json:"id"`
 	CustomerID      int64    `json:"customer_id"`
 	CustomerName    string   `json:"customer_name"`
+	OwnerName       string   `json:"owner_name,omitempty"`
 	SourceID        *int64   `json:"source_id,omitempty"`
 	TaskType        string   `json:"task_type"`
 	Goal            string   `json:"goal"`

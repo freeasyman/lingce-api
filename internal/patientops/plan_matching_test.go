@@ -1,6 +1,7 @@
 package patientops
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,6 +126,24 @@ func TestMatchPlanProduct(t *testing.T) {
 	fact.Question = ""
 	if matched, _, _, _ = matchPlanProduct(fact, []planProduct{product}); matched != nil {
 		t.Fatal("customer without product signal must not match")
+	}
+
+	fact = planTestFact()
+	fact.Age = 0
+	if matched, _, _, _ = matchPlanProduct(fact, []planProduct{product}); matched != nil {
+		t.Fatal("customer with unknown age must not match age-bounded product")
+	}
+
+	clinicalProduct := product
+	clinicalProduct.ApplicableKeywords = []string{"过敏性鼻炎"}
+	fact = planTestFact()
+	fact.Interest = "[]"
+	fact.Concern = ""
+	fact.Question = ""
+	fact.ClinicalText = "过敏性鼻炎"
+	matched, _, reason, _ = matchPlanProduct(fact, []planProduct{clinicalProduct})
+	if matched == nil || !strings.Contains(reason, "就诊：过敏性鼻炎") {
+		t.Fatalf("expected clinical text match with reason, got %+v %q", matched, reason)
 	}
 }
 

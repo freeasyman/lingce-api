@@ -518,7 +518,7 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 		due = time.Now().AddDate(0, 0, 7)
 	}
 	if plan.PeriodEnd != "" {
-		if end, err := time.Parse("2006-01-02", plan.PeriodEnd); err == nil {
+		if end, err := time.ParseInLocation("2006-01-02", plan.PeriodEnd, time.FixedZone("Asia/Shanghai", 8*3600)); err == nil {
 			end = end.Add(23*time.Hour + 59*time.Minute)
 			if due.After(end) {
 				due = end
@@ -526,6 +526,18 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 		}
 	}
 	goal, action, content, expected := planTaskContent(plan, cand, cand.Interest)
+	if strings.TrimSpace(cand.Goal) != "" {
+		goal = cand.Goal
+	}
+	if strings.TrimSpace(cand.Action) != "" {
+		action = cand.Action
+	}
+	if strings.TrimSpace(cand.Content) != "" {
+		content = cand.Content
+	}
+	if strings.TrimSpace(cand.ExpectedResult) != "" {
+		expected = cand.ExpectedResult
+	}
 	dedupeKey := fmt.Sprintf("plan:%d:customer:%d", plan.ID, cand.CustomerID)
 	priority := 5
 	if cand.MatchScore != nil {
@@ -592,6 +604,16 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("no eligible customers to publish")
 	}
+	ordered := make([]PlanCandidate, 0, len(selected))
+	for _, customerID := range selected {
+		if cand, ok := candidateByID[customerID]; ok {
+			ordered = append(ordered, cand)
+		}
+	}
+	ordered = s.enrichPlanCandidatesWithLLM(ctx, plan, ordered)
+	for _, cand := range ordered {
+		candidateByID[cand.CustomerID] = cand
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin publish plan: %w", err)
@@ -647,6 +669,16 @@ func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, plan
 	for _, cand := range preview.Candidates {
 		candidateByID[cand.CustomerID] = cand
 	}
+	ordered := make([]PlanCandidate, 0, len(req.CustomerIDs))
+	for _, customerID := range req.CustomerIDs {
+		if cand, ok := candidateByID[customerID]; ok {
+			ordered = append(ordered, cand)
+		}
+	}
+	ordered = s.enrichPlanCandidatesWithLLM(ctx, plan, ordered)
+	for _, cand := range ordered {
+		candidateByID[cand.CustomerID] = cand
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin add plan members: %w", err)
@@ -683,18 +715,30 @@ func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, plan
 }
 
 func (s *Service) ClosePlan(ctx context.Context, tenantID, planID int64) error {
-	result, err := s.pool.Exec(ctx, `UPDATE patient_ops_plans SET status='closed',updated_at=NOW() WHERE tenant_id=$1 AND id=$2 AND status IN ('draft','published')`, tenantID, planID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin close plan: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `UPDATE patient_ops_plans SET status='closed',updated_at=NOW() WHERE tenant_id=$1 AND id=$2 AND status IN ('draft','published')`, tenantID, planID)
 	if err != nil {
 		return fmt.Errorf("close plan: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return fmt.Errorf("plan not found or already closed")
 	}
+	// 结束计划后，未完成任务不再占用客户，避免阻塞后续计划筛选。
+	if _, err := tx.Exec(ctx, `UPDATE patient_operation_tasks SET status='已取消',updated_at=NOW() WHERE tenant_id=$1 AND plan_id=$2 AND status NOT IN ('已完成','已取消')`, tenantID, planID); err != nil {
+		return fmt.Errorf("cancel open plan tasks: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit close plan: %w", err)
+	}
 	return nil
 }
 
 const patientTaskSelect = `
-	t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,
+	t.id,t.customer_id,COALESCE(c.name,''),COALESCE(emp.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,
 	COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),
 	t.parent_task_id,t.plan_id,t.plan_member_id,t.task_subtype,t.product_id,COALESCE(p.name,''),
 	t.priority,t.match_score,t.risk_medical,t.risk_commercial,t.next_action,COALESCE(t.next_due_at::text,''),
@@ -703,6 +747,7 @@ const patientTaskSelect = `
 const patientTaskFrom = `
 	FROM patient_operation_tasks t
 	JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id
+	LEFT JOIN employees emp ON emp.id=t.employee_id
 	LEFT JOIN products p ON p.id=t.product_id`
 
 func scanPatientTask(row interface {
@@ -712,7 +757,7 @@ func scanPatientTask(row interface {
 	var planID, planMemberID, productID, parentTaskID, matchScore, resultProductID sql.NullInt64
 	var resultAmount sql.NullFloat64
 	err := row.Scan(
-		&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence,
+		&item.ID, &item.CustomerID, &item.CustomerName, &item.OwnerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence,
 		&item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt,
 		&parentTaskID, &planID, &planMemberID, &item.TaskSubtype, &productID, &item.ProductName,
 		&item.Priority, &matchScore, &item.RiskMedical, &item.RiskCommercial, &item.NextAction, &item.NextDueAt,
