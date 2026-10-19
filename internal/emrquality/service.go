@@ -909,6 +909,31 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Reason = "没有记录诊断"
 			result.Evidence = []Evidence{{Source: "record.content", Path: "diagnosis", Excerpt: ""}}
 		}
+	case "GEN-007":
+		missing := make([]string, 0, 3)
+		if strings.TrimSpace(input.RecordID) == "" {
+			missing = append(missing, "病历编号")
+		}
+		if input.StartedAt.IsZero() {
+			missing = append(missing, "就诊日期")
+		}
+		department := ""
+		if input.DepartmentID != nil {
+			department = strconv.FormatInt(*input.DepartmentID, 10)
+		}
+		if department == "" && input.Encounter != nil {
+			if value, ok := input.Encounter["medical_department_code"]; ok && value != nil {
+				department = strings.TrimSpace(fmt.Sprint(value))
+			}
+		}
+		if department == "" {
+			missing = append(missing, "科别")
+		}
+		if len(missing) > 0 {
+			result.Result = "problem"
+			result.Reason = "系统未采集：" + strings.Join(missing, "、") + "（不扣医生分）"
+			result.Evidence = []Evidence{{Source: "record.context", Path: "system_fields", Excerpt: strings.Join(missing, "、")}}
+		}
 	case "SIGN-001":
 		if input.CreatedBy <= 0 && input.DoctorID <= 0 {
 			result.Result = "problem"

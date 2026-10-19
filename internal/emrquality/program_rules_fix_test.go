@@ -189,3 +189,21 @@ func TestWRITE001NotApplicableToElectronicRecord(t *testing.T) {
 		t.Fatalf("writing requirement should be not applicable, got %s/%d", got.Result, got.Deduction)
 	}
 }
+
+func TestGEN007SystemFieldsReminderWithoutDeduction(t *testing.T) {
+	rule := programRule("GEN-007", 0, `{}`)
+	missingDept := Context{RecordID: "record-1", StartedAt: time.Date(2026, 10, 19, 9, 0, 0, 0, time.Local)}
+	got, err := evaluateRule(missingDept, rule)
+	if err != nil {
+		t.Fatalf("evaluate GEN-007: %v", err)
+	}
+	if got.Result != "problem" || got.Deduction != 0 {
+		t.Fatalf("want reminder without deduction, got %s/%d", got.Result, got.Deduction)
+	}
+	deptID := int64(1)
+	complete := Context{RecordID: "record-1", StartedAt: time.Now(), DepartmentID: &deptID}
+	got, _ = evaluateRule(complete, rule)
+	if got.Result != "pass" {
+		t.Fatalf("complete system fields should pass, got %s", got.Result)
+	}
+}
