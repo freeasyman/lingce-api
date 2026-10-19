@@ -531,7 +531,7 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	// 历史录音可能归属于已离职员工。此类待办不能继续绑定在已删除账号下，
 	// 应进入当前租户的待办池，供现有运营人员接手；仍保留普通员工只看自己
 	// 负责待办的规则。
-	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
+	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL) OR t.plan_id IN (SELECT id FROM patient_ops_plans WHERE tenant_id=$1 AND created_by=$2 AND deleted_at IS NULL))"
 	if allEmployees {
 		ownerFilter = "($2::bigint IS NOT NULL)"
 	}
