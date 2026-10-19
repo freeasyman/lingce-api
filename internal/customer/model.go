@@ -71,6 +71,16 @@ type CustomerInteraction struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// EncounterSummary is the latest visit fact of a customer, used to enrich
+// customer list and detail views with external HIS visit data.
+type EncounterSummary struct {
+	CustomerID   int64
+	StartedAt    time.Time
+	VisitType    string
+	ProviderName string
+	Diagnosis    string
+}
+
 // CustomerFollowUp represents a customer follow-up record
 type CustomerFollowUp struct {
 	ID          int64      `json:"id"`

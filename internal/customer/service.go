@@ -3,6 +3,7 @@ package customer
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -37,6 +38,20 @@ func (s *Service) ListCustomers(ctx context.Context, req CustomerListRequest) ([
 	responses := make([]*CustomerResponse, len(customers))
 	for i, c := range customers {
 		responses[i] = toCustomerResponse(c)
+	}
+
+	if len(responses) > 0 {
+		ids := make([]int64, 0, len(responses))
+		for _, r := range responses {
+			ids = append(ids, r.ID)
+		}
+		interMap, interErr := s.store.LatestCustomerInteractions(ctx, ids)
+		encMap, encErr := s.store.LatestEncounters(ctx, ids)
+		if interErr == nil || encErr == nil {
+			for _, r := range responses {
+				r.RecentInteractions = mergeRecentInteractions(r.ID, interMap, encMap)
+			}
+		}
 	}
 
 	return responses, total, nil
@@ -137,6 +152,14 @@ func (s *Service) GetCustomerByID(ctx context.Context, id int64) (*CustomerRespo
 			resp.RecentInteractions = append(resp.RecentInteractions, summary)
 		}
 	}
+
+	// Merge the latest visit fact (external HIS encounters) into recent interactions.
+	if encMap, encErr := s.store.LatestEncounters(ctx, []int64{id}); encErr == nil {
+		if e, ok := encMap[id]; ok {
+			resp.RecentInteractions = append(resp.RecentInteractions, encounterInteractionSummary(e))
+		}
+	}
+	sortRecentInteractions(resp.RecentInteractions)
 
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT id,
@@ -588,6 +611,77 @@ func (s *Service) ValidateGroupRules(req RuleValidateRequest) *RuleValidateRespo
 }
 
 // Helper functions
+
+// mergeRecentInteractions combines the newest contact interaction and the
+// newest visit fact of a customer into a single time-ordered list so customer
+// list views show external HIS visits as part of the recent lifecycle.
+func mergeRecentInteractions(customerID int64, interMap map[int64]CustomerInteraction, encMap map[int64]EncounterSummary) []CustomerInteractionSummary {
+	items := []CustomerInteractionSummary{}
+	if ci, ok := interMap[customerID]; ok {
+		items = append(items, CustomerInteractionSummary{
+			ID:              ci.ID,
+			InteractionType: ci.Type,
+			Direction:       &ci.Direction,
+			ContentSummary:  ci.Content,
+			CreatedAt:       stringPtr(ci.CreatedAt.Format("2006-01-02T15:04:05Z07:00")),
+			OccurredAt:      stringPtr(ci.InteractedAt.Format("2006-01-02T15:04:05Z07:00")),
+		})
+	}
+	if e, ok := encMap[customerID]; ok {
+		items = append(items, encounterInteractionSummary(e))
+	}
+	sortRecentInteractions(items)
+	return items
+}
+
+// encounterInteractionSummary renders a visit fact as an interaction summary
+// for customer list views.
+func encounterInteractionSummary(e EncounterSummary) CustomerInteractionSummary {
+	visitTypeCN := map[string]string{
+		"first_visit":  "初诊",
+		"return_visit": "复诊",
+		"follow_up":    "随访",
+	}[e.VisitType]
+	if visitTypeCN == "" {
+		visitTypeCN = "就诊"
+	}
+	parts := []string{}
+	if e.Diagnosis != "" {
+		parts = append(parts, "诊断："+e.Diagnosis)
+	}
+	if e.ProviderName != "" {
+		parts = append(parts, "医生："+e.ProviderName)
+	}
+	summary := "就诊：" + visitTypeCN
+	if len(parts) > 0 {
+		summary += " · " + strings.Join(parts, " · ")
+	}
+	t := e.StartedAt.Format("2006-01-02T15:04:05Z07:00")
+	return CustomerInteractionSummary{
+		InteractionType: "visit",
+		ContentSummary:  &summary,
+		OccurredAt:      &t,
+		CreatedAt:       &t,
+	}
+}
+
+// sortRecentInteractions orders interaction summaries by occurred time,
+// newest first.
+func sortRecentInteractions(items []CustomerInteractionSummary) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return interactionTime(items[i]) > interactionTime(items[j])
+	})
+}
+
+func interactionTime(x CustomerInteractionSummary) string {
+	if x.OccurredAt != nil {
+		return *x.OccurredAt
+	}
+	if x.CreatedAt != nil {
+		return *x.CreatedAt
+	}
+	return ""
+}
 
 // toCustomerResponse converts a Customer to CustomerResponse
 func toCustomerResponse(c *Customer) *CustomerResponse {

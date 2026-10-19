@@ -684,6 +684,58 @@ func (s *Store) ListCustomerInteractions(ctx context.Context, req InteractionLis
 	return interactions, total, nil
 }
 
+// LatestCustomerInteractions returns the newest interaction per customer.
+func (s *Store) LatestCustomerInteractions(ctx context.Context, customerIDs []int64) (map[int64]CustomerInteraction, error) {
+	if len(customerIDs) == 0 {
+		return map[int64]CustomerInteraction{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (customer_id) customer_id, type, direction, content, interacted_at
+		FROM customer_interactions
+		WHERE customer_id = ANY($1)
+		ORDER BY customer_id, interacted_at DESC, id DESC`, customerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query latest interactions: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]CustomerInteraction{}
+	for rows.Next() {
+		var ci CustomerInteraction
+		if err := rows.Scan(&ci.CustomerID, &ci.Type, &ci.Direction, &ci.Content, &ci.InteractedAt); err != nil {
+			return nil, fmt.Errorf("scan latest interaction: %w", err)
+		}
+		out[ci.CustomerID] = ci
+	}
+	return out, rows.Err()
+}
+
+// LatestEncounters returns the newest visit fact per customer from the shared
+// encounters table (includes external HIS data).
+func (s *Store) LatestEncounters(ctx context.Context, customerIDs []int64) (map[int64]EncounterSummary, error) {
+	if len(customerIDs) == 0 {
+		return map[int64]EncounterSummary{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (patient_id) patient_id, started_at, COALESCE(visit_type,''),
+		       COALESCE(provider_name,''), COALESCE(patient_candidate_json->>'diagnosis','')
+		FROM encounters
+		WHERE patient_id = ANY($1)
+		ORDER BY patient_id, started_at DESC, id DESC`, customerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query latest encounters: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]EncounterSummary{}
+	for rows.Next() {
+		var e EncounterSummary
+		if err := rows.Scan(&e.CustomerID, &e.StartedAt, &e.VisitType, &e.ProviderName, &e.Diagnosis); err != nil {
+			return nil, fmt.Errorf("scan latest encounter: %w", err)
+		}
+		out[e.CustomerID] = e
+	}
+	return out, rows.Err()
+}
+
 // CreateCustomerInteraction creates a customer interaction
 func (s *Store) CreateCustomerInteraction(ctx context.Context, customerID, tenantID, employeeID int64, req CreateInteractionRequest) (*CustomerInteraction, error) {
 	query := `
