@@ -992,7 +992,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 }
 
 func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAnalyzeRequest, sourceID int64) (*ScreenshotAnalyzeResponse, error) {
-	analysisCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	analysisCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 180*time.Second)
 	defer cancel()
 	// A browser closing the drawer can cancel the HTTP request. Analysis is a
 	// server-owned operation and must finish or be marked failed independently.
@@ -1013,7 +1013,7 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if err != nil {
 		return nil, markFailed(err)
 	}
-	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 60, ResponseFormat: "json"}
+	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 180, ResponseFormat: "json"}
 	applyPatientParams(params, config.Params)
 	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: prompt.UserPrompt}}}}, Params: params})
 	if err != nil {
