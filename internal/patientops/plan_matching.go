@@ -509,6 +509,10 @@ func (s *Service) buildPlanCandidates(ctx context.Context, plan *Plan) (*PlanPre
 			Interest:       planJoinList(f.Interest),
 			Concern:        strings.TrimSpace(f.Concern),
 			ClinicalText:   f.ClinicalText,
+			Salutation:     planSalutationFor(f.Name, f.Nickname, f.Gender, f.Age),
+			CustomerType:   planCustomerType(f.Age),
+			DecisionMaker:  f.DecisionMaker,
+			Source:         f.Source,
 			ReasonSource:   "fact",
 			AssignedTo:     f.AssignedTo,
 		}

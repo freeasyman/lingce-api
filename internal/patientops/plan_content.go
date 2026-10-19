@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
@@ -13,6 +14,12 @@ import (
 const patientOpsPlanContentModel = "patient_ops_plan_content"
 
 type planMemberContentInput struct {
+	Salutation        string `json:"salutation"`
+	CustomerType      string `json:"customer_type"`
+	DecisionMaker     string `json:"decision_maker,omitempty"`
+	Source            string `json:"source,omitempty"`
+	Platform          string `json:"platform,omitempty"`
+	Nickname          string `json:"nickname,omitempty"`
 	CustomerID        int64  `json:"customer_id"`
 	Name              string `json:"name"`
 	Age               int    `json:"age"`
@@ -62,6 +69,16 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 	if strings.TrimSpace(systemPrompt) == "" || strings.TrimSpace(userTemplate) == "" {
 		return candidates
 	}
+	var tenantTemplate string
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(custom_user_prompt_template,'')
+		FROM recording_analysis_tenant_configs
+		WHERE tenant_id=$1 AND prompt_code='patient_plan_member_v1' AND is_enabled=true
+		ORDER BY priority DESC, updated_at DESC LIMIT 1
+	`, plan.TenantID).Scan(&tenantTemplate)
+	if strings.TrimSpace(tenantTemplate) != "" {
+		userTemplate = tenantTemplate
+	}
 	config, err := s.loadModelConfig(ctx, plan.TenantID, patientOpsPlanContentModel)
 	if err != nil {
 		slog.Warn("plan member model config not available", "error", err)
@@ -96,6 +113,12 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 				Interest:          cand.Interest,
 				Concern:           cand.Concern,
 				ClinicalText:      cand.ClinicalText,
+				Salutation:        cand.Salutation,
+				CustomerType:      cand.CustomerType,
+				DecisionMaker:     cand.DecisionMaker,
+				Source:            cand.Source,
+				Platform:          cand.Platform,
+				Nickname:          cand.Nickname,
 				LastVisitAt:       cand.LastVisitAt,
 				LastActivityAt:    cand.LastActivityAt,
 				Reason:            cand.Reason,
@@ -147,7 +170,7 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 				candidates[i].Action = strings.TrimSpace(item.Action)
 			}
 			if strings.TrimSpace(item.Content) != "" {
-				candidates[i].Content = strings.TrimSpace(item.Content)
+				candidates[i].Content = ensurePlanSalutation(strings.TrimSpace(item.Content), candidates[i].Salutation)
 			}
 			if strings.TrimSpace(item.RiskMedical) != "" {
 				candidates[i].RiskMedical = strings.TrimSpace(item.RiskMedical)
@@ -191,4 +214,64 @@ func planProductSummary(candidates []PlanCandidate) string {
 		return "无（状态推进）"
 	}
 	return strings.Join(lines, "\n")
+}
+
+func planCustomerType(age int) string {
+	if age <= 0 {
+		return "未知"
+	}
+	if age < 18 {
+		return "儿童"
+	}
+	return "成人"
+}
+
+func planSalutationFor(name, nickname, gender string, age int) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "您好"
+	}
+	realName := strings.TrimSpace(name) != "" && !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(nickname))
+	for _, r := range name {
+		if unicode.IsDigit(r) || (unicode.IsLetter(r) && !unicode.Is(unicode.Han, r)) || strings.ContainsRune("@#", r) {
+			realName = false
+			break
+		}
+	}
+	if !realName {
+		if age > 0 && age < 18 {
+			return "家长"
+		}
+		return "您好"
+	}
+	if age > 0 && age < 18 {
+		return name + "家长"
+	}
+	if age >= 18 {
+		runes := []rune(name)
+		if len(runes) > 0 && unicode.Is(unicode.Han, runes[0]) {
+			switch normalizePlanGender(gender) {
+			case "male":
+				return string(runes[0]) + "先生"
+			case "female":
+				return string(runes[0]) + "女士"
+			}
+		}
+	}
+	return "您好"
+}
+
+func ensurePlanSalutation(content, salutation string) string {
+	content = strings.TrimSpace(content)
+	salutation = strings.TrimSpace(salutation)
+	if content == "" || salutation == "" {
+		return content
+	}
+	if strings.HasPrefix(content, salutation) {
+		return content
+	}
+	if salutation == "您好" && strings.HasPrefix(content, "您好") {
+		return content
+	}
+	return salutation + "，" + content
 }

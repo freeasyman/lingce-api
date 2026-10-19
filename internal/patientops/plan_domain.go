@@ -78,6 +78,10 @@ type PlanCandidate struct {
 	Interest               string `json:"interest,omitempty"`
 	Concern                string `json:"concern,omitempty"`
 	ClinicalText           string `json:"clinical_text,omitempty"`
+	Salutation             string `json:"salutation,omitempty"`
+	CustomerType           string `json:"customer_type,omitempty"`
+	DecisionMaker          string `json:"decision_maker,omitempty"`
+	Source                 string `json:"source,omitempty"`
 	RecommendedProductID   *int64 `json:"recommended_product_id,omitempty"`
 	RecommendedProductName string `json:"recommended_product_name,omitempty"`
 	ProductApplicable      string `json:"product_applicable,omitempty"`
