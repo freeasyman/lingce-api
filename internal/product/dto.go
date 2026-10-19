@@ -22,6 +22,13 @@ type CreateRequest struct {
 	CombineWith  string   `json:"combine_with"`
 	Status       string   `json:"status"`
 	IsTemplate   bool     `json:"is_template"`
+
+	ApplicableKeywords []string `json:"applicable_keywords,omitempty"`
+	AgeMin             *int     `json:"age_min,omitempty"`
+	AgeMax             *int     `json:"age_max,omitempty"`
+	Gender             string   `json:"gender,omitempty"`
+	Contraindications  string   `json:"contraindications,omitempty"`
+	ReviewStatus       string   `json:"review_status,omitempty"`
 }
 
 type UpdateRequest struct {
@@ -35,4 +42,11 @@ type UpdateRequest struct {
 	CombineWith  *string   `json:"combine_with,omitempty"`
 	Status       *string   `json:"status,omitempty"`
 	IsTemplate   *bool     `json:"is_template,omitempty"`
+
+	ApplicableKeywords *[]string `json:"applicable_keywords,omitempty"`
+	AgeMin             *int      `json:"age_min,omitempty"`
+	AgeMax             *int      `json:"age_max,omitempty"`
+	Gender             *string   `json:"gender,omitempty"`
+	Contraindications  *string   `json:"contraindications,omitempty"`
+	ReviewStatus       *string   `json:"review_status,omitempty"`
 }

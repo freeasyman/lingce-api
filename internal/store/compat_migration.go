@@ -2421,6 +2421,8 @@ func ensureProductLibrarySchema(ctx context.Context, pool compatExecutor) error 
 }
 
 func seedTenantProductCatalog(ctx context.Context, pool compatExecutor) error {
+	// 产品库不再使用 tenant_id=0 的全局模板；原模板产品改为 tenant_id=1 的租户级模板行。
+	// 已有 tenant_id=0 数据的历史库由 scripts/sql/20261019_move_products_tenant0_to_tenant1.sql 修正。
 	seedSQL := `
 	WITH seed_rows AS (
 		SELECT *
@@ -2431,11 +2433,11 @@ func seedTenantProductCatalog(ctx context.Context, pool compatExecutor) error {
 				(4::BIGINT, '屈光'::TEXT, '全飞秒Pro近视手术'::TEXT, '["全飞pro","全飞PRO","全飞秒pro","全飞秒PRO","pro","9秒的"]'::jsonb, 33800::numeric, '散光较高、追求更高精准度与视觉质量的人群'::TEXT, '9秒激光、旋转补偿、中心定位更精准'::TEXT, ''::TEXT, '伴干眼或睑板腺问题可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
 				(4::BIGINT, '屈光'::TEXT, 'ICL晶体植入术'::TEXT, '["晶体","icl","晶体植入","icl晶体"]'::jsonb, 36000::numeric, '高度近视、角膜偏薄或不适合角膜切削者'::TEXT, '不切削角膜、适合高度近视'::TEXT, ''::TEXT, '术前干眼管理可联合干眼OPT'::TEXT, 'active'::TEXT, FALSE),
 				(4::BIGINT, '屈光'::TEXT, '干眼OPT治疗'::TEXT, '["opt","干眼opt","睑板腺疏通","opt治疗"]'::jsonb, 980::numeric, '伴睑板腺堵塞、蒸发型干眼、术前需改善眼表者'::TEXT, '改善眼表状态、帮助术前准备和术后体验'::TEXT, ''::TEXT, ''::TEXT, 'active'::TEXT, FALSE),
-				(0::BIGINT, '屈光'::TEXT, '全飞秒近视手术'::TEXT, '["全飞","普通全飞","smile","全飞秒"]'::jsonb, 25800::numeric, '角膜条件合适、希望切口更小的近视/散光患者'::TEXT, '切口小、恢复快、主流术式'::TEXT, '散光>100度或追求更高视觉质量时建议升全飞Pro'::TEXT, '伴睑板腺堵塞或干眼时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
-				(0::BIGINT, '屈光'::TEXT, '半飞秒近视手术'::TEXT, '["半飞","半飞秒","lasik"]'::jsonb, 19800::numeric, '角膜条件更适合角膜瓣方案或预算更敏感人群'::TEXT, '适应范围广、角膜利用率更灵活'::TEXT, '若散光高、追求视觉质量可升级全飞Pro或晶体方案'::TEXT, '伴干眼症状时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
-				(0::BIGINT, '屈光'::TEXT, '全飞秒Pro近视手术'::TEXT, '["全飞pro","全飞PRO","全飞秒pro","全飞秒PRO","pro","9秒的"]'::jsonb, 33800::numeric, '散光较高、追求更高精准度与视觉质量的人群'::TEXT, '9秒激光、旋转补偿、中心定位更精准'::TEXT, ''::TEXT, '伴干眼或睑板腺问题可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
-				(0::BIGINT, '屈光'::TEXT, 'ICL晶体植入术'::TEXT, '["晶体","icl","晶体植入","icl晶体"]'::jsonb, 36000::numeric, '高度近视、角膜偏薄或不适合角膜切削者'::TEXT, '不切削角膜、适合高度近视'::TEXT, ''::TEXT, '术前干眼管理可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
-				(0::BIGINT, '屈光'::TEXT, '干眼OPT治疗'::TEXT, '["opt","干眼opt","睑板腺疏通","opt治疗"]'::jsonb, 980::numeric, '伴睑板腺堵塞、蒸发型干眼、术前需改善眼表者'::TEXT, '改善眼表状态、帮助术前准备和术后体验'::TEXT, ''::TEXT, ''::TEXT, 'active'::TEXT, TRUE)
+				(1::BIGINT, '屈光'::TEXT, '全飞秒近视手术'::TEXT, '["全飞","普通全飞","smile","全飞秒"]'::jsonb, 25800::numeric, '角膜条件合适、希望切口更小的近视/散光患者'::TEXT, '切口小、恢复快、主流术式'::TEXT, '散光>100度或追求更高视觉质量时建议升全飞Pro'::TEXT, '伴睑板腺堵塞或干眼时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(1::BIGINT, '屈光'::TEXT, '半飞秒近视手术'::TEXT, '["半飞","半飞秒","lasik"]'::jsonb, 19800::numeric, '角膜条件更适合角膜瓣方案或预算更敏感人群'::TEXT, '适应范围广、角膜利用率更灵活'::TEXT, '若散光高、追求视觉质量可升级全飞Pro或晶体方案'::TEXT, '伴干眼症状时可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(1::BIGINT, '屈光'::TEXT, '全飞秒Pro近视手术'::TEXT, '["全飞pro","全飞PRO","全飞秒pro","全飞秒PRO","pro","9秒的"]'::jsonb, 33800::numeric, '散光较高、追求更高精准度与视觉质量的人群'::TEXT, '9秒激光、旋转补偿、中心定位更精准'::TEXT, ''::TEXT, '伴干眼或睑板腺问题可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(1::BIGINT, '屈光'::TEXT, 'ICL晶体植入术'::TEXT, '["晶体","icl","晶体植入","icl晶体"]'::jsonb, 36000::numeric, '高度近视、角膜偏薄或不适合角膜切削者'::TEXT, '不切削角膜、适合高度近视'::TEXT, ''::TEXT, '术前干眼管理可联合干眼OPT'::TEXT, 'active'::TEXT, TRUE),
+				(1::BIGINT, '屈光'::TEXT, '干眼OPT治疗'::TEXT, '["opt","干眼opt","睑板腺疏通","opt治疗"]'::jsonb, 980::numeric, '伴睑板腺堵塞、蒸发型干眼、术前需改善眼表者'::TEXT, '改善眼表状态、帮助术前准备和术后体验'::TEXT, ''::TEXT, ''::TEXT, 'active'::TEXT, TRUE)
 		) AS t(tenant_id, industry, name, aliases, price, applicable, selling_point, upgrade_to, combine_with, status, is_template)
 	)
 	INSERT INTO products (

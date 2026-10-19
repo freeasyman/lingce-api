@@ -62,6 +62,9 @@ func validateCreate(req CreateRequest) error {
 	if !isValidStatus(req.Status) {
 		return fmt.Errorf("invalid status: %s", req.Status)
 	}
+	if err := validateMatchFields(req.AgeMin, req.AgeMax, req.Gender, req.ReviewStatus); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -75,6 +78,36 @@ func validateUpdate(req UpdateRequest) error {
 	if req.Status != nil && !isValidStatus(*req.Status) {
 		return fmt.Errorf("invalid status: %s", *req.Status)
 	}
+	gender := ""
+	if req.Gender != nil {
+		gender = *req.Gender
+	}
+	reviewStatus := ""
+	if req.ReviewStatus != nil {
+		reviewStatus = *req.ReviewStatus
+	}
+	if err := validateMatchFields(req.AgeMin, req.AgeMax, gender, reviewStatus); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMatchFields(ageMin, ageMax *int, gender string, reviewStatus string) error {
+	if ageMin != nil && *ageMin < 0 {
+		return fmt.Errorf("age_min must be >= 0")
+	}
+	if ageMax != nil && *ageMax < 0 {
+		return fmt.Errorf("age_max must be >= 0")
+	}
+	if ageMin != nil && ageMax != nil && *ageMin > *ageMax {
+		return fmt.Errorf("age_min must be <= age_max")
+	}
+	if gender != "" && !isValidGender(gender) {
+		return fmt.Errorf("invalid gender: %s", gender)
+	}
+	if reviewStatus != "" && !isValidReviewStatus(reviewStatus) {
+		return fmt.Errorf("invalid review_status: %s", reviewStatus)
+	}
 	return nil
 }
 
@@ -87,6 +120,16 @@ func normalizeCreate(req CreateRequest) CreateRequest {
 	req.CombineWith = strings.TrimSpace(req.CombineWith)
 	req.Status = strings.TrimSpace(req.Status)
 	req.Aliases = normalizeAliases(req.Aliases)
+	req.ApplicableKeywords = normalizeAliases(req.ApplicableKeywords)
+	req.Gender = strings.TrimSpace(req.Gender)
+	req.Contraindications = strings.TrimSpace(req.Contraindications)
+	req.ReviewStatus = strings.TrimSpace(req.ReviewStatus)
+	if req.Gender == "" {
+		req.Gender = "all"
+	}
+	if req.ReviewStatus == "" {
+		req.ReviewStatus = "approved"
+	}
 	return req
 }
 
@@ -123,6 +166,25 @@ func normalizeUpdate(req UpdateRequest) UpdateRequest {
 		aliases := normalizeAliases(*req.Aliases)
 		req.Aliases = &aliases
 	}
+	if req.ApplicableKeywords != nil {
+		keywords := normalizeAliases(*req.ApplicableKeywords)
+		req.ApplicableKeywords = &keywords
+	}
+	if req.Gender != nil {
+		value := strings.TrimSpace(*req.Gender)
+		if value == "" {
+			value = "all"
+		}
+		req.Gender = &value
+	}
+	if req.Contraindications != nil {
+		value := strings.TrimSpace(*req.Contraindications)
+		req.Contraindications = &value
+	}
+	if req.ReviewStatus != nil {
+		value := strings.TrimSpace(*req.ReviewStatus)
+		req.ReviewStatus = &value
+	}
 	return req
 }
 
@@ -147,6 +209,24 @@ func normalizeAliases(values []string) []string {
 func isValidStatus(status string) bool {
 	switch status {
 	case StatusActive, StatusInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidGender(gender string) bool {
+	switch gender {
+	case "all", "male", "female":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidReviewStatus(status string) bool {
+	switch status {
+	case "draft", "approved", "disabled":
 		return true
 	default:
 		return false

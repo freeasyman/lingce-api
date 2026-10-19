@@ -254,28 +254,45 @@ type ActionResponse struct {
 }
 
 type PatientTaskResponse struct {
-	ID           int64  `json:"id"`
-	CustomerID   int64  `json:"customer_id"`
-	CustomerName string `json:"customer_name"`
-	SourceID     *int64 `json:"source_id,omitempty"`
-	TaskType     string `json:"task_type"`
-	Goal         string `json:"goal"`
-	Action       string `json:"action"`
-	Content      string `json:"content"`
-	Evidence     string `json:"evidence,omitempty"`
-	DueAt        string `json:"due_at,omitempty"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
-	Result       string `json:"result,omitempty"`
-	ResultNote   string `json:"result_note,omitempty"`
-	CompletedAt  string `json:"completed_at,omitempty"`
-	ParentTaskID *int64 `json:"parent_task_id,omitempty"`
+	ID              int64    `json:"id"`
+	CustomerID      int64    `json:"customer_id"`
+	CustomerName    string   `json:"customer_name"`
+	SourceID        *int64   `json:"source_id,omitempty"`
+	TaskType        string   `json:"task_type"`
+	Goal            string   `json:"goal"`
+	Action          string   `json:"action"`
+	Content         string   `json:"content"`
+	Evidence        string   `json:"evidence,omitempty"`
+	DueAt           string   `json:"due_at,omitempty"`
+	Status          string   `json:"status"`
+	CreatedAt       string   `json:"created_at"`
+	Result          string   `json:"result,omitempty"`
+	ResultNote      string   `json:"result_note,omitempty"`
+	CompletedAt     string   `json:"completed_at,omitempty"`
+	ParentTaskID    *int64   `json:"parent_task_id,omitempty"`
+	PlanID          *int64   `json:"plan_id,omitempty"`
+	PlanMemberID    *int64   `json:"plan_member_id,omitempty"`
+	TaskSubtype     string   `json:"task_subtype,omitempty"`
+	ProductID       *int64   `json:"product_id,omitempty"`
+	ProductName     string   `json:"product_name,omitempty"`
+	Priority        int      `json:"priority"`
+	MatchScore      *int     `json:"match_score,omitempty"`
+	RiskMedical     string   `json:"risk_medical,omitempty"`
+	RiskCommercial  string   `json:"risk_commercial,omitempty"`
+	NextAction      string   `json:"next_action,omitempty"`
+	NextDueAt       string   `json:"next_due_at,omitempty"`
+	ExpectedResult  string   `json:"expected_result,omitempty"`
+	ResultAmount    *float64 `json:"result_amount,omitempty"`
+	ResultProductID *int64   `json:"result_product_id,omitempty"`
+	AmountSource    string   `json:"amount_source,omitempty"`
 }
 
 type CompletePatientTaskRequest struct {
-	Result   string                  `json:"result"`
-	Note     string                  `json:"note,omitempty"`
-	NextTask *NextPatientTaskRequest `json:"next_task,omitempty"`
+	Result          string                  `json:"result"`
+	Note            string                  `json:"note,omitempty"`
+	ResultAmount    *float64                `json:"result_amount,omitempty"`
+	ResultProductID *int64                  `json:"result_product_id,omitempty"`
+	NextTask        *NextPatientTaskRequest `json:"next_task,omitempty"`
 }
 
 type UpdatePatientTaskRequest struct {
@@ -315,4 +332,10 @@ type OperationRecordResponse struct {
 	Goal       string `json:"goal,omitempty"`
 	Status     string `json:"status"`
 	CreatedAt  string `json:"created_at"`
+}
+
+type ProductKeywordSuggestRequest struct {
+	Name         string `json:"name"`
+	Applicable   string `json:"applicable"`
+	SellingPoint string `json:"selling_point,omitempty"`
 }

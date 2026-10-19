@@ -43,7 +43,7 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 		argIdx++
 	}
 	if keyword := strings.TrimSpace(req.Keyword); keyword != "" {
-		conditions = append(conditions, fmt.Sprintf("(p.name ILIKE $%d OR p.aliases::text ILIKE $%d OR p.applicable ILIKE $%d)", argIdx, argIdx, argIdx))
+		conditions = append(conditions, fmt.Sprintf("(p.name ILIKE $%d OR p.aliases::text ILIKE $%d OR p.applicable ILIKE $%d OR p.applicable_keywords::text ILIKE $%d)", argIdx, argIdx, argIdx, argIdx))
 		args = append(args, "%"+keyword+"%")
 		argIdx++
 	}
@@ -60,7 +60,9 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 	query := fmt.Sprintf(`
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
-		       p.status, p.is_template, p.created_at, p.updated_at
+		       p.status, p.is_template,
+		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status,
+		       p.created_at, p.updated_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
 		WHERE %s
@@ -81,7 +83,9 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 		if err := rows.Scan(
 			&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 			&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
-			&item.Status, &item.IsTemplate, &item.CreatedAt, &item.UpdatedAt,
+			&item.Status, &item.IsTemplate,
+			&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus,
+			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan product: %w", err)
 		}
@@ -97,7 +101,9 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Product, error) {
 	query := `
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
-		       p.status, p.is_template, p.created_at, p.updated_at
+		       p.status, p.is_template,
+		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status,
+		       p.created_at, p.updated_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
 		WHERE p.id = $1
@@ -106,7 +112,9 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Product, error) {
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 		&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
-		&item.Status, &item.IsTemplate, &item.CreatedAt, &item.UpdatedAt,
+		&item.Status, &item.IsTemplate,
+		&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus,
+		&item.CreatedAt, &item.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -121,10 +129,13 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error)
 	query := `
 		INSERT INTO products (
 			tenant_id, industry, name, aliases, price, applicable, selling_point,
-			upgrade_to, combine_with, status, is_template, created_at, updated_at
+			upgrade_to, combine_with, status, is_template,
+			applicable_keywords, age_min, age_max, gender, contraindications, review_status,
+			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, NOW(), NOW()
+			$8, $9, $10, $11,
+			$12, $13, $14, $15, $16, $17, NOW(), NOW()
 		)
 		RETURNING id, created_at, updated_at
 	`
@@ -140,10 +151,18 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error)
 		CombineWith:  req.CombineWith,
 		Status:       req.Status,
 		IsTemplate:   req.IsTemplate,
+
+		ApplicableKeywords: req.ApplicableKeywords,
+		AgeMin:             req.AgeMin,
+		AgeMax:             req.AgeMax,
+		Gender:             req.Gender,
+		Contraindications:  req.Contraindications,
+		ReviewStatus:       req.ReviewStatus,
 	}
 	if err := s.pool.QueryRow(ctx, query,
 		req.TenantID, req.Industry, req.Name, req.Aliases, req.Price, req.Applicable, req.SellingPoint,
 		req.UpgradeTo, req.CombineWith, req.Status, req.IsTemplate,
+		req.ApplicableKeywords, nullableProductInt(req.AgeMin), nullableProductInt(req.AgeMax), req.Gender, req.Contraindications, req.ReviewStatus,
 	).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("create product: %w", err)
 	}
@@ -205,6 +224,44 @@ func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Produ
 		args = append(args, *req.IsTemplate)
 		argIdx++
 	}
+	if req.ApplicableKeywords != nil {
+		sets = append(sets, fmt.Sprintf("applicable_keywords = $%d", argIdx))
+		args = append(args, *req.ApplicableKeywords)
+		argIdx++
+	}
+	if req.AgeMin != nil {
+		if *req.AgeMin == 0 {
+			sets = append(sets, "age_min = NULL")
+		} else {
+			sets = append(sets, fmt.Sprintf("age_min = $%d", argIdx))
+			args = append(args, *req.AgeMin)
+			argIdx++
+		}
+	}
+	if req.AgeMax != nil {
+		if *req.AgeMax == 0 {
+			sets = append(sets, "age_max = NULL")
+		} else {
+			sets = append(sets, fmt.Sprintf("age_max = $%d", argIdx))
+			args = append(args, *req.AgeMax)
+			argIdx++
+		}
+	}
+	if req.Gender != nil {
+		sets = append(sets, fmt.Sprintf("gender = $%d", argIdx))
+		args = append(args, *req.Gender)
+		argIdx++
+	}
+	if req.Contraindications != nil {
+		sets = append(sets, fmt.Sprintf("contraindications = $%d", argIdx))
+		args = append(args, *req.Contraindications)
+		argIdx++
+	}
+	if req.ReviewStatus != nil {
+		sets = append(sets, fmt.Sprintf("review_status = $%d", argIdx))
+		args = append(args, *req.ReviewStatus)
+		argIdx++
+	}
 
 	if len(sets) == 0 {
 		return s.GetByID(ctx, id)
@@ -224,4 +281,11 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 		return fmt.Errorf("delete product %d: %w", id, err)
 	}
 	return nil
+}
+
+func nullableProductInt(value *int) any {
+	if value == nil || *value == 0 {
+		return nil
+	}
+	return *value
 }

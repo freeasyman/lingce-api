@@ -6,8 +6,20 @@ func TestTaskTypesAndResultsAreStable(t *testing.T) {
 	if len(TaskTypes) != 10 {
 		t.Fatalf("task type count = %d, want 10", len(TaskTypes))
 	}
-	if len(TaskResults) != 10 {
-		t.Fatalf("task result count = %d, want 10", len(TaskResults))
+	if len(TaskResults) != 12 {
+		t.Fatalf("task result count = %d, want 12", len(TaskResults))
+	}
+	for _, value := range []string{"已触达", "无回应"} {
+		found := false
+		for _, item := range TaskResults {
+			if item == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("task results must include %s", value)
+		}
 	}
 	for _, value := range []string{TaskStatusPendingConfirmation, TaskStatusPending, TaskStatusProcessing, TaskStatusWaitingPatient, TaskStatusWaitingCollab, TaskStatusCompleted, TaskStatusRescheduled, TaskStatusCancelled, TaskStatusPaused} {
 		if value == "" {

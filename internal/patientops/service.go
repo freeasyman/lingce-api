@@ -446,18 +446,33 @@ func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int6
 func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID, taskID int64, req CompletePatientTaskRequest) error {
 	tag := strings.TrimSpace(req.Result)
 	note := strings.TrimSpace(req.Note)
+	if req.ResultAmount != nil && *req.ResultAmount < 0 {
+		return fmt.Errorf("result amount must be >= 0")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin complete patient operation task: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if req.ResultProductID != nil && *req.ResultProductID > 0 {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM products WHERE tenant_id=$1 AND id=$2)`, tenantID, *req.ResultProductID).Scan(&exists); err != nil {
+			return fmt.Errorf("verify result product: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("result product does not belong to tenant")
+		}
+	}
 	var customerID int64
 	var sourceID *int64
-	if err := tx.QueryRow(ctx, `UPDATE patient_operation_tasks t SET status='已完成',employee_id=CASE WHEN t.employee_id=$5 THEN t.employee_id ELSE $5 END,updated_at=NOW(),result=$1,result_note=$2,completed_at=NOW() WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消') RETURNING customer_id,source_id`, tag, note, taskID, tenantID, employeeID).Scan(&customerID, &sourceID); err != nil {
+	if err := tx.QueryRow(ctx, `UPDATE patient_operation_tasks t SET status='已完成',employee_id=CASE WHEN t.employee_id=$5 THEN t.employee_id ELSE $5 END,updated_at=NOW(),result=$1,result_note=$2,result_amount=$6::numeric,result_product_id=$7::bigint,amount_source=CASE WHEN $6::numeric IS NULL THEN '' ELSE 'manual' END,completed_at=NOW() WHERE t.id=$3 AND t.tenant_id=$4 AND (t.employee_id=$5 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$4 AND deleted_at IS NOT NULL)) AND t.status NOT IN ('已完成','已取消') RETURNING customer_id,source_id`, tag, note, taskID, tenantID, employeeID, req.ResultAmount, req.ResultProductID).Scan(&customerID, &sourceID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("patient operation task not found or already completed")
 		}
 		return fmt.Errorf("complete patient operation task: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE patient_ops_plan_members SET status='completed',updated_at=NOW() WHERE tenant_id=$1 AND task_id=$2`, tenantID, taskID); err != nil {
+		return fmt.Errorf("complete plan member: %w", err)
 	}
 	if req.NextTask != nil {
 		next := req.NextTask
@@ -540,15 +555,15 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM patient_operation_tasks t WHERE `+baseFilter, tenantID, employeeID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, tenantID, employeeID, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
 	}
 	defer rows.Close()
 	items := []PatientTaskResponse{}
 	for rows.Next() {
-		var item PatientTaskResponse
-		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt, &item.ParentTaskID); err != nil {
+		item, err := scanPatientTask(rows)
+		if err != nil {
 			return nil, 0, err
 		}
 		items = append(items, item)
@@ -601,15 +616,15 @@ func (s *Service) ListOperationRecords(ctx context.Context, tenantID, customerID
 }
 
 func (s *Service) ListCustomerTasks(ctx context.Context, tenantID, customerID int64) ([]PatientTaskResponse, error) {
-	rows, err := s.pool.Query(ctx, `SELECT t.id,t.customer_id,COALESCE(c.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),t.parent_task_id FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND t.customer_id=$2 ORDER BY t.created_at DESC,t.id DESC`, tenantID, customerID)
+	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE t.tenant_id=$1 AND t.customer_id=$2 ORDER BY t.created_at DESC,t.id DESC`, tenantID, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("list patient customer tasks: %w", err)
 	}
 	defer rows.Close()
 	items := []PatientTaskResponse{}
 	for rows.Next() {
-		var item PatientTaskResponse
-		if err := rows.Scan(&item.ID, &item.CustomerID, &item.CustomerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence, &item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt, &item.ParentTaskID); err != nil {
+		item, err := scanPatientTask(rows)
+		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
