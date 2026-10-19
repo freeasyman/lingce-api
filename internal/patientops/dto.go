@@ -256,7 +256,9 @@ type ActionResponse struct {
 type PatientTaskResponse struct {
 	ID              int64    `json:"id"`
 	CustomerID      int64    `json:"customer_id"`
+	OwnerID         int64    `json:"owner_id"`
 	CustomerName    string   `json:"customer_name"`
+	CustomerPhone   string   `json:"customer_phone,omitempty"`
 	OwnerName       string   `json:"owner_name,omitempty"`
 	SourceID        *int64   `json:"source_id,omitempty"`
 	TaskType        string   `json:"task_type"`
@@ -339,4 +341,16 @@ type ProductKeywordSuggestRequest struct {
 	Name         string `json:"name"`
 	Applicable   string `json:"applicable"`
 	SellingPoint string `json:"selling_point,omitempty"`
+}
+
+type PatientTaskCount struct {
+	Total   int `json:"total"`
+	Today   int `json:"today"`
+	Overdue int `json:"overdue"`
+	Future  int `json:"future"`
+}
+
+type PatientTaskSummary struct {
+	Mine PatientTaskCount  `json:"mine"`
+	Team *PatientTaskCount `json:"team,omitempty"`
 }

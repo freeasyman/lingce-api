@@ -520,6 +520,35 @@ func (s *Service) UpdatePatientTaskStatus(ctx context.Context, tenantID, employe
 	return nil
 }
 
+func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID int64, includeTeam bool) (*PatientTaskSummary, error) {
+	var mine PatientTaskCount
+	var team PatientTaskCount
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE t.employee_id=$2),
+			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
+			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at IS NOT NULL AND t.due_at < NOW()),
+			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*),
+			COUNT(*) FILTER (WHERE t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
+			COUNT(*) FILTER (WHERE t.due_at IS NOT NULL AND t.due_at < NOW()),
+			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days')
+		FROM patient_operation_tasks t
+		WHERE t.tenant_id=$1 AND t.status NOT IN ('已完成','已取消')
+	`, tenantID, employeeID).Scan(
+		&mine.Total, &mine.Today, &mine.Overdue, &mine.Future,
+		&team.Total, &team.Today, &team.Overdue, &team.Future,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("count patient operation tasks: %w", err)
+	}
+	summary := &PatientTaskSummary{Mine: mine}
+	if includeTeam {
+		summary.Team = &team
+	}
+	return summary, nil
+}
+
 func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter string) ([]PatientTaskResponse, int64, error) {
 	if page < 1 {
 		page = 1
@@ -531,7 +560,7 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	// 历史录音可能归属于已离职员工。此类待办不能继续绑定在已删除账号下，
 	// 应进入当前租户的待办池，供现有运营人员接手；仍保留普通员工只看自己
 	// 负责待办的规则。
-	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL) OR t.plan_id IN (SELECT id FROM patient_ops_plans WHERE tenant_id=$1 AND created_by=$2 AND deleted_at IS NULL))"
+	ownerFilter := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
 	if allEmployees {
 		ownerFilter = "($2::bigint IS NOT NULL)"
 	}

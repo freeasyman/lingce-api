@@ -776,7 +776,7 @@ func (s *Service) ClosePlan(ctx context.Context, tenantID, planID int64) error {
 }
 
 const patientTaskSelect = `
-	t.id,t.customer_id,COALESCE(c.name,''),COALESCE(emp.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,
+	t.id,t.customer_id,t.employee_id,COALESCE(c.name,''),COALESCE(c.phone,''),COALESCE(emp.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,
 	COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),
 	t.parent_task_id,t.plan_id,t.plan_member_id,t.task_subtype,t.product_id,COALESCE(p.name,''),
 	t.priority,t.match_score,t.risk_medical,t.risk_commercial,t.next_action,COALESCE(t.next_due_at::text,''),
@@ -795,7 +795,7 @@ func scanPatientTask(row interface {
 	var planID, planMemberID, productID, parentTaskID, matchScore, resultProductID sql.NullInt64
 	var resultAmount sql.NullFloat64
 	err := row.Scan(
-		&item.ID, &item.CustomerID, &item.CustomerName, &item.OwnerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence,
+		&item.ID, &item.CustomerID, &item.OwnerID, &item.CustomerName, &item.CustomerPhone, &item.OwnerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence,
 		&item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt,
 		&parentTaskID, &planID, &planMemberID, &item.TaskSubtype, &productID, &item.ProductName,
 		&item.Priority, &matchScore, &item.RiskMedical, &item.RiskCommercial, &item.NextAction, &item.NextDueAt,

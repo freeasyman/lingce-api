@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/tasks", Handler: h.ListCustomerTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/task-summary", Handler: h.ListCustomerTaskSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks", Handler: h.ListTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/tasks/summary", Handler: h.SummaryTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/complete", Handler: h.CompleteTaskAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/{id}/status", Handler: h.UpdateTaskStatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/customers/{id}/actions", Handler: h.SaveActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -265,6 +266,29 @@ func (h *Handler) UpdateTaskStatusAuthenticated(w http.ResponseWriter, r *http.R
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"status": req.Status, "task_id": id})
+}
+
+func (h *Handler) SummaryTasksAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	includeTeam := claims.UserType == auth.UserTypeAdmin
+	if !includeTeam && strings.TrimSpace(r.URL.Query().Get("include_team")) == "1" {
+		allowed, err := h.service.HasPatientOpsPermission(r.Context(), *claims.TenantID, claims.UserID, PatientOpsAbilityTasksReadAll)
+		if err != nil || !allowed {
+			httputil.WriteForbidden(w, "patient operations all-employee task permission required")
+			return
+		}
+		includeTeam = true
+	}
+	summary, err := h.service.PatientTaskSummary(r.Context(), *claims.TenantID, claims.UserID, includeTeam)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, summary)
 }
 
 func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request) {
