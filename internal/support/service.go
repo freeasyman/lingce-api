@@ -508,33 +508,43 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 		billingSubject := item.BillingSubject
 		billingScene := item.BillingScene
 		billingRuleVersion := item.BillingRuleVersion
+		cachedTokens, creationTokens, cachedCost, creationCost, cacheType, priceVersion, pricingMissing, pricingFallback := usageMetaCost(item.UsageMetadata)
 		out = append(out, &LLMCallRecordResponse{
-			ID:                 item.ID,
-			RequestID:          item.RequestID,
-			TenantID:           &tenantID,
-			TenantName:         &tenantName,
-			BusinessDomain:     &businessDomain,
-			BusinessObjectType: &businessObjectType,
-			BusinessObjectID:   &businessObjectID,
-			BillingSubject:     &billingSubject,
-			BillingScene:       &billingScene,
-			BillingRuleVersion: &billingRuleVersion,
-			ModelName:          item.ModelCode,
-			FunctionType:       &functionType,
-			Module:             &module,
-			TraceID:            &traceID,
-			ModelCode:          &modelCode,
-			Provider:           item.Provider,
-			PromptTokens:       int(item.InputTokens),
-			CompletionTokens:   int(item.OutputTokens),
-			TotalTokens:        int(item.TotalTokens),
-			Cost:               item.TotalCost,
-			Duration:           int(item.LatencyMS),
-			Status:             boolToStatus(item.Success),
-			Success:            &success,
-			InputCost:          &inCost,
-			OutputCost:         &outCost,
-			CreatedAt:          item.CreatedAt,
+			ID:                       item.ID,
+			RequestID:                item.RequestID,
+			TenantID:                 &tenantID,
+			TenantName:               &tenantName,
+			BusinessDomain:           &businessDomain,
+			BusinessObjectType:       &businessObjectType,
+			BusinessObjectID:         &businessObjectID,
+			BillingSubject:           &billingSubject,
+			BillingScene:             &billingScene,
+			BillingRuleVersion:       &billingRuleVersion,
+			ModelName:                item.ModelCode,
+			FunctionType:             &functionType,
+			Module:                   &module,
+			TraceID:                  &traceID,
+			ModelCode:                &modelCode,
+			Provider:                 item.Provider,
+			PromptTokens:             int(item.InputTokens),
+			CompletionTokens:         int(item.OutputTokens),
+			TotalTokens:              int(item.TotalTokens),
+			AudioDurationSeconds:     usageMetaFloat(item.UsageMetadata, "audio_duration_seconds"),
+			Cost:                     item.TotalCost,
+			Duration:                 int(item.LatencyMS),
+			Status:                   boolToStatus(item.Success),
+			Success:                  &success,
+			InputCost:                &inCost,
+			OutputCost:               &outCost,
+			CachedInputTokens:        cachedTokens,
+			CacheCreationInputTokens: creationTokens,
+			CachedInputCost:          cachedCost,
+			CacheCreationCost:        creationCost,
+			CacheType:                cacheType,
+			PriceVersion:             priceVersion,
+			PricingMissing:           pricingMissing,
+			PricingFallback:          pricingFallback,
+			CreatedAt:                item.CreatedAt,
 		})
 	}
 
@@ -570,6 +580,7 @@ func (s *Service) GetLLMCallRecordStats(ctx context.Context, tenantID *int64, st
 		TotalTokens:       resp.TotalTokens,
 		TotalInputTokens:  resp.TotalInputTokens,
 		TotalOutputTokens: resp.TotalOutputTokens,
+		TotalAudioSeconds: resp.TotalAudioSeconds,
 		TotalCost:         resp.TotalCost,
 		AvgDuration:       resp.AvgLatencyMS,
 		AvgLatencyMS:      resp.AvgLatencyMS,
@@ -605,34 +616,44 @@ func (s *Service) GetLLMCallRecordByRequestID(ctx context.Context, requestID str
 	billingSubject := record.BillingSubject
 	billingScene := record.BillingScene
 	billingRuleVersion := record.BillingRuleVersion
+	cachedTokens, creationTokens, cachedCost, creationCost, cacheType, priceVersion, pricingMissing, pricingFallback := usageMetaCost(record.UsageMetadata)
 	return &LLMCallRecordResponse{
-		ID:                 record.ID,
-		RequestID:          record.RequestID,
-		TenantID:           &tenantID,
-		TenantName:         &tenantName,
-		BusinessDomain:     &businessDomain,
-		BusinessObjectType: &businessObjectType,
-		BusinessObjectID:   &businessObjectID,
-		BillingSubject:     &billingSubject,
-		BillingScene:       &billingScene,
-		BillingRuleVersion: &billingRuleVersion,
-		ModelName:          record.ModelCode,
-		FunctionType:       &functionType,
-		Module:             &module,
-		TraceID:            &traceID,
-		ModelCode:          &modelCode,
-		Provider:           record.Provider,
-		PromptTokens:       int(record.InputTokens),
-		CompletionTokens:   int(record.OutputTokens),
-		TotalTokens:        int(record.TotalTokens),
-		Cost:               record.TotalCost,
-		Duration:           int(record.LatencyMS),
-		Status:             boolToStatus(record.Success),
-		Success:            &success,
-		InputCost:          &inCost,
-		OutputCost:         &outCost,
-		ErrorMessage:       &errMessage,
-		CreatedAt:          record.CreatedAt,
+		ID:                       record.ID,
+		RequestID:                record.RequestID,
+		TenantID:                 &tenantID,
+		TenantName:               &tenantName,
+		BusinessDomain:           &businessDomain,
+		BusinessObjectType:       &businessObjectType,
+		BusinessObjectID:         &businessObjectID,
+		BillingSubject:           &billingSubject,
+		BillingScene:             &billingScene,
+		BillingRuleVersion:       &billingRuleVersion,
+		ModelName:                record.ModelCode,
+		FunctionType:             &functionType,
+		Module:                   &module,
+		TraceID:                  &traceID,
+		ModelCode:                &modelCode,
+		Provider:                 record.Provider,
+		PromptTokens:             int(record.InputTokens),
+		CompletionTokens:         int(record.OutputTokens),
+		TotalTokens:              int(record.TotalTokens),
+		AudioDurationSeconds:     usageMetaFloat(record.UsageMetadata, "audio_duration_seconds"),
+		Cost:                     record.TotalCost,
+		Duration:                 int(record.LatencyMS),
+		Status:                   boolToStatus(record.Success),
+		Success:                  &success,
+		InputCost:                &inCost,
+		OutputCost:               &outCost,
+		CachedInputTokens:        cachedTokens,
+		CacheCreationInputTokens: creationTokens,
+		CachedInputCost:          cachedCost,
+		CacheCreationCost:        creationCost,
+		CacheType:                cacheType,
+		PriceVersion:             priceVersion,
+		PricingMissing:           pricingMissing,
+		PricingFallback:          pricingFallback,
+		ErrorMessage:             &errMessage,
+		CreatedAt:                record.CreatedAt,
 	}, nil
 }
 
@@ -1430,26 +1451,37 @@ func toLLMModelConfigResponse(c *LLMModelConfig, tenantNameMap map[int64]string)
 		}
 	}
 	return &LLMModelConfigResponse{
-		ID:               c.ID,
-		TenantID:         c.TenantID,
-		TenantName:       &tenantName,
-		ModelCode:        c.ModelCode,
-		FunctionType:     c.FunctionType,
-		ModelName:        c.ModelName,
-		Provider:         c.Provider,
-		APIEndpoint:      c.APIEndpoint,
-		APIBaseURL:       c.APIBaseURL,
-		ModelParams:      c.ModelParams,
-		ExtraParams:      c.ExtraParams,
-		InputTokenPrice:  c.InputTokenPrice,
-		OutputTokenPrice: c.OutputTokenPrice,
-		DailyLimit:       c.DailyLimit,
-		MonthlyLimit:     c.MonthlyLimit,
-		IsDefault:        c.IsDefault,
-		IsActive:         c.IsActive,
-		Description:      c.Description,
-		CreatedAt:        c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:        c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                            c.ID,
+		TenantID:                      c.TenantID,
+		TenantName:                    &tenantName,
+		ModelCode:                     c.ModelCode,
+		FunctionType:                  c.FunctionType,
+		ModelName:                     c.ModelName,
+		Provider:                      c.Provider,
+		APIEndpoint:                   c.APIEndpoint,
+		APIBaseURL:                    c.APIBaseURL,
+		ModelParams:                   c.ModelParams,
+		ExtraParams:                   c.ExtraParams,
+		InputTokenPrice:               c.InputTokenPrice,
+		OutputTokenPrice:              c.OutputTokenPrice,
+		CachedInputTokenPrice:         c.CachedInputTokenPrice,
+		ExplicitCachedInputTokenPrice: c.ExplicitCachedInputTokenPrice,
+		CacheCreationTokenPrice:       c.CacheCreationTokenPrice,
+		AudioPricePerSecond:           c.AudioPricePerSecond,
+		BatchInputTokenPrice:          c.BatchInputTokenPrice,
+		BatchOutputTokenPrice:         c.BatchOutputTokenPrice,
+		ImageInputPricePerImage:       c.ImageInputPricePerImage,
+		ImageGenerationPricePerImage:  c.ImageGenerationPricePerImage,
+		PriceCurrency:                 c.PriceCurrency,
+		PriceVersion:                  c.PriceVersion,
+		PriceEffectiveFrom:            c.PriceEffectiveFrom,
+		DailyLimit:                    c.DailyLimit,
+		MonthlyLimit:                  c.MonthlyLimit,
+		IsDefault:                     c.IsDefault,
+		IsActive:                      c.IsActive,
+		Description:                   c.Description,
+		CreatedAt:                     c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:                     c.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
@@ -1625,4 +1657,81 @@ func setToSortedSlice(input map[string]struct{}) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// usageMetaFloat extracts a numeric value persisted by llm-gateway in
+// usage_metadata. JSON numbers arrive as float64.
+func usageMetaFloat(meta map[string]interface{}, key string) float64 {
+	switch v := meta[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		var n float64
+		_, _ = fmt.Sscanf(v, "%f", &n)
+		return n
+	default:
+		return 0
+	}
+}
+
+// usageMetaCost extracts cache usage/cost fields persisted by llm-gateway in
+// usage_metadata. JSON numbers arrive as float64.
+func usageMetaCost(meta map[string]interface{}) (cachedTokens, creationTokens int, cachedCost, creationCost float64, cacheType, priceVersion string, pricingMissing, pricingFallback bool) {
+	metaInt := func(key string) int {
+		switch v := meta[key].(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case string:
+			var n int
+			_, _ = fmt.Sscanf(v, "%d", &n)
+			return n
+		default:
+			return 0
+		}
+	}
+	metaFloat := func(key string) float64 {
+		switch v := meta[key].(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		case string:
+			var n float64
+			_, _ = fmt.Sscanf(v, "%f", &n)
+			return n
+		default:
+			return 0
+		}
+	}
+	metaString := func(key string) string {
+		if v, ok := meta[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+	metaBool := func(key string) bool {
+		if v, ok := meta[key].(bool); ok {
+			return v
+		}
+		return false
+	}
+	cachedTokens = metaInt("cached_input_tokens")
+	creationTokens = metaInt("cache_creation_input_tokens")
+	cachedCost = metaFloat("cached_input_cost")
+	creationCost = metaFloat("cache_creation_cost")
+	cacheType = metaString("cache_type")
+	priceVersion = metaString("price_version")
+	pricingMissing = metaBool("pricing_missing")
+	pricingFallback = metaBool("pricing_fallback")
+	return
 }

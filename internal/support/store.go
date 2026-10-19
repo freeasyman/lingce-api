@@ -784,6 +784,17 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 		       COALESCE(extra_params, model_params, '{}'::json),
 		       input_token_price,
 		       output_token_price,
+		       cached_input_token_price,
+		       explicit_cached_input_token_price,
+		       cache_creation_token_price,
+		       audio_price_per_second,
+		       batch_input_token_price,
+		       batch_output_token_price,
+		       image_input_price_per_image,
+		       image_generation_price_per_image,
+		       COALESCE(price_currency, 'CNY'),
+		       price_version,
+		       price_effective_from,
 		       daily_limit,
 		       monthly_limit,
 		       COALESCE(is_default, false),
@@ -810,7 +821,7 @@ func (s *Store) ListLLMModelConfigs(ctx context.Context, req LLMModelConfigListR
 	for rows.Next() {
 		var c LLMModelConfig
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
-			&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.CachedInputTokenPrice, &c.ExplicitCachedInputTokenPrice, &c.CacheCreationTokenPrice, &c.AudioPricePerSecond, &c.BatchInputTokenPrice, &c.BatchOutputTokenPrice, &c.ImageInputPricePerImage, &c.ImageGenerationPricePerImage, &c.PriceCurrency, &c.PriceVersion, &c.PriceEffectiveFrom, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan LLM model config: %w", err)
 		}
 		configs = append(configs, &c)
@@ -835,6 +846,17 @@ func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelC
 		       COALESCE(extra_params, model_params, '{}'::json),
 		       input_token_price,
 		       output_token_price,
+		       cached_input_token_price,
+		       explicit_cached_input_token_price,
+		       cache_creation_token_price,
+		       audio_price_per_second,
+		       batch_input_token_price,
+		       batch_output_token_price,
+		       image_input_price_per_image,
+		       image_generation_price_per_image,
+		       COALESCE(price_currency, 'CNY'),
+		       price_version,
+		       price_effective_from,
 		       daily_limit,
 		       monthly_limit,
 		       COALESCE(is_default, false),
@@ -850,7 +872,7 @@ func (s *Store) GetLLMModelConfigByID(ctx context.Context, id int64) (*LLMModelC
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
-		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.CachedInputTokenPrice, &c.ExplicitCachedInputTokenPrice, &c.CacheCreationTokenPrice, &c.AudioPricePerSecond, &c.BatchInputTokenPrice, &c.BatchOutputTokenPrice, &c.ImageInputPricePerImage, &c.ImageGenerationPricePerImage, &c.PriceCurrency, &c.PriceVersion, &c.PriceEffectiveFrom, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {
@@ -889,10 +911,17 @@ func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req C
 		INSERT INTO llm_model_configs (
 			tenant_id, model_code, function_type, model_name, provider,
 			api_endpoint, api_base_url, api_key, model_params, extra_params,
-			input_token_price, output_token_price, daily_limit, monthly_limit,
+			input_token_price, output_token_price,
+			cached_input_token_price, explicit_cached_input_token_price,
+			cache_creation_token_price, audio_price_per_second,
+			batch_input_token_price, batch_output_token_price,
+			image_input_price_per_image, image_generation_price_per_image,
+			price_currency, price_version, daily_limit, monthly_limit,
 			is_default, is_active, description, created_by, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+		        $13, $14, $15, $16, $17, $18, $19, $20,
+		        $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW())
 		RETURNING id,
 		          COALESCE(tenant_id, 0),
 		          COALESCE(model_code, ''),
@@ -906,6 +935,17 @@ func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req C
 		          COALESCE(extra_params, '{}'::json),
 		          input_token_price,
 		          output_token_price,
+		          cached_input_token_price,
+		          explicit_cached_input_token_price,
+		          cache_creation_token_price,
+		          audio_price_per_second,
+		          batch_input_token_price,
+		          batch_output_token_price,
+		          image_input_price_per_image,
+		          image_generation_price_per_image,
+		          COALESCE(price_currency, 'CNY'),
+		          price_version,
+		          price_effective_from,
 		          daily_limit,
 		          monthly_limit,
 		          COALESCE(is_default, false),
@@ -922,11 +962,20 @@ func (s *Store) CreateLLMModelConfig(ctx context.Context, createdBy int64, req C
 	}
 
 	var c LLMModelConfig
+	priceCurrency := strings.TrimSpace(req.PriceCurrency)
+	if priceCurrency == "" {
+		priceCurrency = "CNY"
+	}
 	err := s.pool.QueryRow(ctx, query, tenantID, req.ModelCode, req.FunctionType, req.ModelName, req.Provider, req.APIEndpoint, apiBaseURL, req.APIKey, req.ModelParams, req.ExtraParams,
-		req.InputTokenPrice, req.OutputTokenPrice, req.DailyLimit, req.MonthlyLimit,
+		req.InputTokenPrice, req.OutputTokenPrice,
+		req.CachedInputTokenPrice, req.ExplicitCachedInputTokenPrice,
+		req.CacheCreationTokenPrice, req.AudioPricePerSecond,
+		req.BatchInputTokenPrice, req.BatchOutputTokenPrice,
+		req.ImageInputPricePerImage, req.ImageGenerationPricePerImage,
+		priceCurrency, req.PriceVersion, req.DailyLimit, req.MonthlyLimit,
 		req.IsDefault, req.IsActive, req.Description, createdBy).Scan(
 		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
-		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.CachedInputTokenPrice, &c.ExplicitCachedInputTokenPrice, &c.CacheCreationTokenPrice, &c.AudioPricePerSecond, &c.BatchInputTokenPrice, &c.BatchOutputTokenPrice, &c.ImageInputPricePerImage, &c.ImageGenerationPricePerImage, &c.PriceCurrency, &c.PriceVersion, &c.PriceEffectiveFrom, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err != nil {
@@ -1026,6 +1075,66 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		argIndex++
 	}
 
+	if req.CachedInputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("cached_input_token_price = $%d", argIndex))
+		args = append(args, *req.CachedInputTokenPrice)
+		argIndex++
+	}
+
+	if req.ExplicitCachedInputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("explicit_cached_input_token_price = $%d", argIndex))
+		args = append(args, *req.ExplicitCachedInputTokenPrice)
+		argIndex++
+	}
+
+	if req.CacheCreationTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("cache_creation_token_price = $%d", argIndex))
+		args = append(args, *req.CacheCreationTokenPrice)
+		argIndex++
+	}
+
+	if req.AudioPricePerSecond != nil {
+		setClauses = append(setClauses, fmt.Sprintf("audio_price_per_second = $%d", argIndex))
+		args = append(args, *req.AudioPricePerSecond)
+		argIndex++
+	}
+
+	if req.BatchInputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("batch_input_token_price = $%d", argIndex))
+		args = append(args, *req.BatchInputTokenPrice)
+		argIndex++
+	}
+
+	if req.BatchOutputTokenPrice != nil {
+		setClauses = append(setClauses, fmt.Sprintf("batch_output_token_price = $%d", argIndex))
+		args = append(args, *req.BatchOutputTokenPrice)
+		argIndex++
+	}
+
+	if req.ImageInputPricePerImage != nil {
+		setClauses = append(setClauses, fmt.Sprintf("image_input_price_per_image = $%d", argIndex))
+		args = append(args, *req.ImageInputPricePerImage)
+		argIndex++
+	}
+
+	if req.ImageGenerationPricePerImage != nil {
+		setClauses = append(setClauses, fmt.Sprintf("image_generation_price_per_image = $%d", argIndex))
+		args = append(args, *req.ImageGenerationPricePerImage)
+		argIndex++
+	}
+
+	if req.PriceCurrency != nil {
+		setClauses = append(setClauses, fmt.Sprintf("price_currency = $%d", argIndex))
+		args = append(args, *req.PriceCurrency)
+		argIndex++
+	}
+
+	if req.PriceVersion != nil {
+		setClauses = append(setClauses, fmt.Sprintf("price_version = $%d", argIndex))
+		args = append(args, *req.PriceVersion)
+		argIndex++
+	}
+
 	if req.DailyLimit != nil {
 		setClauses = append(setClauses, fmt.Sprintf("daily_limit = $%d", argIndex))
 		args = append(args, *req.DailyLimit)
@@ -1112,6 +1221,17 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 		          COALESCE(extra_params, model_params, '{}'::json),
 		          input_token_price,
 		          output_token_price,
+		          cached_input_token_price,
+		          explicit_cached_input_token_price,
+		          cache_creation_token_price,
+		          audio_price_per_second,
+		          batch_input_token_price,
+		          batch_output_token_price,
+		          image_input_price_per_image,
+		          image_generation_price_per_image,
+		          COALESCE(price_currency, 'CNY'),
+		          price_version,
+		          price_effective_from,
 		          daily_limit,
 		          monthly_limit,
 		          COALESCE(is_default, false),
@@ -1125,7 +1245,7 @@ func (s *Store) UpdateLLMModelConfig(ctx context.Context, id int64, req UpdateLL
 	var c LLMModelConfig
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&c.ID, &c.TenantID, &c.ModelCode, &c.FunctionType, &c.ModelName, &c.Provider, &c.APIEndpoint, &c.APIBaseURL, &c.APIKey, &c.ModelParams,
-		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&c.ExtraParams, &c.InputTokenPrice, &c.OutputTokenPrice, &c.CachedInputTokenPrice, &c.ExplicitCachedInputTokenPrice, &c.CacheCreationTokenPrice, &c.AudioPricePerSecond, &c.BatchInputTokenPrice, &c.BatchOutputTokenPrice, &c.ImageInputPricePerImage, &c.ImageGenerationPricePerImage, &c.PriceCurrency, &c.PriceVersion, &c.PriceEffectiveFrom, &c.DailyLimit, &c.MonthlyLimit, &c.IsDefault, &c.IsActive, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 
 	if err == pgx.ErrNoRows {

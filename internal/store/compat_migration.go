@@ -2506,9 +2506,9 @@ func seedBenchmarkCommentModelConfig(ctx context.Context, pool compatExecutor) e
 		)
 		SELECT
 			0,
-			'qwen-plus',
+			'qwen3.8-flash',
 			'recording_benchmark_comment',
-			'通义千问 Plus',
+			'通义千问3.8 Flash',
 			'dashscope',
 			'{"temperature":0.2,"max_tokens":900,"timeout_seconds":45}'::json,
 			'{}'::json,
@@ -2571,9 +2571,9 @@ func seedMorningMeetingModelConfig(ctx context.Context, pool compatExecutor) err
 		)
 		SELECT
 			0,
-			'qwen-plus',
+			'qwen3.8-flash',
 			'recording_morning_meeting_comment',
-			'通义千问 Plus',
+			'通义千问3.8 Flash',
 			'dashscope',
 			'{"temperature":0.2,"max_tokens":1000,"timeout_seconds":45}'::json,
 			'{}'::json,
@@ -2631,9 +2631,9 @@ func seedComplianceCheckModelConfig(ctx context.Context, pool compatExecutor) er
 		)
 		SELECT
 			0,
-			'qwen-max',
+			'qwen3.8-max',
 			'compliance_check',
-			'通义千问 Max',
+			'通义千问3.8 Max',
 			'dashscope',
 			'{"temperature":0.0,"max_tokens":4000,"timeout_seconds":120}'::json,
 			'{}'::json,

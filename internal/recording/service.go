@@ -2113,7 +2113,7 @@ func (s *Service) GenerateFollowUpDraft(ctx context.Context, req GenerateFollowU
 	}{
 		FunctionType: "task_script_generation",
 		Provider:     "dashscope",
-		ModelCode:    "qwen-max",
+		ModelCode:    "qwen3.8-max",
 		ModelParams:  JSONObject{},
 	}
 	reqLLM := llmgateway.TextInferenceRequest{

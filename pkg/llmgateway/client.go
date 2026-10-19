@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,9 +17,10 @@ import (
 
 // Client represents an LLM gateway client
 type Client struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
+	baseURL     string
+	apiKey      string
+	client      *http.Client
+	batchClient *http.Client
 }
 
 // NewClient creates a new LLM gateway client
@@ -35,6 +37,10 @@ func NewClient(baseURL, apiKey string) *Client {
 			// 时间：2026-09-14
 			Timeout: 360 * time.Second,
 		},
+		batchClient: &http.Client{
+			// Batch Chat 是同步排队接口，最长可能等待 1 小时。
+			Timeout: 3900 * time.Second,
+		},
 	}
 }
 
@@ -50,6 +56,7 @@ type TextInferenceRequest struct {
 	Billing       *BillingMetadata `json:"billing,omitempty"`
 	Messages      []Message        `json:"messages"`
 	Params        *Params          `json:"params,omitempty"`
+	Batch         bool             `json:"batch,omitempty"`
 }
 
 // ImageInferenceRequest is the business-facing contract for gateway-managed
@@ -128,13 +135,15 @@ func (p Params) MarshalJSON() ([]byte, error) {
 
 // TextInferenceResponse represents a text inference response
 type TextInferenceResponse struct {
-	RequestID string `json:"request_id"`
-	Content   string `json:"content"`
-	Usage     Usage  `json:"usage"`
-	Cost      Cost   `json:"cost"`
-	LatencyMS int    `json:"latency_ms"`
-	Provider  string `json:"provider"`
-	ModelCode string `json:"model_code"`
+	RequestID      string `json:"request_id"`
+	Content        string `json:"content"`
+	Usage          Usage  `json:"usage"`
+	Cost           Cost   `json:"cost"`
+	LatencyMS      int    `json:"latency_ms"`
+	Provider       string `json:"provider"`
+	ModelCode      string `json:"model_code"`
+	PriceVersion   string `json:"price_version,omitempty"`
+	PricingMissing bool   `json:"pricing_missing,omitempty"`
 }
 
 // TextInferenceWithRaw 返回结构化响应及网关原始响应，供需要完整审计链路的业务使用。
@@ -163,7 +172,11 @@ func (c *Client) TextInferenceWithRaw(ctx context.Context, req TextInferenceRequ
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	resp, err := c.client.Do(httpReq)
+	httpClient := c.client
+	if req.Batch {
+		httpClient = c.batchClient
+	}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, requestBody, nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -191,39 +204,205 @@ func (c *Client) TextInferenceWithRaw(ctx context.Context, req TextInferenceRequ
 // ImageInference sends provider-neutral image content through the private
 // LLM gateway. The gateway owns provider credentials and model routing.
 func (c *Client) ImageInference(ctx context.Context, req ImageInferenceRequest) (*TextInferenceResponse, error) {
-	if req.TraceID == "" { req.TraceID = uuid.New().String() }
-	if req.CallerService == "" { req.CallerService = "lingce-api" }
-	if req.FunctionType == "" { req.FunctionType = "image_understanding" }
+	if req.TraceID == "" {
+		req.TraceID = uuid.New().String()
+	}
+	if req.CallerService == "" {
+		req.CallerService = "lingce-api"
+	}
+	if req.FunctionType == "" {
+		req.FunctionType = "image_understanding"
+	}
 	body, err := json.Marshal(req)
-	if err != nil { return nil, fmt.Errorf("failed to marshal image request: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal image request: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/inference/image", bytes.NewReader(body))
-	if err != nil { return nil, fmt.Errorf("failed to create image request: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("failed to create image request: %w", err)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	resp, err := c.client.Do(httpReq)
-	if err != nil { return nil, fmt.Errorf("failed to send image request: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("failed to send image request: %w", err)
+	}
 	defer resp.Body.Close()
 	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil { return nil, fmt.Errorf("failed to read image response: %w", err) }
-	if resp.StatusCode != http.StatusOK { return nil, fmt.Errorf("LLM gateway image error (status %d): %s", resp.StatusCode, string(responseBody)) }
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LLM gateway image error (status %d): %s", resp.StatusCode, string(responseBody))
+	}
 	var result TextInferenceResponse
-	if err := json.Unmarshal(responseBody, &result); err != nil { return nil, fmt.Errorf("failed to parse image response: %w", err) }
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse image response: %w", err)
+	}
 	return &result, nil
 }
 
 // Usage represents token usage
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	TotalTokens              int    `json:"total_tokens"`
+	CachedInputTokens        int    `json:"cached_input_tokens,omitempty"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheType                string `json:"cache_type,omitempty"`
 }
 
 // Cost represents cost information
 type Cost struct {
-	InputCost  float64 `json:"input_cost"`
-	OutputCost float64 `json:"output_cost"`
-	TotalCost  float64 `json:"total_cost"`
-	Currency   string  `json:"currency"`
+	InputCost         float64 `json:"input_cost,omitempty"`
+	CachedInputCost   float64 `json:"cached_input_cost,omitempty"`
+	CacheCreationCost float64 `json:"cache_creation_cost,omitempty"`
+	OutputCost        float64 `json:"output_cost,omitempty"`
+	TotalCost         float64 `json:"total_cost"`
+	Currency          string  `json:"currency"`
+}
+
+// ImageGenerationRequest is the business-facing image generation request.
+type ImageGenerationRequest struct {
+	TenantID      int64            `json:"tenant_id"`
+	CallerService string           `json:"caller_service"`
+	CallerModule  string           `json:"caller_module"`
+	TraceID       string           `json:"trace_id"`
+	FunctionType  string           `json:"function_type"`
+	Provider      string           `json:"provider,omitempty"`
+	ModelCode     string           `json:"model_code,omitempty"`
+	Prompt        string           `json:"prompt"`
+	ImageURL      string           `json:"image_url,omitempty"`
+	N             int              `json:"n,omitempty"`
+	Size          string           `json:"size,omitempty"`
+	Billing       *BillingMetadata `json:"billing,omitempty"`
+}
+
+// ImageGenerationUsage is the billed image count.
+type ImageGenerationUsage struct {
+	InputImageCount  int `json:"input_image_count"`
+	OutputImageCount int `json:"output_image_count"`
+	OutputWidth      int `json:"output_width,omitempty"`
+	OutputHeight     int `json:"output_height,omitempty"`
+}
+
+// ImageGenerationResponse is the gateway image generation response.
+type ImageGenerationResponse struct {
+	RequestID      string               `json:"request_id"`
+	Images         []string             `json:"images"`
+	Usage          ImageGenerationUsage `json:"usage"`
+	Cost           Cost                 `json:"cost"`
+	LatencyMS      int                  `json:"latency_ms"`
+	Provider       string               `json:"provider"`
+	ModelCode      string               `json:"model_code"`
+	PriceVersion   string               `json:"price_version,omitempty"`
+	PricingMissing bool                 `json:"pricing_missing,omitempty"`
+}
+
+// GenerateImage calls the gateway image generation endpoint.
+func (c *Client) GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error) {
+	if req.TraceID == "" {
+		req.TraceID = uuid.New().String()
+	}
+	if req.CallerService == "" {
+		req.CallerService = "lingce-api"
+	}
+	if req.FunctionType == "" {
+		req.FunctionType = "image_generation"
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal image generation request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/inference/image/generate", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gateway image generation error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out ImageGenerationResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// EmbeddingInferenceRequest is the business-facing embedding request.
+type EmbeddingInferenceRequest struct {
+	TenantID      int64            `json:"tenant_id"`
+	CallerService string           `json:"caller_service"`
+	CallerModule  string           `json:"caller_module"`
+	TraceID       string           `json:"trace_id"`
+	FunctionType  string           `json:"function_type"`
+	Provider      string           `json:"provider,omitempty"`
+	ModelCode     string           `json:"model_code,omitempty"`
+	Input         []string         `json:"input"`
+	Billing       *BillingMetadata `json:"billing,omitempty"`
+}
+
+// EmbeddingInferenceResponse is the gateway embedding response.
+type EmbeddingInferenceResponse struct {
+	RequestID      string      `json:"request_id"`
+	Embeddings     [][]float32 `json:"embeddings"`
+	Usage          Usage       `json:"usage"`
+	Cost           Cost        `json:"cost"`
+	LatencyMS      int         `json:"latency_ms"`
+	Provider       string      `json:"provider"`
+	ModelCode      string      `json:"model_code"`
+	PriceVersion   string      `json:"price_version,omitempty"`
+	PricingMissing bool        `json:"pricing_missing,omitempty"`
+}
+
+// CallEmbedding calls the gateway embedding endpoint.
+func (c *Client) CallEmbedding(ctx context.Context, req EmbeddingInferenceRequest) (*EmbeddingInferenceResponse, error) {
+	if req.TraceID == "" {
+		req.TraceID = uuid.New().String()
+	}
+	if req.CallerService == "" {
+		req.CallerService = "lingce-api"
+	}
+	if req.FunctionType == "" {
+		req.FunctionType = "embedding"
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embedding request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/inference/embedding", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gateway embedding error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out EmbeddingInferenceResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ErrorResponse represents an error response
@@ -298,6 +477,7 @@ type AuditRecordStatsResponse struct {
 	TotalTokens       int64   `json:"total_tokens"`
 	TotalInputTokens  int64   `json:"total_input_tokens"`
 	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalAudioSeconds float64 `json:"total_audio_seconds"`
 	TotalCost         float64 `json:"total_cost"`
 	AvgLatencyMS      float64 `json:"avg_latency_ms"`
 	SuccessRate       float64 `json:"success_rate"`
@@ -375,7 +555,11 @@ func (c *Client) TextInference(ctx context.Context, req TextInferenceRequest) (*
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	// Send request
-	resp, err := c.client.Do(httpReq)
+	httpClient := c.client
+	if req.Batch {
+		httpClient = c.batchClient
+	}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

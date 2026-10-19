@@ -329,7 +329,7 @@ func applyDefaults(cfg *Config) {
 		cfg.External.TicketNotify.SMTPPort = 25
 	}
 	if cfg.DashScope.Model == "" {
-		cfg.DashScope.Model = "qwen-max"
+		cfg.DashScope.Model = "qwen3.8-max"
 	}
 	if cfg.DashScope.BaseURL == "" {
 		cfg.DashScope.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"

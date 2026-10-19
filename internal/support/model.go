@@ -91,28 +91,39 @@ type SystemActionLog struct {
 
 // LLMModelConfig represents an LLM model configuration
 type LLMModelConfig struct {
-	ID               int64      `json:"id"`
-	TenantID         int64      `json:"tenant_id"`
-	ModelCode        string     `json:"model_code"`
-	FunctionType     string     `json:"function_type"`
-	ModelName        string     `json:"model_name"`
-	Provider         string     `json:"provider"` // "openai", "anthropic", "azure", etc.
-	APIEndpoint      string     `json:"api_endpoint"`
-	APIBaseURL       *string    `json:"api_base_url,omitempty"`
-	APIKey           string     `json:"api_key"`
-	ModelParams      JSONObject `json:"model_params,omitempty"`
-	ExtraParams      JSONObject `json:"extra_params,omitempty"`
-	InputTokenPrice  *float64   `json:"input_token_price,omitempty"`
-	OutputTokenPrice *float64   `json:"output_token_price,omitempty"`
-	DailyLimit       *int       `json:"daily_limit,omitempty"`
-	MonthlyLimit     *int       `json:"monthly_limit,omitempty"`
-	IsDefault        bool       `json:"is_default"`
-	IsActive         bool       `json:"is_active"`
-	Description      *string    `json:"description,omitempty"`
-	CreatedBy        int64      `json:"created_by"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
+	ID                            int64      `json:"id"`
+	TenantID                      int64      `json:"tenant_id"`
+	ModelCode                     string     `json:"model_code"`
+	FunctionType                  string     `json:"function_type"`
+	ModelName                     string     `json:"model_name"`
+	Provider                      string     `json:"provider"` // "openai", "anthropic", "azure", etc.
+	APIEndpoint                   string     `json:"api_endpoint"`
+	APIBaseURL                    *string    `json:"api_base_url,omitempty"`
+	APIKey                        string     `json:"api_key"`
+	ModelParams                   JSONObject `json:"model_params,omitempty"`
+	ExtraParams                   JSONObject `json:"extra_params,omitempty"`
+	InputTokenPrice               *float64   `json:"input_token_price,omitempty"`
+	OutputTokenPrice              *float64   `json:"output_token_price,omitempty"`
+	CachedInputTokenPrice         *float64   `json:"cached_input_token_price,omitempty"`
+	ExplicitCachedInputTokenPrice *float64   `json:"explicit_cached_input_token_price,omitempty"`
+	CacheCreationTokenPrice       *float64   `json:"cache_creation_token_price,omitempty"`
+	AudioPricePerSecond           *float64   `json:"audio_price_per_second,omitempty"`
+	BatchInputTokenPrice          *float64   `json:"batch_input_token_price,omitempty"`
+	BatchOutputTokenPrice         *float64   `json:"batch_output_token_price,omitempty"`
+	ImageInputPricePerImage       *float64   `json:"image_input_price_per_image,omitempty"`
+	ImageGenerationPricePerImage  *float64   `json:"image_generation_price_per_image,omitempty"`
+	PriceCurrency                 string     `json:"price_currency,omitempty"`
+	PriceVersion                  *string    `json:"price_version,omitempty"`
+	PriceEffectiveFrom            *time.Time `json:"price_effective_from,omitempty"`
+	DailyLimit                    *int       `json:"daily_limit,omitempty"`
+	MonthlyLimit                  *int       `json:"monthly_limit,omitempty"`
+	IsDefault                     bool       `json:"is_default"`
+	IsActive                      bool       `json:"is_active"`
+	Description                   *string    `json:"description,omitempty"`
+	CreatedBy                     int64      `json:"created_by"`
+	CreatedAt                     time.Time  `json:"created_at"`
+	UpdatedAt                     time.Time  `json:"updated_at"`
+	DeletedAt                     *time.Time `json:"deleted_at,omitempty"`
 }
 
 // LLMCallRecord represents an LLM API call record

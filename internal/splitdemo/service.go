@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultPromptVersion         = "v0.3"
-	defaultModelName             = "qwen-max"
+	defaultModelName             = "qwen3.8-max"
 	defaultMaxChunkChars         = 12000
 	twoPassScanOverlapSeconds    = 300
 	dashscopeInputLimit          = 30720
@@ -1339,7 +1339,6 @@ func dedupeInts(values []int) []int {
 	}
 	return out
 }
-
 
 func constrainSegmentsToChunk(segments []SplitSegment, chunk inputChunk) []SplitSegment {
 	if len(segments) == 0 {
