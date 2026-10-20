@@ -68,6 +68,7 @@ func buildAnalysisInput(
 			"encounter_id":       item.EncounterID,
 			"tenant_id":          item.TenantID,
 			"employee_id":        item.EmployeeID,
+			"consultant_name":    item.EmployeeName,
 			"customer_id":        item.CustomerID,
 			"role_code":          item.RoleCode,
 			"recorded_at":        formatTimePtr(item.RecordedAt),

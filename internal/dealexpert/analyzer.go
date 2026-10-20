@@ -73,6 +73,7 @@ type pendingAnalysis struct {
 	AnalysisPipelineVersion string
 	PromptVersion           string
 	RoleCode                string
+	EmployeeName            string
 	Attempts                int
 }
 
@@ -123,7 +124,9 @@ func (a *Analyzer) RunOnce(ctx context.Context, limit int) (int, error) {
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING id, tenant_id, recording_id, encounter_id, employee_id, customer_id, customer_name,
-		          recorded_at, cleaned_transcript, analysis_pipeline_version, prompt_version, role_code, attempts
+		          recorded_at, cleaned_transcript, analysis_pipeline_version, prompt_version, role_code,
+		          COALESCE((SELECT COALESCE(NULLIF(e.full_name, ''), e.name, '') FROM employees e WHERE e.id = deal_expert_analyses.employee_id), '') AS employee_name,
+		          attempts
 	`, limit, analysisMaxAttempts)
 	if err != nil {
 		return 0, fmt.Errorf("claim analyses: %w", err)
@@ -135,7 +138,7 @@ func (a *Analyzer) RunOnce(ctx context.Context, limit int) (int, error) {
 		item := &pendingAnalysis{}
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.RecordingID, &item.EncounterID,
 			&item.EmployeeID, &item.CustomerID, &item.CustomerName, &item.RecordedAt,
-			&item.CleanedTranscript, &item.AnalysisPipelineVersion, &item.PromptVersion, &item.RoleCode, &item.Attempts); err != nil {
+			&item.CleanedTranscript, &item.AnalysisPipelineVersion, &item.PromptVersion, &item.RoleCode, &item.EmployeeName, &item.Attempts); err != nil {
 			return 0, fmt.Errorf("scan pending analysis: %w", err)
 		}
 		pending = append(pending, item)
