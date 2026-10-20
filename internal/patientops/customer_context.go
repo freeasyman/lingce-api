@@ -16,10 +16,39 @@ func (s *Service) loadCustomerContext(ctx context.Context, tenantID, customerID 
 	var name, status, source, firstChannel, lastItem, lastDeal, notes string
 	var lastContacted *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(name,''), COALESCE(status,''), COALESCE(source,''), COALESCE(first_channel,''),
-		       COALESCE(last_consultation_item,''), COALESCE(last_deal_result,''), COALESCE(notes,''), last_contacted_at
-		FROM customers
-		WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL
+		SELECT COALESCE(c.name,''), COALESCE(c.status,''), COALESCE(c.source,''), COALESCE(c.first_channel,''),
+		       COALESCE((
+		           SELECT NULLIF(TRIM(COALESCE(
+		               r.converted_item,
+		               r.analysis_result->'consultation_record'->>'consultation_item',
+		               r.analysis_result->'consultation_record'->>'treatment_item',
+		               r.analysis_result->'analysis_summary'->'visit_outcome'->>'treatment_item',
+		               r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'consultation_item',
+		               r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'treatment_item',
+		               ''
+		           )), '')
+		           FROM recordings r
+		           WHERE r.tenant_id=c.tenant_id AND r.customer_id=c.id
+		           ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
+		           LIMIT 1
+		       ), ''),
+		       COALESCE((
+		           SELECT NULLIF(TRIM(COALESCE(
+		               r.confirmed_deal_status,
+		               r.analysis_result->'analysis_summary'->'visit_outcome'->>'status',
+		               r.analysis_result->'deal_outcome'->>'result',
+		               r.analysis_result->'decision_state'->>'status',
+		               r.analysis_result->'raw'->'consultant_conversion_analysis_v1'->'persuasive'->>'deal_status',
+		               ''
+		           )), '')
+		           FROM recordings r
+		           WHERE r.tenant_id=c.tenant_id AND r.customer_id=c.id
+		           ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
+		           LIMIT 1
+		       ), ''),
+		       COALESCE(c.notes,''), c.last_contacted_at
+		FROM customers c
+		WHERE c.tenant_id=$1 AND c.id=$2 AND c.deleted_at IS NULL
 	`, tenantID, customerID).Scan(&name, &status, &source, &firstChannel, &lastItem, &lastDeal, &notes, &lastContacted)
 	if err != nil {
 		slog.Warn("load screenshot customer context failed", "tenant_id", tenantID, "customer_id", customerID, "error", err)
