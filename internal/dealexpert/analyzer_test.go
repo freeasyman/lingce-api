@@ -327,3 +327,54 @@ func TestValidateDealCardRepairsCompositeQuote(t *testing.T) {
 		t.Fatalf("start_ms should be repaired to 20000, got %v", repaired["start_ms"])
 	}
 }
+
+func TestValidateDealCardAcceptsBrief(t *testing.T) {
+	card := baseCardV11()
+	card["brief"] = map[string]any{
+		"situation":     "客户带孩子来做近视手术，检查已完成，术式还没定。",
+		"blocker":       "家长担心加做角膜交联要多花 6000 元。",
+		"next_step":     "今天 18:00 前由盖珊珊找周教授确认交联是否必须。",
+		"evidence_refs": []any{"ev_1"},
+	}
+	if _, err := validateCard(t, card, validationCtxV11()); err != nil {
+		t.Fatalf("brief should be accepted: %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsBriefPromise(t *testing.T) {
+	card := baseCardV11()
+	card["brief"] = map[string]any{
+		"situation":     "客户已经了解方案，准备今天决定。",
+		"blocker":       nil,
+		"next_step":     "今天联系客户，保证成交。",
+		"evidence_refs": []any{"ev_1"},
+	}
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "forbidden promise") {
+		t.Fatalf("expected forbidden promise error, got %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsBriefUnknownRef(t *testing.T) {
+	card := baseCardV11()
+	card["brief"] = map[string]any{
+		"situation":     "客户带孩子来做近视手术，检查已完成。",
+		"blocker":       nil,
+		"next_step":     "今天由咨询师确认最终术式。",
+		"evidence_refs": []any{"ev_99"},
+	}
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "unknown evidence ref") {
+		t.Fatalf("expected unknown evidence error, got %v", err)
+	}
+}
+
+func TestValidateDealCardAcceptsOtherConcernAndTrust(t *testing.T) {
+	card := baseCardV11()
+	decision := card["decision"].(map[string]any)
+	decision["trust"].([]any)[0].(map[string]any)["trust_target"] = "其他"
+	decision["trust"].([]any)[0].(map[string]any)["target_label"] = "顾问"
+	decision["concerns"].([]any)[0].(map[string]any)["type"] = "其他"
+	decision["concerns"].([]any)[0].(map[string]any)["type_label"] = "医保报销"
+	if _, err := validateCard(t, card, validationCtxV11()); err != nil {
+		t.Fatalf("other concern/trust should be accepted: %v", err)
+	}
+}

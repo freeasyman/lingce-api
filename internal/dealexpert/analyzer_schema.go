@@ -115,6 +115,17 @@ func validateBusinessRules(card map[string]any, ctx cardValidationContext) error
 		return fmt.Errorf("business validation: quality.standard_version must be %s", dealQualityStandard)
 	}
 
+	if brief, ok := card["brief"].(map[string]any); ok {
+		for _, key := range []string{"situation", "blocker", "next_step"} {
+			text, _ := brief[key].(string)
+			for _, forbidden := range []string{"保证成交", "百分百", "一定能成", "绝对能成"} {
+				if strings.Contains(text, forbidden) {
+					return fmt.Errorf("business validation: brief.%s contains forbidden promise %q", key, forbidden)
+				}
+			}
+		}
+	}
+
 	items, err := evidenceItems(card)
 	if err != nil {
 		return err

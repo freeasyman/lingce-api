@@ -343,6 +343,49 @@
         "minLength": 1
       },
       "minItems": 0
+    },
+    "brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "situation",
+        "blocker",
+        "next_step",
+        "evidence_refs"
+      ],
+      "properties": {
+        "situation": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 100
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 70
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_step": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 100
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ev_[0-9]+$"
+          },
+          "minItems": 1,
+          "maxItems": 4
+        }
+      }
     }
   },
   "$defs": {
@@ -430,7 +473,8 @@
                   "医生",
                   "机构",
                   "方案",
-                  "承诺"
+                  "承诺",
+                  "其他"
                 ]
               },
               "state": {
@@ -459,8 +503,43 @@
                   "pattern": "^ev_[0-9]+$"
                 },
                 "minItems": 0
+              },
+              "target_label": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "trust_target": {
+                      "const": "其他"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "target_label"
+                  ],
+                  "properties": {
+                    "target_label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 12
+                    }
+                  }
+                }
+              }
+            ]
           },
           "minItems": 0
         },
@@ -512,7 +591,8 @@
                   "家属或共同决策人",
                   "时间与流程",
                   "竞品比较",
-                  "疼痛隐私情绪"
+                  "疼痛隐私情绪",
+                  "其他"
                 ]
               },
               "summary": {
@@ -529,8 +609,43 @@
                   "pattern": "^ev_[0-9]+$"
                 },
                 "minItems": 1
+              },
+              "type_label": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "其他"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "type_label"
+                  ],
+                  "properties": {
+                    "type_label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 12
+                    }
+                  }
+                }
+              }
+            ]
           },
           "minItems": 0
         },

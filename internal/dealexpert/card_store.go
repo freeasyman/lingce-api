@@ -105,13 +105,12 @@ func (s *Store) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64
 		SELECT id FROM deal_expert_analyses
 		WHERE tenant_id = $1 AND recording_id = $2
 		  AND analysis_pipeline_version = 'recording-analysis-v1'
-		  AND prompt_version = 'deal-expert-prompt-v1.1'
 		ORDER BY id DESC LIMIT 1
 	`, tenantID, recordingID).Scan(&existingID)
 	if err == nil {
 		_, err = s.pool.Exec(ctx, `
 			UPDATE deal_expert_analyses
-			SET status = 'received', attempts = 0, error_message = '', updated_at = NOW()
+			SET status = 'received', attempts = 0, error_message = '', prompt_version = 'deal-expert-prompt-v1.2', updated_at = NOW()
 			WHERE id = $1
 		`, existingID)
 		if err != nil {
@@ -129,7 +128,7 @@ func (s *Store) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64
 		   business_scope, role_code, recorded_at, cleaned_transcript,
 		   analysis_pipeline_version, prompt_version, status)
 		VALUES ($1,$2,COALESCE($3,0),COALESCE($4,0),$5,$6,'consultant','consultant',$7,$8,
-		        'recording-analysis-v1','deal-expert-prompt-v1.1','received')
+		        'recording-analysis-v1','deal-expert-prompt-v1.2','received')
 	`, tenantID, recordingID, encounterID, employeeID, customerID, customerName, recordedAt, transcript)
 	if err != nil {
 		return "", fmt.Errorf("enqueue analysis: %w", err)
