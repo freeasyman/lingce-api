@@ -48,10 +48,10 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			FROM deal_outcome_events
 			GROUP BY tenant_id, encounter_id
 		),
-		active_follow AS (
-			SELECT DISTINCT ON (tenant_id, encounter_id) tenant_id, encounter_id, status
+		latest_follow AS (
+			SELECT DISTINCT ON (tenant_id, encounter_id) tenant_id, encounter_id, status,
+			       (status = ANY($%d)) AS is_active
 			FROM deal_follow_ups
-			WHERE status = ANY($%d)
 			ORDER BY tenant_id, encounter_id, id DESC
 		)
 		SELECT
@@ -74,20 +74,56 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			r.refund_amount::float8 AS refund_amount,
 			CASE WHEN os.cnt > 0 THEN os.net ELSE NULL END AS effective_net,
 			COALESCE(lo.type, '') AS latest_outcome_type,
-			COALESCE(af.status, '') AS follow_up_status,
+			COALESCE(lf.status, '') AS follow_up_status,
+			COALESCE(lf.is_active, false) AS follow_up_active,
 			r.analysis_result
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN latest_outcome lo ON lo.tenant_id = r.tenant_id AND lo.encounter_id = r.encounter_id
 		LEFT JOIN outcome_sum os ON os.tenant_id = r.tenant_id AND os.encounter_id = r.encounter_id
-		LEFT JOIN active_follow af ON af.tenant_id = r.tenant_id AND af.encounter_id = r.encounter_id
+		LEFT JOIN latest_follow lf ON lf.tenant_id = r.tenant_id AND lf.encounter_id = r.encounter_id
 		%s`, activeArg, conditions)
 
-	where := "1=1"
+	outer := make([]string, 0, 4)
 	if status := strings.TrimSpace(params.Status); status != "" {
 		args = append(args, status)
-		where = fmt.Sprintf("t.effective_status = $%d", len(args))
+		outer = append(outer, fmt.Sprintf("t.effective_status = $%d", len(args)))
+	}
+	switch params.Decision {
+	case "paid":
+		outer = append(outer, "t.effective_status = '成交了'")
+	case "appointed":
+		outer = append(outer, "t.latest_outcome_type = '预约'")
+	case "deposit":
+		outer = append(outer, "t.latest_outcome_type = '定金'")
+	case "postponed":
+		outer = append(outer, "t.latest_outcome_type = '暂缓'")
+	case "abandoned":
+		outer = append(outer, "(t.latest_outcome_type = '放弃' OR (t.latest_outcome_type = '' AND t.effective_status = '没成交'))")
+	case "high_intent":
+		outer = append(outer, "t.effective_status = '还在跟进' AND t.latest_outcome_type NOT IN ('预约','定金')")
+	}
+	if params.CustomerLinked != nil {
+		if *params.CustomerLinked {
+			outer = append(outer, "t.customer_id IS NOT NULL")
+		} else {
+			outer = append(outer, "t.customer_id IS NULL")
+		}
+	}
+	switch params.FollowUpState {
+	case "none":
+		outer = append(outer, "t.follow_up_status = ''")
+	case "active":
+		outer = append(outer, "t.follow_up_active")
+	case "completed":
+		outer = append(outer, "t.follow_up_status = '已完成'")
+	case "paused":
+		outer = append(outer, "t.follow_up_status = '暂停联系'")
+	}
+	where := "1=1"
+	if len(outer) > 0 {
+		where = strings.Join(outer, " AND ")
 	}
 
 	var total int

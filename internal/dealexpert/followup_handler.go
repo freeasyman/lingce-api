@@ -45,7 +45,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrFollowUpNotActive):
 		httputil.WriteError(w, http.StatusConflict, "CONFLICT", err.Error(), nil)
-	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrInvalidOutcomeType), errors.Is(err, ErrAmountRequired), errors.Is(err, ErrInvalidOutcomeStatus):
+	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrInvalidOutcomeType), errors.Is(err, ErrAmountRequired),
+		errors.Is(err, ErrInvalidOutcomeStatus), errors.Is(err, ErrInvalidFollowUpState), errors.Is(err, ErrInvalidDecisionFilter):
 		httputil.WriteBadRequest(w, err.Error())
 	default:
 		httputil.WriteInternalError(w, err.Error())
@@ -290,13 +291,25 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	var customerLinked *bool
+	if raw := strings.TrimSpace(r.URL.Query().Get("customer_linked")); raw != "" {
+		value, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			httputil.WriteBadRequest(w, "invalid customer_linked, expected true or false")
+			return
+		}
+		customerLinked = &value
+	}
 	items, total, err := h.service.ListEncounters(r.Context(), scope.TenantID, EncounterListParams{
-		Page:     page,
-		PageSize: pageSize,
-		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
-		Keyword:  strings.TrimSpace(r.URL.Query().Get("keyword")),
-		DateFrom: dateFrom,
-		DateTo:   dateTo,
+		Page:           page,
+		PageSize:       pageSize,
+		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
+		Keyword:        strings.TrimSpace(r.URL.Query().Get("keyword")),
+		DateFrom:       dateFrom,
+		DateTo:         dateTo,
+		CustomerLinked: customerLinked,
+		FollowUpState:  strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
+		Decision:       strings.TrimSpace(r.URL.Query().Get("decision")),
 	}, scope.EmployeeFilter)
 	if err != nil {
 		writeServiceError(w, err)

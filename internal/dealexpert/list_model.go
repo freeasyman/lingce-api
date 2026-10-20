@@ -33,6 +33,12 @@ type EncounterListParams struct {
 	Keyword  string
 	DateFrom *time.Time
 	DateTo   *time.Time
+	// CustomerLinked: nil 不筛选；true 只看已关联客户；false 只看未关联客户。
+	CustomerLinked *bool
+	// FollowUpState: "" 不筛选；none / active / completed / paused。
+	FollowUpState string
+	// Decision: "" 不筛选；paid / appointed / deposit / postponed / abandoned / high_intent。
+	Decision string
 }
 
 func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params EncounterListParams, employeeFilter *int64) ([]*EncounterListItem, int, error) {
@@ -46,6 +52,16 @@ func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params Enc
 	case "", "成交了", "没成交", "还在跟进", "未知":
 	default:
 		return nil, 0, ErrInvalidOutcomeStatus
+	}
+	switch params.FollowUpState {
+	case "", "none", "active", "completed", "paused":
+	default:
+		return nil, 0, ErrInvalidFollowUpState
+	}
+	switch params.Decision {
+	case "", "paid", "appointed", "deposit", "postponed", "abandoned", "high_intent":
+	default:
+		return nil, 0, ErrInvalidDecisionFilter
 	}
 	return s.store.ListEncounters(ctx, tenantID, params, employeeFilter)
 }
