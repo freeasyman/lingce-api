@@ -419,6 +419,15 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	if visitOutcome := r.URL.Query().Get("visit_outcome"); visitOutcome != "" {
 		req.VisitOutcome = &visitOutcome
 	}
+	if dealStatus := strings.TrimSpace(r.URL.Query().Get("confirmed_deal_status")); dealStatus != "" {
+		switch dealStatus {
+		case "成交了", "没成交", "还在跟进":
+			req.ConfirmedDealStatus = &dealStatus
+		default:
+			httputil.WriteBadRequest(w, "Invalid confirmed_deal_status")
+			return
+		}
+	}
 	if includeShortStr := r.URL.Query().Get("include_short"); includeShortStr != "" {
 		includeShort := includeShortStr == "true" || includeShortStr == "1"
 		req.IncludeShort = &includeShort

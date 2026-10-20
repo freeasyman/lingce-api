@@ -3414,6 +3414,11 @@ func toRecordingResponse(r *MedicalRecording) *RecordingResponse {
 		ProcessingError:   r.ProcessingError,
 		CreatedAt:         formatDBLocalTime(r.CreatedAt),
 		UpdatedAt:         formatDBLocalTime(r.UpdatedAt),
+
+		EncounterID:         r.EncounterID,
+		ConfirmedDealStatus: r.ConfirmedDealStatus,
+		ConvertedAmount:     r.ConvertedAmount,
+		RefundAmount:        r.RefundAmount,
 	}
 	if len(r.AnalysisResult) > 0 {
 		resp.AnalysisResult = map[string]interface{}(r.AnalysisResult)

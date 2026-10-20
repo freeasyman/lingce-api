@@ -6,13 +6,20 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-type Handler struct{ service *Service }
+type Handler struct {
+	service *Service
+	pool    *pgxpool.Pool
+}
 
-func NewHandler(service *Service) *Handler { return &Handler{service: service} }
+func NewHandler(service *Service, pool *pgxpool.Pool) *Handler {
+	return &Handler{service: service, pool: pool}
+}
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
 	router.Register(mux, []router.Route{{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings", Handler: h.Receive, AuthMode: "internal"}}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})

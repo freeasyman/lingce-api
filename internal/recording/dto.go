@@ -209,6 +209,11 @@ type RecordingResponse struct {
 	ProcessedAt           *string                  `json:"processed_at,omitempty"`
 	CreatedAt             string                   `json:"created_at"`
 	UpdatedAt             string                   `json:"updated_at"`
+	// 赢客专家读取的成交事实字段：接待引用、人工确认结果、成交与退款金额。
+	EncounterID         *int64   `json:"encounter_id,omitempty"`
+	ConfirmedDealStatus *string  `json:"confirmed_deal_status,omitempty"`
+	ConvertedAmount     *float64 `json:"converted_amount,omitempty"`
+	RefundAmount        *float64 `json:"refund_amount,omitempty"`
 }
 
 // RecordingEMRResponse 是录音详情页读取电子病历草稿时使用的兼容响应。
@@ -254,30 +259,31 @@ type ResetCodeDictionaryResponse struct {
 
 // RecordingListRequest represents a request to list medical recordings
 type RecordingListRequest struct {
-	TenantID        int64            `json:"tenant_id"`
-	TenantIDs       []int64          `json:"tenant_ids,omitempty"`
-	RecordingID     *int64           `json:"recording_id,omitempty"`
-	Scope           *RecordingScope  `json:"recording_scope,omitempty"`
-	EmployeeID      *int64           `json:"employee_id,omitempty"`
-	BusinessScope   *string          `json:"business_scope,omitempty"`
-	PatientName     *string          `json:"patient_name,omitempty"`
-	Status          *RecordingStatus `json:"status,omitempty"`
-	Scene           *RecordingScene  `json:"scene,omitempty"`
-	Source          *RecordingSource `json:"source,omitempty"`
-	SceneType       *string          `json:"scene_type,omitempty"`
-	VisitOutcome    *string          `json:"visit_outcome,omitempty"`
-	IncludeShort    *bool            `json:"include_short,omitempty"`
-	SegueMin        *float64         `json:"segue_min,omitempty"`
-	SegueMax        *float64         `json:"segue_max,omitempty"`
-	StartDate       *time.Time       `json:"start_date,omitempty"`
-	EndDate         *time.Time       `json:"end_date,omitempty"`
-	Keyword         *string          `json:"keyword,omitempty"`
-	HasTask         *bool            `json:"has_task,omitempty"`
-	HasContentSeed  *bool            `json:"has_content_seed,omitempty"`
-	CriticalGapOnly *bool            `json:"critical_gap_only,omitempty"`
-	Sort            *string          `json:"sort,omitempty"`
-	Page            int              `json:"page"`
-	PageSize        int              `json:"page_size"`
+	TenantID            int64            `json:"tenant_id"`
+	TenantIDs           []int64          `json:"tenant_ids,omitempty"`
+	RecordingID         *int64           `json:"recording_id,omitempty"`
+	Scope               *RecordingScope  `json:"recording_scope,omitempty"`
+	EmployeeID          *int64           `json:"employee_id,omitempty"`
+	BusinessScope       *string          `json:"business_scope,omitempty"`
+	PatientName         *string          `json:"patient_name,omitempty"`
+	Status              *RecordingStatus `json:"status,omitempty"`
+	Scene               *RecordingScene  `json:"scene,omitempty"`
+	Source              *RecordingSource `json:"source,omitempty"`
+	SceneType           *string          `json:"scene_type,omitempty"`
+	VisitOutcome        *string          `json:"visit_outcome,omitempty"`
+	IncludeShort        *bool            `json:"include_short,omitempty"`
+	SegueMin            *float64         `json:"segue_min,omitempty"`
+	SegueMax            *float64         `json:"segue_max,omitempty"`
+	StartDate           *time.Time       `json:"start_date,omitempty"`
+	EndDate             *time.Time       `json:"end_date,omitempty"`
+	Keyword             *string          `json:"keyword,omitempty"`
+	ConfirmedDealStatus *string          `json:"confirmed_deal_status,omitempty"`
+	HasTask             *bool            `json:"has_task,omitempty"`
+	HasContentSeed      *bool            `json:"has_content_seed,omitempty"`
+	CriticalGapOnly     *bool            `json:"critical_gap_only,omitempty"`
+	Sort                *string          `json:"sort,omitempty"`
+	Page                int              `json:"page"`
+	PageSize            int              `json:"page_size"`
 }
 
 type SmartBadgeMatchRequest struct {

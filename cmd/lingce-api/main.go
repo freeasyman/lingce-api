@@ -308,8 +308,9 @@ func main() {
 	opportunityAlertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
 	dealExpertStore := dealexpert.NewStore(pool)
-	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore))
+	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
+	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
 
 	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID, emrRecordService)
 	externalDataToken := cfg.External.ExternalDataInternalToken

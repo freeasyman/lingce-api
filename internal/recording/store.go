@@ -644,6 +644,12 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		argIndex++
 	}
 
+	if req.ConfirmedDealStatus != nil && strings.TrimSpace(*req.ConfirmedDealStatus) != "" {
+		conditions = append(conditions, fmt.Sprintf("r.confirmed_deal_status = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.ConfirmedDealStatus))
+		argIndex++
+	}
+
 	if req.Status != nil {
 		conditions = append(conditions, fmt.Sprintf(`
 			(CASE
@@ -809,7 +815,11 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			CASE WHEN r.analysis_status = 'completed' THEN COALESCE(r.updated_at, r.created_at, NOW()) ELSE NULL::timestamp END AS processed_at,
 			r.created_at,
 			COALESCE(r.updated_at, r.created_at, NOW()) AS updated_at,
-			NULL::timestamp AS deleted_at
+			NULL::timestamp AS deleted_at,
+			r.encounter_id,
+			NULLIF(r.confirmed_deal_status, ''),
+			r.converted_amount::float8,
+			r.refund_amount::float8
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
@@ -871,6 +881,10 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 			&r.CreatedAt,
 			&r.UpdatedAt,
 			&r.DeletedAt,
+			&r.EncounterID,
+			&r.ConfirmedDealStatus,
+			&r.ConvertedAmount,
+			&r.RefundAmount,
 		); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan recording: %w", err)
 		}
@@ -1773,7 +1787,11 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 			CASE WHEN r.analysis_status = 'completed' THEN COALESCE(r.updated_at, r.created_at, NOW()) ELSE NULL::timestamp END AS processed_at,
 			r.created_at,
 			COALESCE(r.updated_at, r.created_at, NOW()) AS updated_at,
-			NULL::timestamp AS deleted_at
+			NULL::timestamp AS deleted_at,
+			r.encounter_id,
+			NULLIF(r.confirmed_deal_status, ''),
+			r.converted_amount::float8,
+			r.refund_amount::float8
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
@@ -1822,6 +1840,10 @@ func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecordi
 		&r.CreatedAt,
 		&r.UpdatedAt,
 		&r.DeletedAt,
+		&r.EncounterID,
+		&r.ConfirmedDealStatus,
+		&r.ConvertedAmount,
+		&r.RefundAmount,
 	)
 
 	if err == pgx.ErrNoRows {

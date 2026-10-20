@@ -105,6 +105,11 @@ type MedicalRecording struct {
 	CreatedAt          time.Time        `json:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 	DeletedAt          *time.Time       `json:"deleted_at,omitempty"`
+	// 赢客专家消费的成交事实：接待引用、人工确认结果、成交与退款金额。
+	EncounterID         *int64   `json:"encounter_id,omitempty"`
+	ConfirmedDealStatus *string  `json:"confirmed_deal_status,omitempty"`
+	ConvertedAmount     *float64 `json:"converted_amount,omitempty"`
+	RefundAmount        *float64 `json:"refund_amount,omitempty"`
 }
 
 // RecordingTask represents a task generated from a recording
