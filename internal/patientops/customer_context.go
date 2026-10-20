@@ -78,19 +78,26 @@ func (s *Service) loadCustomerContext(ctx context.Context, tenantID, customerID 
 		parts = append(parts, "数据库历史（需核对，不代表客户当前表达）："+strings.Join(history, "；"))
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT type, direction, COALESCE(content,''), interacted_at
-		FROM customer_interactions
-		WHERE tenant_id=$1 AND customer_id=$2
-		ORDER BY interacted_at DESC
+		SELECT COALESCE(NULLIF(i.interaction_type,''), '沟通'),
+		       COALESCE(NULLIF(i.direction,''), '未标记'),
+		       COALESCE(NULLIF(i.content_summary,''), NULLIF(i.raw_content,''), ''),
+		       COALESCE(i.interacted_at, i.occurred_at, i.created_at)
+		FROM customer_interactions i
+		JOIN customers c ON c.id=i.customer_id
+		WHERE c.tenant_id=$1 AND i.customer_id=$2 AND c.deleted_at IS NULL
+		ORDER BY COALESCE(i.interacted_at, i.occurred_at, i.created_at) DESC
 		LIMIT 3
 	`, tenantID, customerID)
-	if err == nil {
+	if err != nil {
+		slog.Warn("load customer interaction context failed", "tenant_id", tenantID, "customer_id", customerID, "error", err)
+	} else {
 		defer rows.Close()
 		var interactions []string
 		for rows.Next() {
 			var typ, direction, content string
 			var at time.Time
 			if scanErr := rows.Scan(&typ, &direction, &content, &at); scanErr != nil {
+				slog.Warn("scan customer interaction context failed", "tenant_id", tenantID, "customer_id", customerID, "error", scanErr)
 				continue
 			}
 			content = strings.TrimSpace(content)
