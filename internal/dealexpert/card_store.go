@@ -78,3 +78,61 @@ func (s *Store) RecordingConsultant(ctx context.Context, tenantID, recordingID i
 	}
 	return employeeID, nil
 }
+
+// EnqueueAnalysis 为指定录音补生成结案卡；已有分析行时重置为待分析。
+func (s *Store) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64) (string, error) {
+	var encounterID, employeeID, customerID *int64
+	var customerName, transcript string
+	var recordedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT r.encounter_id, r.employee_id, r.customer_id, COALESCE(c.name, ''),
+		       r.recorded_at, COALESCE(r.transcription_text, '')
+		FROM recordings r LEFT JOIN customers c ON c.id = r.customer_id
+		WHERE r.tenant_id = $1 AND r.id = $2 AND r.deleted_at IS NULL
+	`, tenantID, recordingID).Scan(&encounterID, &employeeID, &customerID, &customerName, &recordedAt, &transcript)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("recording not found")
+	}
+	if err != nil {
+		return "", fmt.Errorf("load recording: %w", err)
+	}
+	if len([]rune(strings.TrimSpace(transcript))) < 100 {
+		return "", ErrNoTranscript
+	}
+
+	var existingID int64
+	err = s.pool.QueryRow(ctx, `
+		SELECT id FROM deal_expert_analyses
+		WHERE tenant_id = $1 AND recording_id = $2
+		  AND analysis_pipeline_version = 'recording-analysis-v1'
+		  AND prompt_version = 'deal-expert-prompt-v1.1'
+		ORDER BY id DESC LIMIT 1
+	`, tenantID, recordingID).Scan(&existingID)
+	if err == nil {
+		_, err = s.pool.Exec(ctx, `
+			UPDATE deal_expert_analyses
+			SET status = 'received', attempts = 0, error_message = '', updated_at = NOW()
+			WHERE id = $1
+		`, existingID)
+		if err != nil {
+			return "", fmt.Errorf("reset analysis: %w", err)
+		}
+		return "received", nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("find analysis: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO deal_expert_analyses
+		  (tenant_id, recording_id, encounter_id, employee_id, customer_id, customer_name,
+		   business_scope, role_code, recorded_at, cleaned_transcript,
+		   analysis_pipeline_version, prompt_version, status)
+		VALUES ($1,$2,COALESCE($3,0),COALESCE($4,0),$5,$6,'consultant','consultant',$7,$8,
+		        'recording-analysis-v1','deal-expert-prompt-v1.1','received')
+	`, tenantID, recordingID, encounterID, employeeID, customerID, customerName, recordedAt, transcript)
+	if err != nil {
+		return "", fmt.Errorf("enqueue analysis: %w", err)
+	}
+	return "received", nil
+}

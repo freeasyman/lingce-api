@@ -27,6 +27,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.TriggerRecordingAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret, Pool: h.pool})
 }
@@ -44,6 +45,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrCardNotFound):
 		httputil.WriteNotFound(w, err.Error())
+	case errors.Is(err, ErrNoTranscript):
+		httputil.WriteBadRequest(w, "这次接待没有可用转写，无法生成结案卡")
 	case errors.Is(err, ErrFollowUpNotFound):
 		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrFollowUpNotActive):
@@ -348,4 +351,27 @@ func (h *Handler) GetRecordingCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, card)
+}
+
+func (h *Handler) TriggerRecordingAnalysis(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, recordingID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	status, err := h.service.EnqueueAnalysis(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": status})
 }

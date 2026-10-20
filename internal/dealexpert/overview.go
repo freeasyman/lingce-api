@@ -59,3 +59,10 @@ func (s *Service) LatestCard(ctx context.Context, tenantID, recordingID int64) (
 func (s *Service) RecordingConsultant(ctx context.Context, tenantID, recordingID int64) (int64, error) {
 	return s.store.RecordingConsultant(ctx, tenantID, recordingID)
 }
+
+func (s *Service) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64) (string, error) {
+	if tenantID <= 0 || recordingID <= 0 {
+		return "", fmt.Errorf("tenant_id and recording_id are required")
+	}
+	return s.store.EnqueueAnalysis(ctx, tenantID, recordingID)
+}

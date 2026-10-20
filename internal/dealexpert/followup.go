@@ -43,6 +43,7 @@ var (
 	ErrInvalidFollowUpState  = errors.New("invalid follow up state filter")
 	ErrInvalidDecisionFilter = errors.New("invalid decision filter")
 	ErrCardNotFound          = errors.New("encounter card not found")
+	ErrNoTranscript          = errors.New("recording has no transcript")
 )
 
 type FollowUp struct {
