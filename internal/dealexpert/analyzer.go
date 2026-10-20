@@ -193,12 +193,13 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 	}
 
 	validation := cardValidationContext{
-		Sources:       make(map[string]evidenceSource, len(segments)+len(facts)),
-		SegmentOrder:  make([]string, 0, len(segments)),
-		Facts:         make(map[string]businessFactRef, len(facts)),
-		Catalog:       make(map[int64]catalogRef, len(catalog)),
-		AllowMissed:   allowMissedOpportunity && catalogComplete,
-		AllowExtended: allowExtendedOpportunity && catalogComplete,
+		ConsultantName: item.EmployeeName,
+		Sources:        make(map[string]evidenceSource, len(segments)+len(facts)),
+		SegmentOrder:   make([]string, 0, len(segments)),
+		Facts:          make(map[string]businessFactRef, len(facts)),
+		Catalog:        make(map[int64]catalogRef, len(catalog)),
+		AllowMissed:    allowMissedOpportunity && catalogComplete,
+		AllowExtended:  allowExtendedOpportunity && catalogComplete,
 	}
 	for _, segment := range segments {
 		validation.Sources[segment.ID] = evidenceSource{
