@@ -21,8 +21,9 @@ func TestValidateJSONSchemaScreenshotContract(t *testing.T) {
 
 func TestNormalizeScreenshotResultMap(t *testing.T) {
 	raw := map[string]any{
-		"relationship_clues": []any{map[string]any{"role": "家长", "quote": "和孩子商量"}},
-		"evidence":           []any{"患者：我想考虑一下"},
+		"relationship_clues": []any{map[string]any{"role": "家长", "quote": "和孩子商量"}, "[家长]"},
+		"patient_utterances": []any{"我想考虑一下", "我想考虑一下", "门店地址"},
+		"evidence":           []any{"患者：我想考虑一下", "[用户] 点击了门店地址", "[用户] 点击了门店地址"},
 		"decision_maker":     map[string]any{"role": "本人", "quote": "我自己"},
 	}
 	normalizeScreenshotResultMap(raw)
@@ -32,6 +33,14 @@ func TestNormalizeScreenshotResultMap(t *testing.T) {
 	}
 	if _, ok := raw["decision_maker"].(string); !ok {
 		t.Fatalf("decision_maker was not normalized: %#v", raw["decision_maker"])
+	}
+	utterances, _ := raw["patient_utterances"].([]any)
+	if len(utterances) != 1 {
+		t.Fatalf("patient utterances were not deduped/cleaned: %#v", utterances)
+	}
+	evidence, _ := raw["evidence"].([]any)
+	if len(evidence) != 2 || !strings.HasPrefix(evidence[1].(string), "[系统]") || len(clues) != 1 {
+		t.Fatalf("evidence was not deduped/reclassified: %#v", evidence)
 	}
 }
 

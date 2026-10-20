@@ -28,8 +28,16 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 			if key == "patient_utterances" && screenshotUIText(text) {
 				continue
 			}
-			if key == "evidence" && strings.HasPrefix(text, "[患者]") && screenshotUIText(text) {
-				text = strings.Replace(text, "[患者]", "[系统]", 1)
+			if key == "evidence" && screenshotUIText(text) {
+				for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]"} {
+					if strings.HasPrefix(text, prefix) {
+						text = strings.Replace(text, prefix, "[系统]", 1)
+						break
+					}
+				}
+			}
+			if key == "relationship_clues" && onlyRoleText(text) {
+				continue
 			}
 			if seen[text] {
 				continue
@@ -46,6 +54,11 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 			}
 		}
 	}
+}
+
+func onlyRoleText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "：") && !strings.Contains(trimmed, ":")
 }
 
 func screenshotUIText(text string) bool {
