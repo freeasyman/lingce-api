@@ -14,6 +14,7 @@ import (
 func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 	router.Register(mux, []router.Route{
 		{Method: http.MethodPost, Path: "/api/v1/content-ai/answers", Handler: h.AnswerQuestion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: http.MethodPost, Path: "/api/v1/content-ai/compare", Handler: h.CompareAIAnswers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodGet, Path: "/api/v1/content-ai/questions", Handler: h.ListAIQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodGet, Path: "/api/v1/content-ai/questions/{id}", Handler: h.GetAIQuestion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodGet, Path: "/api/v1/content-ai/environments", Handler: h.ListAIEnvironments, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -140,4 +141,31 @@ func (h *Handler) GetGenerationObservability(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httputil.WriteSuccess(w, result)
+}
+
+func (h *Handler) CompareAIAnswers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req struct {
+		Question string                `json:"question"`
+		Answers  []AIEnvironmentAnswer `json:"answers"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	comparison, err := h.service.CompareAIAnswers(r.Context(), tenantID, req.Question, req.Answers)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, comparison)
 }

@@ -370,3 +370,77 @@ func cleanQuotes(values []string) []string {
 	}
 	return cleaned
 }
+
+type AIComparison struct {
+	Common     string `json:"common"`
+	Difference string `json:"difference"`
+	Gap        string `json:"gap"`
+	Action     string `json:"action"`
+}
+
+func (s *Service) CompareAIAnswers(ctx context.Context, tenantID int64, question string, answers []AIEnvironmentAnswer) (*AIComparison, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return nil, fmt.Errorf("question is required")
+	}
+	parts := make([]string, 0, len(answers))
+	for _, answer := range answers {
+		if answer.Error != "" || strings.TrimSpace(answer.Content) == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("【%s / %s】\n%s", answer.Provider, answer.ModelCode, answer.Content))
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("no answer content to compare")
+	}
+	tpl, err := s.store.GetActiveContentPromptTemplateByFunctionType(ctx, tenantID, "ai_assistant_compare")
+	if err != nil {
+		return nil, fmt.Errorf("load ai_assistant_compare prompt: %w", err)
+	}
+	systemPrompt := strings.TrimSpace(tpl.SystemPrompt)
+	if systemPrompt == "" {
+		return nil, fmt.Errorf("ai_assistant_compare prompt has empty system_prompt")
+	}
+	userPrompt := strings.ReplaceAll(tpl.PromptTemplate, "{{question}}", question)
+	userPrompt = strings.ReplaceAll(userPrompt, "{{answers}}", strings.Join(parts, "\n\n"))
+
+	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"ai_assistant_compare", "ai_assistant", "chat"})
+	if err != nil {
+		return nil, fmt.Errorf("resolve ai_assistant_compare model: %w", err)
+	}
+	req := llmgateway.TextInferenceRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "content.ai_assistant_compare",
+		FunctionType:  selectedModel.FunctionType,
+		Provider:      selectedModel.Provider,
+		ModelCode:     selectedModel.ModelCode,
+		Billing:       newBillingMetadata("content", "ai_compare", 0, "ai_assistant_compare", "ai_assistant_compare"),
+		Messages: []llmgateway.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Params: &llmgateway.Params{Temperature: 0.2, MaxTokens: 1200, TimeoutSeconds: 90, ResponseFormat: "json"},
+	}
+	applyModelParamsToLLMRequest(&req, selectedModel.ModelParams)
+	ensureMinLLMTimeout(&req, 90)
+	resp, err := s.llmClient.TextInference(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("compare AI answers: %w", err)
+	}
+	obj, ok := parseJSONObjectFromLLMText(strings.TrimSpace(resp.Content))
+	if !ok {
+		return nil, fmt.Errorf("AI comparison returned invalid json")
+	}
+	return &AIComparison{
+		Common: aiStringValue(obj["common"]), Difference: aiStringValue(obj["difference"]),
+		Gap: aiStringValue(obj["gap"]), Action: aiStringValue(obj["action"]),
+	}, nil
+}
+
+func aiStringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
