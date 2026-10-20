@@ -311,6 +311,9 @@ func main() {
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
+	// 赢客专家分析消费者：消费 Worker 已落库的清洗转写，调用专属模型配置生成经营结案卡。
+	dealExpertAnalyzer := dealexpert.NewAnalyzer(pool, llmClient)
+	go dealExpertAnalyzer.Run(context.Background(), 20*time.Second)
 
 	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID, emrRecordService)
 	externalDataToken := cfg.External.ExternalDataInternalToken
