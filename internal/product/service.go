@@ -28,6 +28,20 @@ func (s *Service) GetByID(ctx context.Context, id int64) (*Product, error) {
 	return s.store.GetByID(ctx, id)
 }
 
+func (s *Service) GetByIDIncludingDeleted(ctx context.Context, id int64) (*Product, error) {
+	return s.store.GetByIDIncludingDeleted(ctx, id)
+}
+
+func (s *Service) Catalog(ctx context.Context, tenantID int64, page, pageSize int) ([]*CatalogItem, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return s.store.Catalog(ctx, tenantID, page, pageSize)
+}
+
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Product, error) {
 	if err := validateCreate(req); err != nil {
 		return nil, err

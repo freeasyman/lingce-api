@@ -461,7 +461,7 @@ func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID,
 	defer tx.Rollback(ctx)
 	if req.ResultProductID != nil && *req.ResultProductID > 0 {
 		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM products WHERE tenant_id=$1 AND id=$2)`, tenantID, *req.ResultProductID).Scan(&exists); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM products WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL)`, tenantID, *req.ResultProductID).Scan(&exists); err != nil {
 			return fmt.Errorf("verify result product: %w", err)
 		}
 		if !exists {
@@ -853,7 +853,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	productCount := 0
 	if req.Action == "推荐产品解释" {
 		var productsJSON []byte
-		err := s.pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND is_template=false`, tenantID).Scan(&productCount, &productsJSON)
+		err := s.pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND review_status='approved' AND is_template=false AND deleted_at IS NULL`, tenantID).Scan(&productCount, &productsJSON)
 		if err != nil {
 			return nil, fmt.Errorf("读取机构产品库失败：%w", err)
 		}
@@ -876,7 +876,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	result := &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}
 	if req.Action == "推荐产品解释" && productCount > 0 {
 		var productsJSON []byte
-		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND is_template=false`, tenantID).Scan(&productsJSON); err != nil {
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND review_status='approved' AND is_template=false AND deleted_at IS NULL`, tenantID).Scan(&productsJSON); err != nil {
 			return nil, fmt.Errorf("读取机构产品证据失败：%w", err)
 		}
 		if err := json.Unmarshal(productsJSON, &result.Products); err != nil {

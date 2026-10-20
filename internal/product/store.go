@@ -18,7 +18,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, error) {
-	conditions := []string{"1=1"}
+	conditions := []string{"p.deleted_at IS NULL"}
 	args := make([]any, 0, 8)
 	argIdx := 1
 
@@ -35,6 +35,11 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 	if strings.TrimSpace(req.Status) != "" {
 		conditions = append(conditions, fmt.Sprintf("p.status = $%d", argIdx))
 		args = append(args, req.Status)
+		argIdx++
+	}
+	if strings.TrimSpace(req.ReviewStatus) != "" {
+		conditions = append(conditions, fmt.Sprintf("p.review_status = $%d", argIdx))
+		args = append(args, req.ReviewStatus)
 		argIdx++
 	}
 	if req.IsTemplate != nil {
@@ -61,7 +66,7 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
 		       p.status, p.is_template,
-		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status,
+		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status, p.version,
 		       p.created_at, p.updated_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
@@ -84,7 +89,7 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 			&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 			&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
 			&item.Status, &item.IsTemplate,
-			&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus,
+			&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan product: %w", err)
@@ -98,23 +103,34 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 }
 
 func (s *Store) GetByID(ctx context.Context, id int64) (*Product, error) {
+	return s.getByID(ctx, id, false)
+}
+
+// GetByIDIncludingDeleted 供历史引用读取已软删除产品；默认详情仍隐藏已删行。
+func (s *Store) GetByIDIncludingDeleted(ctx context.Context, id int64) (*Product, error) {
+	return s.getByID(ctx, id, true)
+}
+
+func (s *Store) getByID(ctx context.Context, id int64, includeDeleted bool) (*Product, error) {
 	query := `
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
 		       p.status, p.is_template,
-		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status,
-		       p.created_at, p.updated_at
+		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status, p.version,
+		       p.created_at, p.updated_at, p.deleted_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
-		WHERE p.id = $1
-	`
+		WHERE p.id = $1`
+	if !includeDeleted {
+		query += ` AND p.deleted_at IS NULL`
+	}
 	item := &Product{}
 	err := s.pool.QueryRow(ctx, query, id).Scan(
 		&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 		&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
 		&item.Status, &item.IsTemplate,
-		&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus,
-		&item.CreatedAt, &item.UpdatedAt,
+		&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
+		&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -123,6 +139,50 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Product, error) {
 		return nil, fmt.Errorf("get product %d: %w", id, err)
 	}
 	return item, nil
+}
+
+// Catalog 返回赢客专家只读目录，固定 active + approved + 非模板 + 未删除。
+func (s *Store) Catalog(ctx context.Context, tenantID int64, page, pageSize int) ([]*CatalogItem, int, error) {
+	conditions := []string{"p.deleted_at IS NULL", "p.status = 'active'", "p.is_template = false", "p.review_status = 'approved'"}
+	args := make([]any, 0, 4)
+	argIdx := 1
+	if tenantID > 0 {
+		conditions = append(conditions, fmt.Sprintf("p.tenant_id = $%d", argIdx))
+		args = append(args, tenantID)
+		argIdx++
+	}
+	whereClause := strings.Join(conditions, " AND ")
+	var total int
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM products p WHERE %s", whereClause), args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count product catalog: %w", err)
+	}
+	offset := (page - 1) * pageSize
+	query := fmt.Sprintf(`
+		SELECT p.id, p.name, p.aliases, p.price, p.applicable, p.applicable_keywords,
+		       p.review_status, p.status, p.version, p.updated_at
+		FROM products p
+		WHERE %s
+		ORDER BY p.updated_at DESC, p.id DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIdx, argIdx+1)
+	args = append(args, pageSize, offset)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query product catalog: %w", err)
+	}
+	defer rows.Close()
+	items := make([]*CatalogItem, 0, pageSize)
+	for rows.Next() {
+		item := &CatalogItem{}
+		if err := rows.Scan(&item.ID, &item.Name, &item.Aliases, &item.Price, &item.Applicable, &item.ApplicableKeywords, &item.ReviewStatus, &item.Status, &item.Version, &item.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan product catalog: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate product catalog: %w", err)
+	}
+	return items, total, nil
 }
 
 func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error) {
@@ -267,7 +327,7 @@ func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Produ
 		return s.GetByID(ctx, id)
 	}
 
-	sets = append(sets, "updated_at = NOW()")
+	sets = append(sets, "version = version + 1", "updated_at = NOW()")
 	query := fmt.Sprintf("UPDATE products SET %s WHERE id = $%d", strings.Join(sets, ", "), argIdx)
 	args = append(args, id)
 	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
@@ -277,7 +337,7 @@ func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Produ
 }
 
 func (s *Store) Delete(ctx context.Context, id int64) error {
-	if _, err := s.pool.Exec(ctx, "DELETE FROM products WHERE id = $1", id); err != nil {
+	if _, err := s.pool.Exec(ctx, "UPDATE products SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", id); err != nil {
 		return fmt.Errorf("delete product %d: %w", id, err)
 	}
 	return nil

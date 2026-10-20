@@ -1,13 +1,16 @@
 package product
 
+import "time"
+
 type ListRequest struct {
-	TenantID   int64
-	Industry   string
-	Status     string
-	Keyword    string
-	IsTemplate *bool
-	Page       int
-	PageSize   int
+	TenantID     int64
+	Industry     string
+	Status       string
+	ReviewStatus string
+	Keyword      string
+	IsTemplate   *bool
+	Page         int
+	PageSize     int
 }
 
 type CreateRequest struct {
@@ -49,4 +52,18 @@ type UpdateRequest struct {
 	Gender             *string   `json:"gender,omitempty"`
 	Contraindications  *string   `json:"contraindications,omitempty"`
 	ReviewStatus       *string   `json:"review_status,omitempty"`
+}
+
+// CatalogItem 是 /products/catalog 的只读字段，顺序与赢客专家客户端契约一致。
+type CatalogItem struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Aliases            []string  `json:"aliases"`
+	Price              float64   `json:"price"`
+	Applicable         string    `json:"applicable"`
+	ApplicableKeywords []string  `json:"applicable_keywords"`
+	ReviewStatus       string    `json:"review_status"`
+	Status             string    `json:"status"`
+	Version            int       `json:"version"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }

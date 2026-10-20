@@ -244,7 +244,7 @@ func (s *Service) verifyPlanProducts(ctx context.Context, tenantID int64, produc
 	var count int
 	if err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM products
-		WHERE tenant_id=$1 AND id=ANY($2) AND status='active' AND is_template=false AND review_status='approved'
+		WHERE tenant_id=$1 AND id=ANY($2) AND status='active' AND is_template=false AND review_status='approved' AND deleted_at IS NULL
 	`, tenantID, productIDs).Scan(&count); err != nil {
 		return fmt.Errorf("verify plan products: %w", err)
 	}

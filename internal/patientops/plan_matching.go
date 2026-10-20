@@ -170,7 +170,7 @@ func (s *Service) loadPlanProducts(ctx context.Context, tenantID int64, productI
 		       COALESCE(upgrade_to,''), COALESCE(combine_with,''), applicable_keywords,
 		       age_min, age_max, gender, COALESCE(contraindications,'')
 		FROM products
-		WHERE tenant_id=$1 AND id = ANY($2) AND status='active' AND is_template=false AND review_status='approved'
+		WHERE tenant_id=$1 AND id = ANY($2) AND status='active' AND is_template=false AND review_status='approved' AND deleted_at IS NULL
 		ORDER BY id
 	`, tenantID, productIDs)
 	if err != nil {

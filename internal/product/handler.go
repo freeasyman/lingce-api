@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -22,6 +23,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/products", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/products/catalog", Handler: h.Catalog, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/products/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/products", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "PUT", Path: "/api/v1/products/{id}", Handler: h.Update, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
@@ -49,6 +51,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, _ := strconv.Atoi(q.Get("page"))
 	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	page, pageSize = normalizePagination(page, pageSize)
+	reviewStatus := strings.TrimSpace(q.Get("review_status"))
+	if reviewStatus != "" && !isValidReviewStatus(reviewStatus) {
+		httputil.WriteBadRequest(w, "invalid review_status")
+		return
+	}
 	var isTemplate *bool
 	if raw := q.Get("is_template"); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -57,13 +65,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req := ListRequest{
-		TenantID:   tenantID,
-		Industry:   q.Get("industry"),
-		Status:     q.Get("status"),
-		Keyword:    q.Get("keyword"),
-		IsTemplate: isTemplate,
-		Page:       page,
-		PageSize:   pageSize,
+		TenantID:     tenantID,
+		Industry:     q.Get("industry"),
+		Status:       q.Get("status"),
+		ReviewStatus: reviewStatus,
+		Keyword:      q.Get("keyword"),
+		IsTemplate:   isTemplate,
+		Page:         page,
+		PageSize:     pageSize,
 	}
 	items, total, err := h.service.List(r.Context(), req)
 	if err != nil {
@@ -76,13 +85,52 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httputil.WritePaginated(w, items, int64(total), req.Page, req.PageSize)
 }
 
+func (h *Handler) Catalog(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	var tenantID int64
+	if claims.UserType == auth.UserTypeAdmin {
+		if tidStr := r.URL.Query().Get("tenant_id"); tidStr != "" {
+			tid, err := strconv.ParseInt(tidStr, 10, 64)
+			if err != nil || tid < 0 {
+				httputil.WriteBadRequest(w, "invalid tenant_id")
+				return
+			}
+			tenantID = tid
+		}
+	} else if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	page, pageSize = normalizePagination(page, pageSize)
+	items, total, err := h.service.Catalog(r.Context(), tenantID, page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if items == nil {
+		items = []*CatalogItem{}
+	}
+	httputil.WritePaginated(w, items, int64(total), page, pageSize)
+}
+
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		httputil.WriteBadRequest(w, "invalid id")
 		return
 	}
-	item, err := h.service.GetByID(r.Context(), id)
+	includeDeleted := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_deleted")), "true")
+	var item *Product
+	if includeDeleted {
+		item, err = h.service.GetByIDIncludingDeleted(r.Context(), id)
+	} else {
+		item, err = h.service.GetByID(r.Context(), id)
+	}
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -177,6 +225,16 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"status": "deleted"})
+}
+
+func normalizePagination(page, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return page, pageSize
 }
 
 func (h *Handler) resolveWritableTenantID(w http.ResponseWriter, r *http.Request, required bool) (int64, bool) {

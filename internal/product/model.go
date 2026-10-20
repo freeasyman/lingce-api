@@ -18,12 +18,14 @@ type Product struct {
 	IsTemplate   bool     `json:"is_template"`
 
 	// 产品固有匹配属性：只描述产品自身，不包含场景、风险等客户判断。
-	ApplicableKeywords []string `json:"applicable_keywords"`
-	AgeMin             *int     `json:"age_min,omitempty"`
-	AgeMax             *int     `json:"age_max,omitempty"`
-	Gender             string   `json:"gender"`
-	Contraindications  string   `json:"contraindications"`
-	ReviewStatus       string   `json:"review_status"`
+	ApplicableKeywords []string   `json:"applicable_keywords"`
+	AgeMin             *int       `json:"age_min,omitempty"`
+	AgeMax             *int       `json:"age_max,omitempty"`
+	Gender             string     `json:"gender"`
+	Contraindications  string     `json:"contraindications"`
+	ReviewStatus       string     `json:"review_status"`
+	Version            int        `json:"version"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
