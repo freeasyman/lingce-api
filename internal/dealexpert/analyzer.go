@@ -232,6 +232,76 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "SAVE_ERROR", err)
 		return
 	}
+	if err := a.ensureFollowUp(ctx, item, card); err != nil {
+		// 卡片已保存；任务创建失败不回滚分析结果，但要留下可排查日志。
+		a.log.Warn("create follow up from card failed", "id", item.ID, "error", err)
+	}
+}
+
+// ensureFollowUp 把卡片上的主要动作落成跟进任务，否则“卡上有动作、任务列表为空”。
+func (a *Analyzer) ensureFollowUp(ctx context.Context, item *pendingAnalysis, card map[string]any) error {
+	action, _ := card["primary_action"].(map[string]any)
+	if action == nil || item.EncounterID <= 0 {
+		return nil
+	}
+	actionType, _ := action["type"].(string)
+	if actionType != "sales_follow_up" && actionType != "internal_coordination" {
+		return nil
+	}
+	goal := strings.TrimSpace(fmt.Sprintf("%v", action["goal"]))
+	body := strings.TrimSpace(fmt.Sprintf("%v", action["action"]))
+	if goal == "" || goal == "<nil>" || body == "" || body == "<nil>" {
+		return nil
+	}
+	content, _ := action["suggested_content"].(string)
+	dueBasis, _ := action["due_basis"].(string)
+
+	ownerName := ""
+	_ = a.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), '')
+		FROM employees WHERE id = $1
+	`, item.EmployeeID).Scan(&ownerName)
+
+	ownerID := item.EmployeeID
+	_, _, err := a.store.CreateFollowUp(ctx, item.TenantID, CreateFollowUpRequest{
+		EncounterID:      item.EncounterID,
+		RecordingID:      item.RecordingID,
+		CustomerID:       item.CustomerID,
+		CustomerName:     item.CustomerName,
+		Objective:        goal,
+		Action:           body,
+		SuggestedContent: content,
+		OwnerEmployeeID:  &ownerID,
+		OwnerName:        ownerName,
+	}, followUpDueAt(dueBasis))
+	return err
+}
+
+// followUpDueAt 按卡片的时间口径换算截止时间；不确定就不编日期。
+func followUpDueAt(basis string) *time.Time {
+	now := time.Now()
+	switch basis {
+	case "today":
+		due := time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location())
+		if due.Before(now) {
+			due = now.Add(2 * time.Hour)
+		}
+		return &due
+	case "within_48h":
+		due := now.Add(48 * time.Hour)
+		return &due
+	case "within_7d":
+		due := now.Add(7 * 24 * time.Hour)
+		return &due
+	case "after_family_discussion":
+		due := now.Add(48 * time.Hour)
+		return &due
+	case "after_clinical_confirmation":
+		due := now.Add(24 * time.Hour)
+		return &due
+	default:
+		return nil
+	}
 }
 
 func (a *Analyzer) fail(ctx context.Context, item *pendingAnalysis, code string, cause error) {
