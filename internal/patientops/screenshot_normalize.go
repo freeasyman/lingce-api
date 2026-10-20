@@ -19,11 +19,23 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 			continue
 		}
 		normalized := make([]any, 0, len(list))
+		seen := make(map[string]bool, len(list))
 		for _, item := range list {
 			text := stringifyScreenshotItem(item)
-			if text != "" {
-				normalized = append(normalized, text)
+			if text == "" {
+				continue
 			}
+			if key == "patient_utterances" && screenshotUIText(text) {
+				continue
+			}
+			if key == "evidence" && strings.HasPrefix(text, "[患者]") && screenshotUIText(text) {
+				text = strings.Replace(text, "[患者]", "[系统]", 1)
+			}
+			if seen[text] {
+				continue
+			}
+			seen[text] = true
+			normalized = append(normalized, text)
 		}
 		raw[key] = normalized
 	}
@@ -34,6 +46,15 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 			}
 		}
 	}
+}
+
+func screenshotUIText(text string) bool {
+	for _, marker := range []string{"门店地址", "服务内容", "立即咨询", "价格表", "企业微信联系卡", "点击了"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func stringifyScreenshotItem(item any) string {
