@@ -205,22 +205,22 @@ func (s *Service) GenerateTopics(ctx context.Context, tenantID, createdBy int64,
 		return s.generateTopicsFallback(ctx, tenantID, createdBy, req)
 	}
 
-	// Prepare prompt for LLM
-	systemPrompt := "你是一个专业的内容策划专家，擅长根据用户需求生成有价值的内容选题。"
-	userPrompt := fmt.Sprintf(`请根据以下背景信息，生成%d个内容选题：
-
-背景：%s
-
-要求：
-1. 每个选题要有明确的标题和描述
-2. 选题要有实用价值和吸引力
-3. 返回JSON格式，包含title和description字段
-
-返回格式示例：
-[
-  {"title": "选题标题1", "description": "选题描述1"},
-  {"title": "选题标题2", "description": "选题描述2"}
-]`, req.Count, req.Context)
+	// Prompt text is owned by content_prompt_templates, never by this file.
+	tpl, err := s.store.GetActiveContentPromptTemplateByFunctionType(ctx, tenantID, "content_topic")
+	if err != nil {
+		return nil, fmt.Errorf("no active content topic prompt: %w", err)
+	}
+	systemPrompt := strings.TrimSpace(tpl.SystemPrompt)
+	if systemPrompt == "" {
+		return nil, fmt.Errorf("content topic prompt %s has empty system_prompt", tpl.Code)
+	}
+	userPrompt := tpl.PromptTemplate
+	userPrompt = strings.ReplaceAll(userPrompt, "{{count}}", fmt.Sprintf("%d", req.Count))
+	userPrompt = strings.ReplaceAll(userPrompt, "{{context}}", req.Context)
+	userPrompt = strings.ReplaceAll(userPrompt, "{{additional_requirements}}", "")
+	if strings.TrimSpace(userPrompt) == "" {
+		return nil, fmt.Errorf("content topic prompt %s rendered empty", tpl.Code)
+	}
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_topic", "topic_generation", "chat"})
 	if err != nil {
@@ -575,7 +575,6 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		return nil, fmt.Errorf("LLM gateway is not configured")
 	}
 
-	systemPrompt := "你是医疗运营内容写作助手，请输出结构清晰、可执行的中文内容。"
 	contextText := ""
 	if req.Context != nil {
 		contextText = strings.TrimSpace(*req.Context)
@@ -591,7 +590,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		length = *req.WordCount
 	}
 
-	userPrompt := fmt.Sprintf("标题：%s\n背景：%s\n风格：%s\n目标字数：%d\n请直接输出正文内容。", req.Title, contextText, styleText, length)
+	var promptTemplate *TemplateResponse
 	if req.PromptTemplateID != nil && *req.PromptTemplateID > 0 {
 		tpl, err := s.store.GetContentPromptTemplateByID(ctx, *req.PromptTemplateID)
 		if err != nil {
@@ -600,8 +599,25 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		if tpl.TenantID != nil && *tpl.TenantID != tenantID {
 			return nil, fmt.Errorf("prompt template %d does not belong to tenant %d", *req.PromptTemplateID, tenantID)
 		}
-		userPrompt = renderContentPromptTemplate(tpl.PromptTemplate, req, contextText, styleText, length)
+		promptTemplate = tpl
 	}
+	if promptTemplate == nil {
+		for _, functionType := range contentGenerationFunctionTypeCandidates(req.ContentType) {
+			tpl, err := s.store.GetActiveContentPromptTemplateByFunctionType(ctx, tenantID, functionType)
+			if err == nil {
+				promptTemplate = tpl
+				break
+			}
+		}
+	}
+	if promptTemplate == nil {
+		return nil, fmt.Errorf("no active content prompt template for content_type=%s", valueOrDefaultStringPtr(req.ContentType, "article"))
+	}
+	systemPrompt := strings.TrimSpace(promptTemplate.SystemPrompt)
+	if systemPrompt == "" {
+		return nil, fmt.Errorf("content prompt template %s has empty system_prompt", promptTemplate.Code)
+	}
+	userPrompt := renderContentPromptTemplate(promptTemplate.PromptTemplate, req, contextText, styleText, length)
 	if isGraphicContentType(req.ContentType) {
 		userPrompt = normalizeGraphicNotePrompt(userPrompt, req)
 	}
@@ -719,6 +735,8 @@ func contentGenerationFunctionTypeCandidates(contentType *string) []string {
 		return []string{"content_script", "content_generation", "chat"}
 	case "note", "graphic_note", "xhs_note":
 		return []string{"content_graphic_note", "content_generation", "chat"}
+	case "geo", "geo_article", "ai_article":
+		return []string{"content_geo", "content_generation", "chat"}
 	default:
 		return []string{"content_article", "content_generation", "chat"}
 	}
@@ -940,6 +958,10 @@ func renderContentPromptTemplate(tpl string, req GenerateContentRequest, context
 	strategyText := buildGraphicNoteStrategyText(req)
 	topicInfo := buildGraphicNoteTopicInfo(req, contextText, noteStyleDesc)
 	knowledgeSection := buildGraphicNoteKnowledgeSection(strategyText)
+	duration := "60"
+	if req.Duration != nil && *req.Duration > 0 {
+		duration = fmt.Sprintf("%d", *req.Duration)
+	}
 	replacements := map[string]string{
 		"topic":                   req.Title,
 		"title":                   req.Title,
@@ -952,6 +974,9 @@ func renderContentPromptTemplate(tpl string, req GenerateContentRequest, context
 		"content_type":            valueOrDefaultStringPtr(req.ContentType, "article"),
 		"note_style":              effectiveGraphicNoteStyle(req),
 		"script_type":             valueOrDefaultStringPtr(req.ScriptType, ""),
+		"script_type_desc":        valueOrDefaultStringPtr(req.ScriptType, "医生口播"),
+		"duration":                duration,
+		"scene_count":             "6",
 		"platform":                valueOrDefaultStringPtr(req.Platform, ""),
 		"selected_headline":       valueOrDefaultStringPtr(req.SelectedTitle, req.Title),
 		"strategy_text":           strategyText,
@@ -1033,12 +1058,6 @@ func normalizeGraphicNotePrompt(prompt string, req GenerateContentRequest) strin
 		re := regexp.MustCompile(`(?m)^- 目标页数：.*$`)
 		prompt = re.ReplaceAllString(prompt, fmt.Sprintf("- 正文卡片数：%s张（不含封面，封面单独生成）", slideCount))
 	}
-	if strategyText := strings.TrimSpace(buildGraphicNoteStrategyText(req)); strategyText != "" && !strings.Contains(prompt, strategyText) {
-		prompt = strings.TrimSpace(prompt) + "\n\n## 创作约束与素材要点\n" + strategyText
-	}
-	if noteStyleDesc := buildGraphicNoteStyleDesc(req); noteStyleDesc != "" && !strings.Contains(prompt, noteStyleDesc) {
-		prompt = strings.TrimSpace(prompt) + "\n\n## 风格提醒\n" + noteStyleDesc
-	}
 	return prompt
 }
 
@@ -1070,16 +1089,17 @@ func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int6
 		return generatedNoteStructure, generatedText, nil
 	}
 
-	rewritePrompt := fmt.Sprintf(`你上一版输出的正文卡片数不符合要求。
-
-要求：
-1. 保留原主题、封面方向、发布文案、标签、置顶评论、互动引导的整体方向
-2. 将 slides 数组严格改为 %d 张正文卡片
-3. 这里的 %d 张只计算正文卡片，不含封面
-4. 不要输出解释，不要输出 markdown，只返回修正后的完整 JSON
-
-原始 JSON：
-%s`, targetCount, targetCount, generatedText)
+	repairTemplate, err := s.store.GetActiveContentPromptTemplateByFunctionType(ctx, tenantID, "content_graphic_note_repair")
+	if err != nil {
+		return nil, "", fmt.Errorf("load graphic note repair prompt: %w", err)
+	}
+	repairSystemPrompt := strings.TrimSpace(repairTemplate.SystemPrompt)
+	if repairSystemPrompt == "" {
+		return nil, "", fmt.Errorf("graphic note repair prompt %s has empty system_prompt", repairTemplate.Code)
+	}
+	rewritePrompt := repairTemplate.PromptTemplate
+	rewritePrompt = strings.ReplaceAll(rewritePrompt, "{{target_count}}", fmt.Sprintf("%d", targetCount))
+	rewritePrompt = strings.ReplaceAll(rewritePrompt, "{{generated_json}}", generatedText)
 
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
@@ -1090,7 +1110,7 @@ func (s *Service) ensureGraphicNoteSlideCount(ctx context.Context, tenantID int6
 		ModelCode:     selectedModel.ModelCode,
 		Billing:       newContentBillingMetadata(req, "graphic_note_repair", valueOrDefaultStringPtr(req.ContentType, "content")),
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: repairSystemPrompt},
 			{Role: "user", Content: rewritePrompt},
 		},
 		Params: &llmgateway.Params{

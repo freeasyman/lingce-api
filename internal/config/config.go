@@ -77,6 +77,7 @@ type ExternalConfig struct {
 	LingceWorkerToken          string             `toml:"lingce_worker_token"`
 	InternalWorkerToken        string             `toml:"internal_worker_token"`
 	ExternalDataTenantID       int64              `toml:"external_data_tenant_id"`
+	ContentAnalysisTenantID    int64              `toml:"content_analysis_tenant_id"`
 	ExternalDataInternalToken  string             `toml:"external_data_internal_token"`
 	FollowupAPIURL             string             `toml:"followup_api_url"`
 	EMRFollowupDeliveryEnabled bool               `toml:"emr_followup_delivery_enabled"`

@@ -371,6 +371,7 @@ type TemplateResponse struct {
 	Category         *string    `json:"category,omitempty"`
 	FunctionType     *string    `json:"function_type,omitempty"`
 	Template         string     `json:"template"`
+	SystemPrompt     string     `json:"system_prompt"`
 	PromptTemplate   string     `json:"prompt_template"`
 	Variables        []string   `json:"variables,omitempty"`
 	CurrentVersion   *int       `json:"current_version,omitempty"`
@@ -396,6 +397,7 @@ type CreateTemplateRequest struct {
 	FunctionType   *string    `json:"function_type,omitempty"`
 	Version        *string    `json:"version,omitempty"`
 	Template       string     `json:"template"`
+	SystemPrompt   *string    `json:"system_prompt,omitempty"`
 	PromptTemplate *string    `json:"prompt_template,omitempty"`
 	Variables      []string   `json:"variables,omitempty"`
 	ExtraData      JSONObject `json:"extra_data,omitempty"`
@@ -409,6 +411,7 @@ type UpdateTemplateRequest struct {
 	FunctionType   *string    `json:"function_type,omitempty"`
 	Version        *string    `json:"version,omitempty"`
 	Template       *string    `json:"template,omitempty"`
+	SystemPrompt   *string    `json:"system_prompt,omitempty"`
 	PromptTemplate *string    `json:"prompt_template,omitempty"`
 	Variables      []string   `json:"variables,omitempty"`
 	IsActive       *bool      `json:"is_active,omitempty"`

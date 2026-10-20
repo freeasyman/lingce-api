@@ -70,7 +70,7 @@ func (s *Store) ListContentPromptTemplates(ctx context.Context, req TemplateList
 
 	offset := (req.Page - 1) * req.PageSize
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, name, code, description, prompt_template, variables, function_type,
+		SELECT id, tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type,
 		       version, is_active, is_system, usage_count, created_at, updated_at, created_by
 		FROM content_prompt_templates
 		WHERE %s
@@ -98,7 +98,7 @@ func (s *Store) ListContentPromptTemplates(ctx context.Context, req TemplateList
 
 func (s *Store) GetContentPromptTemplateByID(ctx context.Context, id int64) (*TemplateResponse, error) {
 	query := `
-		SELECT id, tenant_id, name, code, description, prompt_template, variables, function_type,
+		SELECT id, tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type,
 		       version, is_active, is_system, usage_count, created_at, updated_at, created_by
 		FROM content_prompt_templates
 		WHERE id = $1
@@ -120,6 +120,10 @@ func (s *Store) CreateContentPromptTemplate(ctx context.Context, tenantID *int64
 		code = fmt.Sprintf("content_tpl_%d", time.Now().UnixNano())
 	}
 
+	systemPrompt := ""
+	if req.SystemPrompt != nil {
+		systemPrompt = strings.TrimSpace(*req.SystemPrompt)
+	}
 	promptText := strings.TrimSpace(req.Template)
 	if promptText == "" && req.PromptTemplate != nil {
 		promptText = strings.TrimSpace(*req.PromptTemplate)
@@ -145,14 +149,14 @@ func (s *Store) CreateContentPromptTemplate(ctx context.Context, tenantID *int64
 	variablesJSON, _ := json.Marshal(req.Variables)
 	query := `
 		INSERT INTO content_prompt_templates (
-			tenant_id, name, code, description, prompt_template, variables, function_type, version,
+			tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type, version,
 			is_active, is_system, usage_count, created_at, updated_at, created_by
 		)
-		VALUES ($1,$2,$3,$4,$5,$6::json,$7,$8,TRUE,FALSE,0,NOW(),NOW(),$9)
-		RETURNING id, tenant_id, name, code, description, prompt_template, variables, function_type,
+		VALUES ($1,$2,$3,$4,$5,$6,$7::json,$8,$9,TRUE,FALSE,0,NOW(),NOW(),$10)
+		RETURNING id, tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type,
 		          version, is_active, is_system, usage_count, created_at, updated_at, created_by
 	`
-	row := s.pool.QueryRow(ctx, query, tenantID, req.Name, code, req.Description, promptText, string(variablesJSON), *functionType, version, createdBy)
+	row := s.pool.QueryRow(ctx, query, tenantID, req.Name, code, req.Description, systemPrompt, promptText, string(variablesJSON), *functionType, version, createdBy)
 	item, err := scanContentPromptTemplateRow(row)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create content prompt template: %w", err)
@@ -189,6 +193,11 @@ func (s *Store) UpdateContentPromptTemplate(ctx context.Context, id int64, req U
 		args = append(args, strings.TrimSpace(*req.Version))
 		argIndex++
 	}
+	if req.SystemPrompt != nil {
+		setClauses = append(setClauses, fmt.Sprintf("system_prompt = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.SystemPrompt))
+		argIndex++
+	}
 	if req.PromptTemplate != nil {
 		setClauses = append(setClauses, fmt.Sprintf("prompt_template = $%d", argIndex))
 		args = append(args, strings.TrimSpace(*req.PromptTemplate))
@@ -220,7 +229,7 @@ func (s *Store) UpdateContentPromptTemplate(ctx context.Context, id int64, req U
 		UPDATE content_prompt_templates
 		SET %s
 		WHERE id = $%d
-		RETURNING id, tenant_id, name, code, description, prompt_template, variables, function_type,
+		RETURNING id, tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type,
 		          version, is_active, is_system, usage_count, created_at, updated_at, created_by
 	`, strings.Join(setClauses, ", "), argIndex)
 
@@ -290,6 +299,7 @@ func scanContentPromptTemplateRow(row rowScanner) (*TemplateResponse, error) {
 		&resp.Name,
 		&resp.Code,
 		&resp.Description,
+		&resp.SystemPrompt,
 		&resp.PromptTemplate,
 		&variablesRaw,
 		&resp.FunctionType,
@@ -327,4 +337,29 @@ func scanContentPromptTemplateRow(row rowScanner) (*TemplateResponse, error) {
 	resp.BusinessType = &biz
 	resp.SourceTable = &table
 	return &resp, nil
+}
+
+// GetActiveContentPromptTemplateByFunctionType returns the tenant-specific or
+// global active prompt for a content function. It is the only source of
+// generation prompts; callers must not fall back to prompt text in Go code.
+func (s *Store) GetActiveContentPromptTemplateByFunctionType(ctx context.Context, tenantID int64, functionType string) (*TemplateResponse, error) {
+	query := `
+		SELECT id, tenant_id, name, code, description, system_prompt, prompt_template, variables, function_type,
+		       version, is_active, is_system, usage_count, created_at, updated_at, created_by
+		FROM content_prompt_templates
+		WHERE is_active = TRUE
+		  AND function_type = $1
+		  AND (tenant_id = $2 OR tenant_id IS NULL)
+		ORDER BY CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END, updated_at DESC, id DESC
+		LIMIT 1
+	`
+	row := s.pool.QueryRow(ctx, query, functionType, tenantID)
+	item, err := scanContentPromptTemplateRow(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("no active content prompt template for function_type=%s", functionType)
+		}
+		return nil, fmt.Errorf("query content prompt template: %w", err)
+	}
+	return item, nil
 }

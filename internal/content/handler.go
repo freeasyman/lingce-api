@@ -27,6 +27,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	h.registerContentSeedRoutes(mux, deps)
 	h.registerLLMPromptRoutes(mux, deps)
 	h.registerContentPromptRoutes(mux, deps)
+	h.registerAIRoutes(mux, deps)
 }
 
 // Topic Handlers

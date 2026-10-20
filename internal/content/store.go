@@ -144,6 +144,18 @@ func (s *Store) GetTopicByID(ctx context.Context, id int64) (*ContentTopic, erro
 
 // CreateTopic creates a new topic
 func (s *Store) CreateTopic(ctx context.Context, tenantID, createdBy int64, req CreateTopicRequest) (*ContentTopic, error) {
+	tags := req.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	extraData := req.ExtraData
+	if extraData == nil {
+		extraData = JSONObject{}
+	}
+	source := req.Source
+	if strings.TrimSpace(source) == "" {
+		source = "manual"
+	}
 	query := `
 		INSERT INTO content_topics (tenant_id, title, description, category, tags, source, status,
 		                            priority, target_date, extra_data, created_by, created_at, updated_at)
@@ -153,8 +165,8 @@ func (s *Store) CreateTopic(ctx context.Context, tenantID, createdBy int64, req 
 	`
 
 	var t ContentTopic
-	err := s.pool.QueryRow(ctx, query, tenantID, req.Title, req.Description, req.Category, req.Tags,
-		req.Source, req.Priority, req.TargetDate, req.ExtraData, createdBy).Scan(
+	err := s.pool.QueryRow(ctx, query, tenantID, req.Title, req.Description, req.Category, tags,
+		source, req.Priority, req.TargetDate, extraData, createdBy).Scan(
 		&t.ID, &t.TenantID, &t.Title, &t.Description, &t.Category, &t.Tags,
 		&t.Source, &t.Status, &t.Priority, &t.TargetDate, &t.ExtraData, &t.CreatedBy,
 		&t.CreatedAt, &t.UpdatedAt,
