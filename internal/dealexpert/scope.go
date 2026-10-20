@@ -13,7 +13,7 @@ import (
 // dealScope 描述一次请求能看到的数据范围。
 // 规则（与产品方案一致，不做个人排名）：
 //   - 管理员：按 tenant_id 参数跨租户；
-//   - 院长 / 销售主管：本租户全部；
+//   - 管理员 / 院长 / 运营经理 / 接待经理 / 运营主管 / 市场经理：本租户全部；
 //   - 咨询师：只看自己负责的接待与跟进；
 //   - 随访 / 普通员工：不能进入赢客专家。
 //
@@ -34,8 +34,29 @@ type ScopeRule struct {
 }
 
 // EvaluateDealScope 只根据角色判断可见范围，不依赖数据库和 HTTP。
+// dealManagerRoles 是“看本租户全部接待”的角色集合。
+// 各机构角色命名不完全一致（admin/director/operating_manager/...），在这里统一收敛。
+var dealManagerRoles = map[string]bool{
+	"admin":                true,
+	"director":             true,
+	"president":            true,
+	"dean":                 true,
+	"manager":              true,
+	"sales_manager":        true,
+	"operating_manager":    true,
+	"reception_manager":    true,
+	"operating_supervisor": true,
+	"marketing_manager":    true,
+}
+
 func EvaluateDealScope(roles []string) ScopeRule {
-	manager := hasRole(roles, "director") || hasRole(roles, "sales_manager")
+	manager := false
+	for _, role := range roles {
+		if dealManagerRoles[role] {
+			manager = true
+			break
+		}
+	}
 	consultant := hasRole(roles, "consultant")
 	if manager {
 		return ScopeRule{Allowed: true, AllEmployees: true, Code: "manager", Reason: "主管/院长可见本租户全部接待"}

@@ -55,9 +55,9 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			ORDER BY tenant_id, encounter_id, id DESC
 		)
 		SELECT
-			r.id, r.tenant_id, r.encounter_id, r.customer_id,
+			r.id, r.tenant_id, COALESCE(r.encounter_id, 0) AS encounter_id, COALESCE(r.customer_id, 0) AS customer_id,
 			COALESCE(NULLIF(c.name, ''), '未识别客户') AS customer_name,
-			r.employee_id,
+			COALESCE(r.employee_id, 0) AS employee_id,
 			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未识别咨询师') AS employee_name,
 			r.recorded_at,
 			COALESCE(r.confirmed_deal_status, '') AS base_status,
