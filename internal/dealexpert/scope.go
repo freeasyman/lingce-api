@@ -17,8 +17,11 @@ import (
 //   - 咨询师：只看自己负责的接待与跟进；
 //   - 随访 / 普通员工：不能进入赢客专家。
 //
-// 兜底：验收环境尚未完成角色分配时，没有角色记录的员工按本租户可见处理，
-// 避免因为配置缺失把所有人挡在门外；角色一旦存在，就严格按角色收敛。
+// 默认权限（2026-10-20 确认）：
+//   - 医生 / 护士 / 治疗师：不看（不接触销售顾虑、话术和营收）；
+//   - 运营经理 / 接待经理 / 运营主管：看本租户全部明细，但页面不做个人排名；
+//   - 客服 / 前台：默认不开启，需要时单独授权；
+//   - 没有角色记录：拒绝，提示联系管理员开通，不再默认放行。
 type dealScope struct {
 	TenantID       int64
 	EmployeeFilter *int64
@@ -65,9 +68,9 @@ func EvaluateDealScope(roles []string) ScopeRule {
 		return ScopeRule{Allowed: true, AllEmployees: false, Code: "consultant", Reason: "咨询师只看自己负责的接待"}
 	}
 	if len(roles) > 0 {
-		return ScopeRule{Allowed: false, Code: "denied", Reason: "当前账号没有赢客专家权限"}
+		return ScopeRule{Allowed: false, Code: "denied", Reason: "当前账号没有赢客专家权限，请联系机构管理员分配角色"}
 	}
-	return ScopeRule{Allowed: true, AllEmployees: true, Code: "fallback", Reason: "未分配角色，按本租户可见兜底"}
+	return ScopeRule{Allowed: false, Code: "unassigned", Reason: "账号尚未分配机构角色，请联系管理员开通赢客专家"}
 }
 
 func (s *dealScope) allowsAllEmployees() bool { return s.EmployeeFilter == nil }

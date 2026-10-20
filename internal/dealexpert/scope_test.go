@@ -24,7 +24,9 @@ func TestEvaluateDealScope(t *testing.T) {
 		{name: "followup denied", roles: []string{"followup"}, allowed: false, code: "denied"},
 		{name: "staff denied", roles: []string{"staff"}, allowed: false, code: "denied"},
 		{name: "unknown role denied", roles: []string{"nurse"}, allowed: false, code: "denied"},
-		{name: "no role fallback", roles: nil, allowed: true, allEmployees: true, code: "fallback"},
+		{name: "no role denied", roles: nil, allowed: false, code: "unassigned"},
+		{name: "customer service denied", roles: []string{"customer_service"}, allowed: false, code: "denied"},
+		{name: "nurse denied", roles: []string{"nurse"}, allowed: false, code: "denied"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
