@@ -832,7 +832,10 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	if tenantID <= 0 || employeeID <= 0 || strings.TrimSpace(req.Action) == "" {
 		return nil, fmt.Errorf("customer and action are required")
 	}
-	allowed := map[string]bool{"帮我破冰": true, "帮我回复": true, "帮我继续跟": true, "识别真实顾虑": true, "判断决策人": true, "推荐产品解释": true, "请求主管帮助": true}
+	if req.Action == "请求主管帮助" {
+		req.Action = "整理给主管"
+	}
+	allowed := map[string]bool{"帮我破冰": true, "帮我回复": true, "帮我继续跟": true, "识别真实顾虑": true, "判断决策人": true, "推荐产品解释": true, "整理给主管": true}
 	if !allowed[req.Action] {
 		return nil, fmt.Errorf("unsupported patient action")
 	}
@@ -896,6 +899,11 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	content := strings.TrimSpace(resp.Content)
 	if content == "" {
 		return nil, fmt.Errorf("patient action generation returned empty content")
+	}
+	if req.Action == "帮我回复" {
+		if err := validateReplyOnly(content); err != nil {
+			return nil, err
+		}
 	}
 	result := &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}
 	if req.Action == "帮我继续跟" {
@@ -1148,6 +1156,31 @@ func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, n
 		result = append(result, c)
 	}
 	return result, rows.Err()
+}
+
+func validateReplyOnly(content string) error {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return fmt.Errorf("帮我回复返回为空")
+	}
+	if strings.HasPrefix(text, "```") || strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+		return fmt.Errorf("帮我回复只允许发送正文，不允许 JSON/代码块")
+	}
+	for _, marker := range []string{"建议回复", "分析：", "分析:", "依据：", "依据:", "内部判断", "患者原话", "沟通判断"} {
+		if strings.Contains(text, marker) {
+			return fmt.Errorf("帮我回复包含内部内容：%s", marker)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			return fmt.Errorf("帮我回复包含分析/列表格式")
+		}
+	}
+	if len([]rune(text)) > 600 {
+		return fmt.Errorf("帮我回复过长，疑似包含内部分析")
+	}
+	return nil
 }
 
 func normalizeActionContactTime(value string) string {

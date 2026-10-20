@@ -108,3 +108,18 @@ func TestAbsoluteSaveDueTimeRejectsNaturalLanguage(t *testing.T) {
 		t.Fatalf("absolute due_at rejected: %v %v", got, err)
 	}
 }
+
+func TestValidateReplyOnly(t *testing.T) {
+	if err := validateReplyOnly("您好，您先考虑一下，有问题随时联系我。"); err != nil {
+		t.Fatalf("valid reply rejected: %v", err)
+	}
+	if err := validateReplyOnly("建议回复：您好，您先考虑一下。"); err == nil {
+		t.Fatal("reply with internal prefix accepted")
+	}
+	if err := validateReplyOnly("依据：患者询问价格\n您好，价格需要评估。"); err == nil {
+		t.Fatal("reply with analysis accepted")
+	}
+	if err := validateReplyOnly(`{"content":"您好"}`); err == nil {
+		t.Fatal("JSON reply accepted")
+	}
+}
