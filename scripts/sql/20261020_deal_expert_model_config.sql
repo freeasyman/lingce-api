@@ -6,7 +6,7 @@ INSERT INTO llm_model_configs (
   model_params, extra_params, input_token_price, output_token_price, price_currency, description, created_at, updated_at
 )
 SELECT 0, 'qwen3.8-max', '通义千问 3.8 Max', 'dashscope', 'deal_expert_analysis', TRUE, TRUE,
-       '{"temperature":0.1,"max_tokens":4096,"response_format":"json","timeout_seconds":180}'::json,
+       '{"temperature":0.1,"max_tokens":8192,"response_format":"json","timeout_seconds":180}'::json,
        '{}'::json, 0.0120, 0.0360, 'CNY', '赢客专家接待分析主模型', NOW(), NOW()
 WHERE NOT EXISTS (
   SELECT 1 FROM llm_model_configs
@@ -19,7 +19,7 @@ INSERT INTO llm_model_configs (
   model_params, extra_params, input_token_price, output_token_price, price_currency, description, created_at, updated_at
 )
 SELECT 0, 'qwen3.8-flash', '通义千问 3.8 Flash', 'dashscope', 'deal_expert_analysis', FALSE, TRUE,
-       '{"temperature":0.1,"max_tokens":4096,"response_format":"json","timeout_seconds":180}'::json,
+       '{"temperature":0.1,"max_tokens":8192,"response_format":"json","timeout_seconds":180}'::json,
        '{}'::json, 0.0008, 0.0027, 'CNY', '赢客专家分析对照模型：仅回填/A-B，不设为默认', NOW(), NOW()
 WHERE NOT EXISTS (
   SELECT 1 FROM llm_model_configs

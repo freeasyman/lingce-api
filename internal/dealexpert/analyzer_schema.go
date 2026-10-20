@@ -41,10 +41,13 @@ type catalogRef struct {
 
 type cardValidationContext struct {
 	Sources       map[string]evidenceSource
+	SegmentOrder  []string
 	Facts         map[string]businessFactRef
 	Catalog       map[int64]catalogRef
 	AllowMissed   bool
 	AllowExtended bool
+	// Repairs 记录 API 为模型纠正过的引用（source_ref / speaker / start_ms）。
+	Repairs []string
 }
 
 // loadDealCardSchema 优先使用提示词表里的 output_schema，否则用内置的 deal-card-v1.1。
@@ -129,23 +132,10 @@ func validateBusinessRules(card map[string]any, ctx cardValidationContext) error
 		}
 	}
 
-	// 证据必须与声明的来源逐字一致。
+	// 证据必须能在转写/事实中找到；引用错位时由 API 校正，找不到才拒绝。
 	for _, item := range items {
-		eid, _ := item["id"].(string)
-		sourceRef, _ := item["source_ref"].(string)
-		source, ok := ctx.Sources[sourceRef]
-		if !ok {
-			return fmt.Errorf("business validation: evidence %s source_ref %q not found", eid, sourceRef)
-		}
-		quote, _ := item["quote"].(string)
-		if !strings.Contains(normalizeForQuoteMatch(source.Text), normalizeForQuoteMatch(quote)) {
-			return fmt.Errorf("business validation: evidence %s quote not found in source %s", eid, sourceRef)
-		}
-		if speaker, _ := item["speaker"].(string); speaker != "" && source.Speaker != "" && speaker != source.Speaker {
-			return fmt.Errorf("business validation: evidence %s speaker %q != source %q", eid, speaker, source.Speaker)
-		}
-		if !sameStartMS(item["start_ms"], source.StartMS) {
-			return fmt.Errorf("business validation: evidence %s start_ms does not match source %s", eid, sourceRef)
+		if err := ctx.resolveEvidence(item); err != nil {
+			return err
 		}
 	}
 
@@ -351,4 +341,155 @@ func stripCodeFence(content string) string {
 		trimmed = trimmed[:idx]
 	}
 	return strings.TrimSpace(trimmed)
+}
+
+// resolveEvidence 校验并尽量修复模型给错的 source_ref / speaker / start_ms。
+// 规则：quote 必须真实存在；优先用声明的来源，其次唯一命中，最后才拒绝。
+func (ctx *cardValidationContext) resolveEvidence(item map[string]any) error {
+	eid, _ := item["id"].(string)
+	quote, _ := item["quote"].(string)
+	normalizedQuote := normalizeForQuoteMatch(quote)
+	if normalizedQuote == "" {
+		return fmt.Errorf("business validation: evidence %s quote is empty", eid)
+	}
+
+	declared, _ := item["source_ref"].(string)
+	if source, ok := ctx.Sources[declared]; ok && strings.Contains(normalizeForQuoteMatch(source.Text), normalizedQuote) {
+		return ctx.applySource(item, declared, source, false)
+	}
+
+	// 唯一命中：quote 出现在另一个来源里（含连续两段的拼接）。
+	if ref, source, ok := ctx.findQuoteSource(normalizedQuote); ok {
+		return ctx.applySource(item, ref, source, true)
+	}
+
+	// 多段拼接：模型常把几段话用「……」连成一条引用，按片段分别定位。
+	if ref, source, ok := ctx.findCompositeQuote(quote); ok {
+		return ctx.applySource(item, ref, source, true)
+	}
+
+	// 近似命中：清洗改写过标点/口语，允许高相似度匹配。
+	if ref, source, score, ok := ctx.findSimilarSource(quote); ok {
+		return ctx.applySource(item, ref, source, true)
+	} else {
+		return fmt.Errorf("business validation: evidence %s quote not found (best=%.2f on %s, quote=%q)", eid, score, ref, truncateRunes(quote, 40))
+	}
+}
+
+func (ctx *cardValidationContext) applySource(item map[string]any, ref string, source evidenceSource, repaired bool) error {
+	eid, _ := item["id"].(string)
+	// 来源以 API 侧为准：模型给错 source_ref / speaker / start_ms 都校正，不因此拒绝整张卡。
+	changed := repaired
+	if item["source_ref"] != ref {
+		item["source_ref"] = ref
+		changed = true
+	}
+	if source.Speaker != "" && item["speaker"] != source.Speaker {
+		item["speaker"] = source.Speaker
+		changed = true
+	}
+	if source.StartMS != nil {
+		if !sameStartMS(item["start_ms"], source.StartMS) {
+			item["start_ms"] = float64(*source.StartMS)
+			changed = true
+		}
+	} else if item["start_ms"] != nil {
+		item["start_ms"] = nil
+		changed = true
+	}
+	if changed {
+		ctx.Repairs = append(ctx.Repairs, eid+"->"+ref)
+	}
+	return nil
+}
+
+func (ctx *cardValidationContext) findQuoteSource(normalizedQuote string) (string, evidenceSource, bool) {
+	matches := make([]struct {
+		ref    string
+		source evidenceSource
+	}, 0, 2)
+	for ref, source := range ctx.Sources {
+		if strings.Contains(normalizeForQuoteMatch(source.Text), normalizedQuote) {
+			matches = append(matches, struct {
+				ref    string
+				source evidenceSource
+			}{ref, source})
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].ref, matches[0].source, true
+	}
+	// 连续分段拼接（最多三段），用于模型把一问一答摘成一条的情况。
+	for i := 0; i < len(ctx.SegmentOrder); i++ {
+		combined := ""
+		for length := 1; length <= 3 && i+length <= len(ctx.SegmentOrder); length++ {
+			combined += normalizeForQuoteMatch(ctx.Sources[ctx.SegmentOrder[i+length-1]].Text)
+			if strings.Contains(combined, normalizedQuote) {
+				return ctx.SegmentOrder[i], ctx.Sources[ctx.SegmentOrder[i]], true
+			}
+		}
+	}
+	return "", evidenceSource{}, false
+}
+
+func (ctx *cardValidationContext) findSimilarSource(quote string) (string, evidenceSource, float64, bool) {
+	bestRef := ""
+	bestScore := 0.0
+	best := evidenceSource{}
+	for ref, source := range ctx.Sources {
+		score := bigramSimilarity(quote, source.Text)
+		if score > bestScore {
+			bestScore, bestRef, best = score, ref, source
+		}
+	}
+	if bestScore >= 0.9 {
+		return bestRef, best, bestScore, true
+	}
+	return bestRef, best, bestScore, false
+}
+
+// findCompositeQuote 处理「A……B……」这类多段拼接引用：
+// 按省略号/句末标点拆段，逐段查找，覆盖率 >= 0.8 视为可定位，取最长命中段作为来源。
+func (ctx *cardValidationContext) findCompositeQuote(quote string) (string, evidenceSource, bool) {
+	parts := splitQuoteParts(quote)
+	if len(parts) < 2 {
+		return "", evidenceSource{}, false
+	}
+	totalChars := 0
+	coveredChars := 0
+	bestRef := ""
+	bestLen := 0
+	best := evidenceSource{}
+	for _, part := range parts {
+		normalized := normalizeForQuoteMatch(part)
+		if len([]rune(normalized)) < 4 {
+			continue
+		}
+		totalChars += len([]rune(normalized))
+		if ref, source, ok := ctx.findQuoteSource(normalized); ok {
+			coveredChars += len([]rune(normalized))
+			if len([]rune(normalized)) > bestLen {
+				bestLen, bestRef, best = len([]rune(normalized)), ref, source
+			}
+		}
+	}
+	if totalChars == 0 || bestRef == "" {
+		return "", evidenceSource{}, false
+	}
+	if float64(coveredChars)/float64(totalChars) < 0.8 {
+		return "", evidenceSource{}, false
+	}
+	return bestRef, best, true
+}
+
+func splitQuoteParts(quote string) []string {
+	replacer := strings.NewReplacer("……", "|", "…", "|", "...", "|", "。", "|", "！", "|", "？", "|", "；", "|")
+	raw := replacer.Replace(quote)
+	parts := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, "|") {
+		if strings.TrimSpace(part) != "" {
+			parts = append(parts, strings.TrimSpace(part))
+		}
+	}
+	return parts
 }

@@ -137,19 +137,31 @@ func TestValidateDealCardRejectsQuoteNotInSource(t *testing.T) {
 	}
 }
 
-func TestValidateDealCardRejectsSpeakerMismatch(t *testing.T) {
+func TestValidateDealCardRepairsSpeakerMismatch(t *testing.T) {
 	card := baseCardV11()
-	card["evidence_refs"].([]any)[0].(map[string]any)["speaker"] = "咨询师"
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "speaker") {
-		t.Fatalf("expected speaker error, got %v", err)
+	evidence := card["evidence_refs"].([]any)[0].(map[string]any)
+	evidence["speaker"] = "咨询师"
+	validated, err := validateCard(t, card, validationCtxV11())
+	if err != nil {
+		t.Fatalf("speaker mismatch should be repaired: %v", err)
+	}
+	repaired := validated["evidence_refs"].([]any)[0].(map[string]any)
+	if repaired["speaker"] != "客户" {
+		t.Fatalf("speaker should be repaired to 客户, got %v", repaired["speaker"])
 	}
 }
 
-func TestValidateDealCardRejectsStartMismatch(t *testing.T) {
+func TestValidateDealCardRepairsStartMismatch(t *testing.T) {
 	card := baseCardV11()
-	card["evidence_refs"].([]any)[0].(map[string]any)["start_ms"] = 5
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "start_ms") {
-		t.Fatalf("expected start_ms error, got %v", err)
+	evidence := card["evidence_refs"].([]any)[0].(map[string]any)
+	evidence["start_ms"] = 5
+	validated, err := validateCard(t, card, validationCtxV11())
+	if err != nil {
+		t.Fatalf("start_ms mismatch should be repaired: %v", err)
+	}
+	repaired := validated["evidence_refs"].([]any)[0].(map[string]any)
+	if repaired["start_ms"] != float64(12000) {
+		t.Fatalf("start_ms should be repaired to 12000, got %v", repaired["start_ms"])
 	}
 }
 
@@ -270,5 +282,32 @@ func TestAlignSegmentTimestamps(t *testing.T) {
 		if segments[index].StartMS == nil || *segments[index].StartMS != want {
 			t.Fatalf("segment %d start = %v, want %d", index, segments[index].StartMS, want)
 		}
+	}
+}
+
+func TestValidateDealCardRepairsCompositeQuote(t *testing.T) {
+	card := baseCardV11()
+	ctx := validationCtxV11()
+	start2 := 20000
+	ctx.Sources["s2"] = evidenceSource{ID: "s2", Text: "今天已经时间比较晚了，对我得先检查。", Speaker: "咨询师", StartMS: &start2}
+	ctx.SegmentOrder = []string{"s1", "s2"}
+	card["evidence_refs"] = []any{map[string]any{
+		"id":         "ev_1",
+		"quote":      "今天已经时间比较晚了……对我得先检查。",
+		"speaker":    "咨询师",
+		"source_ref": "s2",
+		"start_ms":   nil,
+		"used_for":   []any{"结论"},
+	}}
+	validated, err := validateCard(t, card, ctx)
+	if err != nil {
+		t.Fatalf("composite quote should be accepted: %v", err)
+	}
+	repaired := validated["evidence_refs"].([]any)[0].(map[string]any)
+	if repaired["source_ref"] != "s2" {
+		t.Fatalf("composite quote should resolve to s2, got %v", repaired["source_ref"])
+	}
+	if repaired["start_ms"] != float64(20000) {
+		t.Fatalf("start_ms should be repaired to 20000, got %v", repaired["start_ms"])
 	}
 }

@@ -191,6 +191,7 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 
 	validation := cardValidationContext{
 		Sources:       make(map[string]evidenceSource, len(segments)+len(facts)),
+		SegmentOrder:  make([]string, 0, len(segments)),
 		Facts:         make(map[string]businessFactRef, len(facts)),
 		Catalog:       make(map[int64]catalogRef, len(catalog)),
 		AllowMissed:   allowMissedOpportunity && catalogComplete,
@@ -200,6 +201,7 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		validation.Sources[segment.ID] = evidenceSource{
 			ID: segment.ID, Text: segment.Text, Speaker: segment.Speaker, StartMS: segment.StartMS,
 		}
+		validation.SegmentOrder = append(validation.SegmentOrder, segment.ID)
 	}
 	for _, fact := range facts {
 		validation.Sources[fact.ID] = evidenceSource{ID: fact.ID, Text: fact.Text, Speaker: "系统事实"}
@@ -216,11 +218,14 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 
 	card, err := validateDealCard(resp.Content, schema, validation)
 	if err != nil {
-		if saveErr := a.saveRawResponse(ctx, item, resp.Content, err); saveErr != nil {
+		a.fail(ctx, item, "SCHEMA_ERROR", err)
+		if saveErr := a.saveRawResponse(ctx, item, resp, err); saveErr != nil {
 			a.log.Error("save raw analysis response", "id", item.ID, "error", saveErr)
 		}
-		a.fail(ctx, item, "SCHEMA_ERROR", err)
 		return
+	}
+	if len(validation.Repairs) > 0 {
+		a.log.Warn("deal expert evidence repaired", "id", item.ID, "repairs", validation.Repairs)
 	}
 	_ = transcript
 	if err := a.saveResult(ctx, item, card, resp); err != nil {
@@ -445,16 +450,20 @@ func (a *Analyzer) saveResult(ctx context.Context, item *pendingAnalysis, result
 	return nil
 }
 
-// saveRawResponse 保留原始模型响应，便于排查 schema / 业务校验失败，不写 result。
-func (a *Analyzer) saveRawResponse(ctx context.Context, item *pendingAnalysis, content string, cause error) error {
+// saveRawResponse 保留原始模型响应与调用元数据，便于排查 schema / 业务校验失败，不写 result。
+func (a *Analyzer) saveRawResponse(ctx context.Context, item *pendingAnalysis, resp *llmgateway.TextInferenceResponse, cause error) error {
+	content := resp.Content
 	if len(content) > 20000 {
 		content = truncateRunes(content, 20000)
 	}
 	_, err := a.pool.Exec(ctx, `
 		UPDATE deal_expert_analyses
 		SET error_message = COALESCE(NULLIF(error_message, ''), $2) || E'\n-- raw response --\n' || $3,
+		    model_code = COALESCE(NULLIF($4, ''), model_code),
+		    latency_ms = $5,
+		    total_tokens = $6,
 		    updated_at = NOW()
 		WHERE id = $1
-	`, item.ID, cause.Error(), content)
+	`, item.ID, cause.Error(), content, resp.ModelCode, resp.LatencyMS, resp.Usage.TotalTokens)
 	return err
 }
