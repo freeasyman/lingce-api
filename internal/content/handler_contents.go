@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -487,4 +488,115 @@ func (h *Handler) MarkContentNotAdopted(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, content)
+}
+
+// ListContentVersions returns immutable snapshots for a content item.
+func (h *Handler) ListContentVersions(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	versions, err := h.service.ListContentVersions(r.Context(), id, existing.TenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, versions)
+}
+
+// RegenerateContent regenerates an existing content item in place.
+func (h *Handler) RegenerateContent(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	var req GenerateContentRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	req.ContentID = &id
+	if strings.TrimSpace(req.Title) == "" {
+		req.Title = existing.Title
+	}
+	if req.ContentType == nil {
+		req.ContentType = existing.ContentType
+	}
+	if req.Platform == nil {
+		req.Platform = existing.Platform
+	}
+	content, err := h.service.GenerateContent(r.Context(), existing.TenantID, claims.UserID, req)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
+}
+
+// RewriteSelection rewrites only the selected text; it does not persist.
+func (h *Handler) RewriteSelection(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	var req struct {
+		SelectedText string `json:"selected_text"`
+		Instruction  string `json:"instruction"`
+		Context      string `json:"context"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	rewritten, err := h.service.RewriteSelection(r.Context(), existing.TenantID, req.SelectedText, req.Instruction, req.Context)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"content": rewritten})
 }

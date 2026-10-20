@@ -141,3 +141,144 @@ func (s *Service) AnswerQuestion(ctx context.Context, tenantID, createdBy int64,
 
 	return &AIAnswerResult{Question: question, Answers: answers}, nil
 }
+
+type AIQuestion struct {
+	ID             string   `json:"id"`
+	SourceType     string   `json:"source_type"`
+	SourceID       int64    `json:"source_id"`
+	RecordingID    *int64   `json:"recording_id,omitempty"`
+	Topic          string   `json:"topic"`
+	SeedType       string   `json:"seed_type,omitempty"`
+	ContentAngle   string   `json:"content_angle,omitempty"`
+	PatientConcern string   `json:"patient_concern,omitempty"`
+	KeyQuotes      []string `json:"key_quotes,omitempty"`
+	CreatedAt      string   `json:"created_at"`
+}
+
+type AIEnvironment struct {
+	Provider  string `json:"provider"`
+	ModelCode string `json:"model_code"`
+	ModelName string `json:"model_name,omitempty"`
+	Status    string `json:"status"`
+}
+
+// ListAIQuestions returns real questions from content topics and recording
+// seeds. It never invents a question and never reads Worker analysis tables.
+func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int) ([]AIQuestion, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	questions := make([]AIQuestion, 0, limit)
+	seen := map[string]bool{}
+
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT id, title, COALESCE(description,''), COALESCE(source,''), COALESCE(source_recording_ids::text,''), created_at
+		FROM content_topics
+		WHERE tenant_id=$1 AND deleted_at IS NULL
+		ORDER BY created_at DESC, id DESC LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query content topics: %w", err)
+	}
+	for rows.Next() {
+		var id int64
+		var title, description, source, recordingIDsRaw string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &title, &description, &source, &recordingIDsRaw, &createdAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan content topic: %w", err)
+		}
+		key := strings.TrimSpace(title)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		var recordingIDs []int64
+		_ = json.Unmarshal([]byte(recordingIDsRaw), &recordingIDs)
+		var recordingID *int64
+		if len(recordingIDs) > 0 {
+			recordingID = &recordingIDs[0]
+		}
+		questions = append(questions, AIQuestion{
+			ID: fmt.Sprintf("topic:%d", id), SourceType: "content_topic", SourceID: id,
+			RecordingID: recordingID, Topic: title, PatientConcern: description,
+			ContentAngle: source, CreatedAt: createdAt.Format(time.RFC3339),
+		})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate content topics: %w", err)
+	}
+
+	rows, err = s.store.pool.Query(ctx, `
+		SELECT id, recording_id, employee_id, topic, seed_type, COALESCE(content_angle,''), COALESCE(patient_concern,''),
+		       COALESCE(seed_data->'key_quotes','[]'::jsonb)::text, created_at
+		FROM recording_content_seeds
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC, id DESC LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query content seeds: %w", err)
+	}
+	for rows.Next() {
+		var id, recordingID int64
+		var employeeID *int64
+		var topic, seedType, angle, concern, quotesRaw string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &recordingID, &employeeID, &topic, &seedType, &angle, &concern, &quotesRaw, &createdAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan content seed: %w", err)
+		}
+		key := strings.TrimSpace(topic)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		var quotes []string
+		_ = json.Unmarshal([]byte(quotesRaw), &quotes)
+		questions = append(questions, AIQuestion{
+			ID: fmt.Sprintf("seed:%d", id), SourceType: "recording_seed", SourceID: id,
+			RecordingID: &recordingID, Topic: topic, SeedType: seedType,
+			ContentAngle: angle, PatientConcern: concern, KeyQuotes: quotes,
+			CreatedAt: createdAt.Format(time.RFC3339),
+		})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate content seeds: %w", err)
+	}
+
+	if len(questions) > limit {
+		questions = questions[:limit]
+	}
+	return questions, nil
+}
+
+func (s *Service) ListAIEnvironments(ctx context.Context, tenantID int64) ([]AIEnvironment, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT provider, model_code, COALESCE(model_name,'')
+		FROM llm_model_configs
+		WHERE deleted_at IS NULL AND COALESCE(is_active,true)=true
+		  AND function_type='ai_assistant' AND tenant_id IN ($1,0)
+		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END, COALESCE(is_default,false) DESC, updated_at DESC, id DESC
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query ai environments: %w", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	envs := make([]AIEnvironment, 0, 4)
+	for rows.Next() {
+		var env AIEnvironment
+		if err := rows.Scan(&env.Provider, &env.ModelCode, &env.ModelName); err != nil {
+			return nil, err
+		}
+		if env.Provider == "" || env.ModelCode == "" || seen[env.Provider] {
+			continue
+		}
+		seen[env.Provider] = true
+		env.Status = "configured"
+		envs = append(envs, env)
+	}
+	return envs, rows.Err()
+}

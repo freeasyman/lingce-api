@@ -539,6 +539,7 @@ func (s *Service) CreateContent(ctx context.Context, tenantID, createdBy int64, 
 	if err != nil {
 		return nil, err
 	}
+	_ = s.SnapshotContentVersion(ctx, item.ID, tenantID, createdBy)
 	return toContentResponse(item), nil
 }
 
@@ -557,6 +558,7 @@ func (s *Service) UpdateContent(ctx context.Context, id int64, req UpdateContent
 	if err != nil {
 		return nil, err
 	}
+	_ = s.SnapshotContentVersion(ctx, item.ID, item.TenantID, 0)
 	return toContentResponse(item), nil
 }
 
@@ -714,6 +716,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 		if err != nil {
 			return nil, err
 		}
+		_ = s.SnapshotContentVersion(ctx, item.ID, tenantID, createdBy)
 		return toContentResponse(item), nil
 	}
 
@@ -722,6 +725,7 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 	if err != nil {
 		return nil, err
 	}
+	_ = s.SnapshotContentVersion(ctx, item.ID, tenantID, createdBy)
 	return toContentResponse(item), nil
 }
 
@@ -737,6 +741,12 @@ func contentGenerationFunctionTypeCandidates(contentType *string) []string {
 		return []string{"content_graphic_note", "content_generation", "chat"}
 	case "geo", "geo_article", "ai_article":
 		return []string{"content_geo", "content_generation", "chat"}
+	case "moment", "moments", "wechat_moments", "朋友圈":
+		return []string{"content_moments", "content_generation", "chat"}
+	case "poster", "poster_copy", "海报":
+		return []string{"content_poster", "content_generation", "chat"}
+	case "faq", "professional_qa", "qa", "问答":
+		return []string{"content_faq", "content_generation", "chat"}
 	default:
 		return []string{"content_article", "content_generation", "chat"}
 	}

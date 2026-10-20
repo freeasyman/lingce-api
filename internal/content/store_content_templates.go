@@ -349,6 +349,7 @@ func (s *Store) GetActiveContentPromptTemplateByFunctionType(ctx context.Context
 		FROM content_prompt_templates
 		WHERE is_active = TRUE
 		  AND function_type = $1
+		  AND COALESCE(system_prompt, '') <> ''
 		  AND (tenant_id = $2 OR tenant_id IS NULL)
 		ORDER BY CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END, updated_at DESC, id DESC
 		LIMIT 1
