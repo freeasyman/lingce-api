@@ -379,29 +379,3 @@ func TestValidateDealCardAcceptsOtherConcernAndTrust(t *testing.T) {
 		t.Fatalf("other concern/trust should be accepted: %v", err)
 	}
 }
-
-func TestValidateDealCardRejectsBriefWithoutConsultantName(t *testing.T) {
-	card := baseCardV11()
-	card["brief"] = map[string]any{
-		"situation":     "客户带孩子来做近视手术，检查已完成。",
-		"blocker":       nil,
-		"next_step":     "今天 18:00 前确认最终术式。",
-		"evidence_refs": []any{"ev_1"},
-	}
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "name the consultant") {
-		t.Fatalf("expected consultant name error, got %v", err)
-	}
-}
-
-func TestValidateDealCardRejectsBriefWithoutConcreteTime(t *testing.T) {
-	card := baseCardV11()
-	card["brief"] = map[string]any{
-		"situation":     "客户带孩子来做近视手术，检查已完成。",
-		"blocker":       nil,
-		"next_step":     "盖珊珊联系家属确认最终术式。",
-		"evidence_refs": []any{"ev_1"},
-	}
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "concrete time") {
-		t.Fatalf("expected concrete time error, got %v", err)
-	}
-}

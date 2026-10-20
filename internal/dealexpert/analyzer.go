@@ -22,7 +22,7 @@ const (
 	// AnalysisPromptCode 是提示词管理表中的稳定 code；版本放在 version 字段（deal-expert-prompt-v1）。
 	AnalysisPromptCode = "deal_expert_analysis"
 
-	analysisMaxAttempts = 3
+	analysisMaxAttempts = 1
 	maxTranscriptRunes  = 80000
 )
 
@@ -309,10 +309,8 @@ func followUpDueAt(basis string) *time.Time {
 }
 
 func (a *Analyzer) fail(ctx context.Context, item *pendingAnalysis, code string, cause error) {
-	status := "pending"
-	if item.Attempts >= analysisMaxAttempts {
-		status = "failed"
-	}
+	// 不再自动全量重跑：一次失败就停，保留错误与原始响应，由人工决定是否重新生成。
+	status := "failed"
 	message := fmt.Sprintf("%s: %v", code, cause)
 	if _, err := a.pool.Exec(ctx, `
 		UPDATE deal_expert_analyses

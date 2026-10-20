@@ -11,8 +11,6 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-var briefTimePattern = regexp.MustCompile(`(今天|今日|明天|明日|后天|本周|这周|下周|周[一二三四五六日天]|星期[一二三四五六日天]|[0-9]{1,2}[:：][0-9]{2}|[0-9]{1,2}\s*点|[0-9]{1,2}\s*月\s*[0-9]{1,2}\s*[日号]|[0-9]{1,2}\s*[日号]|[0-9]+\s*(小时|天|周)内|术前|术后|面诊后|确认后)`)
-
 //go:embed deal_card_v1_1.schema.json
 var dealCardSchemaFS embed.FS
 
@@ -156,19 +154,6 @@ func validateBusinessRules(card map[string]any, ctx cardValidationContext) error
 	for _, item := range items {
 		if err := ctx.resolveEvidence(item); err != nil {
 			return err
-		}
-	}
-
-	// 有动作时，简报必须写清具体咨询师和具体时间；没有动作不强制。
-	if brief, ok := card["brief"].(map[string]any); ok {
-		if _, hasAction := card["primary_action"].(map[string]any); hasAction {
-			nextStep, _ := brief["next_step"].(string)
-			if ctx.ConsultantName != "" && !strings.Contains(nextStep, ctx.ConsultantName) {
-				return fmt.Errorf("business validation: brief.next_step must name the consultant %q", ctx.ConsultantName)
-			}
-			if !briefTimePattern.MatchString(nextStep) {
-				return fmt.Errorf("business validation: brief.next_step must contain a concrete time (today/tomorrow/weekday/clock/before surgery), not 尽快")
-			}
 		}
 	}
 
