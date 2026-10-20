@@ -34,11 +34,12 @@ const (
 )
 
 var (
-	ErrFollowUpNotFound   = errors.New("follow up not found")
-	ErrFollowUpNotActive  = errors.New("follow up is not active")
-	ErrInvalidResult      = errors.New("invalid follow up result")
-	ErrInvalidOutcomeType = errors.New("invalid outcome type")
-	ErrAmountRequired     = errors.New("amount is required for this outcome")
+	ErrFollowUpNotFound     = errors.New("follow up not found")
+	ErrFollowUpNotActive    = errors.New("follow up is not active")
+	ErrInvalidResult        = errors.New("invalid follow up result")
+	ErrInvalidOutcomeType   = errors.New("invalid outcome type")
+	ErrAmountRequired       = errors.New("amount is required for this outcome")
+	ErrInvalidOutcomeStatus = errors.New("invalid outcome status filter")
 )
 
 type FollowUp struct {

@@ -18,6 +18,7 @@ import (
 // 权限：登录员工；租户与数据范围由 resolveDealScope 统一收敛。
 func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/deal-expert/encounters", Handler: h.ListEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups", Handler: h.ListFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -44,7 +45,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrFollowUpNotActive):
 		httputil.WriteError(w, http.StatusConflict, "CONFLICT", err.Error(), nil)
-	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrInvalidOutcomeType), errors.Is(err, ErrAmountRequired):
+	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrInvalidOutcomeType), errors.Is(err, ErrAmountRequired), errors.Is(err, ErrInvalidOutcomeStatus):
 		httputil.WriteBadRequest(w, err.Error())
 	default:
 		httputil.WriteInternalError(w, err.Error())
@@ -269,4 +270,43 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, overview)
+}
+
+func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	dateFrom, err := parseDateParam(r.URL.Query().Get("date_from"), false)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	dateTo, err := parseDateParam(r.URL.Query().Get("date_to"), true)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, total, err := h.service.ListEncounters(r.Context(), scope.TenantID, EncounterListParams{
+		Page:     page,
+		PageSize: pageSize,
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		Keyword:  strings.TrimSpace(r.URL.Query().Get("keyword")),
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+	}, scope.EmployeeFilter)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
 }

@@ -26,27 +26,41 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 
 	err := s.pool.QueryRow(ctx, `
 		WITH scope AS (
-			SELECT id, confirmed_deal_status,
-			       COALESCE(converted_amount, 0)::float8 AS converted,
-			       COALESCE(refund_amount, 0)::float8 AS refunded,
-			       analysis_result
-			FROM recordings
-			WHERE tenant_id = $1
-			  AND deleted_at IS NULL
-			  AND lower(COALESCE(business_scope, '')) = 'consultant'
-			  AND ($2::timestamptz IS NULL OR recorded_at >= $2)
-			  AND ($3::timestamptz IS NULL OR recorded_at < $3)
-			  AND ($4::bigint IS NULL OR employee_id = $4)
+			SELECT r.id,
+			       CASE lo.type
+			         WHEN '付款' THEN '成交了'
+			         WHEN '退款' THEN '成交了'
+			         WHEN '放弃' THEN '没成交'
+			         WHEN '暂缓' THEN '没成交'
+			         WHEN '定金' THEN '还在跟进'
+			         WHEN '预约' THEN '还在跟进'
+			         ELSE COALESCE(NULLIF(r.confirmed_deal_status, ''), '未知')
+			       END AS effective_status,
+			       COALESCE(r.converted_amount, 0)::float8 AS converted,
+			       COALESCE(r.refund_amount, 0)::float8 AS refunded,
+			       r.analysis_result
+			FROM recordings r
+			LEFT JOIN LATERAL (
+				SELECT type FROM deal_outcome_events o
+				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id
+				ORDER BY occurred_at DESC, id DESC LIMIT 1
+			) lo ON TRUE
+			WHERE r.tenant_id = $1
+			  AND r.deleted_at IS NULL
+			  AND lower(COALESCE(r.business_scope, '')) = 'consultant'
+			  AND ($2::timestamptz IS NULL OR r.recorded_at >= $2)
+			  AND ($3::timestamptz IS NULL OR r.recorded_at < $3)
+			  AND ($4::bigint IS NULL OR r.employee_id = $4)
 		)
 		SELECT
 			COUNT(*),
-			COUNT(*) FILTER (WHERE confirmed_deal_status = '成交了'),
-			COUNT(*) FILTER (WHERE confirmed_deal_status = '还在跟进'),
-			COUNT(*) FILTER (WHERE confirmed_deal_status = '没成交'),
-			COUNT(*) FILTER (WHERE confirmed_deal_status IS NULL),
-			COUNT(*) FILTER (WHERE confirmed_deal_status IN ('还在跟进', '没成交')),
-			COALESCE(SUM(converted) FILTER (WHERE confirmed_deal_status = '成交了'), 0),
-			COALESCE(SUM(refunded) FILTER (WHERE confirmed_deal_status = '成交了'), 0),
+			COUNT(*) FILTER (WHERE effective_status = '成交了'),
+			COUNT(*) FILTER (WHERE effective_status = '还在跟进'),
+			COUNT(*) FILTER (WHERE effective_status = '没成交'),
+			COUNT(*) FILTER (WHERE effective_status = '未知'),
+			COUNT(*) FILTER (WHERE effective_status IN ('还在跟进', '没成交')),
+			COALESCE(SUM(converted) FILTER (WHERE effective_status = '成交了'), 0),
+			COALESCE(SUM(refunded) FILTER (WHERE effective_status = '成交了'), 0),
 			COUNT(*) FILTER (WHERE COALESCE(analysis_result->'persuasive'->'recommend_check'->>'missed', '') <> '')
 		FROM scope
 	`, tenantID, dateFrom, dateTo, employeeFilter).Scan(
