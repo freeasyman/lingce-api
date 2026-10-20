@@ -836,6 +836,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		return nil, fmt.Errorf("parse screenshot analysis: %w", err)
 	}
 	analysis.Normalize()
+	customerContext := s.loadCustomerContext(ctx, tenantID, customerID)
 	prompt, err := s.loadActionPrompt(ctx, req.Action)
 	if err != nil {
 		return nil, err
@@ -846,12 +847,15 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	}
 	params := &llmgateway.Params{Temperature: .3, MaxTokens: 1200, TimeoutSeconds: 45, ResponseFormat: "text"}
 	applyPatientParams(params, config.Params)
+	if req.Action == "帮我继续跟" {
+		params.ResponseFormat = "json"
+	}
 	contextJSON, _ := json.Marshal(analysis)
 	user := strings.ReplaceAll(prompt.UserPrompt, "{{action}}", req.Action)
 	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
 	productContext := "此动作未读取产品库。"
 	productCount := 0
-	if req.Action == "推荐产品解释" {
+	if req.Action == "推荐产品解释" || req.Action == "帮我回复" || req.Action == "帮我继续跟" {
 		var productsJSON []byte
 		err := s.pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND review_status='approved' AND is_template=false AND deleted_at IS NULL`, tenantID).Scan(&productCount, &productsJSON)
 		if err != nil {
@@ -863,6 +867,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		}
 	}
 	user = strings.ReplaceAll(user, "{{product_context}}", productContext)
+	user = strings.ReplaceAll(user, "{{customer_context}}", customerContext)
 	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
 	defer cancel()
 	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
@@ -874,6 +879,22 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		return nil, fmt.Errorf("patient action generation returned empty content")
 	}
 	result := &GenerateActionResponse{Action: req.Action, Content: content, ProductCount: productCount}
+	if req.Action == "帮我继续跟" {
+		var structured struct {
+			Content       string `json:"content"`
+			NextAction    string `json:"next_action"`
+			NextContactAt string `json:"next_contact_at"`
+		}
+		if err := json.Unmarshal([]byte(stripJSONCodeFence(content)), &structured); err != nil {
+			return nil, fmt.Errorf("parse 帮我继续跟 structured result: %w", err)
+		}
+		if strings.TrimSpace(structured.Content) == "" {
+			return nil, fmt.Errorf("帮我继续跟 structured result has empty content")
+		}
+		result.Content = strings.TrimSpace(structured.Content)
+		result.NextAction = strings.TrimSpace(structured.NextAction)
+		result.NextContactAt = strings.TrimSpace(structured.NextContactAt)
+	}
 	if req.Action == "推荐产品解释" && productCount > 0 {
 		var productsJSON []byte
 		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name,'aliases',aliases,'price',price,'applicable',applicable,'selling_point',selling_point,'upgrade_to',upgrade_to,'combine_with',combine_with) ORDER BY id),'[]'::jsonb) FROM products WHERE tenant_id=$1 AND status='active' AND review_status='approved' AND is_template=false AND deleted_at IS NULL`, tenantID).Scan(&productsJSON); err != nil {
@@ -882,10 +903,6 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		if err := json.Unmarshal(productsJSON, &result.Products); err != nil {
 			return nil, fmt.Errorf("解析机构产品证据失败：%w", err)
 		}
-	}
-	if req.Action == "帮我继续跟" {
-		result.NextAction = strings.TrimSpace(analysis.NextAction)
-		result.NextContactAt = strings.TrimSpace(analysis.NextContactAt)
 	}
 	return result, nil
 }
@@ -1013,16 +1030,32 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if err != nil {
 		return nil, markFailed(err)
 	}
+	customerContext := s.loadCustomerContext(analysisCtx, req.TenantID, valueOrZero(req.CustomerID))
+	userPrompt := strings.ReplaceAll(prompt.UserPrompt, "{{customer_context}}", customerContext)
 	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 180, ResponseFormat: "json"}
 	applyPatientParams(params, config.Params)
-	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: prompt.UserPrompt}}}}, Params: params})
+	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: userPrompt}}}}, Params: params})
 	if err != nil {
 		return nil, markFailed(fmt.Errorf("analyze screenshot through llm gateway: %w", err))
 	}
-	var analysis ScreenshotAnalysis
-	if err := json.Unmarshal([]byte(resp.Content), &analysis); err != nil {
+	var rawResult map[string]any
+	if err := json.Unmarshal([]byte(resp.Content), &rawResult); err != nil {
 		slog.Error("patient screenshot analysis response parse failed", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
 		return nil, markFailed(fmt.Errorf("parse patient screenshot analysis (source_id=%d, response_bytes=%d): %w", sourceID, len(resp.Content), err))
+	}
+	normalizeScreenshotResultMap(rawResult)
+	if strings.TrimSpace(prompt.OutputSchema) != "" {
+		if err := validateJSONSchema(prompt.OutputSchema, rawResult); err != nil {
+			return nil, markFailed(fmt.Errorf("validate patient screenshot analysis schema: %w", err))
+		}
+	}
+	var analysis ScreenshotAnalysis
+	normalizedPayload, err := json.Marshal(rawResult)
+	if err != nil {
+		return nil, markFailed(fmt.Errorf("marshal normalized screenshot analysis: %w", err))
+	}
+	if err := json.Unmarshal(normalizedPayload, &analysis); err != nil {
+		return nil, markFailed(fmt.Errorf("decode normalized patient screenshot analysis: %w", err))
 	}
 	analysis.Normalize()
 	payload, _ := json.Marshal(analysis)
@@ -1044,11 +1077,12 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 type screenshotPromptConfig struct {
 	SystemPrompt string
 	UserPrompt   string
+	OutputSchema string
 }
 
 func (s *Service) loadScreenshotPrompt(ctx context.Context) (*screenshotPromptConfig, error) {
 	var p screenshotPromptConfig
-	err := s.pool.QueryRow(ctx, `SELECT COALESCE(system_prompt,''), COALESCE(user_prompt_template,'') FROM recording_analysis_prompts WHERE code='patient_screenshot_analysis_v1' AND is_active=true ORDER BY id DESC LIMIT 1`).Scan(&p.SystemPrompt, &p.UserPrompt)
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(system_prompt,''), COALESCE(user_prompt_template,''), COALESCE(output_schema::text,'') FROM recording_analysis_prompts WHERE code='patient_screenshot_analysis_v1' AND is_active=true ORDER BY id DESC LIMIT 1`).Scan(&p.SystemPrompt, &p.UserPrompt, &p.OutputSchema)
 	if err != nil {
 		return nil, fmt.Errorf("load patient screenshot prompt: %w", err)
 	}
@@ -1092,4 +1126,19 @@ func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, n
 		result = append(result, c)
 	}
 	return result, rows.Err()
+}
+
+func stripJSONCodeFence(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasPrefix(trimmed, "```") {
+		return trimmed
+	}
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	if idx := strings.Index(trimmed, "\n"); idx >= 0 {
+		trimmed = trimmed[idx+1:]
+	}
+	if idx := strings.LastIndex(trimmed, "```"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	return strings.TrimSpace(trimmed)
 }
