@@ -160,6 +160,19 @@ func parsePatientDueAt(value string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unsupported due time: %s", value)
 }
 
+func parseAbsolutePatientDueAt(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("empty due time")
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, value, now.Location()); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("due_at must be an absolute date/time, got %q", value)
+}
+
 func recordingAnalysisContent(analysis *ScreenshotAnalysis) string {
 	parts := []string{}
 	if analysis.ConversationSummary != "" {
@@ -750,7 +763,7 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 			taskType = "咨询推进"
 		}
 		if strings.TrimSpace(req.DueAt) != "" {
-			dueAt, parseErr := parsePatientDueAt(req.DueAt, time.Now())
+			dueAt, parseErr := parseAbsolutePatientDueAt(req.DueAt, time.Now())
 			if parseErr != nil {
 				return nil, fmt.Errorf("invalid task due_at: %w", parseErr)
 			}
@@ -790,7 +803,7 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	}
 	if strings.TrimSpace(req.TaskType) != "" {
 		if strings.TrimSpace(req.DueAt) != "" {
-			dueAt, parseErr := parsePatientDueAt(req.DueAt, time.Now())
+			dueAt, parseErr := parseAbsolutePatientDueAt(req.DueAt, time.Now())
 			if parseErr != nil {
 				return nil, fmt.Errorf("invalid task due_at: %w", parseErr)
 			}

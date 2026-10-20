@@ -3,6 +3,7 @@ package patientops
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateJSONSchemaScreenshotContract(t *testing.T) {
@@ -68,5 +69,42 @@ func TestNormalizeActionContactTime(t *testing.T) {
 	}
 	if got := normalizeActionContactTime("2026-10-21"); got != "2026-10-21" {
 		t.Fatalf("absolute date changed: %q", got)
+	}
+}
+
+func TestClickErrorStaysPatientEvidence(t *testing.T) {
+	raw := map[string]any{
+		"patient_utterances": []any{"点击了价格表，打不开"},
+		"evidence":           []any{"[患者] 点击了价格表，打不开", "[患者] 点击了价格表"},
+	}
+	normalizeScreenshotResultMap(raw)
+	utterances := raw["patient_utterances"].([]any)
+	if len(utterances) != 1 || utterances[0].(string) != "点击了价格表，打不开" {
+		t.Fatalf("patient click error was deleted: %#v", utterances)
+	}
+	evidence := raw["evidence"].([]any)
+	if len(evidence) != 2 || evidence[0].(string) != "[患者] 点击了价格表，打不开" || evidence[1].(string) != "[系统] 点击了价格表" {
+		t.Fatalf("click evidence classification wrong: %#v", evidence)
+	}
+}
+
+func TestMixedTypeObjectIsNotNormalized(t *testing.T) {
+	raw := map[string]any{
+		"evidence": []any{map[string]any{"quote": 123, "text": "真实文字"}},
+	}
+	normalizeScreenshotResultMap(raw)
+	evidence := raw["evidence"].([]any)
+	if _, ok := evidence[0].(map[string]any); !ok {
+		t.Fatalf("mixed object was coerced: %#v", evidence[0])
+	}
+}
+
+func TestAbsoluteSaveDueTimeRejectsNaturalLanguage(t *testing.T) {
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.Local)
+	if _, err := parseAbsolutePatientDueAt("明天", now); err == nil {
+		t.Fatal("natural language due_at was accepted")
+	}
+	if got, err := parseAbsolutePatientDueAt("2026-10-21 10:00", now); err != nil || got.Hour() != 10 {
+		t.Fatalf("absolute due_at rejected: %v %v", got, err)
 	}
 }

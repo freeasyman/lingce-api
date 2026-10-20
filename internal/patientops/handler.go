@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -468,6 +469,12 @@ func (h *Handler) SaveActionAuthenticated(w http.ResponseWriter, r *http.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
+	}
+	if strings.TrimSpace(req.DueAt) != "" {
+		if _, err := parseAbsolutePatientDueAt(req.DueAt, time.Now()); err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
 	}
 	result, err := h.service.SaveAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
 	if err != nil {

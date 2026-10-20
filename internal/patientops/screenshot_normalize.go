@@ -70,21 +70,35 @@ func onlyRoleText(text string) bool {
 	return strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "：") && !strings.Contains(trimmed, ":")
 }
 
-// isUIOnlyText 只删除“本身就是界面标签/点击动作”的短文本，不能按关键词删除完整患者问句。
+// isUIOnlyText 只识别“本身就是界面标签/单纯点击动作”的短文本。
+// 带“打不开/失败/没反应/为什么”等后续内容的句子是患者在描述问题，必须保留。
 func isUIOnlyText(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]", "[系统]"} {
 		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
 	}
-	for _, label := range []string{"门店地址", "服务内容", "立即咨询", "价格表", "企业微信联系卡", "预约", "点击了"} {
+	labels := []string{"门店地址", "服务内容", "立即咨询", "价格表", "企业微信联系卡", "预约"}
+	for _, label := range labels {
 		if trimmed == label {
 			return true
 		}
 	}
-	return strings.HasPrefix(trimmed, "点击了") && len([]rune(trimmed)) <= 30
+	if trimmed == "点击了" {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "点击了") {
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "点击了"))
+		rest = strings.Trim(rest, "“”\"' ")
+		for _, label := range labels {
+			if rest == label {
+				return true
+			}
+		}
+	}
+	return false
 }
 
-// isUIEvidence 识别“患者点击了门店地址”这类动作；不把“请把价格表发给我”误判成系统文本。
+// isUIEvidence 只把“单纯点击动作”归为系统证据；不把“点击了价格表，打不开”改成系统。
 func isUIEvidence(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, "[患者]") && !strings.HasPrefix(trimmed, "[用户]") && !strings.HasPrefix(trimmed, "[家属]") && !strings.HasPrefix(trimmed, "[家长]") {
@@ -94,7 +108,7 @@ func isUIEvidence(text string) bool {
 	for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]"} {
 		body = strings.TrimSpace(strings.TrimPrefix(body, prefix))
 	}
-	return strings.HasPrefix(body, "点击了") || isUIOnlyText(body)
+	return isUIOnlyText(body)
 }
 
 func normalizeScreenshotArrayItem(item any) (string, bool) {
@@ -102,7 +116,14 @@ func normalizeScreenshotArrayItem(item any) (string, bool) {
 	case string:
 		return strings.TrimSpace(value), true
 	case map[string]any:
-		// 只兼容带明确文本字段的对象，拒绝任意 map/数字/布尔值。
+		// 任何已知字段只要出现，就必须是字符串；混合类型直接交给 Schema 拒绝。
+		for _, key := range []string{"role", "speaker", "who", "quote", "text", "content", "summary", "action", "name", "reason", "value"} {
+			if raw, exists := value[key]; exists {
+				if _, ok := raw.(string); !ok {
+					return "", false
+				}
+			}
+		}
 		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value"} {
 			if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
 				return stringifyScreenshotItem(value), true
