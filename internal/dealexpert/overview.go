@@ -36,9 +36,9 @@ type Overview struct {
 	FollowUpCompleted int `json:"follow_up_completed"`
 }
 
-func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time) (*Overview, error) {
+func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("tenant_id is required")
 	}
-	return s.store.Overview(ctx, tenantID, dateFrom, dateTo)
+	return s.store.Overview(ctx, tenantID, dateFrom, dateTo, employeeFilter)
 }

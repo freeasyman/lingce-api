@@ -12,7 +12,7 @@ import (
 //   - 金额优先来自 deal_outcome_events（预约/定金/付款/退款），
 //     没有结果事件时才退回 recordings 的人工确认金额，并写明来源；
 //   - 跟进完成度来自 deal_follow_ups，不进入个人排名。
-func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time) (*Overview, error) {
+func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
 	if s == nil || s.pool == nil {
 		return nil, fmt.Errorf("deal expert store is nil")
 	}
@@ -36,6 +36,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			  AND lower(COALESCE(business_scope, '')) = 'consultant'
 			  AND ($2::timestamptz IS NULL OR recorded_at >= $2)
 			  AND ($3::timestamptz IS NULL OR recorded_at < $3)
+			  AND ($4::bigint IS NULL OR employee_id = $4)
 		)
 		SELECT
 			COUNT(*),
@@ -48,7 +49,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COALESCE(SUM(refunded) FILTER (WHERE confirmed_deal_status = '成交了'), 0),
 			COUNT(*) FILTER (WHERE COALESCE(analysis_result->'persuasive'->'recommend_check'->>'missed', '') <> '')
 		FROM scope
-	`, tenantID, dateFrom, dateTo).Scan(
+	`, tenantID, dateFrom, dateTo, employeeFilter).Scan(
 		&out.TotalEncounters, &out.Converted, &out.Following, &out.NotConverted, &out.Unknown,
 		&out.OpportunityCount, &out.GrossAmount, &out.RefundAmount, &out.ProductMissed,
 	)
@@ -116,7 +117,8 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COUNT(*) FILTER (WHERE status = '已完成')
 		FROM deal_follow_ups
 		WHERE tenant_id = $1
-	`, tenantID).Scan(&out.FollowUpPending, &out.FollowUpOverdue, &out.FollowUpCompleted); err != nil {
+		  AND ($2::bigint IS NULL OR owner_employee_id = $2)
+	`, tenantID, employeeFilter).Scan(&out.FollowUpPending, &out.FollowUpOverdue, &out.FollowUpCompleted); err != nil {
 		return nil, fmt.Errorf("overview follow ups: %w", err)
 	}
 

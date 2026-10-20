@@ -87,7 +87,7 @@ func main() {
 		fmt.Printf("outcome: type=%s source=%s\n", outcome.Type, outcome.Source)
 	}
 
-	overview, err := service.Overview(ctx, tenantID, nil, nil)
+	overview, err := service.Overview(ctx, tenantID, nil, nil, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "overview:", err)
 		os.Exit(1)

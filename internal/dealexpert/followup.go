@@ -188,7 +188,7 @@ func (s *Service) CreateFollowUp(ctx context.Context, tenantID int64, req Create
 	return s.store.CreateFollowUp(ctx, tenantID, req, dueAt)
 }
 
-func (s *Service) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int) ([]*FollowUp, int, error) {
+func (s *Service) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*FollowUp, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -198,7 +198,7 @@ func (s *Service) ListFollowUps(ctx context.Context, tenantID int64, status stri
 	if status != "" && !IsActiveFollowUpStatus(status) && status != FollowUpCompleted && status != FollowUpCancelled && status != FollowUpRescheduled {
 		return nil, 0, errors.New("invalid status filter")
 	}
-	return s.store.ListFollowUps(ctx, tenantID, status, page, pageSize)
+	return s.store.ListFollowUps(ctx, tenantID, status, page, pageSize, employeeFilter)
 }
 
 func (s *Service) GetFollowUp(ctx context.Context, tenantID, id int64) (*FollowUp, error) {
@@ -251,4 +251,9 @@ func (s *Service) CreateOutcome(ctx context.Context, tenantID int64, req CreateO
 
 func (s *Service) ListOutcomesByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*OutcomeEvent, error) {
 	return s.store.ListOutcomesByEncounter(ctx, tenantID, encounterID)
+}
+
+// EncounterConsultant 暴露建议归属，供权限层判断数据范围。
+func (s *Service) EncounterConsultant(ctx context.Context, tenantID, encounterID int64) (int64, error) {
+	return s.store.EncounterConsultant(ctx, tenantID, encounterID)
 }

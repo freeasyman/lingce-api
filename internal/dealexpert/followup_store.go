@@ -118,15 +118,19 @@ func (s *Store) ListFollowUpsByEncounter(ctx context.Context, tenantID, encounte
 	return items, rows.Err()
 }
 
-func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int) ([]*FollowUp, int, error) {
+func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*FollowUp, int, error) {
 	where := "tenant_id = $1"
 	args := []any{tenantID}
 	if status == "" {
-		where += " AND status = ANY($2)"
 		args = append(args, activeStatuses())
+		where += fmt.Sprintf(" AND status = ANY($%d)", len(args))
 	} else {
-		where += " AND status = $2"
 		args = append(args, status)
+		where += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if employeeFilter != nil {
+		args = append(args, *employeeFilter)
+		where += fmt.Sprintf(" AND owner_employee_id = $%d", len(args))
 	}
 
 	var total int
@@ -293,4 +297,20 @@ func (s *Store) ListOutcomesByEncounter(ctx context.Context, tenantID, encounter
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// EncounterConsultant 返回一条接待的负责咨询师，用于数据范围校验。
+func (s *Store) EncounterConsultant(ctx context.Context, tenantID, encounterID int64) (int64, error) {
+	var employeeID int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT employee_id FROM recordings
+		WHERE tenant_id = $1 AND encounter_id = $2 AND deleted_at IS NULL
+		ORDER BY id DESC LIMIT 1`, tenantID, encounterID).Scan(&employeeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("encounter not found")
+	}
+	if err != nil {
+		return 0, fmt.Errorf("query encounter consultant: %w", err)
+	}
+	return employeeID, nil
 }
