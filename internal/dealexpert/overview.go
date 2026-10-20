@@ -48,3 +48,14 @@ func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo
 	}
 	return s.store.Overview(ctx, tenantID, dateFrom, dateTo, employeeFilter)
 }
+
+func (s *Service) LatestCard(ctx context.Context, tenantID, recordingID int64) (*EncounterCard, error) {
+	if tenantID <= 0 || recordingID <= 0 {
+		return nil, fmt.Errorf("tenant_id and recording_id are required")
+	}
+	return s.store.LatestCard(ctx, tenantID, recordingID)
+}
+
+func (s *Service) RecordingConsultant(ctx context.Context, tenantID, recordingID int64) (int64, error) {
+	return s.store.RecordingConsultant(ctx, tenantID, recordingID)
+}

@@ -121,6 +121,20 @@ func (h *Handler) resolveDealScope(r *http.Request) (*dealScope, *tenantError) {
 	return &dealScope{TenantID: tenantID, EmployeeFilter: &employeeID, RoleCode: roleCode}, nil
 }
 
+func (h *Handler) checkRecordingAccess(ctx context.Context, scope *dealScope, recordingID int64) *tenantError {
+	if scope.allowsAllEmployees() {
+		return nil
+	}
+	consultantID, err := h.service.RecordingConsultant(ctx, scope.TenantID, recordingID)
+	if err != nil {
+		return &tenantError{status: http.StatusNotFound, message: "recording not found"}
+	}
+	if consultantID != *scope.EmployeeFilter {
+		return &tenantError{status: http.StatusForbidden, message: "无权访问该接待"}
+	}
+	return nil
+}
+
 func (h *Handler) checkEncounterAccess(ctx context.Context, scope *dealScope, encounterID int64) *tenantError {
 	if scope.allowsAllEmployees() {
 		return nil

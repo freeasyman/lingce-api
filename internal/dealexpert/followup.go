@@ -42,6 +42,7 @@ var (
 	ErrInvalidOutcomeStatus  = errors.New("invalid outcome status filter")
 	ErrInvalidFollowUpState  = errors.New("invalid follow up state filter")
 	ErrInvalidDecisionFilter = errors.New("invalid decision filter")
+	ErrCardNotFound          = errors.New("encounter card not found")
 )
 
 type FollowUp struct {

@@ -26,6 +26,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret, Pool: h.pool})
 }
@@ -41,6 +42,8 @@ func writeTenantError(w http.ResponseWriter, err *tenantError) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrCardNotFound):
+		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrFollowUpNotFound):
 		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrFollowUpNotActive):
@@ -322,4 +325,27 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (h *Handler) GetRecordingCard(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, recordingID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	card, err := h.service.LatestCard(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, card)
 }
