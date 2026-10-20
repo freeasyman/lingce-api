@@ -8,65 +8,93 @@ import (
 	"time"
 )
 
+const (
+	coverageComplete = "complete"
+	coveragePartial  = "partial"
+	coverageUnknown  = "unknown"
+
+	// 产品机会开关：漏推按产品要求默认打开（受目录完整性与转写覆盖约束）；
+	// 升级/替代在完成反例评测前保持关闭。
+	allowMissedOpportunity   = true
+	allowExtendedOpportunity = false
+)
+
 type transcriptSegment struct {
+	ID      string `json:"id"`
 	Speaker string `json:"speaker"`
 	Text    string `json:"text"`
 	StartMS *int   `json:"start_ms"`
 }
 
-type businessFacts struct {
-	ConfirmedDealStatus  *string  `json:"confirmed_deal_status"`
-	ConvertedAmount      *float64 `json:"converted_amount"`
-	RefundAmount         *float64 `json:"refund_amount"`
-	AppointmentConfirmed bool     `json:"appointment_confirmed"`
-	DepositConfirmed     bool     `json:"deposit_confirmed"`
-	PaymentConfirmed     bool     `json:"payment_confirmed"`
-	RefundConfirmed      bool     `json:"refund_confirmed"`
+type businessFact struct {
+	ID         string   `json:"id"`
+	Type       string   `json:"type"`
+	Text       string   `json:"text"`
+	Amount     *float64 `json:"amount"`
+	Source     string   `json:"source"`
+	OccurredAt string   `json:"occurred_at"`
 }
 
-// buildAnalysisInput 按《分析结果生成提示词与评测方案》第 4 节组装模型输入。
-// 模型只解释接待，事实和时间全部由这里注入。
-func buildAnalysisInput(item *pendingAnalysis, segments []transcriptSegment, facts businessFacts, catalog []map[string]any) map[string]any {
-	return map[string]any{
-		"recording": map[string]any{
+type recordingMeta struct {
+	Duration                int
+	TranscriptionStatus     string
+	EncounterRecordingCount int
+	RawFirstStart           float64
+	RawLastEnd              float64
+	HasRawTiming            bool
+}
+
+type analysisInput struct {
+	Recording       map[string]any `json:"recording"`
+	BusinessFacts   []businessFact `json:"business_facts"`
+	AnalysisContext map[string]any `json:"analysis_context"`
+}
+
+func buildAnalysisInput(
+	item *pendingAnalysis,
+	segments []transcriptSegment,
+	facts []businessFact,
+	catalog []map[string]any,
+	coverage string,
+	catalogComplete bool,
+) analysisInput {
+	allowedContact := any(nil)
+	if item.CustomerID != nil {
+		allowedContact = true
+	}
+	return analysisInput{
+		Recording: map[string]any{
 			"recording_id":       item.RecordingID,
 			"encounter_id":       item.EncounterID,
 			"tenant_id":          item.TenantID,
 			"employee_id":        item.EmployeeID,
 			"customer_id":        item.CustomerID,
-			"customer_name":      item.CustomerName,
+			"role_code":          item.RoleCode,
 			"recorded_at":        formatTimePtr(item.RecordedAt),
+			"coverage":           coverage,
 			"cleaned_transcript": segments,
 		},
-		"business_facts": facts,
-		"analysis_context": map[string]any{
-			"product_catalog_available": len(catalog) > 0,
-			"product_catalog":           catalog,
-			"timezone":                  "Asia/Shanghai",
+		BusinessFacts: facts,
+		AnalysisContext: map[string]any{
+			"identity_confirmed":           item.CustomerID != nil,
+			"contact_authorized":           allowedContact,
+			"analysis_at":                  time.Now().Format(time.RFC3339),
+			"timezone":                     "Asia/Shanghai",
+			"product_catalog_available":    len(catalog) > 0,
+			"catalog_complete":             catalogComplete,
+			"product_catalog":              catalog,
+			"allow_missed_opportunity":     allowMissedOpportunity,
+			"allow_extended_opportunities": allowExtendedOpportunity,
 		},
 	}
 }
 
-// renderAnalysisInput 支持两种模板：
-//  1. 推荐：{{input_json}}，整段结构化输入；
-//  2. 兼容：{{transcript}} / {{products}} / {{outcome_facts}} 占位符。
-func renderAnalysisInput(template string, input map[string]any, transcript string, catalog, outcomes []map[string]any) string {
-	if strings.Contains(template, "{{input_json}}") {
-		payload, _ := json.MarshalIndent(input, "", "  ")
-		return strings.ReplaceAll(template, "{{input_json}}", string(payload))
+func renderAnalysisInput(template string, input analysisInput) string {
+	payload, _ := json.MarshalIndent(input, "", "  ")
+	if !strings.Contains(template, "{{input_json}}") {
+		return strings.TrimSpace(template) + "\n\n" + string(payload)
 	}
-	products, _ := json.Marshal(catalog)
-	outcomeJSON, _ := json.Marshal(outcomes)
-	replacements := map[string]string{
-		"{{transcript}}":    transcript,
-		"{{products}}":      string(products),
-		"{{outcome_facts}}": string(outcomeJSON),
-	}
-	result := template
-	for key, value := range replacements {
-		result = strings.ReplaceAll(result, key, value)
-	}
-	return result
+	return strings.ReplaceAll(template, "{{input_json}}", string(payload))
 }
 
 func segmentsTranscript(segments []transcriptSegment) string {
@@ -84,23 +112,44 @@ func segmentsTranscript(segments []transcriptSegment) string {
 	return strings.Join(parts, "\n")
 }
 
-// loadTranscriptSegments 优先使用 recordings.cleaned_transcription 的分段（带说话人），
-// 再用原始 transcription_segments 的 start_time 对齐出时间点（原始时间是秒）。
-// 两者都拿不到时退回 Worker 传入的清洗文本，start_ms 留空，不编造时间。
-func (a *Analyzer) loadTranscriptSegments(ctx context.Context, item *pendingAnalysis) []transcriptSegment {
-	segments := make([]transcriptSegment, 0, 16)
+// loadTranscriptSegments 使用 cleaned_transcription 的分段（说话人），
+// 再用 transcription_segments 的 start_time 对齐时间点，并返回覆盖判定所需的元数据。
+func (a *Analyzer) loadTranscriptSegments(ctx context.Context, item *pendingAnalysis) ([]transcriptSegment, recordingMeta) {
+	meta := recordingMeta{}
 	var cleanedRaw, rawSegments []byte
 	err := a.pool.QueryRow(ctx, `
-		SELECT COALESCE(cleaned_transcription::text, '[]'), COALESCE(transcription_segments::text, '[]')
+		SELECT COALESCE(cleaned_transcription::text, '[]'),
+		       COALESCE(transcription_segments::text, '[]'),
+		       COALESCE(duration, 0),
+		       COALESCE(transcription_status, ''),
+		       (SELECT COUNT(*) FROM recordings r2
+		        WHERE r2.tenant_id = $2 AND r2.encounter_id = $3 AND r2.deleted_at IS NULL)
 		FROM recordings WHERE id = $1
-	`, item.RecordingID).Scan(&cleanedRaw, &rawSegments)
-	if err == nil {
+	`, item.RecordingID, item.TenantID, item.EncounterID).Scan(
+		&cleanedRaw, &rawSegments, &meta.Duration, &meta.TranscriptionStatus, &meta.EncounterRecordingCount)
+	if err != nil {
+		meta.TranscriptionStatus = ""
+	}
+
+	segments := make([]transcriptSegment, 0, 16)
+	if len(cleanedRaw) > 0 {
 		var payload any
 		if json.Unmarshal(cleanedRaw, &payload) == nil {
 			segments = decodeTranscriptSegments(payload, 0)
 		}
+	}
+	raw := decodeRawSegments(rawSegments)
+	if len(raw) > 0 {
+		meta.HasRawTiming = true
+		meta.RawFirstStart = raw[0].Start
+		meta.RawLastEnd = raw[0].End
+		for _, segment := range raw {
+			if segment.End > meta.RawLastEnd {
+				meta.RawLastEnd = segment.End
+			}
+		}
 		if len(segments) > 0 {
-			alignSegmentTimestamps(segments, decodeRawSegments(rawSegments))
+			alignSegmentTimestamps(segments, raw)
 		}
 	}
 	if len(segments) == 0 && strings.TrimSpace(item.CleanedTranscript) != "" {
@@ -109,12 +158,32 @@ func (a *Analyzer) loadTranscriptSegments(ctx context.Context, item *pendingAnal
 			Text:    truncateRunes(item.CleanedTranscript, maxTranscriptRunes),
 		})
 	}
-	return segments
+	for index := range segments {
+		segments[index].ID = fmt.Sprintf("s%d", index+1)
+	}
+	return segments, meta
+}
+
+func computeCoverage(meta recordingMeta, segmentCount int) string {
+	if meta.TranscriptionStatus != "completed" || segmentCount == 0 || meta.Duration <= 0 {
+		return coverageUnknown
+	}
+	if meta.EncounterRecordingCount > 1 {
+		return coveragePartial
+	}
+	if !meta.HasRawTiming {
+		return coverageUnknown
+	}
+	if meta.RawFirstStart > 60 || float64(meta.Duration)-meta.RawLastEnd > 60 {
+		return coverageUnknown
+	}
+	return coverageComplete
 }
 
 type rawSegment struct {
 	Text  string
 	Start float64
+	End   float64
 }
 
 func decodeRawSegments(raw []byte) []rawSegment {
@@ -131,22 +200,11 @@ func decodeRawSegments(raw []byte) []rawSegment {
 		if text == "" {
 			continue
 		}
-		start := 0.0
-		switch value := row["start_time"].(type) {
-		case float64:
-			start = value
-		case json.Number:
-			if parsed, err := value.Float64(); err == nil {
-				start = parsed
-			}
-		}
-		out = append(out, rawSegment{Text: text, Start: start})
+		out = append(out, rawSegment{Text: text, Start: pickFloat(row["start_time"]), End: pickFloat(row["end_time"])})
 	}
 	return out
 }
 
-// alignSegmentTimestamps 用原始分段的时间点给清洗分段补 start_ms。
-// 清洗会合并/改写原始分段，因此按顺序找最相近的原始分段，不保证逐字一致。
 func alignSegmentTimestamps(segments []transcriptSegment, raw []rawSegment) {
 	if len(raw) == 0 {
 		return
@@ -242,56 +300,51 @@ func decodeTranscriptSegments(payload any, depth int) []transcriptSegment {
 	return nil
 }
 
-func (a *Analyzer) loadBusinessFacts(ctx context.Context, item *pendingAnalysis) (businessFacts, error) {
-	facts := businessFacts{}
+// loadBusinessFacts 把录音上的人工确认值与结果事件组装成可引用的业务事实。
+func (a *Analyzer) loadBusinessFacts(ctx context.Context, item *pendingAnalysis) ([]businessFact, error) {
+	facts := make([]businessFact, 0, 4)
 	var status *string
+	var converted, refund *float64
 	if err := a.pool.QueryRow(ctx, `
 		SELECT NULLIF(confirmed_deal_status, ''), converted_amount::float8, refund_amount::float8
 		FROM recordings WHERE id = $1
-	`, item.RecordingID).Scan(&status, &facts.ConvertedAmount, &facts.RefundAmount); err != nil {
-		return facts, fmt.Errorf("load recording facts: %w", err)
+	`, item.RecordingID).Scan(&status, &converted, &refund); err != nil {
+		return nil, fmt.Errorf("load recording facts: %w", err)
 	}
-	facts.ConfirmedDealStatus = status
+	_ = converted
+	_ = refund
 
 	rows, err := a.pool.Query(ctx, `
-		SELECT type FROM deal_outcome_events
+		SELECT type, amount::float8, occurred_at, source
+		FROM deal_outcome_events
 		WHERE tenant_id = $1 AND encounter_id = $2
+		ORDER BY occurred_at ASC, id ASC
 	`, item.TenantID, item.EncounterID)
 	if err != nil {
-		return facts, fmt.Errorf("load outcome facts: %w", err)
+		return nil, fmt.Errorf("load outcome facts: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var eventType string
-		if err := rows.Scan(&eventType); err != nil {
-			return facts, err
+		var eventType, source string
+		var amount *float64
+		var occurredAt time.Time
+		if err := rows.Scan(&eventType, &amount, &occurredAt, &source); err != nil {
+			return nil, err
 		}
-		switch eventType {
-		case "预约":
-			facts.AppointmentConfirmed = true
-		case "定金":
-			facts.DepositConfirmed = true
-		case "付款":
-			facts.PaymentConfirmed = true
-		case "退款":
-			facts.RefundConfirmed = true
+		text := fmt.Sprintf("已确认%s", eventType)
+		if amount != nil && *amount > 0 {
+			text = fmt.Sprintf("已确认%s %0.0f 元", eventType, *amount)
 		}
+		facts = append(facts, businessFact{
+			ID:         fmt.Sprintf("f%d", len(facts)+1),
+			Type:       eventType,
+			Text:       text,
+			Amount:     amount,
+			Source:     source,
+			OccurredAt: occurredAt.Format(time.RFC3339),
+		})
 	}
 	return facts, rows.Err()
-}
-
-func (a *Analyzer) loadCatalogIDs(ctx context.Context, tenantID int64) (map[int64]bool, error) {
-	catalog, err := a.loadCatalog(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	ids := make(map[int64]bool, len(catalog))
-	for _, row := range catalog {
-		if id, ok := row["id"].(int64); ok && id > 0 {
-			ids[id] = true
-		}
-	}
-	return ids, nil
 }
 
 func pickText(values ...any) string {
@@ -324,6 +377,17 @@ func pickInt(values ...any) *int {
 		}
 	}
 	return nil
+}
+
+func pickFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case json.Number:
+		parsed, _ := typed.Float64()
+		return parsed
+	}
+	return 0
 }
 
 func formatTimePtr(value *time.Time) string {

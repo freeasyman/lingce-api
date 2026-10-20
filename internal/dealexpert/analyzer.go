@@ -72,6 +72,7 @@ type pendingAnalysis struct {
 	CleanedTranscript       string
 	AnalysisPipelineVersion string
 	PromptVersion           string
+	RoleCode                string
 	Attempts                int
 }
 
@@ -122,7 +123,7 @@ func (a *Analyzer) RunOnce(ctx context.Context, limit int) (int, error) {
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING id, tenant_id, recording_id, encounter_id, employee_id, customer_id, customer_name,
-		          recorded_at, cleaned_transcript, analysis_pipeline_version, prompt_version, attempts
+		          recorded_at, cleaned_transcript, analysis_pipeline_version, prompt_version, role_code, attempts
 	`, limit, analysisMaxAttempts)
 	if err != nil {
 		return 0, fmt.Errorf("claim analyses: %w", err)
@@ -134,7 +135,7 @@ func (a *Analyzer) RunOnce(ctx context.Context, limit int) (int, error) {
 		item := &pendingAnalysis{}
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.RecordingID, &item.EncounterID,
 			&item.EmployeeID, &item.CustomerID, &item.CustomerName, &item.RecordedAt,
-			&item.CleanedTranscript, &item.AnalysisPipelineVersion, &item.PromptVersion, &item.Attempts); err != nil {
+			&item.CleanedTranscript, &item.AnalysisPipelineVersion, &item.PromptVersion, &item.RoleCode, &item.Attempts); err != nil {
 			return 0, fmt.Errorf("scan pending analysis: %w", err)
 		}
 		pending = append(pending, item)
@@ -160,25 +161,14 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "MODEL_CONFIG_ERROR", err)
 		return
 	}
-	schema, err := loadDealCardSchema(prompt.OutputSchema)
+	schema, schemaRaw, err := loadDealCardSchema(prompt.OutputSchema)
 	if err != nil {
 		a.fail(ctx, item, "SCHEMA_CONFIG_ERROR", err)
 		return
 	}
-	catalog, err := a.loadCatalog(ctx, item.TenantID)
+	catalog, catalogComplete, err := a.loadCatalog(ctx, item.TenantID)
 	if err != nil {
 		a.fail(ctx, item, "CATALOG_ERROR", err)
-		return
-	}
-	catalogIDs := make(map[int64]bool, len(catalog))
-	for _, row := range catalog {
-		if id, ok := row["id"].(int64); ok && id > 0 {
-			catalogIDs[id] = true
-		}
-	}
-	outcomes, err := a.loadOutcomeFacts(ctx, item.TenantID, item.EncounterID)
-	if err != nil {
-		a.fail(ctx, item, "OUTCOME_ERROR", err)
 		return
 	}
 	facts, err := a.loadBusinessFacts(ctx, item)
@@ -186,23 +176,45 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "FACTS_ERROR", err)
 		return
 	}
-	segments := a.loadTranscriptSegments(ctx, item)
+	segments, meta := a.loadTranscriptSegments(ctx, item)
+	coverage := computeCoverage(meta, len(segments))
 	transcript := segmentsTranscript(segments)
 
-	input := buildAnalysisInput(item, segments, facts, catalog)
-	userPrompt := renderAnalysisInput(prompt.UserTemplate, input, transcript, catalog, outcomes)
+	input := buildAnalysisInput(item, segments, facts, catalog, coverage, catalogComplete)
+	userPrompt := renderAnalysisInput(prompt.UserTemplate, input)
 
-	resp, err := a.callLLM(ctx, item, prompt, cfg, userPrompt)
+	resp, err := a.callLLM(ctx, item, prompt, cfg, schemaRaw, userPrompt)
 	if err != nil {
 		a.fail(ctx, item, "LLM_ERROR", err)
 		return
 	}
-	card, err := validateDealCard(resp.Content, schema, cardValidationContext{
-		Transcript:        transcript,
-		CatalogProductIDs: catalogIDs,
-		CatalogAvailable:  len(catalog) > 0,
-		OwnerEmployeeID:   item.EmployeeID,
-	})
+
+	validation := cardValidationContext{
+		Sources:       make(map[string]evidenceSource, len(segments)+len(facts)),
+		Facts:         make(map[string]businessFactRef, len(facts)),
+		Catalog:       make(map[int64]catalogRef, len(catalog)),
+		AllowMissed:   allowMissedOpportunity && catalogComplete,
+		AllowExtended: allowExtendedOpportunity && catalogComplete,
+	}
+	for _, segment := range segments {
+		validation.Sources[segment.ID] = evidenceSource{
+			ID: segment.ID, Text: segment.Text, Speaker: segment.Speaker, StartMS: segment.StartMS,
+		}
+	}
+	for _, fact := range facts {
+		validation.Sources[fact.ID] = evidenceSource{ID: fact.ID, Text: fact.Text, Speaker: "系统事实"}
+		validation.Facts[fact.ID] = businessFactRef{Type: fact.Type}
+	}
+	for _, row := range catalog {
+		id, _ := row["id"].(int64)
+		name, _ := row["name"].(string)
+		version, _ := row["version"].(string)
+		if id > 0 {
+			validation.Catalog[id] = catalogRef{Name: name, Version: version}
+		}
+	}
+
+	card, err := validateDealCard(resp.Content, schema, validation)
 	if err != nil {
 		if saveErr := a.saveRawResponse(ctx, item, resp.Content, err); saveErr != nil {
 			a.log.Error("save raw analysis response", "id", item.ID, "error", saveErr)
@@ -210,6 +222,7 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "SCHEMA_ERROR", err)
 		return
 	}
+	_ = transcript
 	if err := a.saveResult(ctx, item, card, resp); err != nil {
 		a.fail(ctx, item, "SAVE_ERROR", err)
 		return
@@ -302,30 +315,38 @@ func (a *Analyzer) loadPrompt(ctx context.Context, tenantID int64) (*analyzerPro
 
 // loadCatalog 复用产品库的只读目录（与 /products/catalog 同一份过滤逻辑），
 // 让分析在调用模型时就拿到候选产品，避免在赢客专家侧另建产品匹配。
-func (a *Analyzer) loadCatalog(ctx context.Context, tenantID int64) ([]map[string]any, error) {
+func (a *Analyzer) loadCatalog(ctx context.Context, tenantID int64) ([]map[string]any, bool, error) {
 	const pageSize = 100
+	const maxPages = 10
 	items := make([]map[string]any, 0, pageSize)
-	for page := 1; page <= 10; page++ {
+	complete := false
+	for page := 1; page <= maxPages; page++ {
 		rows, total, err := a.productStore.Catalog(ctx, tenantID, page, pageSize)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, row := range rows {
 			items = append(items, map[string]any{
-				"id":                  row.ID,
-				"name":                row.Name,
-				"aliases":             row.Aliases,
-				"price":               row.Price,
-				"applicable":          row.Applicable,
-				"applicable_keywords": row.ApplicableKeywords,
-				"version":             row.Version,
+				"id":                             row.ID,
+				"name":                           row.Name,
+				"aliases":                        row.Aliases,
+				"version":                        fmt.Sprintf("%d", row.Version),
+				"review_status":                  row.ReviewStatus,
+				"status":                         row.Status,
+				"description":                    row.Applicable,
+				"clinical_confirmation_required": true,
 			})
 		}
-		if len(rows) < pageSize || (total > 0 && page*pageSize >= total) {
+		if len(rows) < pageSize {
+			complete = true
+			break
+		}
+		if total > 0 && page*pageSize >= total {
+			complete = true
 			break
 		}
 	}
-	return items, nil
+	return items, complete, nil
 }
 
 func (a *Analyzer) loadOutcomeFacts(ctx context.Context, tenantID, encounterID int64) ([]map[string]any, error) {
@@ -362,6 +383,7 @@ func (a *Analyzer) callLLM(
 	item *pendingAnalysis,
 	prompt *analyzerPrompt,
 	cfg *analyzerModelConfig,
+	schemaRaw string,
 	userPrompt string,
 ) (*llmgateway.TextInferenceResponse, error) {
 	params := &llmgateway.Params{Temperature: 0.1, MaxTokens: 4096, TimeoutSeconds: 180, ResponseFormat: "json"}
@@ -399,7 +421,7 @@ func (a *Analyzer) callLLM(
 			CustomerID:         customerID,
 		},
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: prompt.SystemPrompt},
+			{Role: "system", Content: prompt.SystemPrompt + "\n\n输出必须严格符合以下 JSON Schema：\n" + schemaRaw},
 			{Role: "user", Content: userPrompt},
 		},
 		Params: params,

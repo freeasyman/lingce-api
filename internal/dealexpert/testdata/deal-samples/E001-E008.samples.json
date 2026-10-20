@@ -1,0 +1,2291 @@
+[
+  {
+    "case_id": "E001",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7001,
+        "encounter_id": 8001,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6001,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "咨询师",
+            "text": "今天来最想了解什么？",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "客户",
+            "text": "我明确想暑假做全飞秒，主要是我老公还没了解这个事。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "咨询师",
+            "text": "可以了解全飞秒 Pro，是否适合由医生检查后确认。",
+            "start_ms": null
+          },
+          {
+            "id": "s4",
+            "speaker": "客户",
+            "text": "方案我想继续了解，也想把我老公的意见弄清楚。",
+            "start_ms": null
+          },
+          {
+            "id": "s5",
+            "speaker": "咨询师",
+            "text": "那您回去商量，有问题再找我。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": true,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "客户有明确意向，家属参与决策但具体顾虑尚未确认",
+        "business_impact": "仍可推进",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "有意向但未决定",
+        "state_basis": "transcript_judgment",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5"
+        ],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "明确",
+        "need_summary": "我明确想暑假做全飞秒，主要是我老公还没了解这个事。",
+        "need_evidence_refs": [
+          "ev_2"
+        ],
+        "concerns": [
+          {
+            "type": "家属或共同决策人",
+            "summary": "家属尚不了解事项，其具体意见未确认。",
+            "is_primary": true,
+            "evidence_refs": [
+              "ev_2",
+              "ev_4"
+            ]
+          }
+        ],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "allow",
+      "product_findings": [
+        {
+          "product_id": 9201,
+          "product_name": "全飞秒 Pro",
+          "finding_type": "已正确推荐",
+          "customer_evidence": "我明确想暑假做全飞秒，主要是我老公还没了解这个事。",
+          "matching_reason": "客户明确关注该项目，咨询师承接相关说明；医疗适应性仍由医生确认。",
+          "recommended_by_consultant": true,
+          "requires_clinical_confirmation": true,
+          "suggested_action": "仅解释已审核信息，不代替医生确认医疗问题。",
+          "product_version": "1",
+          "confidence": "medium",
+          "evidence_refs": [
+            "ev_2",
+            "ev_3"
+          ]
+        }
+      ],
+      "primary_action": {
+        "type": "sales_follow_up",
+        "goal": "确认家属参与决策的具体问题",
+        "action": "询问客户需要补充给家属哪些信息，并征求下次沟通时间。",
+        "suggested_content": "您提到想弄清家人的意见，最需要我补充哪方面资料？方便时我们再约个沟通时间。",
+        "owner_employee_id": null,
+        "due_basis": "within_48h",
+        "due_quote": null,
+        "source_evidence_refs": [
+          "ev_2",
+          "ev_4"
+        ]
+      },
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "今天来最想了解什么？",
+          "speaker": "咨询师",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "我明确想暑假做全飞秒，主要是我老公还没了解这个事。",
+          "speaker": "客户",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "可以了解全飞秒 Pro，是否适合由医生检查后确认。",
+          "speaker": "咨询师",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_4",
+          "quote": "方案我想继续了解，也想把我老公的意见弄清楚。",
+          "speaker": "客户",
+          "source_ref": "s4",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_5",
+          "quote": "那您回去商量，有问题再找我。",
+          "speaker": "咨询师",
+          "source_ref": "s5",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 3,
+            "comment": "有后续沟通意向，但未具体确认家属顾虑或下一步时间。",
+            "evidence_refs": [
+              "ev_4",
+              "ev_5"
+            ],
+            "impact_on_deal": "下一步安排不明确；对成交结果的影响待验证。",
+            "highlight_narrative": null
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "medium",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "有意向但未决定",
+      "contact_policy": "allow",
+      "primary_action_type": "sales_follow_up",
+      "business_impact": "仍可推进",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "促成与收尾": [
+          3,
+          3
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "E002",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7002,
+        "encounter_id": 8002,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6002,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "咨询师",
+            "text": "您今天最希望解决的是什么？",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "客户",
+            "text": "我想做全飞秒 Pro，医生已经向我解释方案了，主要担心费用里还有其他收费。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "咨询师",
+            "text": "关于您选择的全飞秒 Pro，我给您逐项说明收费清单，您有不明白的地方我们一项项确认。",
+            "start_ms": null
+          },
+          {
+            "id": "s4",
+            "speaker": "客户",
+            "text": "清单这几项我明白了，费用的问题解决了。",
+            "start_ms": null
+          },
+          {
+            "id": "s5",
+            "speaker": "咨询师",
+            "text": "您是否决定按已确认方案办理？后面的安排我再和您核对。",
+            "start_ms": null
+          },
+          {
+            "id": "s6",
+            "speaker": "客户",
+            "text": "我决定了，刚刚付好了。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [
+        {
+          "id": "f1",
+          "type": "付款",
+          "text": "已确认付款23800元，关联本次接待。",
+          "amount": 23800,
+          "source": "验收人工构造事实",
+          "occurred_at": "2026-10-15T10:00:00+08:00"
+        }
+      ],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": true,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "付款已确认，收费疑问得到回应，可复盘具体做法",
+        "business_impact": "已成交可复盘",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5",
+          "ev_6",
+          "ev_7"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "已付款",
+        "state_basis": "verified_fact",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5",
+          "ev_6",
+          "ev_7"
+        ],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "明确",
+        "need_summary": "我想做全飞秒 Pro，医生已经向我解释方案了，主要担心费用里还有其他收费。",
+        "need_evidence_refs": [
+          "ev_2"
+        ],
+        "concerns": [
+          {
+            "type": "价格与价值",
+            "summary": "担心收费范围；片段后续明确表示问题已解决。",
+            "is_primary": false,
+            "evidence_refs": [
+              "ev_2",
+              "ev_4"
+            ]
+          }
+        ],
+        "outcome_signals": [
+          {
+            "type": "付款",
+            "summary": "客户称已付款，有系统事实可核对。",
+            "evidence_refs": [
+              "ev_6"
+            ]
+          }
+        ]
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "allow",
+      "product_findings": [
+        {
+          "product_id": 9201,
+          "product_name": "全飞秒 Pro",
+          "finding_type": "已正确推荐",
+          "customer_evidence": "我想做全飞秒 Pro，医生已经向我解释方案了，主要担心费用里还有其他收费。",
+          "matching_reason": "客户明确关注该项目，咨询师承接相关说明；医疗适应性仍由医生确认。",
+          "recommended_by_consultant": true,
+          "requires_clinical_confirmation": true,
+          "suggested_action": null,
+          "product_version": "1",
+          "confidence": "medium",
+          "evidence_refs": [
+            "ev_2",
+            "ev_3"
+          ]
+        }
+      ],
+      "primary_action": null,
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "您今天最希望解决的是什么？",
+          "speaker": "咨询师",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "我想做全飞秒 Pro，医生已经向我解释方案了，主要担心费用里还有其他收费。",
+          "speaker": "客户",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "关于您选择的全飞秒 Pro，我给您逐项说明收费清单，您有不明白的地方我们一项项确认。",
+          "speaker": "咨询师",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_4",
+          "quote": "清单这几项我明白了，费用的问题解决了。",
+          "speaker": "客户",
+          "source_ref": "s4",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_5",
+          "quote": "您是否决定按已确认方案办理？后面的安排我再和您核对。",
+          "speaker": "咨询师",
+          "source_ref": "s5",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_6",
+          "quote": "我决定了，刚刚付好了。",
+          "speaker": "客户",
+          "source_ref": "s6",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品"
+          ]
+        },
+        {
+          "id": "ev_7",
+          "quote": "已确认付款23800元，关联本次接待。",
+          "speaker": "系统事实",
+          "source_ref": "f1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "产品"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "scored",
+            "score": 5,
+            "comment": "针对收费疑问逐项解释，客户明确确认疑问解决。",
+            "evidence_refs": [
+              "ev_2",
+              "ev_3",
+              "ev_4"
+            ],
+            "impact_on_deal": "观察到客户说费用问题解决；付款不能单独证明因果。",
+            "highlight_narrative": "先承接收费疑问，再逐项说明，客户确认已理解。"
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 4,
+            "comment": "确认办理意愿，但片段没有后续安排的具体时间。",
+            "evidence_refs": [
+              "ev_5",
+              "ev_6"
+            ],
+            "impact_on_deal": "客户明确决定办理；后续交付安排待核对。",
+            "highlight_narrative": "先确认客户决定，再核对后续安排。"
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [
+          {
+            "behavior": "逐项解释收费清单，并给客户确认理解的机会。",
+            "customer_response": "客户明确表示费用问题解决。",
+            "reusable_when": "客户对收费构成不清楚，且有已审核清单时；不能据此保证成交。",
+            "evidence_refs": [
+              "ev_2",
+              "ev_3",
+              "ev_4"
+            ]
+          }
+        ],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "high",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "已付款",
+      "contact_policy": "allow",
+      "primary_action_type": null,
+      "business_impact": "已成交可复盘",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "异议化解": [
+          5,
+          5
+        ],
+        "促成与收尾": [
+          4,
+          4
+        ]
+      },
+      "successful_practice_required": true
+    }
+  },
+  {
+    "case_id": "E003",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7003,
+        "encounter_id": 8003,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6003,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "客户",
+            "text": "我想继续了解全飞秒，也想知道最近眼睛总是干怎么办。",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "咨询师",
+            "text": "我们先说手术价格，其他的以后再说。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "客户",
+            "text": "眼干的问题我也想先请医生看看。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": true,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "客户表达眼干困扰并希望先请医生确认，需求尚未被承接",
+        "business_impact": "仍可推进",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "有意向但未决定",
+        "state_basis": "transcript_judgment",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "明确",
+        "need_summary": "我想继续了解全飞秒，也想知道最近眼睛总是干怎么办。",
+        "need_evidence_refs": [
+          "ev_1"
+        ],
+        "concerns": [],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "allow",
+      "product_findings": [
+        {
+          "product_id": 9203,
+          "product_name": "干眼评估",
+          "finding_type": "联合机会",
+          "customer_evidence": "眼干的问题我也想先请医生看看。",
+          "matching_reason": "客户主动希望医生处理眼干困扰，目录有相关评估项目；仅是待医生确认的承接线索。",
+          "recommended_by_consultant": false,
+          "requires_clinical_confirmation": true,
+          "suggested_action": "由责任咨询师请专业岗位确认评估需求。",
+          "product_version": "1",
+          "confidence": "medium",
+          "evidence_refs": [
+            "ev_1",
+            "ev_2",
+            "ev_3"
+          ]
+        }
+      ],
+      "primary_action": {
+        "type": "internal_coordination",
+        "goal": "承接客户明确提出的眼干评估需求",
+        "action": "责任咨询师对接专业岗位，确认是否需要安排评估。",
+        "suggested_content": "客户明确希望先请医生了解眼干困扰，请核对本次问题和承接安排；暂不直接推销评估项目。",
+        "owner_employee_id": null,
+        "due_basis": "today",
+        "due_quote": null,
+        "source_evidence_refs": [
+          "ev_1",
+          "ev_3"
+        ]
+      },
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "我想继续了解全飞秒，也想知道最近眼睛总是干怎么办。",
+          "speaker": "客户",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "我们先说手术价格，其他的以后再说。",
+          "speaker": "咨询师",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "眼干的问题我也想先请医生看看。",
+          "speaker": "客户",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "scored",
+            "score": 2,
+            "comment": "客户两次表达眼干问题，咨询师将其推后，未承接当下需求。",
+            "evidence_refs": [
+              "ev_1",
+              "ev_2",
+              "ev_3"
+            ],
+            "impact_on_deal": "客户再次提出先看医生；是否影响最终成交未知。",
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": {
+          "suggestion": "先回应客户明确的专业评估诉求，再讨论价格。",
+          "evidence_refs": [
+            "ev_1",
+            "ev_2",
+            "ev_3"
+          ]
+        },
+        "refund_review": null
+      },
+      "confidence": "medium",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "有意向但未决定",
+      "contact_policy": "allow",
+      "primary_action_type": "internal_coordination",
+      "business_impact": "仍可推进",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "需求探索": [
+          2,
+          2
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "E004",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7004,
+        "encounter_id": 8004,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6004,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "客户",
+            "text": "我已经选了另一家，不考虑在你们这里做了，请不要再联系我。",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "咨询师",
+            "text": "好的，我记录您的选择，后续不再就这件事联系您。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": false,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "客户已选择其他机构，并明确要求停止联系",
+        "business_impact": "已流失",
+        "main_basis": [
+          "ev_1",
+          "ev_2"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "明确不考虑",
+        "state_basis": "transcript_judgment",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2"
+        ],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "无法判断",
+        "need_summary": null,
+        "need_evidence_refs": [],
+        "concerns": [],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "stop",
+      "product_findings": [],
+      "primary_action": null,
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "我已经选了另一家，不考虑在你们这里做了，请不要再联系我。",
+          "speaker": "客户",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "好的，我记录您的选择，后续不再就这件事联系您。",
+          "speaker": "咨询师",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 4,
+            "comment": "明确接受客户停止联系的要求，片段未覆盖其他收尾安排。",
+            "evidence_refs": [
+              "ev_1",
+              "ev_2"
+            ],
+            "impact_on_deal": "尊重停止联系要求；不因没有继续推销而扣分。",
+            "highlight_narrative": "明确接受客户选择，并记录停止联系。"
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "high",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "明确不考虑",
+      "contact_policy": "stop",
+      "primary_action_type": null,
+      "business_impact": "已流失",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "促成与收尾": [
+          4,
+          4
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "E005",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7005,
+        "encounter_id": 8005,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": null,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "未知",
+            "text": "那就这样吧。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": false,
+        "contact_authorized": false,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "片段不足，无法判断需求、决策或成交情况",
+        "business_impact": "无法判断",
+        "main_basis": [],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "无法判断",
+        "state_basis": "unknown",
+        "evidence_refs": [],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "无法判断",
+        "need_summary": null,
+        "need_evidence_refs": [],
+        "concerns": [],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "review",
+      "product_findings": [],
+      "primary_action": null,
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "那就这样吧。",
+          "speaker": "未知",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "low",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。",
+        "无法确认说话人、客户身份、需求、意向和已发生的成交事实。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "无法判断",
+      "contact_policy": "review",
+      "primary_action_type": null,
+      "business_impact": "无法判断",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {}
+    }
+  },
+  {
+    "case_id": "E006",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7006,
+        "encounter_id": 8006,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6006,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "客户",
+            "text": "我想了解全飞秒 Pro，主要担心恢复会影响工作，也觉得费用有点高。",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "咨询师",
+            "text": "您提到的全飞秒 Pro 我们可以先了解，收费构成我来解释，恢复方面需要请医生确认您的具体情况。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "客户",
+            "text": "我先比较恢复安排和费用，弄清这两件事以后再决定。",
+            "start_ms": null
+          },
+          {
+            "id": "s4",
+            "speaker": "咨询师",
+            "text": "那您先比较，之后再说。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": true,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "客户明确等待恢复安排和费用比较完成后再决定",
+        "business_impact": "仍可推进",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "暂缓",
+        "state_basis": "transcript_judgment",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4"
+        ],
+        "condition": "我先比较恢复安排和费用，弄清这两件事以后再决定。",
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "明确",
+        "need_summary": "我想了解全飞秒 Pro，主要担心恢复会影响工作，也觉得费用有点高。",
+        "need_evidence_refs": [
+          "ev_1"
+        ],
+        "concerns": [
+          {
+            "type": "安全与恢复",
+            "summary": "担心恢复影响工作，待专业确认。",
+            "is_primary": true,
+            "evidence_refs": [
+              "ev_1",
+              "ev_3"
+            ]
+          },
+          {
+            "type": "价格与价值",
+            "summary": "认为费用较高，等待比较。",
+            "is_primary": false,
+            "evidence_refs": [
+              "ev_1",
+              "ev_3"
+            ]
+          }
+        ],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "allow",
+      "product_findings": [
+        {
+          "product_id": 9201,
+          "product_name": "全飞秒 Pro",
+          "finding_type": "已正确推荐",
+          "customer_evidence": "我想了解全飞秒 Pro，主要担心恢复会影响工作，也觉得费用有点高。",
+          "matching_reason": "客户明确关注该项目，咨询师承接相关说明；医疗适应性仍由医生确认。",
+          "recommended_by_consultant": true,
+          "requires_clinical_confirmation": true,
+          "suggested_action": "仅解释已审核信息，不代替医生确认医疗问题。",
+          "product_version": "1",
+          "confidence": "medium",
+          "evidence_refs": [
+            "ev_1",
+            "ev_2"
+          ]
+        }
+      ],
+      "primary_action": {
+        "type": "internal_coordination",
+        "goal": "准备客户决策所需的恢复信息与费用说明",
+        "action": "先请专业岗位确认恢复安排可解释的信息，再由原咨询师补充费用清单。",
+        "suggested_content": "客户等待恢复安排与费用比较后决定，请专业岗位确认恢复信息，咨询师同步整理已审核费用说明。",
+        "owner_employee_id": null,
+        "due_basis": "today",
+        "due_quote": null,
+        "source_evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ]
+      },
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "我想了解全飞秒 Pro，主要担心恢复会影响工作，也觉得费用有点高。",
+          "speaker": "客户",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "您提到的全飞秒 Pro 我们可以先了解，收费构成我来解释，恢复方面需要请医生确认您的具体情况。",
+          "speaker": "咨询师",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "我先比较恢复安排和费用，弄清这两件事以后再决定。",
+          "speaker": "客户",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "产品",
+            "动作"
+          ]
+        },
+        {
+          "id": "ev_4",
+          "quote": "那您先比较，之后再说。",
+          "speaker": "咨询师",
+          "source_ref": "s4",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "产品",
+            "动作"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 3,
+            "comment": "知道等待条件，但没有约定如何补齐信息或后续时间。",
+            "evidence_refs": [
+              "ev_3",
+              "ev_4"
+            ],
+            "impact_on_deal": "客户仍在等待比较信息，后续推进效果未知。",
+            "highlight_narrative": null
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "medium",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "暂缓",
+      "contact_policy": "allow",
+      "primary_action_type": "internal_coordination",
+      "business_impact": "仍可推进",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "促成与收尾": [
+          3,
+          3
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "E007",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7007,
+        "encounter_id": 8007,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6007,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "客户",
+            "text": "上次术后不舒服的问题还没解决，现在先不要跟我谈新项目。",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "咨询师",
+            "text": "我们先暂停项目沟通，我来联系负责随访的同事核对处理情况。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "客户",
+            "text": "先把这个问题处理清楚。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": true,
+        "analysis_at": "2026-10-15T10:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "未解决术后问题优先处理，暂停销售触达",
+        "business_impact": "无法判断",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "暂缓",
+        "state_basis": "transcript_judgment",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ],
+        "condition": "先把这个问题处理清楚。",
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "明确",
+        "need_summary": "上次术后不舒服的问题还没解决，现在先不要跟我谈新项目。",
+        "need_evidence_refs": [
+          "ev_1"
+        ],
+        "concerns": [
+          {
+            "type": "安全与恢复",
+            "summary": "未解决术后不适，要求先处理。",
+            "is_primary": true,
+            "evidence_refs": [
+              "ev_1",
+              "ev_3"
+            ]
+          }
+        ],
+        "outcome_signals": []
+      },
+      "clinical_conflict": {
+        "active": true,
+        "reason": "上次术后不舒服的问题还没解决，现在先不要跟我谈新项目。",
+        "evidence_refs": [
+          "ev_1"
+        ]
+      },
+      "contact_policy": "pause_clinical",
+      "product_findings": [],
+      "primary_action": {
+        "type": "internal_coordination",
+        "goal": "优先承接未解决术后问题",
+        "action": "暂停销售，由责任咨询师核对已有随访记录并联系对应专业团队。",
+        "suggested_content": "客户反映术后不适尚未解决，请核对已有处理记录和负责团队，避免重复联系；暂停新项目沟通。",
+        "owner_employee_id": null,
+        "due_basis": "today",
+        "due_quote": null,
+        "source_evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3"
+        ]
+      },
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "上次术后不舒服的问题还没解决，现在先不要跟我谈新项目。",
+          "speaker": "客户",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "动作",
+            "医疗协作"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "我们先暂停项目沟通，我来联系负责随访的同事核对处理情况。",
+          "speaker": "咨询师",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "动作",
+            "医疗协作"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "先把这个问题处理清楚。",
+          "speaker": "客户",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑",
+            "动作",
+            "医疗协作"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 4,
+            "comment": "暂停销售并提出对接随访，但尚无实际交接完成记录。",
+            "evidence_refs": [
+              "ev_1",
+              "ev_2",
+              "ev_3"
+            ],
+            "impact_on_deal": "尊重客户先处理问题的要求，不能声称已解决。",
+            "highlight_narrative": "停止项目推介，先核对术后问题的承接。"
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": null
+      },
+      "confidence": "high",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "暂缓",
+      "contact_policy": "pause_clinical",
+      "primary_action_type": "internal_coordination",
+      "business_impact": "无法判断",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "促成与收尾": [
+          4,
+          4
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "E008",
+    "provenance": "人工编写的回归对话和人工标注期望；不是患者原话，不是模型运行结果。",
+    "input": {
+      "recording": {
+        "recording_id": 7008,
+        "encounter_id": 8008,
+        "tenant_id": 9001,
+        "employee_id": 9101,
+        "customer_id": 6008,
+        "role_code": "consultant",
+        "recorded_at": "2026-10-15T09:00:00+08:00",
+        "cleaned_transcript": [
+          {
+            "id": "s1",
+            "speaker": "咨询师",
+            "text": "您申请退款的原因，方便记录一下吗？",
+            "start_ms": null
+          },
+          {
+            "id": "s2",
+            "speaker": "客户",
+            "text": "我原来安排的休假取消了，已经申请全额退款，目前不考虑重新安排。",
+            "start_ms": null
+          },
+          {
+            "id": "s3",
+            "speaker": "咨询师",
+            "text": "我记录休假变化，不再催您重新购买。",
+            "start_ms": null
+          }
+        ],
+        "coverage": "partial"
+      },
+      "business_facts": [
+        {
+          "id": "f1",
+          "type": "付款",
+          "text": "已确认本次接待付款16800元。",
+          "amount": 16800,
+          "source": "验收人工构造事实",
+          "occurred_at": "2026-10-15T10:00:00+08:00"
+        },
+        {
+          "id": "f2",
+          "type": "退款",
+          "text": "已确认全额退款16800元。",
+          "amount": 16800,
+          "source": "验收人工构造事实",
+          "occurred_at": "2026-10-16T10:00:00+08:00"
+        }
+      ],
+      "analysis_context": {
+        "identity_confirmed": true,
+        "contact_authorized": false,
+        "analysis_at": "2026-10-16T11:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "product_catalog_available": true,
+        "catalog_complete": true,
+        "product_catalog": [
+          {
+            "id": 9201,
+            "name": "全飞秒 Pro",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "机构目录中的咨询项目；医疗适应性必须由医生确认。"
+          },
+          {
+            "id": 9203,
+            "name": "干眼评估",
+            "version": "1",
+            "review_status": "approved",
+            "status": "active",
+            "clinical_confirmation_required": true,
+            "description": "客户明确表达眼干困扰时，可转专业岗位确认评估需求；不代表已诊断。"
+          }
+        ],
+        "allow_missed_opportunity": false,
+        "allow_extended_opportunities": false
+      }
+    },
+    "expected_output": {
+      "schema_version": "deal-card-v1.1",
+      "conclusion": {
+        "current_state": "已付款后全额退款，客户说明休假取消，净额由事实层计算",
+        "business_impact": "已成交可复盘",
+        "main_basis": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5"
+        ],
+        "verification": "责任咨询师核对本次接待的决定和业务结果；模型建议不直接成为收费事实。"
+      },
+      "decision": {
+        "decision_state": "已付款",
+        "state_basis": "verified_fact",
+        "evidence_refs": [
+          "ev_1",
+          "ev_2",
+          "ev_3",
+          "ev_4",
+          "ev_5"
+        ],
+        "condition": null,
+        "condition_due_quote": null,
+        "trust": [],
+        "need_state": "无法判断",
+        "need_summary": null,
+        "need_evidence_refs": [],
+        "concerns": [],
+        "outcome_signals": [
+          {
+            "type": "退款",
+            "summary": "客户提及申请退款，有全额退款事实可核对。",
+            "evidence_refs": [
+              "ev_2"
+            ]
+          }
+        ]
+      },
+      "clinical_conflict": {
+        "active": false,
+        "reason": null,
+        "evidence_refs": []
+      },
+      "contact_policy": "stop",
+      "product_findings": [],
+      "primary_action": null,
+      "secondary_findings": [],
+      "evidence_refs": [
+        {
+          "id": "ev_1",
+          "quote": "您申请退款的原因，方便记录一下吗？",
+          "speaker": "咨询师",
+          "source_ref": "s1",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘"
+          ]
+        },
+        {
+          "id": "ev_2",
+          "quote": "我原来安排的休假取消了，已经申请全额退款，目前不考虑重新安排。",
+          "speaker": "客户",
+          "source_ref": "s2",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘",
+            "需求",
+            "顾虑"
+          ]
+        },
+        {
+          "id": "ev_3",
+          "quote": "我记录休假变化，不再催您重新购买。",
+          "speaker": "咨询师",
+          "source_ref": "s3",
+          "start_ms": null,
+          "used_for": [
+            "结论",
+            "质检",
+            "复盘"
+          ]
+        },
+        {
+          "id": "ev_4",
+          "quote": "已确认本次接待付款16800元。",
+          "speaker": "系统事实",
+          "source_ref": "f1",
+          "start_ms": null,
+          "used_for": [
+            "结论"
+          ]
+        },
+        {
+          "id": "ev_5",
+          "quote": "已确认全额退款16800元。",
+          "speaker": "系统事实",
+          "source_ref": "f2",
+          "start_ms": null,
+          "used_for": [
+            "结论"
+          ]
+        }
+      ],
+      "quality": {
+        "standard_version": "compass-sales-v1.1",
+        "dimensions": {
+          "开场建立权威": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "需求探索": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "问题放大": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "专业呈现": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "方案定制": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "异议化解": {
+            "assessment": "insufficient_evidence",
+            "score": null,
+            "comment": "本样本仅为片段，没有足够材料评价此环节。",
+            "evidence_refs": [],
+            "impact_on_deal": null,
+            "highlight_narrative": null
+          },
+          "促成与收尾": {
+            "assessment": "scored",
+            "score": 4,
+            "comment": "询问退款原因并尊重不再安排的选择。",
+            "evidence_refs": [
+              "ev_1",
+              "ev_2",
+              "ev_3"
+            ],
+            "impact_on_deal": "已知退款与休假变化有关，无法推断员工导致退款。",
+            "highlight_narrative": "记录退款原因，尊重客户不再安排的选择。"
+          }
+        }
+      },
+      "coach": {
+        "successful_practices": [],
+        "improvement": null,
+        "refund_review": {
+          "known_reason": "客户自述休假取消；不推断存在其他退款原因。",
+          "evidence_refs": [
+            "ev_2"
+          ],
+          "unknowns": [
+            "无法仅凭片段判断咨询过程对退款的影响。"
+          ]
+        }
+      },
+      "confidence": "high",
+      "unknowns": [
+        "片段未覆盖全部接待环节，未评分维度不能视为员工未做。",
+        "未出现足以确定信任对象及状态的明确表达。"
+      ]
+    },
+    "hard_assertions": {
+      "decision_state": "已付款",
+      "contact_policy": "stop",
+      "primary_action_type": null,
+      "business_impact": "已成交可复盘",
+      "forbidden_product_types": [
+        "可能漏推",
+        "升级机会",
+        "替代方案"
+      ],
+      "quality_score_ranges": {
+        "促成与收尾": [
+          4,
+          4
+        ]
+      },
+      "net_amount_from_facts": 0
+    }
+  }
+]

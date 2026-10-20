@@ -6,222 +6,249 @@ import (
 	"testing"
 )
 
-const testTranscript = "客户：我想做全飞秒，但是要回去和家里人商量。\n咨询师：可以，我把方案和价格发给您。"
-
-func baseCard() map[string]any {
-	qualityItem := map[string]any{"score": 3, "evidence_refs": []any{}, "impact_on_deal": "一般"}
+func dimension() map[string]any {
 	return map[string]any{
+		"assessment":          "scored",
+		"score":               3,
+		"comment":             "按要求完成",
+		"evidence_refs":       []any{"ev_1"},
+		"impact_on_deal":      nil,
+		"highlight_narrative": nil,
+	}
+}
+
+func baseCardV11() map[string]any {
+	dimensions := map[string]any{
+		"开场建立权威": dimension(), "需求探索": dimension(), "问题放大": dimension(),
+		"专业呈现": dimension(), "方案定制": dimension(), "异议化解": dimension(),
+		"促成与收尾": dimension(),
+	}
+	return map[string]any{
+		"schema_version": dealCardVersion,
 		"conclusion": map[string]any{
 			"current_state":   "有明确意向但未锁定下一步",
 			"business_impact": "仍可推进",
-			"main_basis":      []any{"客户说想回去和家里人商量"},
+			"main_basis":      []any{"ev_1"},
 			"verification":    "记录是否预约",
 		},
 		"decision": map[string]any{
-			"trust": map[string]any{
-				"trust_target":  "医生",
-				"state":         "部分建立",
-				"summary":       "认可方案",
-				"evidence_refs": []any{"ev_1"},
-			},
-			"need_summary":   "想解决近视",
-			"concerns":       []any{map[string]any{"type": "家属或共同决策人", "summary": "要和家里人商量", "is_primary": true, "evidence_refs": []any{"ev_1"}}},
-			"decision_state": "有意向但未决定",
-			"condition":      nil,
-			"due_basis":      "after_family_discussion",
-			"evidence_refs":  []any{"ev_1"},
+			"decision_state":      "有意向但未决定",
+			"state_basis":         "transcript_judgment",
+			"evidence_refs":       []any{"ev_1"},
+			"condition":           nil,
+			"condition_due_quote": nil,
+			"trust": []any{map[string]any{
+				"trust_target": "医生", "state": "部分建立", "summary": "认可方案", "evidence_refs": []any{"ev_1"},
+			}},
+			"need_state":         "明确",
+			"need_summary":       "想解决近视",
+			"need_evidence_refs": []any{"ev_1"},
+			"concerns": []any{map[string]any{
+				"type": "家属或共同决策人", "summary": "要和家里人商量", "is_primary": true, "evidence_refs": []any{"ev_1"},
+			}},
+			"outcome_signals": []any{},
 		},
+		"clinical_conflict": map[string]any{"active": false, "reason": nil, "evidence_refs": []any{}},
+		"contact_policy":    "allow",
 		"product_findings": []any{map[string]any{
-			"product_id":                     3,
-			"product_name":                   "全飞秒Pro近视手术",
-			"finding_type":                   "已正确推荐",
-			"customer_evidence":              "我想做全飞秒",
-			"matching_reason":                "客户明确表达需求",
-			"recommended_by_consultant":      true,
-			"requires_clinical_confirmation": false,
-			"suggested_action":               "补发方案资料",
-			"product_version":                "v1",
-			"confidence":                     "high",
-			"evidence_refs":                  []any{"ev_1"},
+			"product_id": 3, "product_name": "全飞秒Pro近视手术", "finding_type": "已正确推荐",
+			"customer_evidence": "我想做全飞秒", "matching_reason": "客户明确表达需求",
+			"recommended_by_consultant": true, "requires_clinical_confirmation": false,
+			"suggested_action": "补发方案资料", "product_version": "1", "confidence": "high",
+			"evidence_refs": []any{"ev_1"},
 		}},
 		"primary_action": map[string]any{
-			"goal":                 "确认家属顾虑",
-			"action":               "今天打电话确认",
-			"suggested_content":    "想确认一下家人最担心什么",
-			"owner_employee_id":    float64(9102),
-			"due_basis":            "today",
-			"source_evidence_refs": []any{"ev_1"},
+			"type": "sales_follow_up", "goal": "确认家属顾虑", "action": "今天打电话确认",
+			"suggested_content": "想确认一下家人最担心什么", "owner_employee_id": nil,
+			"due_basis": "today", "due_quote": nil, "source_evidence_refs": []any{"ev_1"},
 		},
 		"secondary_findings": []any{},
 		"evidence_refs": []any{map[string]any{
-			"id":       "ev_1",
-			"quote":    "我想做全飞秒",
-			"speaker":  "客户",
-			"start_ms": float64(12000),
-			"used_for": []any{"结论", "需求"},
+			"id": "ev_1", "quote": "我想做全飞秒", "speaker": "客户", "source_ref": "s1",
+			"start_ms": 12000, "used_for": []any{"结论", "需求"},
 		}},
-		"quality": map[string]any{
-			"需求洞察": qualityItem,
-			"方案呈现": qualityItem,
-			"价值塑造": qualityItem,
-			"异议处理": qualityItem,
-			"信任建立": qualityItem,
-			"成交推动": qualityItem,
-			"客户体验": qualityItem,
+		"quality": map[string]any{"standard_version": dealQualityStandard, "dimensions": dimensions},
+		"coach": map[string]any{
+			"successful_practices": []any{},
+			"improvement":          nil,
+			"refund_review":        nil,
 		},
 		"confidence": "high",
 		"unknowns":   []any{},
 	}
 }
 
-func encodeCard(t *testing.T, card map[string]any) string {
+func validationCtxV11() cardValidationContext {
+	start := 12000
+	return cardValidationContext{
+		Sources: map[string]evidenceSource{
+			"s1": {ID: "s1", Text: "我想做全飞秒，但是要回去和家里人商量。", Speaker: "客户", StartMS: &start},
+		},
+		Facts:         map[string]businessFactRef{"f1": {Type: "付款"}},
+		Catalog:       map[int64]catalogRef{3: {Name: "全飞秒Pro近视手术", Version: "1"}},
+		AllowMissed:   true,
+		AllowExtended: false,
+	}
+}
+
+func validateCard(t *testing.T, card map[string]any, ctx cardValidationContext) (map[string]any, error) {
 	t.Helper()
+	schema, _, err := loadDealCardSchema("")
+	if err != nil {
+		t.Fatalf("load schema: %v", err)
+	}
 	raw, err := json.Marshal(card)
 	if err != nil {
 		t.Fatalf("marshal card: %v", err)
 	}
-	return string(raw)
+	return validateDealCard(string(raw), schema, ctx)
 }
 
-func validationContext() cardValidationContext {
-	return cardValidationContext{
-		Transcript:        testTranscript,
-		CatalogProductIDs: map[int64]bool{3: true},
-		CatalogAvailable:  true,
-		OwnerEmployeeID:   9101,
-	}
-}
-
-func validate(t *testing.T, card map[string]any) (map[string]any, error) {
-	t.Helper()
-	schema, err := loadDealCardSchema("")
-	if err != nil {
-		t.Fatalf("load schema: %v", err)
-	}
-	return validateDealCard(encodeCard(t, card), schema, validationContext())
-}
-
-func TestValidateDealCardAcceptsValidCard(t *testing.T) {
-	card, err := validate(t, baseCard())
-	if err != nil {
+func TestValidateDealCardAcceptsValidV11Card(t *testing.T) {
+	if _, err := validateCard(t, baseCardV11(), validationCtxV11()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	action, _ := card["primary_action"].(map[string]any)
-	if action["owner_employee_id"] != int64(9101) {
-		t.Fatalf("owner should be overridden to 9101, got %v", action["owner_employee_id"])
 	}
 }
 
 func TestValidateDealCardAllowsNullAction(t *testing.T) {
-	card := baseCard()
+	card := baseCardV11()
 	card["primary_action"] = nil
-	if _, err := validate(t, card); err != nil {
-		t.Fatalf("null primary_action should be allowed: %v", err)
-	}
-}
-
-func TestValidateDealCardRejectsUnknownField(t *testing.T) {
-	card := baseCard()
-	card["extra_field"] = "x"
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "additional") {
-		t.Fatalf("expected additionalProperties error, got %v", err)
-	}
-}
-
-func TestValidateDealCardRejectsLowConfidenceAction(t *testing.T) {
-	card := baseCard()
-	card["confidence"] = "low"
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "low confidence") {
-		t.Fatalf("expected low-confidence rejection, got %v", err)
+	if _, err := validateCard(t, card, validationCtxV11()); err != nil {
+		t.Fatalf("null action should be allowed: %v", err)
 	}
 }
 
 func TestValidateDealCardRejectsUnknownEvidenceRef(t *testing.T) {
-	card := baseCard()
-	decision := card["decision"].(map[string]any)
-	decision["evidence_refs"] = []any{"ev_9"}
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "unknown evidence ref") {
+	card := baseCardV11()
+	card["conclusion"].(map[string]any)["main_basis"] = []any{"ev_9"}
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "unknown evidence ref") {
 		t.Fatalf("expected unknown evidence error, got %v", err)
 	}
 }
 
-func TestValidateDealCardRejectsQuoteNotInTranscript(t *testing.T) {
-	card := baseCard()
+func TestValidateDealCardRejectsQuoteNotInSource(t *testing.T) {
+	card := baseCardV11()
 	card["evidence_refs"] = []any{map[string]any{
-		"id": "ev_1", "quote": "客户说一定要做", "speaker": "客户",
-		"start_ms": nil, "used_for": []any{"结论"},
+		"id": "ev_1", "quote": "客户说一定要做", "speaker": "客户", "source_ref": "s1",
+		"start_ms": 12000, "used_for": []any{"结论"},
 	}}
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "not found in transcript") {
-		t.Fatalf("expected quote mismatch error, got %v", err)
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "quote not found") {
+		t.Fatalf("expected quote error, got %v", err)
 	}
 }
 
-func TestValidateDealCardRejectsProductGating(t *testing.T) {
-	card := baseCard()
+func TestValidateDealCardRejectsSpeakerMismatch(t *testing.T) {
+	card := baseCardV11()
+	card["evidence_refs"].([]any)[0].(map[string]any)["speaker"] = "咨询师"
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "speaker") {
+		t.Fatalf("expected speaker error, got %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsStartMismatch(t *testing.T) {
+	card := baseCardV11()
+	card["evidence_refs"].([]any)[0].(map[string]any)["start_ms"] = 5
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "start_ms") {
+		t.Fatalf("expected start_ms error, got %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsVerifiedFactWithoutFact(t *testing.T) {
+	card := baseCardV11()
+	decision := card["decision"].(map[string]any)
+	decision["decision_state"] = "已付款"
+	decision["state_basis"] = "verified_fact"
+	ctx := validationCtxV11()
+	ctx.Facts = map[string]businessFactRef{}
+	if _, err := validateCard(t, card, ctx); err == nil || !strings.Contains(err.Error(), "verified_fact") {
+		t.Fatalf("expected verified_fact error, got %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsStopPolicyWithSalesAction(t *testing.T) {
+	card := baseCardV11()
+	card["contact_policy"] = "stop"
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil {
+		t.Fatal("contact_policy=stop with sales action should be rejected")
+	}
+}
+
+func TestValidateDealCardRejectsClinicalConflictWithFindings(t *testing.T) {
+	card := baseCardV11()
+	card["clinical_conflict"] = map[string]any{"active": true, "reason": "术后问题未解决", "evidence_refs": []any{"ev_1"}}
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil {
+		t.Fatal("clinical conflict with product findings should be rejected")
+	}
+}
+
+func TestValidateDealCardRejectsMissedWhenDisabled(t *testing.T) {
+	card := baseCardV11()
+	card["product_findings"].([]any)[0].(map[string]any)["finding_type"] = "可能漏推"
+	ctx := validationCtxV11()
+	ctx.AllowMissed = false
+	if _, err := validateCard(t, card, ctx); err == nil || !strings.Contains(err.Error(), "allow_missed_opportunity") {
+		t.Fatalf("expected missed gating error, got %v", err)
+	}
+}
+
+func TestValidateDealCardRejectsDuplicateFinding(t *testing.T) {
+	card := baseCardV11()
 	findings := card["product_findings"].([]any)
-	finding := findings[0].(map[string]any)
-	finding["finding_type"] = "可能漏推"
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "not allowed without product catalog") {
-		// catalog 可用时允许；再验证目录不可用的情况
-		t.Logf("catalog available: %v", err)
-	}
-	ctx := validationContext()
-	ctx.CatalogAvailable = false
-	schema, _ := loadDealCardSchema("")
-	if _, err := validateDealCard(encodeCard(t, card), schema, ctx); err == nil || !strings.Contains(err.Error(), "not allowed without product catalog") {
-		t.Fatalf("expected product gating error, got %v", err)
+	card["product_findings"] = append(findings, findings[0])
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate error, got %v", err)
 	}
 }
 
-func TestValidateDealCardRequiresClinicalConfirmationForCombined(t *testing.T) {
-	card := baseCard()
-	finding := card["product_findings"].([]any)[0].(map[string]any)
-	finding["finding_type"] = "联合机会"
-	finding["requires_clinical_confirmation"] = false
-	if _, err := validate(t, card); err == nil || !strings.Contains(err.Error(), "clinical confirmation") {
-		t.Fatalf("expected clinical confirmation error, got %v", err)
+func TestValidateDealCardRejectsLowConfidenceAction(t *testing.T) {
+	card := baseCardV11()
+	card["confidence"] = "low"
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil {
+		t.Fatal("low confidence with action should be rejected")
 	}
 }
 
-func TestRenderAnalysisInputWithJSONPlaceholder(t *testing.T) {
-	input := map[string]any{"recording": map[string]any{"recording_id": 7001}}
-	rendered := renderAnalysisInput("输入：{{input_json}}", input, "", nil, nil)
+func TestValidateDealCardRejectsDuplicateEvidenceID(t *testing.T) {
+	card := baseCardV11()
+	evidence := card["evidence_refs"].([]any)
+	card["evidence_refs"] = append(evidence, evidence[0])
+	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "duplicate evidence") {
+		t.Fatalf("expected duplicate evidence error, got %v", err)
+	}
+}
+
+func TestRenderAnalysisInputReplacesPlaceholder(t *testing.T) {
+	input := analysisInput{Recording: map[string]any{"recording_id": 7001}}
+	rendered := renderAnalysisInput("输入：{{input_json}}", input)
 	if !strings.Contains(rendered, "7001") || strings.Contains(rendered, "{{") {
 		t.Fatalf("unexpected render result: %s", rendered)
 	}
 }
 
-func TestRenderAnalysisInputWithLegacyPlaceholders(t *testing.T) {
-	rendered := renderAnalysisInput("转写：{{transcript}}", nil, "客户说再看看", nil, nil)
-	if !strings.Contains(rendered, "客户说再看看") {
-		t.Fatalf("legacy placeholder not replaced: %s", rendered)
+func TestComputeCoverage(t *testing.T) {
+	complete := recordingMeta{Duration: 500, TranscriptionStatus: "completed", EncounterRecordingCount: 1, RawFirstStart: 2, RawLastEnd: 495, HasRawTiming: true}
+	if got := computeCoverage(complete, 10); got != coverageComplete {
+		t.Fatalf("complete case got %s", got)
 	}
-}
-
-func TestDecodeTranscriptSegments(t *testing.T) {
-	payload := []any{
-		map[string]any{"speaker_role": "客户", "text": "我想做全飞秒", "start_ms": float64(1000)},
-		map[string]any{"speaker": "咨询师", "text": "可以", "start_time": float64(2000)},
+	multi := complete
+	multi.EncounterRecordingCount = 2
+	if got := computeCoverage(multi, 10); got != coveragePartial {
+		t.Fatalf("multi-recording case got %s", got)
 	}
-	segments := decodeTranscriptSegments(payload, 0)
-	if len(segments) != 2 || segments[0].Speaker != "客户" || segments[1].StartMS == nil || *segments[1].StartMS != 2000 {
-		t.Fatalf("unexpected segments: %+v", segments)
+	pending := complete
+	pending.TranscriptionStatus = "pending"
+	if got := computeCoverage(pending, 10); got != coverageUnknown {
+		t.Fatalf("pending case got %s", got)
 	}
-	if !strings.Contains(segmentsTranscript(segments), "客户：我想做全飞秒") {
-		t.Fatalf("unexpected transcript: %s", segmentsTranscript(segments))
+	late := complete
+	late.RawLastEnd = 300
+	if got := computeCoverage(late, 10); got != coverageUnknown {
+		t.Fatalf("late-end case got %s", got)
 	}
 }
 
 func TestMapSpeaker(t *testing.T) {
-	cases := map[string]string{
-		"consultant": "咨询师",
-		"customer":   "客户",
-		"patient":    "客户",
-		"doctor":     "咨询师",
-		"":           "未知",
-		"咨询师":        "咨询师",
-		"客户":         "客户",
-	}
+	cases := map[string]string{"consultant": "咨询师", "customer": "客户", "patient": "客户", "doctor": "咨询师", "": "未知", "客户": "客户"}
 	for raw, want := range cases {
 		if got := mapSpeaker(raw); got != want {
 			t.Fatalf("mapSpeaker(%q) = %q, want %q", raw, got, want)
@@ -233,15 +260,13 @@ func TestAlignSegmentTimestamps(t *testing.T) {
 	segments := []transcriptSegment{
 		{Speaker: "咨询师", Text: "您好，请坐"},
 		{Speaker: "客户", Text: "我想做全飞秒"},
-		{Speaker: "咨询师", Text: "我先给您查一下角膜厚度"},
 	}
 	raw := []rawSegment{
-		{Text: "哎，您好，请坐", Start: 1.2},
-		{Text: "我想做全飞秒", Start: 3.5},
-		{Text: "我先给您查一下角膜厚度", Start: 8.0},
+		{Text: "哎，您好，请坐", Start: 1.2, End: 3.0},
+		{Text: "我想做全飞秒", Start: 3.5, End: 6.0},
 	}
 	alignSegmentTimestamps(segments, raw)
-	for index, want := range []int{1200, 3500, 8000} {
+	for index, want := range []int{1200, 3500} {
 		if segments[index].StartMS == nil || *segments[index].StartMS != want {
 			t.Fatalf("segment %d start = %v, want %d", index, segments[index].StartMS, want)
 		}
