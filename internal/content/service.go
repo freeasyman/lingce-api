@@ -2,10 +2,12 @@ package content
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
+	"io"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1842,22 +1844,67 @@ func fallbackGeneratedContent(title string, context *string) string {
 }
 
 func (s *Service) generateImageURL(ctx context.Context, tenantID, contentID int64, prompt string) (string, error) {
-	if s.ossClient == nil {
-		hash := fnv.New64a()
-		_, _ = hash.Write([]byte(prompt))
-		return fmt.Sprintf("mock://content/%d/%d/%d.png", tenantID, contentID, hash.Sum64()), nil
+	if s.llmClient == nil {
+		return "", fmt.Errorf("LLM gateway is not configured for image generation")
 	}
-
-	key := oss.GenerateObjectKey(fmt.Sprintf("content/%d/%d", tenantID, contentID), ".txt")
-	data := []byte("generated_image_prompt: " + prompt)
-	url, err := s.ossClient.UploadBytes(ctx, key, data, &oss.UploadOptions{
-		ContentType: "text/plain; charset=utf-8",
-		Metadata: map[string]string{
-			"prompt": prompt,
-		},
+	resp, err := s.llmClient.GenerateImage(ctx, llmgateway.ImageGenerationRequest{
+		TenantID:      tenantID,
+		CallerService: "lingce-api",
+		CallerModule:  "content",
+		FunctionType:  "image_generation",
+		Prompt:        prompt,
+		N:             1,
+		Size:          "1024x1024",
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to upload generated image payload: %w", err)
+		return "", fmt.Errorf("gateway image generation failed: %w", err)
+	}
+	if len(resp.Images) == 0 || strings.TrimSpace(resp.Images[0]) == "" {
+		return "", fmt.Errorf("gateway image generation returned no image")
+	}
+	source := strings.TrimSpace(resp.Images[0])
+	var data []byte
+	contentType := "image/png"
+	if strings.HasPrefix(source, "data:") {
+		parts := strings.SplitN(source, ",", 2)
+		if len(parts) != 2 {
+			return "", fmt.Errorf("invalid image data uri")
+		}
+		data, err = base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", fmt.Errorf("decode image data uri: %w", err)
+		}
+	} else {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+		if reqErr != nil {
+			return "", fmt.Errorf("create image download request: %w", reqErr)
+		}
+		httpResp, reqErr := http.DefaultClient.Do(req)
+		if reqErr != nil {
+			return "", fmt.Errorf("download generated image: %w", reqErr)
+		}
+		defer httpResp.Body.Close()
+		if httpResp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("download generated image: status %d", httpResp.StatusCode)
+		}
+		data, err = io.ReadAll(httpResp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read generated image: %w", err)
+		}
+		if ct := httpResp.Header.Get("Content-Type"); strings.HasPrefix(ct, "image/") {
+			contentType = ct
+		}
+	}
+	if s.ossClient == nil {
+		return source, nil
+	}
+	key := oss.GenerateObjectKey(fmt.Sprintf("content/%d/%d", tenantID, contentID), ".png")
+	url, err := s.ossClient.UploadBytes(ctx, key, data, &oss.UploadOptions{
+		ContentType: contentType,
+		Metadata:    map[string]string{"prompt": prompt},
+	})
+	if err != nil {
+		return "", fmt.Errorf("upload generated image: %w", err)
 	}
 	return url, nil
 }
