@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lingce.local/schema/deal-card-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "conclusion",
+    "decision",
+    "product_findings",
+    "primary_action",
+    "secondary_findings",
+    "evidence_refs",
+    "quality",
+    "confidence",
+    "unknowns"
+  ],
+  "properties": {
+    "conclusion": { "$ref": "#/$defs/conclusion" },
+    "decision": { "$ref": "#/$defs/decision" },
+    "product_findings": { "type": "array", "items": { "$ref": "#/$defs/productFinding" } },
+    "primary_action": { "anyOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
+    "secondary_findings": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "evidence_refs": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "quality": { "$ref": "#/$defs/quality" },
+    "confidence": { "enum": ["high", "medium", "low"] },
+    "unknowns": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "quote", "speaker", "start_ms", "used_for"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^ev_[0-9]+$" },
+        "quote": { "type": "string", "minLength": 1 },
+        "speaker": { "enum": ["客户", "咨询师", "系统事实", "无法判断"] },
+        "start_ms": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "used_for": { "type": "array", "minItems": 1, "items": { "enum": ["结论", "信任", "需求", "顾虑", "产品", "动作", "质检"] } }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current_state", "business_impact", "main_basis", "verification"],
+      "properties": {
+        "current_state": { "type": "string", "minLength": 1 },
+        "business_impact": { "enum": ["仍可推进", "已流失", "已成交可复盘", "无法判断"] },
+        "main_basis": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "verification": { "type": "string", "minLength": 1 }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trust_target", "state", "summary", "evidence_refs"],
+      "properties": {
+        "trust_target": { "anyOf": [{ "enum": ["医生", "机构", "方案", "承诺"] }, { "type": "null" }] },
+        "state": { "enum": ["已建立", "部分建立", "存疑", "无法判断"] },
+        "summary": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "pattern": "^ev_[0-9]+$" } }
+      }
+    },
+    "concern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "summary", "is_primary", "evidence_refs"],
+      "properties": {
+        "type": { "enum": ["效果与适配", "安全与恢复", "价格与价值", "医生与机构信任", "家属或共同决策人", "时间与流程", "竞品比较", "疼痛隐私情绪"] },
+        "summary": { "type": "string", "minLength": 1 },
+        "is_primary": { "type": "boolean" },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "pattern": "^ev_[0-9]+$" } }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trust", "need_summary", "concerns", "decision_state", "condition", "due_basis", "evidence_refs"],
+      "properties": {
+        "trust": { "$ref": "#/$defs/trust" },
+        "need_summary": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "concerns": { "type": "array", "items": { "$ref": "#/$defs/concern" } },
+        "decision_state": { "enum": ["了解比较中", "有意向但未决定", "暂缓", "明确不考虑", "已预约", "已交定金", "已付款", "无法判断"] },
+        "condition": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "due_basis": { "enum": ["today", "within_48h", "within_7d", "after_family_discussion", "after_clinical_confirmation", "unknown"] },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "pattern": "^ev_[0-9]+$" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "decision_state": { "const": "暂缓" } } },
+          "then": { "properties": { "condition": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "if": { "properties": { "decision_state": { "not": { "const": "暂缓" } } } },
+          "then": { "properties": { "condition": { "type": "null" } } }
+        }
+      ]
+    },
+    "productFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product_id", "product_name", "finding_type", "customer_evidence", "matching_reason", "recommended_by_consultant", "requires_clinical_confirmation", "suggested_action", "product_version", "confidence", "evidence_refs"],
+      "properties": {
+        "product_id": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "product_name": { "type": "string", "minLength": 1 },
+        "finding_type": { "enum": ["已正确推荐", "可能漏推", "推荐不清", "升级机会", "联合机会", "替代方案"] },
+        "customer_evidence": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "matching_reason": { "type": "string", "minLength": 1 },
+        "recommended_by_consultant": { "type": "boolean" },
+        "requires_clinical_confirmation": { "type": "boolean" },
+        "suggested_action": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "product_version": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "pattern": "^ev_[0-9]+$" } }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal", "action", "suggested_content", "owner_employee_id", "due_basis", "source_evidence_refs"],
+      "properties": {
+        "goal": { "type": "string", "minLength": 1 },
+        "action": { "type": "string", "minLength": 1 },
+        "suggested_content": { "type": "string", "minLength": 1 },
+        "owner_employee_id": { "anyOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "due_basis": { "enum": ["today", "within_48h", "within_7d", "after_family_discussion", "after_clinical_confirmation", "unknown"] },
+        "source_evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^ev_[0-9]+$" } }
+      }
+    },
+    "qualityItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "evidence_refs", "impact_on_deal"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "pattern": "^ev_[0-9]+$" } },
+        "impact_on_deal": { "type": "string", "minLength": 1 }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["需求洞察", "方案呈现", "价值塑造", "异议处理", "信任建立", "成交推动", "客户体验"],
+      "properties": {
+        "需求洞察": { "$ref": "#/$defs/qualityItem" },
+        "方案呈现": { "$ref": "#/$defs/qualityItem" },
+        "价值塑造": { "$ref": "#/$defs/qualityItem" },
+        "异议处理": { "$ref": "#/$defs/qualityItem" },
+        "信任建立": { "$ref": "#/$defs/qualityItem" },
+        "成交推动": { "$ref": "#/$defs/qualityItem" },
+        "客户体验": { "$ref": "#/$defs/qualityItem" }
+      }
+    }
+  }
+}

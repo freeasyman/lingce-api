@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/lib/pq v1.12.3
 	github.com/pelletier/go-toml/v2 v2.3.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/xuri/excelize/v2 v2.9.1
 	golang.org/x/crypto v0.49.0
 	golang.org/x/image v0.38.0

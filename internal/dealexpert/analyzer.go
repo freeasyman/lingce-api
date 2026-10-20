@@ -19,8 +19,8 @@ import (
 const (
 	// AnalysisFunctionType 是赢客专家专属的模型配置类型，在运营控制台配置，不在代码里写模型名。
 	AnalysisFunctionType = "deal_expert_analysis"
-	// AnalysisPromptCode 是提示词管理表中的固定 code，版本号会进入幂等键。
-	AnalysisPromptCode = "deal_expert_analysis_v1"
+	// AnalysisPromptCode 是提示词管理表中的稳定 code；版本放在 version 字段（deal-expert-prompt-v1）。
+	AnalysisPromptCode = "deal_expert_analysis"
 
 	analysisMaxAttempts = 3
 	maxTranscriptRunes  = 80000
@@ -160,38 +160,57 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "MODEL_CONFIG_ERROR", err)
 		return
 	}
+	schema, err := loadDealCardSchema(prompt.OutputSchema)
+	if err != nil {
+		a.fail(ctx, item, "SCHEMA_CONFIG_ERROR", err)
+		return
+	}
 	catalog, err := a.loadCatalog(ctx, item.TenantID)
 	if err != nil {
 		a.fail(ctx, item, "CATALOG_ERROR", err)
 		return
+	}
+	catalogIDs := make(map[int64]bool, len(catalog))
+	for _, row := range catalog {
+		if id, ok := row["id"].(int64); ok && id > 0 {
+			catalogIDs[id] = true
+		}
 	}
 	outcomes, err := a.loadOutcomeFacts(ctx, item.TenantID, item.EncounterID)
 	if err != nil {
 		a.fail(ctx, item, "OUTCOME_ERROR", err)
 		return
 	}
+	facts, err := a.loadBusinessFacts(ctx, item)
+	if err != nil {
+		a.fail(ctx, item, "FACTS_ERROR", err)
+		return
+	}
+	segments := a.loadTranscriptSegments(ctx, item)
+	transcript := segmentsTranscript(segments)
 
-	userPrompt := renderAnalysisPrompt(prompt.UserTemplate, analysisPromptData{
-		Transcript:     truncateRunes(item.CleanedTranscript, maxTranscriptRunes),
-		CustomerName:   item.CustomerName,
-		RecordedAt:     formatTimePtr(item.RecordedAt),
-		EncounterID:    item.EncounterID,
-		RecordingID:    item.RecordingID,
-		ProductCatalog: catalog,
-		OutcomeFacts:   outcomes,
-	})
+	input := buildAnalysisInput(item, segments, facts, catalog)
+	userPrompt := renderAnalysisInput(prompt.UserTemplate, input, transcript, catalog, outcomes)
 
 	resp, err := a.callLLM(ctx, item, prompt, cfg, userPrompt)
 	if err != nil {
 		a.fail(ctx, item, "LLM_ERROR", err)
 		return
 	}
-	result, err := parseAnalysisResult(resp.Content)
+	card, err := validateDealCard(resp.Content, schema, cardValidationContext{
+		Transcript:        transcript,
+		CatalogProductIDs: catalogIDs,
+		CatalogAvailable:  len(catalog) > 0,
+		OwnerEmployeeID:   item.EmployeeID,
+	})
 	if err != nil {
+		if saveErr := a.saveRawResponse(ctx, item, resp.Content, err); saveErr != nil {
+			a.log.Error("save raw analysis response", "id", item.ID, "error", saveErr)
+		}
 		a.fail(ctx, item, "SCHEMA_ERROR", err)
 		return
 	}
-	if err := a.saveResult(ctx, item, result, resp); err != nil {
+	if err := a.saveResult(ctx, item, card, resp); err != nil {
 		a.fail(ctx, item, "SAVE_ERROR", err)
 		return
 	}
@@ -404,17 +423,16 @@ func (a *Analyzer) saveResult(ctx context.Context, item *pendingAnalysis, result
 	return nil
 }
 
-func formatTimePtr(value *time.Time) string {
-	if value == nil {
-		return ""
+// saveRawResponse 保留原始模型响应，便于排查 schema / 业务校验失败，不写 result。
+func (a *Analyzer) saveRawResponse(ctx context.Context, item *pendingAnalysis, content string, cause error) error {
+	if len(content) > 20000 {
+		content = truncateRunes(content, 20000)
 	}
-	return value.Format(time.RFC3339)
-}
-
-func truncateRunes(value string, max int) string {
-	runes := []rune(value)
-	if len(runes) <= max {
-		return value
-	}
-	return string(runes[:max]) + "\n[转写过长，已截断]"
+	_, err := a.pool.Exec(ctx, `
+		UPDATE deal_expert_analyses
+		SET error_message = COALESCE(NULLIF(error_message, ''), $2) || E'\n-- raw response --\n' || $3,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, item.ID, cause.Error(), content)
+	return err
 }

@@ -40,3 +40,6 @@ tmp/
 temp/
 
 lingce-api
+
+# 赢客专家回归语料（含患者原话，不入库）
+testdata/deal-analysis/
