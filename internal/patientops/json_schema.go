@@ -72,6 +72,13 @@ func validateSchemaNode(schema map[string]any, value any, path string) error {
 			}
 		}
 		if properties, ok := schema["properties"].(map[string]any); ok {
+			if additional, ok := schema["additionalProperties"].(bool); ok && !additional {
+				for key := range object {
+					if _, exists := properties[key]; !exists {
+						return fmt.Errorf("%s.%s is not allowed", path, key)
+					}
+				}
+			}
 			for key, raw := range properties {
 				childSchema, ok := raw.(map[string]any)
 				if !ok {

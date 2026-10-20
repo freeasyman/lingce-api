@@ -21,14 +21,15 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 		normalized := make([]any, 0, len(list))
 		seen := make(map[string]bool, len(list))
 		for _, item := range list {
-			text := stringifyScreenshotItem(item)
-			if text == "" {
+			text, ok := normalizeScreenshotArrayItem(item)
+			if !ok {
+				normalized = append(normalized, item)
 				continue
 			}
-			if key == "patient_utterances" && screenshotUIText(text) {
+			if key == "patient_utterances" && isUIOnlyText(text) {
 				continue
 			}
-			if key == "evidence" && screenshotUIText(text) {
+			if key == "evidence" && isUIEvidence(text) {
 				for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]"} {
 					if strings.HasPrefix(text, prefix) {
 						text = strings.Replace(text, prefix, "[系统]", 1)
@@ -50,7 +51,9 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 	for _, key := range []string{"concern", "decision_maker", "patient_question"} {
 		if value, ok := raw[key]; ok {
 			if _, isString := value.(string); !isString {
-				raw[key] = stringifyScreenshotItem(value)
+				if normalized, ok := normalizeScreenshotArrayItem(value); ok {
+					raw[key] = normalized
+				}
 			}
 		}
 	}
@@ -58,16 +61,57 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 
 func onlyRoleText(text string) bool {
 	trimmed := strings.TrimSpace(text)
-	return strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "：") && !strings.Contains(trimmed, ":")
-}
-
-func screenshotUIText(text string) bool {
-	for _, marker := range []string{"门店地址", "服务内容", "立即咨询", "价格表", "企业微信联系卡", "点击了"} {
-		if strings.Contains(text, marker) {
+	bareRoles := []string{"家长", "患者", "本人", "家属", "朋友圈作者", "咨询者", "员工", "无法判断", "客户"}
+	for _, role := range bareRoles {
+		if trimmed == role || trimmed == "["+role+"]" {
 			return true
 		}
 	}
-	return false
+	return strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "：") && !strings.Contains(trimmed, ":")
+}
+
+// isUIOnlyText 只删除“本身就是界面标签/点击动作”的短文本，不能按关键词删除完整患者问句。
+func isUIOnlyText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]", "[系统]"} {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	}
+	for _, label := range []string{"门店地址", "服务内容", "立即咨询", "价格表", "企业微信联系卡", "预约", "点击了"} {
+		if trimmed == label {
+			return true
+		}
+	}
+	return strings.HasPrefix(trimmed, "点击了") && len([]rune(trimmed)) <= 30
+}
+
+// isUIEvidence 识别“患者点击了门店地址”这类动作；不把“请把价格表发给我”误判成系统文本。
+func isUIEvidence(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "[患者]") && !strings.HasPrefix(trimmed, "[用户]") && !strings.HasPrefix(trimmed, "[家属]") && !strings.HasPrefix(trimmed, "[家长]") {
+		return false
+	}
+	body := trimmed
+	for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]"} {
+		body = strings.TrimSpace(strings.TrimPrefix(body, prefix))
+	}
+	return strings.HasPrefix(body, "点击了") || isUIOnlyText(body)
+}
+
+func normalizeScreenshotArrayItem(item any) (string, bool) {
+	switch value := item.(type) {
+	case string:
+		return strings.TrimSpace(value), true
+	case map[string]any:
+		// 只兼容带明确文本字段的对象，拒绝任意 map/数字/布尔值。
+		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value"} {
+			if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
+				return stringifyScreenshotItem(value), true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
 }
 
 func stringifyScreenshotItem(item any) string {

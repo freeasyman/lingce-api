@@ -828,8 +828,12 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	}
 	sourceID := int64(req.SourceID)
 	var analysisRaw []byte
-	if err := s.pool.QueryRow(ctx, `SELECT recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND ($3=0 OR customer_id=$3 OR customer_id IS NULL)`, tenantID, sourceID, customerID).Scan(&analysisRaw); err != nil {
+	var sourceCustomerID int64
+	if err := s.pool.QueryRow(ctx, `SELECT recognition_payload, COALESCE(customer_id,0) FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND ($3=0 OR customer_id=$3 OR customer_id IS NULL)`, tenantID, sourceID, customerID).Scan(&analysisRaw, &sourceCustomerID); err != nil {
 		return nil, fmt.Errorf("load screenshot analysis: %w", err)
+	}
+	if customerID <= 0 && sourceCustomerID > 0 {
+		customerID = sourceCustomerID
 	}
 	var analysis ScreenshotAnalysis
 	if err := json.Unmarshal(analysisRaw, &analysis); err != nil {
@@ -851,6 +855,7 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		params.ResponseFormat = "json"
 	}
 	contextJSON, _ := json.Marshal(analysis)
+	systemPrompt := strings.ReplaceAll(prompt.SystemPrompt, "{{current_time}}", time.Now().Format("2006-01-02 15:04"))
 	user := strings.ReplaceAll(prompt.UserPrompt, "{{action}}", req.Action)
 	user = strings.ReplaceAll(user, "{{analysis}}", string(contextJSON))
 	productContext := "此动作未读取产品库。"
@@ -868,9 +873,10 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	}
 	user = strings.ReplaceAll(user, "{{product_context}}", productContext)
 	user = strings.ReplaceAll(user, "{{customer_context}}", customerContext)
+	user = strings.ReplaceAll(user, "{{current_time}}", time.Now().Format("2006-01-02 15:04"))
 	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(params.TimeoutSeconds+10)*time.Second)
 	defer cancel()
-	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: user}}, Params: params})
+	resp, err := s.llm.TextInference(llmCtx, llmgateway.TextInferenceRequest{TenantID: tenantID, CallerService: "lingce-api", CallerModule: "patientops.action", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: customerID, BillingSubject: "patient_action_generation", BillingScene: req.Action}, Messages: []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}}, Params: params})
 	if err != nil {
 		return nil, fmt.Errorf("generate patient action through llm gateway: %w", err)
 	}
@@ -891,9 +897,12 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 		if strings.TrimSpace(structured.Content) == "" {
 			return nil, fmt.Errorf("帮我继续跟 structured result has empty content")
 		}
+		if strings.TrimSpace(structured.NextAction) == "" {
+			return nil, fmt.Errorf("帮我继续跟 structured result has empty next_action")
+		}
 		result.Content = strings.TrimSpace(structured.Content)
 		result.NextAction = strings.TrimSpace(structured.NextAction)
-		result.NextContactAt = strings.TrimSpace(structured.NextContactAt)
+		result.NextContactAt = normalizeActionContactTime(structured.NextContactAt)
 	}
 	if req.Action == "推荐产品解释" && productCount > 0 {
 		var productsJSON []byte
@@ -1126,6 +1135,20 @@ func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, n
 		result = append(result, c)
 	}
 	return result, rows.Err()
+}
+
+func normalizeActionContactTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	// 只接受绝对日期/时间；自由表达不直接变成截止时间。
+	for _, layout := range []string{"2006-01-02 15:04", "2006-01-02T15:04", "2006-01-02"} {
+		if _, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return value
+		}
+	}
+	return ""
 }
 
 func stripJSONCodeFence(value string) string {
