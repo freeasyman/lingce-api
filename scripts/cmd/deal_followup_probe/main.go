@@ -95,6 +95,8 @@ func main() {
 	fmt.Printf("overview: total=%d converted=%d following=%d notConverted=%d unknown=%d net=%.2f source=%s missed=%d followUp(completed=%d)\n",
 		overview.TotalEncounters, overview.Converted, overview.Following, overview.NotConverted, overview.Unknown,
 		overview.NetAmount, overview.AmountSource, overview.ProductMissed, overview.FollowUpCompleted)
+	fmt.Printf("gaps: unlinked=%d identityPending=%d amountPending=%d followUpMissing=%d\n",
+		overview.UnlinkedEncounters, overview.IdentityPending, overview.AmountPending, overview.FollowUpMissing)
 
 	outcomes, err := service.ListOutcomesByEncounter(ctx, tenantID, encounterID)
 	if err != nil {

@@ -8,10 +8,9 @@ import (
 
 // Overview 汇总一个租户在时间范围内的经营事实。
 // 口径：
-//   - 到院、成交状态来自 recordings；
-//   - 金额优先来自 deal_outcome_events（预约/定金/付款/退款），
-//     没有结果事件时才退回 recordings 的人工确认金额，并写明来源；
-//   - 跟进完成度来自 deal_follow_ups，不进入个人排名。
+//   - 到院、有效成交状态来自 recordings + 结果事件；
+//   - 金额优先来自 deal_outcome_events，没有结果事件时才退回 recordings 的人工确认金额，并写明来源；
+//   - 跟进完成度与数据缺口来自 deal_follow_ups，不进入个人排名。
 func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
 	if s == nil || s.pool == nil {
 		return nil, fmt.Errorf("deal expert store is nil")
@@ -24,9 +23,10 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 		out.DateTo = *dateTo
 	}
 
+	active := activeStatuses()
 	err := s.pool.QueryRow(ctx, `
 		WITH scope AS (
-			SELECT r.id,
+			SELECT r.id, r.encounter_id, r.customer_id,
 			       CASE lo.type
 			         WHEN '付款' THEN '成交了'
 			         WHEN '退款' THEN '成交了'
@@ -38,6 +38,8 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			       END AS effective_status,
 			       COALESCE(r.converted_amount, 0)::float8 AS converted,
 			       COALESCE(r.refund_amount, 0)::float8 AS refunded,
+			       COALESCE(os.cnt, 0) AS outcome_count,
+			       COALESCE(af.status, '') AS follow_status,
 			       r.analysis_result
 			FROM recordings r
 			LEFT JOIN LATERAL (
@@ -45,6 +47,15 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id
 				ORDER BY occurred_at DESC, id DESC LIMIT 1
 			) lo ON TRUE
+			LEFT JOIN LATERAL (
+				SELECT COUNT(*) AS cnt FROM deal_outcome_events o
+				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id
+			) os ON TRUE
+			LEFT JOIN LATERAL (
+				SELECT status FROM deal_follow_ups f
+				WHERE f.tenant_id = r.tenant_id AND f.encounter_id = r.encounter_id AND f.status = ANY($5)
+				ORDER BY f.id DESC LIMIT 1
+			) af ON TRUE
 			WHERE r.tenant_id = $1
 			  AND r.deleted_at IS NULL
 			  AND lower(COALESCE(r.business_scope, '')) = 'consultant'
@@ -61,11 +72,16 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COUNT(*) FILTER (WHERE effective_status IN ('还在跟进', '没成交')),
 			COALESCE(SUM(converted) FILTER (WHERE effective_status = '成交了'), 0),
 			COALESCE(SUM(refunded) FILTER (WHERE effective_status = '成交了'), 0),
-			COUNT(*) FILTER (WHERE COALESCE(analysis_result->'persuasive'->'recommend_check'->>'missed', '') <> '')
+			COUNT(*) FILTER (WHERE COALESCE(analysis_result->'persuasive'->'recommend_check'->>'missed', '') <> ''),
+			COUNT(*) FILTER (WHERE encounter_id IS NULL),
+			COUNT(*) FILTER (WHERE customer_id IS NULL),
+			COUNT(*) FILTER (WHERE effective_status = '成交了' AND outcome_count = 0 AND converted = 0),
+			COUNT(*) FILTER (WHERE effective_status = '还在跟进' AND follow_status = '')
 		FROM scope
-	`, tenantID, dateFrom, dateTo, employeeFilter).Scan(
+	`, tenantID, dateFrom, dateTo, employeeFilter, active).Scan(
 		&out.TotalEncounters, &out.Converted, &out.Following, &out.NotConverted, &out.Unknown,
 		&out.OpportunityCount, &out.GrossAmount, &out.RefundAmount, &out.ProductMissed,
+		&out.UnlinkedEncounters, &out.IdentityPending, &out.AmountPending, &out.FollowUpMissing,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("overview recordings: %w", err)
@@ -127,12 +143,12 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 	if err := s.pool.QueryRow(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = '待处理'),
-			COUNT(*) FILTER (WHERE status IN ('待处理','处理中','等待客户','等待内部协作','暂停联系') AND due_at IS NOT NULL AND due_at < NOW()),
+			COUNT(*) FILTER (WHERE status = ANY($2) AND due_at IS NOT NULL AND due_at < NOW()),
 			COUNT(*) FILTER (WHERE status = '已完成')
 		FROM deal_follow_ups
 		WHERE tenant_id = $1
-		  AND ($2::bigint IS NULL OR owner_employee_id = $2)
-	`, tenantID, employeeFilter).Scan(&out.FollowUpPending, &out.FollowUpOverdue, &out.FollowUpCompleted); err != nil {
+		  AND ($3::bigint IS NULL OR owner_employee_id = $3)
+	`, tenantID, active, employeeFilter).Scan(&out.FollowUpPending, &out.FollowUpOverdue, &out.FollowUpCompleted); err != nil {
 		return nil, fmt.Errorf("overview follow ups: %w", err)
 	}
 

@@ -34,6 +34,12 @@ type Overview struct {
 	FollowUpPending   int `json:"follow_up_pending"`
 	FollowUpOverdue   int `json:"follow_up_overdue"`
 	FollowUpCompleted int `json:"follow_up_completed"`
+
+	// 数据缺口：这些接待可以继续分析，但下游经营统计会缺一块。
+	UnlinkedEncounters int `json:"unlinked_encounters"`
+	IdentityPending    int `json:"identity_pending"`
+	AmountPending      int `json:"amount_pending"`
+	FollowUpMissing    int `json:"follow_up_missing"`
 }
 
 func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
