@@ -233,7 +233,7 @@ func (s *Service) CompleteFollowUp(ctx context.Context, tenantID, id int64, req 
 	return s.store.CompleteFollowUp(ctx, tenantID, id, req, rule, occurredAt, actorID, actorName)
 }
 
-func (s *Service) CreateOutcome(ctx context.Context, tenantID int64, req CreateOutcomeRequest) (*OutcomeEvent, error) {
+func (s *Service) CreateOutcome(ctx context.Context, tenantID, actorID int64, req CreateOutcomeRequest) (*OutcomeEvent, error) {
 	if req.EncounterID <= 0 || req.RecordingID <= 0 {
 		return nil, errors.New("encounter_id and recording_id are required")
 	}
@@ -251,7 +251,7 @@ func (s *Service) CreateOutcome(ctx context.Context, tenantID int64, req CreateO
 	if err != nil {
 		return nil, err
 	}
-	return s.store.CreateOutcome(ctx, tenantID, req, occurredAt)
+	return s.store.CreateOutcome(ctx, tenantID, actorID, req, occurredAt)
 }
 
 func (s *Service) ListOutcomesByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*OutcomeEvent, error) {

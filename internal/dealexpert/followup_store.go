@@ -261,16 +261,16 @@ func (s *Store) ListFollowUpEvents(ctx context.Context, tenantID, followUpID int
 	return items, rows.Err()
 }
 
-func (s *Store) CreateOutcome(ctx context.Context, tenantID int64, req CreateOutcomeRequest, occurredAt *time.Time) (*OutcomeEvent, error) {
+func (s *Store) CreateOutcome(ctx context.Context, tenantID, actorID int64, req CreateOutcomeRequest, occurredAt *time.Time) (*OutcomeEvent, error) {
 	if occurredAt == nil {
 		now := time.Now()
 		occurredAt = &now
 	}
 	item, err := scanOutcome(s.pool.QueryRow(ctx, `
-		INSERT INTO deal_outcome_events (tenant_id, encounter_id, recording_id, type, amount, occurred_at, source, source_ref, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		INSERT INTO deal_outcome_events (tenant_id, encounter_id, recording_id, type, amount, occurred_at, source, source_ref, note, confirmed_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING `+outcomeColumns,
-		tenantID, req.EncounterID, req.RecordingID, req.Type, req.Amount, occurredAt, req.Source, req.SourceRef, req.Note))
+		tenantID, req.EncounterID, req.RecordingID, req.Type, req.Amount, occurredAt, req.Source, req.SourceRef, req.Note, actorID))
 	if err != nil {
 		return nil, fmt.Errorf("create outcome: %w", err)
 	}

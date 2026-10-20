@@ -232,7 +232,12 @@ func (h *Handler) CreateOutcome(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
-	item, err := h.service.CreateOutcome(r.Context(), scope.TenantID, req)
+	claims := middleware.GetUserClaims(r.Context())
+	actorID := int64(0)
+	if claims != nil {
+		actorID = claims.UserID
+	}
+	item, err := h.service.CreateOutcome(r.Context(), scope.TenantID, actorID, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return
