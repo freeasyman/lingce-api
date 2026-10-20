@@ -1,10 +1,13 @@
 package content
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +67,10 @@ func (h *ExternalHandler) RegisterInternalRoutes(mux *http.ServeMux, token strin
 	deps := router.RouteDeps{InternalToken: strings.TrimSpace(token)}
 	router.Register(mux, []router.Route{
 		{Method: http.MethodPost, Path: "/internal/v1/content-analysis/signals", Handler: h.receive, AuthMode: "internal"},
+		{Method: http.MethodGet, Path: "/internal/v1/content-analysis/deliveries", Handler: h.listDeliveries, AuthMode: "internal"},
 		{Method: http.MethodGet, Path: "/internal/v1/content-analysis/deliveries/{id}", Handler: h.getDelivery, AuthMode: "internal"},
+		{Method: http.MethodPost, Path: "/internal/v1/content-analysis/deliveries/{id}/retry", Handler: h.retryDelivery, AuthMode: "internal"},
+		{Method: http.MethodGet, Path: "/internal/v1/content-analysis/stats", Handler: h.deliveryStats, AuthMode: "internal"},
 	}, deps)
 }
 
@@ -270,4 +276,117 @@ func writeContentJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// listDeliveries exposes delivery status for operations/monitoring.
+func (h *ExternalHandler) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	source := strings.TrimSpace(r.URL.Query().Get("source_system"))
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+	conditions := []string{"tenant_id=$1"}
+	args := []any{h.tenantID}
+	argIndex := 2
+	if status != "" {
+		conditions = append(conditions, fmt.Sprintf("status=$%d", argIndex))
+		args = append(args, status)
+		argIndex++
+	}
+	if source != "" {
+		conditions = append(conditions, fmt.Sprintf("source_system=$%d", argIndex))
+		args = append(args, source)
+		argIndex++
+	}
+	where := strings.Join(conditions, " AND ")
+	var total int
+	if err := h.pool.QueryRow(r.Context(), "SELECT COUNT(*) FROM content_analysis_deliveries WHERE "+where, args...).Scan(&total); err != nil {
+		writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "count deliveries failed"})
+		return
+	}
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT id, status, tenant_id, source_system, source_record_id, event_type, resource_id, error_reason,
+		       attempts, accepted, created_at, updated_at
+		FROM content_analysis_deliveries
+		WHERE `+where+`
+		ORDER BY created_at DESC
+		LIMIT $`+fmt.Sprintf("%d", argIndex), append(args, limit)...)
+	if err != nil {
+		writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "list deliveries failed"})
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0, limit)
+	for rows.Next() {
+		var id, status, sourceSystem, sourceRecordID, eventType string
+		var tenantID int64
+		var resourceID, errorReason *string
+		var attempts, accepted int
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&id, &status, &tenantID, &sourceSystem, &sourceRecordID, &eventType, &resourceID, &errorReason, &attempts, &accepted, &createdAt, &updatedAt); err != nil {
+			writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan delivery failed"})
+			return
+		}
+		items = append(items, map[string]any{
+			"delivery_id": id, "status": status, "tenant_id": tenantID, "source_system": sourceSystem,
+			"source_record_id": sourceRecordID, "event_type": eventType, "resource_id": resourceID,
+			"error": errorReason, "attempts": attempts, "accepted": accepted,
+			"created_at": createdAt, "updated_at": updatedAt,
+		})
+	}
+	writeContentJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// retryDelivery re-runs the exact stored envelope through the same receive
+// path. Idempotency and delivery bookkeeping stay in one place.
+func (h *ExternalHandler) retryDelivery(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	var payload []byte
+	var status string
+	if err := h.pool.QueryRow(r.Context(), `
+		SELECT payload, status FROM content_analysis_deliveries WHERE id=$1 AND tenant_id=$2
+	`, id, h.tenantID).Scan(&payload, &status); err != nil {
+		writeContentJSON(w, http.StatusNotFound, map[string]string{"error": "delivery not found"})
+		return
+	}
+	if status == "succeeded" {
+		writeContentJSON(w, http.StatusConflict, map[string]string{"error": "delivery already succeeded"})
+		return
+	}
+	_, _ = h.pool.Exec(r.Context(), `UPDATE content_analysis_deliveries SET attempts=attempts+1, updated_at=NOW() WHERE id=$1`, id)
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/content-analysis/signals", bytes.NewReader(payload))
+	req = req.WithContext(r.Context())
+	rec := httptest.NewRecorder()
+	h.receive(rec, req)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(rec.Code)
+	_, _ = w.Write(rec.Body.Bytes())
+}
+
+func (h *ExternalHandler) deliveryStats(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT status, COUNT(*), COALESCE(SUM(attempts),0)
+		FROM content_analysis_deliveries WHERE tenant_id=$1 GROUP BY status
+	`, h.tenantID)
+	if err != nil {
+		writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "stats failed"})
+		return
+	}
+	defer rows.Close()
+	byStatus := map[string]map[string]int64{}
+	var total int64
+	for rows.Next() {
+		var status string
+		var count, attempts int64
+		if err := rows.Scan(&status, &count, &attempts); err != nil {
+			writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan stats failed"})
+			return
+		}
+		byStatus[status] = map[string]int64{"count": count, "attempts": attempts}
+		total += count
+	}
+	writeContentJSON(w, http.StatusOK, map[string]any{"total": total, "by_status": byStatus})
 }

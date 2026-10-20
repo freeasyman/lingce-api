@@ -135,3 +135,91 @@ func jsonUnmarshalObject(raw []byte, target *JSONObject) error {
 	*target = obj
 	return nil
 }
+
+type ContentVersionCompare struct {
+	From    ContentVersion `json:"from"`
+	To      ContentVersion `json:"to"`
+	Added   []string       `json:"added"`
+	Removed []string       `json:"removed"`
+}
+
+func (s *Service) GetContentVersion(ctx context.Context, contentID, tenantID int64, version int) (*ContentVersion, error) {
+	var v ContentVersion
+	var extraRaw []byte
+	var createdAt time.Time
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT id, content_id, tenant_id, version, title, content, content_type, platform, status,
+		       COALESCE(extra_data, '{}'::jsonb), created_by, created_at
+		FROM content_item_versions
+		WHERE content_id=$1 AND tenant_id=$2 AND version=$3
+	`, contentID, tenantID, version).Scan(&v.ID, &v.ContentID, &v.TenantID, &v.Version, &v.Title, &v.Content, &v.ContentType, &v.Platform, &v.Status, &extraRaw, &v.CreatedBy, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("get content version: %w", err)
+	}
+	if len(extraRaw) > 0 {
+		_ = jsonUnmarshalObject(extraRaw, &v.ExtraData)
+	}
+	v.CreatedAt = createdAt.Format(time.RFC3339)
+	return &v, nil
+}
+
+func (s *Service) CompareContentVersions(ctx context.Context, contentID, tenantID int64, from, to int) (*ContentVersionCompare, error) {
+	if from <= 0 || to <= 0 || from == to {
+		return nil, fmt.Errorf("from and to must be different positive versions")
+	}
+	fromVersion, err := s.GetContentVersion(ctx, contentID, tenantID, from)
+	if err != nil {
+		return nil, err
+	}
+	toVersion, err := s.GetContentVersion(ctx, contentID, tenantID, to)
+	if err != nil {
+		return nil, err
+	}
+	added, removed := diffLines(fromVersion.Content, toVersion.Content)
+	return &ContentVersionCompare{From: *fromVersion, To: *toVersion, Added: added, Removed: removed}, nil
+}
+
+func (s *Service) RestoreContentVersion(ctx context.Context, contentID, tenantID, createdBy int64, version int) (*ContentResponse, error) {
+	selected, err := s.GetContentVersion(ctx, contentID, tenantID, version)
+	if err != nil {
+		return nil, err
+	}
+	title := selected.Title
+	content := selected.Content
+	update := UpdateContentRequest{
+		Title:       &title,
+		Content:     &content,
+		ContentType: selected.ContentType,
+		Platform:    selected.Platform,
+		ExtraData:   selected.ExtraData,
+	}
+	return s.UpdateContent(ctx, contentID, update)
+}
+
+func diffLines(before, after string) ([]string, []string) {
+	oldCount := map[string]int{}
+	for _, line := range strings.Split(before, "\n") {
+		oldCount[line]++
+	}
+	added := make([]string, 0)
+	for _, line := range strings.Split(after, "\n") {
+		if oldCount[line] > 0 {
+			oldCount[line]--
+		} else if strings.TrimSpace(line) != "" {
+			added = append(added, line)
+		}
+	}
+	newCount := map[string]int{}
+	for _, line := range strings.Split(after, "\n") {
+		newCount[line]++
+	}
+	removed := make([]string, 0)
+	for _, line := range strings.Split(before, "\n") {
+		if newCount[line] > 0 {
+			newCount[line]--
+		} else if strings.TrimSpace(line) != "" {
+			removed = append(removed, line)
+		}
+	}
+	return added, removed
+}

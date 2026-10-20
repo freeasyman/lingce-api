@@ -62,6 +62,25 @@ func (h *Handler) ListContents(w http.ResponseWriter, r *http.Request) {
 	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
 		req.EndDate = &endDate
 	}
+	if search := r.URL.Query().Get("search"); search != "" {
+		req.Search = &search
+	}
+	if platform := r.URL.Query().Get("platform"); platform != "" {
+		req.Platform = &platform
+	}
+	if contentType := r.URL.Query().Get("content_type"); contentType != "" {
+		req.ContentType = &contentType
+	}
+	if seedIDStr := r.URL.Query().Get("source_seed_id"); seedIDStr != "" {
+		if seedID, parseErr := strconv.ParseInt(seedIDStr, 10, 64); parseErr == nil {
+			req.SourceSeedID = &seedID
+		}
+	}
+	if recordingIDStr := r.URL.Query().Get("source_recording_id"); recordingIDStr != "" {
+		if recordingID, parseErr := strconv.ParseInt(recordingIDStr, 10, 64); parseErr == nil {
+			req.SourceRecordingID = &recordingID
+		}
+	}
 
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -599,4 +618,69 @@ func (h *Handler) RewriteSelection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"content": rewritten})
+}
+
+func (h *Handler) CompareContentVersions(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+	to, _ := strconv.Atoi(r.URL.Query().Get("to"))
+	comparison, err := h.service.CompareContentVersions(r.Context(), id, existing.TenantID, from, to)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, comparison)
+}
+
+func (h *Handler) RestoreContentVersion(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid content ID")
+		return
+	}
+	existing, err := h.service.GetContentByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	var req struct {
+		Version int `json:"version"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	content, err := h.service.RestoreContentVersion(r.Context(), id, existing.TenantID, claims.UserID, req.Version)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, content)
 }

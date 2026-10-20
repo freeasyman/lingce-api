@@ -340,6 +340,31 @@ func (s *Store) ListContents(ctx context.Context, req ContentListRequest) ([]*Co
 		args = append(args, *req.EndDate)
 		argIndex++
 	}
+	if req.Search != nil && strings.TrimSpace(*req.Search) != "" {
+		conditions = append(conditions, fmt.Sprintf("(ci.title ILIKE $%d OR ci.content ILIKE $%d)", argIndex, argIndex))
+		args = append(args, "%"+strings.TrimSpace(*req.Search)+"%")
+		argIndex++
+	}
+	if req.Platform != nil && strings.TrimSpace(*req.Platform) != "" {
+		conditions = append(conditions, fmt.Sprintf("ci.platform = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.Platform))
+		argIndex++
+	}
+	if req.ContentType != nil && strings.TrimSpace(*req.ContentType) != "" {
+		conditions = append(conditions, fmt.Sprintf("ci.content_type = $%d", argIndex))
+		args = append(args, strings.TrimSpace(*req.ContentType))
+		argIndex++
+	}
+	if req.SourceSeedID != nil {
+		conditions = append(conditions, fmt.Sprintf("(ci.extra_data->>'source_seed_id')::bigint = $%d", argIndex))
+		args = append(args, *req.SourceSeedID)
+		argIndex++
+	}
+	if req.SourceRecordingID != nil {
+		conditions = append(conditions, fmt.Sprintf("(ci.extra_data->>'source_recording_id')::bigint = $%d", argIndex))
+		args = append(args, *req.SourceRecordingID)
+		argIndex++
+	}
 
 	whereClause := strings.Join(conditions, " AND ")
 

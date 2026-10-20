@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,11 +165,15 @@ type AIEnvironment struct {
 
 // ListAIQuestions returns real questions from content topics and recording
 // seeds. It never invents a question and never reads Worker analysis tables.
-func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int) ([]AIQuestion, error) {
+func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int, sourceType string, recordingID int64, search string) ([]AIQuestion, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	questions := make([]AIQuestion, 0, limit)
+	fetchLimit := limit
+	if sourceType != "" || recordingID > 0 || strings.TrimSpace(search) != "" {
+		fetchLimit = 50
+	}
+	questions := make([]AIQuestion, 0, fetchLimit)
 	seen := map[string]bool{}
 
 	rows, err := s.store.pool.Query(ctx, `
@@ -176,7 +181,7 @@ func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int
 		FROM content_topics
 		WHERE tenant_id=$1 AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC LIMIT $2
-	`, tenantID, limit)
+	`, tenantID, fetchLimit)
 	if err != nil {
 		return nil, fmt.Errorf("query content topics: %w", err)
 	}
@@ -202,7 +207,7 @@ func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int
 		questions = append(questions, AIQuestion{
 			ID: fmt.Sprintf("topic:%d", id), SourceType: "content_topic", SourceID: id,
 			RecordingID: recordingID, Topic: title, PatientConcern: description,
-			ContentAngle: source, CreatedAt: createdAt.Format(time.RFC3339),
+			SeedType: "content_topic", CreatedAt: createdAt.Format(time.RFC3339),
 		})
 	}
 	rows.Close()
@@ -216,7 +221,7 @@ func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int
 		FROM recording_content_seeds
 		WHERE tenant_id=$1
 		ORDER BY created_at DESC, id DESC LIMIT $2
-	`, tenantID, limit)
+	`, tenantID, fetchLimit)
 	if err != nil {
 		return nil, fmt.Errorf("query content seeds: %w", err)
 	}
@@ -236,6 +241,7 @@ func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int
 		seen[key] = true
 		var quotes []string
 		_ = json.Unmarshal([]byte(quotesRaw), &quotes)
+		quotes = cleanQuotes(quotes)
 		questions = append(questions, AIQuestion{
 			ID: fmt.Sprintf("seed:%d", id), SourceType: "recording_seed", SourceID: id,
 			RecordingID: &recordingID, Topic: topic, SeedType: seedType,
@@ -248,10 +254,82 @@ func (s *Service) ListAIQuestions(ctx context.Context, tenantID int64, limit int
 		return nil, fmt.Errorf("iterate content seeds: %w", err)
 	}
 
-	if len(questions) > limit {
-		questions = questions[:limit]
+	filtered := make([]AIQuestion, 0, len(questions))
+	searchText := strings.ToLower(strings.TrimSpace(search))
+	for _, q := range questions {
+		if sourceType != "" && q.SourceType != sourceType {
+			continue
+		}
+		if recordingID > 0 && (q.RecordingID == nil || *q.RecordingID != recordingID) {
+			continue
+		}
+		if searchText != "" {
+			haystack := strings.ToLower(q.Topic + " " + q.PatientConcern + " " + q.ContentAngle + " " + strings.Join(q.KeyQuotes, " "))
+			if !strings.Contains(haystack, searchText) {
+				continue
+			}
+		}
+		filtered = append(filtered, q)
+		if len(filtered) >= limit {
+			break
+		}
 	}
-	return questions, nil
+	return filtered, nil
+}
+
+func (s *Service) GetAIQuestion(ctx context.Context, tenantID int64, id string) (*AIQuestion, error) {
+	parts := strings.SplitN(strings.TrimSpace(id), ":", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid question id")
+	}
+	numericID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || numericID <= 0 {
+		return nil, fmt.Errorf("invalid question id")
+	}
+	switch parts[0] {
+	case "topic":
+		var q AIQuestion
+		var description, source, recordingIDsRaw string
+		var createdAt time.Time
+		err := s.store.pool.QueryRow(ctx, `
+			SELECT id, title, COALESCE(description,''), COALESCE(source,''), COALESCE(source_recording_ids::text,''), created_at
+			FROM content_topics WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL
+		`, numericID, tenantID).Scan(&q.SourceID, &q.Topic, &description, &source, &recordingIDsRaw, &createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("question not found")
+		}
+		q.ID = fmt.Sprintf("topic:%d", q.SourceID)
+		q.SourceType = "content_topic"
+		q.PatientConcern = description
+		q.CreatedAt = createdAt.Format(time.RFC3339)
+		var recordingIDs []int64
+		_ = json.Unmarshal([]byte(recordingIDsRaw), &recordingIDs)
+		if len(recordingIDs) > 0 {
+			q.RecordingID = &recordingIDs[0]
+		}
+		return &q, nil
+	case "seed":
+		var q AIQuestion
+		var recordingID int64
+		var quotesRaw string
+		var createdAt time.Time
+		err := s.store.pool.QueryRow(ctx, `
+			SELECT id, recording_id, topic, seed_type, COALESCE(content_angle,''), COALESCE(patient_concern,''), COALESCE(seed_data->'key_quotes','[]'::jsonb)::text, created_at
+			FROM recording_content_seeds WHERE id=$1 AND tenant_id=$2
+		`, numericID, tenantID).Scan(&q.SourceID, &recordingID, &q.Topic, &q.SeedType, &q.ContentAngle, &q.PatientConcern, &quotesRaw, &createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("question not found")
+		}
+		q.ID = fmt.Sprintf("seed:%d", q.SourceID)
+		q.SourceType = "recording_seed"
+		q.RecordingID = &recordingID
+		_ = json.Unmarshal([]byte(quotesRaw), &q.KeyQuotes)
+		q.KeyQuotes = cleanQuotes(q.KeyQuotes)
+		q.CreatedAt = createdAt.Format(time.RFC3339)
+		return &q, nil
+	default:
+		return nil, fmt.Errorf("invalid question id")
+	}
 }
 
 func (s *Service) ListAIEnvironments(ctx context.Context, tenantID int64) ([]AIEnvironment, error) {
@@ -281,4 +359,14 @@ func (s *Service) ListAIEnvironments(ctx context.Context, tenantID int64) ([]AIE
 		envs = append(envs, env)
 	}
 	return envs, rows.Err()
+}
+
+func cleanQuotes(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			cleaned = append(cleaned, strings.TrimSpace(value))
+		}
+	}
+	return cleaned
 }

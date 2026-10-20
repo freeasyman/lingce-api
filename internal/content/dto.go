@@ -4,16 +4,21 @@ package content
 
 // TopicListRequest represents the request for listing topics
 type TopicListRequest struct {
-	TenantID  *int64  `json:"tenant_id,omitempty"`
-	TenantIDs []int64 `json:"tenant_ids,omitempty"`
-	Status    *string `json:"status,omitempty"`
-	Category  *string `json:"category,omitempty"`
-	Source    *string `json:"source,omitempty"`
-	CreatedBy *int64  `json:"created_by,omitempty"`
-	StartDate *string `json:"start_date,omitempty"`
-	EndDate   *string `json:"end_date,omitempty"`
-	Page      int     `json:"page"`
-	PageSize  int     `json:"page_size"`
+	TenantID          *int64  `json:"tenant_id,omitempty"`
+	TenantIDs         []int64 `json:"tenant_ids,omitempty"`
+	Status            *string `json:"status,omitempty"`
+	Category          *string `json:"category,omitempty"`
+	Source            *string `json:"source,omitempty"`
+	CreatedBy         *int64  `json:"created_by,omitempty"`
+	StartDate         *string `json:"start_date,omitempty"`
+	EndDate           *string `json:"end_date,omitempty"`
+	Search            *string `json:"search,omitempty"`
+	Platform          *string `json:"platform,omitempty"`
+	ContentType       *string `json:"content_type,omitempty"`
+	SourceSeedID      *int64  `json:"source_seed_id,omitempty"`
+	SourceRecordingID *int64  `json:"source_recording_id,omitempty"`
+	Page              int     `json:"page"`
+	PageSize          int     `json:"page_size"`
 }
 
 // TopicResponse represents topic response
@@ -122,16 +127,21 @@ type SaveIdeaTopicsRequest struct {
 
 // ContentListRequest represents the request for listing contents
 type ContentListRequest struct {
-	TenantID  *int64  `json:"tenant_id,omitempty"`
-	TenantIDs []int64 `json:"tenant_ids,omitempty"`
-	TopicID   *int64  `json:"topic_id,omitempty"`
-	Status    *string `json:"status,omitempty"`
-	Category  *string `json:"category,omitempty"`
-	CreatedBy *int64  `json:"created_by,omitempty"`
-	StartDate *string `json:"start_date,omitempty"`
-	EndDate   *string `json:"end_date,omitempty"`
-	Page      int     `json:"page"`
-	PageSize  int     `json:"page_size"`
+	TenantID          *int64  `json:"tenant_id,omitempty"`
+	TenantIDs         []int64 `json:"tenant_ids,omitempty"`
+	TopicID           *int64  `json:"topic_id,omitempty"`
+	Status            *string `json:"status,omitempty"`
+	Category          *string `json:"category,omitempty"`
+	CreatedBy         *int64  `json:"created_by,omitempty"`
+	StartDate         *string `json:"start_date,omitempty"`
+	EndDate           *string `json:"end_date,omitempty"`
+	Search            *string `json:"search,omitempty"`
+	Platform          *string `json:"platform,omitempty"`
+	ContentType       *string `json:"content_type,omitempty"`
+	SourceSeedID      *int64  `json:"source_seed_id,omitempty"`
+	SourceRecordingID *int64  `json:"source_recording_id,omitempty"`
+	Page              int     `json:"page"`
+	PageSize          int     `json:"page_size"`
 }
 
 // ContentResponse represents content response
