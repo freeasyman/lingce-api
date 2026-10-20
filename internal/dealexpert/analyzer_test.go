@@ -177,11 +177,15 @@ func TestValidateDealCardRejectsVerifiedFactWithoutFact(t *testing.T) {
 	}
 }
 
-func TestValidateDealCardRejectsStopPolicyWithSalesAction(t *testing.T) {
+func TestValidateDealCardDropsActionForStopPolicy(t *testing.T) {
 	card := baseCardV11()
 	card["contact_policy"] = "stop"
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil {
-		t.Fatal("contact_policy=stop with sales action should be rejected")
+	validated, err := validateCard(t, card, validationCtxV11())
+	if err != nil {
+		t.Fatalf("stop policy should keep the card and drop the action: %v", err)
+	}
+	if validated["primary_action"] != nil {
+		t.Fatal("primary_action should be dropped for stop policy")
 	}
 }
 
@@ -193,30 +197,42 @@ func TestValidateDealCardRejectsClinicalConflictWithFindings(t *testing.T) {
 	}
 }
 
-func TestValidateDealCardRejectsMissedWhenDisabled(t *testing.T) {
+func TestValidateDealCardDropsMissedWhenDisabled(t *testing.T) {
 	card := baseCardV11()
 	card["product_findings"].([]any)[0].(map[string]any)["finding_type"] = "可能漏推"
 	ctx := validationCtxV11()
 	ctx.AllowMissed = false
-	if _, err := validateCard(t, card, ctx); err == nil || !strings.Contains(err.Error(), "allow_missed_opportunity") {
-		t.Fatalf("expected missed gating error, got %v", err)
+	validated, err := validateCard(t, card, ctx)
+	if err != nil {
+		t.Fatalf("disallowed finding should be dropped, not rejected: %v", err)
+	}
+	if len(validated["product_findings"].([]any)) != 0 {
+		t.Fatal("missed finding should be dropped when disabled")
 	}
 }
 
-func TestValidateDealCardRejectsDuplicateFinding(t *testing.T) {
+func TestValidateDealCardDedupesFindings(t *testing.T) {
 	card := baseCardV11()
 	findings := card["product_findings"].([]any)
 	card["product_findings"] = append(findings, findings[0])
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("expected duplicate error, got %v", err)
+	validated, err := validateCard(t, card, validationCtxV11())
+	if err != nil {
+		t.Fatalf("duplicate finding should be deduped: %v", err)
+	}
+	if len(validated["product_findings"].([]any)) != 1 {
+		t.Fatal("duplicate finding should be removed")
 	}
 }
 
-func TestValidateDealCardRejectsLowConfidenceAction(t *testing.T) {
+func TestValidateDealCardDropsActionForLowConfidence(t *testing.T) {
 	card := baseCardV11()
 	card["confidence"] = "low"
-	if _, err := validateCard(t, card, validationCtxV11()); err == nil {
-		t.Fatal("low confidence with action should be rejected")
+	validated, err := validateCard(t, card, validationCtxV11())
+	if err != nil {
+		t.Fatalf("low confidence should keep the card and drop the action: %v", err)
+	}
+	if validated["primary_action"] != nil {
+		t.Fatal("primary_action should be dropped for low confidence")
 	}
 }
 

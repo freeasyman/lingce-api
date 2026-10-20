@@ -91,6 +91,12 @@ func validateDealCard(content string, schema *jsonschema.Schema, ctx cardValidat
 	if err := json.Unmarshal([]byte(cleaned), &card); err != nil {
 		return nil, fmt.Errorf("model output is not valid JSON: %w", err)
 	}
+	// 模型常给出“待核实/停止联系”却仍附带动作；按触达策略收敛，保留卡片其余内容。
+	if shouldDropAction(card) {
+		card["primary_action"] = nil
+	}
+	// 开关未开放或医疗冲突时，模型仍可能输出销售型产品发现；按策略过滤而不是废掉整张卡。
+	sanitizeProductFindings(card, ctx)
 	if err := schema.Validate(card); err != nil {
 		return nil, fmt.Errorf("schema validation failed: %w", err)
 	}
@@ -492,4 +498,50 @@ func splitQuoteParts(quote string) []string {
 		}
 	}
 	return parts
+}
+
+// shouldDropAction：stop/review 或低置信时，动作必须为空。
+func shouldDropAction(card map[string]any) bool {
+	if card["primary_action"] == nil {
+		return false
+	}
+	policy, _ := card["contact_policy"].(string)
+	confidence, _ := card["confidence"].(string)
+	return policy == "stop" || policy == "review" || confidence == "low"
+}
+
+// sanitizeProductFindings 去掉策略不允许的产品发现与重复项。
+func sanitizeProductFindings(card map[string]any, ctx cardValidationContext) {
+	rows, ok := card["product_findings"].([]any)
+	if !ok {
+		return
+	}
+	conflict, _ := card["clinical_conflict"].(map[string]any)
+	conflictActive, _ := conflict["active"].(bool)
+	kept := make([]any, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		finding, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		if conflictActive {
+			continue
+		}
+		findingType, _ := finding["finding_type"].(string)
+		if findingType == "可能漏推" && !ctx.AllowMissed {
+			continue
+		}
+		if (findingType == "升级机会" || findingType == "替代方案") && !ctx.AllowExtended {
+			continue
+		}
+		name, _ := finding["product_name"].(string)
+		key := findingType + "|" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, finding)
+	}
+	card["product_findings"] = kept
 }
