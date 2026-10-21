@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/employee"
@@ -2763,13 +2764,33 @@ func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingRespons
 	return resp, nil
 }
 
-// GetRecordingMinimal 供赢客详情首屏使用：只读录音和基础事实，不加载分析回放。
+type recordingMinimalCacheEntry struct {
+	at   time.Time
+	resp *RecordingResponse
+}
+
+var recordingMinimalCache sync.Map
+
+// GetRecordingMinimal 供赢客详情首屏使用：只读录音、转写和基础事实，不加载分析回放。
 func (s *Service) GetRecordingMinimal(ctx context.Context, id int64) (*RecordingResponse, error) {
+	if hit, ok := recordingMinimalCache.Load(id); ok {
+		if entry, valid := hit.(recordingMinimalCacheEntry); valid && time.Since(entry.at) < 30*time.Second {
+			return entry.resp, nil
+		}
+	}
 	recording, err := s.store.GetRecordingByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return toRecordingResponse(recording), nil
+	resp := toRecordingResponse(recording)
+	if cleaned, loadErr := s.loadCleanedTranscriptionSegments(ctx, id); loadErr == nil && len(cleaned) > 0 {
+		resp.CleanedTranscription = cleaned
+	}
+	if raw, loadErr := s.loadRawTranscriptionSegments(ctx, id); loadErr == nil && len(raw) > 0 {
+		resp.TranscriptionSegments = raw
+	}
+	recordingMinimalCache.Store(id, recordingMinimalCacheEntry{at: time.Now(), resp: resp})
+	return resp, nil
 }
 
 // GetRecordingLight 供赢客详情等只需要基础事实的页面使用，跳过全量分析回放重建。
