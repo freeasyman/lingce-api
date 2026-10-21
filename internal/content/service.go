@@ -1629,7 +1629,7 @@ func toContentResponse(item *ContentItem) *ContentResponse {
 		ViewCount:     item.ViewCount,
 		LikeCount:     item.LikeCount,
 		ShareCount:    item.ShareCount,
-		Images:        item.Images,
+		Images:        []string(item.Images),
 		ExtraData:     item.ExtraData,
 		CreatedBy:     item.CreatedBy,
 		CreatedAt:     formatDBLocalTime(item.CreatedAt),

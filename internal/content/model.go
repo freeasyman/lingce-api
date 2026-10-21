@@ -3,6 +3,7 @@ package content
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -25,6 +26,56 @@ type ContentTopic struct {
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 }
 
+// ImageList tolerates both JSON arrays of URL strings and arrays of image objects.
+type ImageList []string
+
+func (l *ImageList) Scan(value interface{}) error {
+	if value == nil {
+		*l = nil
+		return nil
+	}
+	var raw []byte
+	switch v := value.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		return fmt.Errorf("unsupported images value %T", value)
+	}
+	var items []interface{}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		// Some legacy rows store a single object rather than an array.
+		var single map[string]interface{}
+		if err2 := json.Unmarshal(raw, &single); err2 != nil {
+			return err
+		}
+		items = []interface{}{single}
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		switch v := item.(type) {
+		case string:
+			if v != "" {
+				result = append(result, v)
+			}
+		case map[string]interface{}:
+			for _, key := range []string{"url", "image_url", "src", "path"} {
+				if value, ok := v[key].(string); ok && value != "" {
+					result = append(result, value)
+					break
+				}
+			}
+		}
+	}
+	*l = result
+	return nil
+}
+
+func (l ImageList) Value() (driver.Value, error) {
+	return json.Marshal([]string(l))
+}
+
 // ContentItem represents a content item
 type ContentItem struct {
 	ID            int64      `json:"id"`
@@ -44,7 +95,7 @@ type ContentItem struct {
 	ViewCount     int        `json:"view_count"`
 	LikeCount     int        `json:"like_count"`
 	ShareCount    int        `json:"share_count"`
-	Images        []string   `json:"images,omitempty"`
+	Images        ImageList  `json:"images,omitempty"`
 	ExtraData     JSONObject `json:"extra_data,omitempty"`
 	CreatedBy     int64      `json:"created_by"`
 	CreatedAt     time.Time  `json:"created_at"`
