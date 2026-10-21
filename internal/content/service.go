@@ -1279,6 +1279,18 @@ func (s *Service) MarkContentNotAdopted(ctx context.Context, id, rejectedBy int6
 	return toContentResponse(item), nil
 }
 
+func defaultOrgAssetURL(assets []ContentOrgAsset, legacy string) string {
+	for _, asset := range assets {
+		if asset.IsDefault && asset.URL != "" {
+			return asset.URL
+		}
+	}
+	if len(assets) > 0 && assets[0].URL != "" {
+		return assets[0].URL
+	}
+	return legacy
+}
+
 // GenerateImages generates multiple image candidates for a content item.
 func (s *Service) GenerateImages(ctx context.Context, contentID int64, req GenerateImagesRequest) (*ImageGenerationResponse, error) {
 	if len(req.Prompts) == 0 {
@@ -1296,9 +1308,14 @@ func (s *Service) GenerateImages(ctx context.Context, contentID int64, req Gener
 	}
 
 	profile, _ := s.store.GetContentOrgProfile(ctx, content.TenantID)
-	logoURL, qrURL := "", ""
+	logoURL, qrURL := req.LogoURL, req.QRURL
 	if profile != nil {
-		logoURL, qrURL = profile.LogoURL, profile.QRCodeURL
+		if logoURL == "" {
+			logoURL = defaultOrgAssetURL(profile.LogoAssets, profile.LogoURL)
+		}
+		if qrURL == "" {
+			qrURL = defaultOrgAssetURL(profile.QRAssets, profile.QRCodeURL)
+		}
 	}
 	images := make([]GeneratedImage, 0, len(req.Prompts))
 	for _, prompt := range req.Prompts {

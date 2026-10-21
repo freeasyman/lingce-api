@@ -453,6 +453,8 @@ type VersionResponse struct {
 type GenerateImagesRequest struct {
 	Prompts   []string   `json:"prompts"`
 	Style     *string    `json:"style,omitempty"`
+	LogoURL   string     `json:"logo_url,omitempty"`
+	QRURL     string     `json:"qr_url,omitempty"`
 	ExtraData JSONObject `json:"extra_data,omitempty"`
 }
 
