@@ -550,7 +550,12 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recording, err := h.service.GetRecording(r.Context(), id)
+	var recording *RecordingResponse
+	if r.URL.Query().Get("light") == "1" {
+		recording, err = h.service.GetRecordingLight(r.Context(), id)
+	} else {
+		recording, err = h.service.GetRecording(r.Context(), id)
+	}
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return

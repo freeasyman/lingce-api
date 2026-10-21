@@ -23,6 +23,9 @@ type EncounterListItem struct {
 	EffectiveNetAmount  *float64       `json:"effective_net_amount,omitempty"`
 	LatestOutcomeType   string         `json:"latest_outcome_type,omitempty"`
 	FollowUpStatus      string         `json:"follow_up_status,omitempty"`
+	ProductName         string         `json:"product_name,omitempty"`
+	ConcernType         string         `json:"concern_type,omitempty"`
+	NextAction          string         `json:"next_action,omitempty"`
 	AnalysisResult      map[string]any `json:"analysis_result,omitempty"`
 }
 

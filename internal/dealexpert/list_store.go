@@ -76,6 +76,9 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			COALESCE(lo.type, '') AS latest_outcome_type,
 			COALESCE(lf.status, '') AS follow_up_status,
 			COALESCE(lf.is_active, false) AS follow_up_active,
+			COALESCE(NULLIF(r.analysis_result->>'business_title', ''), latest_analysis.result->'product_findings'->0->>'product_name', '') AS product_name,
+			COALESCE(latest_analysis.result->'decision'->'concerns'->0->>'type', '') AS concern_type,
+			COALESCE(latest_analysis.result->'primary_action'->>'action', '') AS next_action,
 			r.analysis_result
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
@@ -83,6 +86,11 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 		LEFT JOIN latest_outcome lo ON lo.tenant_id = r.tenant_id AND lo.encounter_id = r.encounter_id
 		LEFT JOIN outcome_sum os ON os.tenant_id = r.tenant_id AND os.encounter_id = r.encounter_id
 		LEFT JOIN latest_follow lf ON lf.tenant_id = r.tenant_id AND lf.encounter_id = r.encounter_id
+		LEFT JOIN LATERAL (
+			SELECT result FROM deal_expert_analyses a
+			WHERE a.tenant_id = r.tenant_id AND a.recording_id = r.id AND a.status = 'analyzed'
+			ORDER BY a.id DESC LIMIT 1
+		) latest_analysis ON true
 		%s`, activeArg, conditions)
 
 	outer := make([]string, 0, 4)
@@ -137,7 +145,7 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 		SELECT t.id, t.tenant_id, t.encounter_id, t.customer_id, t.customer_name, t.employee_id,
 		       t.employee_name, t.recorded_at, t.base_status, t.effective_status,
 		       t.converted_amount, t.refund_amount, t.effective_net,
-		       t.latest_outcome_type, t.follow_up_status, t.analysis_result
+		       t.latest_outcome_type, t.follow_up_status, t.product_name, t.concern_type, t.next_action, t.analysis_result
 		FROM (%s) t
 		WHERE %s
 		ORDER BY t.recorded_at DESC NULLS LAST, t.id DESC
@@ -156,7 +164,7 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			&item.ID, &item.TenantID, &item.EncounterID, &item.CustomerID, &item.CustomerName,
 			&item.EmployeeID, &item.EmployeeName, &item.RecordedAt, &item.BaseDealStatus,
 			&item.EffectiveDealStatus, &item.ConvertedAmount, &item.RefundAmount, &item.EffectiveNetAmount,
-			&item.LatestOutcomeType, &item.FollowUpStatus, &item.AnalysisResult,
+			&item.LatestOutcomeType, &item.FollowUpStatus, &item.ProductName, &item.ConcernType, &item.NextAction, &item.AnalysisResult,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan deal encounter: %w", err)
 		}

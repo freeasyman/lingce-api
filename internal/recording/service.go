@@ -2763,6 +2763,19 @@ func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingRespons
 	return resp, nil
 }
 
+// GetRecordingLight 供赢客详情等只需要基础事实的页面使用，跳过全量分析回放重建。
+func (s *Service) GetRecordingLight(ctx context.Context, id int64) (*RecordingResponse, error) {
+	recording, err := s.store.GetRecordingByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	resp := toRecordingResponse(recording)
+	if err := s.enrichRecordingResponse(ctx, id, resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 func (s *Service) GetTherapistReset(ctx context.Context, id int64) (*TherapistResetResponse, error) {
 	resp, err := s.GetRecording(ctx, id)
 	if err != nil {
