@@ -79,9 +79,13 @@ func (h *Handler) UploadContentOrgAsset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 10<<20))
+	data, err := io.ReadAll(io.LimitReader(file, 20<<20+1))
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		return
+	}
+	if len(data) > 20<<20 {
+		httputil.WriteBadRequest(w, "图片不能超过 20MB")
 		return
 	}
 	contentType := http.DetectContentType(data)
