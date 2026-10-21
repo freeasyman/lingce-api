@@ -382,7 +382,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 		if err != nil {
 			return nil, fmt.Errorf("failed to get employee: %w", err)
 		}
-		roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+		roleCode := employee.RoleCode
 
 		return &MeResponse{
 			UserID:   employee.ID,

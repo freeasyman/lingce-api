@@ -32,6 +32,7 @@ type Employee struct {
 	Email                 string
 	DepartmentID          *int64
 	MedicalDepartmentCode string
+	RoleCode              string
 	SessionVersion        int
 	IsActive              bool
 	CreatedAt             time.Time
