@@ -26,6 +26,10 @@ func (h *Handler) registerAccountRoutes(mux *http.ServeMux, deps router.RouteDep
 		{Method: http.MethodDelete, Path: "/api/v1/content-columns/{id}", Handler: h.DeleteContentColumn, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodGet, Path: "/api/v1/content-plans", Handler: h.ListContentPlans, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodPost, Path: "/api/v1/content-plans/weeks/{week_start}/generate", Handler: h.GenerateContentPlanWeek, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: http.MethodPost, Path: "/api/v1/content-plans/weeks/{week_start}/sync", Handler: h.SyncContentPlanWeek, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: http.MethodPost, Path: "/api/v1/content-plans/slots", Handler: h.CreateContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: http.MethodDelete, Path: "/api/v1/content-plans/slots/{id}", Handler: h.DeleteContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: http.MethodDelete, Path: "/api/v1/content-plans/slots/{id}/contents/{content_id}", Handler: h.RemoveContentFromPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodPut, Path: "/api/v1/content-plans/slots/{id}", Handler: h.UpdateContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodPost, Path: "/api/v1/content-plans/slots/{id}/assign-content", Handler: h.AssignContentToPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, deps)
@@ -278,6 +282,70 @@ func (h *Handler) AssignContentToPlanSlot(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"status": "assigned", "slot_id": id, "content_id": req.ContentID})
+}
+
+func (h *Handler) SyncContentPlanWeek(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireContentTenant(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.SyncContentPlanWeek(r.Context(), tenantID, strings.TrimSpace(r.PathValue("week_start")))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) CreateContentPlanSlot(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireContentTenant(w, r)
+	if !ok {
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	var req struct {
+		AccountID   int64  `json:"account_id"`
+		ColumnID    int64  `json:"column_id"`
+		WeekStart   string `json:"week_start"`
+		TargetCount int    `json:"target_count"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	item, err := h.service.CreateContentPlanSlot(r.Context(), tenantID, req.AccountID, req.ColumnID, strings.TrimSpace(req.WeekStart), req.TargetCount, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+func (h *Handler) DeleteContentPlanSlot(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireContentTenant(w, r)
+	if !ok {
+		return
+	}
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := h.service.DeleteContentPlanSlot(r.Context(), tenantID, id); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": "deleted", "slot_id": id})
+}
+
+func (h *Handler) RemoveContentFromPlanSlot(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireContentTenant(w, r)
+	if !ok {
+		return
+	}
+	slotID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	contentID, _ := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
+	if err := h.service.RemoveContentFromPlanSlot(r.Context(), tenantID, slotID, contentID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": "removed", "slot_id": slotID, "content_id": contentID})
 }
 
 func requireContentTenant(w http.ResponseWriter, r *http.Request) (int64, bool) {
