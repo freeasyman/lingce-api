@@ -1272,9 +1272,16 @@ func (s *Service) GenerateImages(ctx context.Context, contentID int64, req Gener
 
 	images := make([]GeneratedImage, 0, len(req.Prompts))
 	for _, prompt := range req.Prompts {
-		url, err := s.generateImageURL(ctx, content.TenantID, contentID, prompt)
-		if err != nil {
-			return nil, err
+		var url string
+		var lastErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			url, lastErr = s.generateImageURL(ctx, content.TenantID, contentID, prompt)
+			if lastErr == nil {
+				break
+			}
+		}
+		if lastErr != nil {
+			return nil, fmt.Errorf("generate image after retry: %w", lastErr)
 		}
 		images = append(images, GeneratedImage{
 			URL:    url,
@@ -1879,7 +1886,7 @@ func (s *Service) generateImageURL(ctx context.Context, tenantID, contentID int6
 		if reqErr != nil {
 			return "", fmt.Errorf("create image download request: %w", reqErr)
 		}
-		httpResp, reqErr := http.DefaultClient.Do(req)
+		httpResp, reqErr := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 		if reqErr != nil {
 			return "", fmt.Errorf("download generated image: %w", reqErr)
 		}
