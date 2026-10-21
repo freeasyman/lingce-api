@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS content_org_profiles (
+    tenant_id BIGINT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    institution_name VARCHAR(200) NOT NULL DEFAULT '',
+    region VARCHAR(100) NOT NULL DEFAULT '',
+    address VARCHAR(300) NOT NULL DEFAULT '',
+    phone VARCHAR(50) NOT NULL DEFAULT '',
+    website VARCHAR(300) NOT NULL DEFAULT '',
+    license VARCHAR(200) NOT NULL DEFAULT '',
+    doctor_name VARCHAR(100) NOT NULL DEFAULT '',
+    doctor_title VARCHAR(100) NOT NULL DEFAULT '',
+    doctor_department VARCHAR(100) NOT NULL DEFAULT '',
+    doctor_credentials VARCHAR(300) NOT NULL DEFAULT '',
+    doctor_profile_url VARCHAR(300) NOT NULL DEFAULT '',
+    doctor_bio TEXT NOT NULL DEFAULT '',
+    doctor_schedule VARCHAR(200) NOT NULL DEFAULT '',
+    doctor_same_as TEXT NOT NULL DEFAULT '',
+    extra_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
