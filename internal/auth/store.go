@@ -186,6 +186,7 @@ func (s *Store) GetEmployeeByUsername(ctx context.Context, username string, tena
 			&match.employee.Email,
 			&match.employee.DepartmentID,
 			&match.employee.MedicalDepartmentCode,
+			&match.employee.RoleCode,
 			&match.employee.SessionVersion,
 			&match.employee.IsActive,
 			&match.employee.CreatedAt,
