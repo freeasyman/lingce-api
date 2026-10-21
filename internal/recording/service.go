@@ -2778,7 +2778,7 @@ func (s *Service) GetRecordingMinimal(ctx context.Context, id int64) (*Recording
 			return entry.resp, nil
 		}
 	}
-	recording, err := s.store.GetRecordingByID(ctx, id)
+	recording, err := s.store.GetRecordingMinimalByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}

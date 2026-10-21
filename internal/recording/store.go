@@ -1738,6 +1738,49 @@ func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, day
 	return out, rows.Err()
 }
 
+// GetRecordingMinimalByID 读取赢客详情首屏所需的录音事实，不加载分析回放和大字段。
+func (s *Store) GetRecordingMinimalByID(ctx context.Context, id int64) (*MedicalRecording, error) {
+	query := `
+		SELECT
+			r.id, r.tenant_id,
+			COALESCE(NULLIF(t.name, ''), CONCAT('租户#', r.tenant_id::text)) AS tenant_name,
+			r.employee_id,
+			COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未知员工') AS employee_name,
+			r.customer_id, NULLIF(c.name, ''), COALESCE(c.name, ''),
+			c.age, c.gender, c.phone,
+			r.file_url, r.duration, r.transcription_text,
+			COALESCE(NULLIF(r.business_scope, ''), 'unknown') AS business_scope,
+			COALESCE(r.analysis_result, '{}'::json) AS analysis_result,
+			NULLIF(r.analysis_status, '') AS analysis_status,
+			CASE
+				WHEN r.analysis_status = 'completed' THEN 'completed'
+				WHEN r.analysis_status = 'failed' OR r.transcription_status = 'failed' THEN 'failed'
+				WHEN r.analysis_status = 'pending' OR r.transcription_status = 'pending' THEN 'pending'
+				ELSE 'processing'
+			END AS status,
+			r.recorded_at, r.created_at, COALESCE(r.updated_at, r.created_at, NOW()) AS updated_at,
+			r.encounter_id, NULLIF(r.confirmed_deal_status, ''),
+			r.converted_amount::float8, r.refund_amount::float8
+		FROM recordings r
+		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN tenants t ON t.id = r.tenant_id
+		WHERE r.id = $1 AND r.deleted_at IS NULL
+	`
+	var r MedicalRecording
+	err := s.pool.QueryRow(ctx, query, id).Scan(
+		&r.ID, &r.TenantID, &r.TenantName, &r.EmployeeID, &r.EmployeeName,
+		&r.CustomerID, &r.CustomerName, &r.PatientName, &r.PatientAge, &r.PatientGender, &r.PatientPhone,
+		&r.RecordingURL, &r.RecordingDuration, &r.TranscriptText, &r.BusinessScope,
+		&r.AnalysisResult, &r.AnalysisStatus, &r.Status, &r.RecordingStartedAt, &r.CreatedAt, &r.UpdatedAt,
+		&r.EncounterID, &r.ConfirmedDealStatus, &r.ConvertedAmount, &r.RefundAmount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
 // GetRecordingByID retrieves a medical recording by ID
 func (s *Store) GetRecordingByID(ctx context.Context, id int64) (*MedicalRecording, error) {
 	query := `
