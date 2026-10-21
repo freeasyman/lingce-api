@@ -551,7 +551,9 @@ func (h *Handler) GetRecording(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var recording *RecordingResponse
-	if r.URL.Query().Get("light") == "1" {
+	if r.URL.Query().Get("light") == "2" {
+		recording, err = h.service.GetRecordingMinimal(r.Context(), id)
+	} else if r.URL.Query().Get("light") == "1" {
 		recording, err = h.service.GetRecordingLight(r.Context(), id)
 	} else {
 		recording, err = h.service.GetRecording(r.Context(), id)

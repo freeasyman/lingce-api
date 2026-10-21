@@ -2763,6 +2763,15 @@ func (s *Service) GetRecording(ctx context.Context, id int64) (*RecordingRespons
 	return resp, nil
 }
 
+// GetRecordingMinimal 供赢客详情首屏使用：只读录音和基础事实，不加载分析回放。
+func (s *Service) GetRecordingMinimal(ctx context.Context, id int64) (*RecordingResponse, error) {
+	recording, err := s.store.GetRecordingByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toRecordingResponse(recording), nil
+}
+
 // GetRecordingLight 供赢客详情等只需要基础事实的页面使用，跳过全量分析回放重建。
 func (s *Service) GetRecordingLight(ctx context.Context, id int64) (*RecordingResponse, error) {
 	recording, err := s.store.GetRecordingByID(ctx, id)
