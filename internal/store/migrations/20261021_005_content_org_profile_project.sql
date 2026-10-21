@@ -1,0 +1,2 @@
+ALTER TABLE content_org_profiles
+    ADD COLUMN IF NOT EXISTS project VARCHAR(120) NOT NULL DEFAULT '';

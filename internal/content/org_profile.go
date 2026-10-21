@@ -8,6 +8,7 @@ import (
 type ContentOrgProfile struct {
 	TenantID          int64      `json:"tenant_id"`
 	InstitutionName   string     `json:"institution_name"`
+	Project           string     `json:"project"`
 	Region            string     `json:"region"`
 	Address           string     `json:"address"`
 	Phone             string     `json:"phone"`
@@ -27,12 +28,12 @@ type ContentOrgProfile struct {
 func (s *Store) GetContentOrgProfile(ctx context.Context, tenantID int64) (*ContentOrgProfile, error) {
 	profile := &ContentOrgProfile{TenantID: tenantID}
 	err := s.pool.QueryRow(ctx, `
-		SELECT institution_name, region, address, phone, website, license,
+		SELECT institution_name, project, region, address, phone, website, license,
 		       doctor_name, doctor_title, doctor_department, doctor_credentials,
 		       doctor_profile_url, doctor_bio, doctor_schedule, doctor_same_as, extra_data
 		FROM content_org_profiles WHERE tenant_id = $1
 	`, tenantID).Scan(
-		&profile.InstitutionName, &profile.Region, &profile.Address, &profile.Phone, &profile.Website, &profile.License,
+		&profile.InstitutionName, &profile.Project, &profile.Region, &profile.Address, &profile.Phone, &profile.Website, &profile.License,
 		&profile.DoctorName, &profile.DoctorTitle, &profile.DoctorDepartment, &profile.DoctorCredentials,
 		&profile.DoctorProfileURL, &profile.DoctorBio, &profile.DoctorSchedule, &profile.DoctorSameAs, &profile.ExtraData,
 	)
@@ -52,12 +53,13 @@ func (s *Store) UpsertContentOrgProfile(ctx context.Context, profile *ContentOrg
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO content_org_profiles (
-			tenant_id, institution_name, region, address, phone, website, license,
+			tenant_id, institution_name, project, region, address, phone, website, license,
 			doctor_name, doctor_title, doctor_department, doctor_credentials,
 			doctor_profile_url, doctor_bio, doctor_schedule, doctor_same_as, extra_data
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			institution_name=EXCLUDED.institution_name,
+			project=EXCLUDED.project,
 			region=EXCLUDED.region,
 			address=EXCLUDED.address,
 			phone=EXCLUDED.phone,
@@ -73,7 +75,7 @@ func (s *Store) UpsertContentOrgProfile(ctx context.Context, profile *ContentOrg
 			doctor_same_as=EXCLUDED.doctor_same_as,
 			extra_data=EXCLUDED.extra_data,
 			updated_at=NOW()
-	`, profile.TenantID, profile.InstitutionName, profile.Region, profile.Address, profile.Phone, profile.Website, profile.License,
+	`, profile.TenantID, profile.InstitutionName, profile.Project, profile.Region, profile.Address, profile.Phone, profile.Website, profile.License,
 		profile.DoctorName, profile.DoctorTitle, profile.DoctorDepartment, profile.DoctorCredentials,
 		profile.DoctorProfileURL, profile.DoctorBio, profile.DoctorSchedule, profile.DoctorSameAs, profile.ExtraData)
 	if err != nil {
