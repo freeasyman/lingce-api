@@ -2,6 +2,7 @@ package content
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -13,6 +14,7 @@ func (h *Handler) registerContentOrgProfileRoutes(mux *http.ServeMux, deps route
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/content-org-profile", Handler: h.GetContentOrgProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/content-org-profile", Handler: h.UpdateContentOrgProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-org-profile/assets", Handler: h.UploadContentOrgAsset, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, deps)
 }
 
@@ -60,4 +62,37 @@ func (h *Handler) UpdateContentOrgProfile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httputil.WriteSuccess(w, profile)
+}
+
+func (h *Handler) UploadContentOrgAsset(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.contentOrgProfileTenant(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		httputil.WriteBadRequest(w, "invalid multipart form")
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		httputil.WriteBadRequest(w, "file is required")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 10<<20))
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		return
+	}
+	contentType := http.DetectContentType(data)
+	if contentType != "image/png" && contentType != "image/jpeg" {
+		httputil.WriteBadRequest(w, "only PNG or JPEG is supported")
+		return
+	}
+	url, err := h.service.UploadContentOrgAsset(r.Context(), tenantID, r.FormValue("kind"), data, contentType)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]string{"url": url})
 }

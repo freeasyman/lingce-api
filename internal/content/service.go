@@ -1295,12 +1295,17 @@ func (s *Service) GenerateImages(ctx context.Context, contentID int64, req Gener
 		return nil, err
 	}
 
+	profile, _ := s.store.GetContentOrgProfile(ctx, content.TenantID)
+	logoURL, qrURL := "", ""
+	if profile != nil {
+		logoURL, qrURL = profile.LogoURL, profile.QRCodeURL
+	}
 	images := make([]GeneratedImage, 0, len(req.Prompts))
 	for _, prompt := range req.Prompts {
 		var url string
 		var lastErr error
 		for attempt := 0; attempt < 2; attempt++ {
-			url, lastErr = s.generateImageURL(ctx, content.TenantID, contentID, prompt)
+			url, lastErr = s.generateImageURL(ctx, content.TenantID, contentID, prompt, logoURL, qrURL)
 			if lastErr == nil {
 				break
 			}
@@ -1875,7 +1880,7 @@ func fallbackGeneratedContent(title string, context *string) string {
 	return fmt.Sprintf("【%s】\n\n一、背景\n%s\n\n二、核心问题\n1. 目标人群不清晰\n2. 内容价值表达不足\n\n三、执行建议\n1. 用具体场景开头，增强代入感\n2. 以问题-方法-案例结构组织内容\n3. 给出可直接执行的清单\n\n四、落地动作\n- 今日完成内容初稿\n- 明日完成渠道适配\n- 本周完成数据复盘", title, bg)
 }
 
-func (s *Service) generateImageURL(ctx context.Context, tenantID, contentID int64, prompt string) (string, error) {
+func (s *Service) generateImageURL(ctx context.Context, tenantID, contentID int64, prompt, logoURL, qrURL string) (string, error) {
 	if s.llmClient == nil {
 		return "", fmt.Errorf("LLM gateway is not configured for image generation")
 	}
@@ -1927,6 +1932,7 @@ func (s *Service) generateImageURL(ctx context.Context, tenantID, contentID int6
 			contentType = ct
 		}
 	}
+	data, contentType = s.composeBrandAssets(ctx, data, contentType, logoURL, qrURL)
 	if s.ossClient == nil {
 		return source, nil
 	}
