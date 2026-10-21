@@ -9,45 +9,48 @@ import (
 )
 
 type ContentAccount struct {
-	ID           int64      `json:"id"`
-	TenantID     int64      `json:"tenant_id"`
-	Name         string     `json:"name"`
-	Platform     string     `json:"platform"`
-	AccountType  string     `json:"account_type"`
-	Status       string     `json:"status"`
-	OwnerName    *string    `json:"owner_name,omitempty"`
-	ReviewerName *string    `json:"reviewer_name,omitempty"`
-	Audience     *string    `json:"audience,omitempty"`
-	Forms        []string   `json:"forms"`
-	Notes        *string    `json:"notes,omitempty"`
-	ExtraData    JSONObject `json:"extra_data,omitempty"`
-	CreatedBy    int64      `json:"created_by"`
-	CreatedAt    string     `json:"created_at"`
-	UpdatedAt    string     `json:"updated_at"`
+	ID            int64      `json:"id"`
+	TenantID      int64      `json:"tenant_id"`
+	Name          string     `json:"name"`
+	Platform      string     `json:"platform"`
+	AccountType   string     `json:"account_type"`
+	Status        string     `json:"status"`
+	MonthlyTarget int        `json:"monthly_target"`
+	OwnerName     *string    `json:"owner_name,omitempty"`
+	ReviewerName  *string    `json:"reviewer_name,omitempty"`
+	Audience      *string    `json:"audience,omitempty"`
+	Forms         []string   `json:"forms"`
+	Notes         *string    `json:"notes,omitempty"`
+	ExtraData     JSONObject `json:"extra_data,omitempty"`
+	CreatedBy     int64      `json:"created_by"`
+	CreatedAt     string     `json:"created_at"`
+	UpdatedAt     string     `json:"updated_at"`
 }
 
 type CreateContentAccountRequest struct {
-	Name         string   `json:"name"`
-	Platform     string   `json:"platform"`
-	AccountType  string   `json:"account_type"`
-	Status       string   `json:"status"`
-	OwnerName    *string  `json:"owner_name"`
-	ReviewerName *string  `json:"reviewer_name"`
-	Audience     *string  `json:"audience"`
-	Forms        []string `json:"forms"`
-	Notes        *string  `json:"notes"`
+	Name          string   `json:"name"`
+	Platform      string   `json:"platform"`
+	AccountType   string   `json:"account_type"`
+	Status        string   `json:"status"`
+	MonthlyTarget int      `json:"monthly_target"`
+	OwnerName     *string  `json:"owner_name"`
+	ReviewerName  *string  `json:"reviewer_name"`
+	Audience      *string  `json:"audience"`
+	Forms         []string `json:"forms"`
+	Notes         *string  `json:"notes"`
 }
 
 type UpdateContentAccountRequest struct {
-	Name         *string   `json:"name"`
-	Platform     *string   `json:"platform"`
-	AccountType  *string   `json:"account_type"`
-	Status       *string   `json:"status"`
-	OwnerName    *string   `json:"owner_name"`
-	ReviewerName *string   `json:"reviewer_name"`
-	Audience     *string   `json:"audience"`
-	Forms        *[]string `json:"forms"`
-	Notes        *string   `json:"notes"`
+	Name          *string   `json:"name"`
+	Platform      *string   `json:"platform"`
+	AccountType   *string   `json:"account_type"`
+	Status        *string   `json:"status"`
+	MonthlyTarget *int      `json:"monthly_target"`
+	OwnerName     *string   `json:"owner_name"`
+	ReviewerName  *string   `json:"reviewer_name"`
+	Audience      *string   `json:"audience"`
+	Forms         *[]string `json:"forms"`
+	Notes         *string   `json:"notes"`
 }
 
 type ContentColumn struct {
@@ -114,7 +117,7 @@ type ContentPlanSlot struct {
 
 func (s *Service) ListContentAccounts(ctx context.Context, tenantID int64) ([]ContentAccount, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT id, tenant_id, name, platform, account_type, status, owner_name, reviewer_name, audience,
+		SELECT id, tenant_id, name, platform, account_type, status, monthly_target, owner_name, reviewer_name, audience,
 		       forms, notes, COALESCE(extra_data,'{}'::jsonb), created_by, created_at, updated_at
 		FROM content_accounts WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC
 	`, tenantID)
@@ -135,7 +138,7 @@ func (s *Service) ListContentAccounts(ctx context.Context, tenantID int64) ([]Co
 
 func (s *Service) GetContentAccount(ctx context.Context, tenantID, id int64) (*ContentAccount, error) {
 	row := s.store.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, name, platform, account_type, status, owner_name, reviewer_name, audience,
+		SELECT id, tenant_id, name, platform, account_type, status, monthly_target, owner_name, reviewer_name, audience,
 		       forms, notes, COALESCE(extra_data,'{}'::jsonb), created_by, created_at, updated_at
 		FROM content_accounts WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL
 	`, id, tenantID)
@@ -163,11 +166,11 @@ func (s *Service) CreateContentAccount(ctx context.Context, tenantID, createdBy 
 	formsJSON, _ := json.Marshal(forms)
 	row := s.store.pool.QueryRow(ctx, `
 		INSERT INTO content_accounts
-			(tenant_id, name, platform, account_type, status, owner_name, reviewer_name, audience, forms, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
-		RETURNING id, tenant_id, name, platform, account_type, status, owner_name, reviewer_name, audience,
+			(tenant_id, name, platform, account_type, status, monthly_target, owner_name, reviewer_name, audience, forms, notes, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+		RETURNING id, tenant_id, name, platform, account_type, status, monthly_target, owner_name, reviewer_name, audience,
 		          forms, notes, COALESCE(extra_data,'{}'::jsonb), created_by, created_at, updated_at
-	`, tenantID, name, platform, accountType, status, req.OwnerName, req.ReviewerName, req.Audience, string(formsJSON), req.Notes, createdBy)
+	`, tenantID, name, platform, accountType, status, req.MonthlyTarget, req.OwnerName, req.ReviewerName, req.Audience, string(formsJSON), req.Notes, createdBy)
 	return scanContentAccount(row)
 }
 
@@ -181,12 +184,12 @@ func (s *Service) UpdateContentAccount(ctx context.Context, tenantID, id int64, 
 	row := s.store.pool.QueryRow(ctx, `
 		UPDATE content_accounts SET
 			name=COALESCE($3,name), platform=COALESCE($4,platform), account_type=COALESCE($5,account_type),
-			status=COALESCE($6,status), owner_name=COALESCE($7,owner_name), reviewer_name=COALESCE($8,reviewer_name),
-			audience=COALESCE($9,audience), forms=COALESCE($10::jsonb,forms), notes=COALESCE($11,notes), updated_at=NOW()
+			status=COALESCE($6,status), monthly_target=COALESCE($7,monthly_target), owner_name=COALESCE($8,owner_name), reviewer_name=COALESCE($9,reviewer_name),
+			audience=COALESCE($10,audience), forms=COALESCE($11::jsonb,forms), notes=COALESCE($12,notes), updated_at=NOW()
 		WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL
-		RETURNING id, tenant_id, name, platform, account_type, status, owner_name, reviewer_name, audience,
+		RETURNING id, tenant_id, name, platform, account_type, status, monthly_target, owner_name, reviewer_name, audience,
 		          forms, notes, COALESCE(extra_data,'{}'::jsonb), created_by, created_at, updated_at
-	`, id, tenantID, req.Name, req.Platform, req.AccountType, req.Status, req.OwnerName, req.ReviewerName, req.Audience, formsJSON, req.Notes)
+	`, id, tenantID, req.Name, req.Platform, req.AccountType, req.Status, req.MonthlyTarget, req.OwnerName, req.ReviewerName, req.Audience, formsJSON, req.Notes)
 	return scanContentAccount(row)
 }
 
@@ -547,7 +550,7 @@ func scanContentAccount(row accountScanner) (*ContentAccount, error) {
 	var formsRaw []byte
 	var extraRaw []byte
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Platform, &item.AccountType, &item.Status, &item.OwnerName, &item.ReviewerName, &item.Audience, &formsRaw, &item.Notes, &extraRaw, &item.CreatedBy, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Platform, &item.AccountType, &item.Status, &item.MonthlyTarget, &item.OwnerName, &item.ReviewerName, &item.Audience, &formsRaw, &item.Notes, &extraRaw, &item.CreatedBy, &createdAt, &updatedAt); err != nil {
 		return nil, fmt.Errorf("scan content account: %w", err)
 	}
 	if len(formsRaw) > 0 {
