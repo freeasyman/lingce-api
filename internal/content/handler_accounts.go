@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -24,14 +23,6 @@ func (h *Handler) registerAccountRoutes(mux *http.ServeMux, deps router.RouteDep
 		{Method: http.MethodGet, Path: "/api/v1/content-columns", Handler: h.ListContentColumns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodPut, Path: "/api/v1/content-columns/{id}", Handler: h.UpdateContentColumn, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: http.MethodDelete, Path: "/api/v1/content-columns/{id}", Handler: h.DeleteContentColumn, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodGet, Path: "/api/v1/content-plans", Handler: h.ListContentPlans, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodPost, Path: "/api/v1/content-plans/weeks/{week_start}/generate", Handler: h.GenerateContentPlanWeek, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodPost, Path: "/api/v1/content-plans/weeks/{week_start}/sync", Handler: h.SyncContentPlanWeek, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodPost, Path: "/api/v1/content-plans/slots", Handler: h.CreateContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodDelete, Path: "/api/v1/content-plans/slots/{id}", Handler: h.DeleteContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodDelete, Path: "/api/v1/content-plans/slots/{id}/contents/{content_id}", Handler: h.RemoveContentFromPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodPut, Path: "/api/v1/content-plans/slots/{id}", Handler: h.UpdateContentPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: http.MethodPost, Path: "/api/v1/content-plans/slots/{id}/assign-content", Handler: h.AssignContentToPlanSlot, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, deps)
 }
 
@@ -201,151 +192,6 @@ func (h *Handler) DeleteContentColumn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"status": "deleted"})
-}
-
-func (h *Handler) ListContentPlans(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	weekStart := strings.TrimSpace(r.URL.Query().Get("week_start"))
-	if weekStart == "" {
-		httputil.WriteBadRequest(w, "week_start is required")
-		return
-	}
-	items, err := h.service.ListContentPlanSlots(r.Context(), tenantID, weekStart)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, items)
-}
-
-func (h *Handler) GenerateContentPlanWeek(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	weekStart := strings.TrimSpace(r.PathValue("week_start"))
-	items, err := h.service.GenerateContentPlanWeek(r.Context(), tenantID, claims.UserID, weekStart)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, items)
-}
-
-func (h *Handler) UpdateContentPlanSlot(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var req struct {
-		TargetCount *int    `json:"target_count"`
-		Status      *string `json:"status"`
-		Notes       *string `json:"notes"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	item, err := h.service.UpdateContentPlanSlot(r.Context(), tenantID, id, req.TargetCount, req.Status, req.Notes)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, item)
-}
-
-func (h *Handler) AssignContentToPlanSlot(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var req struct {
-		ContentID int64 `json:"content_id"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	if err := h.service.AssignContentToPlanSlot(r.Context(), tenantID, id, req.ContentID); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"status": "assigned", "slot_id": id, "content_id": req.ContentID})
-}
-
-func (h *Handler) SyncContentPlanWeek(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	items, err := h.service.SyncContentPlanWeek(r.Context(), tenantID, strings.TrimSpace(r.PathValue("week_start")))
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, items)
-}
-
-func (h *Handler) CreateContentPlanSlot(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	claims := middleware.GetUserClaims(r.Context())
-	var req struct {
-		AccountID   int64  `json:"account_id"`
-		ColumnID    int64  `json:"column_id"`
-		WeekStart   string `json:"week_start"`
-		TargetCount int    `json:"target_count"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	item, err := h.service.CreateContentPlanSlot(r.Context(), tenantID, req.AccountID, req.ColumnID, strings.TrimSpace(req.WeekStart), req.TargetCount, claims.UserID)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, item)
-}
-
-func (h *Handler) DeleteContentPlanSlot(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := h.service.DeleteContentPlanSlot(r.Context(), tenantID, id); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"status": "deleted", "slot_id": id})
-}
-
-func (h *Handler) RemoveContentFromPlanSlot(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireContentTenant(w, r)
-	if !ok {
-		return
-	}
-	slotID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	contentID, _ := strconv.ParseInt(r.PathValue("content_id"), 10, 64)
-	if err := h.service.RemoveContentFromPlanSlot(r.Context(), tenantID, slotID, contentID); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"status": "removed", "slot_id": slotID, "content_id": contentID})
 }
 
 func requireContentTenant(w http.ResponseWriter, r *http.Request) (int64, bool) {
