@@ -32,6 +32,7 @@ type Service struct {
 	contentTemplates map[int64]*runtimeTemplateEntry
 	nextTemplateID   int64
 	nextVersionID    int64
+	contentLocks     sync.Map
 }
 
 func NewService(store *Store, llmClient *llmgateway.Client, ossClient *oss.Client) *Service {
@@ -569,6 +570,18 @@ func (s *Service) DeleteContent(ctx context.Context, id int64) error {
 	return s.store.DeleteContent(ctx, id)
 }
 
+func (s *Service) tryLockContent(contentID int64) (func(), bool) {
+	if contentID <= 0 {
+		return func() {}, true
+	}
+	value, _ := s.contentLocks.LoadOrStore(contentID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	if !mutex.TryLock() {
+		return nil, false
+	}
+	return mutex.Unlock, true
+}
+
 // GenerateContent generates content using LLM and persists it.
 func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64, req GenerateContentRequest) (*ContentResponse, error) {
 	if req.Title == "" {
@@ -577,6 +590,13 @@ func (s *Service) GenerateContent(ctx context.Context, tenantID, createdBy int64
 
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	if req.ContentID != nil {
+		unlock, ok := s.tryLockContent(*req.ContentID)
+		if !ok {
+			return nil, fmt.Errorf("这条内容正在生成，请等待完成后再试")
+		}
+		defer unlock()
 	}
 
 	contextText := ""
@@ -1264,6 +1284,11 @@ func (s *Service) GenerateImages(ctx context.Context, contentID int64, req Gener
 	if len(req.Prompts) == 0 {
 		return nil, fmt.Errorf("prompts is required")
 	}
+	unlock, ok := s.tryLockContent(contentID)
+	if !ok {
+		return nil, fmt.Errorf("这条内容正在生成，请等待完成后再试")
+	}
+	defer unlock()
 
 	content, err := s.store.GetContentByID(ctx, contentID)
 	if err != nil {
