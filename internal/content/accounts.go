@@ -327,6 +327,12 @@ func (s *Service) GenerateContentPlanWeek(ctx context.Context, tenantID, created
 		FROM content_accounts a
 		JOIN content_account_columns c ON c.account_id=a.id AND c.tenant_id=a.tenant_id AND c.is_active AND c.deleted_at IS NULL
 		WHERE a.tenant_id=$1 AND a.deleted_at IS NULL AND a.status='normal'
+		  AND (
+		    lower(coalesce(c.cadence,'weekly')) = 'weekly'
+		    OR lower(coalesce(c.cadence,'weekly')) = 'daily'
+		    OR (lower(coalesce(c.cadence,'weekly')) = 'biweekly' AND (FLOOR(($2::date - c.created_at::date)::numeric / 7)::int % 2) = 0)
+		    OR (lower(coalesce(c.cadence,'weekly')) = 'monthly' AND EXTRACT(DAY FROM $2::date) <= 7)
+		  )
 		ON CONFLICT (tenant_id, account_id, column_id, week_start) DO NOTHING
 	`, tenantID, weekStart, createdBy)
 	if err != nil {
@@ -363,6 +369,32 @@ func (s *Service) UpdateContentPlanSlot(ctx context.Context, tenantID, id int64,
 	return nil, fmt.Errorf("plan slot not found")
 }
 
+func planFormMatches(columnForm, contentType string) bool {
+	columnForm = strings.ToLower(strings.TrimSpace(columnForm))
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if columnForm == "" || columnForm == contentType {
+		return true
+	}
+	aliases := map[string][]string{
+		"article":         {"article", "wechat_image"},
+		"xhs_note":        {"xhs_note"},
+		"poster":          {"poster"},
+		"moment":          {"moment"},
+		"video_script":    {"video_script"},
+		"geo_article":     {"geo_article"},
+		"faq":             {"faq", "professional_qa"},
+		"professional_qa": {"professional_qa", "faq"},
+	}
+	if accepted, ok := aliases[columnForm]; ok {
+		for _, item := range accepted {
+			if item == contentType {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) AssignContentToPlanSlot(ctx context.Context, tenantID, slotID, contentID int64) error {
 	tx, err := s.store.pool.Begin(ctx)
 	if err != nil {
@@ -377,6 +409,16 @@ func (s *Service) AssignContentToPlanSlot(ctx context.Context, tenantID, slotID,
 	}
 	if status == "paused" || status == "skipped" {
 		return fmt.Errorf("这个槽位已暂停或跳过，不能继续排内容")
+	}
+	var contentTitle, contentType, columnForm string
+	if err := tx.QueryRow(ctx, `SELECT title, content_type FROM content_items WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, contentID, tenantID).Scan(&contentTitle, &contentType); err != nil {
+		return fmt.Errorf("content not found")
+	}
+	if err := tx.QueryRow(ctx, `SELECT form FROM content_account_columns WHERE id=$1 AND tenant_id=$2`, columnID, tenantID).Scan(&columnForm); err != nil {
+		return fmt.Errorf("column not found")
+	}
+	if !planFormMatches(columnForm, contentType) {
+		return fmt.Errorf("这个槽位是「%s」，不能放「%s」内容", columnForm, contentType)
 	}
 	var scheduled int
 	if err := tx.QueryRow(ctx, `
