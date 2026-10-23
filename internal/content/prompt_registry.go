@@ -131,3 +131,23 @@ func (s *Service) resolveDraftSystemPrompt(ctx context.Context, tenantID int64, 
 	systemPrompt = creative + "\n\n## 输出格式（必须严格遵守）\n只返回一个 JSON 对象，不要任何解释、不要 markdown 代码块：\n" + contract
 	return systemPrompt, modelRef, source
 }
+
+// resolvePromptByCode 按 code 从旧提示词模块取 prompt（含机构覆盖）；DB 无则用 fallback。
+// 用于非创作类 prompt（选题/补全/计划/归并/AI先答/学模板/明验/洞察提取）。
+func (s *Service) resolvePromptByCode(ctx context.Context, tenantID int64, code, fallback string) string {
+	prompt := fallback
+	if p, err := s.store.getPromptByCode(ctx, code); err != nil {
+		slog.Warn("load prompt module failed", "error", err, "code", code)
+	} else if p != nil && strings.TrimSpace(p.SystemPrompt) != "" {
+		prompt = strings.TrimSpace(p.SystemPrompt)
+		if strings.TrimSpace(p.UserPrompt) != "" {
+			prompt = prompt + "\n\n" + strings.TrimSpace(p.UserPrompt)
+		}
+	}
+	if o, err := s.store.getTenantPromptOverride(ctx, tenantID, code); err == nil && o != nil {
+		if strings.TrimSpace(o.SystemPrompt) != "" {
+			prompt = strings.TrimSpace(o.SystemPrompt)
+		}
+	}
+	return prompt
+}

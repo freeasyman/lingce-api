@@ -190,7 +190,7 @@ func (s *Service) generatePlanSummary(ctx context.Context, tenantID int64, accou
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: planSummaryPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_plan_summary", planSummaryPrompt)},
 			{Role: "user", Content: "本月计划：\n" + b.String()},
 		},
 	}

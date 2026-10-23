@@ -105,7 +105,7 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		ModelCode:     selectedModel.ModelCode,
 		Billing:       newBillingMetadata("content", "recording", recordingID, "insight_extraction", "content_insight"),
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: insightExtractionSystemPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_insight_extract", insightExtractionSystemPrompt)},
 			{Role: "user", Content: "问诊转写如下：\n\n" + transcript},
 		},
 	}

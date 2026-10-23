@@ -56,7 +56,7 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: normalizeQuestionsPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_cluster_normalize", normalizeQuestionsPrompt)},
 			{Role: "user", Content: strings.Join(lines, "\n")},
 		},
 	}

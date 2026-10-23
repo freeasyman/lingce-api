@@ -71,7 +71,7 @@ func (s *Service) aiAnswer(ctx context.Context, tenantID int64, question string)
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: aiAnswerPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_ai_answer", aiAnswerPrompt)},
 			{Role: "user", Content: question},
 		},
 	}
@@ -88,7 +88,7 @@ func (s *Service) aiAnalyze(ctx context.Context, tenantID int64, question, aiAns
 	if err != nil {
 		return nil, err
 	}
-	prompt := fmt.Sprintf(aiAnalysisPrompt, orgName)
+	prompt := fmt.Sprintf(s.resolvePromptByCode(ctx, tenantID, "content_ai_analyze", aiAnalysisPrompt), orgName)
 	user := fmt.Sprintf("患者问题：%s\n\nAI 回答：%s", question, aiAnswer)
 	req := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,

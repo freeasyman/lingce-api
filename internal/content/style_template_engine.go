@@ -105,7 +105,7 @@ func (s *Service) LearnStyleTemplate(ctx context.Context, tenantID int64, req Le
 		level = "tenant"
 	}
 
-	content, err := s.multimodalCall(ctx, tenantID, req.ImageURL, learnStyleTemplatePrompt)
+	content, err := s.multimodalCall(ctx, tenantID, req.ImageURL, s.resolvePromptByCode(ctx, tenantID, "content_learn_style", learnStyleTemplatePrompt))
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (s *Service) VerifyImageText(ctx context.Context, tenantID int64, imageURL,
 	if strings.TrimSpace(imageURL) == "" {
 		return nil, fmt.Errorf("image_url is required")
 	}
-	prompt := verifyImageTextPrompt + "\n\n预期文字：\n" + expectedText
+	prompt := s.resolvePromptByCode(ctx, tenantID, "content_verify_image_text", verifyImageTextPrompt) + "\n\n预期文字：\n" + expectedText
 	content, err := s.multimodalCall(ctx, tenantID, imageURL, prompt)
 	if err != nil {
 		return nil, err

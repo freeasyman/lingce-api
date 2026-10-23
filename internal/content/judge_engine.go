@@ -75,7 +75,7 @@ func (s *Service) GenerateTopicsFromInsights(ctx context.Context, tenantID int64
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: topicGenerationFromInsightPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen", topicGenerationFromInsightPrompt)},
 			{Role: "user", Content: "洞察如下：\n\n" + b.String()},
 		},
 	}
@@ -205,7 +205,7 @@ func (s *Service) EnrichTopic(ctx context.Context, tenantID, topicID int64) (map
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: topicEnrichPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_enrich", topicEnrichPrompt)},
 			{Role: "user", Content: user},
 		},
 	}
@@ -269,7 +269,7 @@ func (s *Service) EnrichTopicsBatch(ctx context.Context, tenantID int64, limit i
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: topicBatchEnrichPrompt},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_enrich_batch", topicBatchEnrichPrompt)},
 			{Role: "user", Content: user.String()},
 		},
 	}
