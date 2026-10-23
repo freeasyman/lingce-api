@@ -27,6 +27,8 @@ type BadgeDeviceV2 struct {
 	DeviceUID            *string    `json:"device_uid,omitempty"`
 	HardwareModel        *string    `json:"hardware_model,omitempty"`
 	BadgeStatus          string     `json:"badge_status"`
+	Position             string     `json:"position"`
+	Availability         string     `json:"availability"`
 	CurrentTenantID      *int64     `json:"current_tenant_id,omitempty"`
 	CurrentTenantName    *string    `json:"current_tenant_name,omitempty"`
 	CurrentEmployeeID    *int64     `json:"current_employee_id,omitempty"`

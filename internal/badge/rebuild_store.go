@@ -97,6 +97,16 @@ func (s *Store) RebuildListBadgeDevices(ctx context.Context, req RebuildBadgeDev
 		args = append(args, normalizeBadgeStatus(*req.BadgeStatus))
 		argIndex++
 	}
+	if req.Position != nil {
+		conditions = append(conditions, fmt.Sprintf("position = $%d", argIndex))
+		args = append(args, *req.Position)
+		argIndex++
+	}
+	if req.Availability != nil {
+		conditions = append(conditions, fmt.Sprintf("availability = $%d", argIndex))
+		args = append(args, *req.Availability)
+		argIndex++
+	}
 	if req.HealthLevel != nil {
 		conditions = append(conditions, fmt.Sprintf("health_status = $%d", argIndex))
 		args = append(args, *req.HealthLevel)
@@ -118,7 +128,7 @@ func (s *Store) RebuildListBadgeDevices(ctx context.Context, req RebuildBadgeDev
 	offset := (req.Page - 1) * req.PageSize
 	listSQL := fmt.Sprintf(`
 		SELECT id, device_no, manufacturer_id, manufacturer_code, manufacturer_name, app_id, device_uid,
-		       hardware_model, status, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
+		       hardware_model, status, position, availability, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
 		       assigned_at, health_status, battery_level, last_online_at, last_check_at, health_check_result,
 		       import_batch_no, acceptance_batch_no, accepted_at, metadata, created_at, updated_at, deleted_at
 		FROM badge_devices
@@ -148,7 +158,7 @@ func (s *Store) RebuildListBadgeDevices(ctx context.Context, req RebuildBadgeDev
 func (s *Store) RebuildGetBadgeDeviceByID(ctx context.Context, id int64) (*BadgeDeviceV2, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, device_no, manufacturer_id, manufacturer_code, manufacturer_name, app_id, device_uid,
-		       hardware_model, status, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
+		       hardware_model, status, position, availability, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
 		       assigned_at, health_status, battery_level, last_online_at, last_check_at, health_check_result,
 		       import_batch_no, acceptance_batch_no, accepted_at, metadata, created_at, updated_at, deleted_at
 		FROM badge_devices
@@ -171,12 +181,8 @@ func (s *Store) RebuildSetBadgeHealthSnapshot(ctx context.Context, id int64, hea
 	}
 	defer tx.Rollback(ctx)
 
-	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
-	if err != nil {
+	if _, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id); err != nil {
 		return err
-	}
-	if device.BadgeStatus != BadgeStatusPendingAcceptance {
-		return fmt.Errorf("only pending_acceptance badge can run acceptance")
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -220,6 +226,8 @@ func scanRebuildBadgeDevice(row pgx.Row) (*BadgeDeviceV2, error) {
 		&item.DeviceUID,
 		&item.HardwareModel,
 		&item.BadgeStatus,
+		&item.Position,
+		&item.Availability,
 		&item.CurrentTenantID,
 		&item.CurrentTenantName,
 		&item.CurrentEmployeeID,
@@ -416,17 +424,193 @@ func (s *Store) RebuildImportBadgeDevices(ctx context.Context, req RebuildBadgeI
 	return resp, nil
 }
 
+// RebuildAcceptBadgeDevice 标记可用：只要在仓库里就可以标为可用，不再要求先处于待验收。
 func (s *Store) RebuildAcceptBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
-	return s.rebuildChangeBadgeStatus(ctx, id, "acceptance", BadgeStatusPendingAcceptance, BadgeStatusInStock, reason, operatorID, func(ctx context.Context, tx pgx.Tx, device *BadgeDeviceV2) error {
-		_, err := tx.Exec(ctx, `
-			UPDATE badge_devices
-			SET status = 'in_stock',
-			    accepted_at = NOW(),
-			    updated_at = NOW()
-			WHERE id = $1
-		`, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
+	if err != nil {
 		return err
-	})
+	}
+	if device.Position != "warehouse" {
+		return fmt.Errorf("only warehouse badge can be marked available, got %s", device.Position)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET availability = 'available',
+		    accepted_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, id); err != nil {
+		return fmt.Errorf("failed to mark badge available: %w", err)
+	}
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   id,
+		Action:     "acceptance",
+		FromStatus: strPtr(device.BadgeStatus),
+		ToStatus:   strPtr(BadgeStatusInStock),
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"reason":            optionalString(reason),
+			"from_position":     device.Position,
+			"from_availability": device.Availability,
+		},
+	}); err != nil {
+		return fmt.Errorf("failed to insert acceptance log: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+var allowedPlacementTargets = map[string]map[string]bool{
+	"in_transit": {"warehouse": true},
+	"warehouse":  {"to_return": true, "lost": true, "scrapped": true, "inactive": true},
+	"in_use":     {"warehouse": true, "to_return": true, "lost": true, "scrapped": true},
+	"to_return":  {"vendor": true, "warehouse": true, "lost": true, "scrapped": true},
+	"vendor":     {"warehouse": true, "lost": true, "scrapped": true},
+	"lost":       {"warehouse": true, "scrapped": true},
+	"inactive":   {"warehouse": true, "scrapped": true, "lost": true},
+	"scrapped":   {},
+}
+
+func validAvailability(value string) bool {
+	return value == "pending_check" || value == "pending_config" || value == "available" || value == "unusable"
+}
+
+// RebuildBatchSetAvailability 批量设置可用性（当前用于“批量标记可用”）。
+func (s *Store) RebuildBatchSetAvailability(ctx context.Context, ids []int64, availability string, reason string, operatorID int64) (int, []int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	updated := 0
+	skipped := make([]int64, 0)
+	for _, id := range ids {
+		device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
+		if err != nil {
+			skipped = append(skipped, id)
+			continue
+		}
+		if availability == "available" && device.Position != "warehouse" {
+			skipped = append(skipped, id)
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE badge_devices SET availability = $2, updated_at = NOW() WHERE id = $1`, id, availability); err != nil {
+			return updated, skipped, fmt.Errorf("failed to update availability for %d: %w", id, err)
+		}
+		if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+			DeviceID:   id,
+			Action:     "batch_availability",
+			FromStatus: strPtr(device.BadgeStatus),
+			ToStatus:   strPtr(device.Position),
+			OperatorID: &operatorID,
+			ExtraData: JSONObject{
+				"reason":            optionalString(reason),
+				"from_availability": device.Availability,
+				"to_availability":   availability,
+			},
+		}); err != nil {
+			return updated, skipped, fmt.Errorf("failed to insert batch log for %d: %w", id, err)
+		}
+		updated++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, fmt.Errorf("failed to commit batch availability: %w", err)
+	}
+	return updated, skipped, nil
+}
+
+// RebuildChangeBadgePlacement 调整设备位置与可用性：登记到货、寄出、回机、丢失、停用、报废、标记已配置/可用。
+func (s *Store) RebuildChangeBadgePlacement(ctx context.Context, id int64, req RebuildBadgePlacementRequest, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	targetPosition := device.Position
+	if req.Position != "" {
+		targetPosition = req.Position
+	}
+	if targetPosition == "in_use" {
+		return nil, fmt.Errorf("在用状态只能通过分配或换机设置")
+	}
+	if targetPosition != device.Position {
+		if !allowedPlacementTargets[device.Position][targetPosition] {
+			return nil, fmt.Errorf("不允许从 %s 变更到 %s", device.Position, targetPosition)
+		}
+	}
+
+	targetAvailability := req.Availability
+	if targetAvailability == "" {
+		switch targetPosition {
+		case "scrapped", "lost", "inactive":
+			targetAvailability = "unusable"
+		case "warehouse":
+			if device.Position == "warehouse" && validAvailability(device.Availability) {
+				targetAvailability = device.Availability
+			} else {
+				targetAvailability = "pending_check"
+			}
+		default:
+			targetAvailability = "pending_check"
+		}
+	}
+	if !validAvailability(targetAvailability) {
+		return nil, fmt.Errorf("invalid availability: %s", targetAvailability)
+	}
+	switch targetAvailability {
+	case "available", "pending_config":
+		if targetPosition != "warehouse" {
+			return nil, fmt.Errorf("%s 只能用于仓库中的设备", targetAvailability)
+		}
+	case "unusable":
+		if targetPosition == "in_transit" {
+			return nil, fmt.Errorf("在途设备不能标记为不可用")
+		}
+	}
+
+	clearOwner := device.Position == "in_use"
+	sqlText := `UPDATE badge_devices SET position = $2, availability = $3, updated_at = NOW() WHERE id = $1`
+	if clearOwner {
+		sqlText = `UPDATE badge_devices SET position = $2, availability = $3, tenant_id = NULL, tenant_name = NULL,
+		           employee_id = NULL, employee_name = NULL, employee_phone = NULL, updated_at = NOW() WHERE id = $1`
+	}
+	if _, err := tx.Exec(ctx, sqlText, id, targetPosition, targetAvailability); err != nil {
+		return nil, fmt.Errorf("failed to change badge placement: %w", err)
+	}
+
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   id,
+		Action:     "placement",
+		FromStatus: strPtr(device.BadgeStatus),
+		ToStatus:   strPtr(targetPosition),
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"reason":            optionalString(req.Reason),
+			"from_position":     device.Position,
+			"from_availability": device.Availability,
+			"to_position":       targetPosition,
+			"to_availability":   targetAvailability,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("failed to insert placement log: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit placement: %w", err)
+	}
+	return s.RebuildGetBadgeDeviceByID(ctx, id)
 }
 
 func (s *Store) RebuildRejectAcceptance(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
@@ -452,8 +636,10 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 	if err != nil {
 		return err
 	}
-	if device.BadgeStatus != BadgeStatusInStock {
-		return fmt.Errorf("only in_stock badge can be assigned")
+	// 在库可用 → 领用；已在用 → 换人（同一事务内直接转移归属）。
+	transfer := device.Position == "in_use"
+	if !transfer && (device.Position != "warehouse" || device.Availability != "available") {
+		return fmt.Errorf("badge must be warehouse+available or in_use to assign, got %s/%s", device.Position, device.Availability)
 	}
 
 	var tenantName string
@@ -502,7 +688,8 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 
 	_, err = tx.Exec(ctx, `
 		UPDATE badge_devices
-		SET status = 'assigned',
+		SET position = 'in_use',
+		    availability = 'available',
 		    tenant_id = $2,
 		    tenant_name = $3,
 		    employee_id = $4,
@@ -516,10 +703,14 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 		return fmt.Errorf("failed to assign badge: %w", err)
 	}
 
+	action, fromStatus := "assign_employee", BadgeStatusInStock
+	if transfer {
+		action, fromStatus = "swap_employee", BadgeStatusAssigned
+	}
 	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
 		DeviceID:   id,
-		Action:     "assign_employee",
-		FromStatus: strPtr(BadgeStatusInStock),
+		Action:     action,
+		FromStatus: strPtr(fromStatus),
 		ToStatus:   strPtr(BadgeStatusAssigned),
 		TenantID:   &tenantID,
 		EmployeeID: &employeeID,
@@ -533,6 +724,110 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 	}
 
 	return tx.Commit(ctx)
+}
+
+// RebuildSwapBadgeDevices 换机：旧机转为待寄回，新机承接原归属。一个事务内完成。
+func (s *Store) RebuildSwapBadgeDevices(ctx context.Context, oldID, newID int64, reason string, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+	if oldID == newID {
+		return nil, fmt.Errorf("old and new badge must differ")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	oldDevice, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, oldID)
+	if err != nil {
+		return nil, err
+	}
+	newDevice, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, newID)
+	if err != nil {
+		return nil, err
+	}
+	if oldDevice.Position != "in_use" {
+		return nil, fmt.Errorf("old badge must be in_use, got %s/%s", oldDevice.Position, oldDevice.Availability)
+	}
+	if newDevice.Position != "warehouse" || newDevice.Availability != "available" {
+		return nil, fmt.Errorf("new badge must be warehouse+available, got %s/%s", newDevice.Position, newDevice.Availability)
+	}
+	if newDevice.CurrentTenantID != nil || newDevice.CurrentEmployeeID != nil {
+		return nil, fmt.Errorf("new badge is already assigned")
+	}
+
+	tenantID, tenantName := oldDevice.CurrentTenantID, oldDevice.CurrentTenantName
+	employeeID, employeeName, employeePhone := oldDevice.CurrentEmployeeID, oldDevice.CurrentEmployeeName, oldDevice.CurrentEmployeePhone
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET position = 'to_return',
+		    availability = 'pending_check',
+		    tenant_id = NULL,
+		    tenant_name = NULL,
+		    employee_id = NULL,
+		    employee_name = NULL,
+		    employee_phone = NULL,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, oldID); err != nil {
+		return nil, fmt.Errorf("failed to swap out old badge: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE badge_devices
+		SET position = 'in_use',
+		    availability = 'available',
+		    tenant_id = $2,
+		    tenant_name = $3,
+		    employee_id = $4,
+		    employee_name = $5,
+		    employee_phone = $6,
+		    assigned_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, newID, tenantID, tenantName, employeeID, employeeName, employeePhone); err != nil {
+		return nil, fmt.Errorf("failed to swap in new badge: %w", err)
+	}
+
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   oldID,
+		Action:     "swap_out",
+		FromStatus: strPtr(BadgeStatusAssigned),
+		ToStatus:   strPtr(BadgeStatusReturned),
+		TenantID:   tenantID,
+		EmployeeID: employeeID,
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"reason":        optionalString(reason),
+			"new_device_id": newID,
+			"new_device_no": newDevice.DeviceNo,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("failed to insert swap_out log: %w", err)
+	}
+
+	if err := s.insertRebuildLifecycleLogTx(ctx, tx, rebuildLifecycleLogPayload{
+		DeviceID:   newID,
+		Action:     "swap_in",
+		FromStatus: strPtr(BadgeStatusInStock),
+		ToStatus:   strPtr(BadgeStatusAssigned),
+		TenantID:   tenantID,
+		EmployeeID: employeeID,
+		OperatorID: &operatorID,
+		ExtraData: JSONObject{
+			"reason":        optionalString(reason),
+			"old_device_id": oldID,
+			"old_device_no": oldDevice.DeviceNo,
+			"employee_name": employeeName,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("failed to insert swap_in log: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit swap: %w", err)
+	}
+	return s.RebuildGetBadgeDeviceByID(ctx, newID)
 }
 
 func (s *Store) RebuildReclaimBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
@@ -653,7 +948,7 @@ func optionalString(value string) *string {
 func (s *Store) rebuildGetBadgeDeviceForUpdate(ctx context.Context, tx pgx.Tx, id int64) (*BadgeDeviceV2, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT id, device_no, manufacturer_id, manufacturer_code, manufacturer_name, app_id, device_uid,
-		       hardware_model, status, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
+		       hardware_model, status, position, availability, tenant_id, tenant_name, employee_id, employee_name, employee_phone,
 		       assigned_at, health_status, battery_level, last_online_at, last_check_at, health_check_result,
 		       import_batch_no, acceptance_batch_no, accepted_at, metadata, created_at, updated_at, deleted_at
 		FROM badge_devices

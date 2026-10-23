@@ -218,6 +218,12 @@ func (h *Handler) parseRebuildListRequest(r *http.Request) RebuildBadgeDeviceLis
 	if v := r.URL.Query().Get("badge_status"); v != "" {
 		req.BadgeStatus = &v
 	}
+	if v := r.URL.Query().Get("position"); v != "" {
+		req.Position = &v
+	}
+	if v := r.URL.Query().Get("availability"); v != "" {
+		req.Availability = &v
+	}
 	if v := r.URL.Query().Get("health_level"); v != "" {
 		req.HealthLevel = &v
 	}
@@ -227,6 +233,76 @@ func (h *Handler) parseRebuildListRequest(r *http.Request) RebuildBadgeDeviceLis
 	req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
 	return req
+}
+
+func (h *Handler) RebuildBatchSetAvailability(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "only admin can operate badge devices")
+		return
+	}
+	var req RebuildBadgeBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+	updated, skipped, err := h.service.RebuildBatchSetAvailability(r.Context(), req, claims.UserID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]interface{}{
+		"updated": updated,
+		"skipped": skipped,
+	})
+}
+
+func (h *Handler) RebuildChangeBadgePlacement(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "only admin can operate badge devices")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req RebuildBadgePlacementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+	resp, err := h.service.RebuildChangeBadgePlacement(r.Context(), id, req, claims.UserID, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) RebuildSwapBadgeDevice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "only admin can operate badge devices")
+		return
+	}
+	oldID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req RebuildBadgeSwapRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+	resp, err := h.service.RebuildSwapBadgeDevices(r.Context(), oldID, req, claims.UserID, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
 }
 
 func (h *Handler) rebuildRunStatusAction(w http.ResponseWriter, r *http.Request, fn func(context.Context, int64, string, int64, string) error) {

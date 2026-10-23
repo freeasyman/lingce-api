@@ -83,6 +83,35 @@ func (s *Service) RebuildAssignBadgeDevice(ctx context.Context, id int64, req Re
 	return s.store.RebuildAssignBadgeDevice(ctx, id, req.TenantID, req.EmployeeID, operatorID, operatorName)
 }
 
+func (s *Service) RebuildBatchSetAvailability(ctx context.Context, req RebuildBadgeBatchRequest, operatorID int64) (int, []int64, error) {
+	if len(req.DeviceIDs) == 0 {
+		return 0, nil, fmt.Errorf("device_ids is required")
+	}
+	if len(req.DeviceIDs) > 500 {
+		return 0, nil, fmt.Errorf("一次最多处理 500 台")
+	}
+	if !validAvailability(req.Availability) {
+		return 0, nil, fmt.Errorf("invalid availability: %s", req.Availability)
+	}
+	return s.store.RebuildBatchSetAvailability(ctx, req.DeviceIDs, req.Availability, req.Reason, operatorID)
+}
+
+func (s *Service) RebuildChangeBadgePlacement(ctx context.Context, id int64, req RebuildBadgePlacementRequest, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+	req.Position = strings.TrimSpace(req.Position)
+	req.Availability = strings.TrimSpace(req.Availability)
+	if req.Position == "" && req.Availability == "" {
+		return nil, fmt.Errorf("position or availability is required")
+	}
+	return s.store.RebuildChangeBadgePlacement(ctx, id, req, operatorID, operatorName)
+}
+
+func (s *Service) RebuildSwapBadgeDevices(ctx context.Context, oldID int64, req RebuildBadgeSwapRequest, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+	if req.NewDeviceID <= 0 {
+		return nil, fmt.Errorf("new_device_id is required")
+	}
+	return s.store.RebuildSwapBadgeDevices(ctx, oldID, req.NewDeviceID, req.Reason, operatorID, operatorName)
+}
+
 func (s *Service) RebuildReclaimBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
 	return s.store.RebuildReclaimBadgeDevice(ctx, id, reason, operatorID, operatorName)
 }
