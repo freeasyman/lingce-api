@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
@@ -11,27 +12,6 @@ import (
 
 // 文稿生成引擎：选题 → 结构化文稿（按形式）。
 
-const graphicNoteDraftPrompt = `你是小红书医疗科普笔记策划。根据下面的选题，生成一篇笔记的完整文稿。
-
-返回 JSON：
-{
-  "cover_title": "封面标题（≤20字，有钩子）",
-  "cover_subtitle": "封面副标题",
-  "cards": ["卡片1文案", "卡片2文案", "卡片3文案"],
-  "publish_package": {
-    "title": "发布标题",
-    "tags": ["#话题1", "#话题2"],
-    "pinned_comment": "首条评论（补充信息或CTA）"
-  }
-}
-
-要求：
-1. 文案口语化、有记忆点，emoji 分段。
-2. 用上证据里的金句/原话（如果有）。
-3. 每张卡片讲一个点，不堆砌。
-4. 不承诺疗效、不出现患者正脸描述。
-
-只返回 JSON。`
 
 // GenerateGraphicNoteDraftRequest 图文笔记文稿生成请求。
 type GenerateGraphicNoteDraftRequest struct {
@@ -58,6 +38,9 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 	user := s.buildDraftUserPrompt(ctx, tenantID, req)
 	user += fmt.Sprintf("卡片数量：%d 张\n", cardCount)
 
+	systemPrompt, modelRef, source := s.resolveDraftSystemPrompt(ctx, tenantID, "graphic")
+	slog.Info("draft prompt resolved", "form", "graphic", "source", source, "model_ref", modelRef)
+
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_graphic_note", "content_generation", "chat"})
 	if err != nil {
 		return nil, fmt.Errorf("resolve llm config for draft: %w", err)
@@ -70,7 +53,7 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: graphicNoteDraftPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: user},
 		},
 	}

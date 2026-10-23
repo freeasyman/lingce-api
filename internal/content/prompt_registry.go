@@ -1,0 +1,94 @@
+package content
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// 提示词注册表：让「创作方案」（content_creation_schemes）真正驱动生成。
+//
+// 设计：
+//   - 创作方案的 prompt 层 = 创作指令（人设/风格/要求），存 DB，可在「管理」页改。
+//   - 输出结构契约仍由代码保证（JSON schema），避免 DB 里的散文提示词导致输出格式崩坏。
+//   - DB 没有对应方案/未启用时，回退到内置默认创作指令。
+
+// formSchemeName 形式 → 创作方案名（content_creation_schemes.name）。
+var formSchemeName = map[string]string{
+	"article":    "公众号文章生成",
+	"graphic":    "小红书医疗科普笔记（专业版）",
+	"script":     "视频脚本生成",
+	"storyboard": "视频脚本生成",
+	"poster":     "海报文案",
+	"moments":    "朋友圈文案",
+}
+
+// formJsonContract 每种形式的输出结构契约（必须由代码保证）。
+var formJsonContract = map[string]string{
+	"article": `{"title":"标题","body":"正文（可含 markdown 小标题/加粗）","publish_package":{"summary":"摘要（分享时显示）","share_copy":"分享朋友圈的推荐文案"}}`,
+	"script":  `{"segments":[{"phase":"开场","words":"口播词","action":"画面/动作提示","subtitle":"字幕关键句","duration":"0-3s"},{"phase":"正文","words":"...","action":"...","subtitle":"...","duration":"3-24s"},{"phase":"结尾","words":"...","action":"...","subtitle":"...","duration":"24-30s"}],"publish_package":{"title":"视频标题","tags":["#话题"],"description":"视频描述"}}`,
+	"storyboard": `{"shots":[{"scene":"景别(特写/中景/全景)","camera":"运镜(固定/推/摇)","dialogue":"台词","duration":"时长","subtitle":"字幕","description":"画面描述(给手绘分镜用)"}]}`,
+	"poster":     `{"title":"主标题","subtitle":"副标题","bullets":["信息点1","信息点2","信息点3"],"publish_package":{"copy":"发布配文","tags":["#话题"],"cta":"行动号召"}}`,
+	"moments":    `{"copy":"朋友圈配文(注意分行和emoji)","image_points":["图片要点1","图片要点2","图片要点3"],"publish_package":{"mention":"@提醒(可空)","visibility_note":"可见范围提醒"}}`,
+	"graphic": `{"cover_title":"封面标题（≤20字，有钩子）","cover_subtitle":"封面副标题","cards":["卡片1文案","卡片2文案","卡片3文案"],` +
+		`"publish_package":{"title":"发布标题","tags":["#话题1","#话题2"],"pinned_comment":"首条评论（补充信息或CTA）"}}`,
+}
+
+// formCreativeDefault 内置默认创作指令（DB 无方案时兜底）。
+var formCreativeDefault = map[string]string{
+	"article":    "你是医疗科普公众号作者。根据选题，写一篇公众号文章文稿。要求：正文要有小标题分段、专业准确、不承诺疗效。",
+	"script":     "你是医疗短视频口播稿策划。根据选题，写一条 30 秒口播稿。要求：口语化、有钩子、有记忆点；字幕是关键词不是全文。",
+	"storyboard": "你是医疗短视频分镜师。根据选题，写分镜脚本。要求：3~5 个镜头，画面描述具体到人物动作和构图。",
+	"poster":     "你是医疗科普海报文案。根据选题，写海报文案。要求：主标题短而有钩子，信息点简洁。",
+	"moments":    "你是医疗科普朋友圈文案。根据选题，写朋友圈内容。要求：配文口语化、有温度，不超过6行避免折叠。",
+	"graphic": "你是小红书医疗科普笔记策划。根据下面的选题，生成一篇笔记的完整文稿。要求：" +
+		"1. 文案口语化、有记忆点，emoji 分段。2. 用上证据里的金句/原话（如果有）。3. 每张卡片讲一个点，不堆砌。4. 不承诺疗效、不出现患者正脸描述。",
+}
+
+// creationScheme 一条创作方案（只取提示词相关层）。
+type creationScheme struct {
+	ID       int64
+	Name     string
+	Prompt   string
+	ModelRef string
+}
+
+// getActiveCreationScheme 取某方案名的活跃方案：租户定制优先，其次全局（tenant_id=0）。
+func (s *Store) getActiveCreationScheme(ctx context.Context, tenantID int64, name string) (*creationScheme, error) {
+	var cs creationScheme
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(name,''), COALESCE(prompt,''), COALESCE(model_ref,'')
+		FROM content_creation_schemes
+		WHERE (tenant_id = $1 OR tenant_id = 0) AND name = $2 AND is_active = true
+		ORDER BY tenant_id DESC, version DESC
+		LIMIT 1`, tenantID, name).
+		Scan(&cs.ID, &cs.Name, &cs.Prompt, &cs.ModelRef)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &cs, nil
+}
+
+// resolveDraftSystemPrompt 解析某形式的系统提示词：DB 创作方案（活跃）优先，否则内置默认；
+// 末尾统一拼上代码保证的 JSON 结构契约。
+func (s *Service) resolveDraftSystemPrompt(ctx context.Context, tenantID int64, form string) (systemPrompt string, modelRef string, source string) {
+	creative := formCreativeDefault[form]
+	source = "code"
+	if name, ok := formSchemeName[form]; ok {
+		if cs, err := s.store.getActiveCreationScheme(ctx, tenantID, name); err != nil {
+			slog.Warn("load creation scheme failed", "error", err, "form", form, "scheme", name)
+		} else if cs != nil && strings.TrimSpace(cs.Prompt) != "" {
+			creative = strings.TrimSpace(cs.Prompt)
+			modelRef = strings.TrimSpace(cs.ModelRef)
+			source = "db:" + name
+		}
+	}
+	contract := formJsonContract[form]
+	systemPrompt = creative + "\n\n## 输出格式（必须严格遵守）\n只返回一个 JSON 对象，不要任何解释、不要 markdown 代码块：\n" + contract
+	return systemPrompt, modelRef, source
+}
