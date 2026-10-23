@@ -661,3 +661,34 @@ func (s *Store) activateCreationScheme(ctx context.Context, tenantID, id int64) 
 		WHERE (tenant_id = $1 OR tenant_id = 0) AND name = $3`, tenantID, id, name)
 	return err
 }
+
+// ContentInsightV2Record 单条洞察。
+type ContentInsightV2Record struct {
+	ID               int64           `json:"id"`
+	TenantID         int64           `json:"tenant_id"`
+	RecordingID      *int64          `json:"recording_id"`
+	SourceType       string          `json:"source_type"`
+	Type             string          `json:"type"`
+	Topic            string          `json:"topic"`
+	Evidence         json.RawMessage `json:"evidence"`
+	SuggestedForms   json.RawMessage `json:"suggested_forms"`
+	SuggestedTargets json.RawMessage `json:"suggested_targets"`
+	CreatedAt        *time.Time      `json:"created_at,omitempty"`
+}
+
+// getInsightV2 取单条洞察。
+func (s *Store) getInsightV2(ctx context.Context, tenantID, id int64) (*ContentInsightV2Record, error) {
+	var r ContentInsightV2Record
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, recording_id, COALESCE(source_type,''), COALESCE(type,''), COALESCE(topic,''),
+		       COALESCE(evidence,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
+		FROM content_insights WHERE id = $1 AND tenant_id = $2`, id, tenantID).
+		Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}

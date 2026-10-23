@@ -454,6 +454,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-media-accounts", Handler: h.ListMediaAccountsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-media-accounts", Handler: h.CreateMediaAccountV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights", Handler: h.ListInsightsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-insights/{id}", Handler: h.GetInsightV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights/clusters", Handler: h.ListQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/clusters/actions/rebuild", Handler: h.RebuildQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -574,4 +575,28 @@ func (h *Handler) ActivateCreationScheme(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]bool{"activated": true})
+}
+
+// GetInsightV2 洞察详情。
+func (h *Handler) GetInsightV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid insight id")
+		return
+	}
+	ins, err := h.service.store.getInsightV2(r.Context(), tenantID, id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if ins == nil {
+		httputil.WriteNotFound(w, "insight not found")
+		return
+	}
+	httputil.WriteSuccess(w, ins)
 }
