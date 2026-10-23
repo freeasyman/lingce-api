@@ -499,7 +499,7 @@ func (s *Store) findPlanPeriod(ctx context.Context, tenantID int64, period, star
 func (s *Store) getPlanPeriod(ctx context.Context, tenantID, id int64) (*PlanPeriodSummary, error) {
 	var p PlanPeriodSummary
 	err := s.pool.QueryRow(ctx, `
-		SELECT pp.id, pp.period, pp.start_date, COALESCE(pp.summary_text, ''),
+		SELECT pp.id, pp.period, pp.start_date::text, COALESCE(pp.summary_text, ''),
 		       count(pi.id)::int AS total_items,
 		       count(pi.id) FILTER (WHERE pi.status = 'published')::int AS published_items
 		FROM content_plan_periods pp
@@ -529,7 +529,7 @@ type PlanPeriodSummary struct {
 // listPlanPeriods 列出计划周期（按开始日期倒序），带完成度。
 func (s *Store) listPlanPeriods(ctx context.Context, tenantID int64) ([]PlanPeriodSummary, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT pp.id, pp.period, pp.start_date, COALESCE(pp.summary_text, ''),
+		SELECT pp.id, pp.period, pp.start_date::text, COALESCE(pp.summary_text, ''),
 		       count(pi.id)::int AS total_items,
 		       count(pi.id) FILTER (WHERE pi.status = 'published')::int AS published_items
 		FROM content_plan_periods pp

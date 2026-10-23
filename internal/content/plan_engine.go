@@ -40,7 +40,20 @@ func (s *Service) GeneratePlan(ctx context.Context, tenantID int64, period, star
 	if existingID, exists, err := s.store.findPlanPeriod(ctx, tenantID, period, startDate); err != nil {
 		return nil, fmt.Errorf("find plan period: %w", err)
 	} else if exists {
-		return s.loadPlan(ctx, tenantID, existingID, period, startDate)
+		plan, err := s.loadPlan(ctx, tenantID, existingID, period, startDate)
+		if err != nil {
+			return nil, err
+		}
+		// 已有计划且有条目 → 直接返回；空计划（上次失败残留）→ 清掉重建
+		if items, ok := plan["items"].([]map[string]any); ok && len(items) > 0 {
+			return plan, nil
+		}
+		if _, err := s.store.pool.Exec(ctx, `DELETE FROM content_plan_items WHERE plan_period_id = $1`, existingID); err != nil {
+			return nil, fmt.Errorf("clear empty plan items: %w", err)
+		}
+		if _, err := s.store.pool.Exec(ctx, `DELETE FROM content_plan_periods WHERE id = $1`, existingID); err != nil {
+			return nil, fmt.Errorf("clear empty plan period: %w", err)
+		}
 	}
 
 	// 1. 账号
@@ -73,18 +86,13 @@ func (s *Service) GeneratePlan(ctx context.Context, tenantID int64, period, star
 	topicIdx := 0
 	totalTarget := 0
 	for _, a := range accounts {
-		if a.MonthlyTarget != nil {
-			totalTarget += *a.MonthlyTarget
-		}
+		totalTarget += effectiveMonthlyTarget(a)
 	}
 	for topicIdx < len(topics) {
 		assignedAny := false
 		for ai := range accounts {
 			a := &accounts[ai]
-			target := 0
-			if a.MonthlyTarget != nil {
-				target = *a.MonthlyTarget
-			}
+			target := effectiveMonthlyTarget(*a)
 			// 该账号已分配数量
 			count := 0
 			for _, x := range assignedList {
@@ -151,10 +159,7 @@ func (s *Service) GeneratePlan(ctx context.Context, tenantID int64, period, star
 func (s *Service) generatePlanSummary(ctx context.Context, tenantID int64, accounts []ContentMediaAccount, items []map[string]any) (string, error) {
 	var b strings.Builder
 	for _, a := range accounts {
-		target := 0
-		if a.MonthlyTarget != nil {
-			target = *a.MonthlyTarget
-		}
+		target := effectiveMonthlyTarget(a)
 		b.WriteString(fmt.Sprintf("账号[%s｜角色 %s] 目标 %d 篇：\n", a.Name, a.Role, target))
 		for _, it := range items {
 			if it["account_id"] == a.ID {
@@ -263,4 +268,26 @@ func (s *Service) GetPlan(ctx context.Context, tenantID int64, period, startDate
 		return nil, nil
 	}
 	return s.loadPlan(ctx, tenantID, id, period, startDate)
+}
+
+// defaultMonthlyTarget 按平台兜底默认发布量（账号没填时用）。
+func defaultMonthlyTarget(platform string) int {
+	switch platform {
+	case "wechat", "gongzhonghao":
+		return 8
+	case "xiaohongshu":
+		return 8
+	case "website":
+		return 2
+	default:
+		return 4
+	}
+}
+
+// effectiveMonthlyTarget 账号的每月发布量：填了就用，没填/0 用平台默认。
+func effectiveMonthlyTarget(a ContentMediaAccount) int {
+	if a.MonthlyTarget != nil && *a.MonthlyTarget > 0 {
+		return *a.MonthlyTarget
+	}
+	return defaultMonthlyTarget(a.Platform)
 }
