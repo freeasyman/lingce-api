@@ -615,53 +615,6 @@ func (s *Store) listStyleTemplates(ctx context.Context, tenantID int64, tplType 
 	return out, rows.Err()
 }
 
-// listCreationSchemes 列出创作方案（六层）。
-func (s *Store) listCreationSchemes(ctx context.Context, tenantID int64) ([]map[string]any, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, version, COALESCE(model_ref,''), COALESCE(is_active,false), COALESCE(updated_at, created_at)::text
-		FROM content_creation_schemes
-		WHERE tenant_id = $1 OR tenant_id = 0
-		ORDER BY is_active DESC, version DESC, id`, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var id int64
-		var name, modelRef string
-		var version int
-		var active bool
-		var updated string
-		if err := rows.Scan(&id, &name, &version, &modelRef, &active, &updated); err != nil {
-			return nil, err
-		}
-		out = append(out, map[string]any{"id": id, "name": name, "version": version, "model_ref": modelRef, "is_active": active, "updated_at": updated})
-	}
-	return out, rows.Err()
-}
-
-// createCreationScheme 新建创作方案。
-func (s *Store) createCreationScheme(ctx context.Context, tenantID int64, name, prompt, modelRef string) (int64, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_creation_schemes (tenant_id, name, version, prompt, model_ref, is_active)
-		VALUES ($1,$2,1,$3,$4,true) RETURNING id`, tenantID, name, prompt, modelRef).Scan(&id)
-	return id, err
-}
-
-// activateCreationScheme 启用某方案（同一名称只保留一个活跃）。
-func (s *Store) activateCreationScheme(ctx context.Context, tenantID, id int64) error {
-	var name string
-	if err := s.pool.QueryRow(ctx, `SELECT name FROM content_creation_schemes WHERE id = $1`, id).Scan(&name); err != nil {
-		return err
-	}
-	_, err := s.pool.Exec(ctx, `
-		UPDATE content_creation_schemes SET is_active = (id = $2), updated_at = now()
-		WHERE (tenant_id = $1 OR tenant_id = 0) AND name = $3`, tenantID, id, name)
-	return err
-}
-
 // ContentInsightV2Record 单条洞察。
 type ContentInsightV2Record struct {
 	ID               int64           `json:"id"`

@@ -464,9 +464,6 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "PUT", Path: "/api/v1/content-items/{id}", Handler: h.UpdateContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-style-templates", Handler: h.ListStyleTemplatesV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-org-knowledge", Handler: h.GetOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/content-creation-schemes", Handler: h.ListCreationSchemes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/content-creation-schemes", Handler: h.CreateCreationScheme, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/content-creation-schemes/{id}/actions/activate", Handler: h.ActivateCreationScheme, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-org-knowledge", Handler: h.UpsertOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-plans", Handler: h.ListPlanPeriods, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-plans/current", Handler: h.GetCurrentPlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -515,67 +512,8 @@ func (h *Handler) UpsertOrgKnowledge(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]bool{"saved": true})
 }
 
-// ListCreationSchemes 列出创作方案（六层）。
-func (h *Handler) ListCreationSchemes(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantOf(r)
-	if !ok {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	schemes, err := h.service.store.listCreationSchemes(r.Context(), tenantID)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, schemes)
-}
 
-// CreateCreationScheme 新建创作方案。
-func (h *Handler) CreateCreationScheme(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantOf(r)
-	if !ok {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	var req struct {
-		Name     string `json:"name"`
-		Prompt   string `json:"prompt"`
-		ModelRef string `json:"model_ref"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	if req.Name == "" {
-		httputil.WriteBadRequest(w, "name is required")
-		return
-	}
-	id, err := h.service.store.createCreationScheme(r.Context(), tenantID, req.Name, req.Prompt, req.ModelRef)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]int64{"id": id})
-}
 
-// ActivateCreationScheme 启用创作方案。
-func (h *Handler) ActivateCreationScheme(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenantOf(r)
-	if !ok {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		httputil.WriteBadRequest(w, "invalid scheme id")
-		return
-	}
-	if err := h.service.store.activateCreationScheme(r.Context(), tenantID, id); err != nil {
-		httputil.WriteInternalError(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]bool{"activated": true})
-}
 
 // GetInsightV2 洞察详情。
 func (h *Handler) GetInsightV2(w http.ResponseWriter, r *http.Request) {
