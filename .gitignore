@@ -43,3 +43,8 @@ lingce-api
 
 # 赢客专家回归语料（含患者原话，不入库）
 testdata/deal-analysis/
+
+# 本地运行产物（sqlite/导出，不入库）
+data/*.db
+data/*.sqlite
+data/*.sqlite3
