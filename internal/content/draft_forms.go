@@ -49,16 +49,7 @@ func (s *Service) GenerateDraft(ctx context.Context, tenantID int64, form string
 	}
 
 	var user strings.Builder
-	user.WriteString("选题标题：" + req.TopicTitle + "\n")
-	if req.TopicDescription != "" {
-		user.WriteString("选题说明：" + req.TopicDescription + "\n")
-	}
-	if req.Evidence != "" {
-		user.WriteString("证据（金句/原话/依据）：" + req.Evidence + "\n")
-	}
-	if kc := s.knowledgeContext(ctx, tenantID); kc != "" {
-		user.WriteString("\n" + kc + "\n")
-	}
+	user.WriteString(s.buildDraftUserPrompt(ctx, tenantID, req))
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_generation", "content_"+form, "chat"})
 	if err != nil {

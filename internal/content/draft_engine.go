@@ -39,6 +39,7 @@ type GenerateGraphicNoteDraftRequest struct {
 	TopicDescription string `json:"topic_description"`
 	Evidence         string `json:"evidence,omitempty"`
 	CardCount        int    `json:"card_count,omitempty"`
+	TopicID          *int64 `json:"topic_id,omitempty"`
 }
 
 // GenerateGraphicNoteDraft 生成图文笔记文稿（封面 + 各卡片 + 发布包）。
@@ -54,18 +55,8 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 		cardCount = 3
 	}
 
-	var user strings.Builder
-	user.WriteString("选题标题：" + req.TopicTitle + "\n")
-	if req.TopicDescription != "" {
-		user.WriteString("选题说明：" + req.TopicDescription + "\n")
-	}
-	if req.Evidence != "" {
-		user.WriteString("证据（金句/原话/依据）：" + req.Evidence + "\n")
-	}
-	if kc := s.knowledgeContext(ctx, tenantID); kc != "" {
-		user.WriteString("\n" + kc + "\n")
-	}
-	user.WriteString(fmt.Sprintf("卡片数量：%d 张\n", cardCount))
+	user := s.buildDraftUserPrompt(ctx, tenantID, req)
+	user += fmt.Sprintf("卡片数量：%d 张\n", cardCount)
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_graphic_note", "content_generation", "chat"})
 	if err != nil {
@@ -80,7 +71,7 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: graphicNoteDraftPrompt},
-			{Role: "user", Content: user.String()},
+			{Role: "user", Content: user},
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)

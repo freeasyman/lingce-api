@@ -100,13 +100,14 @@ func (h *Handler) GenerateDraft(w http.ResponseWriter, r *http.Request) {
 		TopicDescription string `json:"topic_description"`
 		Evidence         string `json:"evidence"`
 		CardCount        int    `json:"card_count"`
+		TopicID          *int64 `json:"topic_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
 	draft, err := h.service.GenerateDraft(r.Context(), tenantID, req.Form, GenerateGraphicNoteDraftRequest{
-		TopicTitle: req.TopicTitle, TopicDescription: req.TopicDescription, Evidence: req.Evidence, CardCount: req.CardCount,
+		TopicTitle: req.TopicTitle, TopicDescription: req.TopicDescription, Evidence: req.Evidence, CardCount: req.CardCount, TopicID: req.TopicID,
 	})
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
