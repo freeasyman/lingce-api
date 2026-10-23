@@ -1,0 +1,577 @@
+package content
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/httputil"
+)
+
+func tenantOf(r *http.Request) (int64, bool) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		return 0, false
+	}
+	id, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func (h *Handler) ListMediaAccountsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	accounts, err := h.service.store.listMediaAccounts(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, accounts)
+}
+
+func (h *Handler) CreateMediaAccountV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		Platform      string `json:"platform"`
+		Name          string `json:"name"`
+		Role          string `json:"role"`
+		MonthlyTarget *int   `json:"monthly_target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.Platform == "" || req.Name == "" || req.Role == "" {
+		httputil.WriteBadRequest(w, "platform/name/role are required")
+		return
+	}
+	// 发布量默认：公众号 8 / 小红书 8 / 官网 2 / 其他 4
+	if req.MonthlyTarget == nil || *req.MonthlyTarget <= 0 {
+		d := 4
+		switch req.Platform {
+		case "wechat", "xiaohongshu":
+			d = 8
+		case "website":
+			d = 2
+		}
+		req.MonthlyTarget = &d
+	}
+	id, err := h.service.store.insertMediaAccount(r.Context(), tenantID, req.Platform, req.Name, req.Role, req.MonthlyTarget)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int64{"id": id})
+}
+
+func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	insights, err := h.service.store.listInsights(r.Context(), tenantID, limit)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, insights)
+}
+
+// ListQuestionClusters 反复问聚合。
+func (h *Handler) ListQuestionClusters(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	minCount := 2
+	if v := r.URL.Query().Get("min"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 2 {
+			minCount = n
+		}
+	}
+	clusters, err := h.service.store.listQuestionClusters(r.Context(), tenantID, minCount)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, clusters)
+}
+
+// RebuildQuestionClusters 重建反复问簇（LLM 归一化）。
+func (h *Handler) RebuildQuestionClusters(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	n, err := h.service.RebuildQuestionClusters(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int{"clusters": n})
+}
+
+// RecommendTopics 推荐打分（反复问频次）。
+func (h *Handler) RecommendTopics(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	limit := 3
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	items, err := h.service.RecommendTopics(r.Context(), tenantID, limit)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	topics, err := h.service.store.listTopicsV2(r.Context(), tenantID, 200)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, topics)
+}
+
+func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) ListStyleTemplatesV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tplType := r.URL.Query().Get("type")
+	templates, err := h.service.store.listStyleTemplates(r.Context(), tenantID, tplType)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, templates)
+}
+
+func (h *Handler) GeneratePlanV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		Period    string `json:"period"`
+		StartDate string `json:"start_date"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	plan, err := h.service.GeneratePlan(r.Context(), tenantID, req.Period, req.StartDate)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, plan)
+}
+
+func (h *Handler) ListPlanItemsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	planPeriodID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid plan period id")
+		return
+	}
+	items, err := h.service.store.listPlanItemsV2(r.Context(), tenantID, planPeriodID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+func (h *Handler) ScheduleTopicV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	planPeriodID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid plan period id")
+		return
+	}
+	var req struct {
+		AccountID   int64   `json:"account_id"`
+		TopicID     int64   `json:"topic_id"`
+		PlannedDate *string `json:"planned_date"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	id, err := h.service.ScheduleTopic(r.Context(), tenantID, planPeriodID, req.AccountID, req.TopicID, req.PlannedDate)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int64{"id": id})
+}
+
+// PublishContentV2 发布内容并回填计划。
+func (h *Handler) PublishContentV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	contentID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	if err := h.service.PublishContentV2(r.Context(), tenantID, contentID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"published": true})
+}
+
+// ReviewContentV2 标记内容已审核（半自动：一键复制/导出→医生确认→点已审核）。
+func (h *Handler) ReviewContentV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	contentID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	if err := h.service.store.updateContentItemV2Status(r.Context(), tenantID, contentID, "reviewed"); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"reviewed": true})
+}
+
+// GetReportData 周报/月报数据聚合。
+func (h *Handler) GetReportData(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	since := time.Now().AddDate(0, 0, -days)
+	data, err := h.service.store.GetReportData(r.Context(), tenantID, since)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, data)
+}
+
+// ExportReport 导出周报/月报 Word + PPT。
+func (h *Handler) ExportReport(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	result, err := h.service.ExportReport(r.Context(), tenantID, days)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// GetCurrentPlan 取某个月现有计划（无则返回 null）。
+func (h *Handler) GetCurrentPlan(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	period := r.URL.Query().Get("period")
+	startDate := r.URL.Query().Get("start_date")
+	plan, err := h.service.GetPlan(r.Context(), tenantID, period, startDate)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, plan)
+}
+
+// ListPlanPeriods 列出计划周期（含完成度）。
+func (h *Handler) ListPlanPeriods(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	periods, err := h.service.store.listPlanPeriods(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, periods)
+}
+
+// GetContentItemV2 内容详情。
+func (h *Handler) GetContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	item, err := h.service.store.getContentItemV2(r.Context(), tenantID, id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if item == nil {
+		httputil.WriteNotFound(w, "content not found")
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// UpdateContentItemV2 编辑内容。
+func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	var req struct {
+		Title          *string         `json:"title"`
+		Body           *string         `json:"body"`
+		PublishPackage json.RawMessage `json:"publish_package"`
+		Images         json.RawMessage `json:"images"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	existing, err := h.service.store.getContentItemV2(r.Context(), tenantID, id)
+	if err != nil || existing == nil {
+		httputil.WriteNotFound(w, "content not found")
+		return
+	}
+	title, body := existing.Title, existing.Body
+	if req.Title != nil {
+		title = *req.Title
+	}
+	if req.Body != nil {
+		body = *req.Body
+	}
+	pp := req.PublishPackage
+	if len(pp) == 0 {
+		pp = existing.PublishPackage
+	}
+	img := req.Images
+	if len(img) == 0 {
+		img = existing.Images
+	}
+	if err := h.service.store.updateContentItemV2(r.Context(), tenantID, id, title, body, pp, img); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"updated": true})
+}
+
+func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
+	routes := []router.Route{
+		{Method: "GET", Path: "/api/v1/content-media-accounts", Handler: h.ListMediaAccountsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-media-accounts", Handler: h.CreateMediaAccountV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-insights", Handler: h.ListInsightsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-insights/clusters", Handler: h.ListQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-insights/clusters/actions/rebuild", Handler: h.RebuildQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/recommendations", Handler: h.RecommendTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContentItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-items/{id}", Handler: h.GetContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/content-items/{id}", Handler: h.UpdateContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-style-templates", Handler: h.ListStyleTemplatesV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-org-knowledge", Handler: h.GetOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-creation-schemes", Handler: h.ListCreationSchemes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-creation-schemes", Handler: h.CreateCreationScheme, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-creation-schemes/{id}/actions/activate", Handler: h.ActivateCreationScheme, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-org-knowledge", Handler: h.UpsertOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-plans", Handler: h.ListPlanPeriods, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-plans/current", Handler: h.GetCurrentPlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-plans/actions/generate", Handler: h.GeneratePlanV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-plans/{id}/items", Handler: h.ListPlanItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-plans/{id}/items", Handler: h.ScheduleTopicV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/publish", Handler: h.PublishContentV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/review", Handler: h.ReviewContentV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-reports", Handler: h.GetReportData, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-reports/actions/export", Handler: h.ExportReport, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}
+	router.Register(mux, routes, deps)
+}
+
+// GetOrgKnowledge 取知识库/规则。
+func (h *Handler) GetOrgKnowledge(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	k, err := h.service.store.getOrgKnowledge(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, k)
+}
+
+// UpsertOrgKnowledge 保存知识库/规则。
+func (h *Handler) UpsertOrgKnowledge(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var k orgKnowledge
+	if err := json.NewDecoder(r.Body).Decode(&k); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.store.upsertOrgKnowledge(r.Context(), tenantID, &k); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"saved": true})
+}
+
+// ListCreationSchemes 列出创作方案（六层）。
+func (h *Handler) ListCreationSchemes(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	schemes, err := h.service.store.listCreationSchemes(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, schemes)
+}
+
+// CreateCreationScheme 新建创作方案。
+func (h *Handler) CreateCreationScheme(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		Name     string `json:"name"`
+		Prompt   string `json:"prompt"`
+		ModelRef string `json:"model_ref"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.Name == "" {
+		httputil.WriteBadRequest(w, "name is required")
+		return
+	}
+	id, err := h.service.store.createCreationScheme(r.Context(), tenantID, req.Name, req.Prompt, req.ModelRef)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]int64{"id": id})
+}
+
+// ActivateCreationScheme 启用创作方案。
+func (h *Handler) ActivateCreationScheme(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid scheme id")
+		return
+	}
+	if err := h.service.store.activateCreationScheme(r.Context(), tenantID, id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]bool{"activated": true})
+}
