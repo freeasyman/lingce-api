@@ -30,6 +30,9 @@ type ContentAnalysisEnvelope struct {
 }
 
 type ContentAnalysisPayload struct {
+	// TenantID 是信号的归属租户（worker 产生信号时带上录音真实租户）。
+	// 为空时接收方按 recording_id 反查录音，再兜底到配置租户。
+	TenantID    int64                     `json:"tenant_id,omitempty"`
 	RecordingID int64                     `json:"recording_id"`
 	EmployeeID  *int64                    `json:"employee_id,omitempty"`
 	Questions   []ContentAnalysisQuestion `json:"questions"`
@@ -92,12 +95,16 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 信号按录音真实租户处理；配置里的 content_analysis_tenant_id 仅作兜底。
-	// 否则跨租户录音（如租户 1 的录音）会被误判到配置租户下，导致记录找不到。
+	// 租户归属优先级：信封自带的 tenant_id → 按 recording_id 反查录音 → 配置兜底。
+	// 这样跨租户录音不会被误判到配置租户下导致记录找不到。
 	tenantID := h.tenantID
-	var recordingTenantID int64
-	if err := h.pool.QueryRow(r.Context(), `SELECT tenant_id FROM recordings WHERE id = $1`, env.Data.RecordingID).Scan(&recordingTenantID); err == nil && recordingTenantID > 0 {
-		tenantID = recordingTenantID
+	if env.Data.TenantID > 0 {
+		tenantID = env.Data.TenantID
+	} else {
+		var recordingTenantID int64
+		if err := h.pool.QueryRow(r.Context(), `SELECT tenant_id FROM recordings WHERE id = $1`, env.Data.RecordingID).Scan(&recordingTenantID); err == nil && recordingTenantID > 0 {
+			tenantID = recordingTenantID
+		}
 	}
 
 	payload, _ := json.Marshal(env)
