@@ -40,7 +40,7 @@ type ContentInsightRecord struct {
 	EmployeeName          string `json:"employee_name"`
 	MedicalDepartmentCode string `json:"medical_department_code"`
 	MedicalDepartmentName string `json:"medical_department_name"`
-	// Status：new（待处理）/ dismissed（已忽略）。已采纳由 content_topics.evidence_ref 反查派生。
+	// Status：new（待处理）/ dismissed（已忽略）。已采纳由 content_topics.insight_ids 反查派生。
 	Status    string     `json:"status"`
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 }
@@ -314,7 +314,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
 		  AND ($4 = '' OR ci.medical_department_code = $4)
-		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) ELSE TRUE END)`,
+		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id=ci.tenant_id) ELSE TRUE END)`,
 		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Status).Scan(&total); err != nil {
 		return nil, 0, nil, nil, err
 	}
@@ -331,7 +331,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
 		  AND ($4 = '' OR ci.medical_department_code = $4)
-		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) ELSE TRUE END)
+		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id=ci.tenant_id) ELSE TRUE END)
 		ORDER BY ci.id DESC
 		LIMIT $6 OFFSET $7`,
 		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Status, f.Limit, f.Offset)
