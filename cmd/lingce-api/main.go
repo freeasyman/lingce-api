@@ -460,23 +460,6 @@ func main() {
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	// 录音 → 洞察 → 选题 自动闭环：后台定时补齐有转写但还没洞察的录音
-	analysisCtx, analysisCancel := context.WithCancel(context.Background())
-	if cfg.Content.AnalysisOn() {
-		interval := time.Duration(cfg.Content.AnalysisIntervalSeconds) * time.Second
-		if interval <= 0 {
-			interval = 2 * time.Minute
-		}
-		batch := cfg.Content.AnalysisBatch
-		if batch <= 0 {
-			batch = 2
-		}
-		slog.Info("content analysis worker started", "interval", interval.String(), "batch", batch)
-		contentService.StartAnalysisWorker(analysisCtx, interval, batch)
-	} else {
-		slog.Info("content analysis worker disabled by config")
-	}
-
 	// Content-center external analysis contract. The Worker (or another
 	// external producer) pushes analysis here; this module never reads or
 	// mutates Worker, follow-up, EMR or deal-expert tables.
@@ -539,7 +522,6 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down server...")
-	analysisCancel()
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
