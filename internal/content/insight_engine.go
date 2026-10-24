@@ -38,6 +38,7 @@ const insightExtractionSystemPrompt = `你是医疗内容洞察专家，擅长�
 
 // InsightExtraction 是洞察提取的单条结果。
 type InsightExtraction struct {
+	ID               int64    `json:"id,omitempty"`
 	Type             string   `json:"type"`
 	Topic            string   `json:"topic"`
 	Quote            string   `json:"quote"`
@@ -60,10 +61,15 @@ func (s *Store) fetchRecordingTranscript(ctx context.Context, tenantID, recordin
 	var transcript string
 	err := s.pool.QueryRow(ctx, `
 		SELECT COALESCE(
-			NULLIF((
-				SELECT string_agg(COALESCE(seg->>'speaker_role','') || '：' || COALESCE(seg->>'text',''), E'\n')
-				FROM jsonb_array_elements(cleaned_transcription) AS seg
-			), ''),
+			NULLIF(CASE
+				WHEN jsonb_typeof(cleaned_transcription) = 'array' THEN (
+					SELECT string_agg(COALESCE(seg->>'speaker_role', seg->>'speaker', '') || '：' || COALESCE(seg->>'text',''), E'\n')
+					FROM jsonb_array_elements(cleaned_transcription) AS seg
+				)
+				WHEN jsonb_typeof(cleaned_transcription) = 'object' THEN COALESCE(cleaned_transcription->>'full_text', cleaned_transcription->>'text', '')
+				WHEN jsonb_typeof(cleaned_transcription) = 'string' THEN trim(both '"' from cleaned_transcription::text)
+				ELSE NULL
+			END, ''),
 			NULLIF(transcription_text, ''),
 			''
 		)
@@ -200,7 +206,7 @@ func (s *Store) insertInsights(ctx context.Context, tenantID, recordingID int64,
 		if err != nil {
 			return nil, fmt.Errorf("insert insight: %w", err)
 		}
-		_ = id
+		it.ID = id
 		out = append(out, it)
 	}
 	return out, nil

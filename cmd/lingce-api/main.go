@@ -460,6 +460,16 @@ func main() {
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
+	// 录音 → 洞察 → 选题 自动闭环：后台定时补齐有转写但还没洞察的录音
+	analysisCtx, analysisCancel := context.WithCancel(context.Background())
+	contentService.StartAnalysisWorker(analysisCtx, 2*time.Minute, 2)
+
+	// Content-center external analysis contract. The Worker (or another
+	// external producer) pushes analysis here; this module never reads or
+	// mutates Worker, follow-up, EMR or deal-expert tables.
+	contentExternalHandler := content.NewExternalHandler(pool, cfg.External.ContentAnalysisTenantID)
+	contentExternalHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
+
 	// Register sandbox transfer module
 	sandboxService := sandbox.NewService(pool, ossClient, cfg.External.LingceWorkerURL, cfg.External.LingceWorkerToken)
 	sandboxHandler := sandbox.NewHandler(sandboxService)
@@ -516,6 +526,7 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down server...")
+	analysisCancel()
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
