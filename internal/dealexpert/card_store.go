@@ -82,19 +82,23 @@ func (s *Store) RecordingConsultant(ctx context.Context, tenantID, recordingID i
 // EnqueueAnalysis 为指定录音补生成结案卡；已有分析行时重置为待分析。
 func (s *Store) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64) (string, error) {
 	var encounterID, employeeID, customerID *int64
-	var customerName, transcript string
+	var customerName, transcript, businessScope, resolvedRole string
 	var recordedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT r.encounter_id, r.employee_id, r.customer_id, COALESCE(c.name, ''),
-		       r.recorded_at, COALESCE(r.transcription_text, '')
+		       r.recorded_at, COALESCE(r.transcription_text, ''),
+		       lower(trim(COALESCE(r.business_scope,''))), lower(trim(COALESCE(r.resolved_role_code,'')))
 		FROM recordings r LEFT JOIN customers c ON c.id = r.customer_id
 		WHERE r.tenant_id = $1 AND r.id = $2 AND r.deleted_at IS NULL
-	`, tenantID, recordingID).Scan(&encounterID, &employeeID, &customerID, &customerName, &recordedAt, &transcript)
+	`, tenantID, recordingID).Scan(&encounterID, &employeeID, &customerID, &customerName, &recordedAt, &transcript, &businessScope, &resolvedRole)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("recording not found")
 	}
 	if err != nil {
 		return "", fmt.Errorf("load recording: %w", err)
+	}
+	if businessScope != "consultant" && resolvedRole != "consultant" {
+		return "", fmt.Errorf("deal analysis only accepts consultant recordings")
 	}
 	if len([]rune(strings.TrimSpace(transcript))) < 100 {
 		return "", ErrNoTranscript

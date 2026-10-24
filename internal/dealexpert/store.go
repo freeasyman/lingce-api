@@ -16,6 +16,23 @@ func (s *Store) Receive(ctx context.Context, req ReceiveRequest) (*Analysis, boo
 	if s == nil || s.pool == nil {
 		return nil, false, fmt.Errorf("deal expert store is nil")
 	}
+	if req.TenantID <= 0 || req.RecordingID <= 0 {
+		return nil, false, fmt.Errorf("tenant_id and recording_id are required")
+	}
+	var recordingTenantID int64
+	var businessScope, resolvedRole string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id, lower(trim(COALESCE(business_scope,''))), lower(trim(COALESCE(resolved_role_code,'')))
+		FROM recordings WHERE id=$1 AND deleted_at IS NULL
+	`, req.RecordingID).Scan(&recordingTenantID, &businessScope, &resolvedRole); err != nil {
+		return nil, false, fmt.Errorf("load recording for deal analysis: %w", err)
+	}
+	if recordingTenantID != req.TenantID {
+		return nil, false, fmt.Errorf("recording tenant mismatch")
+	}
+	if businessScope != "consultant" && resolvedRole != "consultant" {
+		return nil, false, fmt.Errorf("deal analysis only accepts consultant recordings")
+	}
 	var row Analysis
 	var customerID *int64
 	var recordedAt *time.Time
