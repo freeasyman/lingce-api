@@ -179,6 +179,7 @@ func (s *Service) generateTopicsForOneInsight(ctx context.Context, tenantID, ins
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
+		Billing:       newBillingMetadata("content", "insight", insightID, "topic_generation", "content_topic"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen", topicGenerationFromInsightPrompt)},
 			{Role: "user", Content: userPrompt},
