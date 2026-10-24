@@ -298,12 +298,10 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM content_insights ci
-		LEFT JOIN recordings r ON r.id = ci.recording_id
-		LEFT JOIN employees e ON e.id = r.employee_id
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
-		  AND ($3 = 0 OR COALESCE(r.employee_id,0) = $3)
-		  AND ($4 = 0 OR COALESCE(e.department_id,0) = $4)`,
+		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
+		  AND ($4 = 0 OR COALESCE(ci.department_id,0) = $4)`,
 		tenantID, f.Type, f.EmployeeID, f.DepartmentID).Scan(&total); err != nil {
 		return nil, 0, nil, nil, err
 	}
@@ -312,16 +310,14 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		SELECT ci.id, ci.tenant_id, ci.recording_id, COALESCE(ci.source_type,'recording'), ci.type, ci.topic,
 		       COALESCE(ci.evidence,'{}'::jsonb), COALESCE(ci.payload,'{}'::jsonb),
 		       COALESCE(ci.suggested_forms,'[]'::jsonb), COALESCE(ci.suggested_targets,'[]'::jsonb),
-		       COALESCE(e.name,''), COALESCE(d.name,''), COALESCE(r.employee_id,0), COALESCE(e.department_id,0),
+		       COALESCE(ci.employee_name,''), COALESCE(ci.department_name,''),
+		       COALESCE(ci.employee_id,0), COALESCE(ci.department_id,0),
 		       ci.created_at
 		FROM content_insights ci
-		LEFT JOIN recordings r ON r.id = ci.recording_id
-		LEFT JOIN employees e ON e.id = r.employee_id
-		LEFT JOIN departments d ON d.id = e.department_id
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
-		  AND ($3 = 0 OR COALESCE(r.employee_id,0) = $3)
-		  AND ($4 = 0 OR COALESCE(e.department_id,0) = $4)
+		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
+		  AND ($4 = 0 OR COALESCE(ci.department_id,0) = $4)
 		ORDER BY ci.id DESC
 		LIMIT $5 OFFSET $6`,
 		tenantID, f.Type, f.EmployeeID, f.DepartmentID, f.Limit, f.Offset)
@@ -357,11 +353,9 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 
 func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT COALESCE(r.employee_id,0), COALESCE(e.name,'')
-		FROM content_insights ci
-		LEFT JOIN recordings r ON r.id = ci.recording_id
-		LEFT JOIN employees e ON e.id = r.employee_id
-		WHERE ci.tenant_id = $1 AND COALESCE(r.employee_id,0) > 0
+		SELECT DISTINCT employee_id, COALESCE(employee_name,'')
+		FROM content_insights
+		WHERE tenant_id = $1 AND employee_id IS NOT NULL AND employee_id > 0
 		ORDER BY 1`, tenantID)
 	if err != nil {
 		return nil, err
@@ -383,12 +377,9 @@ func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) 
 
 func (s *Store) listInsightDepartmentOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT COALESCE(e.department_id,0), COALESCE(d.name,'')
-		FROM content_insights ci
-		LEFT JOIN recordings r ON r.id = ci.recording_id
-		LEFT JOIN employees e ON e.id = r.employee_id
-		LEFT JOIN departments d ON d.id = e.department_id
-		WHERE ci.tenant_id = $1 AND COALESCE(e.department_id,0) > 0
+		SELECT DISTINCT department_id, COALESCE(department_name,'')
+		FROM content_insights
+		WHERE tenant_id = $1 AND department_id IS NOT NULL AND department_id > 0
 		ORDER BY 1`, tenantID)
 	if err != nil {
 		return nil, err

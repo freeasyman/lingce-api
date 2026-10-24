@@ -138,7 +138,20 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "值不值得做成选题的理由（不含价值等级，等级单独在 value_level 字段）。"
+          },
+          "value_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "高",
+              "中",
+              "低"
+            ],
+            "description": "内容价值等级：高=有强冲突或强情绪或高搜索刚需，优先做；中=有价值但不够突出；低=可做可不做。"
           },
           "evidence_strength": {
             "type": [
@@ -514,6 +527,7 @@
           "prevalence",
           "fact_statement",
           "value_judgment",
+          "value_level",
           "evidence_strength",
           "help_dimensions",
           "search_queries",

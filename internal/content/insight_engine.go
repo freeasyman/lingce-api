@@ -39,7 +39,7 @@ trust_arc：犹豫→安心→仍担心，从原话归纳不脑补。
 
 【speculated 规则】speculated 填【字段名】数组（如 ["search_queries"]），不要填句子。search_queries 是推测用户会搜什么，必须给出内容并放进 speculated。
 
-【硬规则】一条洞察只聚焦一个点，quotes 只放 2-4 句原话，不同点拆成不同洞察。quotes 是唯一事实源，从 0 编号。fact_statement 只写转写里有的。value_judgment 禁"最大/全网最高频"这类无数据断言。宁缺毋滥。
+【硬规则】一条洞察只聚焦一个点，quotes 只放 2-4 句原话，不同点拆成不同洞察。quotes 是唯一事实源，从 0 编号。fact_statement 只写转写里有的。value_judgment 只写「值不值得做 + 为什么」的理由，不要在文里写「高价值/中价值/低价值」前缀，等级单独填 value_level 字段。value_level 分级：高 = 有强冲突或强情绪或高搜索刚需，优先做；中 = 有价值但不够突出；低 = 可做可不做。value_judgment 禁"最大/全网最高频"这类无数据断言。宁缺毋滥。
 `
 
 // Insight 是一条洞察（28 字段，与 insight_schema.json 严格一致）。
@@ -52,6 +52,7 @@ type Insight struct {
 	Prevalence            string                  `json:"prevalence"`
 	FactStatement         string                  `json:"fact_statement"`
 	ValueJudgment         string                  `json:"value_judgment"`
+	ValueLevel            string                  `json:"value_level"`
 	EvidenceStrength      string                  `json:"evidence_strength"`
 	HelpDimensions        []string                `json:"help_dimensions"`
 	SearchQueries         []string                `json:"search_queries"`
@@ -244,9 +245,47 @@ func parseInsights(content string) ([]Insight, error) {
 		if !validInsightTypes[it.Type] || it.Topic == "" {
 			continue
 		}
+		it.ValueLevel, it.ValueJudgment = normalizeValueLevel(it.ValueLevel, it.ValueJudgment)
 		filtered = append(filtered, it)
 	}
 	return filtered, nil
+}
+
+// normalizeValueLevel 把价值等级与理由彻底分开：
+// value_level 为空时从 value_judgment 前缀补出（高/中/低）；
+// 无论模型是否遵守提示词，都把 value_judgment 里的「高价值/中等价值/低价值/高/中/低」前缀剥掉，
+// 保证 value_judgment 只留理由。
+var valueTokenLevel = map[string]string{
+	"极高价值": "高", "较高价值": "高", "较低价值": "低",
+	"高价值": "高", "中等价值": "中", "中价值": "中", "低价值": "低",
+}
+
+func normalizeValueLevel(level, judgment string) (string, string) {
+	j := strings.TrimSpace(judgment)
+	level = strings.TrimSpace(level)
+	// 带「价值」的前缀：极/较/高/中/低 + 价值（不会误伤「高血压」这类词）。
+	for _, tok := range []string{"极高价值", "较高价值", "较低价值", "高价值", "中等价值", "中价值", "低价值"} {
+		if strings.HasPrefix(j, tok) {
+			rest := strings.TrimSpace(strings.TrimLeft(j[len(tok):], ":：。、，"))
+			if level == "" {
+				level = valueTokenLevel[tok]
+			}
+			return level, rest
+		}
+	}
+	// 纯「高/中/低」+ 冒号（如「高：」），必须带冒号才剥，避免误伤。
+	for _, tok := range []string{"高", "中", "低"} {
+		for _, sep := range []string{"：", ":"} {
+			prefix := tok + sep
+			if strings.HasPrefix(j, prefix) {
+				if level == "" {
+					level = tok
+				}
+				return level, strings.TrimSpace(j[len(prefix):])
+			}
+		}
+	}
+	return level, j
 }
 
 // replaceInsights 用新洞察替换该录音旧的 recording 洞察（重新分析 = 替换，不是追加）。
@@ -272,6 +311,9 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 		return nil, fmt.Errorf("delete old insights: %w", err)
 	}
 
+	// 提取那一刻固化来源医生/科室（冗余列，避免后续 JOIN 归属漂移）。
+	employeeID, departmentID, employeeName, departmentName := s.recordingOwner(ctx, tenantID, recordingID)
+
 	out := make([]Insight, 0, len(insights))
 	for i := range insights {
 		it := &insights[i]
@@ -281,10 +323,12 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 		}
 		var id int64
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO content_insights (tenant_id, recording_id, source_type, type, topic, payload)
-			VALUES ($1,$2,'recording',$3,$4,$5::jsonb)
+			INSERT INTO content_insights (tenant_id, recording_id, source_type, type, topic, payload,
+				employee_id, department_id, employee_name, department_name)
+			VALUES ($1,$2,'recording',$3,$4,$5::jsonb,$6,$7,$8,$9)
 			RETURNING id`,
 			tenantID, recordingID, it.Type, it.Topic, string(payload),
+			employeeID, departmentID, employeeName, departmentName,
 		).Scan(&id); err != nil {
 			return nil, fmt.Errorf("insert insight: %w", err)
 		}
@@ -295,4 +339,17 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 		return nil, fmt.Errorf("commit replace insights: %w", err)
 	}
 	return out, nil
+}
+
+// recordingOwner 取录音的医生/科室（含姓名），用于提取时固化到洞察冗余列。
+func (s *Store) recordingOwner(ctx context.Context, tenantID, recordingID int64) (employeeID, departmentID int64, employeeName, departmentName string) {
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(r.employee_id,0), COALESCE(e.name,''),
+		       COALESCE(e.department_id,0), COALESCE(d.name,'')
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
+		WHERE r.id = $1 AND r.tenant_id = $2`,
+		recordingID, tenantID).Scan(&employeeID, &employeeName, &departmentID, &departmentName)
+	return
 }
