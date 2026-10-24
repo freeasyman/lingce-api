@@ -31,6 +31,8 @@ type ContentInsightRecord struct {
 	Type             string          `json:"type"`
 	Topic            string          `json:"topic"`
 	Evidence         json.RawMessage `json:"evidence"`
+	// Payload 是新版 28 字段洞察结构（source_type=recording 时使用）；旧 seed 仍读 evidence。
+	Payload          json.RawMessage `json:"payload,omitempty"`
 	SuggestedForms   json.RawMessage `json:"suggested_forms"`
 	SuggestedTargets json.RawMessage `json:"suggested_targets"`
 	CreatedAt        *time.Time      `json:"created_at,omitempty"`
@@ -266,7 +268,7 @@ func (s *Store) listInsights(ctx context.Context, tenantID int64, limit int) ([]
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, recording_id, COALESCE(source_type,'recording'), type, topic,
-		       COALESCE(evidence,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
+		       COALESCE(evidence,'{}'::jsonb), COALESCE(payload,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
 		FROM content_insights WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2`,
 		tenantID, limit)
 	if err != nil {
@@ -276,7 +278,7 @@ func (s *Store) listInsights(ctx context.Context, tenantID int64, limit int) ([]
 	var out []ContentInsightRecord
 	for rows.Next() {
 		var r ContentInsightRecord
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -624,6 +626,7 @@ type ContentInsightV2Record struct {
 	Type             string          `json:"type"`
 	Topic            string          `json:"topic"`
 	Evidence         json.RawMessage `json:"evidence"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
 	SuggestedForms   json.RawMessage `json:"suggested_forms"`
 	SuggestedTargets json.RawMessage `json:"suggested_targets"`
 	CreatedAt        *time.Time      `json:"created_at,omitempty"`
@@ -634,9 +637,9 @@ func (s *Store) getInsightV2(ctx context.Context, tenantID, id int64) (*ContentI
 	var r ContentInsightV2Record
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, recording_id, COALESCE(source_type,''), COALESCE(type,''), COALESCE(topic,''),
-		       COALESCE(evidence,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
+		       COALESCE(evidence,'{}'::jsonb), COALESCE(payload,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
 		FROM content_insights WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
