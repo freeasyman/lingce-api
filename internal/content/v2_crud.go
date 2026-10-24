@@ -57,8 +57,11 @@ type ContentTopicV2Record struct {
 	Recommendation string          `json:"recommendation"`
 	ExpectedHelp   json.RawMessage `json:"expected_help"`
 	EvidenceRef    *int64          `json:"evidence_ref"`
-	Status         string          `json:"status"`
-	CreatedAt      *time.Time      `json:"created_at,omitempty"`
+	// Brief 是完整创作简报（16 字段），InsightIDs 是来源灵感。
+	Brief      json.RawMessage `json:"brief,omitempty"`
+	InsightIDs json.RawMessage `json:"insight_ids,omitempty"`
+	Status     string          `json:"status"`
+	CreatedAt  *time.Time      `json:"created_at,omitempty"`
 }
 
 // topicStatusSQL 选题派生状态：已发布 > 已生成 > 已进计划 > 未进计划。
@@ -434,6 +437,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
+		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2`,
 		tenantID, limit)
@@ -444,7 +448,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]
 	var out []ContentTopicV2Record
 	for rows.Next() {
 		var r ContentTopicV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -504,9 +508,10 @@ func (s *Store) getTopicV2(ctx context.Context, tenantID, id int64) (*ContentTop
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
+		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Status, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
