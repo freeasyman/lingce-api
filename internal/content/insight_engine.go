@@ -206,7 +206,7 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		return nil, fmt.Errorf("parse insights: %w", err)
 	}
 
-	stored, err := s.store.insertInsights(ctx, tenantID, recordingID, insights)
+	stored, err := s.store.replaceInsights(ctx, tenantID, recordingID, insights)
 	if err != nil {
 		return nil, err
 	}
@@ -249,8 +249,29 @@ func parseInsights(content string) ([]Insight, error) {
 	return filtered, nil
 }
 
-// insertInsights 落库洞察：完整 28 字段存 payload，type/topic 冗余列供查询。
-func (s *Store) insertInsights(ctx context.Context, tenantID, recordingID int64, insights []Insight) ([]Insight, error) {
+// replaceInsights 用新洞察替换该录音旧的 recording 洞察（重新分析 = 替换，不是追加）。
+// worker seed（source_type='worker'）由 worker 自己维护，这里不碰。
+// 事务内加 recording 级 advisory lock，避免同一录音并发分析互相覆盖。
+func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64, insights []Insight) ([]Insight, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin replace insights tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 同一录音的洞察替换串行化。
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, fmt.Sprintf("content_insight:%d", recordingID)); err != nil {
+		return nil, fmt.Errorf("lock insight extraction: %w", err)
+	}
+
+	// 只删本层写的数据（source_type='recording'），worker seed 不动。
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM content_insights
+		WHERE tenant_id=$1 AND recording_id=$2 AND source_type='recording'`,
+		tenantID, recordingID); err != nil {
+		return nil, fmt.Errorf("delete old insights: %w", err)
+	}
+
 	out := make([]Insight, 0, len(insights))
 	for i := range insights {
 		it := &insights[i]
@@ -259,17 +280,19 @@ func (s *Store) insertInsights(ctx context.Context, tenantID, recordingID int64,
 			return nil, fmt.Errorf("marshal insight payload: %w", err)
 		}
 		var id int64
-		err = s.pool.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO content_insights (tenant_id, recording_id, source_type, type, topic, payload)
 			VALUES ($1,$2,'recording',$3,$4,$5::jsonb)
 			RETURNING id`,
 			tenantID, recordingID, it.Type, it.Topic, string(payload),
-		).Scan(&id)
-		if err != nil {
+		).Scan(&id); err != nil {
 			return nil, fmt.Errorf("insert insight: %w", err)
 		}
 		it.ID = id
 		out = append(out, *it)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit replace insights: %w", err)
 	}
 	return out, nil
 }
