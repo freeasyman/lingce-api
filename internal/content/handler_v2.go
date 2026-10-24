@@ -98,11 +98,13 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	employeeID, _ := strconv.ParseInt(q.Get("employee_id"), 10, 64)
 	departmentCode := q.Get("department_code")
+	status := q.Get("status")
 
 	items, total, employees, departments, err := h.service.store.listInsightsFiltered(r.Context(), tenantID, insightListFilter{
 		Type:           q.Get("type"),
 		EmployeeID:     employeeID,
 		DepartmentCode: departmentCode,
+		Status:         status,
 		Limit:          limit,
 		Offset:         offset,
 	})
@@ -118,6 +120,36 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		"employees":   employees,
 		"departments": departments,
 	})
+}
+
+// SetInsightStatusV2 设置灵感处理状态（new=待处理 / dismissed=已忽略）。
+func (h *Handler) SetInsightStatusV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid insight id")
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.Status != "new" && req.Status != "dismissed" {
+		httputil.WriteBadRequest(w, "status must be new or dismissed")
+		return
+	}
+	if err := h.service.store.setInsightStatus(r.Context(), tenantID, id, req.Status); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"id": id, "status": req.Status})
 }
 
 // ListQuestionClusters 反复问聚合。
@@ -479,6 +511,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-insights", Handler: h.ListInsightsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights/{id}", Handler: h.GetInsightV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights/clusters", Handler: h.ListQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-insights/{id}/status", Handler: h.SetInsightStatusV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/clusters/actions/rebuild", Handler: h.RebuildQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/recommendations", Handler: h.RecommendTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

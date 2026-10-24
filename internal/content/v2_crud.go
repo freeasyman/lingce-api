@@ -40,7 +40,9 @@ type ContentInsightRecord struct {
 	EmployeeName          string `json:"employee_name"`
 	MedicalDepartmentCode string `json:"medical_department_code"`
 	MedicalDepartmentName string `json:"medical_department_name"`
-	CreatedAt             *time.Time `json:"created_at,omitempty"`
+	// Status：new（待处理）/ dismissed（已忽略）。已采纳由 content_topics.evidence_ref 反查派生。
+	Status    string     `json:"status"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 }
 
 type ContentTopicV2Record struct {
@@ -272,6 +274,7 @@ type insightListFilter struct {
 	Type           string
 	EmployeeID     int64
 	DepartmentCode string // 临床科室代码（medical_department_code）
+	Status         string // 处理状态：pending / accepted / dismissed（空=全部）
 	Limit          int
 	Offset         int
 }
@@ -307,8 +310,9 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
-		  AND ($4 = '' OR ci.medical_department_code = $4)`,
-		tenantID, f.Type, f.EmployeeID, f.DepartmentCode).Scan(&total); err != nil {
+		  AND ($4 = '' OR ci.medical_department_code = $4)
+		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) ELSE TRUE END)`,
+		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Status).Scan(&total); err != nil {
 		return nil, 0, nil, nil, err
 	}
 
@@ -318,15 +322,16 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		       COALESCE(ci.suggested_forms,'[]'::jsonb), COALESCE(ci.suggested_targets,'[]'::jsonb),
 		       COALESCE(ci.employee_name,''), COALESCE(ci.medical_department_name,''),
 		       COALESCE(ci.employee_id,0), COALESCE(ci.medical_department_code,''),
-		       ci.created_at
+		       COALESCE(ci.status,'new'), ci.created_at
 		FROM content_insights ci
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
 		  AND ($4 = '' OR ci.medical_department_code = $4)
+		  AND (CASE $5 WHEN 'dismissed' THEN ci.status='dismissed' WHEN 'accepted' THEN EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) WHEN 'pending' THEN COALESCE(ci.status,'new')='new' AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.evidence_ref=ci.id AND t.tenant_id=ci.tenant_id) ELSE TRUE END)
 		ORDER BY ci.id DESC
-		LIMIT $5 OFFSET $6`,
-		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Limit, f.Offset)
+		LIMIT $6 OFFSET $7`,
+		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Status, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
@@ -336,7 +341,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		var r ContentInsightRecord
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic,
 			&r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets,
-			&r.EmployeeName, &r.MedicalDepartmentName, &r.EmployeeID, &r.MedicalDepartmentCode, &r.CreatedAt); err != nil {
+			&r.EmployeeName, &r.MedicalDepartmentName, &r.EmployeeID, &r.MedicalDepartmentCode, &r.Status, &r.CreatedAt); err != nil {
 			return nil, 0, nil, nil, err
 		}
 		out = append(out, r)
@@ -410,6 +415,14 @@ func (s *Store) listInsightDepartmentOptions(ctx context.Context, tenantID int64
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// setInsightStatus 设置灵感处理状态（new=待处理 / dismissed=已忽略）。
+func (s *Store) setInsightStatus(ctx context.Context, tenantID, id int64, status string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_insights SET status=$3 WHERE id=$1 AND tenant_id=$2`,
+		id, tenantID, status)
+	return err
 }
 
 // ===== 选题 =====
@@ -774,3 +787,4 @@ func (s *Store) getInsightV2(ctx context.Context, tenantID, id int64) (*ContentI
 	}
 	return &r, nil
 }
+
