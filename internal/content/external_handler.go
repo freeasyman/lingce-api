@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -57,10 +58,11 @@ type ContentAnalysisDeliveryResponse struct {
 type ExternalHandler struct {
 	pool     *pgxpool.Pool
 	tenantID int64
+	service  *Service
 }
 
-func NewExternalHandler(pool *pgxpool.Pool, tenantID int64) *ExternalHandler {
-	return &ExternalHandler{pool: pool, tenantID: tenantID}
+func NewExternalHandler(pool *pgxpool.Pool, tenantID int64, service *Service) *ExternalHandler {
+	return &ExternalHandler{pool: pool, tenantID: tenantID, service: service}
 }
 
 func (h *ExternalHandler) RegisterInternalRoutes(mux *http.ServeMux, token string) {
@@ -164,6 +166,19 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(r.Context()); err != nil {
 		writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "commit failed"})
 		return
+	}
+
+	// 新链路：Worker 分析结束 → 信号到达 → 触发新 28 字段洞察提取 + 选题（异步，不阻塞信号响应）。
+	if h.service != nil {
+		recordingID := env.Data.RecordingID
+		tenantID := h.tenantID
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if _, err := h.service.AnalyzeRecording(ctx, tenantID, recordingID); err != nil {
+				slog.Warn("content insight extraction after worker signal failed", "error", err, "tenant_id", tenantID, "recording_id", recordingID)
+			}
+		}()
 	}
 
 	writeContentJSON(w, http.StatusOK, ContentAnalysisDeliveryResponse{

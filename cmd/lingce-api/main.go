@@ -480,7 +480,7 @@ func main() {
 	// Content-center external analysis contract. The Worker (or another
 	// external producer) pushes analysis here; this module never reads or
 	// mutates Worker, follow-up, EMR or deal-expert tables.
-	contentExternalHandler := content.NewExternalHandler(pool, cfg.External.ContentAnalysisTenantID)
+	contentExternalHandler := content.NewExternalHandler(pool, cfg.External.ContentAnalysisTenantID, contentService)
 	contentExternalHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 
 	// Register sandbox transfer module
