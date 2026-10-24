@@ -39,6 +39,7 @@ func (h *Handler) registerInsightEngineRoutes(mux *http.ServeMux, deps router.Ro
 	routes := []router.Route{
 		{Method: "POST", Path: "/api/v1/content-insights/actions/extract/{id}", Handler: h.ExtractInsights, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/actions/extract-batch", Handler: h.ExtractInsightsBatch, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-insights/analysis-status", Handler: h.AnalysisStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, deps)
 }
