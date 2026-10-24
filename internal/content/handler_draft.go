@@ -146,6 +146,7 @@ func (h *Handler) registerDraftRoutes(mux *http.ServeMux, deps router.RouteDeps)
 		{Method: "POST", Path: "/api/v1/content-drafts/actions/generate-graphic-note", Handler: h.GenerateGraphicNoteDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items", Handler: h.SaveContentV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/actions/generate-v2", Handler: h.GenerateContentV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/actions/export-images-zip", Handler: h.ExportImagesZip, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-cards/actions/generate-image", Handler: h.GenerateCardImage, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, deps)
