@@ -35,7 +35,12 @@ type ContentInsightRecord struct {
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	SuggestedForms   json.RawMessage `json:"suggested_forms"`
 	SuggestedTargets json.RawMessage `json:"suggested_targets"`
-	CreatedAt        *time.Time      `json:"created_at,omitempty"`
+	// 来源录音的医生与科室（按 recording_id → employee → department 关联）。
+	EmployeeID     int64  `json:"employee_id"`
+	EmployeeName   string `json:"employee_name"`
+	DepartmentID   int64  `json:"department_id"`
+	DepartmentName string `json:"department_name"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
 }
 
 type ContentTopicV2Record struct {
@@ -262,26 +267,143 @@ func (s *Store) replaceQuestionClusters(ctx context.Context, tenantID int64, clu
 	return tx.Commit(ctx)
 }
 
-func (s *Store) listInsights(ctx context.Context, tenantID int64, limit int) ([]ContentInsightRecord, error) {
-	if limit <= 0 {
-		limit = 100
+// insightListFilter 洞察列表筛选条件。EmployeeID/DepartmentID 为 0 表示不筛选。
+type insightListFilter struct {
+	Type         string
+	EmployeeID   int64
+	DepartmentID int64
+	Limit        int
+	Offset       int
+}
+
+// insightFilterOption 筛选项（医生/科室）。
+type insightFilterOption struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// listInsightsFiltered 按类型/医生/科室筛选并分页，返回当页数据、总数与筛选项。
+func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insightListFilter) ([]ContentInsightRecord, int64, []insightFilterOption, []insightFilterOption, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
 	}
+	if f.Limit > 200 {
+		f.Limit = 200
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+
+	var total int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM content_insights ci
+		LEFT JOIN recordings r ON r.id = ci.recording_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE ci.tenant_id = $1
+		  AND ($2 = '' OR ci.type = $2)
+		  AND ($3 = 0 OR COALESCE(r.employee_id,0) = $3)
+		  AND ($4 = 0 OR COALESCE(e.department_id,0) = $4)`,
+		tenantID, f.Type, f.EmployeeID, f.DepartmentID).Scan(&total); err != nil {
+		return nil, 0, nil, nil, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, recording_id, COALESCE(source_type,'recording'), type, topic,
-		       COALESCE(evidence,'{}'::jsonb), COALESCE(payload,'{}'::jsonb), COALESCE(suggested_forms,'[]'::jsonb), COALESCE(suggested_targets,'[]'::jsonb), created_at
-		FROM content_insights WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2`,
-		tenantID, limit)
+		SELECT ci.id, ci.tenant_id, ci.recording_id, COALESCE(ci.source_type,'recording'), ci.type, ci.topic,
+		       COALESCE(ci.evidence,'{}'::jsonb), COALESCE(ci.payload,'{}'::jsonb),
+		       COALESCE(ci.suggested_forms,'[]'::jsonb), COALESCE(ci.suggested_targets,'[]'::jsonb),
+		       COALESCE(e.name,''), COALESCE(d.name,''), COALESCE(r.employee_id,0), COALESCE(e.department_id,0),
+		       ci.created_at
+		FROM content_insights ci
+		LEFT JOIN recordings r ON r.id = ci.recording_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
+		WHERE ci.tenant_id = $1
+		  AND ($2 = '' OR ci.type = $2)
+		  AND ($3 = 0 OR COALESCE(r.employee_id,0) = $3)
+		  AND ($4 = 0 OR COALESCE(e.department_id,0) = $4)
+		ORDER BY ci.id DESC
+		LIMIT $5 OFFSET $6`,
+		tenantID, f.Type, f.EmployeeID, f.DepartmentID, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	defer rows.Close()
+	out := make([]ContentInsightRecord, 0, f.Limit)
+	for rows.Next() {
+		var r ContentInsightRecord
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic,
+			&r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets,
+			&r.EmployeeName, &r.DepartmentName, &r.EmployeeID, &r.DepartmentID, &r.CreatedAt); err != nil {
+			return nil, 0, nil, nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, nil, nil, err
+	}
+
+	// 筛选项：本租户有洞察的医生与科室（不受当前筛选影响，方便切换）。
+	employees, err := s.listInsightEmployeeOptions(ctx, tenantID)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	departments, err := s.listInsightDepartmentOptions(ctx, tenantID)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	return out, total, employees, departments, nil
+}
+
+func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT COALESCE(r.employee_id,0), COALESCE(e.name,'')
+		FROM content_insights ci
+		LEFT JOIN recordings r ON r.id = ci.recording_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE ci.tenant_id = $1 AND COALESCE(r.employee_id,0) > 0
+		ORDER BY 1`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ContentInsightRecord
+	out := make([]insightFilterOption, 0, 16)
 	for rows.Next() {
-		var r ContentInsightRecord
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic, &r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets, &r.CreatedAt); err != nil {
+		var o insightFilterOption
+		if err := rows.Scan(&o.ID, &o.Name); err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		if o.Name == "" {
+			o.Name = "未命名医生"
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) listInsightDepartmentOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT COALESCE(e.department_id,0), COALESCE(d.name,'')
+		FROM content_insights ci
+		LEFT JOIN recordings r ON r.id = ci.recording_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
+		WHERE ci.tenant_id = $1 AND COALESCE(e.department_id,0) > 0
+		ORDER BY 1`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]insightFilterOption, 0, 16)
+	for rows.Next() {
+		var o insightFilterOption
+		if err := rows.Scan(&o.ID, &o.Name); err != nil {
+			return nil, err
+		}
+		if o.Name == "" {
+			o.Name = "未命名科室"
+		}
+		out = append(out, o)
 	}
 	return out, rows.Err()
 }

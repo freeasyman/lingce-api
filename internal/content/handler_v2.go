@@ -83,18 +83,41 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
+	q := r.URL.Query()
+	limit := 50
+	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	insights, err := h.service.store.listInsights(r.Context(), tenantID, limit)
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	employeeID, _ := strconv.ParseInt(q.Get("employee_id"), 10, 64)
+	departmentID, _ := strconv.ParseInt(q.Get("department_id"), 10, 64)
+
+	items, total, employees, departments, err := h.service.store.listInsightsFiltered(r.Context(), tenantID, insightListFilter{
+		Type:         q.Get("type"),
+		EmployeeID:   employeeID,
+		DepartmentID: departmentID,
+		Limit:        limit,
+		Offset:       offset,
+	})
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, insights)
+	httputil.WriteSuccess(w, map[string]any{
+		"items":       items,
+		"total":       total,
+		"limit":       limit,
+		"offset":      offset,
+		"employees":   employees,
+		"departments": departments,
+	})
 }
 
 // ListQuestionClusters 反复问聚合。
