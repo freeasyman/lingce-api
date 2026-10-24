@@ -92,6 +92,14 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 信号按录音真实租户处理；配置里的 content_analysis_tenant_id 仅作兜底。
+	// 否则跨租户录音（如租户 1 的录音）会被误判到配置租户下，导致记录找不到。
+	tenantID := h.tenantID
+	var recordingTenantID int64
+	if err := h.pool.QueryRow(r.Context(), `SELECT tenant_id FROM recordings WHERE id = $1`, env.Data.RecordingID).Scan(&recordingTenantID); err == nil && recordingTenantID > 0 {
+		tenantID = recordingTenantID
+	}
+
 	payload, _ := json.Marshal(env)
 	tx, err := h.pool.Begin(r.Context())
 	if err != nil {
@@ -107,11 +115,11 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 		SELECT id, status, COALESCE(source_updated_at, 'epoch'::timestamptz)
 		FROM content_analysis_deliveries
 		WHERE tenant_id=$1 AND source_system=$2 AND source_record_id=$3
-	`, h.tenantID, env.SourceSystem, env.SourceRecordID).Scan(&existingID, &existingStatus, &existingUpdated)
+	`, tenantID, env.SourceSystem, env.SourceRecordID).Scan(&existingID, &existingStatus, &existingUpdated)
 	if err == nil && !env.UpdatedAt.After(existingUpdated) && existingStatus == "succeeded" {
 		_ = tx.Rollback(r.Context())
 		writeContentJSON(w, http.StatusOK, ContentAnalysisDeliveryResponse{
-			DeliveryID: existingID, Status: "duplicate", TenantID: h.tenantID,
+			DeliveryID: existingID, Status: "duplicate", TenantID: tenantID,
 			SourceRecordID: env.SourceRecordID, ResourceID: fmt.Sprintf("%d", env.Data.RecordingID),
 		})
 		return
@@ -135,7 +143,7 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 			source_updated_at = EXCLUDED.source_updated_at,
 			updated_at = NOW()
 		RETURNING id
-	`, h.tenantID, env.SourceSystem, env.SourceRecordID, env.IdempotencyKey, env.EventType, string(payload), env.UpdatedAt).Scan(&deliveryID)
+	`, tenantID, env.SourceSystem, env.SourceRecordID, env.IdempotencyKey, env.EventType, string(payload), env.UpdatedAt).Scan(&deliveryID)
 	if err != nil {
 		writeContentJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist delivery failed"})
 		return
@@ -143,11 +151,11 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 
 	accepted := 0
 	for _, q := range env.Data.Questions {
-		if err := upsertContentSeed(r.Context(), tx, h.tenantID, env, q, env.Data.EmployeeID); err != nil {
+		if err := upsertContentSeed(r.Context(), tx, tenantID, env, q, env.Data.EmployeeID); err != nil {
 			_, _ = tx.Exec(r.Context(), `UPDATE content_analysis_deliveries SET status='failed', error_reason=$2, updated_at=NOW() WHERE id=$1`, deliveryID, err.Error())
 			_ = tx.Commit(r.Context())
 			writeContentJSON(w, http.StatusUnprocessableEntity, ContentAnalysisDeliveryResponse{
-				DeliveryID: deliveryID, Status: "failed", TenantID: h.tenantID,
+				DeliveryID: deliveryID, Status: "failed", TenantID: tenantID,
 				SourceRecordID: env.SourceRecordID, Error: err.Error(),
 			})
 			return
@@ -171,18 +179,22 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 	// 新链路：Worker 分析结束 → 信号到达 → 触发新 28 字段洞察提取 + 选题（异步，不阻塞信号响应）。
 	if h.service != nil {
 		recordingID := env.Data.RecordingID
-		tenantID := h.tenantID
+		slog.Info("content insight extraction triggered", "tenant_id", tenantID, "recording_id", recordingID)
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if _, err := h.service.AnalyzeRecording(ctx, tenantID, recordingID); err != nil {
 				slog.Warn("content insight extraction after worker signal failed", "error", err, "tenant_id", tenantID, "recording_id", recordingID)
+			} else {
+				slog.Info("content insight extraction completed", "tenant_id", tenantID, "recording_id", recordingID)
 			}
 		}()
+	} else {
+		slog.Warn("content insight extraction skipped: service is nil", "recording_id", env.Data.RecordingID)
 	}
 
 	writeContentJSON(w, http.StatusOK, ContentAnalysisDeliveryResponse{
-		DeliveryID: deliveryID, Status: "succeeded", TenantID: h.tenantID,
+		DeliveryID: deliveryID, Status: "succeeded", TenantID: tenantID,
 		SourceRecordID: env.SourceRecordID, ResourceID: fmt.Sprintf("%d", env.Data.RecordingID), Accepted: accepted,
 	})
 }
