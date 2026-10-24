@@ -1,0 +1,317 @@
+{
+  "type": "object",
+  "properties": {
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "recommendation": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string",
+            "enum": [
+              "科普",
+              "品牌",
+              "医生IP",
+              "转化",
+              "GEO"
+            ]
+          },
+          "expected_help": {
+            "type": "object",
+            "properties": {
+              "search": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cognition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "conversion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "search",
+              "cognition",
+              "conversion"
+            ],
+            "additionalProperties": false
+          },
+          "core_claim": {
+            "type": "string"
+          },
+          "angle": {
+            "type": "string"
+          },
+          "audience": {
+            "type": "string"
+          },
+          "suggested_forms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "文章",
+                "图文",
+                "口播",
+                "海报",
+                "分镜",
+                "朋友圈"
+              ]
+            }
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "speaker": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "speaker"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "golden_quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_points": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "per_form_structure": {
+            "type": "object",
+            "properties": {
+              "文章": {
+                "type": "object",
+                "properties": {
+                  "sections": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string"
+                        },
+                        "point": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "point"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "sections"
+                ],
+                "additionalProperties": false
+              },
+              "图文": {
+                "type": "object",
+                "properties": {
+                  "cards": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "cards"
+                ],
+                "additionalProperties": false
+              },
+              "口播": {
+                "type": "object",
+                "properties": {
+                  "segments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "开头",
+                            "正文",
+                            "结尾"
+                          ]
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "segments"
+                ],
+                "additionalProperties": false
+              },
+              "分镜": {
+                "type": "object",
+                "properties": {
+                  "shots": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "visual": {
+                          "type": "string"
+                        },
+                        "audio": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "visual",
+                        "audio"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "shots"
+                ],
+                "additionalProperties": false
+              },
+              "朋友圈": {
+                "type": "object",
+                "properties": {
+                  "images": {
+                    "type": "integer"
+                  },
+                  "caption_points": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "images",
+                  "caption_points"
+                ],
+                "additionalProperties": false
+              },
+              "海报": {
+                "type": "object",
+                "properties": {
+                  "headline": {
+                    "type": "string"
+                  },
+                  "selling_points": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "headline",
+                  "selling_points",
+                  "cta"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "forbidden_claims": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bias_risk": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "recommendation",
+          "goal",
+          "expected_help",
+          "core_claim",
+          "angle",
+          "audience",
+          "suggested_forms",
+          "facts",
+          "quotes",
+          "golden_quote",
+          "key_points",
+          "per_form_structure",
+          "forbidden_claims",
+          "bias_risk"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "topics"
+  ],
+  "additionalProperties": false
+}
