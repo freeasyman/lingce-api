@@ -25,7 +25,8 @@ func (s *Store) listTranscriptsWithoutInsights(ctx context.Context, limit int) (
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.tenant_id, r.id, r.employee_id
 		FROM recordings r
-		WHERE COALESCE(NULLIF(r.transcription_text,''), NULLIF(r.cleaned_transcription::text,''), '') <> ''
+		WHERE r.business_scope = 'doctor'
+		  AND COALESCE(NULLIF(r.transcription_text,''), NULLIF(r.cleaned_transcription::text,''), '') <> ''
 		  AND NOT EXISTS (SELECT 1 FROM content_insights ci WHERE ci.recording_id = r.id AND ci.tenant_id = r.tenant_id)
 		ORDER BY r.id DESC
 		LIMIT $1`, limit)
@@ -112,6 +113,7 @@ func (s *Store) listPendingTranscripts(ctx context.Context, tenantID int64, limi
 		SELECT r.tenant_id, r.id, r.employee_id
 		FROM recordings r
 		WHERE r.tenant_id = $1
+		  AND r.business_scope = 'doctor'
 		  AND COALESCE(NULLIF(r.transcription_text,''), NULLIF(r.cleaned_transcription::text,''), '') <> ''
 		  AND NOT EXISTS (SELECT 1 FROM content_insights ci WHERE ci.recording_id = r.id AND ci.tenant_id = r.tenant_id)
 		ORDER BY GREATEST(length(COALESCE(r.transcription_text,'')), length(COALESCE(r.cleaned_transcription::text,''))) DESC, r.id DESC

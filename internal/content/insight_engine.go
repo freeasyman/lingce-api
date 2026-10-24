@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,74 +11,122 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// 洞察提取提示词：从医生-患者问诊转写中提取 10 类洞察。
-const insightExtractionSystemPrompt = `你是资深医疗内容策划，专门从医患问诊转写里判断"哪些内容值得做成传播内容、为什么"。你的产出不是摘要，而是能直接变成选题的原料。
+//go:embed insight_schema.json
+var insightSchemaJSON []byte
 
-## 一、判断标准（一条洞察至少满足 2 条）
-1. 真实：转写里患者或医生确实说了，有原话可逐字引用
-2. 具体：有场景细节——时间、动作、情绪、数字、前后对比
-3. 有张力：反常识 / 有情绪 / 有身份共鸣 / 解决真实决策障碍
-4. 可传播：换个没专业背景的人也能看懂、有代入感
+// 洞察提取提示词（v12）：语义由提示词管（角色/10类/字段判断标准/溯源规则），
+// 结构由 insight_schema.json 的 JSON Schema 强制（28 字段、类型、必填）。
+const insightExtractionSystemPrompt = `你是资深「医疗新媒体专家」，做「发现 → 洞察 → 判断」三段式工作：从真实医患对话里发现值得传播的内容点、剖析它好在哪戳中谁、判断它值不值得做。
+你懂四件事：1) 医患沟通，听得懂患者在担心什么、犹豫什么、没问出口什么；2) 内容传播，知道内容怎么在小红书/公众号/抖音/视频号被搜到刷到；3) 医疗合规，不承诺疗效、不出现患者正脸、不制造焦虑；4) 内容价值分级，判断信息普遍性/稀缺性——普遍做FAQ吃长尾流量，稀缺做差异化权威内容。
 
-## 二、不要提取（宁缺毋滥）
-- 纯流程对话：挂号、缴费、预约、复诊时间安排
-- 空泛安抚："别担心""没事的""放心吧"
-- 医生单方面的教科书式科普，没有患者反应或追问
-- 转写里没有依据的推断
-- 隐私信息：姓名、电话、住址、身份证、具体单位
+【任务】这是医院「内容获客」第一环「洞察」：从问诊转写里把值得做成内容的点一条条挖出来、剖析清楚。下游会变成图文/口播/文章，发到小红书/公众号/抖音/视频号；最终目标：让犹豫患者来咨询/到院、纠正误区建立信任、让患者搜索到/让AI提到我们、建立医生IP。
 
-## 三、10 类洞察（判断要点 / 反例）
-1. question 问题 —— 患者自己问出口的问题；反例："医生你说吧我听着"
-2. concern 顾虑 —— 患者担心、犹豫、下不了决心的点；反例："好，可以"
-3. misconception 误区 —— 患者的错误认知 + 医生如何纠正；反例：患者本来就理解正确
-4. scene 共鸣场景 —— 让人"这就是我"的具体情境（时间/身份/处境）；反例："很多人都有这种情况"
-5. quote 金句 —— 医生说的有传播力的原话（判断句、比喻、大实话）；反例：检查数据罗列
-6. aha 认知瞬间 —— 颠覆常识、"原来如此"的点
-7. viewpoint 医生观点 —— 医生的明确立场、判断、建议（有态度）
-8. explanation 医生讲解 —— 对机制/原理的解释，能讲清"为什么"
-9. story 患者故事 —— 患者自述的经历、过程、结果，有时间线和结果
-10. fact 数据事实 —— 具体数字、指标、分级标准，可核验
+【重要】一条录音不强求生成洞察，整段平庸就 insights 返回空数组。
 
-## 四、字段要求
-- quote：必须是转写原文，逐字摘录，不改写、不拼接
-- speaker：doctor / patient / family
-- position：大致位置，如"开头" / "中段" / "结尾前"
-- topic：一句话主题，要能直接当选题标题用，禁止"患者咨询XX"这类空话
-- core_insight：这条洞察的内容价值是什么（一句话，讲清"观众为什么会看"）
-- why_valuable：为什么值得做成内容，引用上面的判断标准
-- patient_concern / doctor_point / angle：按类型填，没有就留空
-- suggested_forms：口播稿 / 图文 / 文章 / 海报 / 朋友圈（可多选）
-- suggested_targets：xiaohongshu / douyin / wechat / shipinhao / website
+【洞察10类】
+1 问题：患者自己问出口的问题。2 顾虑：担心、犹豫、下不了决心的点。3 误区：错误认知+医生纠正。4 共鸣场景：让人"这就是我"的具体情境（有画面能复述）。5 金句：医生说的有传播力的话（有比喻/反差/判断/鲜明态度 + 脱离上下文能独立成立 + 医生亲口说的）。金句极稀缺，大多数就诊没有，没有就写 null，绝不硬凑；陈述事实/罗列数据/普通解释/套话安慰都不是金句。6 认知瞬间：颠覆常识"原来如此"。7 医生观点：明确立场判断建议（有态度有取舍）。8 医生讲解：把病/治疗讲透（机制/原理/为什么）。9 患者故事：患者自述经历，有时间线+结果。10 数据事实：可核验的具体数字/指标/分级/时间。
 
-## 五、质量控制
-- 一场 30 分钟问诊通常只值 3-8 条洞察；宁可少，不要凑数。
-- 整段都没有值得做成内容的，返回 []。
-- 同一段转写里 topic 不能重复。
+【创作类字段判断标准】
+conflict：两个对立诉求/事实同时存在，必须指出对立两方（A vs B）。
+emotion_hook：能触发情绪的原话，必须指出"什么情绪+哪句原话"。
+counterintuitive_point：颠覆大众认知，必须指出"大众以为X，实际Y"。
+number_hook：原话里的具体数字（几周/几分钟/几岁/多少钱）。
+identity_resonance：戳中某类人群，必须具体到"哪类人会说这就是我"。
+story_arc：有时间线+结果。
+trust_arc：犹豫→安心→仍担心，从原话归纳不脑补。
 
-## 六、输出格式
-只返回 JSON 数组，不要任何解释、不要 markdown 代码块：
-[{"type":"","topic":"","quote":"","speaker":"","position":"","core_insight":"","why_valuable":"","patient_concern":"","doctor_point":"","angle":"","suggested_forms":[],"suggested_targets":[]}]`
+【evidence_refs 规则】evidence_refs 只给【claim 类】字段溯源（这些是能精确追溯到某句原话的断言）：conflict、emotion_hook、counterintuitive_point、number_hook、identity_resonance、golden_quote、story_arc、trust_arc、concern_to_resolve、misconception_to_correct、knowledge_gap。有内容就给它的 quote 序号，null 不列。type/topic/prevalence/fact_statement 等是整条洞察的归纳，不需要逐句溯源。写不出依据的 claim 字段必须写 null，不许编。
 
-// InsightExtraction 是洞察提取的单条结果。
-type InsightExtraction struct {
-	ID               int64    `json:"id,omitempty"`
-	Type             string   `json:"type"`
-	Topic            string   `json:"topic"`
-	Quote            string   `json:"quote"`
-	Speaker          string   `json:"speaker"`
-	Position         string   `json:"position"`
-	CoreInsight      string   `json:"core_insight,omitempty"`
-	WhyValuable      string   `json:"why_valuable,omitempty"`
-	PatientConcern   string   `json:"patient_concern,omitempty"`
-	DoctorPoint      string   `json:"doctor_point,omitempty"`
-	Angle            string   `json:"angle,omitempty"`
-	SuggestedForms   []string `json:"suggested_forms,omitempty"`
-	SuggestedTargets []string `json:"suggested_targets,omitempty"`
+【speculated 规则】speculated 填【字段名】数组（如 ["search_queries"]），不要填句子。search_queries 是推测用户会搜什么，必须给出内容并放进 speculated。
+
+【硬规则】一条洞察只聚焦一个点，quotes 只放 2-4 句原话，不同点拆成不同洞察。quotes 是唯一事实源，从 0 编号。fact_statement 只写转写里有的。value_judgment 禁"最大/全网最高频"这类无数据断言。宁缺毋滥。
+`
+
+// Insight 是一条洞察（28 字段，与 insight_schema.json 严格一致）。
+type Insight struct {
+	Quotes                []InsightQuote          `json:"quotes"`
+	Exchange              InsightExchange         `json:"exchange"`
+	ContentMarkers        InsightMarkers          `json:"content_markers"`
+	Type                  string                  `json:"type"`
+	Topic                 string                  `json:"topic"`
+	Prevalence            string                  `json:"prevalence"`
+	FactStatement         string                  `json:"fact_statement"`
+	ValueJudgment         string                  `json:"value_judgment"`
+	EvidenceStrength      string                  `json:"evidence_strength"`
+	HelpDimensions        []string                `json:"help_dimensions"`
+	SearchQueries         []string                `json:"search_queries"`
+	KnowledgeGap          string                  `json:"knowledge_gap"`
+	MisconceptionToCorrect string                 `json:"misconception_to_correct"`
+	ConcernToResolve      string                  `json:"concern_to_resolve"`
+	Conflict              string                  `json:"conflict"`
+	EmotionHook           string                  `json:"emotion_hook"`
+	CounterintuitivePoint string                  `json:"counterintuitive_point"`
+	NumberHook            string                  `json:"number_hook"`
+	IdentityResonance     string                  `json:"identity_resonance"`
+	GoldenQuote           string                  `json:"golden_quote"`
+	StoryArc              string                  `json:"story_arc"`
+	TrustArc              InsightTrustArc         `json:"trust_arc"`
+	SuggestedForms        []string                `json:"suggested_forms"`
+	PerForm               map[string]InsightFormScript `json:"per_form"`
+	KeyPoints             []string                `json:"key_points"`
+	Risks                 InsightRisks            `json:"risks"`
+	EvidenceRefs          map[string][]int        `json:"evidence_refs"`
+	Speculated            []string                `json:"speculated"`
+	ID                    int64                   `json:"id,omitempty"`
+}
+
+type InsightQuote struct {
+	Text           string `json:"text"`
+	Speaker        string `json:"speaker"`
+	Position       string `json:"position,omitempty"`
+	RoleInExchange string `json:"role_in_exchange,omitempty"`
+}
+
+type InsightExchange struct {
+	Trigger   string `json:"trigger"`
+	Response  string `json:"response"`
+	TurnCount int    `json:"turn_count"`
+}
+
+type InsightMarkers struct {
+	HasNumber           bool `json:"has_number"`
+	HasContrast         bool `json:"has_contrast"`
+	HasEmotion          bool `json:"has_emotion"`
+	HasCounterintuitive bool `json:"has_counterintuitive"`
+	HasQuestion         bool `json:"has_question"`
+	HasHesitation       bool `json:"has_hesitation"`
+	HasDecisionConflict bool `json:"has_decision_conflict"`
+}
+
+type InsightTrustArc struct {
+	Hesitation  string `json:"hesitation"`
+	Reassurance string `json:"reassurance"`
+	Unresolved  string `json:"unresolved"`
+}
+
+type InsightFormScript struct {
+	Hook    string `json:"hook"`
+	Opening string `json:"opening"`
+	Cta     string `json:"cta"`
+}
+
+type InsightRisks struct {
+	ForbiddenClaims []string `json:"forbidden_claims"`
+	BiasRisk        string   `json:"bias_risk"`
 }
 
 var validInsightTypes = map[string]bool{
-	"question": true, "concern": true, "misconception": true, "scene": true, "quote": true,
-	"aha": true, "viewpoint": true, "explanation": true, "story": true, "fact": true,
+	"问题": true, "顾虑": true, "误区": true, "共鸣场景": true, "金句": true,
+	"认知瞬间": true, "医生观点": true, "医生讲解": true, "患者故事": true, "数据事实": true,
+}
+
+// insightOutputSchema 解析内嵌 JSON Schema，包装成网关 output_schema 结构。
+func insightOutputSchema() (*llmgateway.OutputSchema, error) {
+	var schema map[string]interface{}
+	if err := json.Unmarshal(insightSchemaJSON, &schema); err != nil {
+		return nil, fmt.Errorf("parse insight schema: %w", err)
+	}
+	return &llmgateway.OutputSchema{Name: "content_insights", Strict: true, Schema: schema}, nil
 }
 
 // fetchRecordingTranscript 取录音转写（优先分段拼接，否则原始转写文本）。
@@ -111,8 +160,8 @@ func (s *Store) fetchRecordingTranscript(ctx context.Context, tenantID, recordin
 	return transcript, nil
 }
 
-// ExtractInsights 从录音转写提取 10 类洞察，落库 content_insights。
-func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int64) ([]InsightExtraction, error) {
+// ExtractInsights 从录音转写提取洞察（28 字段），落库 content_insights。
+func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int64) ([]Insight, error) {
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("llm gateway is not configured")
 	}
@@ -126,6 +175,11 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		return nil, fmt.Errorf("resolve llm config for insight extraction: %w", err)
 	}
 
+	outSchema, err := insightOutputSchema()
+	if err != nil {
+		return nil, err
+	}
+
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
@@ -136,8 +190,9 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		Billing:       newBillingMetadata("content", "recording", recordingID, "insight_extraction", "content_insight"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_insight_extract", insightExtractionSystemPrompt)},
-			{Role: "user", Content: "问诊转写如下：\n\n" + transcript},
+			{Role: "user", Content: "转写文本：\n\n" + transcript},
 		},
+		Params: &llmgateway.Params{OutputSchema: outSchema},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
 
@@ -146,9 +201,9 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		return nil, fmt.Errorf("extract insights via llm: %w", err)
 	}
 
-	insights, err := parseInsightExtractions(llmResp.Content)
+	insights, err := parseInsights(llmResp.Content)
 	if err != nil {
-		return nil, fmt.Errorf("parse insight extractions: %w", err)
+		return nil, fmt.Errorf("parse insights: %w", err)
 	}
 
 	stored, err := s.store.insertInsights(ctx, tenantID, recordingID, insights)
@@ -158,10 +213,9 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 	return stored, nil
 }
 
-// parseInsightExtractions 解析 llm 返回的洞察 JSON（容忍 markdown 代码块包裹）。
-func parseInsightExtractions(content string) ([]InsightExtraction, error) {
+// parseInsights 解析 llm 返回的对象根 {"insights":[...]}（容忍 markdown 代码块包裹）。
+func parseInsights(content string) ([]Insight, error) {
 	raw := strings.TrimSpace(content)
-	// 去掉 ```json ... ``` 包裹
 	if idx := strings.Index(raw, "```"); idx >= 0 {
 		raw = raw[idx+3:]
 		if j := strings.Index(raw, "json"); j == 0 {
@@ -172,20 +226,20 @@ func parseInsightExtractions(content string) ([]InsightExtraction, error) {
 		}
 		raw = strings.TrimSpace(raw)
 	}
-	// 取第一个 [ 到最后一个 ]
-	if start := strings.Index(raw, "["); start >= 0 {
-		if end := strings.LastIndex(raw, "]"); end > start {
+	if start := strings.Index(raw, "{"); start >= 0 {
+		if end := strings.LastIndex(raw, "}"); end > start {
 			raw = raw[start : end+1]
 		}
 	}
-	var out []InsightExtraction
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+	var wrapper struct {
+		Insights []Insight `json:"insights"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
 		return nil, fmt.Errorf("unmarshal insights: %w (raw: %.200s)", err, raw)
 	}
-	// 过滤非法类型和空主题
-	filtered := out[:0]
-	for _, it := range out {
-		it.Type = strings.TrimSpace(strings.ToLower(it.Type))
+	filtered := wrapper.Insights[:0]
+	for _, it := range wrapper.Insights {
+		it.Type = strings.TrimSpace(it.Type)
 		it.Topic = strings.TrimSpace(it.Topic)
 		if !validInsightTypes[it.Type] || it.Topic == "" {
 			continue
@@ -195,49 +249,27 @@ func parseInsightExtractions(content string) ([]InsightExtraction, error) {
 	return filtered, nil
 }
 
-// insertInsights 落库洞察，返回带 id 的结果。
-func (s *Store) insertInsights(ctx context.Context, tenantID, recordingID int64, insights []InsightExtraction) ([]InsightExtraction, error) {
-	out := make([]InsightExtraction, 0, len(insights))
-	for _, it := range insights {
-		evidence := map[string]any{
-			"quotes": []map[string]string{{
-				"speaker":  it.Speaker,
-				"text":     it.Quote,
-				"position": it.Position,
-			}},
+// insertInsights 落库洞察：完整 28 字段存 payload，type/topic 冗余列供查询。
+func (s *Store) insertInsights(ctx context.Context, tenantID, recordingID int64, insights []Insight) ([]Insight, error) {
+	out := make([]Insight, 0, len(insights))
+	for i := range insights {
+		it := &insights[i]
+		payload, err := json.Marshal(it)
+		if err != nil {
+			return nil, fmt.Errorf("marshal insight payload: %w", err)
 		}
-		if it.PatientConcern != "" {
-			evidence["patient_concern"] = it.PatientConcern
-		}
-		if it.DoctorPoint != "" {
-			evidence["doctor_point"] = it.DoctorPoint
-		}
-		if it.Angle != "" {
-			evidence["angle"] = it.Angle
-		}
-		if it.CoreInsight != "" {
-			evidence["core_insight"] = it.CoreInsight
-		}
-		if it.WhyValuable != "" {
-			evidence["why_valuable"] = it.WhyValuable
-		}
-		evidenceJSON, _ := json.Marshal(evidence)
-		formsJSON, _ := json.Marshal(it.SuggestedForms)
-		targetsJSON, _ := json.Marshal(it.SuggestedTargets)
-
 		var id int64
-		err := s.pool.QueryRow(ctx, `
-			INSERT INTO content_insights
-				(tenant_id, recording_id, source_type, type, topic, evidence, suggested_forms, suggested_targets)
-			VALUES ($1,$2,'recording',$3,$4,$5::jsonb,$6::jsonb,$7::jsonb)
+		err = s.pool.QueryRow(ctx, `
+			INSERT INTO content_insights (tenant_id, recording_id, source_type, type, topic, payload)
+			VALUES ($1,$2,'recording',$3,$4,$5::jsonb)
 			RETURNING id`,
-			tenantID, recordingID, it.Type, it.Topic, string(evidenceJSON), string(formsJSON), string(targetsJSON),
+			tenantID, recordingID, it.Type, it.Topic, string(payload),
 		).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert insight: %w", err)
 		}
 		it.ID = id
-		out = append(out, it)
+		out = append(out, *it)
 	}
 	return out, nil
 }

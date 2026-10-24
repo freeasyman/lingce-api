@@ -1,0 +1,546 @@
+{
+  "type": "object",
+  "properties": {
+    "insights": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "speaker": {
+                  "type": "string",
+                  "enum": [
+                    "doctor",
+                    "patient",
+                    "family",
+                    "咨询师",
+                    "客服"
+                  ]
+                },
+                "position": {
+                  "type": "string"
+                },
+                "role_in_exchange": {
+                  "type": "string",
+                  "enum": [
+                    "问题",
+                    "回答",
+                    "陈述",
+                    "反驳",
+                    "犹豫",
+                    "决定"
+                  ]
+                }
+              },
+              "required": [
+                "text",
+                "speaker"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "exchange": {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "string"
+              },
+              "response": {
+                "type": "string"
+              },
+              "turn_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "trigger",
+              "response",
+              "turn_count"
+            ],
+            "additionalProperties": false
+          },
+          "content_markers": {
+            "type": "object",
+            "properties": {
+              "has_number": {
+                "type": "boolean"
+              },
+              "has_contrast": {
+                "type": "boolean"
+              },
+              "has_emotion": {
+                "type": "boolean"
+              },
+              "has_counterintuitive": {
+                "type": "boolean"
+              },
+              "has_question": {
+                "type": "boolean"
+              },
+              "has_hesitation": {
+                "type": "boolean"
+              },
+              "has_decision_conflict": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "has_number",
+              "has_contrast",
+              "has_emotion",
+              "has_counterintuitive",
+              "has_question",
+              "has_hesitation",
+              "has_decision_conflict"
+            ],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "问题",
+              "顾虑",
+              "误区",
+              "共鸣场景",
+              "金句",
+              "认知瞬间",
+              "医生观点",
+              "医生讲解",
+              "患者故事",
+              "数据事实"
+            ]
+          },
+          "topic": {
+            "type": "string"
+          },
+          "prevalence": {
+            "type": "string",
+            "enum": [
+              "普遍",
+              "稀缺",
+              "中"
+            ]
+          },
+          "fact_statement": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value_judgment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_strength": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "强",
+              "中",
+              "弱"
+            ]
+          },
+          "help_dimensions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "search",
+                "ai_citation",
+                "cognition",
+                "conversion"
+              ]
+            }
+          },
+          "search_queries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_gap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "misconception_to_correct": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "concern_to_resolve": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflict": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "emotion_hook": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "counterintuitive_point": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number_hook": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity_resonance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "golden_quote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "story_arc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trust_arc": {
+            "type": "object",
+            "properties": {
+              "hesitation": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reassurance": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unresolved": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "hesitation",
+              "reassurance",
+              "unresolved"
+            ],
+            "additionalProperties": false
+          },
+          "suggested_forms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "图文",
+                "口播",
+                "文章",
+                "海报",
+                "朋友圈",
+                "分镜"
+              ]
+            }
+          },
+          "per_form": {
+            "type": "object",
+            "properties": {
+              "图文": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              },
+              "口播": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              },
+              "文章": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              },
+              "海报": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              },
+              "朋友圈": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              },
+              "分镜": {
+                "type": "object",
+                "properties": {
+                  "hook": {
+                    "type": "string"
+                  },
+                  "opening": {
+                    "type": "string"
+                  },
+                  "cta": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "hook",
+                  "opening",
+                  "cta"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "key_points": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risks": {
+            "type": "object",
+            "properties": {
+              "forbidden_claims": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bias_risk": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "forbidden_claims",
+              "bias_risk"
+            ],
+            "additionalProperties": false
+          },
+          "evidence_refs": {
+            "type": "object",
+            "properties": {
+              "conflict": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "emotion_hook": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "counterintuitive_point": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "number_hook": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "identity_resonance": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "golden_quote": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "story_arc": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "trust_arc": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "concern_to_resolve": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "misconception_to_correct": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "knowledge_gap": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "speculated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "quotes",
+          "exchange",
+          "content_markers",
+          "type",
+          "topic",
+          "prevalence",
+          "fact_statement",
+          "value_judgment",
+          "evidence_strength",
+          "help_dimensions",
+          "search_queries",
+          "knowledge_gap",
+          "misconception_to_correct",
+          "concern_to_resolve",
+          "conflict",
+          "emotion_hook",
+          "counterintuitive_point",
+          "number_hook",
+          "identity_resonance",
+          "golden_quote",
+          "story_arc",
+          "trust_arc",
+          "suggested_forms",
+          "per_form",
+          "key_points",
+          "risks",
+          "evidence_refs",
+          "speculated"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "insights"
+  ],
+  "additionalProperties": false
+}

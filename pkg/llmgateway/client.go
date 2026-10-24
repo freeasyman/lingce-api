@@ -110,25 +110,37 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// OutputSchema carries a provider JSON Schema for structured output.
+// When set, the gateway emits response_format=json_schema so the model is
+// forced to return the exact structure instead of drifting.
+type OutputSchema struct {
+	Name   string                 `json:"name"`
+	Strict bool                   `json:"strict"`
+	Schema map[string]interface{} `json:"schema"`
+}
+
 // Params represents optional parameters
 type Params struct {
-	Temperature    float64 `json:"temperature,omitempty"`
-	MaxTokens      int     `json:"max_tokens,omitempty"`
-	TimeoutSeconds int     `json:"timeout_seconds,omitempty"`
-	ResponseFormat string  `json:"response_format,omitempty"` // text, json
+	Temperature    float64       `json:"temperature,omitempty"`
+	MaxTokens      int           `json:"max_tokens,omitempty"`
+	TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
+	ResponseFormat string        `json:"response_format,omitempty"` // text, json
+	OutputSchema   *OutputSchema `json:"output_schema,omitempty"`
 }
 
 func (p Params) MarshalJSON() ([]byte, error) {
 	payload := struct {
-		Temperature    float64 `json:"temperature"`
-		MaxTokens      int     `json:"max_tokens,omitempty"`
-		TimeoutSeconds int     `json:"timeout_seconds,omitempty"`
-		ResponseFormat string  `json:"response_format,omitempty"`
+		Temperature    float64       `json:"temperature"`
+		MaxTokens      int           `json:"max_tokens,omitempty"`
+		TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
+		ResponseFormat string        `json:"response_format,omitempty"`
+		OutputSchema   *OutputSchema `json:"output_schema,omitempty"`
 	}{
 		Temperature:    p.Temperature,
 		MaxTokens:      p.MaxTokens,
 		TimeoutSeconds: p.TimeoutSeconds,
 		ResponseFormat: p.ResponseFormat,
+		OutputSchema:   p.OutputSchema,
 	}
 	return json.Marshal(payload)
 }
