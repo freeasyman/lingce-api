@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// 租户知识库 / 规则：判断 + 创作注入。
+// 机构知识库 / 规则：判断 + 创作注入。
 
 type orgKnowledge struct {
 	InstitutionInfo json.RawMessage `json:"institution_info"`
@@ -16,15 +16,18 @@ type orgKnowledge struct {
 	Data            json.RawMessage `json:"data"`
 	HardRules       json.RawMessage `json:"hard_rules"`
 	SoftPrefs       json.RawMessage `json:"soft_prefs"`
+	// BrandAssets 品牌素材：logo/二维码/医生照片/环境照片/配色/字体。
+	BrandAssets json.RawMessage `json:"brand_assets"`
 }
 
 func (s *Store) getOrgKnowledge(ctx context.Context, tenantID int64) (*orgKnowledge, error) {
 	var k orgKnowledge
 	err := s.pool.QueryRow(ctx, `
 		SELECT COALESCE(institution_info,'{}'::jsonb), COALESCE(doctors,'[]'::jsonb), COALESCE(specialties,'[]'::jsonb),
-		       COALESCE(data,'{}'::jsonb), COALESCE(hard_rules,'[]'::jsonb), COALESCE(soft_prefs,'[]'::jsonb)
+		       COALESCE(data,'{}'::jsonb), COALESCE(hard_rules,'[]'::jsonb), COALESCE(soft_prefs,'[]'::jsonb),
+		       COALESCE(brand_assets,'{}'::jsonb)
 		FROM content_org_knowledge WHERE tenant_id = $1`, tenantID).
-		Scan(&k.InstitutionInfo, &k.Doctors, &k.Specialties, &k.Data, &k.HardRules, &k.SoftPrefs)
+		Scan(&k.InstitutionInfo, &k.Doctors, &k.Specialties, &k.Data, &k.HardRules, &k.SoftPrefs, &k.BrandAssets)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
 			return &k, nil
@@ -36,12 +39,13 @@ func (s *Store) getOrgKnowledge(ctx context.Context, tenantID int64) (*orgKnowle
 
 func (s *Store) upsertOrgKnowledge(ctx context.Context, tenantID int64, k *orgKnowledge) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO content_org_knowledge (tenant_id, institution_info, doctors, specialties, data, hard_rules, soft_prefs, updated_at)
-		VALUES ($1, COALESCE($2::jsonb,'{}'::jsonb), COALESCE($3::jsonb,'[]'::jsonb), COALESCE($4::jsonb,'[]'::jsonb), COALESCE($5::jsonb,'{}'::jsonb), COALESCE($6::jsonb,'[]'::jsonb), COALESCE($7::jsonb,'[]'::jsonb), now())
+		INSERT INTO content_org_knowledge (tenant_id, institution_info, doctors, specialties, data, hard_rules, soft_prefs, brand_assets, updated_at)
+		VALUES ($1, COALESCE($2::jsonb,'{}'::jsonb), COALESCE($3::jsonb,'[]'::jsonb), COALESCE($4::jsonb,'[]'::jsonb), COALESCE($5::jsonb,'{}'::jsonb), COALESCE($6::jsonb,'[]'::jsonb), COALESCE($7::jsonb,'[]'::jsonb), COALESCE($8::jsonb,'{}'::jsonb), now())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 		  institution_info = EXCLUDED.institution_info, doctors = EXCLUDED.doctors, specialties = EXCLUDED.specialties,
-		  data = EXCLUDED.data, hard_rules = EXCLUDED.hard_rules, soft_prefs = EXCLUDED.soft_prefs, updated_at = now()`,
-		tenantID, string(k.InstitutionInfo), string(k.Doctors), string(k.Specialties), string(k.Data), string(k.HardRules), string(k.SoftPrefs))
+		  data = EXCLUDED.data, hard_rules = EXCLUDED.hard_rules, soft_prefs = EXCLUDED.soft_prefs,
+		  brand_assets = EXCLUDED.brand_assets, updated_at = now()`,
+		tenantID, string(k.InstitutionInfo), string(k.Doctors), string(k.Specialties), string(k.Data), string(k.HardRules), string(k.SoftPrefs), string(k.BrandAssets))
 	return err
 }
 
