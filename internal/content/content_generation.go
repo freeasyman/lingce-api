@@ -458,7 +458,7 @@ func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, contentFormPromptCode[form], contentFormPrompt[form])},
 			{Role: "user", Content: userPrompt},
 		},
-		Params: &llmgateway.Params{OutputSchema: outSchema},
+		Params: &llmgateway.Params{OutputSchema: outSchema, TimeoutSeconds: 180},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
 

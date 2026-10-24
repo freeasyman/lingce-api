@@ -184,7 +184,7 @@ func (s *Service) generateTopicsForOneInsight(ctx context.Context, tenantID, ins
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen", topicGenerationFromInsightPrompt)},
 			{Role: "user", Content: userPrompt},
 		},
-		Params: &llmgateway.Params{OutputSchema: outSchema},
+		Params: &llmgateway.Params{OutputSchema: outSchema, TimeoutSeconds: 180},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
 
