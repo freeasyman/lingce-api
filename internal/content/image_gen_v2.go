@@ -43,7 +43,7 @@ func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt,
 		Prompt:        prompt,
 		ImageURL:      referenceImage,
 		N:             n,
-		Size:          "1024x1024",
+		Size:          "768x1024",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("generate image: %w", err)
