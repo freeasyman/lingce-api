@@ -35,12 +35,12 @@ type ContentInsightRecord struct {
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	SuggestedForms   json.RawMessage `json:"suggested_forms"`
 	SuggestedTargets json.RawMessage `json:"suggested_targets"`
-	// 来源录音的医生与科室（按 recording_id → employee → department 关联）。
-	EmployeeID     int64  `json:"employee_id"`
-	EmployeeName   string `json:"employee_name"`
-	DepartmentID   int64  `json:"department_id"`
-	DepartmentName string `json:"department_name"`
-	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	// 来源录音的医生与临床科室（提取时固化的冗余列）。
+	EmployeeID            int64  `json:"employee_id"`
+	EmployeeName          string `json:"employee_name"`
+	MedicalDepartmentCode string `json:"medical_department_code"`
+	MedicalDepartmentName string `json:"medical_department_name"`
+	CreatedAt             *time.Time `json:"created_at,omitempty"`
 }
 
 type ContentTopicV2Record struct {
@@ -267,23 +267,29 @@ func (s *Store) replaceQuestionClusters(ctx context.Context, tenantID int64, clu
 	return tx.Commit(ctx)
 }
 
-// insightListFilter 洞察列表筛选条件。EmployeeID/DepartmentID 为 0 表示不筛选。
+// insightListFilter 洞察列表筛选条件。EmployeeID 为 0、DepartmentCode 为空表示不筛选。
 type insightListFilter struct {
-	Type         string
-	EmployeeID   int64
-	DepartmentID int64
-	Limit        int
-	Offset       int
+	Type           string
+	EmployeeID     int64
+	DepartmentCode string // 临床科室代码（medical_department_code）
+	Limit          int
+	Offset         int
 }
 
-// insightFilterOption 筛选项（医生/科室）。
-type insightFilterOption struct {
+// insightEmployeeOption 医生筛选项。
+type insightEmployeeOption struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 }
 
+// insightDepartmentOption 科室筛选项（code 为 medical_department_code）。
+type insightDepartmentOption struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 // listInsightsFiltered 按类型/医生/科室筛选并分页，返回当页数据、总数与筛选项。
-func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insightListFilter) ([]ContentInsightRecord, int64, []insightFilterOption, []insightFilterOption, error) {
+func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insightListFilter) ([]ContentInsightRecord, int64, []insightEmployeeOption, []insightDepartmentOption, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}
@@ -301,8 +307,8 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
-		  AND ($4 = 0 OR COALESCE(ci.department_id,0) = $4)`,
-		tenantID, f.Type, f.EmployeeID, f.DepartmentID).Scan(&total); err != nil {
+		  AND ($4 = '' OR ci.medical_department_code = $4)`,
+		tenantID, f.Type, f.EmployeeID, f.DepartmentCode).Scan(&total); err != nil {
 		return nil, 0, nil, nil, err
 	}
 
@@ -310,17 +316,17 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		SELECT ci.id, ci.tenant_id, ci.recording_id, COALESCE(ci.source_type,'recording'), ci.type, ci.topic,
 		       COALESCE(ci.evidence,'{}'::jsonb), COALESCE(ci.payload,'{}'::jsonb),
 		       COALESCE(ci.suggested_forms,'[]'::jsonb), COALESCE(ci.suggested_targets,'[]'::jsonb),
-		       COALESCE(ci.employee_name,''), COALESCE(ci.department_name,''),
-		       COALESCE(ci.employee_id,0), COALESCE(ci.department_id,0),
+		       COALESCE(ci.employee_name,''), COALESCE(ci.medical_department_name,''),
+		       COALESCE(ci.employee_id,0), COALESCE(ci.medical_department_code,''),
 		       ci.created_at
 		FROM content_insights ci
 		WHERE ci.tenant_id = $1
 		  AND ($2 = '' OR ci.type = $2)
 		  AND ($3 = 0 OR COALESCE(ci.employee_id,0) = $3)
-		  AND ($4 = 0 OR COALESCE(ci.department_id,0) = $4)
+		  AND ($4 = '' OR ci.medical_department_code = $4)
 		ORDER BY ci.id DESC
 		LIMIT $5 OFFSET $6`,
-		tenantID, f.Type, f.EmployeeID, f.DepartmentID, f.Limit, f.Offset)
+		tenantID, f.Type, f.EmployeeID, f.DepartmentCode, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, nil, nil, err
 	}
@@ -330,7 +336,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		var r ContentInsightRecord
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.RecordingID, &r.SourceType, &r.Type, &r.Topic,
 			&r.Evidence, &r.Payload, &r.SuggestedForms, &r.SuggestedTargets,
-			&r.EmployeeName, &r.DepartmentName, &r.EmployeeID, &r.DepartmentID, &r.CreatedAt); err != nil {
+			&r.EmployeeName, &r.MedicalDepartmentName, &r.EmployeeID, &r.MedicalDepartmentCode, &r.CreatedAt); err != nil {
 			return nil, 0, nil, nil, err
 		}
 		out = append(out, r)
@@ -339,7 +345,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 		return nil, 0, nil, nil, err
 	}
 
-	// 筛选项：本租户有洞察的医生与科室（不受当前筛选影响，方便切换）。
+	// 筛选项：本租户【所有医生】与【所有临床科室】（从 employees 读，不依赖已有洞察）。
 	employees, err := s.listInsightEmployeeOptions(ctx, tenantID)
 	if err != nil {
 		return nil, 0, nil, nil, err
@@ -351,19 +357,22 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 	return out, total, employees, departments, nil
 }
 
-func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
+// listInsightEmployeeOptions 本租户所有医生（有 medical_department_code 的活跃员工）。
+func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) ([]insightEmployeeOption, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT employee_id, COALESCE(employee_name,'')
-		FROM content_insights
-		WHERE tenant_id = $1 AND employee_id IS NOT NULL AND employee_id > 0
-		ORDER BY 1`, tenantID)
+		SELECT e.id, COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), NULLIF(e.username,''), '')
+		FROM employees e
+		WHERE e.tenant_id = $1
+		  AND e.is_active = 1
+		  AND COALESCE(e.medical_department_code,'') <> ''
+		ORDER BY e.id`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]insightFilterOption, 0, 16)
+	out := make([]insightEmployeeOption, 0, 32)
 	for rows.Next() {
-		var o insightFilterOption
+		var o insightEmployeeOption
 		if err := rows.Scan(&o.ID, &o.Name); err != nil {
 			return nil, err
 		}
@@ -375,24 +384,28 @@ func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) 
 	return out, rows.Err()
 }
 
-func (s *Store) listInsightDepartmentOptions(ctx context.Context, tenantID int64) ([]insightFilterOption, error) {
+// listInsightDepartmentOptions 本租户所有临床科室（medical_department_code → 中文名）。
+func (s *Store) listInsightDepartmentOptions(ctx context.Context, tenantID int64) ([]insightDepartmentOption, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT department_id, COALESCE(department_name,'')
-		FROM content_insights
-		WHERE tenant_id = $1 AND department_id IS NOT NULL AND department_id > 0
+		SELECT DISTINCT COALESCE(e.medical_department_code,''), COALESCE(e.medical_department_code,'')
+		FROM employees e
+		WHERE e.tenant_id = $1
+		  AND e.is_active = 1
+		  AND COALESCE(e.medical_department_code,'') <> ''
 		ORDER BY 1`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]insightFilterOption, 0, 16)
+	out := make([]insightDepartmentOption, 0, 16)
 	for rows.Next() {
-		var o insightFilterOption
-		if err := rows.Scan(&o.ID, &o.Name); err != nil {
+		var o insightDepartmentOption
+		if err := rows.Scan(&o.Code, &o.Name); err != nil {
 			return nil, err
 		}
+		o.Name = medicalDepartmentName(o.Code)
 		if o.Name == "" {
-			o.Name = "未命名科室"
+			o.Name = o.Code
 		}
 		out = append(out, o)
 	}

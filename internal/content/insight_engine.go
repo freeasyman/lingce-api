@@ -312,7 +312,7 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 	}
 
 	// 提取那一刻固化来源医生/科室（冗余列，避免后续 JOIN 归属漂移）。
-	employeeID, departmentID, employeeName, departmentName := s.recordingOwner(ctx, tenantID, recordingID)
+	employeeID, employeeName, medicalDeptCode, medicalDeptName := s.recordingOwner(ctx, tenantID, recordingID)
 
 	out := make([]Insight, 0, len(insights))
 	for i := range insights {
@@ -324,11 +324,11 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 		var id int64
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO content_insights (tenant_id, recording_id, source_type, type, topic, payload,
-				employee_id, department_id, employee_name, department_name)
+				employee_id, employee_name, medical_department_code, medical_department_name)
 			VALUES ($1,$2,'recording',$3,$4,$5::jsonb,$6,$7,$8,$9)
 			RETURNING id`,
 			tenantID, recordingID, it.Type, it.Topic, string(payload),
-			employeeID, departmentID, employeeName, departmentName,
+			employeeID, employeeName, medicalDeptCode, medicalDeptName,
 		).Scan(&id); err != nil {
 			return nil, fmt.Errorf("insert insight: %w", err)
 		}
@@ -341,15 +341,47 @@ func (s *Store) replaceInsights(ctx context.Context, tenantID, recordingID int64
 	return out, nil
 }
 
-// recordingOwner 取录音的医生/科室（含姓名），用于提取时固化到洞察冗余列。
-func (s *Store) recordingOwner(ctx context.Context, tenantID, recordingID int64) (employeeID, departmentID int64, employeeName, departmentName string) {
+// recordingOwner 取录音的医生 + 临床科室（medical_department_code → 中文名），
+// 用于提取时固化到洞察冗余列。姓名优先 full_name，其次 name/username。
+func (s *Store) recordingOwner(ctx context.Context, tenantID, recordingID int64) (employeeID int64, employeeName, medicalDeptCode, medicalDeptName string) {
+	var rawCode string
 	_ = s.pool.QueryRow(ctx, `
-		SELECT COALESCE(r.employee_id,0), COALESCE(e.name,''),
-		       COALESCE(e.department_id,0), COALESCE(d.name,'')
+		SELECT COALESCE(r.employee_id,0),
+		       COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), NULLIF(e.username,''), ''),
+		       COALESCE(e.medical_department_code,'')
 		FROM recordings r
 		LEFT JOIN employees e ON e.id = r.employee_id
-		LEFT JOIN departments d ON d.id = e.department_id
 		WHERE r.id = $1 AND r.tenant_id = $2`,
-		recordingID, tenantID).Scan(&employeeID, &employeeName, &departmentID, &departmentName)
-	return
+		recordingID, tenantID).Scan(&employeeID, &employeeName, &rawCode)
+	return employeeID, employeeName, rawCode, medicalDepartmentName(rawCode)
+}
+
+// medicalDepartmentName 把 medical_department_code 映射为中文临床科室名（与 EMR 质量规则一致）。
+func medicalDepartmentName(code string) string {
+	switch strings.TrimSpace(code) {
+	case "internal_medicine":
+		return "内科"
+	case "surgery":
+		return "外科"
+	case "gynecology":
+		return "妇科"
+	case "pediatrics":
+		return "儿科"
+	case "tcm":
+		return "中医科"
+	case "stomatology":
+		return "口腔科"
+	case "ophthalmology":
+		return "眼科"
+	case "dermatology":
+		return "皮肤科"
+	case "ent":
+		return "耳鼻喉科"
+	case "general":
+		return "全科"
+	case "general_outpatient":
+		return "普通门诊"
+	default:
+		return code
+	}
 }

@@ -97,14 +97,14 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	employeeID, _ := strconv.ParseInt(q.Get("employee_id"), 10, 64)
-	departmentID, _ := strconv.ParseInt(q.Get("department_id"), 10, 64)
+	departmentCode := q.Get("department_code")
 
 	items, total, employees, departments, err := h.service.store.listInsightsFiltered(r.Context(), tenantID, insightListFilter{
-		Type:         q.Get("type"),
-		EmployeeID:   employeeID,
-		DepartmentID: departmentID,
-		Limit:        limit,
-		Offset:       offset,
+		Type:           q.Get("type"),
+		EmployeeID:     employeeID,
+		DepartmentCode: departmentCode,
+		Limit:          limit,
+		Offset:         offset,
 	})
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
