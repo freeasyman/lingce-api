@@ -44,14 +44,14 @@ func (s *Store) listTranscriptsWithoutInsights(ctx context.Context, limit int) (
 	return out, rows.Err()
 }
 
-// AnalyzeRecording 对一条录音做「洞察提取 + 生成选题」，返回 (洞察数, 选题数, err)。
-func (s *Service) AnalyzeRecording(ctx context.Context, tenantID, recordingID int64) (int, int, error) {
+// AnalyzeRecording 对一条录音做「洞察提取 + 生成选题」。
+func (s *Service) AnalyzeRecording(ctx context.Context, tenantID, recordingID int64) (int, error) {
 	insights, err := s.ExtractInsights(ctx, tenantID, recordingID)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	if len(insights) == 0 {
-		return 0, 0, nil
+		return 0, nil
 	}
 	ids := make([]int64, 0, len(insights))
 	for _, it := range insights {
@@ -60,45 +60,13 @@ func (s *Service) AnalyzeRecording(ctx context.Context, tenantID, recordingID in
 		}
 	}
 	if len(ids) == 0 {
-		return len(insights), 0, nil
+		return len(insights), nil
 	}
-	topics, terr := s.GenerateTopicsFromInsights(ctx, tenantID, ids)
-	if terr != nil {
-		slog.Warn("generate topics from insights failed", "error", terr, "tenant_id", tenantID, "recording_id", recordingID)
-		return len(insights), 0, nil
+	if _, err := s.GenerateTopicsFromInsights(ctx, tenantID, ids); err != nil {
+		// 洞察已落库，选题生成失败不视为整体失败
+		slog.Warn("generate topics from insights failed", "error", err, "tenant_id", tenantID, "recording_id", recordingID)
 	}
-	return len(insights), len(topics), nil
-}
-
-// runAnalysisBatch 处理一批录音并记台账。
-func (s *Service) runAnalysisBatch(ctx context.Context, tenantID int64, trigger string, items []transcriptPending) (done, failed, insights, topics int) {
-	runID, err := s.store.createAnalysisRun(ctx, tenantID, trigger, len(items))
-	if err != nil {
-		slog.Warn("create analysis run failed", "error", err, "tenant_id", tenantID)
-	}
-	for _, p := range items {
-		i, t, aerr := s.AnalyzeRecording(ctx, tenantID, p.RecordingID)
-		if aerr != nil {
-			failed++
-			slog.Warn("analyze recording failed", "error", aerr, "tenant_id", tenantID, "recording_id", p.RecordingID)
-			continue
-		}
-		done++
-		insights += i
-		topics += t
-		slog.Info("recording analyzed", "tenant_id", tenantID, "recording_id", p.RecordingID, "insights", i, "topics", t)
-	}
-	if runID > 0 {
-		_ = s.store.bumpAnalysisRun(ctx, runID, done, failed, insights, topics)
-		status := "succeeded"
-		if failed > 0 && done > 0 {
-			status = "partial"
-		} else if failed > 0 {
-			status = "failed"
-		}
-		_ = s.store.finishAnalysisRun(ctx, runID, status, "")
-	}
-	return
+	return len(insights), nil
 }
 
 // StartAnalysisWorker 启动后台补齐（每次最多处理 batch 条，避免压垮模型）。
@@ -122,13 +90,13 @@ func (s *Service) StartAnalysisWorker(ctx context.Context, interval time.Duratio
 					slog.Warn("list transcripts without insights failed", "error", err)
 					continue
 				}
-				// 按租户分组建台账
-				groups := map[int64][]transcriptPending{}
 				for _, p := range pending {
-					groups[p.TenantID] = append(groups[p.TenantID], p)
-				}
-				for tenantID, items := range groups {
-					s.runAnalysisBatch(ctx, tenantID, "worker", items)
+					n, err := s.AnalyzeRecording(ctx, p.TenantID, p.RecordingID)
+					if err != nil {
+						slog.Warn("analyze recording failed", "error", err, "tenant_id", p.TenantID, "recording_id", p.RecordingID)
+						continue
+					}
+					slog.Info("recording analyzed", "tenant_id", p.TenantID, "recording_id", p.RecordingID, "insights", n)
 				}
 			}
 		}
@@ -161,82 +129,4 @@ func (s *Store) listPendingTranscripts(ctx context.Context, tenantID int64, limi
 		out = append(out, p)
 	}
 	return out, rows.Err()
-}
-
-// ===== 批次台账（任务化记录）=====
-
-type analysisRun struct {
-	ID         int64      `json:"id"`
-	Trigger    string     `json:"trigger"`
-	Status     string     `json:"status"`
-	Total      int        `json:"total"`
-	Done       int        `json:"done"`
-	Failed     int        `json:"failed"`
-	Insights   int        `json:"insights"`
-	Topics     int        `json:"topics"`
-	Error      string     `json:"error,omitempty"`
-	StartedAt  time.Time  `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-}
-
-func (s *Store) createAnalysisRun(ctx context.Context, tenantID int64, trigger string, total int) (int64, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_analysis_runs (tenant_id, trigger, status, total)
-		VALUES ($1,$2,'running',$3) RETURNING id`, tenantID, trigger, total).Scan(&id)
-	return id, err
-}
-
-func (s *Store) bumpAnalysisRun(ctx context.Context, runID int64, done, failed, insights, topics int) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE content_analysis_runs
-		SET done = done + $2, failed = failed + $3, insights = insights + $4, topics = topics + $5
-		WHERE id = $1`, runID, done, failed, insights, topics)
-	return err
-}
-
-func (s *Store) finishAnalysisRun(ctx context.Context, runID int64, status, errText string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE content_analysis_runs
-		SET status = $2, error = NULLIF($3,''), finished_at = now()
-		WHERE id = $1`, runID, status, errText)
-	return err
-}
-
-func (s *Store) listAnalysisRuns(ctx context.Context, tenantID int64, limit int) ([]analysisRun, error) {
-	if limit <= 0 {
-		limit = 10
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, trigger, status, total, done, failed, insights, topics,
-		       COALESCE(error,''), started_at, finished_at
-		FROM content_analysis_runs
-		WHERE tenant_id = $1
-		ORDER BY started_at DESC, id DESC
-		LIMIT $2`, tenantID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []analysisRun
-	for rows.Next() {
-		var r analysisRun
-		if err := rows.Scan(&r.ID, &r.Trigger, &r.Status, &r.Total, &r.Done, &r.Failed, &r.Insights, &r.Topics, &r.Error, &r.StartedAt, &r.FinishedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) countPendingTranscripts(ctx context.Context, tenantID int64) (int, error) {
-	var n int
-	err := s.pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM recordings r
-		WHERE r.tenant_id = $1
-		  AND COALESCE(NULLIF(r.transcription_text,''), NULLIF(r.cleaned_transcription::text,''), '') <> ''
-		  AND NOT EXISTS (SELECT 1 FROM content_insights ci WHERE ci.recording_id = r.id AND ci.tenant_id = r.tenant_id)`,
-		tenantID).Scan(&n)
-	return n, err
 }
