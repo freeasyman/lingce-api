@@ -462,7 +462,20 @@ func main() {
 
 	// 录音 → 洞察 → 选题 自动闭环：后台定时补齐有转写但还没洞察的录音
 	analysisCtx, analysisCancel := context.WithCancel(context.Background())
-	contentService.StartAnalysisWorker(analysisCtx, 2*time.Minute, 2)
+	if cfg.Content.AnalysisOn() {
+		interval := time.Duration(cfg.Content.AnalysisIntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = 2 * time.Minute
+		}
+		batch := cfg.Content.AnalysisBatch
+		if batch <= 0 {
+			batch = 2
+		}
+		slog.Info("content analysis worker started", "interval", interval.String(), "batch", batch)
+		contentService.StartAnalysisWorker(analysisCtx, interval, batch)
+	} else {
+		slog.Info("content analysis worker disabled by config")
+	}
 
 	// Content-center external analysis contract. The Worker (or another
 	// external producer) pushes analysis here; this module never reads or

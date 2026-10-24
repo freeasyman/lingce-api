@@ -53,3 +53,9 @@ api_base_url = "https://qyapi.weixin.qq.com"
 
 [log]
 level = "debug"
+
+[content]
+# 内容获客：录音→洞察→选题 自动补齐
+analysis_enabled = true
+analysis_interval_seconds = 120
+analysis_batch = 2

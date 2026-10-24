@@ -17,6 +17,7 @@ type Config struct {
 	Schema    SchemaConfig    `toml:"schema"`
 	JWT       JWTConfig       `toml:"jwt"`
 	Recording RecordingConfig `toml:"recording"`
+	Content   ContentConfig   `toml:"content"`
 	External  ExternalConfig  `toml:"external"`
 	DashScope DashScopeConfig `toml:"dashscope"`
 	Aliyun    AliyunConfig    `toml:"aliyun"`
@@ -58,6 +59,18 @@ type SchemaConfig struct {
 type JWTConfig struct {
 	Secret      string `toml:"secret"`
 	ExpiryHours int    `toml:"expiry_hours"`
+}
+
+// ContentConfig 内容获客后台分析（录音→洞察→选题）配置。
+type ContentConfig struct {
+	AnalysisEnabled         *bool `toml:"analysis_enabled"`
+	AnalysisIntervalSeconds int   `toml:"analysis_interval_seconds"`
+	AnalysisBatch           int   `toml:"analysis_batch"`
+}
+
+// AnalysisOn 是否开启自动补齐（默认开启）。
+func (c ContentConfig) AnalysisOn() bool {
+	return c.AnalysisEnabled == nil || *c.AnalysisEnabled
 }
 
 type RecordingConfig struct {
