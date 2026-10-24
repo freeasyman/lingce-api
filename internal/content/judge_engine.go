@@ -56,10 +56,46 @@ func (s *Service) GenerateTopicsFromInsights(ctx context.Context, tenantID int64
 		return nil, fmt.Errorf("no insights found")
 	}
 
-	// 组装洞察上下文
+	// 组装洞察上下文：把 28 字段剖析完整喂给选题生成，不再只有类型+主题。
 	var b strings.Builder
 	for _, it := range insights {
-		b.WriteString(fmt.Sprintf("- [%s] %s（原话：%s）\n", it.Type, it.Topic, it.Quote))
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", it.Type, it.Topic))
+		if it.FactStatement != "" {
+			b.WriteString("  事实：" + it.FactStatement + "\n")
+		}
+		if it.ValueJudgment != "" {
+			b.WriteString("  价值判断：" + it.ValueJudgment + "\n")
+		}
+		if it.ConcernToResolve != "" {
+			b.WriteString("  患者顾虑：" + it.ConcernToResolve + "\n")
+		}
+		if it.MisconceptionToCorrect != "" {
+			b.WriteString("  纠正认知：" + it.MisconceptionToCorrect + "\n")
+		}
+		if it.Conflict != "" {
+			b.WriteString("  冲突：" + it.Conflict + "\n")
+		}
+		if it.EmotionHook != "" {
+			b.WriteString("  情绪钩子：" + it.EmotionHook + "\n")
+		}
+		if it.NumberHook != "" {
+			b.WriteString("  数字钩子：" + it.NumberHook + "\n")
+		}
+		if it.GoldenQuote != "" {
+			b.WriteString("  金句：" + it.GoldenQuote + "\n")
+		}
+		if len(it.KeyPoints) > 0 {
+			b.WriteString("  要点：" + strings.Join(it.KeyPoints, "；") + "\n")
+		}
+		if len(it.HelpDimensions) > 0 {
+			b.WriteString("  预期帮助：" + strings.Join(it.HelpDimensions, "、") + "\n")
+		}
+		if len(it.SearchQueries) > 0 {
+			b.WriteString("  患者会搜：" + strings.Join(it.SearchQueries, " / ") + "\n")
+		}
+		if it.Quote != "" {
+			b.WriteString("  原话：" + it.Quote + "\n")
+		}
 	}
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_topic", "topic_generation", "chat"})
@@ -130,12 +166,37 @@ type insightBrief struct {
 	Type  string
 	Topic string
 	Quote string
+
+	// 新版 28 字段剖析（有 payload 时使用），让选题生成吃到分析结果。
+	FactStatement          string
+	ValueJudgment          string
+	ConcernToResolve       string
+	MisconceptionToCorrect string
+	Conflict               string
+	EmotionHook            string
+	NumberHook             string
+	GoldenQuote            string
+	KeyPoints              []string
+	HelpDimensions         []string
+	SearchQueries          []string
 }
 
 // fetchInsightsByIDs 取洞察简报。
 func (s *Store) fetchInsightsByIDs(ctx context.Context, tenantID int64, ids []int64) ([]insightBrief, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT type, topic, COALESCE(evidence->'quotes'->0->>'text', '')
+		SELECT type, topic,
+		       COALESCE(payload->'quotes'->0->>'text', evidence->'quotes'->0->>'text', ''),
+		       COALESCE(payload->>'fact_statement',''),
+		       COALESCE(payload->>'value_judgment',''),
+		       COALESCE(payload->>'concern_to_resolve',''),
+		       COALESCE(payload->>'misconception_to_correct',''),
+		       COALESCE(payload->>'conflict',''),
+		       COALESCE(payload->>'emotion_hook',''),
+		       COALESCE(payload->>'number_hook',''),
+		       COALESCE(payload->>'golden_quote',''),
+		       COALESCE(payload->'key_points','[]'::jsonb),
+		       COALESCE(payload->'help_dimensions','[]'::jsonb),
+		       COALESCE(payload->'search_queries','[]'::jsonb)
 		FROM content_insights WHERE tenant_id = $1 AND id = ANY($2)`,
 		tenantID, ids)
 	if err != nil {
@@ -145,9 +206,18 @@ func (s *Store) fetchInsightsByIDs(ctx context.Context, tenantID int64, ids []in
 	var out []insightBrief
 	for rows.Next() {
 		var it insightBrief
-		if err := rows.Scan(&it.Type, &it.Topic, &it.Quote); err != nil {
+		var kp, hd, sq []byte
+		if err := rows.Scan(
+			&it.Type, &it.Topic, &it.Quote,
+			&it.FactStatement, &it.ValueJudgment, &it.ConcernToResolve, &it.MisconceptionToCorrect,
+			&it.Conflict, &it.EmotionHook, &it.NumberHook, &it.GoldenQuote,
+			&kp, &hd, &sq,
+		); err != nil {
 			return nil, fmt.Errorf("scan insight: %w", err)
 		}
+		_ = json.Unmarshal(kp, &it.KeyPoints)
+		_ = json.Unmarshal(hd, &it.HelpDimensions)
+		_ = json.Unmarshal(sq, &it.SearchQueries)
 		out = append(out, it)
 	}
 	return out, rows.Err()

@@ -2,14 +2,15 @@ package content
 
 import (
 	"context"
-	"log/slog"
 )
 
-// 录音 → 洞察 → 选题 的闭环。
+// 录音 → 洞察 的提取。
 //
 // 触发方式：
 //   1. Worker 分析结束 → /internal/v1/content-analysis/signals → 异步 AnalyzeRecording（主线）
 //   2. 手动批量补齐接口 ExtractInsightsBatch → listPendingTranscripts
+//
+// 只提取灵感，不生成选题。选题由运营在灵感页手动「做成选题」（可单条、可跨灵感组合）。
 
 type transcriptPending struct {
 	TenantID    int64
@@ -17,27 +18,11 @@ type transcriptPending struct {
 	EmployeeID  *int64
 }
 
-// AnalyzeRecording 对一条录音做「洞察提取 + 生成选题」。
+// AnalyzeRecording 对一条录音做「灵感提取」。不自动生成选题（选题由运营手动判断）。
 func (s *Service) AnalyzeRecording(ctx context.Context, tenantID, recordingID int64) (int, error) {
 	insights, err := s.ExtractInsights(ctx, tenantID, recordingID)
 	if err != nil {
 		return 0, err
-	}
-	if len(insights) == 0 {
-		return 0, nil
-	}
-	ids := make([]int64, 0, len(insights))
-	for _, it := range insights {
-		if it.ID > 0 {
-			ids = append(ids, it.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return len(insights), nil
-	}
-	if _, err := s.GenerateTopicsFromInsights(ctx, tenantID, ids); err != nil {
-		// 洞察已落库，选题生成失败不视为整体失败
-		slog.Warn("generate topics from insights failed", "error", err, "tenant_id", tenantID, "recording_id", recordingID)
 	}
 	return len(insights), nil
 }

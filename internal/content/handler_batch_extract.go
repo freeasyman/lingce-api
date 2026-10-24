@@ -7,7 +7,7 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
-// ExtractInsightsBatch 批量补齐：对本租户「有转写但还没洞察」的录音跑分析+生成选题。
+// ExtractInsightsBatch 批量补齐：对本租户「有转写但还没灵感」的录音跑灵感提取（不生成选题）。
 // 一次最多处理 limit 条（默认 3，上限 20），返回逐条结果。
 func (h *Handler) ExtractInsightsBatch(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
