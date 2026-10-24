@@ -156,25 +156,11 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accepted := 0
-	for _, q := range env.Data.Questions {
-		if err := upsertContentSeed(r.Context(), tx, tenantID, env, q, env.Data.EmployeeID); err != nil {
-			_, _ = tx.Exec(r.Context(), `UPDATE content_analysis_deliveries SET status='failed', error_reason=$2, updated_at=NOW() WHERE id=$1`, deliveryID, err.Error())
-			_ = tx.Commit(r.Context())
-			writeContentJSON(w, http.StatusUnprocessableEntity, ContentAnalysisDeliveryResponse{
-				DeliveryID: deliveryID, Status: "failed", TenantID: tenantID,
-				SourceRecordID: env.SourceRecordID, Error: err.Error(),
-			})
-			return
-		}
-		accepted++
-	}
-
 	if _, err := tx.Exec(r.Context(), `
 		UPDATE content_analysis_deliveries
-		SET status='succeeded', resource_id=$2, accepted=$3, updated_at=NOW()
+		SET status='succeeded', resource_id=$2, updated_at=NOW()
 		WHERE id=$1
-	`, deliveryID, fmt.Sprintf("%d", env.Data.RecordingID), accepted); err != nil {
+	`, deliveryID, fmt.Sprintf("%d", env.Data.RecordingID)); err != nil {
 		// 兼容没有 accepted 列的旧库结构
 		_, _ = tx.Exec(r.Context(), `UPDATE content_analysis_deliveries SET status='succeeded', resource_id=$2, updated_at=NOW() WHERE id=$1`, deliveryID, fmt.Sprintf("%d", env.Data.RecordingID))
 	}
@@ -202,7 +188,7 @@ func (h *ExternalHandler) receive(w http.ResponseWriter, r *http.Request) {
 
 	writeContentJSON(w, http.StatusOK, ContentAnalysisDeliveryResponse{
 		DeliveryID: deliveryID, Status: "succeeded", TenantID: tenantID,
-		SourceRecordID: env.SourceRecordID, ResourceID: fmt.Sprintf("%d", env.Data.RecordingID), Accepted: accepted,
+		SourceRecordID: env.SourceRecordID, ResourceID: fmt.Sprintf("%d", env.Data.RecordingID),
 	})
 }
 
@@ -242,97 +228,7 @@ func validateContentAnalysisEnvelope(env ContentAnalysisEnvelope) error {
 	if env.Data.RecordingID <= 0 {
 		return fmt.Errorf("data.recording_id is required")
 	}
-	if len(env.Data.Questions) == 0 {
-		return fmt.Errorf("data.questions is required")
-	}
-	for i, q := range env.Data.Questions {
-		if strings.TrimSpace(q.Topic) == "" {
-			return fmt.Errorf("data.questions[%d].topic is required", i)
-		}
-	}
 	return nil
-}
-
-// 旧 worker 信号入口：写入 content_insights（原 recording_content_seeds 已在 Phase 3 下线）。
-func upsertContentSeed(ctx context.Context, tx pgx.Tx, tenantID int64, env ContentAnalysisEnvelope, q ContentAnalysisQuestion, employeeID *int64) error {
-	insightType := mapSeedTypeToInsightType(q.SeedType)
-	topic := strings.TrimSpace(q.Topic)
-	if topic == "" {
-		return fmt.Errorf("topic is required")
-	}
-	quotes := make([]map[string]string, 0, len(q.KeyQuotes))
-	for _, text := range q.KeyQuotes {
-		if strings.TrimSpace(text) != "" {
-			quotes = append(quotes, map[string]string{"text": text, "speaker": "patient"})
-		}
-	}
-	evidence := map[string]any{
-		"source_system":    env.SourceSystem,
-		"source_record_id": env.SourceRecordID,
-		"event_type":       env.EventType,
-		"quotes":           quotes,
-	}
-	if a := strings.TrimSpace(q.ContentAngle); a != "" {
-		evidence["angle"] = a
-	}
-	if c := strings.TrimSpace(q.PatientConcern); c != "" {
-		evidence["patient_concern"] = c
-	}
-	if v := strings.TrimSpace(q.ViralPotential); v != "" {
-		evidence["viral_potential"] = v
-	}
-	evidenceJSON, _ := json.Marshal(evidence)
-	platforms := q.SuggestedPlatforms
-	if platforms == nil {
-		platforms = []string{}
-	}
-	targetsJSON, _ := json.Marshal(platforms)
-
-	// 幂等：同租户 + 录音 + topic 就地更新
-	res, err := tx.Exec(ctx, `
-		UPDATE content_insights
-		SET type=$4, evidence=$5::jsonb, suggested_targets=$6::jsonb
-		WHERE tenant_id=$1 AND recording_id=$2 AND topic=$3`,
-		tenantID, env.Data.RecordingID, topic, insightType, string(evidenceJSON), string(targetsJSON))
-	if err != nil {
-		return fmt.Errorf("update content insight: %w", err)
-	}
-	if res.RowsAffected() > 0 {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO content_insights
-			(tenant_id, recording_id, source_type, type, topic, evidence, suggested_forms, suggested_targets)
-		VALUES ($1,$2,'worker',$3,$4,$5::jsonb,'[]'::jsonb,$6::jsonb)`,
-		tenantID, env.Data.RecordingID, insightType, topic, string(evidenceJSON), string(targetsJSON)); err != nil {
-		return fmt.Errorf("insert content insight: %w", err)
-	}
-	return nil
-}
-
-// mapSeedTypeToInsightType worker 的 seed_type → 洞察 type。
-func mapSeedTypeToInsightType(seedType string) string {
-	switch strings.ToLower(strings.TrimSpace(seedType)) {
-	case "question", "practical_qa", "qa":
-		return "question"
-	case "concern", "concern_handling":
-		return "concern"
-	case "quote", "golden_quote":
-		return "quote"
-	case "scene", "relatable_scene":
-		return "scene"
-	case "aha", "aha_moment":
-		return "aha"
-	case "viewpoint", "explanation":
-		return "viewpoint"
-	case "story", "fact":
-		return strings.ToLower(strings.TrimSpace(seedType))
-	default:
-		if validInsightTypes[strings.ToLower(strings.TrimSpace(seedType))] {
-			return strings.ToLower(strings.TrimSpace(seedType))
-		}
-		return "question"
-	}
 }
 
 func writeContentJSON(w http.ResponseWriter, status int, payload any) {
