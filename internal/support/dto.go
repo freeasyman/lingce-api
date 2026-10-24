@@ -233,22 +233,33 @@ type LLMModelConfigResponse struct {
 
 // LLMCallRecordListRequest represents the request for listing LLM call records
 type LLMCallRecordListRequest struct {
-	TenantID      *int64  `json:"tenant_id,omitempty"`
-	UserID        *int64  `json:"user_id,omitempty"`
-	ModelConfigID *int64  `json:"model_config_id,omitempty"`
-	Provider      *string `json:"provider,omitempty"`
-	Status        *string `json:"status,omitempty"`
-	Purpose       *string `json:"purpose,omitempty"`
-	FunctionType  *string `json:"function_type,omitempty"`
-	Module        *string `json:"module,omitempty"`
-	ModelCode     *string `json:"model_code,omitempty"`
-	Success       *bool   `json:"success,omitempty"`
-	TraceID       *string `json:"trace_id,omitempty"`
-	StartDate     *string `json:"start_date,omitempty"`
-	EndDate       *string `json:"end_date,omitempty"`
-	Page          int     `json:"page"`
-	PageSize      int     `json:"page_size"`
-	Size          int     `json:"size"`
+	TenantID         *int64  `json:"tenant_id,omitempty"`
+	UserID           *int64  `json:"user_id,omitempty"`
+	ModelConfigID    *int64  `json:"model_config_id,omitempty"`
+	Provider         *string `json:"provider,omitempty"`
+	Status           *string `json:"status,omitempty"`
+	Purpose          *string `json:"purpose,omitempty"`
+	FunctionType     *string `json:"function_type,omitempty"`
+	Module           *string `json:"module,omitempty"`
+	ModelCode        *string `json:"model_code,omitempty"`
+	Success          *bool   `json:"success,omitempty"`
+	TraceID          *string `json:"trace_id,omitempty"`
+	BusinessDomain   *string `json:"business_domain,omitempty"`
+	BillingSubject   *string `json:"billing_subject,omitempty"`
+	RecordingID      *int64  `json:"recording_id,omitempty"`
+	ContentID        *int64  `json:"content_id,omitempty"`
+	CustomerID       *int64  `json:"customer_id,omitempty"`
+	GenerationTaskID *int64  `json:"generation_task_id,omitempty"`
+	Search           *string `json:"search,omitempty"`
+	PricingMissing   *bool   `json:"pricing_missing,omitempty"`
+	MinLatencyMS     *int64  `json:"min_latency_ms,omitempty"`
+	Sort             *string `json:"sort,omitempty"`
+	Order            *string `json:"order,omitempty"`
+	StartDate        *string `json:"start_date,omitempty"`
+	EndDate          *string `json:"end_date,omitempty"`
+	Page             int     `json:"page"`
+	PageSize         int     `json:"page_size"`
+	Size             int     `json:"size"`
 }
 
 // AIUsageListRequest represents unified AI usage query filters.
@@ -392,53 +403,68 @@ type AIUsageAnomaliesResponse struct {
 
 // LLMCallRecordResponse represents an LLM call record response
 type LLMCallRecordResponse struct {
-	ID                       int64    `json:"id"`
-	RequestID                string   `json:"request_id"`
-	TenantID                 *int64   `json:"tenant_id,omitempty"`
-	TenantName               *string  `json:"tenant_name,omitempty"`
-	UserID                   *int64   `json:"user_id,omitempty"`
-	BusinessDomain           *string  `json:"business_domain,omitempty"`
-	BusinessObjectType       *string  `json:"business_object_type,omitempty"`
-	BusinessObjectID         *int64   `json:"business_object_id,omitempty"`
-	BillingSubject           *string  `json:"billing_subject,omitempty"`
-	BillingScene             *string  `json:"billing_scene,omitempty"`
-	BillingRuleVersion       *string  `json:"billing_rule_version,omitempty"`
-	RecordingID              *int64   `json:"recording_id,omitempty"`
-	ContentID                *int64   `json:"content_id,omitempty"`
-	TopicID                  *int64   `json:"topic_id,omitempty"`
-	CustomerID               *int64   `json:"customer_id,omitempty"`
-	AnalysisRunID            *int64   `json:"analysis_run_id,omitempty"`
-	AnalysisStepRunID        *int64   `json:"analysis_step_run_id,omitempty"`
-	GenerationTaskID         *int64   `json:"generation_task_id,omitempty"`
-	ModelName                string   `json:"model_name"`
-	FunctionType             *string  `json:"function_type,omitempty"`
-	Module                   *string  `json:"module,omitempty"`
-	TraceID                  *string  `json:"trace_id,omitempty"`
-	ModelCode                *string  `json:"model_code,omitempty"`
-	Provider                 string   `json:"provider"`
-	PromptTokens             int      `json:"prompt_tokens"`
-	CompletionTokens         int      `json:"completion_tokens"`
-	TotalTokens              int      `json:"total_tokens"`
-	AudioDurationSeconds     float64  `json:"audio_duration_seconds,omitempty"`
-	Cost                     float64  `json:"cost"`
-	Duration                 int      `json:"duration"`
-	Status                   string   `json:"status"`
-	Success                  *bool    `json:"success,omitempty"`
-	InputCost                *float64 `json:"input_cost,omitempty"`
-	OutputCost               *float64 `json:"output_cost,omitempty"`
-	CachedInputTokens        int      `json:"cached_input_tokens,omitempty"`
-	CacheCreationInputTokens int      `json:"cache_creation_input_tokens,omitempty"`
-	CachedInputCost          float64  `json:"cached_input_cost,omitempty"`
-	CacheCreationCost        float64  `json:"cache_creation_cost,omitempty"`
-	CacheType                string   `json:"cache_type,omitempty"`
-	PriceVersion             string   `json:"price_version,omitempty"`
-	PricingMissing           bool     `json:"pricing_missing,omitempty"`
-	PricingFallback          bool     `json:"pricing_fallback,omitempty"`
-	ErrorMessage             *string  `json:"error_message,omitempty"`
-	Purpose                  *string  `json:"purpose,omitempty"`
-	RelatedID                *int64   `json:"related_id,omitempty"`
-	RelatedType              *string  `json:"related_type,omitempty"`
-	CreatedAt                string   `json:"created_at"`
+	ID                       int64                  `json:"id"`
+	RequestID                string                 `json:"request_id"`
+	TenantID                 *int64                 `json:"tenant_id,omitempty"`
+	TenantName               *string                `json:"tenant_name,omitempty"`
+	UserID                   *int64                 `json:"user_id,omitempty"`
+	AccountID                *int64                 `json:"account_id,omitempty"`
+	AccountName              *string                `json:"account_name,omitempty"`
+	ProductCode              *string                `json:"product_code,omitempty"`
+	ActionCode               *string                `json:"action_code,omitempty"`
+	SpanID                   *string                `json:"span_id,omitempty"`
+	ParentSpanID             *string                `json:"parent_span_id,omitempty"`
+	AttemptCount             int                    `json:"attempt_count,omitempty"`
+	ErrorStage               *string                `json:"error_stage,omitempty"`
+	TTFTMs                   int                    `json:"ttft_ms,omitempty"`
+	Attempts                 []LLMCallAttempt       `json:"attempts,omitempty"`
+	BusinessDomain           *string                `json:"business_domain,omitempty"`
+	BusinessObjectType       *string                `json:"business_object_type,omitempty"`
+	BusinessObjectID         *int64                 `json:"business_object_id,omitempty"`
+	BillingSubject           *string                `json:"billing_subject,omitempty"`
+	BillingScene             *string                `json:"billing_scene,omitempty"`
+	BillingRuleVersion       *string                `json:"billing_rule_version,omitempty"`
+	RecordingID              *int64                 `json:"recording_id,omitempty"`
+	ContentID                *int64                 `json:"content_id,omitempty"`
+	TopicID                  *int64                 `json:"topic_id,omitempty"`
+	CustomerID               *int64                 `json:"customer_id,omitempty"`
+	AnalysisRunID            *int64                 `json:"analysis_run_id,omitempty"`
+	AnalysisStepRunID        *int64                 `json:"analysis_step_run_id,omitempty"`
+	GenerationTaskID         *int64                 `json:"generation_task_id,omitempty"`
+	ModelName                string                 `json:"model_name"`
+	FunctionType             *string                `json:"function_type,omitempty"`
+	Module                   *string                `json:"module,omitempty"`
+	TraceID                  *string                `json:"trace_id,omitempty"`
+	ModelCode                *string                `json:"model_code,omitempty"`
+	Provider                 string                 `json:"provider"`
+	PromptTokens             int                    `json:"prompt_tokens"`
+	CompletionTokens         int                    `json:"completion_tokens"`
+	TotalTokens              int                    `json:"total_tokens"`
+	AudioDurationSeconds     float64                `json:"audio_duration_seconds,omitempty"`
+	Cost                     float64                `json:"cost"`
+	Duration                 int                    `json:"duration"`
+	Status                   string                 `json:"status"`
+	Success                  *bool                  `json:"success,omitempty"`
+	InputCost                *float64               `json:"input_cost,omitempty"`
+	OutputCost               *float64               `json:"output_cost,omitempty"`
+	CachedInputTokens        int                    `json:"cached_input_tokens,omitempty"`
+	CacheCreationInputTokens int                    `json:"cache_creation_input_tokens,omitempty"`
+	CachedInputCost          float64                `json:"cached_input_cost,omitempty"`
+	CacheCreationCost        float64                `json:"cache_creation_cost,omitempty"`
+	CacheType                string                 `json:"cache_type,omitempty"`
+	PriceVersion             string                 `json:"price_version,omitempty"`
+	PricingMissing           bool                   `json:"pricing_missing,omitempty"`
+	PricingFallback          bool                   `json:"pricing_fallback,omitempty"`
+	RequestMetadata          map[string]interface{} `json:"request_metadata,omitempty"`
+	UsageMetadata            map[string]interface{} `json:"usage_metadata,omitempty"`
+	RequestPreview           string                 `json:"request_preview,omitempty"`
+	ResponsePreview          string                 `json:"response_preview,omitempty"`
+	PayloadExpiresAt         string                 `json:"payload_expires_at,omitempty"`
+	ErrorMessage             *string                `json:"error_message,omitempty"`
+	Purpose                  *string                `json:"purpose,omitempty"`
+	RelatedID                *int64                 `json:"related_id,omitempty"`
+	RelatedType              *string                `json:"related_type,omitempty"`
+	CreatedAt                string                 `json:"created_at"`
 }
 
 // LLMCallRecordStatsResponse represents LLM call record statistics
@@ -458,6 +484,52 @@ type LLMCallRecordStatsResponse struct {
 	AvgLatencyMS      float64           `json:"avg_latency_ms"`
 	TopModels         []ModelUsageCount `json:"top_models,omitempty"`
 	TopPurposes       []PurposeCount    `json:"top_purposes,omitempty"`
+}
+
+// LLMCallAttempt is one retry/fallback attempt.
+type LLMCallAttempt struct {
+	AttemptNo    int    `json:"attempt_no"`
+	Provider     string `json:"provider"`
+	ModelCode    string `json:"model_code"`
+	Success      bool   `json:"success"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	LatencyMs    int    `json:"latency_ms"`
+}
+
+// LLMCallRecordBreakdownItem is one grouped audit row.
+type LLMCallRecordBreakdownItem struct {
+	Key          string  `json:"key"`
+	Label        string  `json:"label,omitempty"`
+	CallCount    int64   `json:"call_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	TotalCost    float64 `json:"total_cost"`
+	FailureCount int64   `json:"failure_count"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+}
+
+// LLMCallRecordBreakdownResponse is a grouped audit aggregation.
+type LLMCallRecordBreakdownResponse struct {
+	GroupBy string                       `json:"group_by"`
+	Items   []LLMCallRecordBreakdownItem `json:"items"`
+}
+
+// LLMCallRecordOptionsResponse contains distinct values for the filter UI.
+type LLMCallRecordOptionsResponse struct {
+	FunctionTypes   []string                    `json:"function_types"`
+	Modules         []string                    `json:"modules"`
+	Providers       []string                    `json:"providers"`
+	ModelCodes      []string                    `json:"model_codes"`
+	BusinessDomains []string                    `json:"business_domains"`
+	BillingSubjects []string                    `json:"billing_subjects"`
+	BusinessPairs   []LLMCallRecordBusinessPair `json:"business_pairs"`
+}
+
+// LLMCallRecordBusinessPair is one product/action combination.
+type LLMCallRecordBusinessPair struct {
+	BusinessDomain string `json:"business_domain"`
+	BillingSubject string `json:"billing_subject"`
+	Count          int64  `json:"count"`
 }
 
 // ModelUsageCount represents model usage count

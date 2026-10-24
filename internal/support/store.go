@@ -2105,3 +2105,94 @@ func (s *Store) GetVisitFilters(ctx context.Context, tenantID *int64) (map[strin
 		"statuses":    statuses,
 	}, nil
 }
+
+// LLMAccountInfo is the account (employee/provider) behind a business object.
+type LLMAccountInfo struct {
+	AccountID   int64
+	AccountName string
+}
+
+// GetLLMAccounts resolves accounts for LLM audit rows by business object.
+// Keys are "recording:<id>", "encounter:<id>", "content:<id>", "customer:<id>".
+func (s *Store) GetLLMAccounts(ctx context.Context, recordingIDs, encounterIDs, contentIDs, customerIDs, insightIDs []int64) (map[string]LLMAccountInfo, error) {
+	result := make(map[string]LLMAccountInfo)
+	if len(recordingIDs) == 0 && len(encounterIDs) == 0 && len(contentIDs) == 0 && len(customerIDs) == 0 && len(insightIDs) == 0 {
+		return result, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT 'recording' AS kind, r.id AS object_id,
+		       COALESCE(r.employee_id, 0) AS account_id,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, '') AS account_name
+		FROM recordings r
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.id = ANY($1)
+		UNION ALL
+		SELECT 'encounter', en.id,
+		       COALESCE(en.provider_id, 0),
+		       COALESCE(NULLIF(en.provider_name, ''), NULLIF(e.full_name, ''), e.name, '')
+		FROM encounters en
+		LEFT JOIN employees e ON e.id = en.provider_id
+		WHERE en.id = ANY($2)
+		UNION ALL
+		SELECT 'content', ci.id,
+		       COALESCE(ct.account_id, 0),
+		       COALESCE(NULLIF(e.full_name, ''), e.name, '')
+		FROM content_items ci
+		LEFT JOIN content_topics ct ON ct.id = ci.topic_id
+		LEFT JOIN employees e ON e.id = ct.account_id
+		WHERE ci.id = ANY($3)
+		UNION ALL
+		SELECT 'customer', c.id,
+		       COALESCE(c.assigned_to, 0),
+		       COALESCE(c.assigned_to_name, '')
+		FROM customers c
+		WHERE c.id = ANY($4)
+		UNION ALL
+		SELECT 'insight', ci.id,
+		       COALESCE(ci.employee_id, 0),
+		       COALESCE(NULLIF(ci.employee_name, ''), NULLIF(e.full_name, ''), e.name, '')
+		FROM content_insights ci
+		LEFT JOIN employees e ON e.id = ci.employee_id
+		WHERE ci.id = ANY($5)
+	`, recordingIDs, encounterIDs, contentIDs, customerIDs, insightIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve LLM accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var objectID, accountID int64
+		var accountName string
+		if err := rows.Scan(&kind, &objectID, &accountID, &accountName); err != nil {
+			return nil, fmt.Errorf("failed to scan LLM account: %w", err)
+		}
+		result[fmt.Sprintf("%s:%d", kind, objectID)] = LLMAccountInfo{AccountID: accountID, AccountName: accountName}
+	}
+	return result, rows.Err()
+}
+
+// GetEmployeeNames resolves employee display names for account IDs.
+func (s *Store) GetEmployeeNames(ctx context.Context, ids []int64) (map[int64]string, error) {
+	result := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), NULLIF(username, ''), '未命名医生')
+		FROM employees
+		WHERE id = ANY($1) AND deleted_at IS NULL
+	`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve employee names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		result[id] = name
+	}
+	return result, rows.Err()
+}

@@ -49,6 +49,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/llm/models/{id}/set-default", Handler: h.SetDefaultLLMModelConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/llm/records", Handler: h.ListLLMCallRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/llm/records/stats", Handler: h.GetLLMCallRecordStats, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/records/options", Handler: h.GetLLMCallRecordOptions, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/llm/records/breakdown", Handler: h.GetLLMCallRecordBreakdown, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/llm/records/{request_id}", Handler: h.GetLLMCallRecordByRequestID, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/llm/costs/by-tenant/{tenant_id}", Handler: h.GetLLMCostByTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/llm/costs/summary", Handler: h.GetLLMCostSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
@@ -941,85 +943,76 @@ func (h *Handler) SetDefaultLLMModelConfig(w http.ResponseWriter, r *http.Reques
 
 // LLM Call Record Handlers
 
-// ListLLMCallRecords handles listing LLM call records
+// parseLLMCallRecordFilter reads the shared list/stats filter from query params.
+func parseLLMCallRecordFilter(r *http.Request) LLMCallRecordListRequest {
+	q := r.URL.Query()
+	stringPtr := func(key string) *string {
+		if v := q.Get(key); v != "" {
+			return &v
+		}
+		return nil
+	}
+	int64Ptr := func(key string) *int64 {
+		if v := q.Get(key); v != "" {
+			n, _ := strconv.ParseInt(v, 10, 64)
+			return &n
+		}
+		return nil
+	}
+	boolPtr := func(key string) *bool {
+		if v := q.Get(key); v != "" {
+			b := v == "true" || v == "1"
+			return &b
+		}
+		return nil
+	}
+	page, _ := strconv.Atoi(q.Get("page"))
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	size, _ := strconv.Atoi(q.Get("size"))
+	return LLMCallRecordListRequest{
+		TenantID:         int64Ptr("tenant_id"),
+		UserID:           int64Ptr("user_id"),
+		ModelConfigID:    int64Ptr("model_config_id"),
+		Provider:         stringPtr("provider"),
+		Status:           stringPtr("status"),
+		Purpose:          stringPtr("purpose"),
+		FunctionType:     stringPtr("function_type"),
+		Module:           stringPtr("module"),
+		ModelCode:        stringPtr("model_code"),
+		Success:          boolPtr("success"),
+		TraceID:          stringPtr("trace_id"),
+		BusinessDomain:   stringPtr("business_domain"),
+		BillingSubject:   stringPtr("billing_subject"),
+		RecordingID:      int64Ptr("recording_id"),
+		ContentID:        int64Ptr("content_id"),
+		CustomerID:       int64Ptr("customer_id"),
+		GenerationTaskID: int64Ptr("generation_task_id"),
+		Search:           stringPtr("search"),
+		PricingMissing:   boolPtr("pricing_missing"),
+		MinLatencyMS:     int64Ptr("min_latency_ms"),
+		Sort:             stringPtr("sort"),
+		Order:            stringPtr("order"),
+		StartDate:        stringPtr("start_date"),
+		EndDate:          stringPtr("end_date"),
+		Page:             page,
+		PageSize:         pageSize,
+		Size:             size,
+	}
+}
+
+// ListLLMCallRecords handles listing LLM call records.
 func (h *Handler) ListLLMCallRecords(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-
-	// Only admin can view LLM call records
 	if claims.UserType != auth.UserTypeAdmin {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
 
-	var req LLMCallRecordListRequest
-
-	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		req.TenantID = &tenantID
-	}
-
-	if userIDStr := r.URL.Query().Get("user_id"); userIDStr != "" {
-		userID, _ := strconv.ParseInt(userIDStr, 10, 64)
-		req.UserID = &userID
-	}
-
-	if modelConfigIDStr := r.URL.Query().Get("model_config_id"); modelConfigIDStr != "" {
-		modelConfigID, _ := strconv.ParseInt(modelConfigIDStr, 10, 64)
-		req.ModelConfigID = &modelConfigID
-	}
-
-	if provider := r.URL.Query().Get("provider"); provider != "" {
-		req.Provider = &provider
-	}
-
-	if functionType := r.URL.Query().Get("function_type"); functionType != "" {
-		req.FunctionType = &functionType
-	}
-
-	if module := r.URL.Query().Get("module"); module != "" {
-		req.Module = &module
-	}
-
-	if modelCode := r.URL.Query().Get("model_code"); modelCode != "" {
-		req.ModelCode = &modelCode
-	}
-
-	if successStr := r.URL.Query().Get("success"); successStr != "" {
-		success := successStr == "true" || successStr == "1"
-		req.Success = &success
-	}
-
-	if traceID := r.URL.Query().Get("trace_id"); traceID != "" {
-		req.TraceID = &traceID
-	}
-
-	if status := r.URL.Query().Get("status"); status != "" {
-		req.Status = &status
-	}
-
-	if purpose := r.URL.Query().Get("purpose"); purpose != "" {
-		req.Purpose = &purpose
-	}
-
-	if startDate := r.URL.Query().Get("start_date"); startDate != "" {
-		req.StartDate = &startDate
-	}
-
-	if endDate := r.URL.Query().Get("end_date"); endDate != "" {
-		req.EndDate = &endDate
-	}
-
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
-	req.Page = page
-	req.PageSize = pageSize
-	req.Size = size
-
+	req := parseLLMCallRecordFilter(r)
 	records, total, err := h.service.ListLLMCallRecords(r.Context(), req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -1048,41 +1041,66 @@ func (h *Handler) ListLLMCallRecords(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetLLMCallRecordStats handles getting LLM call record statistics
+// GetLLMCallRecordStats handles getting LLM call record statistics.
 func (h *Handler) GetLLMCallRecordStats(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-
-	// Only admin can view LLM call record stats
 	if claims.UserType != auth.UserTypeAdmin {
 		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
 
-	var tenantID *int64
-	if tenantIDStr := r.URL.Query().Get("tenant_id"); tenantIDStr != "" {
-		tid, _ := strconv.ParseInt(tenantIDStr, 10, 64)
-		tenantID = &tid
-	}
-
-	var startDate, endDate *string
-	if sd := r.URL.Query().Get("start_date"); sd != "" {
-		startDate = &sd
-	}
-	if ed := r.URL.Query().Get("end_date"); ed != "" {
-		endDate = &ed
-	}
-
-	stats, err := h.service.GetLLMCallRecordStats(r.Context(), tenantID, startDate, endDate)
+	stats, err := h.service.GetLLMCallRecordStats(r.Context(), parseLLMCallRecordFilter(r))
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-
 	httputil.WriteSuccess(w, stats)
+}
+
+// GetLLMCallRecordBreakdown handles grouped call statistics.
+func (h *Handler) GetLLMCallRecordBreakdown(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	groupBy := r.URL.Query().Get("group_by")
+	if groupBy == "" {
+		groupBy = "business_domain"
+	}
+	resp, err := h.service.GetLLMCallRecordBreakdown(r.Context(), parseLLMCallRecordFilter(r), groupBy)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+// GetLLMCallRecordOptions handles distinct filter values.
+func (h *Handler) GetLLMCallRecordOptions(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
+		return
+	}
+	options, err := h.service.GetLLMCallRecordOptions(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, options)
 }
 
 // GetLLMCallRecordByRequestID handles getting LLM call record by request ID.

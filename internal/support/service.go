@@ -422,6 +422,118 @@ func (s *Service) SetDefaultLLMModelConfig(ctx context.Context, id int64) error 
 
 // LLM Call Record Services
 
+func toLLMCallAttempts(items []llmgateway.AuditAttempt) []LLMCallAttempt {
+	out := make([]LLMCallAttempt, 0, len(items))
+	for _, item := range items {
+		out = append(out, LLMCallAttempt{
+			AttemptNo:    item.AttemptNo,
+			Provider:     item.Provider,
+			ModelCode:    item.ModelCode,
+			Success:      item.Success,
+			ErrorCode:    item.ErrorCode,
+			ErrorMessage: item.ErrorMessage,
+			LatencyMs:    item.LatencyMs,
+		})
+	}
+	return out
+}
+
+func optionalInt64(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func (s *Service) attachAccounts(ctx context.Context, records []*LLMCallRecordResponse) {
+	if len(records) == 0 {
+		return
+	}
+	recordingIDs := make([]int64, 0, len(records))
+	encounterIDs := make([]int64, 0, len(records))
+	contentIDs := make([]int64, 0, len(records))
+	customerIDs := make([]int64, 0, len(records))
+	insightIDs := make([]int64, 0, len(records))
+	for _, row := range records {
+		kind, id := llmAccountObject(row)
+		switch kind {
+		case "recording":
+			recordingIDs = append(recordingIDs, id)
+		case "encounter":
+			encounterIDs = append(encounterIDs, id)
+		case "content":
+			contentIDs = append(contentIDs, id)
+		case "customer":
+			customerIDs = append(customerIDs, id)
+		case "insight":
+			insightIDs = append(insightIDs, id)
+		}
+	}
+	accounts, err := s.store.GetLLMAccounts(ctx, recordingIDs, encounterIDs, contentIDs, customerIDs, insightIDs)
+	if err != nil {
+		return
+	}
+	for _, row := range records {
+		kind, id := llmAccountObject(row)
+		info, ok := accounts[fmt.Sprintf("%s:%d", kind, id)]
+		if !ok || info.AccountID <= 0 {
+			continue
+		}
+		accountID := info.AccountID
+		accountName := info.AccountName
+		row.AccountID = &accountID
+		row.AccountName = &accountName
+	}
+	accountIDs := make([]int64, 0, len(records))
+	for _, row := range records {
+		if row.AccountID != nil && *row.AccountID > 0 && (row.AccountName == nil || *row.AccountName == "") {
+			accountIDs = append(accountIDs, *row.AccountID)
+		}
+	}
+	names, nameErr := s.store.GetEmployeeNames(ctx, accountIDs)
+	if nameErr != nil {
+		return
+	}
+	for _, row := range records {
+		if row.AccountID == nil || *row.AccountID <= 0 {
+			continue
+		}
+		if name, ok := names[*row.AccountID]; ok && name != "" {
+			row.AccountName = &name
+		}
+	}
+}
+
+func llmAccountObject(row *LLMCallRecordResponse) (string, int64) {
+	if row == nil {
+		return "", 0
+	}
+	if row.RecordingID != nil && *row.RecordingID > 0 {
+		return "recording", *row.RecordingID
+	}
+	if row.BusinessObjectType != nil && row.BusinessObjectID != nil && *row.BusinessObjectID > 0 {
+		switch *row.BusinessObjectType {
+		case "recording":
+			return "recording", *row.BusinessObjectID
+		case "encounter":
+			return "encounter", *row.BusinessObjectID
+		case "content":
+			return "content", *row.BusinessObjectID
+		case "customer":
+			return "customer", *row.BusinessObjectID
+		case "insight":
+			return "insight", *row.BusinessObjectID
+		}
+	}
+	if row.ContentID != nil && *row.ContentID > 0 {
+		return "content", *row.ContentID
+	}
+	if row.CustomerID != nil && *row.CustomerID > 0 {
+		return "customer", *row.CustomerID
+	}
+	return "", 0
+}
+
 // ListLLMCallRecords retrieves a paginated list of LLM call records
 func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListRequest) ([]*LLMCallRecordResponse, int, error) {
 	if s.llmClient == nil {
@@ -443,34 +555,9 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 		size = 100
 	}
 
-	startDate, endDate := normalizeDateRange(req.StartDate, req.EndDate)
-	params := map[string]string{
-		"page":       fmt.Sprintf("%d", req.Page),
-		"size":       fmt.Sprintf("%d", size),
-		"start_date": startDate,
-		"end_date":   endDate,
-	}
-	if req.TenantID != nil {
-		params["tenant_id"] = fmt.Sprintf("%d", *req.TenantID)
-	}
-	if req.FunctionType != nil {
-		params["function_type"] = *req.FunctionType
-	}
-	if req.Module != nil {
-		params["module"] = *req.Module
-	}
-	if req.ModelCode != nil {
-		params["model_code"] = *req.ModelCode
-	}
-	if req.Provider != nil {
-		params["provider"] = *req.Provider
-	}
-	if req.Success != nil {
-		params["success"] = fmt.Sprintf("%t", *req.Success)
-	}
-	if req.TraceID != nil {
-		params["trace_id"] = *req.TraceID
-	}
+	params := buildLLMCallRecordParams(req)
+	params["page"] = fmt.Sprintf("%d", req.Page)
+	params["size"] = fmt.Sprintf("%d", size)
 
 	resp, err := s.llmClient.ListAuditRecords(ctx, params)
 	if err != nil {
@@ -497,7 +584,7 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 		tenantName := tenantNameMap[tenantID]
 		functionType := item.FunctionType
 		module := item.Module
-		traceID := item.RequestID
+		traceID := item.TraceID
 		modelCode := item.ModelCode
 		success := item.Success
 		inCost := item.InputCost
@@ -520,6 +607,11 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 			BillingSubject:           &billingSubject,
 			BillingScene:             &billingScene,
 			BillingRuleVersion:       &billingRuleVersion,
+			RecordingID:              optionalInt64(item.RecordingID),
+			ContentID:                optionalInt64(item.ContentID),
+			CustomerID:               optionalInt64(item.CustomerID),
+			AnalysisRunID:            optionalInt64(item.AnalysisRunID),
+			GenerationTaskID:         optionalInt64(item.GenerationTaskID),
 			ModelName:                item.ModelCode,
 			FunctionType:             &functionType,
 			Module:                   &module,
@@ -544,27 +636,126 @@ func (s *Service) ListLLMCallRecords(ctx context.Context, req LLMCallRecordListR
 			PriceVersion:             priceVersion,
 			PricingMissing:           pricingMissing,
 			PricingFallback:          pricingFallback,
+			UsageMetadata:            item.UsageMetadata,
 			CreatedAt:                item.CreatedAt,
 		})
 	}
+	s.attachAccounts(ctx, out)
 
 	return out, int(resp.Total), nil
 }
 
-// GetLLMCallRecordStats retrieves LLM call record statistics
-func (s *Service) GetLLMCallRecordStats(ctx context.Context, tenantID *int64, startDate, endDate *string) (*LLMCallRecordStatsResponse, error) {
+func buildLLMCallRecordParams(req LLMCallRecordListRequest) map[string]string {
+	startDate, endDate := normalizeDateRange(req.StartDate, req.EndDate)
+	params := map[string]string{
+		"start_date": startDate,
+		"end_date":   endDate,
+	}
+	setString := func(key string, value *string) {
+		if value != nil && *value != "" {
+			params[key] = *value
+		}
+	}
+	setInt := func(key string, value *int64) {
+		if value != nil {
+			params[key] = fmt.Sprintf("%d", *value)
+		}
+	}
+	setBool := func(key string, value *bool) {
+		if value != nil {
+			params[key] = fmt.Sprintf("%t", *value)
+		}
+	}
+	setInt("tenant_id", req.TenantID)
+	setString("function_type", req.FunctionType)
+	setString("module", req.Module)
+	setString("model_code", req.ModelCode)
+	setString("provider", req.Provider)
+	setBool("success", req.Success)
+	setString("trace_id", req.TraceID)
+	setString("business_domain", req.BusinessDomain)
+	setString("billing_subject", req.BillingSubject)
+	setInt("recording_id", req.RecordingID)
+	setInt("content_id", req.ContentID)
+	setInt("customer_id", req.CustomerID)
+	setInt("generation_task_id", req.GenerationTaskID)
+	setString("search", req.Search)
+	setBool("pricing_missing", req.PricingMissing)
+	setInt("min_latency_ms", req.MinLatencyMS)
+	setString("sort", req.Sort)
+	setString("order", req.Order)
+	return params
+}
+
+// GetLLMCallRecordBreakdown returns grouped call stats.
+func (s *Service) GetLLMCallRecordBreakdown(ctx context.Context, req LLMCallRecordListRequest, groupBy string) (*LLMCallRecordBreakdownResponse, error) {
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("LLM gateway is not configured")
 	}
-	sd, ed := normalizeDateRange(startDate, endDate)
-	params := map[string]string{
-		"start_date": sd,
-		"end_date":   ed,
+	params := buildLLMCallRecordParams(req)
+	params["group_by"] = groupBy
+	resp, err := s.llmClient.GetAuditBreakdown(ctx, params)
+	if err != nil {
+		return nil, err
 	}
-	if tenantID != nil {
-		params["tenant_id"] = fmt.Sprintf("%d", *tenantID)
+	items := make([]LLMCallRecordBreakdownItem, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		items = append(items, LLMCallRecordBreakdownItem{
+			Key:          item.Key,
+			Label:        item.Label,
+			CallCount:    item.CallCount,
+			TotalTokens:  item.TotalTokens,
+			TotalCost:    item.TotalCost,
+			FailureCount: item.FailureCount,
+			AvgLatencyMS: item.AvgLatencyMS,
+		})
 	}
+	return &LLMCallRecordBreakdownResponse{GroupBy: resp.GroupBy, Items: items}, nil
+}
 
+// GetLLMCallRecordOptions returns distinct filter values.
+func (s *Service) GetLLMCallRecordOptions(ctx context.Context) (*LLMCallRecordOptionsResponse, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	opts, err := s.llmClient.GetAuditOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	values := func(items []llmgateway.AuditOptionItem) []string {
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if item.Value != "" {
+				out = append(out, item.Value)
+			}
+		}
+		return out
+	}
+	pairs := make([]LLMCallRecordBusinessPair, 0, len(opts.BusinessPairs))
+	for _, pair := range opts.BusinessPairs {
+		pairs = append(pairs, LLMCallRecordBusinessPair{
+			BusinessDomain: pair.BusinessDomain,
+			BillingSubject: pair.BillingSubject,
+			Count:          pair.Count,
+		})
+	}
+	return &LLMCallRecordOptionsResponse{
+		FunctionTypes:   values(opts.FunctionTypes),
+		Modules:         values(opts.Modules),
+		Providers:       values(opts.Providers),
+		ModelCodes:      values(opts.ModelCodes),
+		BusinessDomains: values(opts.BusinessDomains),
+		BillingSubjects: values(opts.BillingSubjects),
+		BusinessPairs:   pairs,
+	}, nil
+}
+
+// GetLLMCallRecordStats retrieves LLM call record statistics.
+func (s *Service) GetLLMCallRecordStats(ctx context.Context, req LLMCallRecordListRequest) (*LLMCallRecordStatsResponse, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("LLM gateway is not configured")
+	}
+	params := buildLLMCallRecordParams(req)
 	resp, err := s.llmClient.GetAuditRecordStats(ctx, params)
 	if err != nil {
 		return nil, err
@@ -617,21 +808,35 @@ func (s *Service) GetLLMCallRecordByRequestID(ctx context.Context, requestID str
 	billingScene := record.BillingScene
 	billingRuleVersion := record.BillingRuleVersion
 	cachedTokens, creationTokens, cachedCost, creationCost, cacheType, priceVersion, pricingMissing, pricingFallback := usageMetaCost(record.UsageMetadata)
-	return &LLMCallRecordResponse{
+	resp := &LLMCallRecordResponse{
 		ID:                       record.ID,
 		RequestID:                record.RequestID,
 		TenantID:                 &tenantID,
 		TenantName:               &tenantName,
+		AccountID:                optionalInt64(record.AccountID),
 		BusinessDomain:           &businessDomain,
 		BusinessObjectType:       &businessObjectType,
 		BusinessObjectID:         &businessObjectID,
 		BillingSubject:           &billingSubject,
 		BillingScene:             &billingScene,
 		BillingRuleVersion:       &billingRuleVersion,
+		RecordingID:              optionalInt64(record.RecordingID),
+		ContentID:                optionalInt64(record.ContentID),
+		CustomerID:               optionalInt64(record.CustomerID),
+		AnalysisRunID:            optionalInt64(record.AnalysisRunID),
+		GenerationTaskID:         optionalInt64(record.GenerationTaskID),
 		ModelName:                record.ModelCode,
 		FunctionType:             &functionType,
 		Module:                   &module,
 		TraceID:                  &traceID,
+		ProductCode:              &record.ProductCode,
+		ActionCode:               &record.ActionCode,
+		SpanID:                   &record.SpanID,
+		ParentSpanID:             &record.ParentSpanID,
+		AttemptCount:             record.AttemptCount,
+		ErrorStage:               &record.ErrorStage,
+		TTFTMs:                   record.TTFTMs,
+		Attempts:                 toLLMCallAttempts(record.Attempts),
 		ModelCode:                &modelCode,
 		Provider:                 record.Provider,
 		PromptTokens:             int(record.InputTokens),
@@ -652,9 +857,16 @@ func (s *Service) GetLLMCallRecordByRequestID(ctx context.Context, requestID str
 		PriceVersion:             priceVersion,
 		PricingMissing:           pricingMissing,
 		PricingFallback:          pricingFallback,
+		RequestMetadata:          record.RequestMetadata,
+		UsageMetadata:            record.UsageMetadata,
+		RequestPreview:           record.RequestPreview,
+		ResponsePreview:          record.ResponsePreview,
+		PayloadExpiresAt:         record.PayloadExpiresAt,
 		ErrorMessage:             &errMessage,
 		CreatedAt:                record.CreatedAt,
-	}, nil
+	}
+	s.attachAccounts(ctx, []*LLMCallRecordResponse{resp})
+	return resp, nil
 }
 
 // LLM Cost Services

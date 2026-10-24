@@ -465,13 +465,36 @@ type AuditRecordItem struct {
 // AuditRecordDetail represents a gateway audit record detail.
 type AuditRecordDetail struct {
 	AuditRecordItem
-	TraceID         string                 `json:"trace_id"`
-	CallerService   string                 `json:"caller_service"`
-	CallerModule    string                 `json:"caller_module"`
-	ErrorCode       string                 `json:"error_code"`
-	ErrorMessage    string                 `json:"error_message"`
-	UsageMetadata   map[string]interface{} `json:"usage_metadata"`
-	RequestMetadata map[string]interface{} `json:"request_metadata"`
+	TraceID          string                 `json:"trace_id"`
+	AccountID        int64                  `json:"account_id,omitempty"`
+	ProductCode      string                 `json:"product_code,omitempty"`
+	ActionCode       string                 `json:"action_code,omitempty"`
+	SpanID           string                 `json:"span_id,omitempty"`
+	ParentSpanID     string                 `json:"parent_span_id,omitempty"`
+	AttemptCount     int                    `json:"attempt_count,omitempty"`
+	ErrorStage       string                 `json:"error_stage,omitempty"`
+	TTFTMs           int                    `json:"ttft_ms,omitempty"`
+	Attempts         []AuditAttempt         `json:"attempts,omitempty"`
+	CallerService    string                 `json:"caller_service"`
+	CallerModule     string                 `json:"caller_module"`
+	ErrorCode        string                 `json:"error_code"`
+	ErrorMessage     string                 `json:"error_message"`
+	UsageMetadata    map[string]interface{} `json:"usage_metadata"`
+	RequestMetadata  map[string]interface{} `json:"request_metadata"`
+	RequestPreview   string                 `json:"request_preview,omitempty"`
+	ResponsePreview  string                 `json:"response_preview,omitempty"`
+	PayloadExpiresAt string                 `json:"payload_expires_at,omitempty"`
+}
+
+// AuditAttempt is one retry/fallback attempt.
+type AuditAttempt struct {
+	AttemptNo    int    `json:"attempt_no"`
+	Provider     string `json:"provider"`
+	ModelCode    string `json:"model_code"`
+	Success      bool   `json:"success"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	LatencyMs    int    `json:"latency_ms"`
 }
 
 // AuditRecordListResponse represents audit record list response.
@@ -495,6 +518,47 @@ type AuditRecordStatsResponse struct {
 	SuccessRate       float64 `json:"success_rate"`
 	SuccessCount      int64   `json:"success_count"`
 	FailureCount      int64   `json:"failure_count"`
+}
+
+// AuditOptionItem is one distinct filter value with its call count.
+type AuditOptionItem struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+// AuditBreakdownItem is one grouped audit row.
+type AuditBreakdownItem struct {
+	Key          string  `json:"key"`
+	Label        string  `json:"label,omitempty"`
+	CallCount    int64   `json:"call_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	TotalCost    float64 `json:"total_cost"`
+	FailureCount int64   `json:"failure_count"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+}
+
+// AuditBreakdownResponse is a grouped audit aggregation.
+type AuditBreakdownResponse struct {
+	GroupBy string               `json:"group_by"`
+	Items   []AuditBreakdownItem `json:"items"`
+}
+
+// AuditOptionsResponse contains distinct values used by the audit filter UI.
+type AuditOptionsResponse struct {
+	FunctionTypes   []AuditOptionItem   `json:"function_types"`
+	Modules         []AuditOptionItem   `json:"modules"`
+	Providers       []AuditOptionItem   `json:"providers"`
+	ModelCodes      []AuditOptionItem   `json:"model_codes"`
+	BusinessDomains []AuditOptionItem   `json:"business_domains"`
+	BillingSubjects []AuditOptionItem   `json:"billing_subjects"`
+	BusinessPairs   []AuditBusinessPair `json:"business_pairs"`
+}
+
+// AuditBusinessPair is one product/action combination.
+type AuditBusinessPair struct {
+	BusinessDomain string `json:"business_domain"`
+	BillingSubject string `json:"billing_subject"`
+	Count          int64  `json:"count"`
 }
 
 // CostByTenantItem represents cost grouped by tenant.
@@ -648,6 +712,30 @@ func (c *Client) ListAuditRecords(ctx context.Context, params map[string]string)
 	}
 	var out AuditRecordListResponse
 	if err := c.get(ctx, "/v1/audit/records", query, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetAuditOptions retrieves distinct filter values from gateway.
+func (c *Client) GetAuditOptions(ctx context.Context) (*AuditOptionsResponse, error) {
+	var out AuditOptionsResponse
+	if err := c.get(ctx, "/v1/audit/records/options", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetAuditBreakdown retrieves grouped audit statistics.
+func (c *Client) GetAuditBreakdown(ctx context.Context, params map[string]string) (*AuditBreakdownResponse, error) {
+	query := make(url.Values)
+	for k, v := range params {
+		if v != "" {
+			query.Set(k, v)
+		}
+	}
+	var out AuditBreakdownResponse
+	if err := c.get(ctx, "/v1/audit/records/breakdown", query, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
