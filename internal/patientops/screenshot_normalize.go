@@ -26,8 +26,14 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 				normalized = append(normalized, item)
 				continue
 			}
-			if key == "patient_utterances" && isUIOnlyText(text) {
-				continue
+			if key == "patient_utterances" {
+				if isUIOnlyText(text) {
+					continue
+				}
+				text = stripSpeakerPrefix(text)
+			}
+			if key == "evidence" {
+				text = normalizeEvidenceRole(text)
 			}
 			if key == "evidence" && isUIEvidence(text) {
 				for _, prefix := range []string{"[患者]", "[用户]", "[家属]", "[家长]"} {
@@ -57,6 +63,26 @@ func normalizeScreenshotResultMap(raw map[string]any) {
 			}
 		}
 	}
+}
+
+func stripSpeakerPrefix(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range []string{"患者：", "患者:", "用户：", "用户:", "家长：", "家长:", "家属：", "家属:", "朋友圈作者：", "朋友圈作者:"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		}
+	}
+	return trimmed
+}
+
+func normalizeEvidenceRole(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, pair := range [][2]string{{"患者：", "[患者] "}, {"患者:", "[患者] "}, {"用户：", "[患者] "}, {"用户:", "[患者] "}, {"家长：", "[家长] "}, {"家长:", "[家长] "}, {"家属：", "[家属] "}, {"家属:", "[家属] "}, {"机构：", "[机构] "}, {"机构:", "[机构] "}, {"员工：", "[员工] "}, {"员工:", "[员工] "}, {"朋友圈作者：", "[朋友圈作者] "}, {"朋友圈作者:", "[朋友圈作者] "}} {
+		if strings.HasPrefix(trimmed, pair[0]) {
+			return pair[1] + strings.TrimSpace(strings.TrimPrefix(trimmed, pair[0]))
+		}
+	}
+	return trimmed
 }
 
 func onlyRoleText(text string) bool {
@@ -117,14 +143,14 @@ func normalizeScreenshotArrayItem(item any) (string, bool) {
 		return strings.TrimSpace(value), true
 	case map[string]any:
 		// 任何已知字段只要出现，就必须是字符串；混合类型直接交给 Schema 拒绝。
-		for _, key := range []string{"role", "speaker", "who", "quote", "text", "content", "summary", "action", "name", "reason", "value"} {
+		for _, key := range []string{"role", "speaker", "who", "quote", "text", "content", "summary", "action", "name", "reason", "value", "evidence", "clue", "description", "label", "note"} {
 			if raw, exists := value[key]; exists {
 				if _, ok := raw.(string); !ok {
 					return "", false
 				}
 			}
 		}
-		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value"} {
+		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value", "evidence", "clue", "description", "label", "note"} {
 			if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
 				return stringifyScreenshotItem(value), true
 			}
@@ -147,7 +173,7 @@ func stringifyScreenshotItem(item any) string {
 				break
 			}
 		}
-		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value"} {
+		for _, key := range []string{"quote", "text", "content", "summary", "action", "name", "reason", "value", "evidence", "clue", "description", "label", "note"} {
 			if text := strings.TrimSpace(fmt.Sprint(value[key])); text != "" && text != "<nil>" {
 				parts = append(parts, text)
 				break

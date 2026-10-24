@@ -22,7 +22,10 @@ type Service struct {
 	llm  *llmgateway.Client
 }
 
-var ErrScreenshotCustomerConflict = errors.New("screenshot is already associated with another customer")
+var (
+	ErrScreenshotCustomerConflict = errors.New("screenshot is already associated with another customer")
+	ErrCustomerTenantMismatch     = errors.New("customer does not belong to tenant")
+)
 
 type patientTaskExecer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -753,6 +756,13 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 	if tenantID <= 0 || employeeID <= 0 || customerID <= 0 || strings.TrimSpace(req.Action) == "" || strings.TrimSpace(req.Content) == "" {
 		return nil, fmt.Errorf("customer, action and content are required")
 	}
+	var customerExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL)`, tenantID, customerID).Scan(&customerExists); err != nil {
+		return nil, fmt.Errorf("verify action customer: %w", err)
+	}
+	if !customerExists {
+		return nil, ErrCustomerTenantMismatch
+	}
 	recordType := strings.TrimSpace(req.RecordType)
 	if recordType == "" {
 		recordType = "employee"
@@ -970,7 +980,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			return nil, fmt.Errorf("validate screenshot customer: %w", err)
 		}
 		if !exists {
-			return nil, fmt.Errorf("customer does not belong to tenant")
+			return nil, ErrCustomerTenantMismatch
 		}
 	}
 	contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.ImageData)))
@@ -1064,7 +1074,19 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	userPrompt := strings.ReplaceAll(prompt.UserPrompt, "{{customer_context}}", customerContext)
 	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 180, ResponseFormat: "json"}
 	applyPatientParams(params, config.Params)
-	resp, err := s.llm.ImageInference(analysisCtx, llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: userPrompt}}}}, Params: params})
+	imageRequest := llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID)}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: userPrompt}}}}, Params: params}
+	var resp *llmgateway.TextInferenceResponse
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err = s.llm.ImageInference(analysisCtx, imageRequest)
+		if err != nil {
+			break
+		}
+		trimmed := strings.TrimSpace(resp.Content)
+		if trimmed != "" && trimmed != "[]" {
+			break
+		}
+		slog.Warn("patient screenshot analysis returned empty payload; retrying", "source_id", sourceID, "attempt", attempt+1)
+	}
 	if err != nil {
 		return nil, markFailed(fmt.Errorf("analyze screenshot through llm gateway: %w", err))
 	}

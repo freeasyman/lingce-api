@@ -478,6 +478,10 @@ func (h *Handler) SaveActionAuthenticated(w http.ResponseWriter, r *http.Request
 	}
 	result, err := h.service.SaveAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
 	if err != nil {
+		if errors.Is(err, ErrCustomerTenantMismatch) {
+			httputil.WriteNotFound(w, "customer not found")
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

@@ -30,8 +30,8 @@ func TestValidateJSONSchemaScreenshotContract(t *testing.T) {
 func TestNormalizeScreenshotResultMap(t *testing.T) {
 	raw := map[string]any{
 		"relationship_clues": []any{map[string]any{"role": "家长", "quote": "和孩子商量"}, "[家长]"},
-		"patient_utterances": []any{"请把价格表发给我", "请把价格表发给我", "门店地址"},
-		"evidence":           []any{"[患者] 请把价格表发给我", "[用户] 点击了门店地址", "[用户] 点击了门店地址"},
+		"patient_utterances": []any{"患者：请把价格表发给我", "患者：请把价格表发给我", "门店地址"},
+		"evidence":           []any{"患者：请把价格表发给我", "[用户] 点击了门店地址", "[用户] 点击了门店地址", map[string]any{"role": "家长", "evidence": "和孩子商量"}},
 		"decision_maker":     map[string]any{"role": "本人", "quote": "我自己"},
 	}
 	normalizeScreenshotResultMap(raw)
@@ -47,7 +47,7 @@ func TestNormalizeScreenshotResultMap(t *testing.T) {
 		t.Fatalf("real patient utterance was deleted: %#v", utterances)
 	}
 	evidence, _ := raw["evidence"].([]any)
-	if len(evidence) != 2 || evidence[0].(string) != "[患者] 请把价格表发给我" || !strings.HasPrefix(evidence[1].(string), "[系统]") || len(clues) != 1 {
+	if len(evidence) != 3 || evidence[0].(string) != "[患者] 请把价格表发给我" || !strings.HasPrefix(evidence[1].(string), "[系统]") || len(clues) != 1 {
 		t.Fatalf("evidence was not deduped/reclassified: %#v", evidence)
 	}
 }
