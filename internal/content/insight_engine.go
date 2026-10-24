@@ -39,7 +39,7 @@ trust_arc：犹豫→安心→仍担心，从原话归纳不脑补。
 
 【speculated 规则】speculated 填【字段名】数组（如 ["search_queries"]），不要填句子。search_queries 是推测用户会搜什么，必须给出内容并放进 speculated。
 
-【硬规则】一条洞察只聚焦一个点，quotes 只放 2-4 句原话，不同点拆成不同洞察。quotes 是唯一事实源，从 0 编号。fact_statement 只写转写里有的。value_judgment 只写「值不值得做 + 为什么」的理由，不要在文里写「高价值/中价值/低价值」前缀，等级单独填 value_level 字段。value_level 分级：高 = 有强冲突或强情绪或高搜索刚需，优先做；中 = 有价值但不够突出；低 = 可做可不做。value_judgment 禁"最大/全网最高频"这类无数据断言。宁缺毋滥。
+【硬规则】一条洞察只聚焦一个点，quotes 只放 2-4 句原话，不同点拆成不同洞察。quotes 是唯一事实源，从 0 编号。fact_statement 只写转写里有的。value_judgment 只写「值不值得做 + 为什么」的理由，不要在文里写「高价值/中价值/低价值」前缀，等级单独填 value_level 字段。value_level 分级：高 = 有强冲突或强情绪或高搜索刚需，优先做；中 = 有价值但不够突出；低 = 可做可不做。value_judgment 禁"最大/全网最高频"这类无数据断言。所有字段值一律用中文：speaker 用「医生/患者/家属/咨询师/客服」，help_dimensions 用「搜索/智能引用/认知/转化」。宁缺毋滥。
 `
 
 // Insight 是一条洞察（28 字段，与 insight_schema.json 严格一致）。

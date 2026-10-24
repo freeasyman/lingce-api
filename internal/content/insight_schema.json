@@ -17,9 +17,9 @@
                 "speaker": {
                   "type": "string",
                   "enum": [
-                    "doctor",
-                    "patient",
-                    "family",
+                    "医生",
+                    "患者",
+                    "家属",
                     "咨询师",
                     "客服"
                   ]
@@ -169,10 +169,10 @@
             "items": {
               "type": "string",
               "enum": [
-                "search",
-                "ai_citation",
-                "cognition",
-                "conversion"
+                "搜索",
+                "智能引用",
+                "认知",
+                "转化"
               ]
             }
           },
