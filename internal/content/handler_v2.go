@@ -521,6 +521,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-style-templates", Handler: h.ListStyleTemplatesV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-org-knowledge", Handler: h.GetOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-org-knowledge", Handler: h.UpsertOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-assets/actions/upload", Handler: h.UploadContentAsset, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-plans", Handler: h.ListPlanPeriods, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-plans/current", Handler: h.GetCurrentPlan, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-plans/actions/generate", Handler: h.GeneratePlanV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
