@@ -74,20 +74,21 @@ const topicStatusSQL = `CASE
   ELSE 'new' END`
 
 type ContentItemV2Record struct {
-	ID               int64           `json:"id"`
-	TenantID         int64           `json:"tenant_id"`
-	TopicID          *int64          `json:"topic_id"`
-	Form             string          `json:"form"`
-	Title            string          `json:"title"`
-	Body             string          `json:"body"`
-	PublishPackage   json.RawMessage `json:"publish_package"`
-	Images           json.RawMessage `json:"images"`
-	Status           string          `json:"status"`
-	GenerationStatus string          `json:"generation_status"`
-	CreatedAt        *time.Time      `json:"created_at,omitempty"`
-	TopicTitle       string          `json:"topic_title,omitempty"`
-	DoctorName       string          `json:"doctor_name,omitempty"`
-	DepartmentName   string          `json:"department_name,omitempty"`
+	ID                  int64           `json:"id"`
+	TenantID            int64           `json:"tenant_id"`
+	TopicID             *int64          `json:"topic_id"`
+	Form                string          `json:"form"`
+	Title               string          `json:"title"`
+	Body                string          `json:"body"`
+	PublishPackage      json.RawMessage `json:"publish_package"`
+	Images              json.RawMessage `json:"images"`
+	Status              string          `json:"status"`
+	GenerationStatus    string          `json:"generation_status"`
+	GenerationShotIndex int             `json:"generation_shot_index"`
+	CreatedAt           *time.Time      `json:"created_at,omitempty"`
+	TopicTitle          string          `json:"topic_title,omitempty"`
+	DoctorName          string          `json:"doctor_name,omitempty"`
+	DepartmentName      string          `json:"department_name,omitempty"`
 }
 
 type PlanPeriod struct {
@@ -558,7 +559,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
-		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.generation_status,''), ci.created_at,
+		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.generation_status,''), COALESCE(ci.generation_shot_index,-1), ci.created_at,
 		       COALESCE(ct.title,''), COALESCE(e.name,''),
 		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
 		FROM content_items ci
@@ -577,7 +578,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	out := make([]ContentItemV2Record, 0)
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
 			return nil, err
 		}
 		r.DoctorName = maskPhoneNumber(r.DoctorName)
@@ -724,9 +725,9 @@ func (s *Store) getContentItemV2(ctx context.Context, tenantID, id int64) (*Cont
 	var r ContentItemV2Record
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, topic_id, COALESCE(form,'article'), COALESCE(title,''), COALESCE(body,''),
-		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), COALESCE(generation_status,''), created_at
+		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), COALESCE(generation_status,''), COALESCE(generation_shot_index,-1), created_at
 		FROM content_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -755,8 +756,8 @@ func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, for
 }
 
 // setContentGenerationStatus 持久化生图状态（running / 空=完成）。
-func (s *Store) setContentGenerationStatus(ctx context.Context, tenantID, id int64, status string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE content_items SET generation_status = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID, status)
+func (s *Store) setContentGenerationStatus(ctx context.Context, tenantID, id int64, status string, shotIndex int) error {
+	_, err := s.pool.Exec(ctx, `UPDATE content_items SET generation_status = $3, generation_shot_index = $4, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID, status, shotIndex)
 	return err
 }
 
