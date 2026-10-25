@@ -97,11 +97,14 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 		Cards          []docxCard          `json:"cards"`
 		PublishPackage map[string]any      `json:"publish_package"`
 		Images         []string            `json:"images"`
-		Mode           string              `json:"mode"`
-		Cover          map[string]any      `json:"cover"`
-		Segments       []docxScriptSegment `json:"segments"`
-		Bgm            string              `json:"bgm"`
-		Brand          string              `json:"brand"`
+		Mode             string                   `json:"mode"`
+		Cover            map[string]any           `json:"cover"`
+		Segments         []docxScriptSegment      `json:"segments"`
+		Bgm              string                   `json:"bgm"`
+		Brand            string                   `json:"brand"`
+		GlobalEditing    map[string]any           `json:"global_editing"`
+		Chapters         []docxStoryboardChapter  `json:"chapters"`
+		MaterialChecklist []docxMaterial          `json:"material_checklist"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -109,7 +112,9 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	var buildErr error
-	if len(req.Segments) > 0 {
+	if len(req.Chapters) > 0 {
+		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage)
+	} else if len(req.Segments) > 0 {
 		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
 	} else {
 		data, buildErr = buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
@@ -147,11 +152,14 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 		Cards          []docxCard          `json:"cards"`
 		PublishPackage map[string]any      `json:"publish_package"`
 		Images         []string            `json:"images"`
-		Mode           string              `json:"mode"`
-		Cover          map[string]any      `json:"cover"`
-		Segments       []docxScriptSegment `json:"segments"`
-		Bgm            string              `json:"bgm"`
-		Brand          string              `json:"brand"`
+		Mode             string                   `json:"mode"`
+		Cover            map[string]any           `json:"cover"`
+		Segments         []docxScriptSegment      `json:"segments"`
+		Bgm              string                   `json:"bgm"`
+		Brand            string                   `json:"brand"`
+		GlobalEditing    map[string]any           `json:"global_editing"`
+		Chapters         []docxStoryboardChapter  `json:"chapters"`
+		MaterialChecklist []docxMaterial          `json:"material_checklist"`
 	}
 	if err := json.Unmarshal(decoded, &req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid payload json")
@@ -159,7 +167,9 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	var buildErr error
-	if len(req.Segments) > 0 {
+	if len(req.Chapters) > 0 {
+		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage)
+	} else if len(req.Segments) > 0 {
 		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
 	} else {
 		data, buildErr = buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
