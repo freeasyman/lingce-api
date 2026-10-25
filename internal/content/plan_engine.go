@@ -66,7 +66,7 @@ func (s *Service) GeneratePlan(ctx context.Context, tenantID int64, period, star
 	}
 
 	// 2. 选题（未排进计划的，按 id 倒序）
-	topics, err := s.store.listTopicsV2(ctx, tenantID, 200)
+	topics, _, err := s.store.listTopicsV2(ctx, tenantID, 0, 200)
 	if err != nil {
 		return nil, fmt.Errorf("list topics: %w", err)
 	}
@@ -228,7 +228,7 @@ func (s *Service) loadPlan(ctx context.Context, tenantID, planPeriodID int64, pe
 	}
 	topicTitle := map[int64]string{}
 	topicGoal := map[int64]string{}
-	if topics, err := s.store.listTopicsV2(ctx, tenantID, 500); err == nil {
+	if topics, _, err := s.store.listTopicsV2(ctx, tenantID, 0, 500); err == nil {
 		for _, t := range topics {
 			topicTitle[t.ID] = t.Title
 			topicGoal[t.ID] = t.Goal

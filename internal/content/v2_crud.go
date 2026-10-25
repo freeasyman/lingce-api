@@ -435,9 +435,19 @@ func (s *Store) setInsightStatus(ctx context.Context, tenantID, id int64, status
 
 // ===== 选题 =====
 
-func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]ContentTopicV2Record, error) {
+func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit int) ([]ContentTopicV2Record, int64, error) {
 	if limit <= 0 {
-		limit = 100
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM content_topics WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
@@ -445,21 +455,21 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
-		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2`,
-		tenantID, limit)
+		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3`,
+		tenantID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []ContentTopicV2Record
 	for rows.Next() {
 		var r ContentTopicV2Record
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // listTopicsWithoutHelp 取缺"判断"信息的选题（expected_help 为空）。

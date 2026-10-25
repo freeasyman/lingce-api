@@ -216,12 +216,25 @@ func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	topics, err := h.service.store.listTopicsV2(r.Context(), tenantID, 200)
+	q := r.URL.Query()
+	limit := 20
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	topics, total, err := h.service.store.listTopicsV2(r.Context(), tenantID, offset, limit)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, topics)
+	httputil.WriteSuccess(w, map[string]any{"items": topics, "total": total, "limit": limit, "offset": offset})
 }
 
 func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
