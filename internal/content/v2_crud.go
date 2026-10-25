@@ -61,6 +61,8 @@ type ContentTopicV2Record struct {
 	Brief      json.RawMessage `json:"brief,omitempty"`
 	InsightIDs json.RawMessage `json:"insight_ids,omitempty"`
 	Status     string          `json:"status"`
+	// GeneratedForms 已生成内容的形式列表（如 ["graphic","article"]）。
+	GeneratedForms json.RawMessage `json:"generated_forms,omitempty"`
 	CreatedAt  *time.Time      `json:"created_at,omitempty"`
 }
 
@@ -441,6 +443,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
+		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2`,
 		tenantID, limit)
@@ -451,7 +454,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, limit int) ([]
 	var out []ContentTopicV2Record
 	for rows.Next() {
 		var r ContentTopicV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -626,18 +629,18 @@ func normalizeFormCode(form string) string {
 
 // getOrCreateContentItemByTopic 按 topic_id 取或建：已有直接返回（不动正文/图片），没有才新建空稿。
 func (s *Store) getOrCreateContentItemByTopic(ctx context.Context, tenantID, topicID int64, title, form string) (int64, bool, error) {
+	form = normalizeFormCode(form)
 	var existingID int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT id FROM content_items
-		WHERE tenant_id = $1 AND topic_id = $2 AND deleted_at IS NULL
-		ORDER BY id DESC LIMIT 1`, tenantID, topicID).Scan(&existingID)
+		WHERE tenant_id = $1 AND topic_id = $2 AND form = $3 AND deleted_at IS NULL
+		ORDER BY id DESC LIMIT 1`, tenantID, topicID, form).Scan(&existingID)
 	if err == nil && existingID > 0 {
 		return existingID, true, nil
 	}
 	if err != nil && err != pgx.ErrNoRows {
 		return 0, false, err
 	}
-	form = normalizeFormCode(form)
 	var id int64
 	if err := s.pool.QueryRow(ctx, `
 		INSERT INTO content_items (tenant_id, topic_id, form, title, body, publish_package, images, status)
