@@ -113,7 +113,7 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 	var data []byte
 	var buildErr error
 	if len(req.Chapters) > 0 {
-		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage)
+		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage, req.Images)
 	} else if len(req.Segments) > 0 {
 		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
 	} else {
@@ -168,7 +168,7 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 	var data []byte
 	var buildErr error
 	if len(req.Chapters) > 0 {
-		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage)
+		data, buildErr = buildStoryboardDocx(req.Title, req.GlobalEditing, req.Chapters, req.MaterialChecklist, req.PublishPackage, req.Images)
 	} else if len(req.Segments) > 0 {
 		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
 	} else {
