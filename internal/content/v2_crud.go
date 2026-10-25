@@ -69,7 +69,7 @@ type ContentTopicV2Record struct {
 // topicStatusSQL 选题派生状态：已发布 > 已生成 > 已进计划 > 未进计划。
 const topicStatusSQL = `CASE
   WHEN EXISTS (SELECT 1 FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.status='published' AND ci.deleted_at IS NULL) THEN 'published'
-  WHEN EXISTS (SELECT 1 FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL) THEN 'generated'
+  WHEN EXISTS (SELECT 1 FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL AND ci.body <> '') THEN 'generated'
   WHEN EXISTS (SELECT 1 FROM content_plan_items pi WHERE pi.topic_id = content_topics.id) THEN 'planned'
   ELSE 'new' END`
 
@@ -453,7 +453,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
-		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL), '[]'::jsonb),
+		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL AND ci.body <> ''), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3`,
 		tenantID, limit, offset)
