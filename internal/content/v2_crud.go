@@ -584,6 +584,27 @@ func maskPhoneNumber(s string) string {
 	return s
 }
 
+// normalizeFormCode 把中文/近义的形式名归一到英文代码。
+func normalizeFormCode(form string) string {
+	switch strings.TrimSpace(form) {
+	case "图文", "图文笔记", "graphic":
+		return "graphic"
+	case "文章", "公众号文章", "article":
+		return "article"
+	case "口播", "口播稿", "script", "video", "视频":
+		return "script"
+	case "分镜", "storyboard":
+		return "storyboard"
+	case "海报", "poster":
+		return "poster"
+	case "朋友圈", "moments":
+		return "moments"
+	case "":
+		return "graphic"
+	}
+	return form
+}
+
 // getOrCreateContentItemByTopic 按 topic_id 取或建：已有直接返回（不动正文/图片），没有才新建空稿。
 func (s *Store) getOrCreateContentItemByTopic(ctx context.Context, tenantID, topicID int64, title, form string) (int64, bool, error) {
 	var existingID int64
@@ -597,9 +618,7 @@ func (s *Store) getOrCreateContentItemByTopic(ctx context.Context, tenantID, top
 	if err != nil && err != pgx.ErrNoRows {
 		return 0, false, err
 	}
-	if strings.TrimSpace(form) == "" {
-		form = "graphic"
-	}
+	form = normalizeFormCode(form)
 	var id int64
 	if err := s.pool.QueryRow(ctx, `
 		INSERT INTO content_items (tenant_id, topic_id, form, title, body, publish_package, images, status)
@@ -629,6 +648,7 @@ func (s *Store) hardDeleteContentItemV2(ctx context.Context, tenantID, id int64)
 }
 
 func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64, form, title, body string, publishPackage, images json.RawMessage) (int64, error) {
+	form = normalizeFormCode(form)
 	pp := string(publishPackage)
 	if strings.TrimSpace(pp) == "" {
 		pp = "{}"

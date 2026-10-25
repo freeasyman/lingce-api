@@ -424,6 +424,7 @@ func contentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 
 // GenerateContentV2 选题 → 内容（按形式）。count<=0 时用简报骨架的默认数量。
 func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64, form string, count int) (map[string]any, error) {
+	form = normalizeFormCode(form)
 	if _, ok := contentFormPrompt[form]; !ok {
 		return nil, fmt.Errorf("unsupported form: %s", form)
 	}
