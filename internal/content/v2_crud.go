@@ -82,6 +82,7 @@ type ContentItemV2Record struct {
 	Images         json.RawMessage `json:"images"`
 	Status         string          `json:"status"`
 	CreatedAt      *time.Time      `json:"created_at,omitempty"`
+	TopicTitle     string          `json:"topic_title,omitempty"`
 }
 
 type PlanPeriod struct {
@@ -536,9 +537,12 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, topic_id, COALESCE(form,'article'), COALESCE(title,''), COALESCE(body,''),
-		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), created_at
-		FROM content_items WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY id DESC LIMIT $2`,
+		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
+		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), ci.created_at,
+		       COALESCE(ct.title,'')
+		FROM content_items ci
+		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
+		WHERE ci.tenant_id = $1 AND ci.deleted_at IS NULL ORDER BY ci.id DESC LIMIT $2`,
 		tenantID, limit)
 	if err != nil {
 		return nil, err
@@ -547,7 +551,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	var out []ContentItemV2Record
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt, &r.TopicTitle); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -563,6 +567,19 @@ func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64
 	img := string(images)
 	if strings.TrimSpace(img) == "" {
 		img = "{}"
+	}
+	// 同一个选题只保留一条内容：已有则更新，不重复新建
+	if topicID > 0 {
+		var existingID int64
+		if e := s.pool.QueryRow(ctx, `
+			SELECT id FROM content_items
+			WHERE tenant_id = $1 AND topic_id = $2 AND deleted_at IS NULL
+			ORDER BY id DESC LIMIT 1`, tenantID, topicID).Scan(&existingID); e == nil && existingID > 0 {
+			if uerr := s.updateContentItemV2(ctx, tenantID, existingID, title, body, publishPackage, images); uerr != nil {
+				return 0, uerr
+			}
+			return existingID, nil
+		}
 	}
 	var id int64
 	err := s.pool.QueryRow(ctx, `
