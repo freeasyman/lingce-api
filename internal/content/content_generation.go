@@ -285,33 +285,74 @@ func (s *Service) styleContext(ctx context.Context, tenantID int64) string {
 	return "风格模板（照着这个视觉做）：\n" + strings.TrimSpace(b.String())
 }
 
-// buildContentUserPrompt 组装创作 user prompt：简报 + 知识库 + 品牌素材 + 风格模板 + 数量覆盖。
-func (s *Service) buildContentUserPrompt(ctx context.Context, tenantID, topicID int64, form string, count int) (string, error) {
+// contentUserPromptCode 创作通用用户提示词的 code（6 种形式共用一份 user 模板）。
+const contentUserPromptCode = "content_user_prompt"
+
+// contentUserPromptFallback 创作通用用户提示词模板（代码兜底，含 {{占位符}}）。
+// 占位符：{{topic_brief}} 选题简报 / {{org_knowledge}} 机构知识库 / {{brand_assets}} 品牌素材
+//        {{style_templates}} 风格模板 / {{count_requirement}} 数量覆盖
+const contentUserPromptFallback = "选题简报如下（JSON）：\n\n{{topic_brief}}\n\n" +
+	contentBriefGlossary +
+	"\n\n{{org_knowledge}}\n\n{{brand_assets}}\n\n{{style_templates}}\n\n{{count_requirement}}\n\n" +
+	contentHardRules
+
+// resolvePromptUserTemplate 读 user_prompt_template（表），空则用代码兜底。
+func (s *Service) resolvePromptUserTemplate(ctx context.Context, code, fallback string) string {
+	if p, err := s.store.getPromptByCode(ctx, code); err == nil && p != nil && strings.TrimSpace(p.UserPrompt) != "" {
+		return strings.TrimSpace(p.UserPrompt)
+	}
+	return fallback
+}
+
+// knowledgeBlock 机构知识库注入块（含标题；空则空串）。
+func (s *Service) knowledgeBlock(ctx context.Context, tenantID int64) string {
+	if kc := s.knowledgeContext(ctx, tenantID); kc != "" {
+		return "【机构知识库】\n" + kc
+	}
+	return ""
+}
+
+// brandBlock 品牌素材注入块。
+func (s *Service) brandBlock(ctx context.Context, tenantID int64) string {
+	if bc := s.brandContext(ctx, tenantID); bc != "" {
+		return "【品牌素材】\n" + bc
+	}
+	return ""
+}
+
+// styleBlock 风格模板注入块。
+func (s *Service) styleBlock(ctx context.Context, tenantID int64) string {
+	if sc := s.styleContext(ctx, tenantID); sc != "" {
+		return "【风格模板】\n" + sc
+	}
+	return ""
+}
+
+// countBlock 数量覆盖块（空则空串）。
+func countBlock(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("【数量要求】本次生成 %d 个（张卡/个镜头/节），按这个数量来。", count)
+}
+
+// renderContentUserPrompt 读 user 模板并填充占位符。
+func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID int64, form string, count int) (string, error) {
+	tpl := s.resolvePromptUserTemplate(ctx, contentUserPromptCode, contentUserPromptFallback)
 	brief, err := s.store.fetchTopicBrief(ctx, tenantID, topicID)
 	if err != nil {
 		return "", err
 	}
-
-	var b strings.Builder
-	b.WriteString("选题简报如下（JSON）：\n\n")
-	b.WriteString(brief)
-	b.WriteString("\n\n")
-	b.WriteString(contentBriefGlossary)
-
-	if kc := s.knowledgeContext(ctx, tenantID); kc != "" {
-		b.WriteString("\n\n【机构知识库】\n" + kc)
+	result := tpl
+	result = strings.ReplaceAll(result, "{{topic_brief}}", brief)
+	result = strings.ReplaceAll(result, "{{org_knowledge}}", s.knowledgeBlock(ctx, tenantID))
+	result = strings.ReplaceAll(result, "{{brand_assets}}", s.brandBlock(ctx, tenantID))
+	result = strings.ReplaceAll(result, "{{style_templates}}", s.styleBlock(ctx, tenantID))
+	result = strings.ReplaceAll(result, "{{count_requirement}}", countBlock(count))
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
 	}
-	if bc := s.brandContext(ctx, tenantID); bc != "" {
-		b.WriteString("\n\n【品牌素材】\n" + bc)
-	}
-	if sc := s.styleContext(ctx, tenantID); sc != "" {
-		b.WriteString("\n\n【风格模板】\n" + sc)
-	}
-	if count > 0 {
-		b.WriteString(fmt.Sprintf("\n\n【数量要求】本次生成 %d 个（张卡/个镜头/节），按这个数量来。\n", count))
-	}
-	b.WriteString("\n\n" + contentHardRules)
-	return b.String(), nil
+	return strings.TrimSpace(result), nil
 }
 
 // publishPackageProperties 发布包（所有形式都要，完整 6 项）。
@@ -340,8 +381,8 @@ func strArr(items ...string) []string { return items }
 
 func strProp() map[string]any { return map[string]any{"type": "string"} }
 
-// contentOutputSchema 构建某形式的 json_schema。
-func contentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
+// buildContentOutputSchema 构建某形式的 json_schema（代码兜底）。
+func buildContentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 	var bodyProps map[string]any
 	var bodyRequired []string
 	hasCover := true
@@ -467,6 +508,20 @@ func contentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 	return &llmgateway.OutputSchema{Name: "content_" + form, Strict: true, Schema: schema}, nil
 }
 
+// resolveContentOutputSchema 优先用提示词表里的 output_schema，空则用代码兜底。
+func (s *Service) resolveContentOutputSchema(ctx context.Context, tenantID int64, form string) (*llmgateway.OutputSchema, error) {
+	if raw, err := s.store.getPromptOutputSchema(ctx, contentFormPromptCode[form]); err != nil {
+		return nil, err
+	} else if len(raw) > 0 && string(raw) != "{}" && string(raw) != "null" {
+		var schema map[string]any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			return nil, fmt.Errorf("invalid output_schema for %s: %w", form, err)
+		}
+		return &llmgateway.OutputSchema{Name: "content_" + form, Strict: true, Schema: schema}, nil
+	}
+	return buildContentOutputSchema(form)
+}
+
 // GenerateContentV2 选题 → 内容（按形式）。count<=0 时用简报骨架的默认数量。
 func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64, form string, count int) (map[string]any, error) {
 	form = normalizeFormCode(form)
@@ -477,12 +532,12 @@ func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64
 		return nil, fmt.Errorf("topic_id is required")
 	}
 
-	outSchema, err := contentOutputSchema(form)
+	outSchema, err := s.resolveContentOutputSchema(ctx, tenantID, form)
 	if err != nil {
 		return nil, err
 	}
 
-	userPrompt, err := s.buildContentUserPrompt(ctx, tenantID, topicID, form, count)
+	userPrompt, err := s.renderContentUserPrompt(ctx, tenantID, topicID, form, count)
 	if err != nil {
 		return nil, err
 	}

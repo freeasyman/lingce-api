@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -52,6 +53,23 @@ var formCreativeDefault = map[string]string{
 type promptTemplate struct {
 	SystemPrompt string
 	UserPrompt   string
+}
+
+// getPromptOutputSchema 从旧提示词模块取 output_schema（JSON）。
+func (s *Store) getPromptOutputSchema(ctx context.Context, code string) (json.RawMessage, error) {
+	var schema json.RawMessage
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(output_schema, '{}'::json)
+		FROM recording_analysis_prompts
+		WHERE code = $1 AND is_active = true
+		ORDER BY id DESC LIMIT 1`, code).Scan(&schema)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return schema, nil
 }
 
 // getPromptByCode 从旧提示词模块按 code 取活跃 prompt。
