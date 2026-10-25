@@ -285,9 +285,6 @@ func (s *Service) styleContext(ctx context.Context, tenantID int64) string {
 	return "风格模板（照着这个视觉做）：\n" + strings.TrimSpace(b.String())
 }
 
-// contentUserPromptCode 创作通用用户提示词的 code（6 种形式共用一份 user 模板）。
-const contentUserPromptCode = "content_user_prompt"
-
 // contentUserPromptFallback 创作通用用户提示词模板（代码兜底，含 {{占位符}}）。
 // 占位符：{{topic_brief}} 选题简报 / {{org_knowledge}} 机构知识库 / {{brand_assets}} 品牌素材
 //        {{style_templates}} 风格模板 / {{count_requirement}} 数量覆盖
@@ -338,7 +335,8 @@ func countBlock(count int) string {
 
 // renderContentUserPrompt 读 user 模板并填充占位符。
 func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID int64, form string, count int) (string, error) {
-	tpl := s.resolvePromptUserTemplate(ctx, contentUserPromptCode, contentUserPromptFallback)
+	// 全站标准：一行三样齐全，user 模板就读当前形式那一行
+	tpl := s.resolvePromptUserTemplate(ctx, contentFormPromptCode[form], contentUserPromptFallback)
 	brief, err := s.store.fetchTopicBrief(ctx, tenantID, topicID)
 	if err != nil {
 		return "", err
