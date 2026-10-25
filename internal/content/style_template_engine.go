@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
+	"github.com/freeasyman/lingce-api/pkg/oss"
 )
 
 const learnStyleTemplatePrompt = `你是视觉设计分析专家。分析这张图片的视觉风格，提取可复用的设计参数，返回 JSON：
@@ -230,6 +231,65 @@ func cleanArticleHTML(html string) string {
 	return out
 }
 
+// extractImageAssets 从文章 HTML 里抽取背景图 + 装饰图标（mmbiz 小图，去重，最多 6 个）。
+func extractImageAssets(html string) (bg string, icons []string) {
+	if m := regexp.MustCompile(`background(?:-image)?\s*:\s*url\([^)]*?(https?://[^)"'\\\\\s]+)`).FindStringSubmatch(html); len(m) > 1 {
+		bg = strings.ReplaceAll(m[1], "&amp;", "&")
+	}
+	seen := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?:src|data-src)=["'](https://mmbiz\.qpic\.cn/[^"']+)["']`).FindAllStringSubmatch(html, -1) {
+		u := strings.ReplaceAll(m[1], "&amp;", "&")
+		if u == bg || seen[u] || !strings.Contains(u, "640?") {
+			continue
+		}
+		seen[u] = true
+		icons = append(icons, u)
+		if len(icons) >= 6 {
+			break
+		}
+	}
+	return bg, icons
+}
+
+// uploadRemoteImage 下载远程图片并上传 OSS；失败返回空（不阻断提取）。
+func (s *Service) uploadRemoteImage(ctx context.Context, tenantID int64, source string) string {
+	if s.ossClient == nil || strings.TrimSpace(source) == "" {
+		return source
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	ct := resp.Header.Get("Content-Type")
+	ext := "png"
+	if strings.Contains(ct, "jpeg") || strings.Contains(ct, "jpg") {
+		ext = "jpg"
+	} else if strings.Contains(ct, "gif") {
+		ext = "gif"
+	}
+	if !strings.HasPrefix(ct, "image/") {
+		ct = "image/png"
+	}
+	key := oss.GenerateObjectKey(fmt.Sprintf("content/asset/%d", tenantID), "."+ext)
+	url, err := s.ossClient.UploadBytes(ctx, key, data, &oss.UploadOptions{ContentType: ct})
+	if err != nil {
+		return ""
+	}
+	return url
+}
+
 // ExtractArticleLayout 从公众号链接提取排版模板，落库 content_style_templates(type=layout)。
 func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req ExtractArticleLayoutRequest) (map[string]any, error) {
 	if s.llmClient == nil {
@@ -239,13 +299,15 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 
 	// 拿到 style：要么用传入的（保存模式），要么抓取提取（提取模式）
 	var style map[string]any
+	var rawHTML string
+	var err error
 	if len(req.Style) > 0 {
 		style = req.Style
 	} else {
 		if strings.TrimSpace(req.URL) == "" {
 			return nil, fmt.Errorf("url is required")
 		}
-		rawHTML, err := fetchArticleHTML(ctx, req.URL)
+		rawHTML, err = fetchArticleHTML(ctx, req.URL)
 		if err != nil {
 			return nil, err
 		}
@@ -281,6 +343,26 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 		}
 	}
 
+	// 图片类装饰：背景图 + 图标素材（下载转存 OSS）
+	if bgURL, iconURLs := extractImageAssets(rawHTML); bgURL != "" || len(iconURLs) > 0 {
+		if bgURL != "" {
+			if up := s.uploadRemoteImage(ctx, tenantID, bgURL); up != "" {
+				style["background"] = map[string]any{"color": style["bg"], "image": up}
+			}
+		}
+		if len(iconURLs) > 0 {
+			assets := make([]map[string]any, 0, len(iconURLs))
+			for _, u := range iconURLs {
+				if up := s.uploadRemoteImage(ctx, tenantID, u); up != "" {
+					assets = append(assets, map[string]any{"url": up})
+				}
+			}
+			if len(assets) > 0 {
+				style["assets"] = assets
+			}
+		}
+	}
+
 	// name 为空：只提取不保存（预览用）
 	if name == "" {
 		return map[string]any{"type": "layout", "style": style}, nil
@@ -288,7 +370,7 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 
 	styleJSON, _ := json.Marshal(style)
 	var id int64
-	err := s.store.pool.QueryRow(ctx, `
+	err = s.store.pool.QueryRow(ctx, `
 		INSERT INTO content_style_templates (tenant_id, level, industry, type, name, reference_url, extracted_style)
 		VALUES ($1,'tenant','','layout',$2,$3,$4::jsonb)
 		RETURNING id`,
