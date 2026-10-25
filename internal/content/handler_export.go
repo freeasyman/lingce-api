@@ -93,18 +93,29 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title          string         `json:"title"`
-		Cards          []docxCard     `json:"cards"`
-		PublishPackage map[string]any `json:"publish_package"`
-		Images         []string       `json:"images"`
+		Title          string              `json:"title"`
+		Cards          []docxCard          `json:"cards"`
+		PublishPackage map[string]any      `json:"publish_package"`
+		Images         []string            `json:"images"`
+		Mode           string              `json:"mode"`
+		Cover          map[string]any      `json:"cover"`
+		Segments       []docxScriptSegment `json:"segments"`
+		Bgm            string              `json:"bgm"`
+		Brand          string              `json:"brand"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
-	if err != nil {
-		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
+	var data []byte
+	var buildErr error
+	if len(req.Segments) > 0 {
+		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
+	} else {
+		data, buildErr = buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
+	}
+	if buildErr != nil {
+		httputil.WriteInternalError(w, "生成 docx 失败: "+buildErr.Error())
 		return
 	}
 	name := strings.TrimSpace(req.Title)
@@ -132,18 +143,29 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title          string         `json:"title"`
-		Cards          []docxCard     `json:"cards"`
-		PublishPackage map[string]any `json:"publish_package"`
-		Images         []string       `json:"images"`
+		Title          string              `json:"title"`
+		Cards          []docxCard          `json:"cards"`
+		PublishPackage map[string]any      `json:"publish_package"`
+		Images         []string            `json:"images"`
+		Mode           string              `json:"mode"`
+		Cover          map[string]any      `json:"cover"`
+		Segments       []docxScriptSegment `json:"segments"`
+		Bgm            string              `json:"bgm"`
+		Brand          string              `json:"brand"`
 	}
 	if err := json.Unmarshal(decoded, &req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid payload json")
 		return
 	}
-	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
-	if err != nil {
-		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
+	var data []byte
+	var buildErr error
+	if len(req.Segments) > 0 {
+		data, buildErr = buildScriptDocx(req.Title, req.Mode, req.Cover, req.Segments, req.Bgm, req.Brand, req.PublishPackage)
+	} else {
+		data, buildErr = buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
+	}
+	if buildErr != nil {
+		httputil.WriteInternalError(w, "生成 docx 失败: "+buildErr.Error())
 		return
 	}
 	name := strings.TrimSpace(req.Title)
