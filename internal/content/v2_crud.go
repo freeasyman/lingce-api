@@ -545,13 +545,13 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
 		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), ci.created_at,
-		       COALESCE(ct.title,''), COALESCE(e.name,''), COALESCE(d.name,'')
+		       COALESCE(ct.title,''), COALESCE(e.name,''),
+		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
 		FROM content_items ci
 		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
 		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
 		LEFT JOIN content_insights ins ON ins.id = x.iid
 		LEFT JOIN employees e ON e.id = ins.employee_id
-		LEFT JOIN departments d ON d.id = e.department_id
 		WHERE ci.tenant_id = $1 AND ` + deletedFilter + ` ORDER BY ci.id DESC LIMIT $2`,
 		tenantID, limit)
 	if err != nil {
@@ -565,6 +565,9 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 			return nil, err
 		}
 		r.DoctorName = maskPhoneNumber(r.DoctorName)
+		if label, ok := medicalDepartmentLabels[r.DepartmentName]; ok {
+			r.DepartmentName = label
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -582,6 +585,20 @@ func maskPhoneNumber(s string) string {
 		return ""
 	}
 	return s
+}
+
+// medicalDepartmentLabels 医生专科代码 → 中文科室名。
+var medicalDepartmentLabels = map[string]string{
+	"internal_medicine":  "内科",
+	"general_outpatient": "全科",
+	"dermatology":        "皮肤科",
+	"tcm":                "中医科",
+	"pediatrics":         "儿科",
+	"ophthalmology":      "眼科",
+	"gynecology":         "妇科",
+	"surgery":            "外科",
+	"stomatology":        "口腔科",
+	"anesthesiology":     "麻醉科",
 }
 
 // normalizeFormCode 把中文/近义的形式名归一到英文代码。
