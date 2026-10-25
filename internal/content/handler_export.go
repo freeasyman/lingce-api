@@ -84,3 +84,34 @@ func buildImagesZip(ctx context.Context, urls []string) (*bytes.Buffer, bool) {
 	_ = zw.Close()
 	return buf, ok > 0
 }
+
+// ExportDocx 把标题 + 卡片正文 + 发布包导出成 Word docx。
+func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
+	if _, ok := tenantOf(r); !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		Title          string         `json:"title"`
+		Cards          []docxCard     `json:"cards"`
+		PublishPackage map[string]any `json:"publish_package"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage)
+	if err != nil {
+		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(req.Title)
+	if name == "" {
+		name = "内容"
+	}
+	encoded := url.QueryEscape(name + ".docx")
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="content.docx"; filename*=UTF-8''%s`, encoded))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
