@@ -168,7 +168,7 @@ func (s *Service) VerifyImageText(ctx context.Context, tenantID int64, imageURL,
 const contentLayoutExtractPrompt = `你是公众号排版分析专家。下面是公众号文章的 HTML（含行内样式）。分析它的排版，提取一套可复用的「排版 DNA」。返回 JSON：
 
 {
- "bg":"页面底色 hex",
+ "bg":"正文内容区的底色 hex（放文字那块区域的背景色，不是浏览器页面的白）",
  "container":"容器 CSS（背景色、内边距）",
  "title":"标题 CSS",
  "lead":"导语 CSS",
