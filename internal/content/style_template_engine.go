@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"regexp"
@@ -363,6 +367,20 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 		}
 	}
 
+	// 小标题装饰图：序号图（小近方形）+ 横幅图（扁平宽），按宽高比识别
+	if badgeURL, bannerURL := s.classifyHeadingDecorations(ctx, rawHTML); badgeURL != "" || bannerURL != "" {
+		deco := map[string]any{}
+		if badgeURL != "" {
+			deco["badge_image"] = s.uploadRemoteImage(ctx, tenantID, badgeURL)
+		}
+		if bannerURL != "" {
+			deco["banner_image"] = s.uploadRemoteImage(ctx, tenantID, bannerURL)
+		}
+		if len(deco) > 0 {
+			style["heading_decoration"] = deco
+		}
+	}
+
 	// name 为空：只提取不保存（预览用）
 	if name == "" {
 		return map[string]any{"type": "layout", "style": style}, nil
@@ -380,4 +398,70 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 		return nil, fmt.Errorf("insert layout template: %w", err)
 	}
 	return map[string]any{"id": id, "name": name, "type": "layout", "style": style}, nil
+}
+
+// collectImageURLs 收集文章里所有候选图片 URL（背景图 + img src），去重保序。
+func collectImageURLs(html string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(u string) {
+		u = strings.ReplaceAll(strings.ReplaceAll(u, "&amp;", "&"), "\\x26", "&")
+		if u == "" || seen[u] || !strings.HasPrefix(u, "http") {
+			return
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	for _, m := range regexp.MustCompile(`background(?:-image)?\s*:\s*url\([^)]*?(https?://[^)"'\\\s]+)`).FindAllStringSubmatch(html, -1) {
+		add(m[1])
+	}
+	for _, m := range regexp.MustCompile(`(?:src|data-src)=["'](https?://[^"']+)["']`).FindAllStringSubmatch(html, -1) {
+		add(m[1])
+	}
+	if len(out) > 24 {
+		out = out[:24]
+	}
+	return out
+}
+
+// downloadImageSize 只解码图片头拿宽高，不整张解码。
+func downloadImageSize(ctx context.Context, url string) (int, int, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0, false
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, false
+	}
+	cfg, _, err := image.DecodeConfig(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, 0, false
+	}
+	return cfg.Width, cfg.Height, true
+}
+
+// classifyHeadingDecorations 按宽高比识别「小节序号图」（小且近方形）与「小标题横幅图」（扁平且宽）。
+func (s *Service) classifyHeadingDecorations(ctx context.Context, html string) (badge, banner string) {
+	for _, u := range collectImageURLs(html) {
+		w, h, ok := downloadImageSize(ctx, u)
+		if !ok || w == 0 || h == 0 {
+			continue
+		}
+		ratio := float64(w) / float64(h)
+		if banner == "" && ratio >= 2.6 && w >= 280 {
+			banner = u
+		} else if badge == "" && ratio >= 0.7 && ratio <= 1.5 && w <= 220 {
+			badge = u
+		}
+		if badge != "" && banner != "" {
+			break
+		}
+	}
+	return badge, banner
 }
