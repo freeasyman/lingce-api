@@ -43,7 +43,7 @@ func storyboardShotPromptGo(shotNo, sceneNo int, shot map[string]any) string {
 
 // generateStoryboardImagesAsync 后台按顺序生成分镜缺失的线稿图，逐张写回 content.images。
 // images 是"稀疏数组"（无人物镜头不占位、缺图的镜头是空串），所以能按 index 精确定位缺哪张。
-func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, contentID int64) {
+func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, contentID, regenerateIndex int64) {
 	rec, err := s.store.getContentItemV2(ctx, tenantID, contentID)
 	if err != nil {
 		slog.Error("async storyboard images: load content", "error", err, "content_id", contentID)
@@ -81,7 +81,11 @@ func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, c
 	}
 
 	for _, j := range jobs {
-		if j.imgIdx < len(imgs) && imgs[j.imgIdx] != "" {
+		if regenerateIndex >= 0 {
+			if int64(j.imgIdx) != regenerateIndex {
+				continue // 只重生成指定那一镜
+			}
+		} else if j.imgIdx < len(imgs) && imgs[j.imgIdx] != "" {
 			continue // 已有图，跳过
 		}
 		urls, err := s.GenerateCardImage(ctx, tenantID, storyboardShotPromptGo(j.shotNo, j.sceneNo, j.shot), "", "", "", 1, "")
@@ -112,16 +116,21 @@ func (h *Handler) GenerateStoryboardImagesAsync(w http.ResponseWriter, r *http.R
 		return
 	}
 	var req struct {
-		ContentID int64 `json:"content_id"`
+		ContentID int64  `json:"content_id"`
+		ShotIndex *int64 `json:"shot_index"` // nil = 生成缺失；非 nil = 只重生成该镜
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ContentID <= 0 {
 		httputil.WriteBadRequest(w, "content_id is required")
 		return
 	}
+	regenerateIndex := int64(-1)
+	if req.ShotIndex != nil {
+		regenerateIndex = *req.ShotIndex
+	}
 	// 用独立 context，脱离请求生命周期，浏览器关掉也能继续跑
 	go func() {
-		slog.Info("async storyboard images started", "tenant_id", tenantID, "content_id", req.ContentID)
-		h.service.generateStoryboardImagesAsync(context.Background(), tenantID, req.ContentID)
+		slog.Info("async storyboard images started", "tenant_id", tenantID, "content_id", req.ContentID, "shot_index", regenerateIndex)
+		h.service.generateStoryboardImagesAsync(context.Background(), tenantID, req.ContentID, regenerateIndex)
 	}()
 	httputil.WriteSuccess(w, map[string]any{"started": true})
 }
