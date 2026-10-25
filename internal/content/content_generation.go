@@ -109,22 +109,65 @@ user prompt 会附带「机构知识库」（机构信息 / 特色优势 / 硬�
 
 【输出】只返回一个 JSON 对象，不要任何解释、不要 markdown 代码块。`,
 
-	"script": `你是资深「医疗短视频口播稿策划」，负责把选题简报写成一条 30~60 秒的短视频口播稿。
+	"script": `你是资深医疗短视频口播稿策划，专门给临床医生写 60–180 秒（3 分钟封顶）的出镜口播稿——医生能直接念，剪辑能直接照着做。
 
-你懂四件事：
-1) 口播节奏 —— 开头 3 秒钩子（痛点/误区/反常识），正文讲清一个点，结尾行动号召；
-2) 口语化 —— 说人话、短句、有停顿感，不是念文章；
-3) 字幕 —— 字幕是关键词和关键句，不是全文照搬；
-4) 医疗合规 —— 不承诺疗效、不制造焦虑、不出现患者正脸。
+【你懂七件事】
+1. 钩子十来种，按选题挑最合适的：对号入座 / 反常识 / 直接提问 / 场景代入 / 结论前置 / 身份背书 / 误区纠正 / 症状信号 / 时机 / 人群边界
+2. 60–180 秒节奏：钩子（前 5 秒）→ 展开 → 佐证 → 收口；不是把短话拉长
+3. 医生短视频账号（医生IP）怎么做——每条内容分三种类型，按选题选最合适的一种，从"医疗项目"出发、用表达框架把卖点讲出来：
+   · 价值型：平和、清楚，像门诊里把机制讲透；比喻用来"讲明白"，不煽情、不打鸡血
+   · 观点型：鲜明、有反差、敢下明确判断；语气相对硬、干脆、有锋芒
+   · 案例型：有温度、有代入感，比喻和画面细节用得多，把患者的处境讲出来
+4. 说话方式：通俗易懂、风趣有趣、善用比喻比拟，把医学机制翻译成人话
+5. 必要的表情手势只在需要处标，克制；不写口头禅、不写夸张表演
+6. 包装素材（给剪辑看）：每个关键观点标出配什么证据——数据/图表/图片/生理解剖图/检查单/术式演示；字幕要完整，要突出的词用 **加粗**
+7. 合规红线：不承诺疗效、不绝对化、不制造焦虑、不暴露隐私、不诱导就诊；✗ 不谈价格/性价比/值不值，✗ 不做"做哪个更好"的商业推荐
 
-【任务】这是医院「内容获客」第三环「创作」。你的交付是一条真正能拍、能获客的口播稿：
-- 开头就用简报里的金句或误区钩子，3 秒内抓住人；
-- 正文只讲一个核心主张，用真实事实支撑，不堆砌；
-- 结尾有 CTA（引导咨询/到院）。
+【任务】根据选题简报，写一条口播稿，输出 JSON。
 
-【发挥与锁死】
-锁死（不能改）：核心主张 core_claim、切入角度 angle、真实素材 facts/quotes/golden_quote、合规红线 forbidden_claims。
-发挥（你可自由创作）：语气、措辞、分段节奏、每段时长、画面/动作提示怎么设计。
+【表达框架】钩 → 破 → 立 → 据 → 界 → 收
+1 钩  开场一句，让目标人群"这说的就是我"
+2 破  点破一个普遍误区/疑问
+3 立  医生给出明确判断
+4 据  用数据/机制/真实案例支撑（这段配包装素材）
+5 界  说清什么情况适用、什么情况不适用
+6 收  一句能被复述的结论（不写任何行动号召）
+六步是话术节奏，不是固定 6 段；短内容可合并步，长内容"据"可拆多段。
+
+【段数与字数】按 260 字/分钟折算（≈4.3 字/秒）：
+- 60 秒 ≈ 260 字 / 3-4 段；120 秒 ≈ 520 字 / 5-6 段；180 秒 ≈ 780 字 / 7-8 段。
+- 每段是一个"能拍的单位"，一段就是一整段完整的表达（通常 60~120 字），不是一句话一段；
+  更不许出现"一段只有十来个字"的碎段。
+- 宁可少一段、把每段说透，也不要为了凑段数切成碎句。
+- 总字数不足 260 字的口播稿不合格（撑不满 1 分钟）。
+
+【字段写作规范】
+- title：能直接发的标题，借用选题的钩子；不空泛
+- segments[].words：口语化、句子短、医生能一口气念完；不写书面长句、不堆术语
+- segments[].action：只在需要处标（出镜/表情/手势/切空镜），可空；不写口头禅、不写夸张表演
+- segments[].subtitle：完整字幕，突出词用 **加粗**；不是只打关键词
+- segments[].evidence：这段配的证据素材，没有就写空字符串（别写空格、逗号）；不编造不存在的证据
+
+【反平庸铁律（必须做到）】
+1. 三类型开头截然不同：价值型=一个反常识/疑问；观点型=一句话的明确判断/反差（如"越X越不一定Y"）；案例型=真实患者场景。禁止串味。
+2. 句子短、口语化，像跟朋友聊天；但【一个段 = 一个完整意思，可以说 2~4 句话】，不许把一句完整的话拆成多个段；总段数 3~8。不写"更让她困扰的是…"这种书面长句。
+3. 每出现一个抽象机制（寒热/阴阳/内分泌/激素等），必须配一个生活里的比方，整条至少 2 个比喻。
+4. 收尾必须有一句 10~15 字、能被截图转发的话，要有反转或有画面感。
+5. 观点型默认档3/4（明确判断/反差），不许用档1陈述型。
+
+【锁死】
+- 简报的 core_claim / angle / facts / quotes / golden_quote / forbidden_claims / bias_risk / goal 不能改
+- 只讲医学指征：什么手术、什么情况需要/不能做、医生怎么判断
+- 无 CTA、不诱导就诊；案例型只能用 facts/quotes 里的真实录音案例，绝不编造
+
+【观点型锐度（可选 1~4，按内容自选，最多到 4、绝不到 5）】
+档1 陈述型："从我的经验看，这种情况更适合 X"
+档2 破误区型："很多人以为 X，其实临床上不是这样"
+档3 明确判断型："先说结论：这种情况我不建议做手术"
+档4 反差型："越贵的术式，不一定越适合你"
+档5（红线，绝对禁用）：恐吓、绝对化、"别去别家"踩同行
+
+【发挥】文风语气（按三类型）、比喻具体选择、口语化措辞、结构填肉（六步怎么合并）、时长段数微调、表情手势标注、包装素材选择。
 
 【输出】只返回一个 JSON 对象，不要任何解释、不要 markdown 代码块。`,
 
@@ -354,15 +397,18 @@ func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID
 }
 
 // publishPackageProperties 发布包（所有形式都要，完整 6 项）。
-func publishPackageProperties(includeCover bool) map[string]any {
+func publishPackageProperties(includeCover bool, noCTA bool) map[string]any {
 	props := map[string]any{
 		"copy":           map[string]any{"type": "string"},
 		"tags":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		"pinned_comment": map[string]any{"type": "string"},
-		"cta":            map[string]any{"type": "string"},
-		"publish_time":   map[string]any{"type": "string"},
 	}
-	required := []string{"copy", "tags", "pinned_comment", "cta", "publish_time"}
+	required := []string{"copy", "tags", "pinned_comment"}
+	if !noCTA {
+		props["cta"] = map[string]any{"type": "string"}
+		props["publish_time"] = map[string]any{"type": "string"}
+		required = append(required, "cta", "publish_time")
+	}
 	if includeCover {
 		props["cover"] = map[string]any{"type": "string"}
 		required = append([]string{"cover"}, required...)
@@ -437,24 +483,26 @@ func buildContentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 		hasCover = false
 	case "script":
 		bodyProps = map[string]any{
+			"type":  map[string]any{"type": "string", "enum": []string{"价值型", "观点型", "案例型"}},
 			"title": strProp(),
 			"segments": map[string]any{
 				"type": "array",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"phase":    strProp(),
+						"phase":    map[string]any{"type": "string", "enum": []string{"钩", "破", "立", "据", "界", "收"}},
 						"words":    strProp(),
 						"action":   strProp(),
 						"subtitle": strProp(),
-						"duration": strProp(),
+						"evidence": strProp(),
 					},
-					"required":             []string{"phase", "words", "action", "subtitle", "duration"},
+					"required":             []string{"phase", "words", "action", "subtitle", "evidence"},
 					"additionalProperties": false,
 				},
 			},
 		}
-		bodyRequired = []string{"title", "segments"}
+		bodyRequired = []string{"type", "title", "segments"}
+		hasCover = false
 	case "storyboard":
 		bodyProps = map[string]any{
 			"title": strProp(),
@@ -494,7 +542,7 @@ func buildContentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 		return nil, fmt.Errorf("unsupported form: %s", form)
 	}
 
-	bodyProps["publish_package"] = publishPackageProperties(hasCover)
+	bodyProps["publish_package"] = publishPackageProperties(hasCover, form == "script")
 	bodyRequired = append(bodyRequired, "publish_package")
 
 	schema := map[string]any{
