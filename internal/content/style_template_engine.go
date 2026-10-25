@@ -216,7 +216,7 @@ func fetchArticleHTML(ctx context.Context, url string) (string, error) {
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("fetch article http %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 12<<20))
 	if err != nil {
 		return "", err
 	}
@@ -264,6 +264,8 @@ func (s *Service) uploadRemoteImage(ctx context.Context, tenantID int64, source 
 	if err != nil {
 		return ""
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+	req.Header.Set("Referer", "https://mp.weixin.qq.com/")
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return ""
@@ -367,18 +369,34 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 		}
 	}
 
-	// 小标题装饰图：序号图（小近方形）+ 横幅图（扁平宽），按宽高比识别
+	// 小标题装饰图：序号图/横幅图（宽高比识别）+ 两侧小图标（独立识别，互不依赖）
+	deco := map[string]any{}
 	if badgeURL, bannerURL := s.classifyHeadingDecorations(ctx, rawHTML); badgeURL != "" || bannerURL != "" {
-		deco := map[string]any{}
 		if badgeURL != "" {
-			deco["badge_image"] = s.uploadRemoteImage(ctx, tenantID, badgeURL)
+			if up := s.uploadRemoteImage(ctx, tenantID, badgeURL); up != "" {
+				deco["badge_image"] = up
+			}
 		}
 		if bannerURL != "" {
-			deco["banner_image"] = s.uploadRemoteImage(ctx, tenantID, bannerURL)
+			if up := s.uploadRemoteImage(ctx, tenantID, bannerURL); up != "" {
+				deco["banner_image"] = up
+			}
 		}
-		if len(deco) > 0 {
-			style["heading_decoration"] = deco
+	}
+	if l, r := extractHeadingSideIcons(rawHTML); l != "" || r != "" {
+		if l != "" {
+			if up := s.uploadRemoteImage(ctx, tenantID, l); up != "" {
+				deco["side_left"] = up
+			}
 		}
+		if r != "" {
+			if up := s.uploadRemoteImage(ctx, tenantID, r); up != "" {
+				deco["side_right"] = up
+			}
+		}
+	}
+	if len(deco) > 0 {
+		style["heading_decoration"] = deco
 	}
 
 	// name 为空：只提取不保存（预览用）
@@ -444,6 +462,31 @@ func downloadImageSize(ctx context.Context, url string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return cfg.Width, cfg.Height, true
+}
+
+// extractHeadingSideIcons 抽取小标题横幅两侧的小图标（容器宽度为两位数的 img，去重取前两个）。
+func extractHeadingSideIcons(html string) (left, right string) {
+	var urls []string
+	seen := map[string]bool{}
+	pat := regexp.MustCompile(`<section[^>]*width:\s*[1-9][0-9]px[^>]*>\s*<img[^>]*data-src="(https?://[^"]+)"`)
+	for _, m := range pat.FindAllStringSubmatch(html, -1) {
+		u := strings.ReplaceAll(strings.ReplaceAll(m[1], "&amp;", "&"), "\\x26", "&")
+		if seen[u] {
+			continue
+		}
+		seen[u] = true
+		urls = append(urls, u)
+		if len(urls) >= 2 {
+			break
+		}
+	}
+	if len(urls) > 0 {
+		left = urls[0]
+	}
+	if len(urls) > 1 {
+		right = urls[1]
+	}
+	return left, right
 }
 
 // classifyHeadingDecorations 按宽高比识别「小节序号图」（小且近方形）与「小标题横幅图」（扁平且宽）。
