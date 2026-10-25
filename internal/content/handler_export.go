@@ -3,6 +3,7 @@ package content
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -114,4 +115,75 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="content.docx"; filename*=UTF-8''%s`, encoded))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+
+// ExportDocxGet 是 ExportDocx 的 GET 版本，payload 放在 query（base64），用于导航式下载。
+func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
+	if _, ok := tenantOf(r); !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	raw := r.URL.Query().Get("payload")
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid payload")
+		return
+	}
+	var req struct {
+		Title          string         `json:"title"`
+		Cards          []docxCard     `json:"cards"`
+		PublishPackage map[string]any `json:"publish_package"`
+	}
+	if err := json.Unmarshal(decoded, &req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid payload json")
+		return
+	}
+	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage)
+	if err != nil {
+		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(req.Title)
+	if name == "" {
+		name = "内容"
+	}
+	encoded := url.QueryEscape(name + ".docx")
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="content.docx"; filename*=UTF-8''%s`, encoded))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// ExportImagesZipGet 是 ExportImagesZip 的 GET 版本，urls 放在 query（base64 JSON），用于导航式下载。
+func (h *Handler) ExportImagesZipGet(w http.ResponseWriter, r *http.Request) {
+	if _, ok := tenantOf(r); !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	raw := r.URL.Query().Get("urls")
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid urls")
+		return
+	}
+	var urls []string
+	if err := json.Unmarshal(decoded, &urls); err != nil || len(urls) == 0 {
+		httputil.WriteBadRequest(w, "Invalid urls json")
+		return
+	}
+	buf, ok := buildImagesZip(r.Context(), urls)
+	if !ok {
+		httputil.WriteInternalError(w, "所有图片下载失败")
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = "卡片图"
+	}
+	encoded := url.QueryEscape(name + ".zip")
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="content-images.zip"; filename*=UTF-8''%s`, encoded))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }

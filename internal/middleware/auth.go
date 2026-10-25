@@ -33,7 +33,8 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Extract token from Authorization header
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			// 下载类接口 / websocket 允许用 query 里的 access_token（导航式下载无法带 header）
+			if authHeader == "" && (strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || strings.Contains(r.URL.Path, "/actions/export")) {
 				if token := strings.TrimSpace(r.URL.Query().Get("access_token")); token != "" {
 					authHeader = "Bearer " + token
 				}
