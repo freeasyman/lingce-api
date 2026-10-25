@@ -278,7 +278,14 @@ facts[] 必须来自简报 facts；quotes[]/golden_quote 必须来自简报 quot
 2. 锁死 core_claim / angle / facts/quotes/golden_quote / forbidden_claims。
 3. 不承诺疗效、不制造焦虑、不出现患者正脸、不用绝对化用语。
 4. 每个字段都必须出现，没有内容写 null 或 []，不许省略字段。
-5. 只返回一个 JSON 对象，不要解释、不要 markdown 代码块。`
+5. 只返回一个 JSON 对象，不要解释、不要 markdown 代码块。
+6. 不许在正文或文案里写「// 标题」「// 正文」「---」这类分隔标记，也不许用 markdown 语法。
+
+【发布包（publish_package）怎么写】
+copy：发布文案，直接能贴到平台描述框里——2~3 句、口语，不重复标题，
+     不加前缀符号、不写结构标记，像真人发帖那样。
+tags：话题标签，每个以 # 开头，3~5 个。
+pinned_comment：置顶评论，一句补充说明或引导互动的话。`
 
 // fetchTopicBrief 取选题完整简报（16 字段）。
 func (s *Store) fetchTopicBrief(ctx context.Context, tenantID, topicID int64) (string, error) {
