@@ -13,24 +13,24 @@ import (
 // content_items / content_plan_periods / content_plan_items / content_style_templates）。
 
 type ContentMediaAccount struct {
-	ID            int64   `json:"id"`
-	TenantID      int64   `json:"tenant_id"`
-	Platform      string  `json:"platform"`
-	Name          string  `json:"name"`
-	Role          string  `json:"role"`
-	MonthlyTarget *int    `json:"monthly_target"`
-	IsActive      bool    `json:"is_active"`
+	ID            int64      `json:"id"`
+	TenantID      int64      `json:"tenant_id"`
+	Platform      string     `json:"platform"`
+	Name          string     `json:"name"`
+	Role          string     `json:"role"`
+	MonthlyTarget *int       `json:"monthly_target"`
+	IsActive      bool       `json:"is_active"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 }
 
 type ContentInsightRecord struct {
-	ID               int64           `json:"id"`
-	TenantID         int64           `json:"tenant_id"`
-	RecordingID      *int64          `json:"recording_id"`
-	SourceType       string          `json:"source_type"`
-	Type             string          `json:"type"`
-	Topic            string          `json:"topic"`
-	Evidence         json.RawMessage `json:"evidence"`
+	ID          int64           `json:"id"`
+	TenantID    int64           `json:"tenant_id"`
+	RecordingID *int64          `json:"recording_id"`
+	SourceType  string          `json:"source_type"`
+	Type        string          `json:"type"`
+	Topic       string          `json:"topic"`
+	Evidence    json.RawMessage `json:"evidence"`
 	// Payload 是新版 28 字段洞察结构（source_type=recording 时使用）；旧 seed 仍读 evidence。
 	Payload          json.RawMessage `json:"payload,omitempty"`
 	SuggestedForms   json.RawMessage `json:"suggested_forms"`
@@ -63,7 +63,7 @@ type ContentTopicV2Record struct {
 	Status     string          `json:"status"`
 	// GeneratedForms 已生成内容的形式列表（如 ["graphic","article"]）。
 	GeneratedForms json.RawMessage `json:"generated_forms,omitempty"`
-	CreatedAt  *time.Time      `json:"created_at,omitempty"`
+	CreatedAt      *time.Time      `json:"created_at,omitempty"`
 }
 
 // topicStatusSQL 选题派生状态：已发布 > 已生成 > 已进计划 > 未进计划。
@@ -74,39 +74,40 @@ const topicStatusSQL = `CASE
   ELSE 'new' END`
 
 type ContentItemV2Record struct {
-	ID             int64           `json:"id"`
-	TenantID       int64           `json:"tenant_id"`
-	TopicID        *int64          `json:"topic_id"`
-	Form           string          `json:"form"`
-	Title          string          `json:"title"`
-	Body           string          `json:"body"`
-	PublishPackage json.RawMessage `json:"publish_package"`
-	Images         json.RawMessage `json:"images"`
-	Status         string          `json:"status"`
-	CreatedAt      *time.Time      `json:"created_at,omitempty"`
-	TopicTitle     string          `json:"topic_title,omitempty"`
-	DoctorName     string          `json:"doctor_name,omitempty"`
-	DepartmentName string          `json:"department_name,omitempty"`
+	ID               int64           `json:"id"`
+	TenantID         int64           `json:"tenant_id"`
+	TopicID          *int64          `json:"topic_id"`
+	Form             string          `json:"form"`
+	Title            string          `json:"title"`
+	Body             string          `json:"body"`
+	PublishPackage   json.RawMessage `json:"publish_package"`
+	Images           json.RawMessage `json:"images"`
+	Status           string          `json:"status"`
+	GenerationStatus string          `json:"generation_status"`
+	CreatedAt        *time.Time      `json:"created_at,omitempty"`
+	TopicTitle       string          `json:"topic_title,omitempty"`
+	DoctorName       string          `json:"doctor_name,omitempty"`
+	DepartmentName   string          `json:"department_name,omitempty"`
 }
 
 type PlanPeriod struct {
-	ID          int64   `json:"id"`
-	TenantID    int64   `json:"tenant_id"`
-	Period      string  `json:"period"`
-	StartDate   string  `json:"start_date"`
-	SummaryText string  `json:"summary_text"`
+	ID          int64      `json:"id"`
+	TenantID    int64      `json:"tenant_id"`
+	Period      string     `json:"period"`
+	StartDate   string     `json:"start_date"`
+	SummaryText string     `json:"summary_text"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
 }
 
 type PlanItemV2 struct {
-	ID           int64   `json:"id"`
-	PlanPeriodID int64   `json:"plan_period_id"`
-	AccountID    int64   `json:"account_id"`
-	TopicID      *int64  `json:"topic_id"`
-	ContentID    *int64  `json:"content_id"`
-	PlannedDate  *string `json:"planned_date"`
-	Status       string  `json:"status"`
-	Sort         *int    `json:"sort"`
+	ID           int64      `json:"id"`
+	PlanPeriodID int64      `json:"plan_period_id"`
+	AccountID    int64      `json:"account_id"`
+	TopicID      *int64     `json:"topic_id"`
+	ContentID    *int64     `json:"content_id"`
+	PlannedDate  *string    `json:"planned_date"`
+	Status       string     `json:"status"`
+	Sort         *int       `json:"sort"`
 	CreatedAt    *time.Time `json:"created_at,omitempty"`
 }
 
@@ -557,7 +558,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
-		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), ci.created_at,
+		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.generation_status,''), ci.created_at,
 		       COALESCE(ct.title,''), COALESCE(e.name,''),
 		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
 		FROM content_items ci
@@ -565,7 +566,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
 		LEFT JOIN content_insights ins ON ins.id = x.iid
 		LEFT JOIN employees e ON e.id = ins.employee_id
-		WHERE ci.tenant_id = $1 AND ` + deletedFilter + `
+		WHERE ci.tenant_id = $1 AND `+deletedFilter+`
 		  AND ($3 = '' OR ci.title ILIKE '%' || $3 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $3 || '%')
 		ORDER BY ci.id DESC LIMIT $2`,
 		tenantID, limit, q)
@@ -576,7 +577,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	out := make([]ContentItemV2Record, 0)
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
 			return nil, err
 		}
 		r.DoctorName = maskPhoneNumber(r.DoctorName)
@@ -723,9 +724,9 @@ func (s *Store) getContentItemV2(ctx context.Context, tenantID, id int64) (*Cont
 	var r ContentItemV2Record
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, topic_id, COALESCE(form,'article'), COALESCE(title,''), COALESCE(body,''),
-		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), created_at
+		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), COALESCE(generation_status,''), created_at
 		FROM content_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -750,6 +751,12 @@ func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, for
 		SET form = CASE WHEN $3 = '' THEN form ELSE $3 END,
 		    title = $4, body = $5, publish_package = $6::jsonb, images = $7::jsonb, updated_at = now()
 		WHERE id = $1 AND tenant_id = $2`, id, tenantID, form, title, body, pp, img)
+	return err
+}
+
+// setContentGenerationStatus 持久化生图状态（running / 空=完成）。
+func (s *Store) setContentGenerationStatus(ctx context.Context, tenantID, id int64, status string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE content_items SET generation_status = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID, status)
 	return err
 }
 
@@ -932,4 +939,3 @@ func (s *Store) getInsightV2(ctx context.Context, tenantID, id int64) (*ContentI
 	}
 	return &r, nil
 }
-

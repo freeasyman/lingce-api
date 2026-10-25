@@ -80,6 +80,9 @@ func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, c
 		}
 	}
 
+	_ = s.store.setContentGenerationStatus(ctx, tenantID, contentID, "running")
+	defer func() { _ = s.store.setContentGenerationStatus(ctx, tenantID, contentID, "") }()
+
 	for _, j := range jobs {
 		if regenerateIndex >= 0 {
 			if int64(j.imgIdx) != regenerateIndex {
