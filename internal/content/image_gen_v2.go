@@ -14,7 +14,7 @@ import (
 )
 
 // GenerateCardImage 生成卡片图候选：文生图（可带参考模板）+ 素材叠加 + 上传 OSS。返回 n 个候选 URL。
-func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt, referenceImage, logoURL, qrURL string, n int) ([]string, error) {
+func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt, referenceImage, logoURL, qrURL string, n int, size string) ([]string, error) {
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("llm gateway is not configured")
 	}
@@ -43,7 +43,7 @@ func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt,
 		Prompt:        prompt,
 		ImageURL:      referenceImage,
 		N:             n,
-		Size:          "768x1024",
+		Size:          normalizeImageSize(size),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("generate image: %w", err)
@@ -135,4 +135,14 @@ func sanitizeHeaderValue(v string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// normalizeImageSize 只放行已知可用的尺寸，避免传怪尺寸把上游打挂。
+func normalizeImageSize(size string) string {
+	switch strings.TrimSpace(size) {
+	case "768x1024", "1024x768", "1280x720", "1024x1024", "720x1280":
+		return strings.TrimSpace(size)
+	default:
+		return "768x1024"
+	}
 }

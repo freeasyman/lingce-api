@@ -73,12 +73,13 @@ func (h *Handler) GenerateCardImage(w http.ResponseWriter, r *http.Request) {
 		LogoURL        string `json:"logo_url"`
 		QRURL          string `json:"qr_url"`
 		N              int    `json:"n"`
+		Size           string `json:"size"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	urls, err := h.service.GenerateCardImage(r.Context(), tenantID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, req.N)
+	urls, err := h.service.GenerateCardImage(r.Context(), tenantID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, req.N, req.Size)
 	if err != nil {
 		slog.Error("generate card image failed", "error", err, "tenant_id", tenantID, "n", req.N, "prompt_len", len(req.Prompt))
 		httputil.WriteInternalError(w, err.Error())

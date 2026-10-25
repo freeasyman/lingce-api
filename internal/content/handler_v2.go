@@ -556,6 +556,7 @@ func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Form           *string         `json:"form"`
 		Title          *string         `json:"title"`
 		Body           *string         `json:"body"`
 		PublishPackage json.RawMessage `json:"publish_package"`
@@ -585,7 +586,11 @@ func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
 	if len(img) == 0 {
 		img = existing.Images
 	}
-	if err := h.service.store.updateContentItemV2(r.Context(), tenantID, id, title, body, pp, img); err != nil {
+	form := ""
+	if req.Form != nil {
+		form = normalizeFormCode(*req.Form)
+	}
+	if err := h.service.store.updateContentItemV2(r.Context(), tenantID, id, form, title, body, pp, img); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

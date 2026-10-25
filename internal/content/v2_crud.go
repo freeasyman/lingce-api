@@ -683,7 +683,7 @@ func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64
 			SELECT id FROM content_items
 			WHERE tenant_id = $1 AND topic_id = $2 AND deleted_at IS NULL
 			ORDER BY id DESC LIMIT 1`, tenantID, topicID).Scan(&existingID); e == nil && existingID > 0 {
-			if uerr := s.updateContentItemV2(ctx, tenantID, existingID, title, body, publishPackage, images); uerr != nil {
+			if uerr := s.updateContentItemV2(ctx, tenantID, existingID, "", title, body, publishPackage, images); uerr != nil {
 				return 0, uerr
 			}
 			return existingID, nil
@@ -723,7 +723,7 @@ func (s *Store) getContentItemV2(ctx context.Context, tenantID, id int64) (*Cont
 }
 
 // updateContentItemV2 更新内容（标题/正文/发布包/图片）。
-func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, title, body string, publishPackage, images json.RawMessage) error {
+func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, form, title, body string, publishPackage, images json.RawMessage) error {
 	pp := string(publishPackage)
 	if strings.TrimSpace(pp) == "" {
 		pp = "{}"
@@ -733,8 +733,10 @@ func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, tit
 		img = "[]"
 	}
 	_, err := s.pool.Exec(ctx, `
-		UPDATE content_items SET title = $3, body = $4, publish_package = $5::jsonb, images = $6::jsonb, updated_at = now()
-		WHERE id = $1 AND tenant_id = $2`, id, tenantID, title, body, pp, img)
+		UPDATE content_items
+		SET form = CASE WHEN $3 = '' THEN form ELSE $3 END,
+		    title = $4, body = $5, publish_package = $6::jsonb, images = $7::jsonb, updated_at = now()
+		WHERE id = $1 AND tenant_id = $2`, id, tenantID, form, title, body, pp, img)
 	return err
 }
 
