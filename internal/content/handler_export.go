@@ -96,12 +96,13 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 		Title          string         `json:"title"`
 		Cards          []docxCard     `json:"cards"`
 		PublishPackage map[string]any `json:"publish_package"`
+		Images         []string       `json:"images"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage)
+	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
 	if err != nil {
 		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
 		return
@@ -134,12 +135,13 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 		Title          string         `json:"title"`
 		Cards          []docxCard     `json:"cards"`
 		PublishPackage map[string]any `json:"publish_package"`
+		Images         []string       `json:"images"`
 	}
 	if err := json.Unmarshal(decoded, &req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid payload json")
 		return
 	}
-	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage)
+	data, err := buildDocx(req.Title, req.Cards, req.PublishPackage, req.Images)
 	if err != nil {
 		httputil.WriteInternalError(w, "生成 docx 失败: "+err.Error())
 		return
