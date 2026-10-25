@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
@@ -159,4 +163,118 @@ func (s *Service) VerifyImageText(ctx context.Context, tenantID int64, imageURL,
 		}
 	}
 	return result, nil
+}
+
+const contentLayoutExtractPrompt = `你是公众号排版分析专家。下面是一篇公众号文章的 HTML（含行内样式）。分析它的排版，提取一套可复用的排版样式，返回 JSON：
+{"bg":"页面/容器背景色(hex)","container":"容器样式","title":"标题样式","lead":"导语样式","heading":"小节标题样式","paragraph":"正文样式","quote":"引用块样式","cta":"行动号召样式"}
+每个值是 CSS 内联样式字符串（只含 font-size/color/line-height/margin/font-weight/border/background/padding/text-align 等，不带选择器）。颜色取文章里实际出现的值。只返回 JSON，不要其他内容。`
+
+// ExtractArticleLayoutRequest 从公众号链接提取排版请求。
+type ExtractArticleLayoutRequest struct {
+	URL   string         `json:"url"`
+	Name  string         `json:"name"`
+	Style map[string]any `json:"style"` // 已提取的 style（保存时传入）
+}
+
+// fetchArticleHTML 服务端抓取文章 HTML（带 UA，绕过简单反爬）。
+func fetchArticleHTML(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("bad url: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch article failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("fetch article http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+var htmlTagRegex = regexp.MustCompile(`(?s)<script.*?</script>|<style.*?</style>|<!--.*?-->`)
+
+// cleanArticleHTML 去掉脚本/样式/注释并截断，降低噪声。
+func cleanArticleHTML(html string) string {
+	out := htmlTagRegex.ReplaceAllString(html, "")
+	const maxLen = 40000
+	if len(out) > maxLen {
+		out = out[:maxLen]
+	}
+	return out
+}
+
+// ExtractArticleLayout 从公众号链接提取排版模板，落库 content_style_templates(type=layout)。
+func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req ExtractArticleLayoutRequest) (map[string]any, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("llm gateway is not configured")
+	}
+	name := strings.TrimSpace(req.Name)
+
+	// 拿到 style：要么用传入的（保存模式），要么抓取提取（提取模式）
+	var style map[string]any
+	if len(req.Style) > 0 {
+		style = req.Style
+	} else {
+		if strings.TrimSpace(req.URL) == "" {
+			return nil, fmt.Errorf("url is required")
+		}
+		rawHTML, err := fetchArticleHTML(ctx, req.URL)
+		if err != nil {
+			return nil, err
+		}
+		html := cleanArticleHTML(rawHTML)
+		selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_layout_extract", "content_generation", "chat"})
+		if err != nil {
+			return nil, fmt.Errorf("resolve llm config for layout extract: %w", err)
+		}
+		llmReq := llmgateway.TextInferenceRequest{
+			TenantID:      tenantID,
+			CallerService: "lingce-api",
+			CallerModule:  contentCallerModule("layout_extract"),
+			FunctionType:  selectedModel.FunctionType,
+			Provider:      selectedModel.Provider,
+			ModelCode:     selectedModel.ModelCode,
+			Billing:       newBillingMetadata("content", "layout", 0, "layout_extract", "layout_extract"),
+			Messages: []llmgateway.Message{
+				{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_layout_extract", contentLayoutExtractPrompt)},
+				{Role: "user", Content: html},
+			},
+			Params: &llmgateway.Params{TimeoutSeconds: 120},
+		}
+		applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+		llmResp, err := s.llmClient.TextInference(ctx, llmReq)
+		if err != nil {
+			return nil, fmt.Errorf("extract layout: %w", err)
+		}
+		style, err = extractJSONObject(llmResp.Content)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// name 为空：只提取不保存（预览用）
+	if name == "" {
+		return map[string]any{"type": "layout", "style": style}, nil
+	}
+
+	styleJSON, _ := json.Marshal(style)
+	var id int64
+	err := s.store.pool.QueryRow(ctx, `
+		INSERT INTO content_style_templates (tenant_id, level, industry, type, name, reference_url, extracted_style)
+		VALUES ($1,'tenant','','layout',$2,$3,$4::jsonb)
+		RETURNING id`,
+		tenantID, name, req.URL, string(styleJSON),
+	).Scan(&id)
+	if err != nil {
+		return nil, fmt.Errorf("insert layout template: %w", err)
+	}
+	return map[string]any{"id": id, "name": name, "type": "layout", "style": style}, nil
 }
