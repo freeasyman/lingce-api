@@ -534,7 +534,7 @@ func (s *Store) updateTopicEnrichment(ctx context.Context, tenantID, id int64, r
 
 // ===== 内容 =====
 
-func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit int, deleted bool) ([]ContentItemV2Record, error) {
+func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit int, deleted bool, q string) ([]ContentItemV2Record, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -552,13 +552,15 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
 		LEFT JOIN content_insights ins ON ins.id = x.iid
 		LEFT JOIN employees e ON e.id = ins.employee_id
-		WHERE ci.tenant_id = $1 AND ` + deletedFilter + ` ORDER BY ci.id DESC LIMIT $2`,
-		tenantID, limit)
+		WHERE ci.tenant_id = $1 AND ` + deletedFilter + `
+		  AND ($3 = '' OR ci.title ILIKE '%' || $3 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $3 || '%')
+		ORDER BY ci.id DESC LIMIT $2`,
+		tenantID, limit, q)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ContentItemV2Record
+	out := make([]ContentItemV2Record, 0)
 	for rows.Next() {
 		var r ContentItemV2Record
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {

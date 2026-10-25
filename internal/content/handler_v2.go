@@ -1,6 +1,7 @@
 package content
 
 import (
+	"strings"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -230,7 +231,8 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deleted := r.URL.Query().Get("deleted") == "true"
-	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200, deleted)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200, deleted, q)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
