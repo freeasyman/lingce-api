@@ -56,17 +56,113 @@ func (s *Service) knowledgeContext(ctx context.Context, tenantID int64) string {
 		return ""
 	}
 	var b strings.Builder
-	if strings.TrimSpace(string(k.InstitutionInfo)) != "" && string(k.InstitutionInfo) != "{}" {
-		b.WriteString(fmt.Sprintf("机构信息：%s\n", string(k.InstitutionInfo)))
+
+	// 机构信息
+	var info map[string]any
+	if json.Unmarshal(k.InstitutionInfo, &info) == nil && len(info) > 0 {
+		labels := [][2]string{{"name", "机构名称"}, {"region", "地区"}, {"address", "地址"}, {"phone", "电话"}, {"website", "官网"}, {"license", "资质"}, {"description", "简介"}}
+		var items []string
+		for _, kv := range labels {
+			if v, ok := info[kv[0]]; ok && strings.TrimSpace(fmt.Sprint(v)) != "" {
+				items = append(items, fmt.Sprintf("- %s：%v", kv[1], v))
+			}
+		}
+		if len(items) > 0 {
+			b.WriteString("机构信息：\n" + strings.Join(items, "\n") + "\n")
+		}
 	}
-	if strings.TrimSpace(string(k.Specialties)) != "" && string(k.Specialties) != "[]" {
-		b.WriteString(fmt.Sprintf("机构特色优势：%s\n", string(k.Specialties)))
+
+	// 医生
+	var doctors []map[string]any
+	if json.Unmarshal(k.Doctors, &doctors) == nil && len(doctors) > 0 {
+		var items []string
+		for _, d := range doctors {
+			name := strings.TrimSpace(fmt.Sprint(d["name"]))
+			if name == "" {
+				continue
+			}
+			head := name
+			if t := strings.TrimSpace(fmt.Sprint(d["title"])); t != "" && t != "<nil>" {
+				head += " " + t
+			}
+			if dep := strings.TrimSpace(fmt.Sprint(d["department"])); dep != "" && dep != "<nil>" {
+				head += "（" + dep + "）"
+			}
+			line := "- " + head
+			if c := strings.TrimSpace(fmt.Sprint(d["credentials"])); c != "" && c != "<nil>" {
+				line += "｜擅长/资质：" + c
+			}
+			if bio := strings.TrimSpace(fmt.Sprint(d["bio"])); bio != "" && bio != "<nil>" {
+				line += "｜" + bio
+			}
+			items = append(items, line)
+		}
+		if len(items) > 0 {
+			b.WriteString("医生：\n" + strings.Join(items, "\n") + "\n")
+		}
 	}
-	if strings.TrimSpace(string(k.HardRules)) != "" && string(k.HardRules) != "[]" {
-		b.WriteString(fmt.Sprintf("硬规则（必须遵守）：%s\n", string(k.HardRules)))
+
+	// 特色优势
+	var specs []map[string]any
+	if json.Unmarshal(k.Specialties, &specs) == nil && len(specs) > 0 {
+		var items []string
+		for _, sp := range specs {
+			name := strings.TrimSpace(fmt.Sprint(sp["name"]))
+			if name == "" || name == "<nil>" {
+				continue
+			}
+			line := "- "
+			if t := strings.TrimSpace(fmt.Sprint(sp["type"])); t != "" && t != "<nil>" {
+				line += "【" + t + "】"
+			}
+			line += name
+			if d := strings.TrimSpace(fmt.Sprint(sp["desc"])); d != "" && d != "<nil>" {
+				line += "：" + d
+			}
+			items = append(items, line)
+		}
+		if len(items) > 0 {
+			b.WriteString("机构特色优势：\n" + strings.Join(items, "\n") + "\n")
+		}
 	}
-	if strings.TrimSpace(string(k.SoftPrefs)) != "" && string(k.SoftPrefs) != "[]" {
-		b.WriteString(fmt.Sprintf("软偏好（风格）：%s\n", string(k.SoftPrefs)))
+
+	// 数据口径
+	var data []map[string]any
+	if json.Unmarshal(k.Data, &data) == nil && len(data) > 0 {
+		var items []string
+		for _, item := range data {
+			label := strings.TrimSpace(fmt.Sprint(item["label"]))
+			val := strings.TrimSpace(fmt.Sprint(item["value"]))
+			if label != "" && val != "" && label != "<nil>" && val != "<nil>" {
+				items = append(items, fmt.Sprintf("- %s：%s", label, val))
+			}
+		}
+		if len(items) > 0 {
+			b.WriteString("可引用数据口径：\n" + strings.Join(items, "\n") + "\n")
+		}
 	}
+
+	// 硬规则 / 软偏好
+	for _, group := range []struct {
+		raw   json.RawMessage
+		title string
+	}{
+		{k.HardRules, "硬规则（必须遵守）："},
+		{k.SoftPrefs, "软偏好（风格）："},
+	} {
+		var rules []string
+		if json.Unmarshal(group.raw, &rules) == nil && len(rules) > 0 {
+			var items []string
+			for _, r := range rules {
+				if strings.TrimSpace(r) != "" {
+					items = append(items, "- "+r)
+				}
+			}
+			if len(items) > 0 {
+				b.WriteString(group.title + "\n" + strings.Join(items, "\n") + "\n")
+			}
+		}
+	}
+
 	return strings.TrimSpace(b.String())
 }
