@@ -229,7 +229,8 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200)
+	deleted := r.URL.Query().Get("deleted") == "true"
+	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200, deleted)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -455,6 +456,63 @@ func (h *Handler) GetContentItemV2(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, item)
 }
 
+// DeleteContentItemV2 软删除（进回收站，数据保留）。
+func (h *Handler) DeleteContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	if err := h.service.store.softDeleteContentItemV2(r.Context(), tenantID, id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"deleted": true})
+}
+
+// RestoreContentItemV2 从回收站恢复。
+func (h *Handler) RestoreContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	if err := h.service.store.restoreContentItemV2(r.Context(), tenantID, id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"restored": true})
+}
+
+// HardDeleteContentItemV2 彻底删除（仅回收站里的可删）。
+func (h *Handler) HardDeleteContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid content id")
+		return
+	}
+	if err := h.service.store.hardDeleteContentItemV2(r.Context(), tenantID, id); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"purged": true})
+}
+
 // UpdateContentItemV2 编辑内容。
 func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
@@ -518,6 +576,9 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContentItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-items/{id}", Handler: h.GetContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/content-items/{id}", Handler: h.UpdateContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/content-items/{id}", Handler: h.DeleteContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/restore", Handler: h.RestoreContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/content-items/{id}/permanent", Handler: h.HardDeleteContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-style-templates", Handler: h.ListStyleTemplatesV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-org-knowledge", Handler: h.GetOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-org-knowledge", Handler: h.UpsertOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

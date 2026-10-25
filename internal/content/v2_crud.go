@@ -83,6 +83,8 @@ type ContentItemV2Record struct {
 	Status         string          `json:"status"`
 	CreatedAt      *time.Time      `json:"created_at,omitempty"`
 	TopicTitle     string          `json:"topic_title,omitempty"`
+	DoctorName     string          `json:"doctor_name,omitempty"`
+	DepartmentName string          `json:"department_name,omitempty"`
 }
 
 type PlanPeriod struct {
@@ -532,17 +534,25 @@ func (s *Store) updateTopicEnrichment(ctx context.Context, tenantID, id int64, r
 
 // ===== 内容 =====
 
-func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit int) ([]ContentItemV2Record, error) {
+func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit int, deleted bool) ([]ContentItemV2Record, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	deletedFilter := "ci.deleted_at IS NULL"
+	if deleted {
+		deletedFilter = "ci.deleted_at IS NOT NULL"
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
 		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), ci.created_at,
-		       COALESCE(ct.title,'')
+		       COALESCE(ct.title,''), COALESCE(e.name,''), COALESCE(d.name,'')
 		FROM content_items ci
 		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
-		WHERE ci.tenant_id = $1 AND ci.deleted_at IS NULL ORDER BY ci.id DESC LIMIT $2`,
+		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
+		LEFT JOIN content_insights ins ON ins.id = x.iid
+		LEFT JOIN employees e ON e.id = ins.employee_id
+		LEFT JOIN departments d ON d.id = e.department_id
+		WHERE ci.tenant_id = $1 AND ` + deletedFilter + ` ORDER BY ci.id DESC LIMIT $2`,
 		tenantID, limit)
 	if err != nil {
 		return nil, err
@@ -551,12 +561,45 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	var out []ContentItemV2Record
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt, &r.TopicTitle); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
 			return nil, err
 		}
+		r.DoctorName = maskPhoneNumber(r.DoctorName)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// maskPhoneNumber 姓名栏如果是手机号（11 位纯数字），返回空，避免泄露隐私。
+func maskPhoneNumber(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) == 11 && s[0] == '1' {
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return s
+			}
+		}
+		return ""
+	}
+	return s
+}
+
+// softDeleteContentItemV2 软删除（只打标记，数据/图片都保留）。
+func (s *Store) softDeleteContentItemV2(ctx context.Context, tenantID, id int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE content_items SET deleted_at = now(), updated_at = now() WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`, id, tenantID)
+	return err
+}
+
+// restoreContentItemV2 从回收站恢复。
+func (s *Store) restoreContentItemV2(ctx context.Context, tenantID, id int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE content_items SET deleted_at = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID)
+	return err
+}
+
+// hardDeleteContentItemV2 彻底删除（只允许删回收站里的）。
+func (s *Store) hardDeleteContentItemV2(ctx context.Context, tenantID, id int64) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM content_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NOT NULL`, id, tenantID)
+	return err
 }
 
 func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64, form, title, body string, publishPackage, images json.RawMessage) (int64, error) {
