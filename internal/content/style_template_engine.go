@@ -165,6 +165,8 @@ func (s *Service) VerifyImageText(ctx context.Context, tenantID int64, imageURL,
 	return result, nil
 }
 
+const contentLayoutUserFallback = "下面是公众号文章的 HTML（含行内样式）：\n\n{{article_html}}"
+
 const contentLayoutExtractPrompt = `你是公众号排版分析专家。下面是公众号文章的 HTML（含行内样式）。分析它的排版，提取一套可复用的「排版 DNA」。返回 JSON：
 
 {
@@ -252,6 +254,8 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 		if err != nil {
 			return nil, fmt.Errorf("resolve llm config for layout extract: %w", err)
 		}
+		userTpl := s.resolvePromptUserTemplate(ctx, "content_layout_extract", contentLayoutUserFallback)
+		userPrompt := strings.ReplaceAll(userTpl, "{{article_html}}", html)
 		llmReq := llmgateway.TextInferenceRequest{
 			TenantID:      tenantID,
 			CallerService: "lingce-api",
@@ -262,7 +266,7 @@ func (s *Service) ExtractArticleLayout(ctx context.Context, tenantID int64, req 
 			Billing:       newBillingMetadata("content", "layout", 0, "layout_extract", "layout_extract"),
 			Messages: []llmgateway.Message{
 				{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_layout_extract", contentLayoutExtractPrompt)},
-				{Role: "user", Content: html},
+				{Role: "user", Content: userPrompt},
 			},
 			Params: &llmgateway.Params{TimeoutSeconds: 120},
 		}
