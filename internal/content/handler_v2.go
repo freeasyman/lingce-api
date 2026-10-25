@@ -513,6 +513,34 @@ func (h *Handler) HardDeleteContentItemV2(w http.ResponseWriter, r *http.Request
 	httputil.WriteSuccess(w, map[string]any{"purged": true})
 }
 
+// GetOrCreateContentItemV2 按选题取或建内容（已有就返回原 id，绝不覆盖正文/图片）。
+func (h *Handler) GetOrCreateContentItemV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		TopicID int64  `json:"topic_id"`
+		Title   string `json:"title"`
+		Form    string `json:"form"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.TopicID <= 0 {
+		httputil.WriteBadRequest(w, "topic_id is required")
+		return
+	}
+	id, existed, err := h.service.store.getOrCreateContentItemByTopic(r.Context(), tenantID, req.TopicID, req.Title, req.Form)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"id": id, "existed": existed})
+}
+
 // UpdateContentItemV2 编辑内容。
 func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
@@ -578,6 +606,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "PUT", Path: "/api/v1/content-items/{id}", Handler: h.UpdateContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "DELETE", Path: "/api/v1/content-items/{id}", Handler: h.DeleteContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/{id}/actions/restore", Handler: h.RestoreContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/actions/get-or-create", Handler: h.GetOrCreateContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "DELETE", Path: "/api/v1/content-items/{id}/permanent", Handler: h.HardDeleteContentItemV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-style-templates", Handler: h.ListStyleTemplatesV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-org-knowledge", Handler: h.GetOrgKnowledge, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

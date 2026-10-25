@@ -584,6 +584,32 @@ func maskPhoneNumber(s string) string {
 	return s
 }
 
+// getOrCreateContentItemByTopic 按 topic_id 取或建：已有直接返回（不动正文/图片），没有才新建空稿。
+func (s *Store) getOrCreateContentItemByTopic(ctx context.Context, tenantID, topicID int64, title, form string) (int64, bool, error) {
+	var existingID int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM content_items
+		WHERE tenant_id = $1 AND topic_id = $2 AND deleted_at IS NULL
+		ORDER BY id DESC LIMIT 1`, tenantID, topicID).Scan(&existingID)
+	if err == nil && existingID > 0 {
+		return existingID, true, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return 0, false, err
+	}
+	if strings.TrimSpace(form) == "" {
+		form = "graphic"
+	}
+	var id int64
+	if err := s.pool.QueryRow(ctx, `
+		INSERT INTO content_items (tenant_id, topic_id, form, title, body, publish_package, images, status)
+		VALUES ($1,$2,$3,$4,'','{}'::jsonb,'[]'::jsonb,'draft')
+		RETURNING id`, tenantID, topicID, form, title).Scan(&id); err != nil {
+		return 0, false, err
+	}
+	return id, false, nil
+}
+
 // softDeleteContentItemV2 软删除（只打标记，数据/图片都保留）。
 func (s *Store) softDeleteContentItemV2(ctx context.Context, tenantID, id int64) error {
 	_, err := s.pool.Exec(ctx, `UPDATE content_items SET deleted_at = now(), updated_at = now() WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`, id, tenantID)
