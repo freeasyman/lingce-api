@@ -505,12 +505,21 @@ func (s *Service) styleBlock(ctx context.Context, tenantID int64) string {
 	return ""
 }
 
-// countBlock 数量覆盖块（空则空串）。
-func countBlock(count int) string {
+// countBlock 数量覆盖块（空则空串；措辞按形式区分）。
+func countBlock(count int, form string) string {
 	if count <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("【数量要求】本次生成 %d 个（张卡/个镜头/节），按这个数量来。", count)
+	unit := "个"
+	switch form {
+	case "graphic":
+		unit = "张卡"
+	case "moments":
+		unit = "张配图"
+	case "article":
+		unit = "节"
+	}
+	return fmt.Sprintf("【数量要求】本次生成 %d %s，按这个数量来。", count, unit)
 }
 
 // whoPostsBlock 谁在发注入块（空则空串；仅朋友圈用，决定口吻）。
@@ -534,7 +543,7 @@ func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID
 	result = strings.ReplaceAll(result, "{{org_knowledge}}", s.knowledgeBlock(ctx, tenantID))
 	result = strings.ReplaceAll(result, "{{brand_assets}}", s.brandBlock(ctx, tenantID))
 	result = strings.ReplaceAll(result, "{{style_templates}}", s.styleBlock(ctx, tenantID))
-	result = strings.ReplaceAll(result, "{{count_requirement}}", countBlock(count))
+	result = strings.ReplaceAll(result, "{{count_requirement}}", countBlock(count, form))
 	result = strings.ReplaceAll(result, "{{who_posts}}", whoPostsBlock(whoPosts))
 	for strings.Contains(result, "\n\n\n") {
 		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
