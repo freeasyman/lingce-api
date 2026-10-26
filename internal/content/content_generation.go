@@ -276,24 +276,45 @@ material_checklist 要把全片所有镜头要备的素材去重汇总，至少�
 
 【输出】只返回一个 JSON 对象，不要解释、不要 markdown 代码块。`,
 
-	"poster": `你是资深「医疗科普海报文案」，负责把选题简报写成一张能直接出图的海报文案。
+	"poster": `你是懂业务、懂行业、懂编辑、懂设计的医疗知识海报编辑兼设计师，
+负责把一条医学判断/一个误区，做成一张"图文混排、一眼能读透、能转发"的知识图。
 
-你懂四件事：
-1) 海报信息密度 —— 主标题短而有钩子，卖点简洁（每条≤15字），CTA 明确；
-2) 视觉层级 —— 主标题最大、卖点次之、CTA 醒目，配色照品牌主色；
-3) 一句话看懂 —— 患者扫一眼就知道"讲什么、对我有什么用、下一步干什么"；
-4) 医疗合规 —— 不承诺疗效、不制造焦虑、不出现患者正脸。
+【你懂四件事】
+1. 懂知识编排：把判断拆成"标题钩子 → 导语 → N 个独立单元 → 结论条"。每个单元是独立可读的小单元，但不预设它讲什么——一个高频误区可能 2 块就够，一个复杂判断可能 5~6 块，跟着内容长，不套模板。
+2. 懂图文混排：每个单元 = 小标题 + 配图 + 一句说明。配图不是装饰，是让抽象机制可视化（示意图讲机制、实拍讲场景、设备检查讲专业、UI 截图讲操作）。
+3. 懂视觉层级与合规：主标题最大、单元标题次之、说明最小；红线：不承诺疗效、不绝对化、不制造焦虑、不诱导就诊、不谈价格、不露患者正脸。
+4. 懂"有什么用什么"：医生形象、栏目名、logo、二维码都是"有才放，没有就不放"，绝不编造。
 
-【任务】这是医院「内容获客」第三环「创作」。你的交付是一张真正能贴出来、能获客的海报：
-- 主标题命中痛点/搜索词/金句；
-- 卖点 3~5 条，每一条都是"患者关心的点"，不是空话；
-- CTA 明确（扫码咨询/到院/留资）。
+【任务】这是医院「内容获客」第三环「创作」。交付是一张 3:4 竖图的文案：
+主标题（钩子）+ 知识内容（分 1~6 个单元）。最终由生图合成一张图。
 
-【发挥与锁死】
-锁死（不能改）：核心主张 core_claim、切入角度 angle、真实素材 facts/quotes/golden_quote、合规红线 forbidden_claims。
-发挥（你可自由创作）：主标题措辞、卖点条数与顺序、副标题怎么起。
+【不是什么】营销海报、品牌海报、活动海报、节令海报、图文卡——都不是。
 
-【输出】只返回一个 JSON 对象，不要任何解释、不要 markdown 代码块。`,
+【素材溯源】facts/quotes/golden_quote 来自简报；机构名/医生名来自知识库；没有就不写、不编。
+
+【字段怎么写】
+title       主标题，钩子问句/金句/反差，最显眼（10~20 字）
+subtitle    导语，一句话点题（没有就空）
+sections[]  知识单元列表（1~6 个，随内容）
+  heading   单元小标题（这块讲什么）
+  body      说明文字（简短，讲清这块）
+  visual    这个单元在整张图里配什么图（示意图/实拍/设备/UI，写给生图看）
+conclusion  结论条，一句收口（没有就空）
+
+【一张图，不是多张】sections[].visual 是"每个单元在整张图里画什么配图"，
+不是单独生成一张图。生图时整张图一起出。
+
+【知识内容不锁形式】怎么排、分几块、每块配什么图，随内容走，不套固定版式。
+
+【CTA 不由你写】CTA 文字、二维码、医生形象、栏目名、logo 都由系统叠加，模型不生成。
+
+【锁死 vs 发挥】
+锁死：core_claim/angle/audience/goal/expected_help；facts/quotes/golden_quote/key_points；forbidden_claims + 硬规则；机构名/医生名。
+发挥：主标题措辞、知识内容分几块/讲什么/配图。
+
+【红线】不承诺疗效、不绝对化、不制造焦虑、不诱导就诊、不谈价格、不露患者正脸。
+
+【输出】只返回一个 JSON 对象，不要解释、不要 markdown 代码块。`,
 
 	"moments": `你是资深「医疗朋友圈文案」，负责把选题简报写成一条能直接发的朋友圈内容。
 
@@ -423,7 +444,8 @@ func (s *Service) styleContext(ctx context.Context, tenantID int64) string {
 
 // contentUserPromptFallback 创作通用用户提示词模板（代码兜底，含 {{占位符}}）。
 // 占位符：{{topic_brief}} 选题简报 / {{org_knowledge}} 机构知识库 / {{brand_assets}} 品牌素材
-//        {{style_templates}} 风格模板 / {{count_requirement}} 数量覆盖
+//
+//	{{style_templates}} 风格模板 / {{count_requirement}} 数量覆盖
 const contentUserPromptFallback = "选题简报如下（JSON）：\n\n{{topic_brief}}\n\n" +
 	contentBriefGlossary +
 	"\n\n{{org_knowledge}}\n\n{{brand_assets}}\n\n{{style_templates}}\n\n{{count_requirement}}\n\n" +
@@ -660,12 +682,25 @@ func buildContentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 		hasCover = false
 	case "poster":
 		bodyProps = map[string]any{
-			"title":          strProp(),
-			"subtitle":       strProp(),
-			"selling_points": map[string]any{"type": "array", "items": strProp()},
-			"cta":            strProp(),
+			"title":    strProp(),
+			"subtitle": strProp(),
+			"sections": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"heading": strProp(),
+						"body":    strProp(),
+						"visual":  strProp(),
+					},
+					"required":             []string{"heading", "body", "visual"},
+					"additionalProperties": false,
+				},
+			},
+			"conclusion": strProp(),
 		}
-		bodyRequired = []string{"title", "subtitle", "selling_points", "cta"}
+		bodyRequired = []string{"title", "subtitle", "sections", "conclusion"}
+		hasCover = false
 	case "moments":
 		bodyProps = map[string]any{
 			"copy":         strProp(),
@@ -676,7 +711,7 @@ func buildContentOutputSchema(form string) (*llmgateway.OutputSchema, error) {
 		return nil, fmt.Errorf("unsupported form: %s", form)
 	}
 
-	bodyProps["publish_package"] = publishPackageProperties(hasCover, form == "script" || form == "storyboard")
+	bodyProps["publish_package"] = publishPackageProperties(hasCover, form == "script" || form == "storyboard" || form == "poster")
 	bodyRequired = append(bodyRequired, "publish_package")
 
 	schema := map[string]any{
