@@ -37,10 +37,11 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	if run == nil {
 		return nil, fmt.Errorf("诊断记录不存在")
 	}
-	targetLabel := "公众号深度文"
-	if target == "website" {
-		targetLabel = "官网栏目页"
+	channel := ValidateChannel(target)
+	if channel == "" {
+		return nil, fmt.Errorf("目标渠道不合法：%s", target)
 	}
+	targetLabel := channel
 	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_article", "chat"})
 	if err != nil {
 		return nil, err
@@ -76,5 +77,8 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"content_id": id, "title": title, "target": target}, nil
+	if err := s.store.updateContentItemChannel(ctx, tenantID, id, channel); err != nil {
+		return nil, err
+	}
+	return map[string]any{"content_id": id, "title": title, "channel": channel}, nil
 }

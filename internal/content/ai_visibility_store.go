@@ -74,3 +74,18 @@ func (s *Store) getAIVisibilityRun(ctx context.Context, tenantID, id int64) (*AI
 	_ = json.Unmarshal(gapRaw, &r.Gap)
 	return &r, nil
 }
+
+// updateContentItemChannel 设置内容的发布渠道/栏目。
+func (s *Store) updateContentItemChannel(ctx context.Context, tenantID, id int64, channel string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE content_items SET channel = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID, channel)
+	return err
+}
+
+// ValidateChannel 校验渠道值，返回规范化后的渠道。
+func ValidateChannel(channel string) string {
+	switch channel {
+	case "公众号深度文", "官网-医生页", "官网-项目页", "官网-FAQ", "官网-机构介绍":
+		return channel
+	}
+	return ""
+}

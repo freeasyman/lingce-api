@@ -83,6 +83,7 @@ type ContentItemV2Record struct {
 	PublishPackage      json.RawMessage `json:"publish_package"`
 	Images              json.RawMessage `json:"images"`
 	Status              string          `json:"status"`
+	Channel             string          `json:"channel"`
 	GenerationStatus    string          `json:"generation_status"`
 	GenerationShotIndex int             `json:"generation_shot_index"`
 	CreatedAt           *time.Time      `json:"created_at,omitempty"`
@@ -559,7 +560,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
-		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.generation_status,''), COALESCE(ci.generation_shot_index,-1), ci.created_at,
+		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.channel,''), COALESCE(ci.generation_status,''), COALESCE(ci.generation_shot_index,-1), ci.created_at,
 		       COALESCE(ct.title,''), COALESCE(e.name,''),
 		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
 		FROM content_items ci
@@ -578,7 +579,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	out := make([]ContentItemV2Record, 0)
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.Channel, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
 			return nil, err
 		}
 		r.DoctorName = maskPhoneNumber(r.DoctorName)
@@ -725,9 +726,9 @@ func (s *Store) getContentItemV2(ctx context.Context, tenantID, id int64) (*Cont
 	var r ContentItemV2Record
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, topic_id, COALESCE(form,'article'), COALESCE(title,''), COALESCE(body,''),
-		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), COALESCE(generation_status,''), COALESCE(generation_shot_index,-1), created_at
+		       COALESCE(publish_package,'{}'::jsonb), COALESCE(images,'{}'::jsonb), COALESCE(status,'draft'), COALESCE(channel,''), COALESCE(generation_status,''), COALESCE(generation_shot_index,-1), created_at
 		FROM content_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.Channel, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
