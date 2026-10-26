@@ -57,7 +57,7 @@ func (h *Handler) GenerateImageAsync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		slog.Info("async image started", "tenant_id", tenantID, "content_id", req.ContentID)
+		slog.Info("async image started", "tenant_id", tenantID, "content_id", req.ContentID, "prompt", req.Prompt)
 		h.service.generateImageAsync(context.Background(), tenantID, req.ContentID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, req.Size)
 	}()
 	httputil.WriteSuccess(w, map[string]any{"started": true})
