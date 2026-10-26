@@ -34,6 +34,8 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 	routes := []router.Route{
 		{Method: "POST", Path: "/api/v1/content-ai/actions/analyze", Handler: h.AnalyzeAIAnswer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-ai/actions/visibility", Handler: h.AnalyzeAIVisibility, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-ai/visibility/runs", Handler: h.ListAIVisibilityRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-ai/actions/visibility/generate", Handler: h.GenerateFromAIVisibility, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, deps)
 }

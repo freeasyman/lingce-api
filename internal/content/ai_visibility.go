@@ -228,7 +228,16 @@ func (s *Service) AnalyzeAIVisibility(ctx context.Context, tenantID int64, quest
 		slog.Warn("ai visibility: gap failed", "error", err)
 	}
 
+	engAny := make([]any, 0, len(results))
+	for _, r := range results {
+		engAny = append(engAny, r)
+	}
+	runID, saveErr := s.store.saveAIVisibilityRun(ctx, tenantID, q, region, orgName, engAny, gap)
+	if saveErr != nil {
+		slog.Warn("ai visibility: save run failed", "error", saveErr)
+	}
 	return map[string]any{
+		"run_id":   runID,
 		"question": q,
 		"region":   region,
 		"org_name": orgName,
