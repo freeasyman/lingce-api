@@ -470,7 +470,7 @@ func (s *Service) styleContext(ctx context.Context, tenantID int64) string {
 //	{{style_templates}} 风格模板 / {{count_requirement}} 数量覆盖
 const contentUserPromptFallback = "选题简报如下（JSON）：\n\n{{topic_brief}}\n\n" +
 	contentBriefGlossary +
-	"\n\n{{org_knowledge}}\n\n{{brand_assets}}\n\n{{style_templates}}\n\n{{count_requirement}}\n\n" +
+	"\n\n{{org_knowledge}}\n\n{{brand_assets}}\n\n{{style_templates}}\n\n{{who_posts}}\n\n{{count_requirement}}\n\n" +
 	contentHardRules
 
 // resolvePromptUserTemplate 读 user_prompt_template（表），空则用代码兜底。
@@ -513,8 +513,16 @@ func countBlock(count int) string {
 	return fmt.Sprintf("【数量要求】本次生成 %d 个（张卡/个镜头/节），按这个数量来。", count)
 }
 
+// whoPostsBlock 谁在发注入块（空则空串；仅朋友圈用，决定口吻）。
+func whoPostsBlock(whoPosts string) string {
+	if strings.TrimSpace(whoPosts) == "" {
+		return ""
+	}
+	return "【谁在发】" + whoPosts
+}
+
 // renderContentUserPrompt 读 user 模板并填充占位符。
-func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID int64, form string, count int) (string, error) {
+func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID int64, form string, count int, whoPosts string) (string, error) {
 	// 全站标准：一行三样齐全，user 模板就读当前形式那一行
 	tpl := s.resolvePromptUserTemplate(ctx, contentFormPromptCode[form], contentUserPromptFallback)
 	brief, err := s.store.fetchTopicBrief(ctx, tenantID, topicID)
@@ -527,6 +535,7 @@ func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID
 	result = strings.ReplaceAll(result, "{{brand_assets}}", s.brandBlock(ctx, tenantID))
 	result = strings.ReplaceAll(result, "{{style_templates}}", s.styleBlock(ctx, tenantID))
 	result = strings.ReplaceAll(result, "{{count_requirement}}", countBlock(count))
+	result = strings.ReplaceAll(result, "{{who_posts}}", whoPostsBlock(whoPosts))
 	for strings.Contains(result, "\n\n\n") {
 		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
 	}
@@ -761,7 +770,7 @@ func (s *Service) resolveContentOutputSchema(ctx context.Context, tenantID int64
 }
 
 // GenerateContentV2 选题 → 内容（按形式）。count<=0 时用简报骨架的默认数量。
-func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64, form string, count int) (map[string]any, error) {
+func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64, form string, count int, whoPosts string) (map[string]any, error) {
 	form = normalizeFormCode(form)
 	if _, ok := contentFormPrompt[form]; !ok {
 		return nil, fmt.Errorf("unsupported form: %s", form)
@@ -775,7 +784,7 @@ func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64
 		return nil, err
 	}
 
-	userPrompt, err := s.renderContentUserPrompt(ctx, tenantID, topicID, form, count)
+	userPrompt, err := s.renderContentUserPrompt(ctx, tenantID, topicID, form, count, whoPosts)
 	if err != nil {
 		return nil, err
 	}

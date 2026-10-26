@@ -125,15 +125,16 @@ func (h *Handler) GenerateContentV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TopicID int64  `json:"topic_id"`
-		Form    string `json:"form"`
-		Count   int    `json:"count"`
+		TopicID  int64  `json:"topic_id"`
+		Form     string `json:"form"`
+		Count    int    `json:"count"`
+		WhoPosts string `json:"who_posts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	content, err := h.service.GenerateContentV2(r.Context(), tenantID, req.TopicID, req.Form, req.Count)
+	content, err := h.service.GenerateContentV2(r.Context(), tenantID, req.TopicID, req.Form, req.Count, req.WhoPosts)
 	if err != nil {
 		slog.Error("generate content v2 failed", "tenant_id", tenantID, "topic_id", req.TopicID, "form", req.Form, "error", err)
 		httputil.WriteInternalError(w, err.Error())
