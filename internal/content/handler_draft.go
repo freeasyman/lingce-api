@@ -156,6 +156,7 @@ func (h *Handler) registerDraftRoutes(mux *http.ServeMux, deps router.RouteDeps)
 		{Method: "POST", Path: "/api/v1/content-cards/actions/generate-image", Handler: h.GenerateCardImage, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/actions/generate-storyboard-images-async", Handler: h.GenerateStoryboardImagesAsync, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-items/actions/generate-image-async", Handler: h.GenerateImageAsync, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-items/actions/generate-images-async", Handler: h.GenerateImagesAsync, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, deps)
 }
