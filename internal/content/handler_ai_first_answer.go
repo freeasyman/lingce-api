@@ -33,6 +33,7 @@ func (h *Handler) AnalyzeAIAnswer(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 	routes := []router.Route{
 		{Method: "POST", Path: "/api/v1/content-ai/actions/analyze", Handler: h.AnalyzeAIAnswer, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-ai/actions/visibility", Handler: h.AnalyzeAIVisibility, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	router.Register(mux, routes, deps)
 }
