@@ -149,6 +149,13 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 	if err != nil {
 		return "", sources, nil, err
 	}
+	// 厂商返回引用（豆包 annotations）时优先用它，比 DeepSeek 搜索更贴合本引擎答案
+	if len(resp.Citations) > 0 {
+		sources = make([]searchResult, 0, len(resp.Citations))
+		for _, c := range resp.Citations {
+			sources = append(sources, searchResult{Title: c.Title, URL: c.URL, SiteName: c.SiteName, Date: c.PublishTime})
+		}
+	}
 	return strings.TrimSpace(resp.Content), sources, resp.SearchQueries, nil
 }
 
