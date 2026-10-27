@@ -2,6 +2,7 @@ package content
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -92,19 +93,45 @@ func (h *Handler) GenerateFromAIVisibility(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req struct {
-		RunID  int64  `json:"run_id"`
-		Target string `json:"target"`
+		RunID     int64  `json:"run_id"`
+		Target    string `json:"target"`
+		Overwrite bool   `json:"overwrite"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RunID <= 0 {
 		httputil.WriteBadRequest(w, "run_id is required")
 		return
 	}
-	result, err := h.service.GenerateFromAIVisibility(r.Context(), tenantID, req.RunID, req.Target)
+	result, err := h.service.GenerateFromAIVisibility(r.Context(), tenantID, req.RunID, req.Target, req.Overwrite)
 	if err != nil {
+		var bizErr *BizError
+		if errors.As(err, &bizErr) {
+			httputil.WriteError(w, http.StatusBadRequest, bizErr.Code, bizErr.Message, nil)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, result)
+}
+
+// CheckGenerateConflict 生成前检查该选题是否已有文章。
+func (h *Handler) CheckGenerateConflict(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	res, err := h.service.ExistingContentForRun(r.Context(), tenantID, id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, res)
 }
 
 // ListCandidateQuestions 候选问题（服务端搜索 + 分页）。

@@ -771,6 +771,35 @@ func (s *Store) updateContentItemV2(ctx context.Context, tenantID, id int64, for
 	return err
 }
 
+// findContentIDByTopic 找该选题下已有的内容（未删除、最新一条）。
+func (s *Store) findContentIDByTopic(ctx context.Context, tenantID, topicID int64) (int64, string, error) {
+	if topicID <= 0 {
+		return 0, "", nil
+	}
+	var id int64
+	var title string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(title,'') FROM content_items
+		WHERE tenant_id = $1 AND topic_id = $2 AND deleted_at IS NULL
+		ORDER BY id DESC LIMIT 1`, tenantID, topicID).Scan(&id, &title)
+	if err == pgx.ErrNoRows {
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	return id, title, nil
+}
+
+// overwriteContentItemBody 覆盖已有内容的标题/正文/渠道，保留图片与发布包（避免冲掉用户配的图）。
+func (s *Store) overwriteContentItemBody(ctx context.Context, tenantID, id int64, title, body, channel string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_items
+		SET title = $3, body = $4, channel = NULLIF($5,''), updated_at = now()
+		WHERE id = $1 AND tenant_id = $2`, id, tenantID, title, body, channel)
+	return err
+}
+
 // setContentGenerationStatus 持久化生图状态（running / 空=完成）。
 func (s *Store) setContentGenerationStatus(ctx context.Context, tenantID, id int64, status string, shotIndex int) error {
 	_, err := s.pool.Exec(ctx, `UPDATE content_items SET generation_status = $3, generation_shot_index = $4, updated_at = now() WHERE id = $1 AND tenant_id = $2`, id, tenantID, status, shotIndex)
