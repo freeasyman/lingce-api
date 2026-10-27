@@ -2,6 +2,7 @@ package httputil
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -76,7 +77,9 @@ func WriteNotFound(w http.ResponseWriter, message string) {
 	WriteError(w, http.StatusNotFound, "NOT_FOUND", message, nil)
 }
 
-// WriteInternalError writes a 500 Internal Server Error response
+// WriteInternalError 记录技术错误到日志，只给客户端返回友好提示。
+// 技术细节（SQL/堆栈）绝不返回给客户，避免泄露且客户看不懂。
 func WriteInternalError(w http.ResponseWriter, message string) {
-	WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", message, nil)
+	slog.Error("internal error", "error", message)
+	WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "服务暂时不可用，请稍后重试", nil)
 }
