@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
@@ -262,46 +263,71 @@ func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, questio
 
 // loadAIVisibilityRun 后台逐个问引擎 + 分析，边跑边更新进度；全部完成后写缺口。
 func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64, engines []llmModelSelection, q, orgName string) {
-	results := make([]aiEngineAnswer, 0, len(engines))
+	// 三家并行跑：总耗时取最慢的那个，而不是三者相加
+	results := make([]aiEngineAnswer, len(engines))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	done := 0
+
 	for i, eng := range engines {
-		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
-		answer, sources, queries, searchCount, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
-		if err != nil {
-			// 技术细节只进日志，返回给客户的是能看懂的话
-			item.Error = "这次没能拿到该 AI 的回答（可能超时），稍后可单独重试"
-			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
-		} else {
-			item.Answer = answer
-			item.Sources = sources
-			item.SearchQueries = queries
-			item.SearchCount = searchCount
-			analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
-			if aerr != nil {
-				item.Error = aerr.Error()
-				slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", aerr)
+		wg.Add(1)
+		go func(idx int, sel llmModelSelection) {
+			defer wg.Done()
+			item := aiEngineAnswer{Engine: engineLabel(sel.Provider, sel.ModelCode), Provider: sel.Provider, ModelCode: sel.ModelCode}
+			answer, sources, queries, searchCount, err := s.aiEngineAnswer(ctx, tenantID, sel, q)
+			if err != nil {
+				// 技术细节只进日志，返回给客户的是能看懂的话
+				item.Error = "这次没能拿到该 AI 的回答（可能超时），稍后可单独重试"
+				slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
 			} else {
-				item.Analysis = analysis
+				item.Answer = answer
+				item.Sources = sources
+				item.SearchQueries = queries
+				item.SearchCount = searchCount
+				analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, sel, q, answer, orgName)
+				if aerr != nil {
+					item.Error = "该 AI 的回答已拿到，但解析失败，稍后可重试"
+					slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", aerr)
+				} else {
+					item.Analysis = analysis
+				}
 			}
+
+			mu.Lock()
+			results[idx] = item
+			done++
+			partial := make([]any, 0, len(engines))
+			for _, r := range results {
+				if r.Engine != "" {
+					partial = append(partial, r)
+				}
+			}
+			p := done
+			mu.Unlock()
+
+			// 边跑边落：前端轮询能逐个看到引擎结果
+			_ = s.store.updateAIVisibilityRunEngines(ctx, tenantID, runID, partial)
+			_ = s.store.updateAIVisibilityRunProgress(ctx, tenantID, runID, p)
+		}(i, eng)
+	}
+	wg.Wait()
+
+	resultsAny := make([]aiEngineAnswer, 0, len(engines))
+	for _, r := range results {
+		if r.Engine != "" {
+			resultsAny = append(resultsAny, r)
 		}
-		results = append(results, item)
-		// 边跑边落：前端轮询能逐个看到引擎结果，不用等全部跑完
-		partial := make([]any, 0, len(results))
-		for _, r := range results {
-			partial = append(partial, r)
-		}
-		_ = s.store.updateAIVisibilityRunEngines(ctx, tenantID, runID, partial)
-		_ = s.store.updateAIVisibilityRunProgress(ctx, tenantID, runID, i+1)
 	}
 
 	gap := map[string]any{}
-	if g, err := s.aiVisibilityGap(ctx, tenantID, q, results); err == nil {
+	if g, err := s.aiVisibilityGap(ctx, tenantID, q, resultsAny); err == nil {
 		gap = g
 	} else {
 		slog.Warn("ai visibility: gap failed", "error", err)
 	}
 
-	engAny := make([]any, 0, len(results))
-	for _, r := range results {
+	engAny := make([]any, 0, len(resultsAny))
+	for _, r := range resultsAny {
 		engAny = append(engAny, r)
 	}
 	if err := s.store.finishAIVisibilityRun(ctx, tenantID, runID, engAny, gap); err != nil {
