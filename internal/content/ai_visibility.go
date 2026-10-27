@@ -102,19 +102,28 @@ func engineLabel(provider, modelCode string) string {
 
 // aiEngineAnswer 先搜公开资料，再让引擎基于资料作答，同时返回真实信源。
 func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, error) {
-	// 1. 搜真实信源（DeepSeek 原生搜索 API）
-	sources, err := s.searchWeb(ctx, tenantID, question, 8)
-	if err != nil {
-		slog.Warn("ai visibility: web search failed", "error", err)
-	}
+	// 每家用自己的联网搜索，保证"患者问这家 AI 时真实会看到什么"。
+	//   deepseek  → 自己的搜索 API（能拿到结构化信源 URL）
+	//   千问/豆包 → 各自厂商的联网搜索（信源由答案分析提取，厂商接口不返回 URL）
+	var sources []searchResult
 	userContent := question
-	if len(sources) > 0 {
-		var b strings.Builder
-		b.WriteString("【网上搜到的公开资料】\n")
-		for i, r := range sources {
-			fmt.Fprintf(&b, "[%d] %s（%s）\n%s\n", i+1, r.Title, r.SiteName, r.Summary)
+	enableSearch := true
+	if sel.Provider == "deepseek" {
+		var serr error
+		sources, serr = s.searchWeb(ctx, tenantID, question, 8)
+		if serr != nil {
+			slog.Warn("ai visibility: deepseek search failed", "error", serr)
 		}
-		userContent = b.String() + "\n【患者问题】" + question
+		if len(sources) > 0 {
+			var b strings.Builder
+			b.WriteString("【网上搜到的公开资料】\n")
+			for i, r := range sources {
+				fmt.Fprintf(&b, "[%d] %s（%s）\n%s\n", i+1, r.Title, r.SiteName, r.Summary)
+			}
+			userContent = b.String() + "\n【患者问题】" + question
+		}
+		// DeepSeek 已经把资料喂进来了，不需要再开它自己的搜索
+		enableSearch = false
 	}
 	req := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
@@ -129,9 +138,6 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
-	// 不启用各厂商自带的联网搜索：信源统一由 DeepSeek 搜索 API 提供（走网关计量），
-	// 否则会重复搜索并产生额外计费（千问 enable_search、豆包联网插件都另收费）。
-	enableSearch := false
 	if req.Params == nil {
 		req.Params = &llmgateway.Params{}
 	}
