@@ -81,6 +81,22 @@ func (s *Store) failStaleAIVisibilityRuns(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
+// softDeleteAIVisibilityRuns 软删除诊断历史（可批量）。
+// 不真删：生成内容仍引用这次诊断，成本审计也要能对上。
+func (s *Store) softDeleteAIVisibilityRuns(ctx context.Context, tenantID int64, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs
+		SET deleted_at = now()
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL`, tenantID, ids)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // listAIVisibilityRuns 列出历史诊断。
 func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
 	if limit <= 0 || limit > 100 {
@@ -90,13 +106,13 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit,
 		offset = 0
 	}
 	var total int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM content_ai_visibility_runs WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM content_ai_visibility_runs WHERE tenant_id = $1 AND deleted_at IS NULL`, tenantID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
 		FROM content_ai_visibility_runs
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
 		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
 	if err != nil {

@@ -130,3 +130,25 @@ func (h *Handler) ListCandidateQuestions(w http.ResponseWriter, r *http.Request)
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
+
+// DeleteAIVisibilityRuns 软删除诊断历史（支持批量）。
+func (h *Handler) DeleteAIVisibilityRuns(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.IDs) == 0 {
+		httputil.WriteBadRequest(w, "请至少选择一条记录")
+		return
+	}
+	n, err := h.service.DeleteAIVisibilityRuns(r.Context(), tenantID, body.IDs)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"deleted": n})
+}

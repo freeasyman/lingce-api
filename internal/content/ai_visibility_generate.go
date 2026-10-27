@@ -87,3 +87,8 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	}
 	return map[string]any{"content_id": id, "title": title, "channel": channel}, nil
 }
+
+// DeleteAIVisibilityRuns 软删除诊断历史。
+func (s *Service) DeleteAIVisibilityRuns(ctx context.Context, tenantID int64, ids []int64) (int64, error) {
+	return s.store.softDeleteAIVisibilityRuns(ctx, tenantID, ids)
+}
