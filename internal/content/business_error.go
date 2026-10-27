@@ -5,6 +5,8 @@ package content
 type BizError struct {
 	Code    string
 	Message string
+	// Status 期望的 HTTP 状态码（0 表示默认 400）
+	Status int
 }
 
 func (e *BizError) Error() string { return e.Message }

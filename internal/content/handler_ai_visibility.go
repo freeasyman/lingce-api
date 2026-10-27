@@ -28,7 +28,7 @@ func (h *Handler) AnalyzeAIVisibility(w http.ResponseWriter, r *http.Request) {
 	}
 	runID, err := h.service.StartAIVisibility(r.Context(), tenantID, req.Question, req.Region, req.InsightID, req.TopicID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
@@ -48,7 +48,7 @@ func (h *Handler) GetAIVisibilityRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := h.service.store.getAIVisibilityRun(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	if run == nil {
@@ -79,7 +79,7 @@ func (h *Handler) ListAIVisibilityRuns(w http.ResponseWriter, r *http.Request) {
 	deleted := r.URL.Query().Get("deleted") == "1"
 	items, total, err := h.service.ListAIVisibilityRuns(r.Context(), tenantID, limit, offset, deleted)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
@@ -108,7 +108,7 @@ func (h *Handler) GenerateFromAIVisibility(w http.ResponseWriter, r *http.Reques
 			httputil.WriteError(w, http.StatusBadRequest, bizErr.Code, bizErr.Message, nil)
 			return
 		}
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)
@@ -128,7 +128,7 @@ func (h *Handler) CheckGenerateConflict(w http.ResponseWriter, r *http.Request) 
 	}
 	res, err := h.service.ExistingContentForRun(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, res)
@@ -155,7 +155,7 @@ func (h *Handler) ListCandidateQuestions(w http.ResponseWriter, r *http.Request)
 	kw := r.URL.Query().Get("q")
 	items, total, err := h.service.ListCandidateQuestions(r.Context(), tenantID, kw, limit, offset)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
@@ -177,7 +177,7 @@ func (h *Handler) DeleteAIVisibilityRuns(w http.ResponseWriter, r *http.Request)
 	}
 	n, err := h.service.DeleteAIVisibilityRuns(r.Context(), tenantID, body.IDs)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"deleted": n})
@@ -199,7 +199,7 @@ func (h *Handler) RestoreAIVisibilityRuns(w http.ResponseWriter, r *http.Request
 	}
 	n, err := h.service.RestoreAIVisibilityRuns(r.Context(), tenantID, body.IDs)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"restored": n})

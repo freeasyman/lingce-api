@@ -67,6 +67,14 @@ func (s *Store) UpsertContentOrgProfile(ctx context.Context, profile *ContentOrg
 	if profile.ExtraData == nil {
 		profile.ExtraData = JSONObject{}
 	}
+	// logo_assets / qr_assets 是 NOT NULL 列；只保存部分字段（如仅机构名）时
+	// 这两个切片是 nil，会写入 NULL 触发约束错误 → 兜底成空数组
+	if profile.LogoAssets == nil {
+		profile.LogoAssets = []ContentOrgAsset{}
+	}
+	if profile.QRAssets == nil {
+		profile.QRAssets = []ContentOrgAsset{}
+	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO content_org_profiles (
 			tenant_id, institution_name, project, region, address, phone, website, license, logo_url, qr_code_url, logo_assets, qr_assets,

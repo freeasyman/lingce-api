@@ -32,7 +32,7 @@ func (h *Handler) GenerateTopicsFromInsights(w http.ResponseWriter, r *http.Requ
 	}
 	topics, err := h.service.GenerateTopicsFromInsights(r.Context(), tenantID, req.InsightIDs)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, topics)
@@ -52,7 +52,7 @@ func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 	}
 	topic, err := h.service.store.getTopicV2(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	if topic == nil {
@@ -76,7 +76,7 @@ func (h *Handler) EnrichTopic(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.EnrichTopic(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)
@@ -97,7 +97,7 @@ func (h *Handler) EnrichTopicsBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := h.service.EnrichTopicsBatch(r.Context(), tenantID, limit)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	remaining, _ := h.service.store.countTopicsWithoutHelp(r.Context(), tenantID)
@@ -127,7 +127,7 @@ func (h *Handler) CreateManualTopic(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.service.store.insertManualTopic(r.Context(), tenantID, req.Title, req.Description, req.Form, req.Goal)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]int64{"id": id})

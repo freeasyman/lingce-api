@@ -29,7 +29,7 @@ func (h *Handler) ExtractInsights(w http.ResponseWriter, r *http.Request) {
 	}
 	insights, err := h.service.ExtractInsights(r.Context(), tenantID, recordingID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, insights)

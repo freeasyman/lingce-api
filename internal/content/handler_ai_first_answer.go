@@ -24,7 +24,7 @@ func (h *Handler) AnalyzeAIAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.AnalyzeAIAnswer(r.Context(), tenantID, req.Question)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)

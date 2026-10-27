@@ -27,7 +27,7 @@ func (h *Handler) ExtractInsightsBatch(w http.ResponseWriter, r *http.Request) {
 
 	pending, err := h.service.store.listPendingTranscripts(r.Context(), tenantID, limit)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 

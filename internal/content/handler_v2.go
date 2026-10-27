@@ -34,7 +34,7 @@ func (h *Handler) ListMediaAccountsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts, err := h.service.store.listMediaAccounts(r.Context(), tenantID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, accounts)
@@ -73,7 +73,7 @@ func (h *Handler) CreateMediaAccountV2(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.service.store.insertMediaAccount(r.Context(), tenantID, req.Platform, req.Name, req.Role, req.MonthlyTarget)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]int64{"id": id})
@@ -111,7 +111,7 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		Offset:         offset,
 	})
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{
@@ -148,7 +148,7 @@ func (h *Handler) SetInsightStatusV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.store.setInsightStatus(r.Context(), tenantID, id, req.Status); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"id": id, "status": req.Status})
@@ -169,7 +169,7 @@ func (h *Handler) ListQuestionClusters(w http.ResponseWriter, r *http.Request) {
 	}
 	clusters, err := h.service.store.listQuestionClusters(r.Context(), tenantID, minCount)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, clusters)
@@ -184,7 +184,7 @@ func (h *Handler) RebuildQuestionClusters(w http.ResponseWriter, r *http.Request
 	}
 	n, err := h.service.RebuildQuestionClusters(r.Context(), tenantID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]int{"clusters": n})
@@ -205,7 +205,7 @@ func (h *Handler) RecommendTopics(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.service.RecommendTopics(r.Context(), tenantID, limit)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, items)
@@ -232,7 +232,7 @@ func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	topics, total, err := h.service.store.listTopicsV2(r.Context(), tenantID, offset, limit)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": topics, "total": total, "limit": limit, "offset": offset})
@@ -248,7 +248,7 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200, deleted, q)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, items)
@@ -263,7 +263,7 @@ func (h *Handler) ListStyleTemplatesV2(w http.ResponseWriter, r *http.Request) {
 	tplType := r.URL.Query().Get("type")
 	templates, err := h.service.store.listStyleTemplates(r.Context(), tenantID, tplType)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, templates)
@@ -288,7 +288,7 @@ func (h *Handler) GeneratePlanV2(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusBadRequest, bizErr.Code, bizErr.Message, nil)
 			return
 		}
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, plan)
@@ -307,7 +307,7 @@ func (h *Handler) ListPlanItemsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.service.store.listPlanItemsV2(r.Context(), tenantID, planPeriodID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, items)
@@ -335,7 +335,7 @@ func (h *Handler) ScheduleTopicV2(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.service.ScheduleTopic(r.Context(), tenantID, planPeriodID, req.AccountID, req.TopicID, req.PlannedDate)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]int64{"id": id})
@@ -354,7 +354,7 @@ func (h *Handler) PublishContentV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.PublishContentV2(r.Context(), tenantID, contentID); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]bool{"published": true})
@@ -373,7 +373,7 @@ func (h *Handler) ReviewContentV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.store.updateContentItemV2Status(r.Context(), tenantID, contentID, "reviewed"); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]bool{"reviewed": true})
@@ -395,7 +395,7 @@ func (h *Handler) GetReportData(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().AddDate(0, 0, -days)
 	data, err := h.service.store.GetReportData(r.Context(), tenantID, since)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, data)
@@ -416,7 +416,7 @@ func (h *Handler) ExportReport(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.ExportReport(r.Context(), tenantID, days)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)
@@ -433,7 +433,7 @@ func (h *Handler) GetCurrentPlan(w http.ResponseWriter, r *http.Request) {
 	startDate := r.URL.Query().Get("start_date")
 	plan, err := h.service.GetPlan(r.Context(), tenantID, period, startDate)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, plan)
@@ -448,7 +448,7 @@ func (h *Handler) ListPlanPeriods(w http.ResponseWriter, r *http.Request) {
 	}
 	periods, err := h.service.store.listPlanPeriods(r.Context(), tenantID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, periods)
@@ -468,7 +468,7 @@ func (h *Handler) GetContentItemV2(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.service.store.getContentItemV2(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	if item == nil {
@@ -491,7 +491,7 @@ func (h *Handler) DeleteContentItemV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.store.softDeleteContentItemV2(r.Context(), tenantID, id); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"deleted": true})
@@ -510,7 +510,7 @@ func (h *Handler) RestoreContentItemV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.store.restoreContentItemV2(r.Context(), tenantID, id); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"restored": true})
@@ -529,7 +529,7 @@ func (h *Handler) HardDeleteContentItemV2(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.service.store.hardDeleteContentItemV2(r.Context(), tenantID, id); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"purged": true})
@@ -557,7 +557,7 @@ func (h *Handler) GetOrCreateContentItemV2(w http.ResponseWriter, r *http.Reques
 	}
 	id, existed, err := h.service.store.getOrCreateContentItemByTopic(r.Context(), tenantID, req.TopicID, req.Title, req.Form)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"id": id, "existed": existed})
@@ -611,7 +611,7 @@ func (h *Handler) UpdateContentItemV2(w http.ResponseWriter, r *http.Request) {
 		form = normalizeFormCode(*req.Form)
 	}
 	if err := h.service.store.updateContentItemV2(r.Context(), tenantID, id, form, title, body, pp, img); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]bool{"updated": true})
@@ -661,7 +661,7 @@ func (h *Handler) GetOrgKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	k, err := h.service.store.getOrgKnowledge(r.Context(), tenantID)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, k)
@@ -680,7 +680,7 @@ func (h *Handler) UpsertOrgKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.store.upsertOrgKnowledge(r.Context(), tenantID, &k); err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]bool{"saved": true})
@@ -700,7 +700,7 @@ func (h *Handler) GetInsightV2(w http.ResponseWriter, r *http.Request) {
 	}
 	ins, err := h.service.store.getInsightV2(r.Context(), tenantID, id)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	if ins == nil {

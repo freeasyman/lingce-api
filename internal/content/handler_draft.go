@@ -23,7 +23,7 @@ func (h *Handler) GenerateGraphicNoteDraft(w http.ResponseWriter, r *http.Reques
 	}
 	draft, err := h.service.GenerateGraphicNoteDraft(r.Context(), tenantID, req)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, draft)
@@ -54,7 +54,7 @@ func (h *Handler) SaveContentV2(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.service.SaveContentV2(r.Context(), tenantID, req.TopicID, req.Form, req.Title, req.Body, req.PublishPackage, req.Images)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]int64{"id": id})
@@ -82,7 +82,7 @@ func (h *Handler) GenerateCardImage(w http.ResponseWriter, r *http.Request) {
 	urls, err := h.service.GenerateCardImage(r.Context(), tenantID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, req.N, req.Size)
 	if err != nil {
 		slog.Error("generate card image failed", "error", err, "tenant_id", tenantID, "n", req.N, "prompt_len", len(req.Prompt))
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, map[string][]string{"urls": urls})
@@ -111,7 +111,7 @@ func (h *Handler) GenerateDraft(w http.ResponseWriter, r *http.Request) {
 		TopicTitle: req.TopicTitle, TopicDescription: req.TopicDescription, Evidence: req.Evidence, CardCount: req.CardCount, TopicID: req.TopicID,
 	})
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, draft)
@@ -137,7 +137,7 @@ func (h *Handler) GenerateContentV2(w http.ResponseWriter, r *http.Request) {
 	content, err := h.service.GenerateContentV2(r.Context(), tenantID, req.TopicID, req.Form, req.Count, req.WhoPosts)
 	if err != nil {
 		slog.Error("generate content v2 failed", "tenant_id", tenantID, "topic_id", req.TopicID, "form", req.Form, "error", err)
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, content)

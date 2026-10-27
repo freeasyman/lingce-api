@@ -29,7 +29,7 @@ func (h *Handler) LearnStyleTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.LearnStyleTemplate(r.Context(), tenantID, req)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)
@@ -54,7 +54,7 @@ func (h *Handler) ExtractArticleLayout(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.ExtractArticleLayout(r.Context(), tenantID, req)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)
@@ -82,7 +82,7 @@ func (h *Handler) VerifyImageText(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.VerifyImageText(r.Context(), tenantID, req.ImageURL, req.ExpectedText)
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, result)

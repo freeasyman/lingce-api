@@ -51,7 +51,7 @@ func (h *Handler) UploadContentAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	payload, err := io.ReadAll(io.LimitReader(file, contentAssetMaxBytes+1))
 	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+		writeContentError(w, err)
 		return
 	}
 	if int64(len(payload)) > contentAssetMaxBytes {
