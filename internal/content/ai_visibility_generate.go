@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
@@ -74,7 +75,7 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 		return nil, err
 	}
 	title := strings.TrimSpace(fmt.Sprint(obj["title"]))
-	body := strings.TrimSpace(fmt.Sprint(obj["body"]))
+	body := unwrapJSONBody(strings.TrimSpace(fmt.Sprint(obj["body"])))
 	if title == "" || title == "<nil>" {
 		title = targetLabel + "：" + run.Question
 	}
@@ -136,4 +137,74 @@ func (s *Service) ExistingContentForRun(ctx context.Context, tenantID, runID int
 		return map[string]any{"has_existing": false}, nil
 	}
 	return map[string]any{"has_existing": true, "content_id": id, "title": title}, nil
+}
+
+// unwrapJSONBody 如果正文本身是一段 JSON（模型偶尔二次编码，甚至多重转义），
+// 取出真正的正文；解析不出来时用正则兜底。
+func unwrapJSONBody(body string) string {
+	t := strings.TrimSpace(body)
+	if !strings.HasPrefix(t, "{") {
+		return body
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(t), &m); err == nil {
+		if v, ok := m["body"].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+		if cards, ok := m["cards"].([]any); ok {
+			var parts []string
+			for _, c := range cards {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, k := range []string{"body", "text", "content"} {
+					if v, ok := cm[k].(string); ok && strings.TrimSpace(v) != "" {
+						parts = append(parts, v)
+						break
+					}
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, "\n\n")
+			}
+		}
+	}
+
+	var parts []string
+	for _, mm := range jsonBodyFieldRe.FindAllStringSubmatch(t, -1) {
+		v := unescapeJSONString(mm[1])
+		if strings.TrimSpace(v) != "" {
+			parts = append(parts, v)
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, "\n\n")
+	}
+	return unescapeJSONString(t)
+}
+
+var jsonBodyFieldRe = regexp.MustCompile(`"(?:body|text|content)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// unescapeJSONString 反复解转义，直到稳定（兼容多重转义的历史数据）。
+func unescapeJSONString(v string) string {
+	rep := strings.NewReplacer(
+		`\"`, `"`,
+		`\/`, `/`,
+		`\b`, "\b",
+		`\f`, "\f",
+		`\n`, "\n",
+		`\r`, "\r",
+		`\t`, "\t",
+		`\\`, `\`,
+	)
+	cur := v
+	for i := 0; i < 4; i++ {
+		next := rep.Replace(cur)
+		if next == cur {
+			break
+		}
+		cur = next
+	}
+	return cur
 }
