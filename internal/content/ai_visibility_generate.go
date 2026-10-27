@@ -22,12 +22,12 @@ const aiVisibilityGeneratePrompt = `你是医疗内容运营专家。下面是�
   · 只返回 JSON。`
 
 // ListAIVisibilityRuns 列出历史诊断。
-func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
+func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int, deleted bool) ([]AIVisibilityRun, int, error) {
 	// 顺手清理重启导致卡在 running 的僵尸记录
 	if n, err := s.store.failStaleAIVisibilityRuns(ctx); err == nil && n > 0 {
 		slog.Warn("ai visibility: marked stale running runs as failed", "count", n)
 	}
-	return s.store.listAIVisibilityRuns(ctx, tenantID, limit, offset)
+	return s.store.listAIVisibilityRuns(ctx, tenantID, limit, offset, deleted)
 }
 
 // GenerateFromAIVisibility 基于缺口诊断生成内容（公众号深度文 / 官网栏目页）。
@@ -91,4 +91,9 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 // DeleteAIVisibilityRuns 软删除诊断历史。
 func (s *Service) DeleteAIVisibilityRuns(ctx context.Context, tenantID int64, ids []int64) (int64, error) {
 	return s.store.softDeleteAIVisibilityRuns(ctx, tenantID, ids)
+}
+
+// RestoreAIVisibilityRuns 从回收站恢复诊断记录。
+func (s *Service) RestoreAIVisibilityRuns(ctx context.Context, tenantID int64, ids []int64) (int64, error) {
+	return s.store.restoreAIVisibilityRuns(ctx, tenantID, ids)
 }

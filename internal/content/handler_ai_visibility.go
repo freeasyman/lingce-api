@@ -73,7 +73,8 @@ func (h *Handler) ListAIVisibilityRuns(w http.ResponseWriter, r *http.Request) {
 			offset = n
 		}
 	}
-	items, total, err := h.service.ListAIVisibilityRuns(r.Context(), tenantID, limit, offset)
+	deleted := r.URL.Query().Get("deleted") == "1"
+	items, total, err := h.service.ListAIVisibilityRuns(r.Context(), tenantID, limit, offset, deleted)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -151,4 +152,26 @@ func (h *Handler) DeleteAIVisibilityRuns(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"deleted": n})
+}
+
+// RestoreAIVisibilityRuns 从回收站恢复。
+func (h *Handler) RestoreAIVisibilityRuns(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.IDs) == 0 {
+		httputil.WriteBadRequest(w, "请至少选择一条记录")
+		return
+	}
+	n, err := h.service.RestoreAIVisibilityRuns(r.Context(), tenantID, body.IDs)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"restored": n})
 }

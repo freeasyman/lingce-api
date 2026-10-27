@@ -37,6 +37,7 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-ai/visibility/runs", Handler: h.ListAIVisibilityRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-ai/candidate-questions", Handler: h.ListCandidateQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-ai/visibility/runs/delete", Handler: h.DeleteAIVisibilityRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-ai/visibility/runs/restore", Handler: h.RestoreAIVisibilityRuns, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-ai/visibility/runs/{id}", Handler: h.GetAIVisibilityRun, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-ai/actions/visibility/generate", Handler: h.GenerateFromAIVisibility, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
