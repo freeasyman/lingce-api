@@ -204,3 +204,31 @@ func (h *Handler) RestoreAIVisibilityRuns(w http.ResponseWriter, r *http.Request
 	}
 	httputil.WriteSuccess(w, map[string]any{"restored": n})
 }
+
+// GenerateWebsiteContent 直接生成官网栏目内容。
+func (h *Handler) GenerateWebsiteContent(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req struct {
+		Column  string `json:"column"`
+		Subject string `json:"subject"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	res, err := h.service.GenerateWebsiteContent(r.Context(), tenantID, req.Column, req.Subject)
+	if err != nil {
+		var bizErr *BizError
+		if errors.As(err, &bizErr) {
+			httputil.WriteError(w, http.StatusBadRequest, bizErr.Code, bizErr.Message, nil)
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, res)
+}
