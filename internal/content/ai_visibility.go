@@ -159,6 +159,10 @@ func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmMo
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
 		return nil, err
@@ -168,7 +172,8 @@ func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmMo
 
 // aiVisibilityGap 汇总缺口诊断。
 func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question string, results []aiEngineAnswer) (map[string]any, error) {
-	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"ai_assistant", "content_topic", "chat"})
+	// 缺口诊断用通用快模型（别用豆包，它长上下文要 100s+）
+	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_topic", "chat", "ai_assistant"})
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +195,10 @@ func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question 
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
 		return nil, err
