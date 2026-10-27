@@ -40,7 +40,7 @@ func (s *Store) getOrgKnowledge(ctx context.Context, tenantID int64) (*orgKnowle
 func (s *Store) upsertOrgKnowledge(ctx context.Context, tenantID int64, k *orgKnowledge) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO content_org_knowledge (tenant_id, institution_info, doctors, specialties, data, hard_rules, soft_prefs, brand_assets, updated_at)
-		VALUES ($1, COALESCE($2::jsonb,'{}'::jsonb), COALESCE($3::jsonb,'[]'::jsonb), COALESCE($4::jsonb,'[]'::jsonb), COALESCE($5::jsonb,'{}'::jsonb), COALESCE($6::jsonb,'[]'::jsonb), COALESCE($7::jsonb,'[]'::jsonb), COALESCE($8::jsonb,'{}'::jsonb), now())
+		VALUES ($1, COALESCE(NULLIF($2,''),'{}')::jsonb, COALESCE(NULLIF($3,''),'[]')::jsonb, COALESCE(NULLIF($4,''),'[]')::jsonb, COALESCE(NULLIF($5,''),'{}')::jsonb, COALESCE(NULLIF($6,''),'[]')::jsonb, COALESCE(NULLIF($7,''),'[]')::jsonb, COALESCE(NULLIF($8,''),'{}')::jsonb, now())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 		  institution_info = EXCLUDED.institution_info, doctors = EXCLUDED.doctors, specialties = EXCLUDED.specialties,
 		  data = EXCLUDED.data, hard_rules = EXCLUDED.hard_rules, soft_prefs = EXCLUDED.soft_prefs,
