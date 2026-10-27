@@ -45,13 +45,14 @@ const aiVisibilityGapPrompt = `你是医疗内容运营专家。下面是同一�
 
 // aiEngineAnswer 一个引擎的回答 + 分析。
 type aiEngineAnswer struct {
-	Engine    string         `json:"engine"`
-	Provider  string         `json:"provider"`
-	ModelCode string         `json:"model_code"`
-	Answer    string         `json:"answer"`
-	Sources   []searchResult `json:"sources,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	Analysis  map[string]any `json:"analysis,omitempty"`
+	Engine        string         `json:"engine"`
+	Provider      string         `json:"provider"`
+	ModelCode     string         `json:"model_code"`
+	Answer        string         `json:"answer"`
+	Sources       []searchResult `json:"sources,omitempty"`
+	SearchQueries []string       `json:"search_queries,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	Analysis      map[string]any `json:"analysis,omitempty"`
 }
 
 // listAIEngines 取所有启用的 ai_assistant 引擎配置（按 provider+model 去重）。
@@ -101,7 +102,7 @@ func engineLabel(provider, modelCode string) string {
 }
 
 // aiEngineAnswer 先搜公开资料，再让引擎基于资料作答，同时返回真实信源。
-func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, error) {
+func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, []string, error) {
 	// 每家用自己的联网搜索，保证"患者问这家 AI 时真实会看到什么"。
 	//   deepseek  → 自己的搜索 API（能拿到结构化信源 URL）
 	//   千问/豆包 → 各自厂商的联网搜索（信源由答案分析提取，厂商接口不返回 URL）
@@ -146,9 +147,9 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
-		return "", sources, err
+		return "", sources, nil, err
 	}
-	return strings.TrimSpace(resp.Content), sources, nil
+	return strings.TrimSpace(resp.Content), sources, resp.SearchQueries, nil
 }
 
 // aiEngineAnalyze 分析一个引擎的回答。
@@ -256,13 +257,14 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 	results := make([]aiEngineAnswer, 0, len(engines))
 	for i, eng := range engines {
 		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
-		answer, sources, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
+		answer, sources, queries, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
 		if err != nil {
 			item.Error = err.Error()
 			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
 		} else {
 			item.Answer = answer
 			item.Sources = sources
+			item.SearchQueries = queries
 			analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
 			if aerr != nil {
 				item.Error = aerr.Error()

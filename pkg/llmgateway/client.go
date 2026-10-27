@@ -151,15 +151,16 @@ func (p Params) MarshalJSON() ([]byte, error) {
 
 // TextInferenceResponse represents a text inference response
 type TextInferenceResponse struct {
-	RequestID      string `json:"request_id"`
-	Content        string `json:"content"`
-	Usage          Usage  `json:"usage"`
-	Cost           Cost   `json:"cost"`
-	LatencyMS      int    `json:"latency_ms"`
-	Provider       string `json:"provider"`
-	ModelCode      string `json:"model_code"`
-	PriceVersion   string `json:"price_version,omitempty"`
-	PricingMissing bool   `json:"pricing_missing,omitempty"`
+	RequestID      string   `json:"request_id"`
+	Content        string   `json:"content"`
+	Usage          Usage    `json:"usage"`
+	Cost           Cost     `json:"cost"`
+	LatencyMS      int      `json:"latency_ms"`
+	Provider       string   `json:"provider"`
+	ModelCode      string   `json:"model_code"`
+	PriceVersion   string   `json:"price_version,omitempty"`
+	SearchQueries  []string `json:"search_queries,omitempty"`
+	PricingMissing bool     `json:"pricing_missing,omitempty"`
 }
 
 // TextInferenceWithRaw 返回结构化响应及网关原始响应，供需要完整审计链路的业务使用。
