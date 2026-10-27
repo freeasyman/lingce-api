@@ -171,14 +171,14 @@ func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question 
 	return extractJSONObject(resp.Content)
 }
 
-// AnalyzeAIVisibility 多引擎查询 + 逐引擎分析 + 缺口诊断。
-func (s *Service) AnalyzeAIVisibility(ctx context.Context, tenantID int64, question, region string) (map[string]any, error) {
+// StartAIVisibility 创建异步诊断任务，立即返回 run_id；后台跑多引擎。
+func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, question, region string) (int64, error) {
 	if s.llmClient == nil {
-		return nil, fmt.Errorf("llm gateway is not configured")
+		return 0, fmt.Errorf("llm gateway is not configured")
 	}
 	question = strings.TrimSpace(question)
 	if question == "" {
-		return nil, fmt.Errorf("question is required")
+		return 0, fmt.Errorf("question is required")
 	}
 	region = strings.TrimSpace(region)
 
@@ -194,31 +194,41 @@ func (s *Service) AnalyzeAIVisibility(ctx context.Context, tenantID int64, quest
 
 	engines, err := s.listAIEngines(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	if len(engines) == 0 {
-		return nil, fmt.Errorf("未配置 AI 引擎（ai_assistant）")
+		return 0, fmt.Errorf("未配置 AI 引擎（ai_assistant）")
 	}
 
+	runID, err := s.store.createAIVisibilityRun(ctx, tenantID, q, region, orgName, len(engines))
+	if err != nil {
+		return 0, err
+	}
+	go s.loadAIVisibilityRun(context.Background(), tenantID, runID, engines, q, orgName)
+	return runID, nil
+}
+
+// loadAIVisibilityRun 后台逐个问引擎 + 分析，边跑边更新进度；全部完成后写缺口。
+func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64, engines []llmModelSelection, q, orgName string) {
 	results := make([]aiEngineAnswer, 0, len(engines))
-	for _, eng := range engines {
+	for i, eng := range engines {
 		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
 		answer, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
 		if err != nil {
 			item.Error = err.Error()
 			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
-			results = append(results, item)
-			continue
-		}
-		item.Answer = answer
-		analysis, err := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
-		if err != nil {
-			item.Error = err.Error()
-			slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", err)
 		} else {
-			item.Analysis = analysis
+			item.Answer = answer
+			analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
+			if aerr != nil {
+				item.Error = aerr.Error()
+				slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", aerr)
+			} else {
+				item.Analysis = analysis
+			}
 		}
 		results = append(results, item)
+		_ = s.store.updateAIVisibilityRunProgress(ctx, tenantID, runID, i+1)
 	}
 
 	gap := map[string]any{}
@@ -232,16 +242,8 @@ func (s *Service) AnalyzeAIVisibility(ctx context.Context, tenantID int64, quest
 	for _, r := range results {
 		engAny = append(engAny, r)
 	}
-	runID, saveErr := s.store.saveAIVisibilityRun(ctx, tenantID, q, region, orgName, engAny, gap)
-	if saveErr != nil {
-		slog.Warn("ai visibility: save run failed", "error", saveErr)
+	if err := s.store.finishAIVisibilityRun(ctx, tenantID, runID, engAny, gap); err != nil {
+		slog.Error("ai visibility: finish run failed", "error", err)
+		_ = s.store.failAIVisibilityRun(ctx, tenantID, runID)
 	}
-	return map[string]any{
-		"run_id":   runID,
-		"question": q,
-		"region":   region,
-		"org_name": orgName,
-		"engines":  results,
-		"gap":      gap,
-	}, nil
 }

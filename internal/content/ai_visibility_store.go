@@ -15,19 +15,48 @@ type AIVisibilityRun struct {
 	OrgName   string         `json:"org_name"`
 	Engines   []any          `json:"engines"`
 	Gap       map[string]any `json:"gap"`
+	Status    string         `json:"status"`
+	Progress  int            `json:"progress"`
+	Total     int            `json:"total"`
 	CreatedAt time.Time      `json:"created_at"`
 }
 
-// saveAIVisibilityRun 落库一次诊断。
-func (s *Store) saveAIVisibilityRun(ctx context.Context, tenantID int64, question, region, orgName string, engines []any, gap map[string]any) (int64, error) {
-	engJSON, _ := json.Marshal(engines)
-	gapJSON, _ := json.Marshal(gap)
+// createAIVisibilityRun 创建一条 running 状态的诊断记录，立即返回 id。
+func (s *Store) createAIVisibilityRun(ctx context.Context, tenantID int64, question, region, orgName string, total int) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_ai_visibility_runs (tenant_id, question, region, org_name, engines, gap)
-		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		tenantID, question, region, orgName, engJSON, gapJSON).Scan(&id)
+		INSERT INTO content_ai_visibility_runs (tenant_id, question, region, org_name, engines, gap, status, progress, total)
+		VALUES ($1,$2,$3,$4,'[]'::jsonb,'{}'::jsonb,'running',0,$5) RETURNING id`,
+		tenantID, question, region, orgName, total).Scan(&id)
 	return id, err
+}
+
+// updateAIVisibilityRunProgress 更新已完成引擎数。
+func (s *Store) updateAIVisibilityRunProgress(ctx context.Context, tenantID, id int64, progress int) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs SET progress = $3 WHERE id = $1 AND tenant_id = $2`,
+		id, tenantID, progress)
+	return err
+}
+
+// finishAIVisibilityRun 写入引擎结果与缺口诊断，状态置 done。
+func (s *Store) finishAIVisibilityRun(ctx context.Context, tenantID, id int64, engines []any, gap map[string]any) error {
+	engJSON, _ := json.Marshal(engines)
+	gapJSON, _ := json.Marshal(gap)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs
+		SET engines = $3::jsonb, gap = $4::jsonb, status = 'done', progress = total
+		WHERE id = $1 AND tenant_id = $2`,
+		id, tenantID, engJSON, gapJSON)
+	return err
+}
+
+// failAIVisibilityRun 标记失败。
+func (s *Store) failAIVisibilityRun(ctx context.Context, tenantID, id int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs SET status = 'failed' WHERE id = $1 AND tenant_id = $2`,
+		id, tenantID)
+	return err
 }
 
 // listAIVisibilityRuns 列出历史诊断。
@@ -36,7 +65,7 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit 
 		limit = 20
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, question, region, org_name, engines, gap, created_at
+		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
 		FROM content_ai_visibility_runs
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -49,7 +78,7 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit 
 	for rows.Next() {
 		var r AIVisibilityRun
 		var engRaw, gapRaw []byte
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(engRaw, &r.Engines)
@@ -64,9 +93,9 @@ func (s *Store) getAIVisibilityRun(ctx context.Context, tenantID, id int64) (*AI
 	var r AIVisibilityRun
 	var engRaw, gapRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, question, region, org_name, engines, gap, created_at
+		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
 		FROM content_ai_visibility_runs WHERE tenant_id = $1 AND id = $2`, tenantID, id).
-		Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

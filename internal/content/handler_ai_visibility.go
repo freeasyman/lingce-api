@@ -3,6 +3,7 @@ package content
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -22,12 +23,36 @@ func (h *Handler) AnalyzeAIVisibility(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	result, err := h.service.AnalyzeAIVisibility(r.Context(), tenantID, req.Question, req.Region)
+	runID, err := h.service.StartAIVisibility(r.Context(), tenantID, req.Question, req.Region)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, result)
+	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
+}
+
+// GetAIVisibilityRun 查单条诊断（轮询用）。
+func (h *Handler) GetAIVisibilityRun(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid run id")
+		return
+	}
+	run, err := h.service.store.getAIVisibilityRun(r.Context(), tenantID, id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if run == nil {
+		httputil.WriteNotFound(w, "诊断记录不存在")
+		return
+	}
+	httputil.WriteSuccess(w, run)
 }
 
 // ListAIVisibilityRuns 历史诊断列表。
