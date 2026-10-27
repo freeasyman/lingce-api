@@ -1,15 +1,13 @@
 package content
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"time"
+
+	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
-// searchResult DeepSeek 原生搜索 API 的单条结果。
+// searchResult 搜索单条结果（来自网关 /v1/inference/search）。
 type searchResult struct {
 	Title     string `json:"title"`
 	URL       string `json:"url"`
@@ -20,35 +18,55 @@ type searchResult struct {
 	Authority int    `json:"authority"`
 }
 
-// searchWeb 调 DeepSeek 原生搜索 API（/v1/tools/search），返回真实信源。
-func (s *Service) searchWeb(ctx context.Context, query string, count int) ([]searchResult, error) {
-	if s.searchAPIKey == "" {
-		return nil, nil
+// searchWeb 通过网关执行搜索（成本由网关统一审计计量）。
+func (s *Service) searchWeb(ctx context.Context, tenantID int64, query string, count int) ([]searchResult, error) {
+	if s.llmClient == nil {
+		return nil, fmt.Errorf("llm gateway is not configured")
 	}
-	if count <= 0 || count > 20 {
-		count = 8
-	}
-	body, _ := json.Marshal(map[string]any{"query": query, "count": count, "need_content": false})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.deepseek.com/v1/tools/search", bytes.NewReader(body))
+	raw, err := s.llmClient.Search(ctx, llmgateway.SearchRequest{
+		Query:         query,
+		Count:         count,
+		TenantID:      int(tenantID),
+		CallerService: "lingce-api",
+		CallerModule:  "ai_visibility_search",
+		FunctionType:  "search",
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+s.searchAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	out := make([]searchResult, 0, len(raw))
+	for _, m := range raw {
+		out = append(out, searchResult{
+			Title:     strOf(m["title"]),
+			URL:       strOf(m["url"]),
+			Snippet:   strOf(m["snippet"]),
+			Summary:   strOf(m["summary"]),
+			SiteName:  strOf(m["site_name"]),
+			Date:      strOf(m["date"]),
+			Authority: intOf(m["authority"]),
+		})
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search api status %d", resp.StatusCode)
+	return out, nil
+}
+
+func strOf(v any) string {
+	if v == nil {
+		return ""
 	}
-	var out struct {
-		Results []searchResult `json:"results"`
+	if s, ok := v.(string); ok {
+		return s
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+	return fmt.Sprint(v)
+}
+
+func intOf(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case int64:
+		return int(t)
 	}
-	return out.Results, nil
+	return 0
 }

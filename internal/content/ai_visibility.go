@@ -103,7 +103,7 @@ func engineLabel(provider, modelCode string) string {
 // aiEngineAnswer 先搜公开资料，再让引擎基于资料作答，同时返回真实信源。
 func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, error) {
 	// 1. 搜真实信源（DeepSeek 原生搜索 API）
-	sources, err := s.searchWeb(ctx, question, 8)
+	sources, err := s.searchWeb(ctx, tenantID, question, 8)
 	if err != nil {
 		slog.Warn("ai visibility: web search failed", "error", err)
 	}

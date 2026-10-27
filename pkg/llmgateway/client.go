@@ -801,3 +801,64 @@ func (c *Client) GetAuditCostByTenant(ctx context.Context, tenantID int64, start
 	}
 	return &out, nil
 }
+
+// SearchRequest 网关搜索请求（走 /v1/inference/search，统一计量）。
+type SearchRequest struct {
+	Query         string `json:"query"`
+	Count         int    `json:"count"`
+	TenantID      int    `json:"tenant_id"`
+	TraceID       string `json:"trace_id"`
+	CallerService string `json:"caller_service"`
+	CallerModule  string `json:"caller_module"`
+	FunctionType  string `json:"function_type"`
+}
+
+// Search 通过网关执行搜索（DeepSeek 原生搜索），成本由网关统一审计。
+func (c *Client) Search(ctx context.Context, req SearchRequest) ([]map[string]any, error) {
+	if req.TraceID == "" {
+		req.TraceID = uuid.New().String()
+	}
+	if req.CallerService == "" {
+		req.CallerService = "lingce-api"
+	}
+	if req.FunctionType == "" {
+		req.FunctionType = "search"
+	}
+	if req.Count <= 0 || req.Count > 20 {
+		req.Count = 8
+	}
+	requestBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal search request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/inference/search", bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create search request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search api status %d: %s", resp.StatusCode, string(raw[:min(len(raw), 300)]))
+	}
+	var out struct {
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode search response: %w", err)
+	}
+	return out.Results, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
