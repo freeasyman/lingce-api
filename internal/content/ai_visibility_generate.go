@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
@@ -22,6 +23,10 @@ const aiVisibilityGeneratePrompt = `你是医疗内容运营专家。下面是�
 
 // ListAIVisibilityRuns 列出历史诊断。
 func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
+	// 顺手清理重启导致卡在 running 的僵尸记录
+	if n, err := s.store.failStaleAIVisibilityRuns(ctx); err == nil && n > 0 {
+		slog.Warn("ai visibility: marked stale running runs as failed", "count", n)
+	}
 	return s.store.listAIVisibilityRuns(ctx, tenantID, limit, offset)
 }
 

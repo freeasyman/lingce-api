@@ -59,6 +59,19 @@ func (s *Store) failAIVisibilityRun(ctx context.Context, tenantID, id int64) err
 	return err
 }
 
+// failStaleAIVisibilityRuns 把长时间卡在 running 的记录标为失败。
+// 服务重启会杀掉后台 goroutine，导致记录永久停在 running。
+func (s *Store) failStaleAIVisibilityRuns(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs
+		SET status = 'failed'
+		WHERE status = 'running' AND created_at < now() - interval '10 minutes'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // listAIVisibilityRuns 列出历史诊断。
 func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
 	if limit <= 0 || limit > 100 {
