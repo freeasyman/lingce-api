@@ -1,10 +1,11 @@
 package content
 
 import (
-	"strings"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -281,6 +282,12 @@ func (h *Handler) GeneratePlanV2(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	plan, err := h.service.GeneratePlan(r.Context(), tenantID, req.Period, req.StartDate)
 	if err != nil {
+		// 业务前置条件（没账号/没选题）要原样告诉用户怎么处理，不能包成「服务不可用」
+		var bizErr *BizError
+		if errors.As(err, &bizErr) {
+			httputil.WriteError(w, http.StatusBadRequest, bizErr.Code, bizErr.Message, nil)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -678,9 +685,6 @@ func (h *Handler) UpsertOrgKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, map[string]bool{"saved": true})
 }
-
-
-
 
 // GetInsightV2 洞察详情。
 func (h *Handler) GetInsightV2(w http.ResponseWriter, r *http.Request) {

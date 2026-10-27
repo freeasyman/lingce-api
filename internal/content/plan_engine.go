@@ -62,13 +62,18 @@ func (s *Service) GeneratePlan(ctx context.Context, tenantID int64, period, star
 		return nil, fmt.Errorf("list accounts: %w", err)
 	}
 	if len(accounts) == 0 {
-		return nil, fmt.Errorf("no media accounts; create accounts first")
+		return nil, NewBizError("NO_MEDIA_ACCOUNTS",
+			"还没有配置发布账号。请先到「账号」里添加公众号、官网等账号，再回来生成计划。")
 	}
 
 	// 2. 选题（未排进计划的，按 id 倒序）
 	topics, _, err := s.store.listTopicsV2(ctx, tenantID, 0, 200)
 	if err != nil {
 		return nil, fmt.Errorf("list topics: %w", err)
+	}
+	if len(topics) == 0 {
+		return nil, NewBizError("NO_TOPICS",
+			"还没有可选选题。请先到「选题」里生成或手动添加选题，再回来生成计划。")
 	}
 
 	// 3. 建计划周期
