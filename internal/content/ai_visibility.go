@@ -188,7 +188,7 @@ func (s *Service) AnalyzeAIVisibility(ctx context.Context, tenantID int64, quest
 	}
 
 	q := question
-	if region != "" {
+	if region != "" && !strings.Contains(question, region) {
 		q = region + "，" + question
 	}
 
