@@ -129,12 +129,14 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
-	enableSearch := true
+	// 不启用各厂商自带的联网搜索：信源统一由 DeepSeek 搜索 API 提供（走网关计量），
+	// 否则会重复搜索并产生额外计费（千问 enable_search、豆包联网插件都另收费）。
+	enableSearch := false
 	if req.Params == nil {
 		req.Params = &llmgateway.Params{}
 	}
 	req.Params.EnableSearch = &enableSearch
-	// 联网搜索会显著变慢（搜索 + 长回答），30 秒默认超时不够
+	// 长上下文回答较慢，30 秒默认超时不够
 	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
