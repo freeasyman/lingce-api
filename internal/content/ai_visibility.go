@@ -144,8 +144,8 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		req.Params = &llmgateway.Params{}
 	}
 	req.Params.EnableSearch = &enableSearch
-	// 长上下文回答较慢，30 秒默认超时不够
-	req.Params.TimeoutSeconds = 120
+	// 联网检索 + 长回答偶发很慢（豆包/千问都可能 1~3 分钟），给足 300 秒
+	req.Params.TimeoutSeconds = 300
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
 		return "", sources, nil, 0, err
@@ -267,7 +267,8 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
 		answer, sources, queries, searchCount, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
 		if err != nil {
-			item.Error = err.Error()
+			// 技术细节只进日志，返回给客户的是能看懂的话
+			item.Error = "这次没能拿到该 AI 的回答（可能超时），稍后可单独重试"
 			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
 		} else {
 			item.Answer = answer
