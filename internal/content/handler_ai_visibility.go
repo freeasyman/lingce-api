@@ -62,13 +62,23 @@ func (h *Handler) ListAIVisibilityRuns(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	limit := 20
-	items, err := h.service.ListAIVisibilityRuns(r.Context(), tenantID, limit)
+	limit, offset := 20, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	items, total, err := h.service.ListAIVisibilityRuns(r.Context(), tenantID, limit, offset)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
 // GenerateFromAIVisibility 基于缺口诊断生成内容。

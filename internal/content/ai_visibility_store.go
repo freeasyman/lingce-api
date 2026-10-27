@@ -60,18 +60,25 @@ func (s *Store) failAIVisibilityRun(ctx context.Context, tenantID, id int64) err
 }
 
 // listAIVisibilityRuns 列出历史诊断。
-func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit int) ([]AIVisibilityRun, error) {
+func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM content_ai_visibility_runs WHERE tenant_id = $1`, tenantID).Scan(&total); err != nil {
+		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
 		FROM content_ai_visibility_runs
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC, id DESC
-		LIMIT $2`, tenantID, limit)
+		LIMIT $2 OFFSET $3`, tenantID, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []AIVisibilityRun
@@ -79,13 +86,13 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit 
 		var r AIVisibilityRun
 		var engRaw, gapRaw []byte
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		_ = json.Unmarshal(engRaw, &r.Engines)
 		_ = json.Unmarshal(gapRaw, &r.Gap)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // getAIVisibilityRun 取单条诊断。

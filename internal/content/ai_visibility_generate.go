@@ -21,8 +21,8 @@ const aiVisibilityGeneratePrompt = `你是医疗内容运营专家。下面是�
   · 只返回 JSON。`
 
 // ListAIVisibilityRuns 列出历史诊断。
-func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limit int) ([]AIVisibilityRun, error) {
-	return s.store.listAIVisibilityRuns(ctx, tenantID, limit)
+func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limit, offset int) ([]AIVisibilityRun, int, error) {
+	return s.store.listAIVisibilityRuns(ctx, tenantID, limit, offset)
 }
 
 // GenerateFromAIVisibility 基于缺口诊断生成内容（公众号深度文 / 官网栏目页）。
