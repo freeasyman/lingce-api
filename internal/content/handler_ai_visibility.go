@@ -103,3 +103,30 @@ func (h *Handler) GenerateFromAIVisibility(w http.ResponseWriter, r *http.Reques
 	}
 	httputil.WriteSuccess(w, result)
 }
+
+// ListCandidateQuestions 候选问题（服务端搜索 + 分页）。
+func (h *Handler) ListCandidateQuestions(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	limit, offset := 30, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	kw := r.URL.Query().Get("q")
+	items, total, err := h.service.ListCandidateQuestions(r.Context(), tenantID, kw, limit, offset)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+}
