@@ -51,6 +51,7 @@ type aiEngineAnswer struct {
 	Answer        string         `json:"answer"`
 	Sources       []searchResult `json:"sources,omitempty"`
 	SearchQueries []string       `json:"search_queries,omitempty"`
+	SearchCount   int            `json:"search_count,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	Analysis      map[string]any `json:"analysis,omitempty"`
 }
@@ -102,7 +103,7 @@ func engineLabel(provider, modelCode string) string {
 }
 
 // aiEngineAnswer 先搜公开资料，再让引擎基于资料作答，同时返回真实信源。
-func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, []string, error) {
+func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, []string, int, error) {
 	// 每家用自己的联网搜索，保证"患者问这家 AI 时真实会看到什么"。
 	//   deepseek  → 自己的搜索 API（能拿到结构化信源 URL）
 	//   千问/豆包 → 各自厂商的联网搜索（信源由答案分析提取，厂商接口不返回 URL）
@@ -147,7 +148,7 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
-		return "", sources, nil, err
+		return "", sources, nil, 0, err
 	}
 	// 厂商返回引用（豆包 annotations）时优先用它，比 DeepSeek 搜索更贴合本引擎答案
 	if len(resp.Citations) > 0 {
@@ -156,7 +157,7 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 			sources = append(sources, searchResult{Title: c.Title, URL: c.URL, SiteName: c.SiteName, Date: c.PublishTime})
 		}
 	}
-	return strings.TrimSpace(resp.Content), sources, resp.SearchQueries, nil
+	return strings.TrimSpace(resp.Content), sources, resp.SearchQueries, resp.SearchCount, nil
 }
 
 // aiEngineAnalyze 分析一个引擎的回答。
@@ -264,7 +265,7 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 	results := make([]aiEngineAnswer, 0, len(engines))
 	for i, eng := range engines {
 		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
-		answer, sources, queries, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
+		answer, sources, queries, searchCount, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
 		if err != nil {
 			item.Error = err.Error()
 			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
@@ -272,6 +273,7 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 			item.Answer = answer
 			item.Sources = sources
 			item.SearchQueries = queries
+			item.SearchCount = searchCount
 			analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
 			if aerr != nil {
 				item.Error = aerr.Error()

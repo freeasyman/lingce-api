@@ -161,6 +161,7 @@ type TextInferenceResponse struct {
 	PriceVersion   string           `json:"price_version,omitempty"`
 	SearchQueries  []string         `json:"search_queries,omitempty"`
 	Citations      []SearchCitation `json:"citations,omitempty"`
+	SearchCount    int              `json:"search_count,omitempty"`
 	PricingMissing bool             `json:"pricing_missing,omitempty"`
 }
 
