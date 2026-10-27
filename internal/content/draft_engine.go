@@ -12,7 +12,6 @@ import (
 
 // 文稿生成引擎：选题 → 结构化文稿（按形式）。
 
-
 // GenerateGraphicNoteDraftRequest 图文笔记文稿生成请求。
 type GenerateGraphicNoteDraftRequest struct {
 	TopicTitle       string `json:"topic_title"`
@@ -58,6 +57,11 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	// 长文生成经常超过网关默认 30 秒，超时会导致 500；这里放宽到 180 秒
+	if llmReq.Params == nil {
+		llmReq.Params = &llmgateway.Params{}
+	}
+	llmReq.Params.TimeoutSeconds = 180
 	resp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
 		return nil, fmt.Errorf("generate draft: %w", err)

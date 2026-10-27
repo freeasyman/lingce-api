@@ -11,7 +11,6 @@ import (
 
 // 通用文稿生成：按 form 分发，选题 → 结构化文稿。
 
-
 // GenerateDraft 按 form 生成文稿。
 func (s *Service) GenerateDraft(ctx context.Context, tenantID int64, form string, req GenerateGraphicNoteDraftRequest) (map[string]any, error) {
 	if form == "graphic" || form == "" {
@@ -33,7 +32,7 @@ func (s *Service) GenerateDraft(ctx context.Context, tenantID int64, form string
 	systemPrompt, modelRef, source := s.resolveDraftSystemPrompt(ctx, tenantID, form)
 	slog.Info("draft prompt resolved", "form", form, "source", source, "model_ref", modelRef)
 
-	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_generation", "content_"+form, "chat"})
+	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_generation", "content_" + form, "chat"})
 	if err != nil {
 		return nil, fmt.Errorf("resolve llm config for draft: %w", err)
 	}
@@ -50,6 +49,11 @@ func (s *Service) GenerateDraft(ctx context.Context, tenantID int64, form string
 		},
 	}
 	applyModelParamsToLLMRequest(&llmReq, selectedModel.ModelParams)
+	// 长文生成经常超过网关默认 30 秒，超时会导致 500；这里放宽到 180 秒
+	if llmReq.Params == nil {
+		llmReq.Params = &llmgateway.Params{}
+	}
+	llmReq.Params.TimeoutSeconds = 180
 	resp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
 		return nil, fmt.Errorf("generate draft: %w", err)
