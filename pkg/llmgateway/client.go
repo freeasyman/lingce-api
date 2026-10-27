@@ -126,6 +126,8 @@ type Params struct {
 	TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
 	ResponseFormat string        `json:"response_format,omitempty"` // text, json
 	OutputSchema   *OutputSchema `json:"output_schema,omitempty"`
+	// EnableSearch 开启 provider 的联网搜索（查实时公开信息）。
+	EnableSearch *bool `json:"enable_search,omitempty"`
 }
 
 func (p Params) MarshalJSON() ([]byte, error) {
@@ -135,12 +137,14 @@ func (p Params) MarshalJSON() ([]byte, error) {
 		TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
 		ResponseFormat string        `json:"response_format,omitempty"`
 		OutputSchema   *OutputSchema `json:"output_schema,omitempty"`
+		EnableSearch   *bool         `json:"enable_search,omitempty"`
 	}{
 		Temperature:    p.Temperature,
 		MaxTokens:      p.MaxTokens,
 		TimeoutSeconds: p.TimeoutSeconds,
 		ResponseFormat: p.ResponseFormat,
 		OutputSchema:   p.OutputSchema,
+		EnableSearch:   p.EnableSearch,
 	}
 	return json.Marshal(payload)
 }

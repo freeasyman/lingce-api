@@ -12,7 +12,11 @@ import (
 // AI 答案可见性：同一患者问题，在多个 AI 引擎各问一遍，
 // 逐引擎分析（是否提到机构/医生、信源、竞品、事实错误），最后汇总缺口诊断。
 
-const aiVisibilityAnswerPrompt = `你是一个通用医疗 AI 助手。请中立、客观地回答患者的问题，站在通用知识角度，不主动推荐任何具体医院或医生。回答控制在 300 字以内。`
+const aiVisibilityAnswerPrompt = `你是一个通用医疗 AI 助手（类似豆包、元宝）。请直接回答患者的问题。
+遇到评价性/建议性问题（例如"某家医院怎么样""某地哪家医院好"），要基于公开信息正面回答：
+查到该机构的公开资料就客观介绍（资质、科室、医生、口碑、注意事项等）；
+没查到就说明没有找到公开信息，不要因为"保持中立"就直接拒答。
+回答控制在 400 字以内。`
 
 const aiVisibilityAnalyzePrompt = `你是医疗内容运营专家。下面是患者问题和某个通用 AI 助手的回答。
 请分析这个回答，输出 JSON（我方机构名：%s）：
@@ -110,6 +114,11 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
+	enableSearch := true
+	if req.Params == nil {
+		req.Params = &llmgateway.Params{}
+	}
+	req.Params.EnableSearch = &enableSearch
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
 		return "", err
