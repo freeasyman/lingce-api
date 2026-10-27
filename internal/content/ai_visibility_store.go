@@ -39,6 +39,15 @@ func (s *Store) updateAIVisibilityRunProgress(ctx context.Context, tenantID, id 
 	return err
 }
 
+// updateAIVisibilityRunEngines 写入已完成的部分引擎结果（边跑边给前端看）。
+func (s *Store) updateAIVisibilityRunEngines(ctx context.Context, tenantID, id int64, engines []any) error {
+	engJSON, _ := json.Marshal(engines)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE content_ai_visibility_runs SET engines = $3::jsonb WHERE id = $1 AND tenant_id = $2`,
+		id, tenantID, engJSON)
+	return err
+}
+
 // finishAIVisibilityRun 写入引擎结果与缺口诊断，状态置 done。
 func (s *Store) finishAIVisibilityRun(ctx context.Context, tenantID, id int64, engines []any, gap map[string]any) error {
 	engJSON, _ := json.Marshal(engines)

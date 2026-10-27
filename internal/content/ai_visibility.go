@@ -281,6 +281,12 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 			}
 		}
 		results = append(results, item)
+		// 边跑边落：前端轮询能逐个看到引擎结果，不用等全部跑完
+		partial := make([]any, 0, len(results))
+		for _, r := range results {
+			partial = append(partial, r)
+		}
+		_ = s.store.updateAIVisibilityRunEngines(ctx, tenantID, runID, partial)
 		_ = s.store.updateAIVisibilityRunProgress(ctx, tenantID, runID, i+1)
 	}
 
