@@ -457,6 +457,7 @@ func main() {
 	// Register content module
 	contentStore := content.NewStore(pool)
 	contentService := content.NewService(contentStore, llmClient, ossClient)
+	contentService.SetSearchAPIKey(cfg.External.DeepSeekSearchAPIKey)
 	contentHandler := content.NewHandler(contentService)
 	contentHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 

@@ -79,8 +79,11 @@ type RecordingConfig struct {
 }
 
 type ExternalConfig struct {
-	LLMGatewayURL              string             `toml:"llm_gateway_url"`
-	LLMGatewayAPIKey           string             `toml:"llm_gateway_api_key"`
+	LLMGatewayURL    string `toml:"llm_gateway_url"`
+	LLMGatewayAPIKey string `toml:"llm_gateway_api_key"`
+	// DeepSeekSearchAPIKey 用于 DeepSeek 原生搜索 API（/v1/tools/search），
+	// 给"AI 答案可见性"提供真实信源（标题/URL/摘要/日期/权威度）。
+	DeepSeekSearchAPIKey       string             `toml:"deepseek_search_api_key"`
 	BadgeMiddlewareURL         string             `toml:"badge_middleware_url"`
 	BadgeMiddlewareToken       string             `toml:"badge_middleware_token"`
 	BadgeCallbackGatewayToken  string             `toml:"badge_callback_gateway_token"`
@@ -182,6 +185,7 @@ type JWTSecrets struct {
 
 type ExternalSecrets struct {
 	LLMGatewayAPIKey          string             `toml:"llm_gateway_api_key"`
+	DeepSeekSearchAPIKey      string             `toml:"deepseek_search_api_key"`
 	BadgeMiddlewareToken      string             `toml:"badge_middleware_token"`
 	BadgeCallbackGatewayToken string             `toml:"badge_callback_gateway_token"`
 	RecordingWorkerToken      string             `toml:"recording_worker_token"`
@@ -359,6 +363,9 @@ func mergeSecrets(cfg *Config, secrets *secretsConfig) {
 	}
 	if secrets.JWT.Secret != "" {
 		cfg.JWT.Secret = secrets.JWT.Secret
+	}
+	if secrets.External.DeepSeekSearchAPIKey != "" {
+		cfg.External.DeepSeekSearchAPIKey = secrets.External.DeepSeekSearchAPIKey
 	}
 	if secrets.External.LLMGatewayAPIKey != "" {
 		cfg.External.LLMGatewayAPIKey = secrets.External.LLMGatewayAPIKey

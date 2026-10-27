@@ -49,6 +49,7 @@ type aiEngineAnswer struct {
 	Provider  string         `json:"provider"`
 	ModelCode string         `json:"model_code"`
 	Answer    string         `json:"answer"`
+	Sources   []searchResult `json:"sources,omitempty"`
 	Error     string         `json:"error,omitempty"`
 	Analysis  map[string]any `json:"analysis,omitempty"`
 }
@@ -99,8 +100,22 @@ func engineLabel(provider, modelCode string) string {
 	return provider + "/" + modelCode
 }
 
-// aiEngineAnswer 调一个引擎回答。
-func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, error) {
+// aiEngineAnswer 先搜公开资料，再让引擎基于资料作答，同时返回真实信源。
+func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmModelSelection, question string) (string, []searchResult, error) {
+	// 1. 搜真实信源（DeepSeek 原生搜索 API）
+	sources, err := s.searchWeb(ctx, question, 8)
+	if err != nil {
+		slog.Warn("ai visibility: web search failed", "error", err)
+	}
+	userContent := question
+	if len(sources) > 0 {
+		var b strings.Builder
+		b.WriteString("【网上搜到的公开资料】\n")
+		for i, r := range sources {
+			fmt.Fprintf(&b, "[%d] %s（%s）\n%s\n", i+1, r.Title, r.SiteName, r.Summary)
+		}
+		userContent = b.String() + "\n【患者问题】" + question
+	}
 	req := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
@@ -110,7 +125,7 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		ModelCode:     sel.ModelCode,
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_ai_visibility_answer", aiVisibilityAnswerPrompt)},
-			{Role: "user", Content: question},
+			{Role: "user", Content: userContent},
 		},
 	}
 	applyModelParamsToLLMRequest(&req, sel.ModelParams)
@@ -123,9 +138,9 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
-		return "", err
+		return "", sources, err
 	}
-	return strings.TrimSpace(resp.Content), nil
+	return strings.TrimSpace(resp.Content), sources, nil
 }
 
 // aiEngineAnalyze 分析一个引擎的回答。
@@ -224,12 +239,13 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 	results := make([]aiEngineAnswer, 0, len(engines))
 	for i, eng := range engines {
 		item := aiEngineAnswer{Engine: engineLabel(eng.Provider, eng.ModelCode), Provider: eng.Provider, ModelCode: eng.ModelCode}
-		answer, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
+		answer, sources, err := s.aiEngineAnswer(ctx, tenantID, eng, q)
 		if err != nil {
 			item.Error = err.Error()
 			slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
 		} else {
 			item.Answer = answer
+			item.Sources = sources
 			analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, eng, q, answer, orgName)
 			if aerr != nil {
 				item.Error = aerr.Error()

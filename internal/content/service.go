@@ -15,10 +15,14 @@ import (
 
 // Service 内容获客服务（新模型核心，旧内容中心代码已随 Phase 3 清理）。
 type Service struct {
-	store     *Store
-	llmClient *llmgateway.Client
-	ossClient *oss.Client
+	store        *Store
+	llmClient    *llmgateway.Client
+	ossClient    *oss.Client
+	searchAPIKey string
 }
+
+// SetSearchAPIKey 注入 DeepSeek 搜索 API key（供 AI 可见性取真实信源）。
+func (s *Service) SetSearchAPIKey(key string) { s.searchAPIKey = key }
 
 func NewService(store *Store, llmClient *llmgateway.Client, ossClient *oss.Client) *Service {
 	return &Service{store: store, llmClient: llmClient, ossClient: ossClient}
