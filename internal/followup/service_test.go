@@ -49,11 +49,11 @@ func testService(t *testing.T) *Service {
 	CREATE TABLE customers (id bigint PRIMARY KEY, tenant_id bigint, patient_id bigint, deleted_at timestamp);
 	CREATE TABLE institution_employee_roles (id bigint PRIMARY KEY, tenant_id bigint, employee_id bigint, role_code text, updated_at timestamp, created_at timestamp);
 	CREATE TABLE encounters (id bigint PRIMARY KEY, tenant_id bigint, source_type text, source_id bigint, provider_id bigint, patient_id bigint);
-	CREATE TABLE recordings (id bigint PRIMARY KEY, tenant_id bigint, encounter_id bigint, employee_id bigint, customer_id bigint, patient_id bigint);
+	CREATE TABLE recordings (id bigint PRIMARY KEY, tenant_id bigint, encounter_id bigint, employee_id bigint, customer_id bigint, patient_id bigint, business_scope text, resolved_role_code text);
 	CREATE TABLE followup_generation_runs (
 	 id bigserial PRIMARY KEY, tenant_id bigint, recording_id bigint, encounter_id bigint,
 	 employee_id bigint, customer_id bigint, customer_name text, doctor_name text, recorded_at timestamp,
-	 request_id text NOT NULL UNIQUE, request_payload jsonb, prompt_code text, status text,
+	 request_id text NOT NULL UNIQUE, request_payload jsonb, analysis_run_id text, prompt_code text, status text,
 	 attempt_count integer, max_attempts integer, created_at timestamp, updated_at timestamp
 	);
 	INSERT INTO tenants VALUES (1,NULL),(2,NULL);
@@ -61,7 +61,7 @@ func testService(t *testing.T) *Service {
 	INSERT INTO customers VALUES (30,1,40,NULL),(31,1,41,NULL),(32,2,42,NULL);
 	INSERT INTO institution_employee_roles VALUES (1,1,10,'doctor',NOW(),NOW());
 	INSERT INTO encounters VALUES (50,1,'realtime',123,10,40),(51,1,'recording',61,10,40);
-	INSERT INTO recordings VALUES (60,1,50,10,30,40),(61,1,51,10,30,40);
+	INSERT INTO recordings VALUES (60,1,50,10,30,40,'doctor','doctor'),(61,1,51,10,30,40,'doctor','doctor');
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +112,7 @@ func TestValidateReferencesRejectsMismatch(t *testing.T) {
 		{name: "foreign_customer", sql: `UPDATE customers SET tenant_id=2 WHERE id=30`},
 		{name: "foreign_encounter", sql: `UPDATE encounters SET tenant_id=2 WHERE id=50`},
 		{name: "recording_source", sql: `UPDATE encounters SET source_type='recording',source_id=999 WHERE id=50`},
+		{name: "recording_non_doctor", mutate: func(r *GenerateRequest) { r.RecordingID = 61; r.EncounterID = 51 }, sql: `UPDATE recordings SET business_scope='consultant',resolved_role_code='consultant' WHERE id=61`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,7 +131,7 @@ func TestValidateReferencesRejectsMismatch(t *testing.T) {
 			if !errors.As(err, &ref) {
 				t.Fatalf("want InvalidReferenceError, got %v", err)
 			}
-			_, err = s.pool.Exec(ctx, `UPDATE encounters SET tenant_id=1,source_type='realtime',source_id=123,provider_id=10,patient_id=40 WHERE id=50; UPDATE customers SET tenant_id=1,patient_id=40 WHERE id=30; UPDATE employees SET deleted_at=NULL WHERE id=10; UPDATE institution_employee_roles SET role_code='doctor';`)
+			_, err = s.pool.Exec(ctx, `UPDATE encounters SET tenant_id=1,source_type='realtime',source_id=123,provider_id=10,patient_id=40 WHERE id=50; UPDATE customers SET tenant_id=1,patient_id=40 WHERE id=30; UPDATE employees SET deleted_at=NULL WHERE id=10; UPDATE institution_employee_roles SET role_code='doctor'; UPDATE recordings SET business_scope='doctor',resolved_role_code='doctor' WHERE id IN (60,61);`)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -204,5 +205,44 @@ func TestConcurrentAcceptanceReturnsOriginalRequest(t *testing.T) {
 		if err := s.pool.QueryRow(ctx, `SELECT status FROM followup_generation_runs`).Scan(&actual); err != nil || actual != status {
 			t.Fatalf("status changed: %s, %v", actual, err)
 		}
+	}
+}
+
+// TestAcceptGenerationRunUsesAnalysisRunID 验证幂等键从录音改为分析 run：
+// 同一 run 的重复回调只接收一次，新的 run（重新分析）必须创建新的生成记录。
+func TestAcceptGenerationRunUsesAnalysisRunID(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+
+	first := testRequest()
+	first.AnalysisRunID = "run-1"
+	id1, request1, created1, err := s.acceptGenerationRun(ctx, "request-1", first)
+	if err != nil || !created1 {
+		t.Fatalf("first run: id=%d request=%s created=%v err=%v", id1, request1, created1, err)
+	}
+
+	duplicate := testRequest()
+	duplicate.AnalysisRunID = "run-1"
+	idDup, requestDup, createdDup, err := s.acceptGenerationRun(ctx, "request-duplicate", duplicate)
+	if err != nil || createdDup {
+		t.Fatalf("duplicate run: id=%d request=%s created=%v err=%v", idDup, requestDup, createdDup, err)
+	}
+	if idDup != id1 || requestDup != request1 {
+		t.Fatalf("duplicate returned different receipt: %d/%s vs %d/%s", idDup, requestDup, id1, request1)
+	}
+
+	second := testRequest()
+	second.AnalysisRunID = "run-2"
+	id2, request2, created2, err := s.acceptGenerationRun(ctx, "request-2", second)
+	if err != nil || !created2 {
+		t.Fatalf("second run: id=%d request=%s created=%v err=%v", id2, request2, created2, err)
+	}
+	if id2 == id1 || request2 == request1 {
+		t.Fatalf("new analysis run reused old receipt: %d/%s vs %d/%s", id2, request2, id1, request1)
+	}
+
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM followup_generation_runs WHERE analysis_run_id IS NOT NULL`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("analysis run count=%d, err=%v", count, err)
 	}
 }

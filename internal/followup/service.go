@@ -173,6 +173,12 @@ func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) e
 		  AND r.encounter_id = $3
 		  AND r.employee_id = $4
 		  AND r.customer_id = $5
+		  -- 随访只面向医生录音；这里与前端列表/统计使用同一口径，
+		  -- 避免咨询师、治疗师、前台录音生成任务后被查询层过滤。
+		  AND (
+			lower(trim(COALESCE(r.business_scope, ''))) = 'doctor'
+			OR lower(trim(COALESCE(r.resolved_role_code, ''))) IN ('doctor', 'doctor_patient', 'doctor_conversion')
+		  )
 		LIMIT 1
 	`, req.RecordingID, req.TenantID, req.EncounterID, req.EmployeeID, req.CustomerID).Scan(&exists)
 	if err == nil {
@@ -216,8 +222,12 @@ type followupGenerationRun struct {
 // 时间：2026-09-10
 // acceptGenerationRun 使用录音行锁串行化同一 tenant_id + recording_id 的接收。
 // 锁与查询、插入在同一事务中，适用于多个 API 实例；历史重复记录取最早一条。
-// 重复投递不修改原请求、不重启生成；failed 也返回原接收记录，由业务补偿管理。
-// 署名：Codex；时间：2026-10-06。
+//
+// 幂等键优先使用 Worker 的 analysis_run_id：同一分析 run 的重复回调只处理一次，
+// 新的分析 run（包括用户主动重新分析）允许重新生成任务。旧调用方没有
+// analysis_run_id 时，继续退回按 tenant_id + recording_id 去重。
+//
+// 署名：Codex；时间：2026-10-06；更新：2026-10-24。
 func (s *Service) acceptGenerationRun(ctx context.Context, requestID string, req GenerateRequest) (int64, string, bool, error) {
 	if s.pool == nil {
 		return 0, "", false, fmt.Errorf("database pool is not configured")
@@ -233,7 +243,11 @@ func (s *Service) acceptGenerationRun(ctx context.Context, requestID string, req
 	}
 	var existingID int64
 	var existingRequestID string
-	err = tx.QueryRow(ctx, `SELECT id, request_id FROM followup_generation_runs WHERE tenant_id=$1 AND recording_id=$2 ORDER BY id ASC LIMIT 1`, req.TenantID, req.RecordingID).Scan(&existingID, &existingRequestID)
+	if analysisRunID := strings.TrimSpace(req.AnalysisRunID); analysisRunID != "" {
+		err = tx.QueryRow(ctx, `SELECT id, request_id FROM followup_generation_runs WHERE tenant_id=$1 AND analysis_run_id=$2 ORDER BY id ASC LIMIT 1`, req.TenantID, analysisRunID).Scan(&existingID, &existingRequestID)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT id, request_id FROM followup_generation_runs WHERE tenant_id=$1 AND recording_id=$2 ORDER BY id ASC LIMIT 1`, req.TenantID, req.RecordingID).Scan(&existingID, &existingRequestID)
+	}
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return 0, "", false, err
@@ -241,7 +255,7 @@ func (s *Service) acceptGenerationRun(ctx context.Context, requestID string, req
 		return existingID, existingRequestID, false, nil
 	}
 	if err != pgx.ErrNoRows {
-		return 0, "", false, err
+		return 0, "", false, fmt.Errorf("load existing followup generation run: %w", err)
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -257,17 +271,17 @@ func (s *Service) acceptGenerationRun(ctx context.Context, requestID string, req
 		INSERT INTO followup_generation_runs (
 			tenant_id, recording_id, encounter_id, employee_id, customer_id,
 			customer_name, doctor_name, recorded_at, request_id, request_payload,
-			prompt_code, status, attempt_count, max_attempts, created_at, updated_at
+			analysis_run_id, prompt_code, status, attempt_count, max_attempts, created_at, updated_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5,
 			NULLIF($6, ''), NULLIF($7, ''), $8, $9, $10::jsonb,
-			$11, 'pending', 0, $12, NOW(), NOW()
+			NULLIF($11, ''), $12, 'pending', 0, $13, NOW(), NOW()
 		)
 		RETURNING id
 	`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID,
 		strings.TrimSpace(req.CustomerName), strings.TrimSpace(req.DoctorName), recordedAt,
-		requestID, payload, followupPromptCode, followupRunMaxAttempts).Scan(&runID)
+		requestID, payload, strings.TrimSpace(req.AnalysisRunID), followupPromptCode, followupRunMaxAttempts).Scan(&runID)
 	if err != nil {
 		return 0, "", false, fmt.Errorf("create followup generation run: %w", err)
 	}

@@ -4,25 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
-const currentRuleSetVersion = "2026-10-04-v2"
+const currentRuleSetVersion = "2026-10-04-v2" // 兜底；正常应传入当前发布版本
+const departmentNameExpr = "COALESCE(NULLIF(d.name,''),CASE e.medical_department_code WHEN 'internal_medicine' THEN '内科' WHEN 'surgery' THEN '外科' WHEN 'gynecology' THEN '妇科' WHEN 'pediatrics' THEN '儿科' WHEN 'tcm' THEN '中医科' WHEN 'stomatology' THEN '口腔科' WHEN 'ophthalmology' THEN '眼科' WHEN 'dermatology' THEN '皮肤科' WHEN 'ent' THEN '耳鼻喉科' WHEN 'general' THEN '全科' ELSE NULLIF(e.medical_department_code,'') END,'')"
 
 type ProblemDetailsFilter struct {
-	TenantID     int64
-	From         *time.Time
-	To           *time.Time
-	SectionCode  string
-	RuleCode     string
-	DepartmentID string
-	DoctorID     string
-	Result       string
-	Blocking     *bool
-	ManualReview *bool
-	Action       string
-	Page         int
-	PageSize     int
+	RuleSetVersion string
+	TenantID       int64
+	From           *time.Time
+	To             *time.Time
+	SectionCode    string
+	RuleCode       string
+	DepartmentID   string
+	DoctorID       string
+	Result         string
+	Blocking       *bool
+	ManualReview   *bool
+	Action         string
+	Page           int
+	PageSize       int
 }
 
 type ProblemDetail struct {
@@ -92,7 +96,11 @@ func (s *Store) ProblemDetails(ctx context.Context, f ProblemDetailsFilter) (*Pr
 	if f.PageSize < 1 || f.PageSize > 200 {
 		f.PageSize = 20
 	}
-	args := []any{f.TenantID, currentRuleSetVersion}
+	version := strings.TrimSpace(f.RuleSetVersion)
+	if version == "" {
+		version = currentRuleSetVersion
+	}
+	args := []any{f.TenantID, version}
 	// Problem classification describes the current quality state of submitted
 	// records. The record projection points at the latest quality run that was
 	// bound during a successful submission, so use that pointer instead of
@@ -117,7 +125,12 @@ func (s *Store) ProblemDetails(ctx context.Context, f ProblemDetailsFilter) (*Pr
 		add("qr.rule_code", f.RuleCode)
 	}
 	if f.DepartmentID != "" {
-		add("r.department_id::text", f.DepartmentID)
+		if _, err := strconv.ParseInt(f.DepartmentID, 10, 64); err == nil {
+			add("r.department_id::text", f.DepartmentID)
+		} else {
+			// 前端科室下拉传的是科室名称（内科/妇科…），按展示口径匹配医生科室编码。
+			add(departmentNameExpr, f.DepartmentID)
+		}
 	}
 	if f.DoctorID != "" {
 		add("r.doctor_id::text", f.DoctorID)
@@ -171,7 +184,7 @@ func (s *Store) ProblemDetails(ctx context.Context, f ProblemDetailsFilter) (*Pr
 		rules = append(rules, item)
 	}
 	ruleRows.Close()
-	rows, err := s.pool.Query(ctx, "SELECT r.id,COALESCE(r.patient_snapshot_json->>'record_no',r.id::text),COALESCE(r.patient_snapshot_json->>'name',''),r.started_at,COALESCE(NULLIF(d.name,''),NULLIF(e.medical_department_code,''),''),COALESCE(NULLIF(e.full_name,''),NULLIF(e.name,''),NULLIF(e.username,''),''),COALESCE(NULLIF(current_score.total_score,0),NULLIF(run.total_score,0)),COALESCE(NULLIF(current_score.grade,''),run.grade),qr.section_code,CASE qr.section_code WHEN 'general' THEN '一般项目' WHEN 'chief_complaint' THEN '主诉' WHEN 'history' THEN '病史' WHEN 'physical_exam' THEN '体检' WHEN 'auxiliary_exam' THEN '辅助检查' WHEN 'diagnosis' THEN '诊断' WHEN 'treatment' THEN '处理治疗' WHEN 'doctor_signature' THEN '医师签名' WHEN 'writing_requirement' THEN '病历书写要求' ELSE qr.section_code END,qr.rule_code,def.name,qr.result,qr.deduction,qr.blocking,qr.manual_review,qr.message,qr.reason,qr.evidence,run.action,run.rule_set_version,run.completed_at"+base+fmt.Sprintf(" ORDER BY run.completed_at DESC,qr.id LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2), append(args, f.PageSize, (f.Page-1)*f.PageSize)...)
+	rows, err := s.pool.Query(ctx, "SELECT r.id,COALESCE(r.patient_snapshot_json->>'record_no',r.id::text),COALESCE(r.patient_snapshot_json->>'name',''),r.started_at,COALESCE(NULLIF(d.name,''),CASE e.medical_department_code WHEN 'internal_medicine' THEN '内科' WHEN 'surgery' THEN '外科' WHEN 'gynecology' THEN '妇科' WHEN 'pediatrics' THEN '儿科' WHEN 'tcm' THEN '中医科' WHEN 'stomatology' THEN '口腔科' WHEN 'ophthalmology' THEN '眼科' WHEN 'dermatology' THEN '皮肤科' WHEN 'ent' THEN '耳鼻喉科' WHEN 'general' THEN '全科' ELSE NULLIF(e.medical_department_code,'') END,''),COALESCE(NULLIF(e.full_name,''),NULLIF(e.name,''),NULLIF(e.username,''),''),COALESCE(NULLIF(current_score.total_score,0),NULLIF(run.total_score,0)),COALESCE(NULLIF(current_score.grade,''),run.grade),qr.section_code,CASE qr.section_code WHEN 'general' THEN '一般项目' WHEN 'chief_complaint' THEN '主诉' WHEN 'history' THEN '病史' WHEN 'physical_exam' THEN '体检' WHEN 'auxiliary_exam' THEN '辅助检查' WHEN 'diagnosis' THEN '诊断' WHEN 'treatment' THEN '处理治疗' WHEN 'doctor_signature' THEN '医师签名' WHEN 'writing_requirement' THEN '病历书写要求' ELSE qr.section_code END,qr.rule_code,def.name,qr.result,qr.deduction,qr.blocking,qr.manual_review,qr.message,qr.reason,qr.evidence,run.action,run.rule_set_version,run.completed_at"+base+fmt.Sprintf(" ORDER BY run.completed_at DESC,qr.id LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2), append(args, f.PageSize, (f.Page-1)*f.PageSize)...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,5 +200,5 @@ func (s *Store) ProblemDetails(ctx context.Context, f ProblemDetailsFilter) (*Pr
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return &ProblemDetailsResponse{RuleSetVersion: currentRuleSetVersion, Items: items, Summary: ProblemDetailsSummary{AffectedRecordCount: affected, OccurrenceCount: occurrences, AverageDeduction: avg, NotEvaluableCount: pending, BlockingCount: blocking, ManualReviewCount: manual}, Categories: categories, Rules: rules, Page: f.Page, PageSize: f.PageSize, Total: total}, nil
+	return &ProblemDetailsResponse{RuleSetVersion: version, Items: items, Summary: ProblemDetailsSummary{AffectedRecordCount: affected, OccurrenceCount: occurrences, AverageDeduction: avg, NotEvaluableCount: pending, BlockingCount: blocking, ManualReviewCount: manual}, Categories: categories, Rules: rules, Page: f.Page, PageSize: f.PageSize, Total: total}, nil
 }

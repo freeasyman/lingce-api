@@ -36,6 +36,9 @@ func (h *QueryHandler) ProblemDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := ProblemDetailsFilter{TenantID: tenantID, SectionCode: r.URL.Query().Get("section_code"), RuleCode: r.URL.Query().Get("rule_code"), DepartmentID: r.URL.Query().Get("department_id"), DoctorID: r.URL.Query().Get("doctor_id"), Result: r.URL.Query().Get("result"), Action: r.URL.Query().Get("action")}
+	if version, ok, versionErr := h.store.activeVersion(r.Context()); versionErr == nil && ok {
+		f.RuleSetVersion = version
+	}
 	f.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	f.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
 	if value := r.URL.Query().Get("from"); value != "" {

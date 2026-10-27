@@ -2981,6 +2981,9 @@ func (s *Store) GetDailyBriefing(ctx context.Context, tenantID int64, assignedTo
 	if followupOnly {
 		// 随访中心每日简报只统计随访来源任务。
 		conditions = append(conditions, "source_type IN ('follow_up', 'followup')")
+		// 简报必须与随访列表、随访统计使用同一可执行任务口径：
+		// 匿名或缺少姓名/电话的任务属于“待补全患者”，不计入队列和简报。
+		conditions = append(conditions, "anonymous_patient = false AND NULLIF(trim(customer_name), '') IS NOT NULL AND NULLIF(trim(customer_phone), '') IS NOT NULL")
 	}
 
 	// 每日简报只统计医生录音任务，避免非医生历史任务污染工作台指标。

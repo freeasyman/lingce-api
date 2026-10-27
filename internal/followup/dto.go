@@ -19,6 +19,9 @@ type GenerateRequest struct {
 	CustomerName      string `json:"customer_name"`
 	RecordedAt        string `json:"recorded_at"`
 	CleanedTranscript string `json:"cleaned_transcript"`
+	// AnalysisRunID 是 Worker 本次分析 run 的稳定标识。
+	// 同一 run 的重复回调只处理一次；新的 run 允许重新生成随访任务。
+	AnalysisRunID string `json:"analysis_run_id,omitempty"`
 }
 
 // GenerateResponse 是随访中心对 Worker 的最小确认返回。

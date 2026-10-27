@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 )
+
+// 实时随访投递是“至少一次”语义，但必须有终态：录音被删除、引用永久不成立
+// 或重试次数耗尽后继续每 5 分钟重试，只会制造无意义的数据库写入和告警。
+const maxFollowupDeliveryAttempts = 20
+
+// nextFollowupDeliveryStatus 根据失败类型和已尝试次数决定下一次状态。
+// 永久错误（例如录音已不存在）立即终止；其他错误最多重试 maxFollowupDeliveryAttempts 次。
+func nextFollowupDeliveryStatus(attemptCount int, permanent bool) string {
+	if permanent || attemptCount+1 >= maxFollowupDeliveryAttempts {
+		return "failed"
+	}
+	return "pending"
+}
 
 // This payload deliberately matches the internal HTTP contract without importing
 // followup implementation: the two modules can be developed independently.
@@ -98,9 +112,10 @@ func (s *Service) processFollowupDeliveries(ctx context.Context) {
 			return
 		}
 		var tenantID, recordingID int64
-		err = tx.QueryRow(ctx, `SELECT tenant_id,recording_id FROM emr_followup_deliveries
+		var attemptCount int
+		err = tx.QueryRow(ctx, `SELECT tenant_id,recording_id,attempt_count FROM emr_followup_deliveries
             WHERE status='pending' AND next_attempt_at<=NOW()
-            ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&tenantID, &recordingID)
+            ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&tenantID, &recordingID, &attemptCount)
 		if err != nil {
 			_ = tx.Rollback(ctx)
 			if err != pgx.ErrNoRows {
@@ -108,7 +123,7 @@ func (s *Service) processFollowupDeliveries(ctx context.Context) {
 			}
 			return
 		}
-	request, loadErr := loadRealtimeFollowup(ctx, tx, tenantID, recordingID)
+		request, loadErr := loadRealtimeFollowup(ctx, tx, tenantID, recordingID)
 		requestID := ""
 		if loadErr == nil {
 			requestID, loadErr = sendRealtimeFollowup(ctx, &http.Client{Timeout: 10 * time.Second}, s.followupAPIURL, s.internalToken, request)
@@ -118,12 +133,17 @@ func (s *Service) processFollowupDeliveries(ctx context.Context) {
                 attempt_count=attempt_count+1,last_error=NULL,updated_at=NOW()
                 WHERE tenant_id=$1 AND recording_id=$2`, tenantID, recordingID, requestID)
 		} else {
-			// Missing references/auth/422 also stay observable and retry after
-			// correction. Retry only delivery; never wait for task generation.
-			_, err = tx.Exec(ctx, `UPDATE emr_followup_deliveries SET attempt_count=attempt_count+1,
+			// 录音已删除、引用永久不成立或重试耗尽时收敛为 failed；其他错误
+			// （网络、鉴权、422）继续按 5 分钟间隔重试，但不再无限重试。
+			status := nextFollowupDeliveryStatus(attemptCount, errors.Is(loadErr, pgx.ErrNoRows))
+			_, err = tx.Exec(ctx, `UPDATE emr_followup_deliveries SET status=$4,attempt_count=attempt_count+1,
                 last_error=$3,next_attempt_at=NOW()+INTERVAL '5 minutes',updated_at=NOW()
-                WHERE tenant_id=$1 AND recording_id=$2`, tenantID, recordingID, loadErr.Error())
-			slog.Warn("realtime followup delivery pending", "tenant_id", tenantID, "recording_id", recordingID, "error", loadErr)
+                WHERE tenant_id=$1 AND recording_id=$2`, tenantID, recordingID, loadErr.Error(), status)
+			if status == "failed" {
+				slog.Error("realtime followup delivery failed permanently", "tenant_id", tenantID, "recording_id", recordingID, "attempt_count", attemptCount+1, "error", loadErr)
+			} else {
+				slog.Warn("realtime followup delivery pending", "tenant_id", tenantID, "recording_id", recordingID, "attempt_count", attemptCount+1, "error", loadErr)
+			}
 		}
 		if err == nil {
 			err = tx.Commit(ctx)

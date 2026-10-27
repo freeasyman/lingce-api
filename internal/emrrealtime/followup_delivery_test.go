@@ -63,3 +63,15 @@ func TestRealtimeFollowupDoesNotAcceptHTTPFailure(t *testing.T) {
 		server.Close()
 	}
 }
+
+func TestNextFollowupDeliveryStatus(t *testing.T) {
+	if got := nextFollowupDeliveryStatus(0, true); got != "failed" {
+		t.Errorf("permanent error status=%q, want failed", got)
+	}
+	if got := nextFollowupDeliveryStatus(1, false); got != "pending" {
+		t.Errorf("transient retry status=%q, want pending", got)
+	}
+	if got := nextFollowupDeliveryStatus(maxFollowupDeliveryAttempts-1, false); got != "failed" {
+		t.Errorf("exhausted retry status=%q, want failed", got)
+	}
+}
