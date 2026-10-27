@@ -78,14 +78,18 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	if title == "" || title == "<nil>" {
 		title = targetLabel + "：" + run.Question
 	}
-	id, err := s.store.insertContentItemV2(ctx, tenantID, 0, "article", title, body, nil, nil)
+	// 带上来源：文章 → 诊断 → 选题/灵感，保证内容库里「来自选题」和溯源能对上
+	id, err := s.store.insertContentItemWithSource(ctx, tenantID, run.TopicID, run.InsightID, "article", title, body)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.store.updateContentItemChannel(ctx, tenantID, id, channel); err != nil {
 		return nil, err
 	}
-	return map[string]any{"content_id": id, "title": title, "channel": channel}, nil
+	return map[string]any{
+		"content_id": id, "title": title, "channel": channel,
+		"topic_id": run.TopicID, "insight_id": run.InsightID,
+	}, nil
 }
 
 // DeleteAIVisibilityRuns 软删除诊断历史。

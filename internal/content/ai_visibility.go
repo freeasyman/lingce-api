@@ -225,7 +225,7 @@ func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question 
 }
 
 // StartAIVisibility 创建异步诊断任务，立即返回 run_id；后台跑多引擎。
-func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, question, region string) (int64, error) {
+func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, question, region string, insightID, topicID int64) (int64, error) {
 	if s.llmClient == nil {
 		return 0, fmt.Errorf("llm gateway is not configured")
 	}
@@ -253,7 +253,7 @@ func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, questio
 		return 0, fmt.Errorf("未配置 AI 引擎（ai_assistant）")
 	}
 
-	runID, err := s.store.createAIVisibilityRun(ctx, tenantID, q, region, orgName, len(engines))
+	runID, err := s.store.createAIVisibilityRun(ctx, tenantID, q, region, orgName, len(engines), insightID, topicID)
 	if err != nil {
 		return 0, err
 	}

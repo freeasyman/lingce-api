@@ -16,14 +16,16 @@ func (h *Handler) AnalyzeAIVisibility(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Question string `json:"question"`
-		Region   string `json:"region"`
+		Question  string `json:"question"`
+		Region    string `json:"region"`
+		InsightID int64  `json:"insight_id"`
+		TopicID   int64  `json:"topic_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	runID, err := h.service.StartAIVisibility(r.Context(), tenantID, req.Question, req.Region)
+	runID, err := h.service.StartAIVisibility(r.Context(), tenantID, req.Question, req.Region, req.InsightID, req.TopicID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return

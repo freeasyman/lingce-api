@@ -90,6 +90,7 @@ type ContentItemV2Record struct {
 	TopicTitle          string          `json:"topic_title,omitempty"`
 	DoctorName          string          `json:"doctor_name,omitempty"`
 	DepartmentName      string          `json:"department_name,omitempty"`
+	InsightID           *int64          `json:"insight_id,omitempty"`
 }
 
 type PlanPeriod struct {
@@ -562,11 +563,12 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
 		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.channel,''), COALESCE(ci.generation_status,''), COALESCE(ci.generation_shot_index,-1), ci.created_at,
 		       COALESCE(ct.title,''), COALESCE(e.name,''),
-		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
+		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), ''),
+		       ci.insight_id
 		FROM content_items ci
 		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
 		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
-		LEFT JOIN content_insights ins ON ins.id = x.iid
+		LEFT JOIN content_insights ins ON ins.id = COALESCE(x.iid, ci.insight_id)
 		LEFT JOIN employees e ON e.id = ins.employee_id
 		WHERE ci.tenant_id = $1 AND `+deletedFilter+`
 		  AND ($3 = '' OR ci.title ILIKE '%' || $3 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $3 || '%')
@@ -579,7 +581,7 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 	out := make([]ContentItemV2Record, 0)
 	for rows.Next() {
 		var r ContentItemV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.Channel, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.TopicID, &r.Form, &r.Title, &r.Body, &r.PublishPackage, &r.Images, &r.Status, &r.Channel, &r.GenerationStatus, &r.GenerationShotIndex, &r.CreatedAt, &r.TopicTitle, &r.DoctorName, &r.DepartmentName, &r.InsightID); err != nil {
 			return nil, err
 		}
 		r.DoctorName = maskPhoneNumber(r.DoctorName)
@@ -711,6 +713,19 @@ func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64
 		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,'draft')
 		RETURNING id`,
 		tenantID, topicID, form, title, body, pp, img).Scan(&id)
+	return id, err
+}
+
+// insertContentItemWithSource 新建内容并记录来源（选题/灵感）。
+// 与 insertContentItemV2 的区别：不做「同一选题只保留一条」的 upsert，
+// 因为从诊断生成文章时不应覆盖用户已经编辑过的既有内容。
+func (s *Store) insertContentItemWithSource(ctx context.Context, tenantID, topicID, insightID int64, form, title, body string) (int64, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO content_items (tenant_id, topic_id, insight_id, form, title, body, publish_package, images, status)
+		VALUES ($1, NULLIF($2,0), NULLIF($3,0), $4, $5, $6, '{}'::jsonb, '{}'::jsonb, 'draft')
+		RETURNING id`,
+		tenantID, topicID, insightID, normalizeFormCode(form), title, body).Scan(&id)
 	return id, err
 }
 

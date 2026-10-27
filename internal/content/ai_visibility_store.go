@@ -18,16 +18,18 @@ type AIVisibilityRun struct {
 	Status    string         `json:"status"`
 	Progress  int            `json:"progress"`
 	Total     int            `json:"total"`
+	InsightID int64          `json:"insight_id,omitempty"`
+	TopicID   int64          `json:"topic_id,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 }
 
 // createAIVisibilityRun 创建一条 running 状态的诊断记录，立即返回 id。
-func (s *Store) createAIVisibilityRun(ctx context.Context, tenantID int64, question, region, orgName string, total int) (int64, error) {
+func (s *Store) createAIVisibilityRun(ctx context.Context, tenantID int64, question, region, orgName string, total int, insightID, topicID int64) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_ai_visibility_runs (tenant_id, question, region, org_name, engines, gap, status, progress, total)
-		VALUES ($1,$2,$3,$4,'[]'::jsonb,'{}'::jsonb,'running',0,$5) RETURNING id`,
-		tenantID, question, region, orgName, total).Scan(&id)
+		INSERT INTO content_ai_visibility_runs (tenant_id, question, region, org_name, engines, gap, status, progress, total, insight_id, topic_id)
+		VALUES ($1,$2,$3,$4,'[]'::jsonb,'{}'::jsonb,'running',0,$5,NULLIF($6,0),NULLIF($7,0)) RETURNING id`,
+		tenantID, question, region, orgName, total, insightID, topicID).Scan(&id)
 	return id, err
 }
 
@@ -129,7 +131,7 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit,
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
+		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at, COALESCE(insight_id,0), COALESCE(topic_id,0)
 		FROM content_ai_visibility_runs
 		WHERE tenant_id = $1 AND `+deletedCond+`
 		ORDER BY created_at DESC, id DESC
@@ -142,7 +144,7 @@ func (s *Store) listAIVisibilityRuns(ctx context.Context, tenantID int64, limit,
 	for rows.Next() {
 		var r AIVisibilityRun
 		var engRaw, gapRaw []byte
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt, &r.InsightID, &r.TopicID); err != nil {
 			return nil, 0, err
 		}
 		_ = json.Unmarshal(engRaw, &r.Engines)
@@ -157,9 +159,9 @@ func (s *Store) getAIVisibilityRun(ctx context.Context, tenantID, id int64) (*AI
 	var r AIVisibilityRun
 	var engRaw, gapRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at
+		SELECT id, tenant_id, question, region, org_name, engines, gap, status, progress, total, created_at, COALESCE(insight_id,0), COALESCE(topic_id,0)
 		FROM content_ai_visibility_runs WHERE tenant_id = $1 AND id = $2`, tenantID, id).
-		Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Question, &r.Region, &r.OrgName, &engRaw, &gapRaw, &r.Status, &r.Progress, &r.Total, &r.CreatedAt, &r.InsightID, &r.TopicID)
 	if err != nil {
 		return nil, err
 	}
