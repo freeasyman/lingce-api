@@ -119,6 +119,8 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		req.Params = &llmgateway.Params{}
 	}
 	req.Params.EnableSearch = &enableSearch
+	// 联网搜索会显著变慢（搜索 + 长回答），30 秒默认超时不够
+	req.Params.TimeoutSeconds = 120
 	resp, err := s.llmClient.TextInference(ctx, req)
 	if err != nil {
 		return "", err
