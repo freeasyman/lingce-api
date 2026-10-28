@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -22,6 +25,32 @@ type Service struct {
 	smsClient      *sms.AliyunClient
 	jwtSecret      string
 	jwtExpiryHours int
+	// 测试用固定验证码旁路（仅 env=test + 显式配置时生效）
+	appEnv          string
+	testCaptchaCode string
+}
+
+// SetTestCaptchaBypass 配置测试验证码旁路。
+// 只有 env 为 test 且 code 非空时才可能生效，其余情况一律关闭。
+func (s *Service) SetTestCaptchaBypass(env, code string) {
+	s.appEnv = env
+	s.testCaptchaCode = code
+	if s.TestCaptchaBypassEnabled() {
+		slog.Warn("⚠️  测试验证码旁路已启用：登录接受固定验证码", "env", env)
+	}
+}
+
+// TestCaptchaBypassEnabled 是否处于测试旁路状态。
+func (s *Service) TestCaptchaBypassEnabled() bool {
+	return s.testCaptchaCode != "" && strings.EqualFold(s.appEnv, "test")
+}
+
+// testCaptchaBypass 校验传入验证码是否命中测试固定值。
+func (s *Service) testCaptchaBypass(code string) bool {
+	if !s.TestCaptchaBypassEnabled() || code == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(code), []byte(s.testCaptchaCode)) == 1
 }
 
 func (s *Service) RecordInstitutionSystemActionLog(ctx context.Context, input InstitutionSystemActionLogInput) error {

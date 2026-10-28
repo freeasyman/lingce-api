@@ -196,6 +196,7 @@ func main() {
 		cfg.Aliyun.SMSTemplateCode,
 	)
 	authService := auth.NewService(authStore, smsClient, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
+	authService.SetTestCaptchaBypass(cfg.App.Env, cfg.App.TestCaptchaCode)
 	authHandler := auth.NewHandler(authService)
 	authHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image/png"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -228,11 +229,11 @@ func (h *Handler) LoginMobile(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) recordInstitutionLoginLog(r *http.Request, reqTenantID int64, loginID string, resp *LoginResponse, err error) {
 	claims := middleware.GetUserClaims(r.Context())
 	meta := InstitutionSystemActionLogInput{
-		LogType:     "login",
-		ActionCode:  "institution_login",
-		ActionName:  "机构员工登录",
-		RoutePath:   "/api/v1/auth/login/institution",
-		Result:      "failure",
+		LogType:    "login",
+		ActionCode: "institution_login",
+		ActionName: "机构员工登录",
+		RoutePath:  "/api/v1/auth/login/institution",
+		Result:     "failure",
 		RequestSummary: map[string]interface{}{
 			"login_id":   loginID,
 			"tenant_id":  reqTenantID,
@@ -282,6 +283,11 @@ func (h *Handler) verifyLoginCaptcha(captchaID, captchaCode, legacyCaptcha strin
 	code := strings.TrimSpace(captchaCode)
 	if code == "" {
 		code = strings.TrimSpace(legacyCaptcha)
+	}
+	// 测试环境固定验证码旁路：仅在 env=test 且显式配置时命中，生产不会生效
+	if h.service.testCaptchaBypass(code) {
+		slog.Warn("login via test captcha bypass", "captcha_id", captchaID)
+		return nil
 	}
 	if strings.TrimSpace(captchaID) == "" || code == "" {
 		return newAuthError(http.StatusBadRequest, "CAPTCHA_REQUIRED", "captcha is required", nil)

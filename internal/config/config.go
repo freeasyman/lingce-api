@@ -29,6 +29,9 @@ type AppConfig struct {
 	Name        string `toml:"name"`
 	Env         string `toml:"env"`
 	SecretsFile string `toml:"secrets_file"`
+	// TestCaptchaCode 仅用于自动化测试：非空且 env=test 时，登录验证码接受这个固定值。
+	// 默认空 = 不生效；生产配置绝不设置该字段。
+	TestCaptchaCode string `toml:"test_captcha_code"`
 }
 
 type ServerConfig struct {
