@@ -408,6 +408,41 @@ func (s *Store) fetchTopicBrief(ctx context.Context, tenantID, topicID int64) (s
 	return brief, nil
 }
 
+// isEmptyBriefJSON 判断简报是否为空（NULL/空串/空对象）。
+func isEmptyBriefJSON(s string) bool {
+	t := strings.TrimSpace(s)
+	return t == "" || t == "{}" || t == "null"
+}
+
+// manualTopicFallbackBrief 手动建的 plan 型选题没有简报，用标题/说明/目标兜底一份最小简报。
+// facts/quotes/key_points 置空，配合 contentHardRules 约束模型"不脑补、不编造"。
+func (s *Service) manualTopicFallbackBrief(ctx context.Context, tenantID, topicID int64) string {
+	topic, err := s.store.getTopicV2(ctx, tenantID, topicID)
+	if err != nil || topic == nil {
+		return "{}"
+	}
+	description := strings.TrimSpace(topic.Description)
+	fallback := map[string]any{
+		"title":            topic.Title,
+		"goal":             strings.TrimSpace(topic.Goal),
+		"description":      description,
+		"audience":         "",
+		"core_claim":       "",
+		"angle":            description,
+		"facts":            []string{},
+		"quotes":           []any{},
+		"golden_quote":     nil,
+		"key_points":       []string{},
+		"forbidden_claims": []string{},
+		"bias_risk":        "手动选题信息有限：仅基于标题与说明创作，不得编造事实、案例或引用。",
+	}
+	b, err := json.Marshal(fallback)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
 // brandContext 组装品牌素材注入文本。
 func (s *Service) brandContext(ctx context.Context, tenantID int64) string {
 	k, err := s.store.getOrgKnowledge(ctx, tenantID)
@@ -537,6 +572,11 @@ func (s *Service) renderContentUserPrompt(ctx context.Context, tenantID, topicID
 	brief, err := s.store.fetchTopicBrief(ctx, tenantID, topicID)
 	if err != nil {
 		return "", err
+	}
+	// 手动建的 plan 型选题没有简报（brief 为空）：用 title/description/goal 兜底，
+	// 否则模型只能对着空简报写"请提供选题简报"这类占位内容。
+	if isEmptyBriefJSON(brief) {
+		brief = s.manualTopicFallbackBrief(ctx, tenantID, topicID)
 	}
 	result := tpl
 	result = strings.ReplaceAll(result, "{{topic_brief}}", brief)
