@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -93,7 +94,12 @@ func (h *Handler) UploadContentOrgAsset(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteBadRequest(w, "only PNG or JPEG is supported")
 		return
 	}
-	url, err := h.service.UploadContentOrgAsset(r.Context(), tenantID, r.FormValue("kind"), data, contentType)
+	kind := strings.TrimSpace(r.FormValue("kind"))
+	if kind != "logo" && kind != "qr" {
+		httputil.WriteBadRequest(w, "kind must be logo or qr")
+		return
+	}
+	url, err := h.service.UploadContentOrgAsset(r.Context(), tenantID, kind, data, contentType)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error(), nil)
 		return
