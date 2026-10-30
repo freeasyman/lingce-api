@@ -86,7 +86,7 @@ func (s *Service) GenerateTopicsFromFrequentQuestionAsync(ctx context.Context, t
 	}
 	// 数量上限：已做够直接拒绝（建任务前就拦掉）
 	if len(fq.InsightIDs) > 0 {
-		if existing, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs); len(existing) >= maxTopicsPerFrequentQuestion {
+		if existing, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs, fq.Topic); len(existing) >= maxTopicsPerFrequentQuestion {
 			return 0, NewBizError("TOPIC_LIMIT_REACHED",
 				fmt.Sprintf("这个高频问题已经做过 %d 个选题了，角度覆盖得差不多了。建议先挑几个发布看效果，不要硬凑同款", len(existing)))
 		}
@@ -146,7 +146,7 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 	_ = json.Unmarshal(fq.Quotes, &quotes)
 
 	// 结果去重：把该高频问题已生成过的选题标题带进提示词，避免重复
-	existingTitles, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs)
+	existingTitles, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs, fq.Topic)
 	if len(existingTitles) >= maxTopicsPerFrequentQuestion {
 		return nil, NewBizError("TOPIC_LIMIT_REACHED",
 			fmt.Sprintf("这个高频问题已经做过 %d 个选题了，角度覆盖得差不多了。建议先挑几个发布看效果，不要硬凑同款", len(existingTitles)))

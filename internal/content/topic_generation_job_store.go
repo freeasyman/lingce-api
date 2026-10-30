@@ -91,19 +91,19 @@ func (s *Store) failTopicGenerationJob(ctx context.Context, tenantID, jobID int6
 }
 
 // listExistingTopicTitles 取与这些洞察相关的已有选题标题（结果去重用）。
-func (s *Store) listExistingTopicTitles(ctx context.Context, tenantID int64, insightIDs []int64) ([]string, error) {
-	if len(insightIDs) == 0 {
+func (s *Store) listExistingTopicTitles(ctx context.Context, tenantID int64, insightIDs []int64, frequentQuestionTopic string) ([]string, error) {
+	if len(insightIDs) == 0 && frequentQuestionTopic == "" {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT title FROM content_topics
 		WHERE tenant_id = $1
-		  AND insight_ids IS NOT NULL
-		  AND EXISTS (
-		    SELECT 1 FROM jsonb_array_elements_text(insight_ids) e
-		    WHERE e::bigint = ANY($2)
+		  AND (
+		    (insight_ids IS NOT NULL AND EXISTS (
+		       SELECT 1 FROM jsonb_array_elements_text(insight_ids) e WHERE e::bigint = ANY($2)))
+		    OR (source = 'frequent_question' AND source_frequent_question_topic = $3)
 		  )
-		ORDER BY id DESC LIMIT 50`, tenantID, insightIDs)
+		ORDER BY id DESC LIMIT 50`, tenantID, insightIDs, frequentQuestionTopic)
 	if err != nil {
 		return nil, err
 	}

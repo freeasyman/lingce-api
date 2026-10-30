@@ -185,9 +185,12 @@ func (s *Store) listFrequentQuestions(ctx context.Context, tenantID int64, minCo
 		       COALESCE(fq.linked_recording_ids, '[]'::jsonb),
 		       COALESCE(fq.insight_ids, '[]'::jsonb),
 		       (SELECT count(*)::int FROM content_topics t
-		        WHERE t.tenant_id = fq.tenant_id AND t.insight_ids IS NOT NULL
-		          AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(t.insight_ids) e
-		                      WHERE e::bigint = ANY (SELECT jsonb_array_elements_text(fq.insight_ids)::bigint)))
+		        WHERE t.tenant_id = fq.tenant_id
+		          AND t.source = 'frequent_question'
+		          AND (t.source_frequent_question_topic = fq.topic
+		               OR (t.insight_ids IS NOT NULL AND EXISTS (
+		                     SELECT 1 FROM jsonb_array_elements_text(t.insight_ids) e
+		                     WHERE e::bigint = ANY (SELECT jsonb_array_elements_text(fq.insight_ids)::bigint)))))
 		FROM content_frequent_questions fq
 		WHERE fq.tenant_id = $1
 		ORDER BY COALESCE((fq.frequency->>'total')::int, 0) DESC, fq.topic`, tenantID)
