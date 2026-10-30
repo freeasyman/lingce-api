@@ -494,6 +494,7 @@ func (a *Analyzer) callLLM(
 			BusinessObjectID:   item.RecordingID,
 			BillingSubject:     "deal_expert_analysis",
 			BillingScene:       "encounter",
+			CostLayer:          "product",
 			RecordingID:        item.RecordingID,
 			CustomerID:         customerID,
 		},

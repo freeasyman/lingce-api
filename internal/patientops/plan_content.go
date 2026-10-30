@@ -154,7 +154,7 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 			FunctionType:  config.FunctionType,
 			Provider:      config.Provider,
 			ModelCode:     config.ModelCode,
-			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "plan", BusinessObjectID: plan.ID, BillingSubject: patientOpsPlanContentModel},
+			Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "plan", BusinessObjectID: plan.ID, BillingSubject: patientOpsPlanContentModel, CostLayer: "product"},
 			Messages:      []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}},
 			Params:        params,
 		})

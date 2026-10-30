@@ -2324,6 +2324,8 @@ func buildCommunicationLLMRequest(tenantID int64, sourceID, sceneCode, ruleSetCo
 			BillingSubject:     "communication_check",
 			BillingScene:       ruleSetCode,
 			BillingRuleVersion: ruleSetVersion,
+			CostLayer:          "product",
+			RecordingID:        parseInt64(sourceID),
 		},
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: runtime.SystemPrompt},

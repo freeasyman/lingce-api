@@ -248,7 +248,7 @@ func (s *Store) listByPatient(ctx context.Context, tenantID, patientID int64, pa
 		pageSize = 100
 	}
 	args := []any{tenantID, patientID}
-	where := "r.tenant_id=$1 AND r.patient_id=$2"
+	where := "r.tenant_id=$1 AND r.customer_id=$2"
 	if access != nil && !access.Admin && access.Scope != "tenant" {
 		switch access.Scope {
 		case "self":

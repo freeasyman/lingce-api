@@ -52,7 +52,7 @@ func (s *Service) SuggestProductKeywords(ctx context.Context, tenantID int64, re
 		FunctionType:  config.FunctionType,
 		Provider:      config.Provider,
 		ModelCode:     config.ModelCode,
-		Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "product", BillingSubject: "patient_product_keywords"},
+		Billing:       &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "product", BillingSubject: "patient_product_keywords", CostLayer: "product"},
 		Messages:      []llmgateway.Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: user}},
 		Params:        params,
 	})

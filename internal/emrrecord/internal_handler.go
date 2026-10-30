@@ -116,7 +116,7 @@ updates 只能使用当前模板中的栏位编码。没有足够信息时返回
 	response, _, _, err := h.callLLM(ctx, llmgateway.TextInferenceRequest{
 		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.experimental_incremental_draft",
 		TraceID: requestID, FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode,
-		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: input.EncounterID, BillingSubject: "emr_incremental_draft", BillingScene: "outpatient"},
+		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: input.EncounterID, BillingSubject: "emr_incremental_draft", BillingScene: "outpatient", CostLayer: "product"},
 		Messages: []llmgateway.Message{{Role: "system", Content: incrementalSystemPrompt}, {Role: "user", Content: userPrompt}},
 		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 4096, TimeoutSeconds: 60, ResponseFormat: "json"},
 	})
@@ -700,6 +700,7 @@ func buildEMRLLMRequest(req EmrWorkerRequest, requestID string, prompt *prepared
 			BusinessObjectID:   req.RecordingID,
 			BillingSubject:     "emr_working_draft_generation",
 			BillingScene:       "outpatient",
+			CostLayer:          "product",
 			RecordingID:        req.RecordingID,
 			CustomerID:         req.CustomerID,
 		},

@@ -330,7 +330,7 @@ func (s *Store) BindCustomer(ctx context.Context, tenantID, encounterID int64, r
 	if status == "已完成" || status == "待归档" || status == "已归档" || status == "已作废" {
 		return fmt.Errorf("当前病历状态不能修改患者")
 	}
-	if err := encounter.BindPatientTx(ctx, tx, tenantID, encounterID, patient.PatientID, patient.Name); err != nil {
+	if err := encounter.BindPatientTx(ctx, tx, tenantID, encounterID, &patient.ID, patient.Name); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -345,10 +345,10 @@ func (s *Store) BindCustomer(ctx context.Context, tenantID, encounterID int64, r
 	// records on the same Customer ID and refresh the recording snapshot.
 	if _, err := tx.Exec(ctx, `
 		UPDATE recordings
-		SET customer_id=$1, patient_id=$2,
+		SET customer_id=$1, patient_id=$1,
 		    updated_at=NOW()
 		WHERE tenant_id=$3 AND encounter_id=$4 AND deleted_at IS NULL
-	`, patient.ID, patient.PatientID, tenantID, encounterID); err != nil {
+	`, patient.ID, tenantID, encounterID); err != nil {
 		return fmt.Errorf("bind recording customer: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -2053,6 +2053,7 @@ func newRecordingBillingMetadata(recordingID int64, subject, scene string) *llmg
 		BillingSubject:     subject,
 		BillingScene:       scene,
 		BillingRuleVersion: "v1",
+		CostLayer:          "product",
 		RecordingID:        recordingID,
 	}
 }

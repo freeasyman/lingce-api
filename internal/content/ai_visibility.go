@@ -135,6 +135,13 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 		FunctionType:  sel.FunctionType,
 		Provider:      sel.Provider,
 		ModelCode:     sel.ModelCode,
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "content",
+			BusinessObjectType: "ai_visibility_run",
+			BillingSubject:     "ai_visibility_answer",
+			BillingScene:       "ai_visibility",
+			CostLayer:          "product",
+		},
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_ai_visibility_answer", aiVisibilityAnswerPrompt)},
 			{Role: "user", Content: userContent},
@@ -171,6 +178,13 @@ func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmMo
 		FunctionType:  sel.FunctionType,
 		Provider:      sel.Provider,
 		ModelCode:     sel.ModelCode,
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "content",
+			BusinessObjectType: "ai_visibility_run",
+			BillingSubject:     "ai_visibility_analyze",
+			BillingScene:       "ai_visibility",
+			CostLayer:          "product",
+		},
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: prompt},
 			{Role: "user", Content: fmt.Sprintf("患者问题：%s\n\nAI 回答：%s", question, answer)},
@@ -207,6 +221,13 @@ func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question 
 		FunctionType:  sel.FunctionType,
 		Provider:      sel.Provider,
 		ModelCode:     sel.ModelCode,
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "content",
+			BusinessObjectType: "ai_visibility_run",
+			BillingSubject:     "ai_visibility_gap",
+			BillingScene:       "ai_visibility",
+			CostLayer:          "product",
+		},
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_ai_visibility_gap", aiVisibilityGapPrompt)},
 			{Role: "user", Content: b.String()},

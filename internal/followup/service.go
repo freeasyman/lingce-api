@@ -163,8 +163,7 @@ func (s *Service) validateReferences(ctx context.Context, req GenerateRequest) e
 		 AND c.deleted_at IS NULL
 		 AND (e.source_type <> 'realtime'
 		      OR e.patient_id IS NULL
-		      OR c.patient_id IS NULL
-		      OR e.patient_id = c.patient_id)
+		      OR e.patient_id = c.id)
 		JOIN tenants t
 		  ON t.id = r.tenant_id
 		 AND t.deleted_at IS NULL
@@ -1344,6 +1343,7 @@ func (s *Service) callLLM(ctx context.Context, req GenerateRequest, systemPrompt
 			BusinessObjectID:   req.RecordingID,
 			BillingSubject:     "followup_task_generation",
 			BillingScene:       "encounter",
+			CostLayer:          "product",
 			RecordingID:        req.RecordingID,
 			CustomerID:         req.CustomerID,
 		},

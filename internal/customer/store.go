@@ -542,7 +542,35 @@ func (s *Store) UpdateCustomer(ctx context.Context, id int64, req UpdateCustomer
 		return nil, fmt.Errorf("failed to update customer: %w", err)
 	}
 
+	if req.Name != nil {
+		_ = s.syncCustomerName(ctx, id, *req.Name)
+	}
+
 	return &c, nil
+}
+
+// syncCustomerName 在客户改名后，把派生记录里的患者姓名同步为 customers.name。
+func (s *Store) syncCustomerName(ctx context.Context, customerID int64, name string) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE encounters e
+		SET patient_name = NULLIF($2, ''), updated_at = NOW()
+		WHERE e.tenant_id = (SELECT tenant_id FROM customers WHERE id = $1)
+		  AND e.patient_id = $1
+	`, customerID, name); err != nil {
+		return fmt.Errorf("sync encounter patient name: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE emr_records r
+		SET patient_snapshot_json = jsonb_set(
+		        COALESCE(patient_snapshot_json, '{}'::jsonb),
+		        '{name}', to_jsonb($2::text), true),
+		    updated_at = NOW()
+		WHERE r.tenant_id = (SELECT tenant_id FROM customers WHERE id = $1)
+		  AND r.customer_id = $1
+	`, customerID, name); err != nil {
+		return fmt.Errorf("sync emr patient name: %w", err)
+	}
+	return nil
 }
 
 // DeleteCustomer soft-deletes a customer.
@@ -1549,7 +1577,7 @@ func (s *Store) ListConsultationRecords(ctx context.Context, customerID int64, p
 
 // GetCustomer360Data returns the real visit, recording and EMR history for a
 // single Customer ID. It intentionally reads the canonical customer_id links;
-// encounters.patient_id is included only as the legacy patient mirror.
+// encounters.patient_id mirrors customers.id for the shared identity.
 func (s *Store) GetCustomer360Data(ctx context.Context, customerID int64) (map[string]interface{}, error) {
 	data := map[string]interface{}{}
 	recordings, total, err := s.ListConsultationRecords(ctx, customerID, 1, 100)
@@ -1589,7 +1617,7 @@ func (s *Store) GetCustomer360Data(ctx context.Context, customerID int64) (map[s
 	data["medical_records"] = medical
 
 	var visits int
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM encounters e WHERE e.patient_id IN (SELECT patient_id FROM customers WHERE id=$1 AND patient_id IS NOT NULL) OR EXISTS (SELECT 1 FROM emr_records r WHERE r.customer_id=$1 AND r.encounter_id=e.id)`, customerID).Scan(&visits); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM encounters e WHERE e.patient_id = $1 OR EXISTS (SELECT 1 FROM emr_records r WHERE r.customer_id=$1 AND r.encounter_id=e.id)`, customerID).Scan(&visits); err != nil {
 		return nil, err
 	}
 	data["statistics"] = map[string]interface{}{"total_visits": visits, "total_recordings": total, "total_medical_records": len(medical)}

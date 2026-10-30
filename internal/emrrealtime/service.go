@@ -388,7 +388,7 @@ func (s *Service) CorrectRealtimeTranscript(ctx context.Context, tenantID, encou
 	resp, err := s.llmClient.TextInference(ctx, llmgateway.TextInferenceRequest{
 		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.realtime_transcript_correction",
 		TraceID: traceID, FunctionType: "realtime_transcript_correction", Provider: model.Provider, ModelCode: model.ModelCode,
-		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: encounterID, BillingSubject: "realtime_transcript_correction", BillingScene: "realtime"},
+		Billing:  &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "encounter", BusinessObjectID: encounterID, BillingSubject: "realtime_transcript_correction", BillingScene: "realtime", CostLayer: "product"},
 		Messages: []llmgateway.Message{{Role: "system", Content: prompt.SystemPrompt}, {Role: "user", Content: userPrompt}},
 		Params:   &llmgateway.Params{Temperature: 0, MaxTokens: 500, TimeoutSeconds: 15, ResponseFormat: "json"},
 	})
@@ -554,7 +554,8 @@ func patientID(patient *patientInfo) *int64 {
 	if patient == nil {
 		return nil
 	}
-	return patient.PatientID
+	// 内部患者主键统一为 customers.id；外部 HIS 患者号保留在 patientSnapshot.patient_id。
+	return &patient.ID
 }
 
 func patientName(patient *patientInfo) string {

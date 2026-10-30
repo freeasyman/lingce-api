@@ -30,6 +30,13 @@ func (s *Service) searchWeb(ctx context.Context, tenantID int64, query string, c
 		CallerService: "lingce-api",
 		CallerModule:  "ai_visibility_search",
 		FunctionType:  "search",
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "content",
+			BusinessObjectType: "ai_visibility_run",
+			BillingSubject:     "ai_visibility_search",
+			BillingScene:       "ai_visibility",
+			CostLayer:          "product",
+		},
 	})
 	if err != nil {
 		return nil, err

@@ -538,6 +538,25 @@ func (s *Store) UpdatePatient(ctx context.Context, id int64, name, phone, email,
 		}
 		return nil, fmt.Errorf("failed to update patient: %w", err)
 	}
+	if name != nil {
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE encounters e
+			SET patient_name = NULLIF($2, ''), updated_at = NOW()
+			WHERE e.tenant_id = $3 AND e.patient_id = $1
+		`, id, *name, p.TenantID); err != nil {
+			return nil, fmt.Errorf("sync encounter patient name: %w", err)
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE emr_records r
+			SET patient_snapshot_json = jsonb_set(
+			        COALESCE(patient_snapshot_json, '{}'::jsonb),
+			        '{name}', to_jsonb($2::text), true),
+			    updated_at = NOW()
+			WHERE r.tenant_id = $3 AND r.customer_id = $1
+		`, id, *name, p.TenantID); err != nil {
+			return nil, fmt.Errorf("sync emr patient name: %w", err)
+		}
+	}
 	return &p, nil
 }
 

@@ -43,7 +43,7 @@ type VerifyImageTextResult struct {
 
 // multimodalCall 调多模态 llm，返回文本内容。
 func (s *Service) multimodalCall(ctx context.Context, tenantID int64, imageURL, prompt string) (string, error) {
-	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"image_analysis", "image_understanding", "chat"})
+	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"image_analysis", "image_understanding"})
 	if err != nil {
 		return "", fmt.Errorf("resolve llm config for multimodal: %w", err)
 	}
@@ -191,7 +191,6 @@ const contentLayoutExtractPrompt = `你是公众号排版分析专家。下面�
 }
 
 规则：CSS 只保留 font-size/color/font-weight/line-height/text-align/letter-spacing/margin/padding/border/background 这些属性；颜色用文章里真实出现的 hex；没有的元素写空串或 null 或 none；数字只写数值不带 px。只返回 JSON，不要解释。`
-
 
 // ExtractArticleLayoutRequest 从公众号链接提取排版请求。
 type ExtractArticleLayoutRequest struct {

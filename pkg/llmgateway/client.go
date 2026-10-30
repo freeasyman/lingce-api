@@ -94,6 +94,8 @@ type BillingMetadata struct {
 	BillingSubject     string `json:"billing_subject,omitempty"`
 	BillingScene       string `json:"billing_scene,omitempty"`
 	BillingRuleVersion string `json:"billing_rule_version,omitempty"`
+	CostLayer          string `json:"cost_layer,omitempty"`
+	ModelConfigID      int64  `json:"model_config_id,omitempty"`
 
 	RecordingID       int64 `json:"recording_id,omitempty"`
 	ContentID         int64 `json:"content_id,omitempty"`
@@ -807,13 +809,14 @@ func (c *Client) GetAuditCostByTenant(ctx context.Context, tenantID int64, start
 
 // SearchRequest 网关搜索请求（走 /v1/inference/search，统一计量）。
 type SearchRequest struct {
-	Query         string `json:"query"`
-	Count         int    `json:"count"`
-	TenantID      int    `json:"tenant_id"`
-	TraceID       string `json:"trace_id"`
-	CallerService string `json:"caller_service"`
-	CallerModule  string `json:"caller_module"`
-	FunctionType  string `json:"function_type"`
+	Query         string           `json:"query"`
+	Count         int              `json:"count"`
+	TenantID      int              `json:"tenant_id"`
+	TraceID       string           `json:"trace_id"`
+	CallerService string           `json:"caller_service"`
+	CallerModule  string           `json:"caller_module"`
+	FunctionType  string           `json:"function_type"`
+	Billing       *BillingMetadata `json:"billing,omitempty"`
 }
 
 // Search 通过网关执行搜索（DeepSeek 原生搜索），成本由网关统一审计。

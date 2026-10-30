@@ -37,15 +37,20 @@ type llmModelSelection struct {
 
 const aiBillingRuleVersionV1 = "v1"
 
-func newBillingMetadata(domain, objectType string, objectID int64, subject, scene string) *llmgateway.BillingMetadata {
-	return &llmgateway.BillingMetadata{
+func newBillingMetadata(domain, objectType string, objectID int64, subject, scene string, recordingIDs ...int64) *llmgateway.BillingMetadata {
+	b := &llmgateway.BillingMetadata{
 		BusinessDomain:     domain,
 		BusinessObjectType: objectType,
 		BusinessObjectID:   objectID,
 		BillingSubject:     subject,
 		BillingScene:       scene,
 		BillingRuleVersion: aiBillingRuleVersionV1,
+		CostLayer:          "product",
 	}
+	if len(recordingIDs) > 0 {
+		b.RecordingID = recordingIDs[0]
+	}
+	return b
 }
 
 func contentCallerModule(subject string) string {

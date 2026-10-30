@@ -44,36 +44,36 @@ trust_arc：犹豫→安心→仍担心，从原话归纳不脑补。
 
 // Insight 是一条洞察（28 字段，与 insight_schema.json 严格一致）。
 type Insight struct {
-	Quotes                []InsightQuote          `json:"quotes"`
-	Exchange              InsightExchange         `json:"exchange"`
-	ContentMarkers        InsightMarkers          `json:"content_markers"`
-	Type                  string                  `json:"type"`
-	Topic                 string                  `json:"topic"`
-	Prevalence            string                  `json:"prevalence"`
-	FactStatement         string                  `json:"fact_statement"`
-	ValueJudgment         string                  `json:"value_judgment"`
-	ValueLevel            string                  `json:"value_level"`
-	EvidenceStrength      string                  `json:"evidence_strength"`
-	HelpDimensions        []string                `json:"help_dimensions"`
-	SearchQueries         []string                `json:"search_queries"`
-	KnowledgeGap          string                  `json:"knowledge_gap"`
-	MisconceptionToCorrect string                 `json:"misconception_to_correct"`
-	ConcernToResolve      string                  `json:"concern_to_resolve"`
-	Conflict              string                  `json:"conflict"`
-	EmotionHook           string                  `json:"emotion_hook"`
-	CounterintuitivePoint string                  `json:"counterintuitive_point"`
-	NumberHook            string                  `json:"number_hook"`
-	IdentityResonance     string                  `json:"identity_resonance"`
-	GoldenQuote           string                  `json:"golden_quote"`
-	StoryArc              string                  `json:"story_arc"`
-	TrustArc              InsightTrustArc         `json:"trust_arc"`
-	SuggestedForms        []string                `json:"suggested_forms"`
-	PerForm               map[string]InsightFormScript `json:"per_form"`
-	KeyPoints             []string                `json:"key_points"`
-	Risks                 InsightRisks            `json:"risks"`
-	EvidenceRefs          map[string][]int        `json:"evidence_refs"`
-	Speculated            []string                `json:"speculated"`
-	ID                    int64                   `json:"id,omitempty"`
+	Quotes                 []InsightQuote               `json:"quotes"`
+	Exchange               InsightExchange              `json:"exchange"`
+	ContentMarkers         InsightMarkers               `json:"content_markers"`
+	Type                   string                       `json:"type"`
+	Topic                  string                       `json:"topic"`
+	Prevalence             string                       `json:"prevalence"`
+	FactStatement          string                       `json:"fact_statement"`
+	ValueJudgment          string                       `json:"value_judgment"`
+	ValueLevel             string                       `json:"value_level"`
+	EvidenceStrength       string                       `json:"evidence_strength"`
+	HelpDimensions         []string                     `json:"help_dimensions"`
+	SearchQueries          []string                     `json:"search_queries"`
+	KnowledgeGap           string                       `json:"knowledge_gap"`
+	MisconceptionToCorrect string                       `json:"misconception_to_correct"`
+	ConcernToResolve       string                       `json:"concern_to_resolve"`
+	Conflict               string                       `json:"conflict"`
+	EmotionHook            string                       `json:"emotion_hook"`
+	CounterintuitivePoint  string                       `json:"counterintuitive_point"`
+	NumberHook             string                       `json:"number_hook"`
+	IdentityResonance      string                       `json:"identity_resonance"`
+	GoldenQuote            string                       `json:"golden_quote"`
+	StoryArc               string                       `json:"story_arc"`
+	TrustArc               InsightTrustArc              `json:"trust_arc"`
+	SuggestedForms         []string                     `json:"suggested_forms"`
+	PerForm                map[string]InsightFormScript `json:"per_form"`
+	KeyPoints              []string                     `json:"key_points"`
+	Risks                  InsightRisks                 `json:"risks"`
+	EvidenceRefs           map[string][]int             `json:"evidence_refs"`
+	Speculated             []string                     `json:"speculated"`
+	ID                     int64                        `json:"id,omitempty"`
 }
 
 type InsightQuote struct {
@@ -188,7 +188,7 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
-		Billing:       newBillingMetadata("content", "recording", recordingID, "insight_extraction", "content_insight"),
+		Billing:       newBillingMetadata("content", "recording", recordingID, "insight_extraction", "content_insight", recordingID),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_insight_extract", insightExtractionSystemPrompt)},
 			{Role: "user", Content: "转写文本：\n\n" + transcript},

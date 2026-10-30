@@ -286,7 +286,7 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 				Provider:      provider,
 				ModelCode:     model,
 				TraceID:       "emr-quality-" + input.RecordID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
-				Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion},
+				Billing:       &llmgateway.BillingMetadata{BusinessDomain: "emr", BusinessObjectType: "emr_record", BillingSubject: "emr_quality", BillingScene: string(input.Action), BillingRuleVersion: report.RuleSetVersion, CostLayer: "product"},
 				Messages:      []llmgateway.Message{{Role: "system", Content: semanticSystemPrompt}, {Role: "user", Content: user}},
 				Params:        &llmgateway.Params{Temperature: 0, MaxTokens: 4096, TimeoutSeconds: 300, ResponseFormat: "json"},
 			})
