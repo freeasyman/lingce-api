@@ -89,3 +89,32 @@ func (s *Store) failTopicGenerationJob(ctx context.Context, tenantID, jobID int6
 		WHERE id = $1 AND tenant_id = $2`, jobID, tenantID, errMsg)
 	return err
 }
+
+// listExistingTopicTitles 取与这些洞察相关的已有选题标题（结果去重用）。
+func (s *Store) listExistingTopicTitles(ctx context.Context, tenantID int64, insightIDs []int64) ([]string, error) {
+	if len(insightIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT title FROM content_topics
+		WHERE tenant_id = $1
+		  AND insight_ids IS NOT NULL
+		  AND EXISTS (
+		    SELECT 1 FROM jsonb_array_elements_text(insight_ids) e
+		    WHERE e::bigint = ANY($2)
+		  )
+		ORDER BY id DESC LIMIT 50`, tenantID, insightIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

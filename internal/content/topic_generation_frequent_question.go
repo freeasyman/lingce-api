@@ -134,12 +134,19 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 	var quotes []string
 	_ = json.Unmarshal(fq.Quotes, &quotes)
 
+	// 结果去重：把该高频问题已生成过的选题标题带进提示词，避免重复
+	existingTitles, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs)
+	existingBlock := ""
+	if len(existingTitles) > 0 {
+		existingBlock = "\n\n【已经做过的选题，绝对不要重复生成同款】\n" + strings.Join(existingTitles, "\n")
+	}
+
 	userPrompt := strings.Join([]string{
 		"高频问题：" + fq.Topic,
 		fmt.Sprintf("被问次数：%d 次", fq.Frequency),
 		"代表原话：" + strings.Join(quotes, "\n"),
 		"聚合素材（JSON）：" + payloads,
-	}, "\n\n")
+	}, "\n\n") + existingBlock
 
 	outSchema, err := topicOutputSchema()
 	if err != nil {
@@ -158,7 +165,7 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
-		Billing:       newBillingMetadata("content", "frequent_question", frequentQuestionID, "topic_generation", "content_topic"),
+		Billing:       newBillingMetadata("content", "frequent_question", frequentQuestionID, "frequent_question_topic_generation", "content_topic"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen_frequent_question", topicGenerationFromFrequentQuestionPrompt)},
 			{Role: "user", Content: userPrompt},
@@ -177,8 +184,9 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 		return nil, err
 	}
 
-	// 质量兜底：clamp 到 1~3；同标题去重
+	// 质量兜底：clamp 到 1~3；同标题去重；与已有选题去重
 	topics = dedupTopics(topics)
+	topics = filterDuplicateTitles(topics, existingTitles)
 	if len(topics) == 0 {
 		return []map[string]any{}, nil
 	}
@@ -203,6 +211,30 @@ func dedupTopics(in []TopicV2) []TopicV2 {
 		dup := false
 		for _, e := range out {
 			et := strings.ToLower(strings.TrimSpace(e.Title))
+			if title == et || (len(title) > 0 && strings.Contains(et, title) && float64(len(title))/float64(len(et)) >= 0.8) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// filterDuplicateTitles 丢掉与已有选题标题过近的（完全相同或包含且占比>=0.8）。
+func filterDuplicateTitles(in []TopicV2, existing []string) []TopicV2 {
+	if len(existing) == 0 {
+		return in
+	}
+	norm := func(x string) string { return strings.ToLower(strings.TrimSpace(x)) }
+	var out []TopicV2
+	for _, t := range in {
+		title := norm(t.Title)
+		dup := false
+		for _, e := range existing {
+			et := norm(e)
 			if title == et || (len(title) > 0 && strings.Contains(et, title) && float64(len(title))/float64(len(et)) >= 0.8) {
 				dup = true
 				break
