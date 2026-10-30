@@ -57,6 +57,10 @@ type ContentTopicV2Record struct {
 	Recommendation string          `json:"recommendation"`
 	ExpectedHelp   json.RawMessage `json:"expected_help"`
 	EvidenceRef    *int64          `json:"evidence_ref"`
+	// 来源快照：来自「高频问题」时，记录高频问题名 + 被问次数 + id。
+	SourceClusterID        int64  `json:"source_cluster_id,omitempty"`
+	SourceClusterQuestion  string `json:"source_cluster_question,omitempty"`
+	SourceClusterFrequency int    `json:"source_cluster_frequency,omitempty"`
 	// Brief 是完整创作简报（16 字段），InsightIDs 是来源灵感。
 	Brief      json.RawMessage `json:"brief,omitempty"`
 	InsightIDs json.RawMessage `json:"insight_ids,omitempty"`
@@ -467,6 +471,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
+		       COALESCE(source_cluster_id,0), COALESCE(source_cluster_question,''), COALESCE(source_cluster_frequency,0),
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL AND ci.body <> ''), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
@@ -479,7 +484,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 	var out []ContentTopicV2Record
 	for rows.Next() {
 		var r ContentTopicV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceClusterID, &r.SourceClusterQuestion, &r.SourceClusterFrequency, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)
@@ -539,10 +544,11 @@ func (s *Store) getTopicV2(ctx context.Context, tenantID, id int64) (*ContentTop
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
+		       COALESCE(source_cluster_id,0), COALESCE(source_cluster_question,''), COALESCE(source_cluster_frequency,0),
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceClusterID, &r.SourceClusterQuestion, &r.SourceClusterFrequency, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
