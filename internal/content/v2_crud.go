@@ -170,6 +170,8 @@ type FrequentQuestion struct {
 	Quotes     json.RawMessage `json:"quotes"`
 	Items      []string        `json:"items,omitempty"`
 	InsightIDs []int64         `json:"insight_ids,omitempty"`
+	// TopicCount 这个高频问题已经做出来多少个选题（前端据此显示"已做 N 个"并控制按钮）。
+	TopicCount int `json:"topic_count"`
 }
 
 // listFrequentQuestions 读"反复问"簇（归一化后落库；表为空时退化为精确分组兜底）。
@@ -178,20 +180,24 @@ func (s *Store) listFrequentQuestions(ctx context.Context, tenantID int64, minCo
 		minCount = 2
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, topic, COALESCE((frequency->>'total')::int, (frequency->>'recent_30d')::int, 0),
-		       COALESCE(representative_quotes, '[]'::jsonb),
-		       COALESCE(linked_recording_ids, '[]'::jsonb),
-		       COALESCE(insight_ids, '[]'::jsonb)
-		FROM content_frequent_questions
-		WHERE tenant_id = $1
-		ORDER BY COALESCE((frequency->>'total')::int, 0) DESC, topic`, tenantID)
+		SELECT fq.id, fq.topic, COALESCE((fq.frequency->>'total')::int, (fq.frequency->>'recent_30d')::int, 0),
+		       COALESCE(fq.representative_quotes, '[]'::jsonb),
+		       COALESCE(fq.linked_recording_ids, '[]'::jsonb),
+		       COALESCE(fq.insight_ids, '[]'::jsonb),
+		       (SELECT count(*)::int FROM content_topics t
+		        WHERE t.tenant_id = fq.tenant_id AND t.insight_ids IS NOT NULL
+		          AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(t.insight_ids) e
+		                      WHERE e::bigint = ANY (SELECT jsonb_array_elements_text(fq.insight_ids)::bigint)))
+		FROM content_frequent_questions fq
+		WHERE fq.tenant_id = $1
+		ORDER BY COALESCE((fq.frequency->>'total')::int, 0) DESC, fq.topic`, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	var out []FrequentQuestion
 	for rows.Next() {
 		var c FrequentQuestion
-		if err := rows.Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs); err != nil {
+		if err := rows.Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs, &c.TopicCount); err != nil {
 			rows.Close()
 			return nil, err
 		}
