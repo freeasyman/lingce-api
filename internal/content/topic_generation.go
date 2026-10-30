@@ -250,10 +250,10 @@ func (s *Store) fetchInsightPayload(ctx context.Context, tenantID, insightID int
 
 // topicSourceInfo 选题来源信息（洞察 / 高频问题 / 手动）。
 type topicSourceInfo struct {
-	Source           string // insight / cluster / manual
-	ClusterID        int64
-	ClusterQuestion  string
-	ClusterFrequency int
+	Source                    string // insight / frequent_question / manual
+	FrequentQuestionID        int64
+	FrequentQuestionTopic     string
+	FrequentQuestionFrequency int
 }
 
 // insertTopicsV2 落库选题：完整创作简报存 brief，冗余列供列表展示。
@@ -270,12 +270,12 @@ func (s *Store) insertTopicsV2(ctx context.Context, tenantID int64, src topicSou
 		var id int64
 		err := s.pool.QueryRow(ctx, `
 			INSERT INTO content_topics (tenant_id, title, form, goal, source, recommendation, expected_help, brief, insight_ids,
-			                            source_cluster_id, source_cluster_question, source_cluster_frequency)
+			                            source_frequent_question_id, source_frequent_question_topic, source_frequent_question_frequency)
 			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,
 			        NULLIF($10,0), NULLIF($11,''), NULLIF($12,0))
 			RETURNING id`,
 			tenantID, t.Title, form, t.Goal, src.Source, t.Recommendation, string(helpJSON), string(briefJSON), string(idsJSON),
-			src.ClusterID, src.ClusterQuestion, src.ClusterFrequency,
+			src.FrequentQuestionID, src.FrequentQuestionTopic, src.FrequentQuestionFrequency,
 		).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert topic: %w", err)

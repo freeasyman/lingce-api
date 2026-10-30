@@ -58,9 +58,9 @@ type ContentTopicV2Record struct {
 	ExpectedHelp   json.RawMessage `json:"expected_help"`
 	EvidenceRef    *int64          `json:"evidence_ref"`
 	// 来源快照：来自「高频问题」时，记录高频问题名 + 被问次数 + id。
-	SourceClusterID        int64  `json:"source_cluster_id,omitempty"`
-	SourceClusterQuestion  string `json:"source_cluster_question,omitempty"`
-	SourceClusterFrequency int    `json:"source_cluster_frequency,omitempty"`
+	SourceFrequentQuestionID        int64  `json:"source_frequent_question_id,omitempty"`
+	SourceFrequentQuestionTopic     string `json:"source_frequent_question_topic,omitempty"`
+	SourceFrequentQuestionFrequency int    `json:"source_frequent_question_frequency,omitempty"`
 	// Brief 是完整创作简报（16 字段），InsightIDs 是来源灵感。
 	Brief      json.RawMessage `json:"brief,omitempty"`
 	InsightIDs json.RawMessage `json:"insight_ids,omitempty"`
@@ -163,8 +163,8 @@ func (s *Store) insertMediaAccount(ctx context.Context, tenantID int64, platform
 
 // ===== 洞察 =====
 
-type QuestionCluster struct {
-	ID         int64           `json:"cluster_id,omitempty"`
+type FrequentQuestion struct {
+	ID         int64           `json:"frequent_question_id,omitempty"`
 	Topic      string          `json:"topic"`
 	Frequency  int             `json:"frequency"`
 	Quotes     json.RawMessage `json:"quotes"`
@@ -172,8 +172,8 @@ type QuestionCluster struct {
 	InsightIDs []int64         `json:"insight_ids,omitempty"`
 }
 
-// listQuestionClusters 读"反复问"簇（归一化后落库；表为空时退化为精确分组兜底）。
-func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCount int) ([]QuestionCluster, error) {
+// listFrequentQuestions 读"反复问"簇（归一化后落库；表为空时退化为精确分组兜底）。
+func (s *Store) listFrequentQuestions(ctx context.Context, tenantID int64, minCount int) ([]FrequentQuestion, error) {
 	if minCount < 2 {
 		minCount = 2
 	}
@@ -182,15 +182,15 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 		       COALESCE(representative_quotes, '[]'::jsonb),
 		       COALESCE(linked_recording_ids, '[]'::jsonb),
 		       COALESCE(insight_ids, '[]'::jsonb)
-		FROM content_question_clusters
+		FROM content_frequent_questions
 		WHERE tenant_id = $1
 		ORDER BY COALESCE((frequency->>'total')::int, 0) DESC, topic`, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	var out []QuestionCluster
+	var out []FrequentQuestion
 	for rows.Next() {
-		var c QuestionCluster
+		var c FrequentQuestion
 		if err := rows.Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs); err != nil {
 			rows.Close()
 			return nil, err
@@ -203,11 +203,11 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 	if len(out) > 0 {
 		return out, nil
 	}
-	return s.listQuestionClustersFallback(ctx, tenantID, minCount)
+	return s.listFrequentQuestionsFallback(ctx, tenantID, minCount)
 }
 
-// listQuestionClustersFallback 表为空时的精确分组兜底。
-func (s *Store) listQuestionClustersFallback(ctx context.Context, tenantID int64, minCount int) ([]QuestionCluster, error) {
+// listFrequentQuestionsFallback 表为空时的精确分组兜底。
+func (s *Store) listFrequentQuestionsFallback(ctx context.Context, tenantID int64, minCount int) ([]FrequentQuestion, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT topic, count(*)::int AS freq,
 		       COALESCE(jsonb_agg(DISTINCT payload->'quotes'->0->>'text'), '[]'::jsonb) AS quotes
@@ -220,9 +220,9 @@ func (s *Store) listQuestionClustersFallback(ctx context.Context, tenantID int64
 		return nil, err
 	}
 	defer rows.Close()
-	var out []QuestionCluster
+	var out []FrequentQuestion
 	for rows.Next() {
-		var c QuestionCluster
+		var c FrequentQuestion
 		if err := rows.Scan(&c.Topic, &c.Frequency, &c.Quotes); err != nil {
 			return nil, err
 		}
@@ -264,17 +264,17 @@ func (s *Store) listQuestionTopicCounts(ctx context.Context, tenantID int64) ([]
 	return out, rows.Err()
 }
 
-// replaceQuestionClusters 重建"反复问"簇（归一化后）。
-func (s *Store) replaceQuestionClusters(ctx context.Context, tenantID int64, clusters []QuestionCluster) error {
+// replaceFrequentQuestions 重建"反复问"簇（归一化后）。
+func (s *Store) replaceFrequentQuestions(ctx context.Context, tenantID int64, frequentQuestions []FrequentQuestion) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `DELETE FROM content_question_clusters WHERE tenant_id = $1`, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM content_frequent_questions WHERE tenant_id = $1`, tenantID); err != nil {
 		return err
 	}
-	for _, c := range clusters {
+	for _, c := range frequentQuestions {
 		quotes := string(c.Quotes)
 		if strings.TrimSpace(quotes) == "" || quotes == "null" {
 			quotes = "[]"
@@ -285,7 +285,7 @@ func (s *Store) replaceQuestionClusters(ctx context.Context, tenantID int64, clu
 			insightJSON = []byte("[]")
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO content_question_clusters (tenant_id, topic, frequency, representative_quotes, linked_recording_ids, insight_ids, updated_at)
+			INSERT INTO content_frequent_questions (tenant_id, topic, frequency, representative_quotes, linked_recording_ids, insight_ids, updated_at)
 			VALUES ($1,$2,jsonb_build_object('total',$3::int,'recent_30d',$3::int),$4::jsonb,$5::jsonb,$6::jsonb,now())`,
 			tenantID, c.Topic, c.Frequency, quotes, string(itemsJSON), string(insightJSON)); err != nil {
 			return err
@@ -471,7 +471,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
-		       COALESCE(source_cluster_id,0), COALESCE(source_cluster_question,''), COALESCE(source_cluster_frequency,0),
+		       COALESCE(source_frequent_question_id,0), COALESCE(source_frequent_question_topic,''), COALESCE(source_frequent_question_frequency,0),
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL AND ci.body <> ''), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
@@ -484,7 +484,7 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 	var out []ContentTopicV2Record
 	for rows.Next() {
 		var r ContentTopicV2Record
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceClusterID, &r.SourceClusterQuestion, &r.SourceClusterFrequency, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceFrequentQuestionID, &r.SourceFrequentQuestionTopic, &r.SourceFrequentQuestionFrequency, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)
@@ -544,11 +544,11 @@ func (s *Store) getTopicV2(ctx context.Context, tenantID, id int64) (*ContentTop
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, title, COALESCE(description,''), COALESCE(form,''), account_id,
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
-		       COALESCE(source_cluster_id,0), COALESCE(source_cluster_question,''), COALESCE(source_cluster_frequency,0),
+		       COALESCE(source_frequent_question_id,0), COALESCE(source_frequent_question_topic,''), COALESCE(source_frequent_question_frequency,0),
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceClusterID, &r.SourceClusterQuestion, &r.SourceClusterFrequency, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceFrequentQuestionID, &r.SourceFrequentQuestionTopic, &r.SourceFrequentQuestionFrequency, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

@@ -40,10 +40,17 @@ func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt,
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
-		Prompt:        prompt,
-		ImageURL:      referenceImage,
-		N:             n,
-		Size:          normalizeImageSize(size),
+		Billing: &llmgateway.BillingMetadata{
+			BusinessDomain:     "content",
+			BusinessObjectType: "content_card",
+			BillingSubject:     "image_generation",
+			BillingScene:       "card_image",
+			CostLayer:          "product",
+		},
+		Prompt:   prompt,
+		ImageURL: referenceImage,
+		N:        n,
+		Size:     normalizeImageSize(size),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("generate image: %w", err)

@@ -3,8 +3,8 @@ package content
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/base64"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,17 +93,17 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title          string              `json:"title"`
-		Cards          []docxCard          `json:"cards"`
-		PublishPackage map[string]any      `json:"publish_package"`
-		Images         []string            `json:"images"`
-		Mode             string                   `json:"mode"`
-		Cover            map[string]any           `json:"cover"`
-		Segments         []docxScriptSegment      `json:"segments"`
-		Bgm              string                   `json:"bgm"`
-		Brand            string                   `json:"brand"`
-		GlobalEditing    map[string]any           `json:"global_editing"`
-		Chapters         []docxStoryboardChapter  `json:"chapters"`
+		Title             string                  `json:"title"`
+		Cards             []docxCard              `json:"cards"`
+		PublishPackage    map[string]any          `json:"publish_package"`
+		Images            []string                `json:"images"`
+		Mode              string                  `json:"mode"`
+		Cover             map[string]any          `json:"cover"`
+		Segments          []docxScriptSegment     `json:"segments"`
+		Bgm               string                  `json:"bgm"`
+		Brand             string                  `json:"brand"`
+		GlobalEditing     map[string]any          `json:"global_editing"`
+		Chapters          []docxStoryboardChapter `json:"chapters"`
 		MaterialChecklist []docxMaterial          `json:"material_checklist"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -134,7 +134,6 @@ func (h *Handler) ExportDocx(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-
 // ExportDocxGet 是 ExportDocx 的 GET 版本，payload 放在 query（base64），用于导航式下载。
 func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 	if _, ok := tenantOf(r); !ok {
@@ -148,17 +147,17 @@ func (h *Handler) ExportDocxGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Title          string              `json:"title"`
-		Cards          []docxCard          `json:"cards"`
-		PublishPackage map[string]any      `json:"publish_package"`
-		Images         []string            `json:"images"`
-		Mode             string                   `json:"mode"`
-		Cover            map[string]any           `json:"cover"`
-		Segments         []docxScriptSegment      `json:"segments"`
-		Bgm              string                   `json:"bgm"`
-		Brand            string                   `json:"brand"`
-		GlobalEditing    map[string]any           `json:"global_editing"`
-		Chapters         []docxStoryboardChapter  `json:"chapters"`
+		Title             string                  `json:"title"`
+		Cards             []docxCard              `json:"cards"`
+		PublishPackage    map[string]any          `json:"publish_package"`
+		Images            []string                `json:"images"`
+		Mode              string                  `json:"mode"`
+		Cover             map[string]any          `json:"cover"`
+		Segments          []docxScriptSegment     `json:"segments"`
+		Bgm               string                  `json:"bgm"`
+		Brand             string                  `json:"brand"`
+		GlobalEditing     map[string]any          `json:"global_editing"`
+		Chapters          []docxStoryboardChapter `json:"chapters"`
 		MaterialChecklist []docxMaterial          `json:"material_checklist"`
 	}
 	if err := json.Unmarshal(decoded, &req); err != nil {

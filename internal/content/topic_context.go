@@ -39,9 +39,9 @@ type expectedHelp struct {
 
 // insightEvidence 洞察 evidence 结构。
 type insightEvidence struct {
-	Angle          string           `json:"angle"`
-	Quotes         []insightQuote   `json:"quotes"`
-	PatientConcern string           `json:"patient_concern"`
+	Angle          string         `json:"angle"`
+	Quotes         []insightQuote `json:"quotes"`
+	PatientConcern string         `json:"patient_concern"`
 }
 
 type insightQuote struct {
@@ -74,18 +74,18 @@ func (s *Store) getTopicEvidenceInsight(ctx context.Context, tenantID, insightID
 	return &e, nil
 }
 
-// getQuestionClusterByTopic 尽力匹配反复问簇（按洞察/选题关键词 contains）。
-func (s *Store) getQuestionClusterByTopic(ctx context.Context, tenantID int64, haystack string) (*QuestionCluster, error) {
+// getFrequentQuestionByTopic 尽力匹配反复问簇（按洞察/选题关键词 contains）。
+func (s *Store) getFrequentQuestionByTopic(ctx context.Context, tenantID int64, haystack string) (*FrequentQuestion, error) {
 	haystack = strings.ToLower(strings.TrimSpace(haystack))
 	if haystack == "" {
 		return nil, nil
 	}
-	clusters, err := s.listQuestionClusters(ctx, tenantID, 2)
+	frequentQuestions, err := s.listFrequentQuestions(ctx, tenantID, 2)
 	if err != nil {
 		return nil, err
 	}
-	for i := range clusters {
-		c := &clusters[i]
+	for i := range frequentQuestions {
+		c := &frequentQuestions[i]
 		key := strings.ToLower(strings.TrimSpace(c.Topic))
 		if key == "" {
 			continue
@@ -182,7 +182,7 @@ func (s *Service) topicContextText(ctx context.Context, tenantID, topicID int64)
 
 	// 反复问热度（尽力匹配）
 	if hay := t.Title + " " + t.Description + " " + insightTopic; strings.TrimSpace(hay) != "" {
-		if c, err := s.store.getQuestionClusterByTopic(ctx, tenantID, hay); err == nil && c != nil && c.Frequency >= 2 {
+		if c, err := s.store.getFrequentQuestionByTopic(ctx, tenantID, hay); err == nil && c != nil && c.Frequency >= 2 {
 			b.WriteString("- 反复问热度：患者已反复问 " + fmt.Sprintf("%d", c.Frequency) + " 次，属高频真实需求\n")
 			var quotes []string
 			_ = json.Unmarshal(c.Quotes, &quotes)

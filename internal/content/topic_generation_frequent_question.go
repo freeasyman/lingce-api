@@ -9,10 +9,10 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
-// topicGenerationFromClusterPrompt 高频问题 → 选题 的策划提示词。
+// topicGenerationFromFrequentQuestionPrompt 高频问题 → 选题 的策划提示词。
 // 与「单条洞察 → 选题」的区别：输入是一个已经聚合的高频问题（多份素材），
 // 且【数量硬约束 1~3，只有命中不同获客效果的角度才拆】。
-const topicGenerationFromClusterPrompt = `你是资深「医疗内容策划专家」，做「判断 → 策划」两段式工作。
+const topicGenerationFromFrequentQuestionPrompt = `你是资深「医疗内容策划专家」，做「判断 → 策划」两段式工作。
 
 【输入】是一个【高频问题】——它由多位患者反复询问的同一个问题聚合而来，是真实、普遍的需求：
 - 高频问题：患者反复在问什么
@@ -38,15 +38,15 @@ const topicGenerationFromClusterPrompt = `你是资深「医疗内容策划专�
 
 【输出字段】与「从单条洞察生成选题」完全一致（title、recommendation、goal、expected_help、core_claim、angle、audience、suggested_forms、facts、quotes、golden_quote、key_points、per_form_structure、forbidden_claims、bias_risk）。`
 
-// getQuestionClusterByID 按 id 取一个高频问题（含 insight_ids）。
-func (s *Store) getQuestionClusterByID(ctx context.Context, tenantID, clusterID int64) (*QuestionCluster, error) {
-	var c QuestionCluster
+// getFrequentQuestionByID 按 id 取一个高频问题（含 insight_ids）。
+func (s *Store) getFrequentQuestionByID(ctx context.Context, tenantID, frequentQuestionID int64) (*FrequentQuestion, error) {
+	var c FrequentQuestion
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, topic, COALESCE((frequency->>'total')::int, (frequency->>'recent_30d')::int, 0),
 		       COALESCE(representative_quotes, '[]'::jsonb),
 		       COALESCE(insight_ids, '[]'::jsonb)
-		FROM content_question_clusters
-		WHERE id = $1 AND tenant_id = $2`, clusterID, tenantID).
+		FROM content_frequent_questions
+		WHERE id = $1 AND tenant_id = $2`, frequentQuestionID, tenantID).
 		Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.InsightIDs)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
@@ -73,33 +73,33 @@ func (s *Store) fetchInsightPayloads(ctx context.Context, tenantID int64, insigh
 	return string(agg), nil
 }
 
-// GenerateTopicsFromCluster 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
-func (s *Service) GenerateTopicsFromCluster(ctx context.Context, tenantID, clusterID int64) ([]map[string]any, error) {
+// GenerateTopicsFromFrequentQuestion 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
+func (s *Service) GenerateTopicsFromFrequentQuestion(ctx context.Context, tenantID, frequentQuestionID int64) ([]map[string]any, error) {
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("llm gateway is not configured")
 	}
-	cluster, err := s.store.getQuestionClusterByID(ctx, tenantID, clusterID)
+	fq, err := s.store.getFrequentQuestionByID(ctx, tenantID, frequentQuestionID)
 	if err != nil {
 		return nil, err
 	}
-	if cluster == nil {
+	if fq == nil {
 		return nil, fmt.Errorf("高频问题不存在")
 	}
-	if len(cluster.InsightIDs) == 0 {
+	if len(fq.InsightIDs) == 0 {
 		return nil, fmt.Errorf("该高频问题缺少关联洞察，无法生成选题")
 	}
 
-	payloads, err := s.store.fetchInsightPayloads(ctx, tenantID, cluster.InsightIDs)
+	payloads, err := s.store.fetchInsightPayloads(ctx, tenantID, fq.InsightIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	var quotes []string
-	_ = json.Unmarshal(cluster.Quotes, &quotes)
+	_ = json.Unmarshal(fq.Quotes, &quotes)
 
 	userPrompt := strings.Join([]string{
-		"高频问题：" + cluster.Topic,
-		fmt.Sprintf("被问次数：%d 次", cluster.Frequency),
+		"高频问题：" + fq.Topic,
+		fmt.Sprintf("被问次数：%d 次", fq.Frequency),
 		"代表原话：" + strings.Join(quotes, "\n"),
 		"聚合素材（JSON）：" + payloads,
 	}, "\n\n")
@@ -117,13 +117,13 @@ func (s *Service) GenerateTopicsFromCluster(ctx context.Context, tenantID, clust
 	llmReq := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
-		CallerModule:  contentCallerModule("topic_generation_cluster"),
+		CallerModule:  contentCallerModule("topic_generation_frequent_question"),
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
-		Billing:       newBillingMetadata("content", "cluster", clusterID, "topic_generation", "content_topic"),
+		Billing:       newBillingMetadata("content", "frequent_question", frequentQuestionID, "topic_generation", "content_topic"),
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen_cluster", topicGenerationFromClusterPrompt)},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_topic_gen_frequent_question", topicGenerationFromFrequentQuestionPrompt)},
 			{Role: "user", Content: userPrompt},
 		},
 		Params: &llmgateway.Params{OutputSchema: outSchema, TimeoutSeconds: 180},
@@ -132,7 +132,7 @@ func (s *Service) GenerateTopicsFromCluster(ctx context.Context, tenantID, clust
 
 	llmResp, err := s.llmClient.TextInference(ctx, llmReq)
 	if err != nil {
-		return nil, fmt.Errorf("generate topics from cluster: %w", err)
+		return nil, fmt.Errorf("generate topics from frequent question: %w", err)
 	}
 
 	topics, err := parseTopicsV2(llmResp.Content)
@@ -150,12 +150,12 @@ func (s *Service) GenerateTopicsFromCluster(ctx context.Context, tenantID, clust
 	}
 
 	src := topicSourceInfo{
-		Source:           "cluster",
-		ClusterID:        cluster.ID,
-		ClusterQuestion:  cluster.Topic,
-		ClusterFrequency: cluster.Frequency,
+		Source:                    "frequent_question",
+		FrequentQuestionID:        fq.ID,
+		FrequentQuestionTopic:     fq.Topic,
+		FrequentQuestionFrequency: fq.Frequency,
 	}
-	return s.store.insertTopicsV2(ctx, tenantID, src, cluster.InsightIDs, topics)
+	return s.store.insertTopicsV2(ctx, tenantID, src, fq.InsightIDs, topics)
 }
 
 // dedupTopics 选题去重：标题去空白后完全相同或高度重叠（>=80% 字符重叠）的只留第一个。

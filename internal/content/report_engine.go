@@ -41,24 +41,24 @@ func (s *Service) PublishContentV2(ctx context.Context, tenantID, contentID int6
 
 // ReportItem 周报/月报里的一条内容。
 type ReportItem struct {
-	ID        int64      `json:"id"`
-	Title     string     `json:"title"`
-	Form      string     `json:"form"`
-	AccountID int64      `json:"account_id"`
-	Account   string     `json:"account"`
-	Goal      string     `json:"goal"`
-	PublishedAt *time.Time `json:"published_at"`
-	ReadCount int        `json:"read_count"`
-	LikeCount int        `json:"like_count"`
-	CommentCount int     `json:"comment_count"`
+	ID           int64      `json:"id"`
+	Title        string     `json:"title"`
+	Form         string     `json:"form"`
+	AccountID    int64      `json:"account_id"`
+	Account      string     `json:"account"`
+	Goal         string     `json:"goal"`
+	PublishedAt  *time.Time `json:"published_at"`
+	ReadCount    int        `json:"read_count"`
+	LikeCount    int        `json:"like_count"`
+	CommentCount int        `json:"comment_count"`
 }
 
 // ReportData 周报/月报聚合数据。
 type ReportData struct {
-	Total       int                     `json:"total"`
-	ByAccount   map[string]int          `json:"by_account"`
-	ByGoal      map[string]int          `json:"by_goal"`
-	Items       []ReportItem            `json:"items"`
+	Total     int            `json:"total"`
+	ByAccount map[string]int `json:"by_account"`
+	ByGoal    map[string]int `json:"by_goal"`
+	Items     []ReportItem   `json:"items"`
 }
 
 // GetReportData 聚合指定周期的已发布内容。

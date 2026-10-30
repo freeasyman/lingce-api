@@ -28,7 +28,7 @@ type docxMedia struct {
 	HeightEMU int
 }
 
-const emuPerPx = 9525         // 96 DPI
+const emuPerPx = 9525           // 96 DPI
 const docMaxWidthEMU = 5029200  // 5.5 inch
 const docMaxHeightEMU = 6858000 // 7.5 inch
 

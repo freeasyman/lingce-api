@@ -38,8 +38,8 @@ func (h *Handler) GenerateTopicsFromInsights(w http.ResponseWriter, r *http.Requ
 	httputil.WriteSuccess(w, topics)
 }
 
-// GenerateTopicsFromCluster 从「高频问题」整体生成 1~3 个选题。
-func (h *Handler) GenerateTopicsFromCluster(w http.ResponseWriter, r *http.Request) {
+// GenerateTopicsFromFrequentQuestion 从「高频问题」整体生成 1~3 个选题。
+func (h *Handler) GenerateTopicsFromFrequentQuestion(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
@@ -51,17 +51,17 @@ func (h *Handler) GenerateTopicsFromCluster(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		ClusterID int64 `json:"cluster_id"`
+		FrequentQuestionID int64 `json:"frequent_question_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	if req.ClusterID <= 0 {
-		httputil.WriteBadRequest(w, "cluster_id is required")
+	if req.FrequentQuestionID <= 0 {
+		httputil.WriteBadRequest(w, "frequent_question_id is required")
 		return
 	}
-	topics, err := h.service.GenerateTopicsFromCluster(r.Context(), tenantID, req.ClusterID)
+	topics, err := h.service.GenerateTopicsFromFrequentQuestion(r.Context(), tenantID, req.FrequentQuestionID)
 	if err != nil {
 		writeContentError(w, err)
 		return
@@ -168,7 +168,7 @@ func (h *Handler) registerJudgeEngineRoutes(mux *http.ServeMux, deps router.Rout
 	routes := []router.Route{
 		{Method: "POST", Path: "/api/v1/content-topics", Handler: h.CreateManualTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-insights", Handler: h.GenerateTopicsFromInsights, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-cluster", Handler: h.GenerateTopicsFromCluster, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-frequent-question", Handler: h.GenerateTopicsFromFrequentQuestion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/{id}", Handler: h.GetTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/{id}/actions/enrich", Handler: h.EnrichTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/enrich-batch", Handler: h.EnrichTopicsBatch, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

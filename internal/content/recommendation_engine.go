@@ -21,8 +21,8 @@ const normalizeQuestionsPrompt = `你是医疗内容运营。把下面这些"患
 4. 规范主题用患者能听懂的简洁中文。
 只返回 JSON 数组。`
 
-// RebuildQuestionClusters 用 LLM 归一化 question 洞察，重建"反复问"簇。
-func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (int, error) {
+// RebuildFrequentQuestions 用 LLM 归一化 question 洞察，重建"反复问"簇。
+func (s *Service) RebuildFrequentQuestions(ctx context.Context, tenantID int64) (int, error) {
 	if s.llmClient == nil {
 		return 0, fmt.Errorf("llm gateway is not configured")
 	}
@@ -58,7 +58,7 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_cluster_normalize", normalizeQuestionsPrompt)},
+			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_frequent_question_normalize", normalizeQuestionsPrompt)},
 			{Role: "user", Content: strings.Join(lines, "\n")},
 		},
 	}
@@ -68,13 +68,13 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 		return 0, fmt.Errorf("normalize questions: %w", err)
 	}
 
-	normalized, err := parseNormalizedClusters(resp.Content)
+	normalized, err := parseNormalizedFrequentQuestions(resp.Content)
 	if err != nil {
 		return 0, err
 	}
 
 	// 重建簇：每个归一化主题汇总频次 + 代表原话 + 原始问题
-	var clusters []QuestionCluster
+	var frequentQuestions []FrequentQuestion
 	for _, n := range normalized {
 		total := 0
 		var quotes []string
@@ -93,22 +93,22 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 		}
 		insightIDs = dedupInt64s(insightIDs)
 		qJSON, _ := json.Marshal(quotes)
-		clusters = append(clusters, QuestionCluster{Topic: n.Topic, Frequency: total, Quotes: qJSON, Items: n.Items, InsightIDs: insightIDs})
+		frequentQuestions = append(frequentQuestions, FrequentQuestion{Topic: n.Topic, Frequency: total, Quotes: qJSON, Items: n.Items, InsightIDs: insightIDs})
 	}
-	sort.Slice(clusters, func(i, j int) bool { return clusters[i].Frequency > clusters[j].Frequency })
+	sort.Slice(frequentQuestions, func(i, j int) bool { return frequentQuestions[i].Frequency > frequentQuestions[j].Frequency })
 
-	if err := s.store.replaceQuestionClusters(ctx, tenantID, clusters); err != nil {
-		return 0, fmt.Errorf("replace clusters: %w", err)
+	if err := s.store.replaceFrequentQuestions(ctx, tenantID, frequentQuestions); err != nil {
+		return 0, fmt.Errorf("replace frequent questions: %w", err)
 	}
-	return len(clusters), nil
+	return len(frequentQuestions), nil
 }
 
-type normalizedCluster struct {
+type normalizedFrequentQuestion struct {
 	Topic string   `json:"topic"`
 	Items []string `json:"items"`
 }
 
-func parseNormalizedClusters(content string) ([]normalizedCluster, error) {
+func parseNormalizedFrequentQuestions(content string) ([]normalizedFrequentQuestion, error) {
 	raw := strings.TrimSpace(content)
 	if idx := strings.Index(raw, "```"); idx >= 0 {
 		raw = raw[idx+3:]
@@ -125,9 +125,9 @@ func parseNormalizedClusters(content string) ([]normalizedCluster, error) {
 			raw = raw[start : end+1]
 		}
 	}
-	var out []normalizedCluster
+	var out []normalizedFrequentQuestion
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("unmarshal normalized clusters: %w (raw: %.300s)", err, raw)
+		return nil, fmt.Errorf("unmarshal normalized frequent questions: %w (raw: %.300s)", err, raw)
 	}
 	return out, nil
 }
@@ -165,24 +165,24 @@ func (s *Service) RecommendTopics(ctx context.Context, tenantID int64, limit int
 	if limit <= 0 {
 		limit = 3
 	}
-	clusters, err := s.store.listQuestionClusters(ctx, tenantID, 2)
+	frequentQuestions, err := s.store.listFrequentQuestions(ctx, tenantID, 2)
 	if err != nil {
-		return nil, fmt.Errorf("list clusters: %w", err)
+		return nil, fmt.Errorf("list frequent questions: %w", err)
 	}
 	var out []map[string]any
-	for i, c := range clusters {
+	for i, c := range frequentQuestions {
 		if i >= limit {
 			break
 		}
 		var quotes []string
 		_ = json.Unmarshal(c.Quotes, &quotes)
 		out = append(out, map[string]any{
-			"cluster_id": c.ID,
-			"question":   c.Topic,
-			"frequency":  c.Frequency,
-			"quotes":     quotes,
-			"items":      c.Items,
-			"why":        fmt.Sprintf("患者反复问了 %d 次", c.Frequency),
+			"frequent_question_id": c.ID,
+			"question":             c.Topic,
+			"frequency":            c.Frequency,
+			"quotes":               quotes,
+			"items":                c.Items,
+			"why":                  fmt.Sprintf("患者反复问了 %d 次", c.Frequency),
 		})
 	}
 	return out, nil

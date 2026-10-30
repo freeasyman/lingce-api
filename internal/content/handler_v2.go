@@ -154,8 +154,8 @@ func (h *Handler) SetInsightStatusV2(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"id": id, "status": req.Status})
 }
 
-// ListQuestionClusters 反复问聚合。
-func (h *Handler) ListQuestionClusters(w http.ResponseWriter, r *http.Request) {
+// ListFrequentQuestions 反复问聚合。
+func (h *Handler) ListFrequentQuestions(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
 	if !ok {
 		httputil.WriteUnauthorized(w, "Invalid token")
@@ -167,27 +167,27 @@ func (h *Handler) ListQuestionClusters(w http.ResponseWriter, r *http.Request) {
 			minCount = n
 		}
 	}
-	clusters, err := h.service.store.listQuestionClusters(r.Context(), tenantID, minCount)
+	frequentQuestions, err := h.service.store.listFrequentQuestions(r.Context(), tenantID, minCount)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, clusters)
+	httputil.WriteSuccess(w, frequentQuestions)
 }
 
-// RebuildQuestionClusters 重建反复问簇（LLM 归一化）。
-func (h *Handler) RebuildQuestionClusters(w http.ResponseWriter, r *http.Request) {
+// RebuildFrequentQuestions 重建反复问簇（LLM 归一化）。
+func (h *Handler) RebuildFrequentQuestions(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
 	if !ok {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	n, err := h.service.RebuildQuestionClusters(r.Context(), tenantID)
+	n, err := h.service.RebuildFrequentQuestions(r.Context(), tenantID)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]int{"clusters": n})
+	httputil.WriteSuccess(w, map[string]int{"frequent_questions": n})
 }
 
 // RecommendTopics 推荐打分（反复问频次）。
@@ -643,9 +643,9 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/content-media-accounts", Handler: h.CreateMediaAccountV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights", Handler: h.ListInsightsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-insights/{id}", Handler: h.GetInsightV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/content-insights/clusters", Handler: h.ListQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-insights/frequent-questions", Handler: h.ListFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/{id}/status", Handler: h.SetInsightStatusV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/content-insights/clusters/actions/rebuild", Handler: h.RebuildQuestionClusters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-insights/frequent-questions/actions/rebuild", Handler: h.RebuildFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/recommendations", Handler: h.RecommendTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContentItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

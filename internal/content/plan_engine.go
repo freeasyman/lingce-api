@@ -174,9 +174,9 @@ func (s *Service) generatePlanSummary(ctx context.Context, tenantID int64, accou
 	}
 
 	// 反复问依据
-	if clusters, err := s.store.listQuestionClusters(ctx, tenantID, 2); err == nil && len(clusters) > 0 {
+	if frequentQuestions, err := s.store.listFrequentQuestions(ctx, tenantID, 2); err == nil && len(frequentQuestions) > 0 {
 		b.WriteString("\n患者反复问（依据）：\n")
-		for _, c := range clusters {
+		for _, c := range frequentQuestions {
 			if c.Frequency >= 3 {
 				b.WriteString(fmt.Sprintf("  - %s（被问 %d 次）\n", c.Topic, c.Frequency))
 			}
