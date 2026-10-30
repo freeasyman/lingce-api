@@ -565,8 +565,9 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit, o
 	rows, err := s.pool.Query(ctx, `
 		SELECT ci.id, ci.tenant_id, ci.topic_id, COALESCE(ci.form,'article'), COALESCE(ci.title,''), COALESCE(ci.body,''),
 		       COALESCE(ci.publish_package,'{}'::jsonb), COALESCE(ci.images,'{}'::jsonb), COALESCE(ci.status,'draft'), COALESCE(ci.channel,''), COALESCE(ci.generation_status,''), COALESCE(ci.generation_shot_index,-1), ci.created_at,
-		       COALESCE(ct.title,''), COALESCE(e.name,''),
-		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), ''),
+		       COALESCE(ct.title,''),
+		       COALESCE(NULLIF(ci.doctor_name,''), NULLIF(e.name,''), ''),
+		       COALESCE(NULLIF(ci.department_name,''), NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), ''),
 		       ci.insight_id
 		FROM content_items ci
 		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
@@ -714,8 +715,17 @@ func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64
 	}
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_items (tenant_id, topic_id, form, title, body, publish_package, images, status)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,'draft')
+		INSERT INTO content_items (tenant_id, topic_id, form, title, body, publish_package, images, status,
+		                           insight_id, doctor_id, doctor_name, department_name)
+		SELECT $1, NULLIF($2,0), $3, $4, $5, $6::jsonb, $7::jsonb, 'draft',
+		       ins.id, ins.employee_id,
+		       COALESCE(NULLIF(ins.employee_name,''), NULLIF(e.full_name,''), NULLIF(e.name,''), ''),
+		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
+		FROM (SELECT 1) AS dummy
+		LEFT JOIN content_topics ct ON ct.id = NULLIF($2,0) AND ct.tenant_id = $1
+		LEFT JOIN LATERAL (SELECT NULLIF(ct.insight_ids->>0,'')::bigint AS iid) x ON true
+		LEFT JOIN content_insights ins ON ins.id = x.iid
+		LEFT JOIN employees e ON e.id = ins.employee_id
 		RETURNING id`,
 		tenantID, topicID, form, title, body, pp, img).Scan(&id)
 	return id, err
@@ -727,8 +737,15 @@ func (s *Store) insertContentItemV2(ctx context.Context, tenantID, topicID int64
 func (s *Store) insertContentItemWithSource(ctx context.Context, tenantID, topicID, insightID int64, form, title, body string) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO content_items (tenant_id, topic_id, insight_id, form, title, body, publish_package, images, status)
-		VALUES ($1, NULLIF($2,0), NULLIF($3,0), $4, $5, $6, '{}'::jsonb, '{}'::jsonb, 'draft')
+		INSERT INTO content_items (tenant_id, topic_id, insight_id, form, title, body, publish_package, images, status,
+		                           doctor_id, doctor_name, department_name)
+		SELECT $1, NULLIF($2,0), ins.id, $4, $5, $6, '{}'::jsonb, '{}'::jsonb, 'draft',
+		       ins.employee_id,
+		       COALESCE(NULLIF(ins.employee_name,''), NULLIF(e.full_name,''), NULLIF(e.name,''), ''),
+		       COALESCE(NULLIF(ins.medical_department_name,''), NULLIF(e.medical_department_code,''), '')
+		FROM (SELECT 1) AS dummy
+		LEFT JOIN content_insights ins ON ins.id = NULLIF($3,0)
+		LEFT JOIN employees e ON e.id = ins.employee_id
 		RETURNING id`,
 		tenantID, topicID, insightID, normalizeFormCode(form), title, body).Scan(&id)
 	return id, err
