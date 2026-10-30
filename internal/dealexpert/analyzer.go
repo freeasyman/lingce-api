@@ -153,6 +153,64 @@ func (a *Analyzer) RunOnce(ctx context.Context, limit int) (int, error) {
 	return len(pending), nil
 }
 
+// pruneUnknownEvidenceRefsInContent 在模型输出引用了不存在的 ev_N 时，
+// 删除这些悬空引用，避免一次小幻觉导致整张卡失败；证据本身的定义不动。
+func pruneUnknownEvidenceRefsInContent(raw string) (string, int) {
+	var card map[string]any
+	if err := json.Unmarshal([]byte(raw), &card); err != nil {
+		return raw, 0
+	}
+	items, err := evidenceItems(card)
+	if err != nil {
+		return raw, 0
+	}
+	valid := make(map[string]bool, len(items))
+	for _, item := range items {
+		if id, _ := item["id"].(string); id != "" {
+			valid[id] = true
+		}
+	}
+	if len(valid) == 0 {
+		return raw, 0
+	}
+	pruned := pruneEvidenceArrays(card, valid)
+	if pruned == 0 {
+		return raw, 0
+	}
+	out, err := json.Marshal(card)
+	if err != nil {
+		return raw, 0
+	}
+	return string(out), pruned
+}
+
+func pruneEvidenceArrays(v any, valid map[string]bool) int {
+	pruned := 0
+	switch node := v.(type) {
+	case map[string]any:
+		for key, value := range node {
+			if arr, ok := value.([]any); ok {
+				out := make([]any, 0, len(arr))
+				for _, item := range arr {
+					if s, ok := item.(string); ok && strings.HasPrefix(s, "ev_") && !valid[s] {
+						pruned++
+						continue
+					}
+					out = append(out, item)
+				}
+				node[key] = out
+				continue
+			}
+			pruned += pruneEvidenceArrays(value, valid)
+		}
+	case []any:
+		for _, item := range node {
+			pruned += pruneEvidenceArrays(item, valid)
+		}
+	}
+	return pruned
+}
+
 func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 	prompt, err := a.loadPrompt(ctx, item.TenantID)
 	if err != nil {
@@ -220,6 +278,10 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		}
 	}
 
+	if cleaned, pruned := pruneUnknownEvidenceRefsInContent(resp.Content); pruned > 0 {
+		resp.Content = cleaned
+		a.log.Warn("deal expert pruned unknown evidence refs", "id", item.ID, "count", pruned)
+	}
 	card, err := validateDealCard(resp.Content, schema, validation)
 	if err != nil {
 		a.fail(ctx, item, "SCHEMA_ERROR", err)
