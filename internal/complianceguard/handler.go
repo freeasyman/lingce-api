@@ -29,12 +29,14 @@ type Handler struct {
 	logPath     string
 }
 
-const communicationCheckLogPath = "/Users/yiliiang/Documents/lingce-web/apps/compliance/data/log/communication-check.log"
-
 func NewHandler(service *Service) *Handler {
+	logPath := strings.TrimSpace(os.Getenv("LINGCE_COMPLIANCE_LOG_PATH"))
+	if logPath == "" {
+		logPath = filepath.Join(os.TempDir(), "lingce-compliance", "communication-check.log")
+	}
 	return &Handler{
 		service: service,
-		logPath: communicationCheckLogPath,
+		logPath: logPath,
 	}
 }
 

@@ -262,19 +262,13 @@ func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerR
 // 署名：Codex
 // 时间：2026-09-13
 func NewInternalHandler(pool *pgxpool.Pool, llm *llmgateway.Client, process *emrprocess.Service) *InternalHandler {
+	debugDir := strings.TrimSpace(os.Getenv("LINGCE_EMR_DEBUG_DIR"))
+	if debugDir == "" {
+		debugDir = filepath.Join(os.TempDir(), "lingce-emr-debug")
+	}
 	return &InternalHandler{
-		logPath: filepath.Join(
-			"/Users/yiliiang/Documents/lingce-web/apps/emr",
-			"data",
-			"log",
-			"emr_worker_debug.log",
-		),
-		betaLogPath: filepath.Join(
-			"/Users/yiliiang/Documents/lingce-web/apps/emr",
-			"data",
-			"log",
-			"emr_generation_beta.log",
-		),
+		logPath:     filepath.Join(debugDir, "emr_worker_debug.log"),
+		betaLogPath: filepath.Join(debugDir, "emr_generation_beta.log"),
 		pool:        pool,
 		recordStore: NewStore(pool),
 		process:     process,
