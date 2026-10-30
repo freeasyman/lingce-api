@@ -119,7 +119,7 @@ func (s *Service) loadTopicGenerationJob(ctx context.Context, tenantID, jobID, f
 
 // maxTopicsPerFrequentQuestion 一个高频问题最多做多少个选题。
 // 素材有限，做太多必然同质化；够了就先发布看效果，不要硬凑。
-const maxTopicsPerFrequentQuestion = 6
+const maxTopicsPerFrequentQuestion = 3
 
 // generateTopicsFromFrequentQuestionCore 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
 func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, tenantID, frequentQuestionID int64) ([]map[string]any, error) {
