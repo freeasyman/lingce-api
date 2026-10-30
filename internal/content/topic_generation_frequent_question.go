@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
@@ -73,8 +74,44 @@ func (s *Store) fetchInsightPayloads(ctx context.Context, tenantID int64, insigh
 	return string(agg), nil
 }
 
-// GenerateTopicsFromFrequentQuestion 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
-func (s *Service) GenerateTopicsFromFrequentQuestion(ctx context.Context, tenantID, frequentQuestionID int64) ([]map[string]any, error) {
+// GenerateTopicsFromFrequentQuestionAsync 异步：创建任务并后台生成，立即返回 job_id。
+// 复用 AI 口碑的 run 模式：create → goroutine → 前端轮询。
+func (s *Service) GenerateTopicsFromFrequentQuestionAsync(ctx context.Context, tenantID, frequentQuestionID int64) (int64, error) {
+	fq, err := s.store.getFrequentQuestionByID(ctx, tenantID, frequentQuestionID)
+	if err != nil {
+		return 0, err
+	}
+	if fq == nil {
+		return 0, fmt.Errorf("高频问题不存在")
+	}
+	// 防重复：同一高频问题已有 running 任务则直接复用，不重复提交
+	if running, err := s.store.getRunningTopicGenerationJob(ctx, tenantID, frequentQuestionID); err == nil && running > 0 {
+		return running, nil
+	}
+	jobID, err := s.store.createTopicGenerationJob(ctx, tenantID, frequentQuestionID)
+	if err != nil {
+		return 0, err
+	}
+	go s.loadTopicGenerationJob(context.Background(), tenantID, jobID, frequentQuestionID)
+	return jobID, nil
+}
+
+// loadTopicGenerationJob 后台执行选题生成，边跑边更新进度；完成/失败都写回任务。
+func (s *Service) loadTopicGenerationJob(ctx context.Context, tenantID, jobID, frequentQuestionID int64) {
+	_ = s.store.updateTopicGenerationJobProgress(ctx, tenantID, jobID, 20)
+	topics, err := s.generateTopicsFromFrequentQuestionCore(ctx, tenantID, frequentQuestionID)
+	if err != nil {
+		_ = s.store.failTopicGenerationJob(ctx, tenantID, jobID, err.Error())
+		return
+	}
+	resultJSON, _ := json.Marshal(topics)
+	if err := s.store.finishTopicGenerationJob(ctx, tenantID, jobID, resultJSON); err != nil {
+		slog.Error("finish topic generation job", "error", err, "job_id", jobID)
+	}
+}
+
+// generateTopicsFromFrequentQuestionCore 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
+func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, tenantID, frequentQuestionID int64) ([]map[string]any, error) {
 	if s.llmClient == nil {
 		return nil, fmt.Errorf("llm gateway is not configured")
 	}

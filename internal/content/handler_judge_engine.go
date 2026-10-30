@@ -61,12 +61,36 @@ func (h *Handler) GenerateTopicsFromFrequentQuestion(w http.ResponseWriter, r *h
 		httputil.WriteBadRequest(w, "frequent_question_id is required")
 		return
 	}
-	topics, err := h.service.GenerateTopicsFromFrequentQuestion(r.Context(), tenantID, req.FrequentQuestionID)
+	jobID, err := h.service.GenerateTopicsFromFrequentQuestionAsync(r.Context(), tenantID, req.FrequentQuestionID)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, topics)
+	httputil.WriteSuccess(w, map[string]any{"job_id": jobID})
+}
+
+// GetTopicGenerationJob 轮询选题生成任务状态。
+func (h *Handler) GetTopicGenerationJob(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "invalid job id")
+		return
+	}
+	job, err := h.service.store.getTopicGenerationJob(r.Context(), tenantID, id)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	if job == nil {
+		httputil.WriteNotFound(w, "job not found")
+		return
+	}
+	httputil.WriteSuccess(w, job)
 }
 
 // GetTopic 选题详情（含判断信息）。
@@ -169,6 +193,7 @@ func (h *Handler) registerJudgeEngineRoutes(mux *http.ServeMux, deps router.Rout
 		{Method: "POST", Path: "/api/v1/content-topics", Handler: h.CreateManualTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-insights", Handler: h.GenerateTopicsFromInsights, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-frequent-question", Handler: h.GenerateTopicsFromFrequentQuestion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/generation-jobs/{id}", Handler: h.GetTopicGenerationJob, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/{id}", Handler: h.GetTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/{id}/actions/enrich", Handler: h.EnrichTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/enrich-batch", Handler: h.EnrichTopicsBatch, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
