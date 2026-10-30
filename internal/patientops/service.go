@@ -1072,9 +1072,26 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	}
 	customerContext := s.loadCustomerContext(analysisCtx, req.TenantID, valueOrZero(req.CustomerID))
 	userPrompt := strings.ReplaceAll(prompt.UserPrompt, "{{customer_context}}", customerContext)
+	imageData := req.ImageData
+	if processed, pErr := preprocessScreenshotDataURL(req.ImageData); pErr == nil {
+		imageData = processed.DataURL
+		slog.Info("patient screenshot preprocessed",
+			"source_id", sourceID,
+			"original", fmt.Sprintf("%dx%d/%dB", processed.OriginalWidth, processed.OriginalHeight, processed.OriginalBytes),
+			"processed", fmt.Sprintf("%dx%d/%dB", processed.ProcessedWidth, processed.ProcessedHeight, processed.ProcessedBytes),
+			"cropped", processed.Cropped, "resized", processed.Resized)
+	} else {
+		slog.Warn("patient screenshot preprocessing failed; using original", "source_id", sourceID, "error", pErr)
+	}
 	params := &llmgateway.Params{Temperature: .2, MaxTokens: 2200, TimeoutSeconds: 180, ResponseFormat: "json"}
+	if strings.TrimSpace(prompt.OutputSchema) != "" {
+		var schema map[string]any
+		if err := json.Unmarshal([]byte(prompt.OutputSchema), &schema); err == nil {
+			params.OutputSchema = &llmgateway.OutputSchema{Name: "patient_screenshot_analysis", Strict: true, Schema: schema}
+		}
+	}
 	applyPatientParams(params, config.Params)
-	imageRequest := llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID), BillingSubject: "patient_screenshot_analysis", BillingScene: "screenshot", CostLayer: "product"}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: req.ImageData}, {Text: userPrompt}}}}, Params: params}
+	imageRequest := llmgateway.ImageInferenceRequest{TenantID: req.TenantID, CallerService: "lingce-api", CallerModule: "patientops.screenshot", FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode, Billing: &llmgateway.BillingMetadata{BusinessDomain: "patient_operations", BusinessObjectType: "conversation_source", BusinessObjectID: sourceID, CustomerID: valueOrZero(req.CustomerID), BillingSubject: "patient_screenshot_analysis", BillingScene: "screenshot", CostLayer: "product"}, Messages: []llmgateway.ImageMessage{{Role: "system", Content: []llmgateway.ImageContentPart{{Text: prompt.SystemPrompt}}}, {Role: "user", Content: []llmgateway.ImageContentPart{{Image: imageData}, {Text: userPrompt}}}}, Params: params}
 	var resp *llmgateway.TextInferenceResponse
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err = s.llm.ImageInference(analysisCtx, imageRequest)
@@ -1092,8 +1109,15 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	}
 	var rawResult map[string]any
 	if err := json.Unmarshal([]byte(resp.Content), &rawResult); err != nil {
-		slog.Error("patient screenshot analysis response parse failed", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
-		return nil, markFailed(fmt.Errorf("parse patient screenshot analysis (source_id=%d, response_bytes=%d): %w", sourceID, len(resp.Content), err))
+		slog.Warn("patient screenshot analysis response parse failed; retrying once", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
+		resp, err = s.llm.ImageInference(analysisCtx, imageRequest)
+		if err != nil {
+			return nil, markFailed(fmt.Errorf("analyze screenshot through llm gateway: %w", err))
+		}
+		if err := json.Unmarshal([]byte(resp.Content), &rawResult); err != nil {
+			slog.Error("patient screenshot analysis response parse failed", "source_id", sourceID, "response_bytes", len(resp.Content), "error", err)
+			return nil, markFailed(fmt.Errorf("parse patient screenshot analysis (source_id=%d, response_bytes=%d): %w", sourceID, len(resp.Content), err))
+		}
 	}
 	normalizeScreenshotResultMap(rawResult)
 	if strings.TrimSpace(prompt.OutputSchema) != "" {
