@@ -205,7 +205,7 @@ func (s *Store) listQuestionClustersFallback(ctx context.Context, tenantID int64
 		SELECT topic, count(*)::int AS freq,
 		       COALESCE(jsonb_agg(DISTINCT evidence->'quotes'->0->>'text'), '[]'::jsonb) AS quotes
 		FROM content_insights
-		WHERE tenant_id = $1 AND type = 'question'
+		WHERE tenant_id = $1 AND type IN ('问题', 'question')
 		GROUP BY topic
 		HAVING count(*) >= $2
 		ORDER BY freq DESC, topic`, tenantID, minCount)
@@ -237,7 +237,7 @@ func (s *Store) listQuestionTopicCounts(ctx context.Context, tenantID int64) ([]
 		SELECT topic, count(*)::int,
 		       COALESCE(jsonb_agg(DISTINCT evidence->'quotes'->0->>'text') FILTER (WHERE evidence->'quotes'->0->>'text' IS NOT NULL), '[]'::jsonb)
 		FROM content_insights
-		WHERE tenant_id = $1 AND type = 'question'
+		WHERE tenant_id = $1 AND type IN ('问题', 'question')
 		GROUP BY topic
 		ORDER BY count(*) DESC`, tenantID)
 	if err != nil {
