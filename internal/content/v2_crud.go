@@ -356,6 +356,7 @@ func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insi
 			&r.EmployeeName, &r.MedicalDepartmentName, &r.EmployeeID, &r.MedicalDepartmentCode, &r.Status, &r.CreatedAt); err != nil {
 			return nil, 0, nil, nil, err
 		}
+		r.EmployeeName = maskPhoneNumber(r.EmployeeName)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -393,6 +394,7 @@ func (s *Store) listInsightEmployeeOptions(ctx context.Context, tenantID int64) 
 		if err := rows.Scan(&o.ID, &o.Name); err != nil {
 			return nil, err
 		}
+		o.Name = maskPhoneNumber(o.Name)
 		if o.Name == "" {
 			o.Name = "未命名医生"
 		}
@@ -597,7 +599,9 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit, o
 	return out, rows.Err()
 }
 
-// maskPhoneNumber 医生姓名栏如果是手机号（11 位纯数字），脱敏成 139****3434。
+// maskPhoneNumber 医生姓名统一脱敏规则：姓名栏是 11 位手机号时脱敏成 139****3434，
+// 是文字姓名则原样返回。内容库、灵感列表、医生筛选项统一走这里，避免同一医生
+// 在不同页面显示不一致。
 // 原来是直接返回空 —— 结果内容库「医生」列全显示「—」，
 // 运营看不出这篇内容是谁的，反而丢信息。
 func maskPhoneNumber(s string) string {
