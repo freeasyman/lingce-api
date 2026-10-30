@@ -596,7 +596,9 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit, o
 	return out, rows.Err()
 }
 
-// maskPhoneNumber 姓名栏如果是手机号（11 位纯数字），返回空，避免泄露隐私。
+// maskPhoneNumber 医生姓名栏如果是手机号（11 位纯数字），脱敏成 139****3434。
+// 原来是直接返回空 —— 结果内容库「医生」列全显示「—」，
+// 运营看不出这篇内容是谁的，反而丢信息。
 func maskPhoneNumber(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) == 11 && s[0] == '1' {
@@ -605,7 +607,7 @@ func maskPhoneNumber(s string) string {
 				return s
 			}
 		}
-		return ""
+		return s[:3] + "****" + s[7:]
 	}
 	return s
 }
