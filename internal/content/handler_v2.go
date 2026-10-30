@@ -246,12 +246,32 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted := r.URL.Query().Get("deleted") == "true"
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, 200, deleted, q)
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, limit, offset, deleted, q)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, items)
+	total, err := h.service.store.countContentItemsV2(r.Context(), tenantID, deleted, q)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
 func (h *Handler) ListStyleTemplatesV2(w http.ResponseWriter, r *http.Request) {

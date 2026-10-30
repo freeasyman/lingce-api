@@ -551,9 +551,12 @@ func (s *Store) updateTopicEnrichment(ctx context.Context, tenantID, id int64, r
 
 // ===== 内容 =====
 
-func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit int, deleted bool, q string) ([]ContentItemV2Record, error) {
+func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit, offset int, deleted bool, q string) ([]ContentItemV2Record, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	deletedFilter := "ci.deleted_at IS NULL"
 	if deleted {
@@ -572,8 +575,8 @@ func (s *Store) listContentItemsV2(ctx context.Context, tenantID int64, limit in
 		LEFT JOIN employees e ON e.id = ins.employee_id
 		WHERE ci.tenant_id = $1 AND `+deletedFilter+`
 		  AND ($3 = '' OR ci.title ILIKE '%' || $3 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $3 || '%')
-		ORDER BY ci.id DESC LIMIT $2`,
-		tenantID, limit, q)
+		ORDER BY ci.id DESC LIMIT $2 OFFSET $4`,
+		tenantID, limit, q, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -984,4 +987,21 @@ func (s *Store) getInsightV2(ctx context.Context, tenantID, id int64) (*ContentI
 		return nil, err
 	}
 	return &r, nil
+}
+
+// countContentItemsV2 统计同条件下内容总数（与 listContentItemsV2 的 WHERE 保持一致）。
+func (s *Store) countContentItemsV2(ctx context.Context, tenantID int64, deleted bool, q string) (int, error) {
+	deletedFilter := "ci.deleted_at IS NULL"
+	if deleted {
+		deletedFilter = "ci.deleted_at IS NOT NULL"
+	}
+	var total int
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM content_items ci
+		LEFT JOIN content_topics ct ON ct.id = ci.topic_id AND ct.tenant_id = ci.tenant_id
+		WHERE ci.tenant_id = $1 AND `+deletedFilter+`
+		  AND ($2 = '' OR ci.title ILIKE '%' || $2 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $2 || '%')`,
+		tenantID, q).Scan(&total)
+	return total, err
 }
