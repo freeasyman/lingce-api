@@ -57,6 +57,7 @@ func (s *Service) RebuildFrequentQuestions(ctx context.Context, tenantID int64) 
 		FunctionType:  selectedModel.FunctionType,
 		Provider:      selectedModel.Provider,
 		ModelCode:     selectedModel.ModelCode,
+		Billing:       newBillingMetadata("content", "frequent_question_run", 0, "frequent_question_rebuild", "content_insight"),
 		Messages: []llmgateway.Message{
 			{Role: "system", Content: s.resolvePromptByCode(ctx, tenantID, "content_frequent_question_normalize", normalizeQuestionsPrompt)},
 			{Role: "user", Content: strings.Join(lines, "\n")},
