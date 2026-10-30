@@ -138,7 +138,11 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 	existingTitles, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs)
 	existingBlock := ""
 	if len(existingTitles) > 0 {
-		existingBlock = "\n\n【已经做过的选题，绝对不要重复生成同款】\n" + strings.Join(existingTitles, "\n")
+		existingBlock = "\n\n【已经做过的选题——不要重复，也不要换个说法重写同一个角度】\n" +
+			strings.Join(existingTitles, "\n") +
+			"\n\n如果上面的选题已经覆盖了某个角度，你必须换一个【完全不同的切入角度】（换人群/换场景/换疑问/换结论）；" +
+			"同时【不要复用同一个开头钩子/引语】（例如不要在已用过「我选3.0行不行？」后再次用它起头）；" +
+			"如果实在没有新角度，就返回空数组，绝不硬凑、绝不换词重写。"
 	}
 
 	userPrompt := strings.Join([]string{
@@ -203,15 +207,13 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 	return s.store.insertTopicsV2(ctx, tenantID, src, fq.InsightIDs, topics)
 }
 
-// dedupTopics 选题去重：标题去空白后完全相同或高度重叠（>=80% 字符重叠）的只留第一个。
+// dedupTopics 选题去重：标题语义高度相近（字符二元组 Jaccard ≥ 0.55）的只留第一个。
 func dedupTopics(in []TopicV2) []TopicV2 {
 	var out []TopicV2
 	for _, t := range in {
-		title := strings.ToLower(strings.TrimSpace(t.Title))
 		dup := false
 		for _, e := range out {
-			et := strings.ToLower(strings.TrimSpace(e.Title))
-			if title == et || (len(title) > 0 && strings.Contains(et, title) && float64(len(title))/float64(len(et)) >= 0.8) {
+			if titleSimilar(t.Title, e.Title) {
 				dup = true
 				break
 			}
@@ -223,19 +225,86 @@ func dedupTopics(in []TopicV2) []TopicV2 {
 	return out
 }
 
-// filterDuplicateTitles 丢掉与已有选题标题过近的（完全相同或包含且占比>=0.8）。
+// titleSimilar 判断两个标题是否"同款"：
+// 完全相等 / 包含且占比高 / 字符二元组 Jaccard ≥ 0.35 / 复用同一个开头钩子。
+func titleSimilar(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if strings.Contains(a, b) || strings.Contains(b, a) {
+		short, long := a, b
+		if len(b) < len(a) {
+			short, long = b, a
+		}
+		if float64(len([]rune(short)))/float64(len([]rune(long))) >= 0.8 {
+			return true
+		}
+	}
+	// 复用同一个开头钩子（例如都从「我选3.0行不行？」起头）也算同款
+	ha, hb := titleHook(a), titleHook(b)
+	if ha != "" && ha == hb && len([]rune(ha)) >= 6 {
+		return true
+	}
+	return bigramJaccard(a, b) >= 0.35
+}
+
+// titleHook 取标题的开头钩子：优先取开头「...」引语，否则取前 10 个字符。
+func titleHook(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "「") {
+		if idx := strings.Index(s, "」"); idx > 0 {
+			return s[:idx+len("」")]
+		}
+	}
+	r := []rune(s)
+	if len(r) > 10 {
+		return string(r[:10])
+	}
+	return s
+}
+
+// bigramJaccard 字符二元组 Jaccard 相似度（对中文标题足够稳）。
+func bigramJaccard(a, b string) float64 {
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) < 2 || len(rb) < 2 {
+		return 0
+	}
+	setA := make(map[string]struct{}, len(ra))
+	for i := 0; i < len(ra)-1; i++ {
+		setA[string(ra[i:i+2])] = struct{}{}
+	}
+	setB := make(map[string]struct{}, len(rb))
+	for i := 0; i < len(rb)-1; i++ {
+		setB[string(rb[i:i+2])] = struct{}{}
+	}
+	inter := 0
+	for k := range setA {
+		if _, ok := setB[k]; ok {
+			inter++
+		}
+	}
+	union := len(setA) + len(setB) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+// filterDuplicateTitles 丢掉与已有选题标题"同款"的。
 func filterDuplicateTitles(in []TopicV2, existing []string) []TopicV2 {
 	if len(existing) == 0 {
 		return in
 	}
-	norm := func(x string) string { return strings.ToLower(strings.TrimSpace(x)) }
 	var out []TopicV2
 	for _, t := range in {
-		title := norm(t.Title)
 		dup := false
 		for _, e := range existing {
-			et := norm(e)
-			if title == et || (len(title) > 0 && strings.Contains(et, title) && float64(len(title))/float64(len(et)) >= 0.8) {
+			if titleSimilar(t.Title, e) {
 				dup = true
 				break
 			}
