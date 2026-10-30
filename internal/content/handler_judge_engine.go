@@ -93,6 +93,21 @@ func (h *Handler) GetTopicGenerationJob(w http.ResponseWriter, r *http.Request) 
 	httputil.WriteSuccess(w, job)
 }
 
+// ListRunningTopicGenerationJobs 列出本租户仍在跑的选题生成任务（页面重进时恢复"生成中"）。
+func (h *Handler) ListRunningTopicGenerationJobs(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	jobs, err := h.service.store.listRunningTopicGenerationJobs(r.Context(), tenantID)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, jobs)
+}
+
 // GetTopic 选题详情（含判断信息）。
 func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
@@ -194,6 +209,7 @@ func (h *Handler) registerJudgeEngineRoutes(mux *http.ServeMux, deps router.Rout
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-insights", Handler: h.GenerateTopicsFromInsights, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-frequent-question", Handler: h.GenerateTopicsFromFrequentQuestion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/generation-jobs/{id}", Handler: h.GetTopicGenerationJob, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/actions/running-generation-jobs", Handler: h.ListRunningTopicGenerationJobs, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/{id}", Handler: h.GetTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/{id}/actions/enrich", Handler: h.EnrichTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/enrich-batch", Handler: h.EnrichTopicsBatch, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

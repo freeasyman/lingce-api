@@ -118,3 +118,25 @@ func (s *Store) listExistingTopicTitles(ctx context.Context, tenantID int64, ins
 	}
 	return out, rows.Err()
 }
+
+// listRunningTopicGenerationJobs 取本租户仍在跑的任务（页面重进时恢复"生成中"）。
+func (s *Store) listRunningTopicGenerationJobs(ctx context.Context, tenantID int64) ([]TopicGenerationJob, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, frequent_question_id, status, progress, result, error, created_at
+		FROM content_topic_generation_jobs
+		WHERE tenant_id = $1 AND status = 'running'
+		ORDER BY id DESC`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TopicGenerationJob, 0, 4)
+	for rows.Next() {
+		var j TopicGenerationJob
+		if err := rows.Scan(&j.ID, &j.TenantID, &j.FrequentQuestionID, &j.Status, &j.Progress, &j.Result, &j.Error, &j.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
