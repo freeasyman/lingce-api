@@ -203,7 +203,7 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 func (s *Store) listQuestionClustersFallback(ctx context.Context, tenantID int64, minCount int) ([]QuestionCluster, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT topic, count(*)::int AS freq,
-		       COALESCE(jsonb_agg(DISTINCT evidence->'quotes'->0->>'text'), '[]'::jsonb) AS quotes
+		       COALESCE(jsonb_agg(DISTINCT payload->'quotes'->0->>'text'), '[]'::jsonb) AS quotes
 		FROM content_insights
 		WHERE tenant_id = $1 AND type IN ('问题', 'question')
 		GROUP BY topic
@@ -235,7 +235,7 @@ type questionTopicCount struct {
 func (s *Store) listQuestionTopicCounts(ctx context.Context, tenantID int64) ([]questionTopicCount, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT topic, count(*)::int,
-		       COALESCE(jsonb_agg(DISTINCT evidence->'quotes'->0->>'text') FILTER (WHERE evidence->'quotes'->0->>'text' IS NOT NULL), '[]'::jsonb)
+		       COALESCE(jsonb_agg(DISTINCT payload->'quotes'->0->>'text') FILTER (WHERE payload->'quotes'->0->>'text' IS NOT NULL), '[]'::jsonb)
 		FROM content_insights
 		WHERE tenant_id = $1 AND type IN ('问题', 'question')
 		GROUP BY topic
