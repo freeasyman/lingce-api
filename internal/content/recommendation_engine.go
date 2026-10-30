@@ -177,11 +177,12 @@ func (s *Service) RecommendTopics(ctx context.Context, tenantID int64, limit int
 		var quotes []string
 		_ = json.Unmarshal(c.Quotes, &quotes)
 		out = append(out, map[string]any{
-			"question":  c.Topic,
-			"frequency": c.Frequency,
-			"quotes":    quotes,
-			"items":     c.Items,
-			"why":       fmt.Sprintf("患者反复问了 %d 次", c.Frequency),
+			"cluster_id": c.ID,
+			"question":   c.Topic,
+			"frequency":  c.Frequency,
+			"quotes":     quotes,
+			"items":      c.Items,
+			"why":        fmt.Sprintf("患者反复问了 %d 次", c.Frequency),
 		})
 	}
 	return out, nil

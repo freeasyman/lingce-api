@@ -2,8 +2,8 @@ package content
 
 import (
 	"context"
-	"encoding/json"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -198,7 +198,7 @@ func (s *Service) generateTopicsForOneInsight(ctx context.Context, tenantID, ins
 		return nil, err
 	}
 
-	return s.store.insertTopicsV2(ctx, tenantID, []int64{insightID}, topics)
+	return s.store.insertTopicsV2(ctx, tenantID, topicSourceInfo{Source: "insight"}, []int64{insightID}, topics)
 }
 
 // parseTopicsV2 解析选题 JSON（对象根 {"topics":[...]}）。
@@ -248,8 +248,16 @@ func (s *Store) fetchInsightPayload(ctx context.Context, tenantID, insightID int
 	return string(payload), nil
 }
 
+// topicSourceInfo 选题来源信息（洞察 / 高频问题 / 手动）。
+type topicSourceInfo struct {
+	Source           string // insight / cluster / manual
+	ClusterID        int64
+	ClusterQuestion  string
+	ClusterFrequency int
+}
+
 // insertTopicsV2 落库选题：完整创作简报存 brief，冗余列供列表展示。
-func (s *Store) insertTopicsV2(ctx context.Context, tenantID int64, insightIDs []int64, topics []TopicV2) ([]map[string]any, error) {
+func (s *Store) insertTopicsV2(ctx context.Context, tenantID int64, src topicSourceInfo, insightIDs []int64, topics []TopicV2) ([]map[string]any, error) {
 	out := make([]map[string]any, 0, len(topics))
 	for _, t := range topics {
 		briefJSON, _ := json.Marshal(t)
@@ -261,10 +269,13 @@ func (s *Store) insertTopicsV2(ctx context.Context, tenantID int64, insightIDs [
 		}
 		var id int64
 		err := s.pool.QueryRow(ctx, `
-			INSERT INTO content_topics (tenant_id, title, form, goal, source, recommendation, expected_help, brief, insight_ids)
-			VALUES ($1,$2,$3,$4,'insight',$5,$6::jsonb,$7::jsonb,$8::jsonb)
+			INSERT INTO content_topics (tenant_id, title, form, goal, source, recommendation, expected_help, brief, insight_ids,
+			                            source_cluster_id, source_cluster_question, source_cluster_frequency)
+			VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,
+			        NULLIF($10,0), NULLIF($11,''), NULLIF($12,0))
 			RETURNING id`,
-			tenantID, t.Title, form, t.Goal, t.Recommendation, string(helpJSON), string(briefJSON), string(idsJSON),
+			tenantID, t.Title, form, t.Goal, src.Source, t.Recommendation, string(helpJSON), string(briefJSON), string(idsJSON),
+			src.ClusterID, src.ClusterQuestion, src.ClusterFrequency,
 		).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert topic: %w", err)

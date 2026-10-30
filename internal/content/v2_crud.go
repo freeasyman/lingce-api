@@ -160,6 +160,7 @@ func (s *Store) insertMediaAccount(ctx context.Context, tenantID int64, platform
 // ===== 洞察 =====
 
 type QuestionCluster struct {
+	ID         int64           `json:"cluster_id,omitempty"`
 	Topic      string          `json:"topic"`
 	Frequency  int             `json:"frequency"`
 	Quotes     json.RawMessage `json:"quotes"`
@@ -173,7 +174,7 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 		minCount = 2
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT topic, COALESCE((frequency->>'total')::int, (frequency->>'recent_30d')::int, 0),
+		SELECT id, topic, COALESCE((frequency->>'total')::int, (frequency->>'recent_30d')::int, 0),
 		       COALESCE(representative_quotes, '[]'::jsonb),
 		       COALESCE(linked_recording_ids, '[]'::jsonb),
 		       COALESCE(insight_ids, '[]'::jsonb)
@@ -186,7 +187,7 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 	var out []QuestionCluster
 	for rows.Next() {
 		var c QuestionCluster
-		if err := rows.Scan(&c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs); err != nil {
+		if err := rows.Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs); err != nil {
 			rows.Close()
 			return nil, err
 		}

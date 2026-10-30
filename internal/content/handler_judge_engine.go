@@ -38,6 +38,37 @@ func (h *Handler) GenerateTopicsFromInsights(w http.ResponseWriter, r *http.Requ
 	httputil.WriteSuccess(w, topics)
 }
 
+// GenerateTopicsFromCluster 从「高频问题」整体生成 1~3 个选题。
+func (h *Handler) GenerateTopicsFromCluster(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, "")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	var req struct {
+		ClusterID int64 `json:"cluster_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if req.ClusterID <= 0 {
+		httputil.WriteBadRequest(w, "cluster_id is required")
+		return
+	}
+	topics, err := h.service.GenerateTopicsFromCluster(r.Context(), tenantID, req.ClusterID)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, topics)
+}
+
 // GetTopic 选题详情（含判断信息）。
 func (h *Handler) GetTopic(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
@@ -137,6 +168,7 @@ func (h *Handler) registerJudgeEngineRoutes(mux *http.ServeMux, deps router.Rout
 	routes := []router.Route{
 		{Method: "POST", Path: "/api/v1/content-topics", Handler: h.CreateManualTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-insights", Handler: h.GenerateTopicsFromInsights, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/content-topics/actions/generate-from-cluster", Handler: h.GenerateTopicsFromCluster, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/{id}", Handler: h.GetTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/{id}/actions/enrich", Handler: h.EnrichTopic, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-topics/actions/enrich-batch", Handler: h.EnrichTopicsBatch, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
