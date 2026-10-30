@@ -2,6 +2,7 @@ package content
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -20,7 +21,7 @@ const aiVisibilityAnswerPrompt = `你是一个通用医疗 AI 助手（类似豆
 回答控制在 400 字以内。`
 
 const aiVisibilityAnalyzePrompt = `你是医疗内容运营专家。下面是患者问题和某个通用 AI 助手的回答。
-请分析这个回答，输出 JSON（我方机构名：%s）：
+请分析这个回答，输出 JSON（我方机构名：%s；我方医生：%s）：
 {
   "mentioned_org": false,
   "mentioned_doctor": false,
@@ -29,6 +30,8 @@ const aiVisibilityAnalyzePrompt = `你是医疗内容运营专家。下面是患
   "fact_errors": [],
   "local_hint": ""
 }
+mentioned_org = AI 回答里是否提到了我方机构（按机构名或常见别称判断）；
+mentioned_doctor = AI 回答里是否提到了我方的医生（只认上面「我方医生」名单里的姓名，提到别家或无关医生不算）；
 sources = AI 回答里提到的信源/引用来源（如官网、公众号、某平台），没有就空数组；
 competitors = AI 推荐的竞品机构/医生，没有就空数组；
 fact_errors = AI 关于我方机构的事实错误或缺失，没有就空数组；
@@ -43,6 +46,32 @@ const aiVisibilityGapPrompt = `你是医疗内容运营专家。下面是同一�
   "advice": "意见：官网该补哪个栏目页面、公众号该写什么、GEO 怎么调"
 }
 只返回 JSON。`
+
+// aiVisibilityDoctorNames 取机构知识库录入的医生名单（姓名 + 头衔），
+// 用于判断 AI 回答是否提到了我方医生；没录入时返回空串。
+func (s *Service) aiVisibilityDoctorNames(ctx context.Context, tenantID int64) string {
+	k, err := s.store.getOrgKnowledge(ctx, tenantID)
+	if err != nil || k == nil {
+		return ""
+	}
+	var doctors []map[string]any
+	if json.Unmarshal(k.Doctors, &doctors) != nil || len(doctors) == 0 {
+		return ""
+	}
+	items := make([]string, 0, len(doctors))
+	for _, d := range doctors {
+		name := strings.TrimSpace(fmt.Sprint(d["name"]))
+		if name == "" {
+			continue
+		}
+		head := name
+		if t := strings.TrimSpace(fmt.Sprint(d["title"])); t != "" && t != "<nil>" {
+			head += " " + t
+		}
+		items = append(items, head)
+	}
+	return strings.Join(items, "、")
+}
 
 // aiEngineAnswer 一个引擎的回答 + 分析。
 type aiEngineAnswer struct {
@@ -169,8 +198,8 @@ func (s *Service) aiEngineAnswer(ctx context.Context, tenantID int64, sel llmMod
 }
 
 // aiEngineAnalyze 分析一个引擎的回答。
-func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmModelSelection, question, answer, orgName string) (map[string]any, error) {
-	prompt := fmt.Sprintf(s.resolvePromptByCode(ctx, tenantID, "content_ai_visibility_analyze", aiVisibilityAnalyzePrompt), orgName)
+func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmModelSelection, question, answer, orgName, doctorNames string) (map[string]any, error) {
+	prompt := fmt.Sprintf(s.resolvePromptByCode(ctx, tenantID, "content_ai_visibility_analyze", aiVisibilityAnalyzePrompt), orgName, doctorNames)
 	req := llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
@@ -260,6 +289,10 @@ func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, questio
 	if profile, err := s.store.GetContentOrgProfile(ctx, tenantID); err == nil && profile != nil && profile.InstitutionName != "" {
 		orgName = profile.InstitutionName
 	}
+	doctorNames := s.aiVisibilityDoctorNames(ctx, tenantID)
+	if doctorNames == "" {
+		doctorNames = "（未录入）"
+	}
 
 	q := question
 	if region != "" && !strings.Contains(question, region) {
@@ -278,12 +311,12 @@ func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, questio
 	if err != nil {
 		return 0, err
 	}
-	go s.loadAIVisibilityRun(context.Background(), tenantID, runID, engines, q, orgName)
+	go s.loadAIVisibilityRun(context.Background(), tenantID, runID, engines, q, orgName, doctorNames)
 	return runID, nil
 }
 
 // loadAIVisibilityRun 后台逐个问引擎 + 分析，边跑边更新进度；全部完成后写缺口。
-func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64, engines []llmModelSelection, q, orgName string) {
+func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64, engines []llmModelSelection, q, orgName, doctorNames string) {
 	// 三家并行跑：总耗时取最慢的那个，而不是三者相加
 	results := make([]aiEngineAnswer, len(engines))
 	var wg sync.WaitGroup
@@ -305,7 +338,7 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 				item.Sources = sources
 				item.SearchQueries = queries
 				item.SearchCount = searchCount
-				analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, sel, q, answer, orgName)
+				analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, sel, q, answer, orgName, doctorNames)
 				if aerr != nil {
 					item.Error = "该 AI 的回答已拿到，但解析失败，稍后可重试"
 					slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", aerr)
