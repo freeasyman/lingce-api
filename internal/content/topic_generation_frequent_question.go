@@ -82,7 +82,14 @@ func (s *Service) GenerateTopicsFromFrequentQuestionAsync(ctx context.Context, t
 		return 0, err
 	}
 	if fq == nil {
-		return 0, fmt.Errorf("高频问题不存在")
+		return 0, NewBizError("FREQUENT_QUESTION_NOT_FOUND", "高频问题不存在，请先重新梳理高频问题")
+	}
+	// 数量上限：已做够直接拒绝（建任务前就拦掉）
+	if len(fq.InsightIDs) > 0 {
+		if existing, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs); len(existing) >= maxTopicsPerFrequentQuestion {
+			return 0, NewBizError("TOPIC_LIMIT_REACHED",
+				fmt.Sprintf("这个高频问题已经做过 %d 个选题了，角度覆盖得差不多了。建议先挑几个发布看效果，不要硬凑同款", len(existing)))
+		}
 	}
 	// 防重复：同一高频问题已有 running 任务则直接复用，不重复提交
 	if running, err := s.store.getRunningTopicGenerationJob(ctx, tenantID, frequentQuestionID); err == nil && running > 0 {
@@ -110,6 +117,10 @@ func (s *Service) loadTopicGenerationJob(ctx context.Context, tenantID, jobID, f
 	}
 }
 
+// maxTopicsPerFrequentQuestion 一个高频问题最多做多少个选题。
+// 素材有限，做太多必然同质化；够了就先发布看效果，不要硬凑。
+const maxTopicsPerFrequentQuestion = 6
+
 // generateTopicsFromFrequentQuestionCore 从「高频问题」整体生成 1~3 个选题（不做逐条洞察 fan-out）。
 func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, tenantID, frequentQuestionID int64) ([]map[string]any, error) {
 	if s.llmClient == nil {
@@ -120,10 +131,10 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 		return nil, err
 	}
 	if fq == nil {
-		return nil, fmt.Errorf("高频问题不存在")
+		return nil, NewBizError("FREQUENT_QUESTION_NOT_FOUND", "高频问题不存在")
 	}
 	if len(fq.InsightIDs) == 0 {
-		return nil, fmt.Errorf("该高频问题缺少关联洞察，无法生成选题")
+		return nil, NewBizError("FREQUENT_QUESTION_NO_INSIGHTS", "这个高频问题没有关联到灵感，无法生成选题")
 	}
 
 	payloads, err := s.store.fetchInsightPayloads(ctx, tenantID, fq.InsightIDs)
@@ -136,6 +147,10 @@ func (s *Service) generateTopicsFromFrequentQuestionCore(ctx context.Context, te
 
 	// 结果去重：把该高频问题已生成过的选题标题带进提示词，避免重复
 	existingTitles, _ := s.store.listExistingTopicTitles(ctx, tenantID, fq.InsightIDs)
+	if len(existingTitles) >= maxTopicsPerFrequentQuestion {
+		return nil, NewBizError("TOPIC_LIMIT_REACHED",
+			fmt.Sprintf("这个高频问题已经做过 %d 个选题了，角度覆盖得差不多了。建议先挑几个发布看效果，不要硬凑同款", len(existingTitles)))
+	}
 	existingBlock := ""
 	if len(existingTitles) > 0 {
 		existingBlock = "\n\n【已经做过的选题——不要重复，也不要换个说法重写同一个角度】\n" +
