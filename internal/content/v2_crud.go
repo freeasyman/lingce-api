@@ -160,10 +160,11 @@ func (s *Store) insertMediaAccount(ctx context.Context, tenantID int64, platform
 // ===== 洞察 =====
 
 type QuestionCluster struct {
-	Topic     string          `json:"topic"`
-	Frequency int             `json:"frequency"`
-	Quotes    json.RawMessage `json:"quotes"`
-	Items     []string        `json:"items,omitempty"`
+	Topic      string          `json:"topic"`
+	Frequency  int             `json:"frequency"`
+	Quotes     json.RawMessage `json:"quotes"`
+	Items      []string        `json:"items,omitempty"`
+	InsightIDs []int64         `json:"insight_ids,omitempty"`
 }
 
 // listQuestionClusters 读"反复问"簇（归一化后落库；表为空时退化为精确分组兜底）。
@@ -174,7 +175,8 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 	rows, err := s.pool.Query(ctx, `
 		SELECT topic, COALESCE((frequency->>'total')::int, (frequency->>'recent_30d')::int, 0),
 		       COALESCE(representative_quotes, '[]'::jsonb),
-		       COALESCE(linked_recording_ids, '[]'::jsonb)
+		       COALESCE(linked_recording_ids, '[]'::jsonb),
+		       COALESCE(insight_ids, '[]'::jsonb)
 		FROM content_question_clusters
 		WHERE tenant_id = $1
 		ORDER BY COALESCE((frequency->>'total')::int, 0) DESC, topic`, tenantID)
@@ -184,7 +186,7 @@ func (s *Store) listQuestionClusters(ctx context.Context, tenantID int64, minCou
 	var out []QuestionCluster
 	for rows.Next() {
 		var c QuestionCluster
-		if err := rows.Scan(&c.Topic, &c.Frequency, &c.Quotes, &c.Items); err != nil {
+		if err := rows.Scan(&c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -226,16 +228,18 @@ func (s *Store) listQuestionClustersFallback(ctx context.Context, tenantID int64
 
 // questionTopicCount 归一化输入：当前 question 洞察的 topic + 频次 + 原话。
 type questionTopicCount struct {
-	Topic  string
-	Count  int
-	Quotes []string
+	Topic      string
+	Count      int
+	Quotes     []string
+	InsightIDs []int64
 }
 
 // listQuestionTopicCounts 取 question 洞察按 topic 精确分组（供 LLM 归一化）。
 func (s *Store) listQuestionTopicCounts(ctx context.Context, tenantID int64) ([]questionTopicCount, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT topic, count(*)::int,
-		       COALESCE(jsonb_agg(DISTINCT payload->'quotes'->0->>'text') FILTER (WHERE payload->'quotes'->0->>'text' IS NOT NULL), '[]'::jsonb)
+		       COALESCE(jsonb_agg(DISTINCT payload->'quotes'->0->>'text') FILTER (WHERE payload->'quotes'->0->>'text' IS NOT NULL), '[]'::jsonb),
+		       COALESCE(jsonb_agg(id ORDER BY id), '[]'::jsonb)
 		FROM content_insights
 		WHERE tenant_id = $1 AND type IN ('问题', 'question')
 		GROUP BY topic
@@ -247,7 +251,7 @@ func (s *Store) listQuestionTopicCounts(ctx context.Context, tenantID int64) ([]
 	var out []questionTopicCount
 	for rows.Next() {
 		var t questionTopicCount
-		if err := rows.Scan(&t.Topic, &t.Count, &t.Quotes); err != nil {
+		if err := rows.Scan(&t.Topic, &t.Count, &t.Quotes, &t.InsightIDs); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -271,10 +275,14 @@ func (s *Store) replaceQuestionClusters(ctx context.Context, tenantID int64, clu
 			quotes = "[]"
 		}
 		itemsJSON, _ := json.Marshal(c.Items)
+		insightJSON, _ := json.Marshal(c.InsightIDs)
+		if len(c.InsightIDs) == 0 {
+			insightJSON = []byte("[]")
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO content_question_clusters (tenant_id, topic, frequency, representative_quotes, linked_recording_ids, updated_at)
-			VALUES ($1,$2,jsonb_build_object('total',$3::int,'recent_30d',$3::int),$4::jsonb,$5::jsonb,now())`,
-			tenantID, c.Topic, c.Frequency, quotes, string(itemsJSON)); err != nil {
+			INSERT INTO content_question_clusters (tenant_id, topic, frequency, representative_quotes, linked_recording_ids, insight_ids, updated_at)
+			VALUES ($1,$2,jsonb_build_object('total',$3::int,'recent_30d',$3::int),$4::jsonb,$5::jsonb,$6::jsonb,now())`,
+			tenantID, c.Topic, c.Frequency, quotes, string(itemsJSON), string(insightJSON)); err != nil {
 			return err
 		}
 	}

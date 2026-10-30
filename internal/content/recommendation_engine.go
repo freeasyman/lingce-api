@@ -38,9 +38,11 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 	var lines []string
 	countMap := map[string]int{}
 	quoteMap := map[string][]string{}
+	insightIDMap := map[string][]int64{}
 	for _, c := range counts {
 		countMap[c.Topic] = c.Count
 		quoteMap[c.Topic] = c.Quotes
+		insightIDMap[c.Topic] = c.InsightIDs
 		lines = append(lines, c.Topic)
 	}
 
@@ -76,9 +78,11 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 	for _, n := range normalized {
 		total := 0
 		var quotes []string
+		var insightIDs []int64
 		for _, item := range n.Items {
 			total += countMap[item]
 			quotes = append(quotes, quoteMap[item]...)
+			insightIDs = append(insightIDs, insightIDMap[item]...)
 		}
 		if total < 2 {
 			continue
@@ -87,8 +91,9 @@ func (s *Service) RebuildQuestionClusters(ctx context.Context, tenantID int64) (
 		if len(quotes) > 3 {
 			quotes = quotes[:3]
 		}
+		insightIDs = dedupInt64s(insightIDs)
 		qJSON, _ := json.Marshal(quotes)
-		clusters = append(clusters, QuestionCluster{Topic: n.Topic, Frequency: total, Quotes: qJSON, Items: n.Items})
+		clusters = append(clusters, QuestionCluster{Topic: n.Topic, Frequency: total, Quotes: qJSON, Items: n.Items, InsightIDs: insightIDs})
 	}
 	sort.Slice(clusters, func(i, j int) bool { return clusters[i].Frequency > clusters[j].Frequency })
 
@@ -137,6 +142,19 @@ func dedupStrings(in []string) []string {
 		}
 		seen[s] = true
 		out = append(out, s)
+	}
+	return out
+}
+
+func dedupInt64s(in []int64) []int64 {
+	seen := map[int64]bool{}
+	var out []int64
+	for _, v := range in {
+		if v <= 0 || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
 	}
 	return out
 }
