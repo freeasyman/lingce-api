@@ -454,7 +454,14 @@ func (s *Service) confirmOrArchive(ctx context.Context, tenantID, actorID int64,
 	if err != nil || snapshot == nil {
 		return nil, fmt.Errorf("找不到当前病历版本，无法%s", action)
 	}
-	if snapshotDigest(current, current.WorkingContent, current.PatientSnapshot) != snapshot.ContentDigest {
+	// current 来自 Store.Get，其 PatientSnapshot 已被 customers 表数据回填
+	// （name/phone/age/extra_data 等），与落库快照的原始 patient_snapshot 不一致。
+	// 一致性校验必须用未经回填的原始字段重算 digest。
+	rawCurrent, err := s.store.GetRaw(ctx, tenantID, current.ID)
+	if err != nil || rawCurrent == nil {
+		return nil, fmt.Errorf("加载当前病历原始版本失败")
+	}
+	if snapshotDigest(rawCurrent, rawCurrent.WorkingContent, rawCurrent.PatientSnapshot) != snapshot.ContentDigest {
 		return nil, fmt.Errorf("病历内容在正式保存后发生了修改，请先保存")
 	}
 	snapshotID := snapshot.ID

@@ -61,13 +61,24 @@ func scanRecord(row pgx.Row) (*Record, error) {
 	return item, nil
 }
 
-func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
+// GetRaw 返回未做客户资料回填的病历记录。归档/确认的 digest 一致性校验必须
+// 使用这里的原始持久化字段；Get 会把 customers 表的 name/phone/extra_data 合并进
+// PatientSnapshot，导致与落库 content_digest 永远对不上。
+func (s *Store) GetRaw(ctx context.Context, tenantID int64, id string) (*Record, error) {
 	item, err := scanRecord(s.pool.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", id, tenantID))
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get emr record: %w", err)
+	}
+	return item, nil
+}
+
+func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
+	item, err := s.GetRaw(ctx, tenantID, id)
+	if err != nil || item == nil {
+		return item, err
 	}
 	if item.DoctorID > 0 {
 		var doctorName, departmentCode string

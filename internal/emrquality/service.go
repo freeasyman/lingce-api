@@ -19,6 +19,11 @@ type Service struct {
 	llm   *llmgateway.Client
 }
 
+// drugAllergyNegativePhrases 是「药物过敏史」明确否认的常见表述。草稿生成侧目前
+// 只把过敏情况写进 allergy_history、未单列 drug_allergy，因此 GEN-005 在
+// drug_allergy 缺失时用这些短语回退判断，避免误阻断。
+var drugAllergyNegativePhrases = []string{"无药物过敏史", "否认药物过敏史", "无药物过敏", "否认药物过敏", "无过敏史", "否认过敏史"}
+
 func NewService(store *Store, clients ...*llmgateway.Client) *Service {
 	var llm *llmgateway.Client
 	if len(clients) > 0 {
@@ -276,7 +281,8 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		}
 		user := "请审核以下病历：\n" + string(payloadJSON)
 
-		var parsed *semanticResponse
+		// 跨重试合并本批已返回的合法结果，只为真正缺失的规则降级。
+		batchFindings := make(map[string]semanticFinding, len(batch))
 		for attempt := 1; attempt <= semanticMaxAttempts; attempt++ {
 			resp, requestRaw, responseRaw, callErr := s.llm.TextInferenceWithRaw(ctx, llmgateway.TextInferenceRequest{
 				TenantID:      input.TenantID,
@@ -299,51 +305,47 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 			if callErr != nil {
 				entry["error"] = callErr.Error()
 				modelAudit = append(modelAudit, entry)
-				parsed = nil
 				continue
 			}
-			var parseErr error
-			parsed, parseErr = parseSemanticResponse(resp.Content)
+			parsed, parseErr := parseSemanticResponse(resp.Content)
 			if parseErr != nil {
 				entry["parse_error"] = parseErr.Error()
 				modelAudit = append(modelAudit, entry)
-				parsed = nil
 				continue
 			}
 			if malformed := semanticBatchMalformed(parsed, batchRequested); malformed != "" {
 				entry["malformed_reason"] = malformed
 				modelAudit = append(modelAudit, entry)
-				parsed = nil
+				// 保留已返回的合法结果，重试只为补齐缺失的规则。
+				mergeSemanticFindings(batchFindings, parsed, batchRequested, input)
 				continue
 			}
 			modelAudit = append(modelAudit, entry)
+			mergeSemanticFindings(batchFindings, parsed, batchRequested, input)
 			break
 		}
-		report.ModelAudit = map[string]any{"batches": modelAudit}
 
-		if parsed == nil {
+		if len(batchFindings) == 0 {
+			// 整批没有任何可用结果（解析失败或空返回），属于系统性失败，仍需整次报错。
 			incomplete = true
 			for _, rule := range batch {
 				appendSemanticUnavailable(report, rule, "大模型没有完成本批规则的判断。")
 			}
 			continue
 		}
-		for _, finding := range parsed.Results {
-			code := strings.TrimSpace(finding.RuleCode)
-			if code == "" || !batchRequested[code] {
-				continue
+		for code, finding := range batchFindings {
+			if _, exists := byCode[code]; !exists {
+				byCode[code] = finding
 			}
-			if _, exists := byCode[code]; exists {
-				continue
+		}
+		// 缺个别规则不再让整次 complete 失败，降级为未评估并转人工复核。
+		for _, rule := range batch {
+			if _, ok := batchFindings[rule.Code]; !ok {
+				appendSemanticUnavailable(report, rule, "大模型未返回该规则的判断，已按未评估处理。")
 			}
-			if !semanticFindingHasEvidence(finding, input) && finding.Result == "problem" {
-				finding.Result = "not_evaluable"
-				finding.Reason = "大模型未提供能够在本次病历中核对的具体证据。"
-				finding.Deduction = 0
-			}
-			byCode[code] = finding
 		}
 	}
+	report.ModelAudit = map[string]any{"batches": modelAudit}
 
 	for _, rule := range semanticRules {
 		finding, ok := byCode[rule.Code]
@@ -467,6 +469,29 @@ func semanticBatchMalformed(parsed *semanticResponse, requested map[string]bool)
 		}
 	}
 	return ""
+}
+
+// mergeSemanticFindings 把单批返回里合法（规则编号在本批、证据可核对）的结果
+// 合并进 dst，重复规则以首次为准。畸形批的缺失规则由调用方降级，不在这里处理。
+func mergeSemanticFindings(dst map[string]semanticFinding, parsed *semanticResponse, requested map[string]bool, input Context) {
+	if parsed == nil {
+		return
+	}
+	for _, finding := range parsed.Results {
+		code := strings.TrimSpace(finding.RuleCode)
+		if code == "" || !requested[code] {
+			continue
+		}
+		if _, exists := dst[code]; exists {
+			continue
+		}
+		if !semanticFindingHasEvidence(finding, input) && finding.Result == "problem" {
+			finding.Result = "not_evaluable"
+			finding.Reason = "大模型未提供能够在本次病历中核对的具体证据。"
+			finding.Deduction = 0
+		}
+		dst[code] = finding
+	}
 }
 
 func parseSemanticResponse(raw string) (*semanticResponse, error) {
@@ -826,6 +851,11 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		}
 		if err := json.Unmarshal(rule.EvaluationSpec, &spec); err != nil {
 			return nil, err
+		}
+		// 草稿生成侧目前只写 allergy_history（过敏史）、未单列 drug_allergy。
+		// 当 drug_allergy 缺失时，若过敏史已明确否认药物过敏，视为已明确记录，避免误阻断。
+		if text == "" && containsAny(strings.TrimSpace(contentText(input.Content, "allergy_history")), drugAllergyNegativePhrases) {
+			break
 		}
 		if text == "" || containsAny(text, spec.Uncertain) {
 			result.Result = "problem"

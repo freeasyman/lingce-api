@@ -40,6 +40,23 @@ func TestHIS009AcceptsNegativeAndRejectsUnasked(t *testing.T) {
 	}
 }
 
+func TestGEN005FallsBackToAllergyHistoryNegative(t *testing.T) {
+	rule := programRule("GEN-005", 2, `{"uncertain":["待确认","尚未询问","不详","未询问"]}`)
+	denied := Context{Content: map[string]any{"allergy_history": "否认药物过敏史。"}, Patient: map[string]any{}}
+	got, err := evaluateRule(denied, rule)
+	if err != nil {
+		t.Fatalf("evaluate GEN-005: %v", err)
+	}
+	if got.Result != "pass" {
+		t.Fatalf("allergy_history 明确否认药物过敏应视为通过，got %s", got.Result)
+	}
+	missing := Context{Content: map[string]any{"allergy_history": "否认食物过敏。"}, Patient: map[string]any{}}
+	got, _ = evaluateRule(missing, rule)
+	if got.Result != "problem" {
+		t.Fatalf("allergy_history 未明确否认药物过敏仍应阻断，got %s", got.Result)
+	}
+}
+
 func TestGEN002SupportsCommonDateFormat(t *testing.T) {
 	rule := programRule("GEN-002", 1, `{}`)
 	started := time.Date(2026, 10, 18, 9, 0, 0, 0, time.Local)
