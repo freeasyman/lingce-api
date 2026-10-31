@@ -578,7 +578,11 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 	}
 	evidence := cand.Reason
 	if strings.TrimSpace(cand.ConditionSummary) != "" {
-		evidence = "病情摘要：" + cand.ConditionSummary + "；匹配依据：" + cand.Reason
+		summary := strings.TrimRight(strings.TrimSpace(cand.ConditionSummary), "。；;,.，、")
+		if summary == "" {
+			summary = strings.TrimSpace(cand.ConditionSummary)
+		}
+		evidence = "病情摘要：" + summary + "；匹配依据：" + cand.Reason
 	}
 	dedupeKey := fmt.Sprintf("plan:%d:customer:%d", plan.ID, cand.CustomerID)
 	priority := 5

@@ -43,11 +43,11 @@ func (s *Service) Catalog(ctx context.Context, tenantID int64, page, pageSize in
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Product, error) {
-	if err := validateCreate(req); err != nil {
-		return nil, err
-	}
 	if req.Status == "" {
 		req.Status = StatusActive
+	}
+	if err := validateCreate(req); err != nil {
+		return nil, err
 	}
 	return s.store.Create(ctx, normalizeCreate(req))
 }
