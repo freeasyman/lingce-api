@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/customercontact"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -19,9 +20,10 @@ const planSelectColumns = `
 	p.target_count, p.target_amount, p.product_ids, p.filter_config, p.status, p.created_by,
 	COALESCE(to_char(p.published_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),''),
 	to_char(p.created_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),
-	to_char(p.updated_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),
+	to_char(p.updated_at,'YYYY-MM-DD"T"HH24:MI:SS.USTZH:TZM'),
 	(SELECT COUNT(*) FROM patient_ops_plan_members m WHERE m.tenant_id=p.tenant_id AND m.plan_id=p.id AND m.status<>'removed'),
-	(SELECT COUNT(*) FROM patient_ops_plan_members m WHERE m.tenant_id=p.tenant_id AND m.plan_id=p.id AND m.status='completed')
+	(SELECT COUNT(*) FROM patient_ops_plan_members m WHERE m.tenant_id=p.tenant_id AND m.plan_id=p.id AND m.status='completed'),
+	COALESCE((SELECT array_agg(pr.name ORDER BY pr.id) FROM products pr WHERE pr.id IN (SELECT jsonb_array_elements_text(p.product_ids)::bigint) AND pr.deleted_at IS NULL), ARRAY[]::text[])
 `
 
 func scanPlanRow(row interface {
@@ -33,12 +35,13 @@ func scanPlanRow(row interface {
 	var productIDs []byte
 	var filterConfig []byte
 	var createdBy sql.NullInt64
+	var productNames []string
 	if err := row.Scan(
 		&p.ID, &p.TenantID, &p.Name, &p.PlanType, &p.Scenario,
 		&p.PeriodStart, &p.PeriodEnd,
 		&targetCount, &targetAmount, &productIDs, &filterConfig, &p.Status, &createdBy,
 		&p.PublishedAt, &p.CreatedAt, &p.UpdatedAt,
-		&p.MemberCount, &p.CompletedCount,
+		&p.MemberCount, &p.CompletedCount, &productNames,
 	); err != nil {
 		return nil, err
 	}
@@ -62,6 +65,7 @@ func scanPlanRow(row interface {
 	if len(filterConfig) > 0 {
 		_ = json.Unmarshal(filterConfig, &p.FilterConfig)
 	}
+	p.ProductNames = productNames
 	return &p, nil
 }
 
@@ -136,7 +140,7 @@ func (s *Service) GetPlan(ctx context.Context, tenantID, planID int64) (*PlanDet
 
 func (s *Service) loadPlanMembers(ctx context.Context, tenantID, planID int64) ([]PlanMember, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.plan_id, m.customer_id, COALESCE(c.name,''),
+		SELECT m.id, m.plan_id, m.customer_id, COALESCE(c.name,''), COALESCE(c.phone,''),
 		       m.recommended_product_id, COALESCE(p.name,''), m.match_score,
 		       m.reason, m.reason_source, m.risk_medical, m.risk_commercial, m.task_id, m.status,
 		       to_char(m.created_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM')
@@ -157,7 +161,7 @@ func (s *Service) loadPlanMembers(ctx context.Context, tenantID, planID int64) (
 		var score sql.NullInt64
 		var taskID sql.NullInt64
 		if err := rows.Scan(
-			&m.ID, &m.PlanID, &m.CustomerID, &m.CustomerName,
+			&m.ID, &m.PlanID, &m.CustomerID, &m.CustomerName, &m.Phone,
 			&productID, &m.RecommendedProductName, &score,
 			&m.Reason, &m.ReasonSource, &m.RiskMedical, &m.RiskCommercial, &taskID, &m.Status,
 			&m.CreatedAt,
@@ -180,6 +184,18 @@ func (s *Service) loadPlanMembers(ctx context.Context, tenantID, planID int64) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate plan members: %w", err)
+	}
+	rows.Close()
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.CustomerID)
+	}
+	contacts, err := customercontact.Load(ctx, s.pool, tenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load plan member contacts: %w", err)
+	}
+	for i := range items {
+		items[i].Contacts = contacts[items[i].CustomerID]
 	}
 	return items, nil
 }
@@ -441,6 +457,7 @@ func (s *Service) PreviewPlan(ctx context.Context, tenantID, planID int64) (*Pla
 }
 
 func (s *Service) insertPlanMember(ctx context.Context, tx pgx.Tx, plan *Plan, cand PlanCandidate) (int64, error) {
+	cand = preservePlanAgeWarning(cand)
 	var score any
 	if cand.MatchScore != nil {
 		score = *cand.MatchScore
@@ -540,6 +557,7 @@ func concernHint(concern string) string {
 }
 
 func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, cand PlanCandidate) (int64, error) {
+	cand = preservePlanAgeWarning(cand)
 	taskType := cand.TaskType
 	if strings.TrimSpace(taskType) == "" {
 		taskType = "咨询推进"
@@ -575,6 +593,10 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 	}
 	if strings.TrimSpace(cand.ExpectedResult) != "" {
 		expected = cand.ExpectedResult
+	}
+	if cand.AdmissionStatus == "needs_confirmation" {
+		action = "先核实实际使用者的年龄和适用条件，再介绍产品；" + action
+		content = fmt.Sprintf("%s，您好。关于您咨询的%s，方便先确认实际使用者的年龄吗？我们核对适用条件后，再向您说明产品和评估安排。", cand.CustomerName, fallbackPlanText(cand.Interest, "相关需求"))
 	}
 	evidence := cand.Reason
 	if strings.TrimSpace(cand.ConditionSummary) != "" {
@@ -630,18 +652,19 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 	if plan.Status != "draft" {
 		return nil, fmt.Errorf("only draft plans can be published")
 	}
+	if err := s.rejectUnconfirmedPlanCustomers(ctx, tenantID, req.CustomerIDs); err != nil {
+		return nil, err
+	}
 	preview, err := s.buildPlanCandidates(ctx, plan)
 	if err != nil {
 		return nil, err
 	}
-	candidateByID := make(map[int64]PlanCandidate, len(preview.Candidates))
-	for _, cand := range preview.Candidates {
-		candidateByID[cand.CustomerID] = cand
-	}
 	selected := req.CustomerIDs
 	if len(selected) == 0 {
 		for _, cand := range preview.Candidates {
-			selected = append(selected, cand.CustomerID)
+			if cand.AdmissionStatus == "ready" {
+				selected = append(selected, cand.CustomerID)
+			}
 		}
 	}
 	if len(selected) > 200 {
@@ -650,27 +673,24 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("no eligible customers to publish")
 	}
-	ordered := make([]PlanCandidate, 0, len(selected))
-	for _, customerID := range selected {
-		if cand, ok := candidateByID[customerID]; ok {
-			ordered = append(ordered, cand)
-		}
+	ordered, err := selectPlanCandidates(preview, selected, req.SuitabilityConfirmations)
+	if err != nil {
+		return nil, err
 	}
 	ordered = s.enrichPlanCandidatesWithLLM(ctx, plan, ordered)
-	for _, cand := range ordered {
-		candidateByID[cand.CustomerID] = cand
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin publish plan: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := validatePlanAdmissionSnapshot(ctx, tx, plan, ordered); err != nil {
+		return nil, err
+	}
+	if err := savePlanSuitabilityReviews(ctx, tx, plan, employeeID, ordered, req.SuitabilityConfirmations); err != nil {
+		return nil, err
+	}
 	published := 0
-	for _, customerID := range selected {
-		cand, ok := candidateByID[customerID]
-		if !ok {
-			continue
-		}
+	for _, cand := range ordered {
 		memberID, err := s.insertPlanMember(ctx, tx, plan, cand)
 		if err != nil {
 			return nil, err
@@ -707,34 +727,34 @@ func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, plan
 	if len(req.CustomerIDs) == 0 {
 		return nil, fmt.Errorf("customer_ids is required")
 	}
+	if len(req.CustomerIDs) > 200 {
+		return nil, fmt.Errorf("at most 200 customers can be added at once")
+	}
+	if err := s.rejectUnconfirmedPlanCustomers(ctx, tenantID, req.CustomerIDs); err != nil {
+		return nil, err
+	}
 	preview, err := s.buildPlanCandidates(ctx, plan)
 	if err != nil {
 		return nil, err
 	}
-	candidateByID := make(map[int64]PlanCandidate, len(preview.Candidates))
-	for _, cand := range preview.Candidates {
-		candidateByID[cand.CustomerID] = cand
-	}
-	ordered := make([]PlanCandidate, 0, len(req.CustomerIDs))
-	for _, customerID := range req.CustomerIDs {
-		if cand, ok := candidateByID[customerID]; ok {
-			ordered = append(ordered, cand)
-		}
+	ordered, err := selectPlanCandidates(preview, req.CustomerIDs, req.SuitabilityConfirmations)
+	if err != nil {
+		return nil, err
 	}
 	ordered = s.enrichPlanCandidatesWithLLM(ctx, plan, ordered)
-	for _, cand := range ordered {
-		candidateByID[cand.CustomerID] = cand
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin add plan members: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	for _, customerID := range req.CustomerIDs {
-		cand, ok := candidateByID[customerID]
-		if !ok {
-			continue
-		}
+	if err := validatePlanAdmissionSnapshot(ctx, tx, plan, ordered); err != nil {
+		return nil, err
+	}
+	if err := savePlanSuitabilityReviews(ctx, tx, plan, employeeID, ordered, req.SuitabilityConfirmations); err != nil {
+		return nil, err
+	}
+	for _, cand := range ordered {
+		customerID := cand.CustomerID
 		var exists bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM patient_ops_plan_members WHERE plan_id=$1 AND customer_id=$2)`, planID, customerID).Scan(&exists); err != nil {
 			return nil, fmt.Errorf("check plan member: %w", err)
@@ -841,4 +861,42 @@ func scanPatientTask(row interface {
 		item.ResultProductID = &value
 	}
 	return item, nil
+}
+
+type UnconfirmedPlanCustomersError struct {
+	Customers []PlanExcluded `json:"excluded_customers"`
+}
+
+func (e *UnconfirmedPlanCustomersError) Error() string {
+	names := make([]string, 0, len(e.Customers))
+	for _, c := range e.Customers {
+		names = append(names, fmt.Sprintf("%s（ID %d）", c.CustomerName, c.CustomerID))
+	}
+	return "以下客户尚未确认身份：" + strings.Join(names, "、") + "。本次请求未执行，请先在待确认客户中确认，或移除这些客户后重试"
+}
+func (s *Service) rejectUnconfirmedPlanCustomers(ctx context.Context, tenantID int64, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id,name FROM customers WHERE tenant_id=$1 AND id=ANY($2::bigint[]) AND deleted_at IS NULL AND extra_data->>'identity_status'='pending_confirm' ORDER BY id`, tenantID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	e := &UnconfirmedPlanCustomersError{}
+	for rows.Next() {
+		var c PlanExcluded
+		if err := rows.Scan(&c.CustomerID, &c.CustomerName); err != nil {
+			return err
+		}
+		c.Reason = "尚未确认身份，请先在待确认客户中确认"
+		e.Customers = append(e.Customers, c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(e.Customers) > 0 {
+		return e
+	}
+	return nil
 }

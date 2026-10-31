@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/freeasyman/lingce-api/internal/customercontact"
 )
 
 type Service struct {
@@ -46,6 +48,9 @@ func (s *Service) ListCustomers(ctx context.Context, req CustomerListRequest) ([
 		for _, r := range responses {
 			ids = append(ids, r.ID)
 		}
+		if err := s.populateContactIdentities(ctx, responses); err != nil {
+			return nil, 0, err
+		}
 		interMap, interErr := s.store.LatestCustomerInteractions(ctx, ids)
 		encMap, encErr := s.store.LatestEncounters(ctx, ids)
 		if interErr == nil || encErr == nil {
@@ -66,6 +71,9 @@ func (s *Service) SearchCandidates(ctx context.Context, tenantID int64, keyword 
 	result := make([]*CustomerResponse, len(items))
 	for i, item := range items {
 		result[i] = toCustomerResponse(item)
+	}
+	if err := s.populateContactIdentities(ctx, result); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -162,25 +170,8 @@ func (s *Service) GetCustomerByID(ctx context.Context, id int64) (*CustomerRespo
 	}
 	sortRecentInteractions(resp.RecentInteractions)
 
-	rows, err := s.store.pool.Query(ctx, `
-		SELECT id,
-		       COALESCE(NULLIF(channel, ''), '') AS channel_type,
-		       NULLIF(channel_id, '') AS external_id,
-		       NULLIF(nickname, '') AS external_name
-		FROM customer_identities
-		WHERE customer_id = $1
-		ORDER BY id DESC
-	`, id)
-	if err == nil {
-		defer rows.Close()
-		resp.Identities = make([]CustomerIdentityResponse, 0, 8)
-		for rows.Next() {
-			var identity CustomerIdentityResponse
-			if scanErr := rows.Scan(&identity.ID, &identity.ChannelType, &identity.ExternalID, &identity.ExternalName); scanErr == nil {
-				identity.Status = "active"
-				resp.Identities = append(resp.Identities, identity)
-			}
-		}
+	if err := s.populateContactIdentities(ctx, []*CustomerResponse{resp}); err != nil {
+		return nil, err
 	}
 
 	// External source identity (HIS import): source system and source patient number.
@@ -310,11 +301,17 @@ func (s *Service) MarkCustomerConverted(ctx context.Context, id int64) error {
 // AddCustomerIdentity adds a customer identity
 func (s *Service) AddCustomerIdentity(ctx context.Context, customerID int64, req AddIdentityRequest) (*CustomerIdentity, error) {
 	// Validate request
-	if req.Channel == "" {
+	if strings.TrimSpace(req.Channel) == "" {
 		return nil, fmt.Errorf("channel is required")
 	}
-	if req.ChannelID == "" {
-		req.ChannelID = fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSpace(req.Channel)), customerID)
+	req.Channel = customercontact.NormalizeChannel(req.Channel)
+	req.ChannelID = strings.TrimSpace(req.ChannelID)
+	if req.Nickname != nil {
+		nickname := strings.TrimSpace(*req.Nickname)
+		req.Nickname = &nickname
+	}
+	if req.ChannelID == "" && (req.Nickname == nil || strings.TrimSpace(*req.Nickname) == "") {
+		return nil, fmt.Errorf("account or nickname is required")
 	}
 
 	return s.store.AddCustomerIdentity(ctx, customerID, req)
@@ -839,4 +836,31 @@ func toGroupResponse(cg *CustomerGroup) *GroupResponse {
 		CreatedAt:   cg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:   cg.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+}
+
+// Populate lists and details through the same batched contact projection.
+func (s *Service) populateContactIdentities(ctx context.Context, responses []*CustomerResponse) error {
+	ids := make([]int64, 0, len(responses))
+	for _, r := range responses {
+		ids = append(ids, r.ID)
+	}
+	contacts, err := customercontact.Load(ctx, s.store.pool, 0, ids)
+	if err != nil {
+		return fmt.Errorf("load customer contacts: %w", err)
+	}
+	for _, r := range responses {
+		for _, c := range contacts[r.ID] {
+			item := CustomerIdentityResponse{ID: c.ID, ChannelType: c.ChannelType, Status: "active"}
+			if c.ExternalID != "" {
+				value := c.ExternalID
+				item.ExternalID = &value
+			}
+			if c.ExternalName != "" {
+				value := c.ExternalName
+				item.ExternalName = &value
+			}
+			r.Identities = append(r.Identities, item)
+		}
+	}
+	return nil
 }

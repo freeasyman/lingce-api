@@ -126,6 +126,11 @@ func validateMatchFields(ageMin, ageMax *int, gender string, reviewStatus string
 }
 
 func normalizeCreate(req CreateRequest) CreateRequest {
+	if req.AgeRequired == nil {
+		// 老客户端未传新字段时，带年龄区间的产品仍默认要求年龄。
+		required := (req.AgeMin != nil && *req.AgeMin > 0) || (req.AgeMax != nil && *req.AgeMax > 0)
+		req.AgeRequired = &required
+	}
 	req.Industry = strings.TrimSpace(req.Industry)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Applicable = strings.TrimSpace(req.Applicable)

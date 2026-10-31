@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/customercontact"
 )
 
 // StringList accepts the two shapes returned by vision models: an array of
@@ -91,16 +93,17 @@ type RecordingAnalyzeResponse struct {
 }
 
 type CreateProspectRequest struct {
-	Name     string `json:"name"`
-	Account  string `json:"account,omitempty"`
-	Platform string `json:"platform,omitempty"`
+	Name     string  `json:"name"`
+	Nickname *string `json:"nickname,omitempty"`
+	Account  string  `json:"account,omitempty"`
+	Platform string  `json:"platform,omitempty"`
 }
 
 type ScreenshotAnalysis struct {
 	ConversationSummary string     `json:"conversation_summary"`
 	ContentScene        string     `json:"content_scene"`
 	Platform            string     `json:"platform"`
-	Account             string     `json:"account"`
+	Account             string     `json:"account,omitempty"`
 	Nickname            string     `json:"nickname"`
 	PatientUtterances   StringList `json:"patient_utterances"`
 	PatientQuestion     string     `json:"patient_question"`
@@ -118,12 +121,24 @@ type ScreenshotAnalysis struct {
 }
 
 func (a *ScreenshotAnalysis) Normalize() {
+	a.Platform = cleanScreenshotIdentityValue(a.Platform)
+	a.Account = cleanScreenshotIdentityValue(a.Account)
+	a.Nickname = cleanScreenshotIdentityValue(a.Nickname)
 	a.PatientUtterances = cleanStringList(a.PatientUtterances)
 	a.ProductInterest = cleanStringList(a.ProductInterest)
 	a.Evidence = cleanStringList(a.Evidence)
 	a.RelationshipClues = cleanStringList(a.RelationshipClues)
 	a.EmployeeCommitments = cleanStringList(a.EmployeeCommitments)
 	a.SuggestedActions = cleanStringList(a.SuggestedActions)
+}
+
+func cleanScreenshotIdentityValue(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(value) {
+	case "未识别", "未知", "无", "暂无", "不适用", "null", "undefined", "unknown", "none", "n/a", "无法判断":
+		return ""
+	}
+	return value
 }
 
 func cleanStringList(values StringList) StringList {
@@ -159,6 +174,7 @@ type ScreenshotAnalyzeResponse struct {
 }
 
 type ScreenshotStatusResponse struct {
+	CustomerID     *int64              `json:"customer_id,omitempty"`
 	SourceID       int64               `json:"source_id"`
 	Analysis       *ScreenshotAnalysis `json:"analysis,omitempty"`
 	Candidates     []CustomerCandidate `json:"candidates,omitempty"`
@@ -168,14 +184,19 @@ type ScreenshotStatusResponse struct {
 }
 
 type ConversationSourceResponse struct {
-	ID           int64              `json:"id"`
-	SourceType   string             `json:"source_type"`
-	OriginalName string             `json:"original_name"`
-	MediaData    string             `json:"media_data,omitempty"`
-	CapturedAt   string             `json:"captured_at"`
-	CustomerID   *int64             `json:"customer_id,omitempty"`
-	MatchStatus  string             `json:"match_status"`
-	Recognition  ScreenshotAnalysis `json:"recognition"`
+	DuplicateLeadCount int                `json:"duplicate_lead_count,omitempty"`
+	CustomerName       string             `json:"customer_name,omitempty"`
+	CustomerPhone      string             `json:"customer_phone,omitempty"`
+	CanMerge           bool               `json:"can_merge"`
+	CustomerDeleted    bool               `json:"customer_deleted"`
+	ID                 int64              `json:"id"`
+	SourceType         string             `json:"source_type"`
+	OriginalName       string             `json:"original_name"`
+	MediaData          string             `json:"media_data,omitempty"`
+	CapturedAt         string             `json:"captured_at"`
+	CustomerID         *int64             `json:"customer_id,omitempty"`
+	MatchStatus        string             `json:"match_status"`
+	Recognition        ScreenshotAnalysis `json:"recognition"`
 }
 
 type CustomerEncounterResponse struct {
@@ -255,40 +276,41 @@ type ActionResponse struct {
 }
 
 type PatientTaskResponse struct {
-	ID              int64    `json:"id"`
-	CustomerID      int64    `json:"customer_id"`
-	OwnerID         int64    `json:"owner_id"`
-	CustomerName    string   `json:"customer_name"`
-	CustomerPhone   string   `json:"customer_phone,omitempty"`
-	OwnerName       string   `json:"owner_name,omitempty"`
-	SourceID        *int64   `json:"source_id,omitempty"`
-	TaskType        string   `json:"task_type"`
-	Goal            string   `json:"goal"`
-	Action          string   `json:"action"`
-	Content         string   `json:"content"`
-	Evidence        string   `json:"evidence,omitempty"`
-	DueAt           string   `json:"due_at,omitempty"`
-	Status          string   `json:"status"`
-	CreatedAt       string   `json:"created_at"`
-	Result          string   `json:"result,omitempty"`
-	ResultNote      string   `json:"result_note,omitempty"`
-	CompletedAt     string   `json:"completed_at,omitempty"`
-	ParentTaskID    *int64   `json:"parent_task_id,omitempty"`
-	PlanID          *int64   `json:"plan_id,omitempty"`
-	PlanMemberID    *int64   `json:"plan_member_id,omitempty"`
-	TaskSubtype     string   `json:"task_subtype,omitempty"`
-	ProductID       *int64   `json:"product_id,omitempty"`
-	ProductName     string   `json:"product_name,omitempty"`
-	Priority        int      `json:"priority"`
-	MatchScore      *int     `json:"match_score,omitempty"`
-	RiskMedical     string   `json:"risk_medical,omitempty"`
-	RiskCommercial  string   `json:"risk_commercial,omitempty"`
-	NextAction      string   `json:"next_action,omitempty"`
-	NextDueAt       string   `json:"next_due_at,omitempty"`
-	ExpectedResult  string   `json:"expected_result,omitempty"`
-	ResultAmount    *float64 `json:"result_amount,omitempty"`
-	ResultProductID *int64   `json:"result_product_id,omitempty"`
-	AmountSource    string   `json:"amount_source,omitempty"`
+	ID              int64                     `json:"id"`
+	CustomerID      int64                     `json:"customer_id"`
+	OwnerID         int64                     `json:"owner_id"`
+	CustomerName    string                    `json:"customer_name"`
+	CustomerPhone   string                    `json:"customer_phone,omitempty"`
+	Contacts        []customercontact.Contact `json:"contacts,omitempty"`
+	OwnerName       string                    `json:"owner_name,omitempty"`
+	SourceID        *int64                    `json:"source_id,omitempty"`
+	TaskType        string                    `json:"task_type"`
+	Goal            string                    `json:"goal"`
+	Action          string                    `json:"action"`
+	Content         string                    `json:"content"`
+	Evidence        string                    `json:"evidence,omitempty"`
+	DueAt           string                    `json:"due_at,omitempty"`
+	Status          string                    `json:"status"`
+	CreatedAt       string                    `json:"created_at"`
+	Result          string                    `json:"result,omitempty"`
+	ResultNote      string                    `json:"result_note,omitempty"`
+	CompletedAt     string                    `json:"completed_at,omitempty"`
+	ParentTaskID    *int64                    `json:"parent_task_id,omitempty"`
+	PlanID          *int64                    `json:"plan_id,omitempty"`
+	PlanMemberID    *int64                    `json:"plan_member_id,omitempty"`
+	TaskSubtype     string                    `json:"task_subtype,omitempty"`
+	ProductID       *int64                    `json:"product_id,omitempty"`
+	ProductName     string                    `json:"product_name,omitempty"`
+	Priority        int                       `json:"priority"`
+	MatchScore      *int                      `json:"match_score,omitempty"`
+	RiskMedical     string                    `json:"risk_medical,omitempty"`
+	RiskCommercial  string                    `json:"risk_commercial,omitempty"`
+	NextAction      string                    `json:"next_action,omitempty"`
+	NextDueAt       string                    `json:"next_due_at,omitempty"`
+	ExpectedResult  string                    `json:"expected_result,omitempty"`
+	ResultAmount    *float64                  `json:"result_amount,omitempty"`
+	ResultProductID *int64                    `json:"result_product_id,omitempty"`
+	AmountSource    string                    `json:"amount_source,omitempty"`
 }
 
 type CompletePatientTaskRequest struct {
@@ -354,6 +376,15 @@ type PatientTaskCount struct {
 }
 
 type PatientTaskSummary struct {
-	Mine PatientTaskCount  `json:"mine"`
-	Team *PatientTaskCount `json:"team,omitempty"`
+	Mine  PatientTaskCount  `json:"mine"`
+	Plans []TaskPlanOption  `json:"plans"`
+	Team  *PatientTaskCount `json:"team,omitempty"`
+}
+
+type TaskPlanOption struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
 }

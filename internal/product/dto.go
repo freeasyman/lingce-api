@@ -29,6 +29,7 @@ type CreateRequest struct {
 	ApplicableKeywords []string `json:"applicable_keywords,omitempty"`
 	AgeMin             *int     `json:"age_min,omitempty"`
 	AgeMax             *int     `json:"age_max,omitempty"`
+	AgeRequired        *bool    `json:"age_required,omitempty"`
 	Gender             string   `json:"gender,omitempty"`
 	Contraindications  string   `json:"contraindications,omitempty"`
 	ReviewStatus       string   `json:"review_status,omitempty"`
@@ -49,6 +50,7 @@ type UpdateRequest struct {
 	ApplicableKeywords *[]string `json:"applicable_keywords,omitempty"`
 	AgeMin             *int      `json:"age_min,omitempty"`
 	AgeMax             *int      `json:"age_max,omitempty"`
+	AgeRequired        *bool     `json:"age_required,omitempty"`
 	Gender             *string   `json:"gender,omitempty"`
 	Contraindications  *string   `json:"contraindications,omitempty"`
 	ReviewStatus       *string   `json:"review_status,omitempty"`

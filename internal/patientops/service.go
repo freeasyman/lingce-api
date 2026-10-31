@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/customercontact"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -277,22 +278,9 @@ func NewService(pool *pgxpool.Pool, llm *llmgateway.Client) *Service {
 	return &Service{pool: pool, llm: llm}
 }
 
-func (s *Service) ConfirmScreenshot(ctx context.Context, tenantID, sourceID, customerID int64) error {
-	if tenantID <= 0 || sourceID <= 0 || customerID <= 0 {
-		return fmt.Errorf("tenant_id, source_id and customer_id are required")
-	}
-	result, err := s.pool.Exec(ctx, `
-		UPDATE patient_conversation_sources
-		SET customer_id=$1, match_status='confirmed', updated_at=NOW()
-		WHERE tenant_id=$2 AND id=$3
-		  AND EXISTS (SELECT 1 FROM customers c WHERE c.id=$1 AND c.tenant_id=$2)`, customerID, tenantID, sourceID)
-	if err != nil {
-		return fmt.Errorf("confirm screenshot customer: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("screenshot source not found")
-	}
-	return nil
+func (s *Service) ConfirmScreenshot(ctx context.Context, tenantID, employeeID, sourceID, customerID int64) error {
+	_, err := s.ReviewScreenshot(ctx, tenantID, employeeID, sourceID, ScreenshotReviewRequest{Action: "rebind", CustomerID: customerID})
+	return err
 }
 
 func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sourceID int64, req CreateProspectRequest) (int64, error) {
@@ -304,29 +292,72 @@ func (s *Service) CreateProspect(ctx context.Context, tenantID, employeeID, sour
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockScreenshotTenant(ctx, tx, tenantID); err != nil {
+		return 0, err
+	}
 	var existingCustomerID *int64
 	var existingMatchStatus string
-	if err := tx.QueryRow(ctx, `SELECT customer_id,match_status FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, sourceID).Scan(&existingCustomerID, &existingMatchStatus); err != nil {
+	var payload []byte
+	if err := tx.QueryRow(ctx, `SELECT customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND source_type='screenshot' FOR UPDATE`, tenantID, sourceID).Scan(&existingCustomerID, &existingMatchStatus, &payload); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, fmt.Errorf("screenshot source not found")
 		}
 		return 0, fmt.Errorf("lock screenshot source: %w", err)
 	}
+	if existingMatchStatus == "rejected" {
+		return 0, ErrScreenshotReviewConflict
+	}
+	if existingCustomerID != nil && existingMatchStatus == "pending_confirm" {
+		var pendingLead bool
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(extra_data->>'screenshot_auto_lead'='true' AND extra_data->>'identity_status'='pending_confirm',false) FROM customers WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE`, tenantID, *existingCustomerID).Scan(&pendingLead); err != nil {
+			return 0, err
+		}
+		if pendingLead {
+			if _, err := tx.Exec(ctx, `UPDATE customers SET name=$3,extra_data=COALESCE(extra_data,'{}'::jsonb)||'{"identity_status":"confirmed"}'::jsonb,updated_at=NOW() WHERE tenant_id=$1 AND id=$2`, tenantID, *existingCustomerID, strings.TrimSpace(req.Name)); err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE patient_conversation_sources SET match_status='confirmed',updated_at=NOW() WHERE tenant_id=$1 AND customer_id=$2 AND match_status='pending_confirm' AND ($3::boolean OR id=$4)`, tenantID, *existingCustomerID, pendingLead, sourceID); err != nil {
+			return 0, err
+		}
+		if err := writeScreenshotReview(ctx, tx, tenantID, sourceID, employeeID, "confirm", existingCustomerID, existingCustomerID, map[string]any{"legacy_prospect_request": true, "name": strings.TrimSpace(req.Name)}); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return *existingCustomerID, nil
+	}
+
 	if existingCustomerID != nil && (existingMatchStatus == "confirmed" || *existingCustomerID > 0) {
+		var live bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL)`, tenantID, *existingCustomerID).Scan(&live); err != nil {
+			return 0, err
+		}
+		if !live {
+			return 0, fmt.Errorf("customer not found")
+		}
 		return *existingCustomerID, nil
 	}
 	var customerID int64
-	source := strings.TrimSpace(req.Platform)
-	if source == "" {
-		source = "social_media"
+	var analysis ScreenshotAnalysis
+	if err := json.Unmarshal(payload, &analysis); err != nil {
+		return 0, fmt.Errorf("decode screenshot contact: %w", err)
+	}
+	platform := strings.TrimSpace(req.Platform)
+	if platform == "" {
+		platform = analysis.Platform
+	}
+	source := customercontact.NormalizeChannel(platform)
+	nickname := analysis.Nickname
+	if req.Nickname != nil {
+		nickname = strings.TrimSpace(*req.Nickname)
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,source,lifecycle_stage,status,momentum,created_by,created_at,updated_at,extra_data) VALUES($1,$2,$3,'unknown','lead',50,$4,NOW(),NOW(),jsonb_build_object('prospect',true,'social_account',$5::text)) RETURNING id`, tenantID, strings.TrimSpace(req.Name), source, employeeID, strings.TrimSpace(req.Account)).Scan(&customerID); err != nil {
 		return 0, fmt.Errorf("create prospect: %w", err)
 	}
-	if strings.TrimSpace(req.Account) != "" {
-		if _, err := tx.Exec(ctx, `INSERT INTO customer_identities(customer_id,channel,channel_id,nickname,extra_data,created_at,updated_at) VALUES($1,$2,$3,$4,'{}'::jsonb,NOW(),NOW())`, customerID, source, strings.TrimSpace(req.Account), strings.TrimSpace(req.Name)); err != nil {
-			return 0, fmt.Errorf("create prospect identity: %w", err)
-		}
+	if err := saveScreenshotContact(ctx, tx, tenantID, customerID, source, req.Account, nickname); err != nil {
+		return 0, fmt.Errorf("create prospect contact: %w", err)
 	}
 	result, err := tx.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3 AND EXISTS (SELECT 1 FROM customers c WHERE c.id=$1 AND c.tenant_id=$2)`, customerID, tenantID, sourceID)
 	if err != nil {
@@ -384,84 +415,11 @@ func (s *Service) ListCustomerSources(ctx context.Context, tenantID, customerID 
 }
 
 type UnlinkedSourcesPage struct {
-	Items    []ConversationSourceResponse `json:"items"`
-	Total    int64                        `json:"total"`
-	Page     int                          `json:"page"`
-	PageSize int                          `json:"page_size"`
-}
-
-// CountUnlinkedSources returns screenshots that have not yet been associated
-// with a customer. This is the same condition used by the existing queue.
-func (s *Service) CountUnlinkedSources(ctx context.Context, tenantID int64) (int64, error) {
-	var count int64
-	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND source_type='screenshot' AND customer_id IS NULL`, tenantID).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count screenshots awaiting identity confirmation: %w", err)
-	}
-	return count, nil
-}
-
-func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64, page, pageSize int) (*UnlinkedSourcesPage, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	result := &UnlinkedSourcesPage{Items: []ConversationSourceResponse{}, Page: page, PageSize: pageSize}
-	if err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot'`, tenantID).Scan(&result.Total); err != nil {
-		return nil, fmt.Errorf("count unlinked patient sources: %w", err)
-	}
-	rows, err := s.pool.Query(queryCtx, `SELECT id,source_type,original_name,captured_at,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND customer_id IS NULL AND source_type='screenshot' ORDER BY captured_at DESC,id DESC LIMIT $2 OFFSET $3`, tenantID, pageSize, int64(page-1)*int64(pageSize))
-	if err != nil {
-		return nil, fmt.Errorf("list unlinked patient sources: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var item ConversationSourceResponse
-		var capturedAt time.Time
-		var raw []byte
-		if err := rows.Scan(&item.ID, &item.SourceType, &item.OriginalName, &capturedAt, &item.MatchStatus, &raw); err != nil {
-			return nil, err
-		}
-		item.CapturedAt = capturedAt.Format(time.RFC3339)
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &item.Recognition); err != nil {
-				return nil, fmt.Errorf("decode screenshot %d: %w", item.ID, err)
-			}
-			item.Recognition.Normalize()
-		}
-		result.Items = append(result.Items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read unlinked patient sources: %w", err)
-	}
-	return result, nil
-}
-
-func (s *Service) GetUnlinkedSource(ctx context.Context, tenantID, sourceID int64) (*ConversationSourceResponse, error) {
-	var item ConversationSourceResponse
-	var capturedAt time.Time
-	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT id,source_type,original_name,media_data,captured_at,customer_id,match_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2 AND customer_id IS NULL`, tenantID, sourceID).Scan(&item.ID, &item.SourceType, &item.OriginalName, &item.MediaData, &capturedAt, &item.CustomerID, &item.MatchStatus, &raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("unlinked screenshot source not found")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get unlinked patient source: %w", err)
-	}
-	item.CapturedAt = capturedAt.Format(time.RFC3339)
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &item.Recognition)
-		item.Recognition.Normalize()
-	}
-	return &item, nil
+	CustomerTotal int64                        `json:"customer_total"`
+	Items         []ConversationSourceResponse `json:"items"`
+	Total         int64                        `json:"total"`
+	Page          int                          `json:"page"`
+	PageSize      int                          `json:"page_size"`
 }
 
 func (s *Service) CompletePatientTask(ctx context.Context, tenantID, employeeID, taskID int64, req CompletePatientTaskRequest) error {
@@ -541,26 +499,51 @@ func (s *Service) UpdatePatientTaskStatus(ctx context.Context, tenantID, employe
 	return nil
 }
 
-func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID int64, includeTeam bool) (*PatientTaskSummary, error) {
+type TaskFilterOptions struct {
+	PlanID *int64
+	NoPlan bool
+	Query  string
+}
+
+func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID int64, includeTeam bool, options ...TaskFilterOptions) (*PatientTaskSummary, error) {
+	var opt TaskFilterOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	var mine PatientTaskCount
 	var team PatientTaskCount
-	err := s.pool.QueryRow(ctx, `
+	ownerMine := "(t.employee_id=$2 OR t.employee_id IN (SELECT id FROM employees WHERE tenant_id=$1 AND deleted_at IS NOT NULL))"
+	where := "t.tenant_id=$1 AND t.status NOT IN ('已完成','已取消')"
+	if opt.PlanID != nil {
+		where += fmt.Sprintf(" AND t.plan_id=$%d", 3)
+	} else if opt.NoPlan {
+		where += " AND t.plan_id IS NULL"
+	}
+	args := []any{tenantID, employeeID}
+	if opt.PlanID != nil {
+		args = append(args, *opt.PlanID)
+	}
+	if strings.TrimSpace(opt.Query) != "" {
+		where += fmt.Sprintf(" AND (c.name ILIKE '%%'||$%d::text||'%%' OR c.phone ILIKE '%%'||$%d::text||'%%' OR t.goal ILIKE '%%'||$%d::text||'%%' OR t.evidence ILIKE '%%'||$%d::text||'%%' OR COALESCE(p.name,'') ILIKE '%%'||$%d::text||'%%')", len(args)+1, len(args)+1, len(args)+1, len(args)+1, len(args)+1)
+		args = append(args, strings.TrimSpace(opt.Query))
+	}
+	query := `
 		SELECT
-			COUNT(*) FILTER (WHERE t.employee_id=$2),
-			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
-			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at IS NOT NULL AND t.due_at < NOW()),
-			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
-			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at >= CURRENT_DATE + INTERVAL '8 days'),
-			COUNT(*) FILTER (WHERE t.employee_id=$2 AND t.due_at IS NULL),
+			COUNT(*) FILTER (WHERE ` + ownerMine + `),
+			COUNT(*) FILTER (WHERE ` + ownerMine + ` AND t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
+			COUNT(*) FILTER (WHERE ` + ownerMine + ` AND t.due_at IS NOT NULL AND t.due_at < NOW()),
+			COUNT(*) FILTER (WHERE ` + ownerMine + ` AND t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE ` + ownerMine + ` AND t.due_at >= CURRENT_DATE + INTERVAL '8 days'),
+			COUNT(*) FILTER (WHERE ` + ownerMine + ` AND t.due_at IS NULL),
 			COUNT(*),
 			COUNT(*) FILTER (WHERE t.due_at >= NOW() AND t.due_at < CURRENT_DATE + INTERVAL '1 day'),
 			COUNT(*) FILTER (WHERE t.due_at IS NOT NULL AND t.due_at < NOW()),
 			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '1 day' AND t.due_at < CURRENT_DATE + INTERVAL '8 days'),
 			COUNT(*) FILTER (WHERE t.due_at >= CURRENT_DATE + INTERVAL '8 days'),
 			COUNT(*) FILTER (WHERE t.due_at IS NULL)
-		FROM patient_operation_tasks t
-		WHERE t.tenant_id=$1 AND t.status NOT IN ('已完成','已取消')
-	`, tenantID, employeeID).Scan(
+		FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id LEFT JOIN products p ON p.id=t.product_id
+		WHERE ` + where
+	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&mine.Total, &mine.Today, &mine.Overdue, &mine.Future, &mine.Later, &mine.Unplanned,
 		&team.Total, &team.Today, &team.Overdue, &team.Future, &team.Later, &team.Unplanned,
 	)
@@ -571,10 +554,46 @@ func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID i
 	if includeTeam {
 		summary.Team = &team
 	}
+	summary.Plans = []TaskPlanOption{}
+	planWhere := "t.tenant_id=$1 AND t.status NOT IN ('已完成','已取消')"
+	planArgs := []any{tenantID}
+	if !includeTeam {
+		planWhere += " AND " + ownerMine
+		planArgs = append(planArgs, employeeID)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT pl.id,pl.name,pl.status,COALESCE(pl.period_start::text,''),COALESCE(pl.period_end::text,'') FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id JOIN patient_ops_plans pl ON pl.id=t.plan_id AND pl.tenant_id=t.tenant_id WHERE `+planWhere, planArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p TaskPlanOption
+		if err := rows.Scan(&p.ID, &p.Name, &p.Status, &p.PeriodStart, &p.PeriodEnd); err != nil {
+			return nil, err
+		}
+		summary.Plans = append(summary.Plans, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(summary.Plans, func(i, j int) bool {
+		a, b := summary.Plans[i], summary.Plans[j]
+		if (a.Status == "published") != (b.Status == "published") {
+			return a.Status == "published"
+		}
+		if a.PeriodStart != b.PeriodStart {
+			return a.PeriodStart > b.PeriodStart
+		}
+		return a.ID > b.ID
+	})
 	return summary, nil
 }
 
-func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter, query string) ([]PatientTaskResponse, int64, error) {
+func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int64, page, pageSize int, allEmployees bool, filter, query string, options ...TaskFilterOptions) ([]PatientTaskResponse, int64, error) {
+	var opt TaskFilterOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -611,26 +630,29 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 	default:
 		return nil, 0, fmt.Errorf("unsupported task filter")
 	}
+	if opt.PlanID != nil {
+		dueFilter += " AND t.plan_id=$" + fmt.Sprint(3+lenNonempty(query))
+	} else if opt.NoPlan {
+		dueFilter += " AND t.plan_id IS NULL"
+	}
 	query = strings.TrimSpace(query)
+	args := []any{tenantID, employeeID}
 	searchFilter := ""
 	if query != "" {
-		searchFilter = " AND (c.name ILIKE '%'||$5::text||'%' OR c.phone ILIKE '%'||$5::text||'%' OR t.goal ILIKE '%'||$5::text||'%' OR t.evidence ILIKE '%'||$5::text||'%' OR COALESCE(p.name,'') ILIKE '%'||$5::text||'%')"
+		args = append(args, query)
+		n := len(args)
+		searchFilter = fmt.Sprintf(" AND (c.name ILIKE '%%'||$%d::text||'%%' OR c.phone ILIKE '%%'||$%d::text||'%%' OR t.goal ILIKE '%%'||$%d::text||'%%' OR t.evidence ILIKE '%%'||$%d::text||'%%' OR COALESCE(p.name,'') ILIKE '%%'||$%d::text||'%%')", n, n, n, n, n)
+	}
+	if opt.PlanID != nil {
+		args = append(args, *opt.PlanID)
 	}
 	baseFilter := "t.tenant_id=$1 AND " + ownerFilter + " AND t.status NOT IN ('已完成','已取消')" + dueFilter + searchFilter
-	countFilter := baseFilter
-	countArgs := []any{tenantID, employeeID}
-	if query != "" {
-		countFilter = strings.ReplaceAll(baseFilter, "$5", "$3")
-		countArgs = append(countArgs, query)
-	}
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) `+patientTaskFrom+` WHERE `+countFilter, countArgs...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) `+patientTaskFrom+` WHERE `+baseFilter, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	listArgs := []any{tenantID, employeeID, pageSize, (page - 1) * pageSize}
-	if query != "" {
-		listArgs = append(listArgs, query)
-	}
-	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE `+baseFilter+` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $3 OFFSET $4`, listArgs...)
+	limitIndex := len(args) + 1
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.pool.Query(ctx, `SELECT `+patientTaskSelect+patientTaskFrom+` WHERE `+baseFilter+fmt.Sprintf(` ORDER BY t.due_at NULLS LAST,t.created_at DESC,t.id DESC LIMIT $%d OFFSET $%d`, limitIndex, limitIndex+1), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list patient operation tasks: %w", err)
 	}
@@ -644,6 +666,10 @@ func (s *Service) ListPatientTasks(ctx context.Context, tenantID, employeeID int
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	if err := s.populateTaskContacts(ctx, tenantID, items); err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil
@@ -704,7 +730,14 @@ func (s *Service) ListCustomerTasks(ctx context.Context, tenantID, customerID in
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := s.populateTaskContacts(ctx, tenantID, items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (s *Service) ListCustomerTaskSummary(ctx context.Context, tenantID, employeeID int64, allEmployees bool) ([]CustomerTaskSummary, error) {
@@ -734,7 +767,7 @@ func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID in
 	}
 	var status ScreenshotStatusResponse
 	var raw []byte
-	if err := s.pool.QueryRow(ctx, `SELECT id,match_status,analysis_status,analysis_error,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID).Scan(&status.SourceID, &status.MatchStatus, &status.AnalysisStatus, &status.AnalysisError, &raw); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,analysis_error,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID).Scan(&status.SourceID, &status.CustomerID, &status.MatchStatus, &status.AnalysisStatus, &status.AnalysisError, &raw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("screenshot source not found")
 		}
@@ -747,7 +780,7 @@ func (s *Service) GetScreenshotStatus(ctx context.Context, tenantID, sourceID in
 		}
 		analysis.Normalize()
 		status.Analysis = &analysis
-		status.Candidates, _ = s.findCandidates(ctx, tenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
+		status.Candidates, _ = s.findCandidates(ctx, tenantID, analysis.Platform, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
 	}
 	return &status, nil
 }
@@ -994,22 +1027,27 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			return nil, ErrScreenshotCustomerConflict
 		}
 		if req.CustomerID != nil && existingCustomerID == nil {
-			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET customer_id=$1,match_status='confirmed',updated_at=NOW() WHERE tenant_id=$2 AND id=$3 AND customer_id IS NULL`, *req.CustomerID, req.TenantID, existing.SourceID); err != nil {
+			if err := s.syncScreenshotContact(ctx, req.TenantID, existing.SourceID, req.CustomerID); err != nil {
 				return nil, fmt.Errorf("bind screenshot to customer: %w", err)
 			}
 			existingCustomerID = req.CustomerID
+			existing.MatchStatus = "confirmed"
 		}
 		if existingStatus == "succeeded" && len(existingPayload) > 0 && string(existingPayload) != "{}" {
 			if err := json.Unmarshal(existingPayload, &existing.Analysis); err != nil {
 				return nil, fmt.Errorf("parse existing screenshot analysis: %w", err)
 			}
 			existing.Analysis.Normalize()
-			existing.Candidates, err = s.findCandidates(ctx, req.TenantID, existing.Analysis.Account, existing.Analysis.Nickname, existing.Analysis.PatientUtterances)
+			existing.CustomerID, existing.MatchStatus, err = s.completeScreenshotRecognition(ctx, req.TenantID, existing.SourceID)
+			if err != nil {
+				return nil, err
+			}
+
+			existing.Candidates, err = s.findCandidates(ctx, req.TenantID, existing.Analysis.Platform, existing.Analysis.Account, existing.Analysis.Nickname, existing.Analysis.PatientUtterances)
 			if err != nil {
 				return nil, err
 			}
 			existing.AnalysisStatus = existingStatus
-			existing.CustomerID = existingCustomerID
 			existing.Reused = true
 			return &existing, nil
 		}
@@ -1017,7 +1055,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			return nil, fmt.Errorf("screenshot analysis already in progress (source_id=%d)", existing.SourceID)
 		}
 		if existingStatus == "failed" {
-			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET original_name=$1,media_data=$2,created_by=$3,customer_id=$4,recognition_payload='{}'::jsonb,analysis_status='processing',analysis_error='',analysis_started_at=NOW(),analysis_completed_at=NULL,updated_at=NOW() WHERE tenant_id=$5 AND id=$6`, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, req.TenantID, existing.SourceID); err != nil {
+			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET original_name=$1,media_data=$2,created_by=$3,customer_id=COALESCE($4,customer_id),recognition_payload='{}'::jsonb,analysis_status='processing',analysis_error='',analysis_started_at=NOW(),analysis_completed_at=NULL,updated_at=NOW() WHERE tenant_id=$5 AND id=$6`, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, req.TenantID, existing.SourceID); err != nil {
 				return nil, fmt.Errorf("restart failed screenshot analysis: %w", err)
 			}
 			return s.analyzeScreenshotSource(ctx, req, existing.SourceID)
@@ -1038,7 +1076,24 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			concurrent.CustomerID = concurrentCustomerID
 			if concurrentStatus == "succeeded" && len(concurrentPayload) > 0 && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
 				concurrent.Analysis.Normalize()
-				concurrent.Candidates, _ = s.findCandidates(ctx, req.TenantID, concurrent.Analysis.Account, concurrent.Analysis.Nickname, concurrent.Analysis.PatientUtterances)
+				if req.CustomerID != nil {
+					if concurrentCustomerID != nil && *concurrentCustomerID != *req.CustomerID {
+						return nil, ErrScreenshotCustomerConflict
+					}
+					if err := s.syncScreenshotContact(ctx, req.TenantID, concurrent.SourceID, req.CustomerID); err != nil {
+						return nil, err
+					}
+					concurrent.CustomerID = req.CustomerID
+					concurrent.MatchStatus = "confirmed"
+				}
+				concurrent.CustomerID, concurrent.MatchStatus, err = s.completeScreenshotRecognition(ctx, req.TenantID, concurrent.SourceID)
+				if err != nil {
+					return nil, err
+				}
+				concurrent.AnalysisStatus = concurrentStatus
+				concurrent.Reused = true
+
+				concurrent.Candidates, _ = s.findCandidates(ctx, req.TenantID, concurrent.Analysis.Platform, concurrent.Analysis.Account, concurrent.Analysis.Nickname, concurrent.Analysis.PatientUtterances)
 				return &concurrent, nil
 			}
 			return nil, fmt.Errorf("screenshot analysis already in progress (source_id=%d)", concurrent.SourceID)
@@ -1139,15 +1194,19 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 		slog.Error("patient screenshot analysis persistence failed", "source_id", sourceID, "error", err)
 		return nil, markFailed(fmt.Errorf("save screenshot analysis: %w", err))
 	}
-	candidates, err := s.findCandidates(analysisCtx, req.TenantID, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
+	boundCustomerID, boundMatchStatus, err := s.completeScreenshotRecognition(analysisCtx, req.TenantID, sourceID)
 	if err != nil {
-		slog.Error("patient screenshot customer candidate lookup failed", "source_id", sourceID, "error", err)
 		return nil, markFailed(err)
 	}
-	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET analysis_status='succeeded',analysis_error='',analysis_completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND tenant_id=$2`, sourceID, req.TenantID); err != nil {
-		return nil, markFailed(fmt.Errorf("mark screenshot analysis succeeded: %w", err))
+	candidates, err := s.findCandidates(analysisCtx, req.TenantID, analysis.Platform, analysis.Account, analysis.Nickname, analysis.PatientUtterances)
+	if err != nil {
+		slog.Warn("screenshot candidate lookup failed after successful analysis", "source_id", sourceID, "error", err)
 	}
-	return &ScreenshotAnalyzeResponse{SourceID: sourceID, CustomerID: req.CustomerID, Analysis: analysis, Candidates: candidates, MatchStatus: matchStatus(req.CustomerID), AnalysisStatus: "succeeded"}, nil
+	if candidates == nil {
+		candidates = []CustomerCandidate{}
+	}
+
+	return &ScreenshotAnalyzeResponse{SourceID: sourceID, CustomerID: boundCustomerID, Analysis: analysis, Candidates: candidates, MatchStatus: boundMatchStatus, AnalysisStatus: "succeeded"}, nil
 }
 
 type screenshotPromptConfig struct {
@@ -1174,20 +1233,30 @@ func valueOrZero(v *int64) int64 {
 	}
 	return *v
 }
-func matchStatus(v *int64) string {
-	if v != nil && *v > 0 {
-		return "confirmed"
-	}
-	return "pending"
-}
-func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, nickname string, utterances []string) ([]CustomerCandidate, error) {
-	account = strings.TrimSpace(account)
-	nickname = strings.TrimSpace(nickname)
+func (s *Service) findCandidates(ctx context.Context, tenantID int64, platform, account, nickname string, utterances []string) ([]CustomerCandidate, error) {
+	platform = cleanScreenshotIdentityValue(platform)
+	account, nickname = cleanScreenshotIdentityValue(account), cleanScreenshotIdentityValue(nickname)
 	utterance := ""
 	if len(utterances) > 0 {
 		utterance = strings.TrimSpace(utterances[0])
 	}
-	rows, err := s.pool.Query(ctx, `SELECT c.id,COALESCE(NULLIF(c.name,''),''),COALESCE(NULLIF(ci.nickname,''),''),COALESCE(NULLIF(c.phone,''),'') FROM customers c LEFT JOIN LATERAL (SELECT COALESCE(NULLIF(nickname,''),NULLIF(external_name,'')) AS nickname FROM customer_identities WHERE customer_id=c.id ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1) ci ON TRUE WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND (($2<>'' AND (c.name ILIKE '%'||$2||'%' OR ci.nickname ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%')) OR ($3<>'' AND (c.name ILIKE '%'||$3||'%' OR ci.nickname ILIKE '%'||$3||'%' OR c.phone ILIKE '%'||$3||'%')) OR ($4<>'' AND c.name ILIKE '%'||$4||'%')) ORDER BY c.updated_at DESC NULLS LAST LIMIT 10`, tenantID, account, nickname, utterance)
+	aliases := customercontact.ChannelAliases(platform)
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id,COALESCE(c.name,''),COALESCE(ci.nickname,''),COALESCE(c.phone,''),COALESCE(ci.exact_account,false)
+		FROM customers c
+		LEFT JOIN LATERAL (
+		  SELECT COALESCE(NULLIF(i.nickname,''),i.external_name,'') AS nickname,
+		         ($2<>'' AND lower(trim(COALESCE(NULLIF(i.channel,''),i.channel_type,'')))=ANY($4::text[]) AND trim(COALESCE(NULLIF(i.channel_id,''),i.external_id,''))=$2) AS exact_account
+		  FROM customer_identities i WHERE i.customer_id=c.id
+            AND lower(trim(COALESCE(NULLIF(i.channel,''),i.channel_type,''))) NOT IN ('patient','__auto__')
+          ORDER BY exact_account DESC, (($3<>'' AND COALESCE(NULLIF(i.nickname,''),i.external_name,'') ILIKE '%'||$3||'%')
+            OR ($2<>'' AND COALESCE(NULLIF(i.nickname,''),i.external_name,'') ILIKE '%'||$2||'%')) DESC,i.id DESC LIMIT 1
+		) ci ON TRUE
+		WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND (
+		  ci.exact_account OR ($3<>'' AND (c.name ILIKE '%'||$3||'%' OR ci.nickname ILIKE '%'||$3||'%' OR c.phone ILIKE '%'||$3||'%'))
+		  OR ($2<>'' AND (c.name ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%' OR ci.nickname ILIKE '%'||$2||'%'))
+		  OR ($5<>'' AND (c.name ILIKE '%'||$5||'%' OR ci.nickname ILIKE '%'||$5||'%')))
+		ORDER BY COALESCE(ci.exact_account,false) DESC,c.updated_at DESC NULLS LAST,c.id DESC LIMIT 10`, tenantID, account, nickname, aliases, utterance)
 	if err != nil {
 		return nil, fmt.Errorf("find customer candidates: %w", err)
 	}
@@ -1195,10 +1264,14 @@ func (s *Service) findCandidates(ctx context.Context, tenantID int64, account, n
 	result := []CustomerCandidate{}
 	for rows.Next() {
 		var c CustomerCandidate
-		if err := rows.Scan(&c.ID, &c.Name, &c.Nickname, &c.Phone); err != nil {
+		var exact bool
+		if err := rows.Scan(&c.ID, &c.Name, &c.Nickname, &c.Phone, &exact); err != nil {
 			return nil, err
 		}
-		c.Reason = "账号、昵称或识别内容可能匹配，请人工确认"
+		c.Reason = "姓名或昵称可能匹配，请人工确认"
+		if exact {
+			c.Reason = "同平台账号一致，请人工确认"
+		}
 		result = append(result, c)
 	}
 	return result, rows.Err()
@@ -1256,4 +1329,26 @@ func stripJSONCodeFence(value string) string {
 		trimmed = trimmed[:idx]
 	}
 	return strings.TrimSpace(trimmed)
+}
+
+func (s *Service) populateTaskContacts(ctx context.Context, tenantID int64, items []PatientTaskResponse) error {
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.CustomerID)
+	}
+	contacts, err := customercontact.Load(ctx, s.pool, tenantID, ids)
+	if err != nil {
+		return fmt.Errorf("load task contacts: %w", err)
+	}
+	for i := range items {
+		items[i].Contacts = contacts[items[i].CustomerID]
+	}
+	return nil
+}
+
+func lenNonempty(v string) int {
+	if strings.TrimSpace(v) != "" {
+		return 1
+	}
+	return 0
 }

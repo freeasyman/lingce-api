@@ -66,7 +66,7 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
 		       p.status, p.is_template,
-		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status, p.version,
+		       p.applicable_keywords, p.age_min, p.age_max, p.age_required, p.gender, p.contraindications, p.review_status, p.version,
 		       p.created_at, p.updated_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
@@ -89,7 +89,7 @@ func (s *Store) List(ctx context.Context, req ListRequest) ([]*Product, int, err
 			&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 			&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
 			&item.Status, &item.IsTemplate,
-			&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
+			&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.AgeRequired, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan product: %w", err)
@@ -116,7 +116,7 @@ func (s *Store) getByID(ctx context.Context, id int64, includeDeleted bool) (*Pr
 		SELECT p.id, p.tenant_id, COALESCE(t.name, ''), p.industry, p.name, p.aliases,
 		       p.price, p.applicable, p.selling_point, p.upgrade_to, p.combine_with,
 		       p.status, p.is_template,
-		       p.applicable_keywords, p.age_min, p.age_max, p.gender, p.contraindications, p.review_status, p.version,
+		       p.applicable_keywords, p.age_min, p.age_max, p.age_required, p.gender, p.contraindications, p.review_status, p.version,
 		       p.created_at, p.updated_at, p.deleted_at
 		FROM products p
 		LEFT JOIN tenants t ON t.id = p.tenant_id
@@ -129,7 +129,7 @@ func (s *Store) getByID(ctx context.Context, id int64, includeDeleted bool) (*Pr
 		&item.ID, &item.TenantID, &item.TenantName, &item.Industry, &item.Name, &item.Aliases,
 		&item.Price, &item.Applicable, &item.SellingPoint, &item.UpgradeTo, &item.CombineWith,
 		&item.Status, &item.IsTemplate,
-		&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
+		&item.ApplicableKeywords, &item.AgeMin, &item.AgeMax, &item.AgeRequired, &item.Gender, &item.Contraindications, &item.ReviewStatus, &item.Version,
 		&item.CreatedAt, &item.UpdatedAt, &item.DeletedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -190,12 +190,12 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error)
 		INSERT INTO products (
 			tenant_id, industry, name, aliases, price, applicable, selling_point,
 			upgrade_to, combine_with, status, is_template,
-			applicable_keywords, age_min, age_max, gender, contraindications, review_status,
+			applicable_keywords, age_min, age_max, age_required, gender, contraindications, review_status,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, NOW(), NOW()
+			$12, $13, $14, $15, $16, $17, $18, NOW(), NOW()
 		)
 		RETURNING id, created_at, updated_at
 	`
@@ -222,7 +222,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error)
 	if err := s.pool.QueryRow(ctx, query,
 		req.TenantID, req.Industry, req.Name, req.Aliases, req.Price, req.Applicable, req.SellingPoint,
 		req.UpgradeTo, req.CombineWith, req.Status, req.IsTemplate,
-		req.ApplicableKeywords, nullableProductInt(req.AgeMin), nullableProductInt(req.AgeMax), req.Gender, req.Contraindications, req.ReviewStatus,
+		req.ApplicableKeywords, nullableProductInt(req.AgeMin), nullableProductInt(req.AgeMax), *req.AgeRequired, req.Gender, req.Contraindications, req.ReviewStatus,
 	).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("create product: %w", err)
 	}
@@ -306,6 +306,11 @@ func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Produ
 			args = append(args, *req.AgeMax)
 			argIdx++
 		}
+	}
+	if req.AgeRequired != nil {
+		sets = append(sets, fmt.Sprintf("age_required = $%d", argIdx))
+		args = append(args, *req.AgeRequired)
+		argIdx++
 	}
 	if req.Gender != nil {
 		sets = append(sets, fmt.Sprintf("gender = $%d", argIdx))

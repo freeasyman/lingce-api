@@ -55,9 +55,13 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	if req.Search != nil {
 		kw := strings.TrimSpace(*req.Search)
 		if kw != "" {
-			conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR phone ILIKE $%d)", argIndex, argIndex+1))
-			args = append(args, "%"+kw+"%", "%"+kw+"%")
-			argIndex += 2
+			conditions = append(conditions, fmt.Sprintf(`(name ILIKE $%[1]d OR phone ILIKE $%[1]d OR EXISTS (
+                SELECT 1 FROM customer_identities contact WHERE contact.customer_id=customers.id
+                  AND lower(trim(COALESCE(NULLIF(contact.channel,''),contact.channel_type,''))) NOT IN ('patient','__auto__')
+                  AND (COALESCE(NULLIF(contact.nickname,''),contact.external_name,'') ILIKE $%[1]d
+                    OR COALESCE(NULLIF(contact.channel_id,''),contact.external_id,'') ILIKE $%[1]d)))`, argIndex))
+			args = append(args, "%"+kw+"%")
+			argIndex++
 		}
 	}
 
@@ -237,7 +241,11 @@ func (s *Store) SearchCandidates(ctx context.Context, tenantID int64, keyword st
 		SELECT id, tenant_id, name, phone, gender, age, extra_data
 		FROM customers
 		WHERE tenant_id=$1 AND deleted_at IS NULL
-		  AND (name ILIKE $2 OR phone ILIKE $2)
+		  AND (name ILIKE $2 OR phone ILIKE $2 OR EXISTS (
+            SELECT 1 FROM customer_identities contact WHERE contact.customer_id=customers.id
+              AND lower(trim(COALESCE(NULLIF(contact.channel,''),contact.channel_type,''))) NOT IN ('patient','__auto__')
+              AND (COALESCE(NULLIF(contact.nickname,''),contact.external_name,'') ILIKE $2
+                OR COALESCE(NULLIF(contact.channel_id,''),contact.external_id,'') ILIKE $2)))
 		ORDER BY CASE WHEN name=$3 OR phone=$3 THEN 0 ELSE 1 END, updated_at DESC, id DESC
 		LIMIT $4
 	`, tenantID, "%"+keyword+"%", keyword, limit)
@@ -612,9 +620,9 @@ func (s *Store) MarkCustomerConverted(ctx context.Context, id int64) error {
 // AddCustomerIdentity adds a customer identity
 func (s *Store) AddCustomerIdentity(ctx context.Context, customerID int64, req AddIdentityRequest) (*CustomerIdentity, error) {
 	query := `
-		INSERT INTO customer_identities (customer_id, channel, channel_id, nickname, avatar, extra_data, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-		RETURNING id, customer_id, channel, channel_id, nickname, avatar, extra_data, created_at, updated_at
+		INSERT INTO customer_identities (customer_id, channel, channel_type, channel_id, external_id, nickname, external_name, avatar, extra_data, created_at, updated_at)
+		VALUES ($1, $2, $2, $3, $3, $4, $4, $5, $6, NOW(), NOW())
+		RETURNING id, customer_id, channel, COALESCE(channel_id,''), nickname, avatar, extra_data, created_at, updated_at
 	`
 
 	var ci CustomerIdentity

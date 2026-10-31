@@ -21,6 +21,7 @@ type Product struct {
 	ApplicableKeywords []string   `json:"applicable_keywords"`
 	AgeMin             *int       `json:"age_min,omitempty"`
 	AgeMax             *int       `json:"age_max,omitempty"`
+	AgeRequired        bool       `json:"age_required"`
 	Gender             string     `json:"gender"`
 	Contraindications  string     `json:"contraindications"`
 	ReviewStatus       string     `json:"review_status"`

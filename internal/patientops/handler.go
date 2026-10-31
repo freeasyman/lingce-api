@@ -28,6 +28,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/unlinked/{id}/detail", Handler: h.GetUnlinkedSource, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/analyze", Handler: h.AnalyzeAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/screenshots/{id}/status", Handler: h.StatusAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/review", Handler: h.ReviewScreenshotAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/confirm", Handler: h.ConfirmAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/prospect", Handler: h.CreateProspectAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/actions/generate", Handler: h.GenerateScreenshotActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -343,7 +344,12 @@ func (h *Handler) SummaryTasksAuthenticated(w http.ResponseWriter, r *http.Reque
 		}
 		includeTeam = true
 	}
-	summary, err := h.service.PatientTaskSummary(r.Context(), *claims.TenantID, claims.UserID, includeTeam)
+	opt, err := parseTaskFilterOptions(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	summary, err := h.service.PatientTaskSummary(r.Context(), *claims.TenantID, claims.UserID, includeTeam, opt)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -375,12 +381,36 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 		}
 		allEmployees = true
 	}
-	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, filter, query)
+	opt, err := parseTaskFilterOptions(r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, total, err := h.service.ListPatientTasks(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, filter, query, opt)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	httputil.WritePaginated(w, items, total, page, pageSize)
+}
+
+func parseTaskFilterOptions(r *http.Request) (TaskFilterOptions, error) {
+	opt := TaskFilterOptions{Query: strings.TrimSpace(r.URL.Query().Get("q"))}
+	v := strings.TrimSpace(r.URL.Query().Get("plan_id"))
+	if v == "none" || v == "0" {
+		opt.NoPlan = true
+		return opt, nil
+	}
+	if v == "" {
+		return opt, nil
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || id <= 0 {
+		return opt, fmt.Errorf("invalid plan_id")
+	}
+	opt.PlanID = &id
+	opt.Query = strings.TrimSpace(r.URL.Query().Get("q"))
+	return opt, nil
 }
 
 func (h *Handler) ListOperationRecords(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +598,7 @@ func (h *Handler) ConfirmAuthenticated(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid source id")
 		return
 	}
-	if err := h.service.ConfirmScreenshot(r.Context(), *claims.TenantID, sourceID, req.CustomerID); err != nil {
+	if _, err := h.service.ReviewScreenshot(r.Context(), *claims.TenantID, claims.UserID, sourceID, ScreenshotReviewRequest{Action: "rebind", CustomerID: req.CustomerID}); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -611,4 +641,44 @@ func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req Screenshot
 		return
 	}
 	httputil.WriteSuccess(w, resp)
+}
+
+func (h *Handler) ReviewScreenshotAuthenticated(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid source id")
+		return
+	}
+	var req ScreenshotReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	customerID, err := h.service.ReviewScreenshot(r.Context(), *claims.TenantID, claims.UserID, id, req)
+	if err != nil {
+		if errors.Is(err, ErrScreenshotReviewConflict) {
+			httputil.WriteError(w, http.StatusConflict, "SCREENSHOT_REVIEW_CONFLICT", err.Error(), nil)
+			return
+		}
+		if errors.Is(err, ErrScreenshotReviewInvalid) {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		if errors.Is(err, ErrCustomerTenantMismatch) {
+			httputil.WriteNotFound(w, "customer not found")
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	status := "confirmed"
+	if req.Action == "reject" {
+		status = "rejected"
+	}
+	httputil.WriteSuccess(w, map[string]any{"source_id": id, "customer_id": customerID, "match_status": status})
 }

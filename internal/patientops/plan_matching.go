@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/freeasyman/lingce-api/internal/customercontact"
 )
 
 // planFilter 是智能筛选的可调参数。名单判断规则内置，经理只调整少量阈值。
@@ -88,9 +90,8 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 		)
 		SELECT c.id, COALESCE(c.name,''), COALESCE(c.phone,''), COALESCE(c.gender,''),
 		       COALESCE(NULLIF(c.age,0), EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.birth_date))::int, 0),
-		       COALESCE(c.tags::text,'[]'), COALESCE(c.status,''), COALESCE(c.source,''), COALESCE(c.lifecycle_stage,''),
+		       COALESCE(c.extra_data->>'identity_status',''), COALESCE(c.tags::text,'[]'), COALESCE(c.status,''), COALESCE(c.source,''), COALESCE(c.lifecycle_stage,''),
 		       c.assigned_to,
-		       EXISTS (SELECT 1 FROM customer_identities ci WHERE ci.customer_id=c.id) AS has_identity,
 		       COALESCE(t.open_tasks,0)::int,
 		       COALESCE(to_char(e.last_visit_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),''), COALESCE(e.last_visit_type,''), COALESCE(e.visit_count,0)::int,
 		       COALESCE(to_char(c.last_contacted_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM'),''),
@@ -141,8 +142,8 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 		var f planCustomerFact
 		if err := rows.Scan(
 			&f.CustomerID, &f.Name, &f.Phone, &f.Gender, &f.Age,
-			&f.Tags, &f.Status, &f.Source, &f.LifecycleStage,
-			&f.AssignedTo, &f.HasIdentity, &f.OpenTasks,
+			&f.IdentityStatus, &f.Tags, &f.Status, &f.Source, &f.LifecycleStage,
+			&f.AssignedTo, &f.OpenTasks,
 			&f.LastVisitAt, &f.LastVisitType, &f.VisitCount,
 			&f.LastContactedAt,
 			&f.LastSourceAt, &f.Platform, &f.Nickname,
@@ -158,6 +159,18 @@ func (s *Service) loadPlanCustomerFacts(ctx context.Context, plan *Plan) ([]plan
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate plan customer facts: %w", err)
 	}
+	rows.Close()
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.CustomerID)
+	}
+	contacts, err := customercontact.Load(ctx, s.pool, plan.TenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load plan contacts: %w", err)
+	}
+	for i := range items {
+		items[i].Contacts = contacts[items[i].CustomerID]
+	}
 	return items, nil
 }
 
@@ -168,7 +181,7 @@ func (s *Service) loadPlanProducts(ctx context.Context, tenantID int64, productI
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, aliases, price, COALESCE(applicable,''), COALESCE(selling_point,''),
 		       COALESCE(upgrade_to,''), COALESCE(combine_with,''), applicable_keywords,
-		       age_min, age_max, gender, COALESCE(contraindications,'')
+		       age_min, age_max, age_required, version, gender, COALESCE(contraindications,'')
 		FROM products
 		WHERE tenant_id=$1 AND id = ANY($2) AND status='active' AND is_template=false AND review_status='approved' AND deleted_at IS NULL
 		ORDER BY id
@@ -184,7 +197,7 @@ func (s *Service) loadPlanProducts(ctx context.Context, tenantID int64, productI
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Aliases, &p.Price, &p.Applicable, &p.SellingPoint,
 			&p.UpgradeTo, &p.CombineWith, &p.ApplicableKeywords,
-			&p.AgeMin, &p.AgeMax, &p.Gender, &p.Contraindications,
+			&p.AgeMin, &p.AgeMax, &p.AgeRequired, &p.Version, &p.Gender, &p.Contraindications,
 		); err != nil {
 			return nil, fmt.Errorf("scan plan product: %w", err)
 		}
@@ -231,8 +244,33 @@ func normalizePlanGender(value string) string {
 	return ""
 }
 
+// planGenderHint 在客户性别未知、而产品限定时提示运营确认；已知不符的客户已在匹配阶段排除。
+func planGenderHint(customerGender, productGender string) string {
+	pg := normalizePlanGender(productGender)
+	if pg == "" {
+		return ""
+	}
+	cg := normalizePlanGender(customerGender)
+	if cg != "" {
+		return ""
+	}
+	label := "男"
+	if pg == "female" {
+		label = "女"
+	}
+	return "产品限" + label + "性，客户性别未知，请确认"
+}
+
 func planHasContact(f planCustomerFact) bool {
-	return strings.TrimSpace(f.Phone) != "" || f.HasIdentity
+	if strings.TrimSpace(f.Phone) != "" {
+		return true
+	}
+	for _, c := range f.Contacts {
+		if c.CanContact() {
+			return true
+		}
+	}
+	return false
 }
 
 // planScenarioFor 判断客户当前落在哪个状态推进场景；返回空字符串表示没有可用场景。
@@ -316,11 +354,8 @@ func planHasIntent(f planCustomerFact) bool {
 }
 
 func planExclusionReason(f planCustomerFact, filter planFilter, now time.Time, requireContact bool) string {
-	if f.OpenTasks > 0 {
-		return "已有未完成任务"
-	}
-	if f.InOtherPlan {
-		return "已在其他进行中计划"
+	if f.IdentityStatus == "pending_confirm" {
+		return "尚未确认身份，请先在待确认客户中确认"
 	}
 	status := strings.ToLower(strings.TrimSpace(f.Status))
 	if status == "lost" || strings.Contains(f.Tags, "暂停联系") || strings.Contains(f.Tags, "明确拒绝") {
@@ -329,7 +364,19 @@ func planExclusionReason(f planCustomerFact, filter planFilter, now time.Time, r
 	if lastContacted, ok := planDaysSince(f.LastContactedAt, now); ok && lastContacted < filter.ContactWindowDays {
 		return fmt.Sprintf("近 %d 天已触达", filter.ContactWindowDays)
 	}
-	if requireContact && !planHasContact(f) {
+	return ""
+}
+
+// planSoftNote 返回不阻断入选、但需要运营知晓的提示（有任务 / 在别的计划 / 缺联系方式）。
+// 目的是尽量多纳入客户，而不是把这些客户直接排除。
+func planSoftNote(f planCustomerFact) string {
+	if f.OpenTasks > 0 {
+		return "已有未完成任务"
+	}
+	if f.InOtherPlan {
+		return "已在其他进行中计划"
+	}
+	if !planHasContact(f) {
 		return "缺少有效联系方式"
 	}
 	return ""
@@ -346,6 +393,7 @@ func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct,
 
 	var best *planProduct
 	bestScore := 0
+	bestRank := -1
 	bestReason := ""
 	bestRisk := ""
 	for i := range products {
@@ -355,10 +403,6 @@ func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct,
 			if customerGender != "" && customerGender != p.Gender {
 				continue
 			}
-		}
-		if (p.AgeMin != nil || p.AgeMax != nil) && f.Age <= 0 {
-			// 产品有明确年龄范围但客户年龄未知时，不自动推荐，交由人工确认。
-			continue
 		}
 		ageOK := true
 		if f.Age > 0 {
@@ -418,7 +462,9 @@ func matchPlanProduct(f planCustomerFact, products []planProduct) (*planProduct,
 		if score > 99 {
 			score = 99
 		}
-		if score > bestScore {
+		rank := planAdmissionRank(f.Age, p)
+		if rank > bestRank || (rank == bestRank && score > bestScore) {
+			bestRank = rank
 			best = p
 			bestScore = score
 			bestReason = strings.Join(reasons, "；")
@@ -495,34 +541,33 @@ func (s *Service) buildPlanCandidates(ctx context.Context, plan *Plan) (*PlanPre
 		}
 
 		candidate := PlanCandidate{
-			CustomerID:     f.CustomerID,
-			CustomerName:   f.Name,
-			Phone:          f.Phone,
-			Platform:       f.Platform,
-			Nickname:       f.Nickname,
-			Age:            f.Age,
-			Gender:         f.Gender,
-			Scenario:       scenario,
-			LastVisitAt:    f.LastVisitAt,
-			LastVisitType:  f.LastVisitType,
-			LastActivityAt: planLastActivity(f),
-			Interest:       planJoinList(f.Interest),
-			Concern:        strings.TrimSpace(f.Concern),
-			ClinicalText:   f.ClinicalText,
-			Salutation:     planSalutationFor(f.Name, f.Nickname, f.Gender, f.Age),
-			CustomerType:   planCustomerType(f.Age),
-			DecisionMaker:  f.DecisionMaker,
-			Source:         f.Source,
-			ReasonSource:   "fact",
-			AssignedTo:     f.AssignedTo,
+			CustomerID:      f.CustomerID,
+			CustomerName:    f.Name,
+			Phone:           f.Phone,
+			Contacts:        f.Contacts,
+			Platform:        f.Platform,
+			Nickname:        f.Nickname,
+			Age:             f.Age,
+			Gender:          f.Gender,
+			Scenario:        scenario,
+			LastVisitAt:     f.LastVisitAt,
+			LastVisitType:   f.LastVisitType,
+			LastActivityAt:  planLastActivity(f),
+			Interest:        planJoinList(f.Interest),
+			Concern:         strings.TrimSpace(f.Concern),
+			ClinicalText:    f.ClinicalText,
+			Salutation:      planSalutationFor(f.Name, f.Nickname, f.Gender, f.Age),
+			CustomerType:    planCustomerType(f.Age),
+			DecisionMaker:   f.DecisionMaker,
+			Source:          f.Source,
+			ReasonSource:    "fact",
+			AssignedTo:      f.AssignedTo,
+			AdmissionStatus: "ready",
 		}
 		if plan.PlanType == "sales" {
 			product, score, reason, risk := matchPlanProduct(f, products)
 			if product == nil {
 				reason := "暂无适配套餐（P99）"
-				if f.Age <= 0 && planProductsRequireAge(products) {
-					reason = "年龄未知，需人工确认适用产品"
-				}
 				if len(preview.Excluded) < 200 {
 					preview.Excluded = append(preview.Excluded, PlanExcluded{CustomerID: f.CustomerID, CustomerName: f.Name, Reason: reason})
 				}
@@ -531,6 +576,13 @@ func (s *Service) buildPlanCandidates(ctx context.Context, plan *Plan) (*PlanPre
 			}
 			productID := product.ID
 			candidate.RecommendedProductID = &productID
+			candidate.ProductVersion = product.Version
+			candidate.ProductAgeMin = product.AgeMin
+			candidate.ProductAgeMax = product.AgeMax
+			candidate.ProductAgeRequired = product.AgeRequired
+			candidate.ProductGender = product.Gender
+			candidate.GenderHint = planGenderHint(f.Gender, product.Gender)
+			candidate.AdmissionStatus, candidate.AdmissionReason = planAgeAdmission(f.Age, product)
 			candidate.RecommendedProductName = product.Name
 			candidate.ProductApplicable = product.Applicable
 			candidate.ProductUpgradeTo = product.UpgradeTo
@@ -552,9 +604,22 @@ func (s *Service) buildPlanCandidates(ctx context.Context, plan *Plan) (*PlanPre
 			candidate.TaskType, candidate.TaskSubtype = planTaskType(scenario)
 			candidate.ExpectedResult = planExpectedResult(scenario)
 		}
+		if note := planSoftNote(f); note != "" {
+			if candidate.Reason != "" {
+				candidate.Reason += "（" + note + "）"
+			} else {
+				candidate.Reason = note
+			}
+		}
 		preview.Candidates = append(preview.Candidates, candidate)
 	}
-	preview.EligibleCount = len(preview.Candidates)
+	for _, candidate := range preview.Candidates {
+		if candidate.AdmissionStatus == "ready" {
+			preview.EligibleCount++
+		} else {
+			preview.PendingCount++
+		}
+	}
 	sortPlanCandidates(preview.Candidates, plan.PlanType, plan.Scenario)
 	if len(preview.Candidates) > 200 {
 		preview.Candidates = preview.Candidates[:200]
@@ -672,6 +737,10 @@ func planCoverage(matched int, products []planProduct, target *float64) *PlanCov
 func sortPlanCandidates(items []PlanCandidate, planType, scenario string) {
 	sort.SliceStable(items, func(i, j int) bool {
 		if planType == "sales" {
+			ri, rj := planCandidateRank(items[i]), planCandidateRank(items[j])
+			if ri != rj {
+				return ri > rj
+			}
 			si, sj := 0, 0
 			if items[i].MatchScore != nil {
 				si = *items[i].MatchScore
@@ -739,14 +808,32 @@ func commercialPart(risk string) string {
 	return ""
 }
 
-func planProductsRequireAge(products []planProduct) bool {
-	if len(products) == 0 {
-		return false
+// 年龄已知且超范围的产品在匹配阶段硬排除；年龄未知只给提示，不再阻断发布。
+func planAgeAdmission(age int, p *planProduct) (string, string) {
+	if age > 0 {
+		return "ready", ""
 	}
-	for _, p := range products {
-		if p.AgeMin == nil && p.AgeMax == nil {
-			return false
-		}
+	if p.AgeRequired {
+		return "needs_age", "年龄未知，请注意产品适用年龄"
 	}
-	return true
+	if p.AgeMin != nil || p.AgeMax != nil {
+		return "needs_confirmation", "年龄未知，请注意产品适用年龄"
+	}
+	return "ready", ""
+}
+
+func planAdmissionRank(age int, p *planProduct) int {
+	status, _ := planAgeAdmission(age, p)
+	return planCandidateRank(PlanCandidate{AdmissionStatus: status})
+}
+
+func planCandidateRank(c PlanCandidate) int {
+	switch c.AdmissionStatus {
+	case "needs_age":
+		return 0
+	case "needs_confirmation":
+		return 1
+	default:
+		return 2
+	}
 }

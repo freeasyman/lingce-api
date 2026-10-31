@@ -17,7 +17,6 @@ func planTestFact() planCustomerFact {
 		Phone:        "13800138000",
 		Age:          7,
 		Tags:         "[]",
-		HasIdentity:  true,
 		LastSourceAt: planTestTime(3),
 		Interest:     `["青少年脊柱侧弯训练","体态评估"]`,
 		Concern:      "价格",
@@ -78,8 +77,11 @@ func TestPlanExclusionRules(t *testing.T) {
 
 	fact := planTestFact()
 	fact.OpenTasks = 1
-	if reason := planExclusionReason(fact, filter, now, false); reason != "已有未完成任务" {
-		t.Fatalf("open task should be excluded, got %q", reason)
+	if reason := planExclusionReason(fact, filter, now, false); reason != "" {
+		t.Fatalf("open task should not be a hard exclusion, got %q", reason)
+	}
+	if note := planSoftNote(fact); note != "已有未完成任务" {
+		t.Fatalf("open task soft note expected, got %q", note)
 	}
 
 	fact = planTestFact()
@@ -130,8 +132,11 @@ func TestMatchPlanProduct(t *testing.T) {
 
 	fact = planTestFact()
 	fact.Age = 0
-	if matched, _, _, _ = matchPlanProduct(fact, []planProduct{product}); matched != nil {
-		t.Fatal("customer with unknown age must not match age-bounded product")
+	if matched, _, _, _ = matchPlanProduct(fact, []planProduct{product}); matched == nil {
+		t.Fatal("unknown age must remain visible as a candidate")
+	}
+	if status, _ := planAgeAdmission(fact.Age, matched); status != "needs_confirmation" {
+		t.Fatalf("unknown age must require suitability confirmation, got %s", status)
 	}
 
 	clinicalProduct := product

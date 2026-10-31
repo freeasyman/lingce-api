@@ -1,5 +1,7 @@
 package patientops
 
+import "github.com/freeasyman/lingce-api/internal/customercontact"
+
 // 经营计划 V1 领域对象。场景、目标、名单属于计划；风险属于“客户 × 产品”的名单与任务。
 
 type Plan struct {
@@ -13,6 +15,7 @@ type Plan struct {
 	TargetCount    *int           `json:"target_count,omitempty"`
 	TargetAmount   *float64       `json:"target_amount,omitempty"`
 	ProductIDs     []int64        `json:"product_ids"`
+	ProductNames   []string       `json:"product_names"`
 	FilterConfig   map[string]any `json:"filter_config"`
 	Status         string         `json:"status"` // draft | published | closed
 	CreatedBy      *int64         `json:"created_by,omitempty"`
@@ -24,20 +27,22 @@ type Plan struct {
 }
 
 type PlanMember struct {
-	ID                     int64  `json:"id"`
-	PlanID                 int64  `json:"plan_id"`
-	CustomerID             int64  `json:"customer_id"`
-	CustomerName           string `json:"customer_name"`
-	RecommendedProductID   *int64 `json:"recommended_product_id,omitempty"`
-	RecommendedProductName string `json:"recommended_product_name,omitempty"`
-	MatchScore             *int   `json:"match_score,omitempty"`
-	Reason                 string `json:"reason"`
-	ReasonSource           string `json:"reason_source"`
-	RiskMedical            string `json:"risk_medical"`
-	RiskCommercial         string `json:"risk_commercial"`
-	TaskID                 *int64 `json:"task_id,omitempty"`
-	Status                 string `json:"status"`
-	CreatedAt              string `json:"created_at"`
+	ID                     int64                     `json:"id"`
+	PlanID                 int64                     `json:"plan_id"`
+	CustomerID             int64                     `json:"customer_id"`
+	CustomerName           string                    `json:"customer_name"`
+	Phone                  string                    `json:"phone,omitempty"`
+	Contacts               []customercontact.Contact `json:"contacts,omitempty"`
+	RecommendedProductID   *int64                    `json:"recommended_product_id,omitempty"`
+	RecommendedProductName string                    `json:"recommended_product_name,omitempty"`
+	MatchScore             *int                      `json:"match_score,omitempty"`
+	Reason                 string                    `json:"reason"`
+	ReasonSource           string                    `json:"reason_source"`
+	RiskMedical            string                    `json:"risk_medical"`
+	RiskCommercial         string                    `json:"risk_commercial"`
+	TaskID                 *int64                    `json:"task_id,omitempty"`
+	Status                 string                    `json:"status"`
+	CreatedAt              string                    `json:"created_at"`
 }
 
 type PlanProductStat struct {
@@ -64,41 +69,51 @@ type PlanDetail struct {
 }
 
 type PlanCandidate struct {
-	CustomerID             int64           `json:"customer_id"`
-	CustomerName           string          `json:"customer_name"`
-	Phone                  string          `json:"phone,omitempty"`
-	Platform               string          `json:"platform,omitempty"`
-	Nickname               string          `json:"nickname,omitempty"`
-	Age                    int             `json:"age,omitempty"`
-	Gender                 string          `json:"gender,omitempty"`
-	Scenario               string          `json:"scenario"`
-	LastVisitAt            string          `json:"last_visit_at,omitempty"`
-	LastVisitType          string          `json:"last_visit_type,omitempty"`
-	LastActivityAt         string          `json:"last_activity_at,omitempty"`
-	Interest               string          `json:"interest,omitempty"`
-	Concern                string          `json:"concern,omitempty"`
-	ClinicalText           string          `json:"clinical_text,omitempty"`
-	Salutation             string          `json:"salutation,omitempty"`
-	CustomerType           string          `json:"customer_type,omitempty"`
-	DecisionMaker          string          `json:"decision_maker,omitempty"`
-	Source                 string          `json:"source,omitempty"`
-	ConditionSummary       string          `json:"condition_summary,omitempty"`
-	VisitHistory           []PlanVisitFact `json:"visit_history,omitempty"`
-	RecommendedProductID   *int64          `json:"recommended_product_id,omitempty"`
-	RecommendedProductName string          `json:"recommended_product_name,omitempty"`
-	ProductPrice           float64         `json:"product_price,omitempty"`
-	ProductApplicable      string          `json:"product_applicable,omitempty"`
-	ProductUpgradeTo       string          `json:"product_upgrade_to,omitempty"`
-	ProductCombineWith     string          `json:"product_combine_with,omitempty"`
-	MatchScore             *int            `json:"match_score,omitempty"`
-	Reason                 string          `json:"reason"`
-	ReasonSource           string          `json:"reason_source"`
-	RiskMedical            string          `json:"risk_medical"`
-	RiskCommercial         string          `json:"risk_commercial"`
-	ExpectedResult         string          `json:"expected_result"`
-	TaskType               string          `json:"task_type"`
-	TaskSubtype            string          `json:"task_subtype"`
-	AssignedTo             *int64          `json:"assigned_to,omitempty"`
+	// 年龄是产品适用判断，不等同于客户身份确认。
+	AdmissionStatus        string                    `json:"admission_status"` // ready | needs_confirmation | needs_age
+	AdmissionReason        string                    `json:"admission_reason,omitempty"`
+	ProductVersion         int                       `json:"product_version,omitempty"`
+	ProductAgeMin          *int                      `json:"product_age_min,omitempty"`
+	ProductAgeMax          *int                      `json:"product_age_max,omitempty"`
+	ProductAgeRequired     bool                      `json:"product_age_required"`
+	ProductGender          string                    `json:"product_gender,omitempty"`
+	GenderHint             string                    `json:"gender_hint,omitempty"`
+	CustomerID             int64                     `json:"customer_id"`
+	CustomerName           string                    `json:"customer_name"`
+	Phone                  string                    `json:"phone,omitempty"`
+	Contacts               []customercontact.Contact `json:"contacts,omitempty"`
+	Platform               string                    `json:"platform,omitempty"`
+	Nickname               string                    `json:"nickname,omitempty"`
+	Age                    int                       `json:"age,omitempty"`
+	Gender                 string                    `json:"gender,omitempty"`
+	Scenario               string                    `json:"scenario"`
+	LastVisitAt            string                    `json:"last_visit_at,omitempty"`
+	LastVisitType          string                    `json:"last_visit_type,omitempty"`
+	LastActivityAt         string                    `json:"last_activity_at,omitempty"`
+	Interest               string                    `json:"interest,omitempty"`
+	Concern                string                    `json:"concern,omitempty"`
+	ClinicalText           string                    `json:"clinical_text,omitempty"`
+	Salutation             string                    `json:"salutation,omitempty"`
+	CustomerType           string                    `json:"customer_type,omitempty"`
+	DecisionMaker          string                    `json:"decision_maker,omitempty"`
+	Source                 string                    `json:"source,omitempty"`
+	ConditionSummary       string                    `json:"condition_summary,omitempty"`
+	VisitHistory           []PlanVisitFact           `json:"visit_history,omitempty"`
+	RecommendedProductID   *int64                    `json:"recommended_product_id,omitempty"`
+	RecommendedProductName string                    `json:"recommended_product_name,omitempty"`
+	ProductPrice           float64                   `json:"product_price,omitempty"`
+	ProductApplicable      string                    `json:"product_applicable,omitempty"`
+	ProductUpgradeTo       string                    `json:"product_upgrade_to,omitempty"`
+	ProductCombineWith     string                    `json:"product_combine_with,omitempty"`
+	MatchScore             *int                      `json:"match_score,omitempty"`
+	Reason                 string                    `json:"reason"`
+	ReasonSource           string                    `json:"reason_source"`
+	RiskMedical            string                    `json:"risk_medical"`
+	RiskCommercial         string                    `json:"risk_commercial"`
+	ExpectedResult         string                    `json:"expected_result"`
+	TaskType               string                    `json:"task_type"`
+	TaskSubtype            string                    `json:"task_subtype"`
+	AssignedTo             *int64                    `json:"assigned_to,omitempty"`
 
 	// 以下字段由大模型按客户生成；为空时回退到模板内容。
 	Goal    string `json:"goal,omitempty"`
@@ -126,6 +141,7 @@ type PlanPreview struct {
 	PlanType      string          `json:"plan_type"`
 	Scenario      string          `json:"scenario"`
 	EligibleCount int             `json:"eligible_count"`
+	PendingCount  int             `json:"pending_count"`
 	ExcludedCount int             `json:"excluded_count"`
 	Candidates    []PlanCandidate `json:"candidates"`
 	Excluded      []PlanExcluded  `json:"excluded"`
@@ -157,11 +173,20 @@ type UpdatePlanRequest struct {
 }
 
 type PublishPlanRequest struct {
-	CustomerIDs []int64 `json:"customer_ids"`
+	CustomerIDs              []int64                       `json:"customer_ids"`
+	SuitabilityConfirmations []PlanSuitabilityConfirmation `json:"suitability_confirmations,omitempty"`
 }
 
 type AddPlanMembersRequest struct {
-	CustomerIDs []int64 `json:"customer_ids"`
+	CustomerIDs              []int64                       `json:"customer_ids"`
+	SuitabilityConfirmations []PlanSuitabilityConfirmation `json:"suitability_confirmations,omitempty"`
+}
+
+type PlanSuitabilityConfirmation struct {
+	CustomerID     int64  `json:"customer_id"`
+	ProductID      int64  `json:"product_id"`
+	ProductVersion int    `json:"product_version"`
+	Reason         string `json:"reason"`
 }
 
 // planCustomerFact 是智能筛选与产品匹配所需的客户事实快照。
@@ -171,12 +196,13 @@ type planCustomerFact struct {
 	Phone           string
 	Gender          string
 	Age             int
+	IdentityStatus  string
 	Tags            string
 	Status          string
 	Source          string
 	LifecycleStage  string
 	AssignedTo      *int64
-	HasIdentity     bool
+	Contacts        []customercontact.Contact
 	OpenTasks       int
 	LastVisitAt     string
 	LastVisitType   string
@@ -219,6 +245,8 @@ type planProduct struct {
 	ApplicableKeywords []string
 	AgeMin             *int
 	AgeMax             *int
+	AgeRequired        bool
+	Version            int
 	Gender             string
 	Contraindications  string
 }

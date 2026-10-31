@@ -2,6 +2,7 @@ package patientops
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,6 +163,16 @@ func (h *Handler) PublishPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.PublishPlan(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
+		var admission *PlanAdmissionError
+		if errors.As(err, &admission) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "PLAN_ADMISSION_REQUIRED", err.Error(), admission)
+			return
+		}
+		var excluded *UnconfirmedPlanCustomersError
+		if errors.As(err, &excluded) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "UNCONFIRMED_CUSTOMERS", err.Error(), excluded)
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -186,6 +197,16 @@ func (h *Handler) AddPlanMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.AddPlanMembers(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
+		var admission *PlanAdmissionError
+		if errors.As(err, &admission) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "PLAN_ADMISSION_REQUIRED", err.Error(), admission)
+			return
+		}
+		var excluded *UnconfirmedPlanCustomersError
+		if errors.As(err, &excluded) {
+			httputil.WriteError(w, http.StatusUnprocessableEntity, "UNCONFIRMED_CUSTOMERS", err.Error(), excluded)
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
