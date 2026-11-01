@@ -146,6 +146,35 @@ func ensureScreenshotLead(ctx context.Context, tx pgx.Tx, tenantID, sourceID int
 			id = matches[0]
 		}
 	}
+	if id == 0 && nickname != "" {
+		// 账号为空时，按「渠道+昵称」在待确认的自动线索里归并：避免同一个联系人的多张截图建出多个待确认客户。
+		// 只复用 pending_confirm 的自动线索，不碰已确认客户；最终是否同一人仍由人工确认。
+		rows, err := tx.Query(ctx, `SELECT c.id FROM customers c WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND c.extra_data->>'screenshot_auto_lead'='true' AND c.extra_data->>'identity_status'='pending_confirm' AND c.name=$2 ORDER BY c.id`, tenantID, name)
+		if err != nil {
+			return nil, "", err
+		}
+		var nickMatches []int64
+		for rows.Next() {
+			var cid int64
+			if err := rows.Scan(&cid); err != nil {
+				rows.Close()
+				return nil, "", err
+			}
+			nickMatches = append(nickMatches, cid)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, "", err
+		}
+		if len(nickMatches) > 1 {
+			// 多个同名待确认线索，可能是不同人，不自动归并，留人工处理。
+			return nil, "pending", nil
+		}
+		if len(nickMatches) == 1 {
+			id = nickMatches[0]
+		}
+	}
 	if id == 0 {
 		err := tx.QueryRow(ctx, `INSERT INTO customers(tenant_id,name,source,lifecycle_stage,status,momentum,created_by,created_at,updated_at,extra_data) VALUES($1,$2,$3,'unknown','lead',50,$4,NOW(),NOW(),jsonb_build_object('prospect',true,'screenshot_auto_lead',true,'identity_status','pending_confirm')) RETURNING id`, tenantID, name, channel, employeeID).Scan(&id)
 		if err != nil {
