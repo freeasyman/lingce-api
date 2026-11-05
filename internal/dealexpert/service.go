@@ -69,3 +69,10 @@ func (s *Service) RecordingBrief(ctx context.Context, tenantID, recordingID int6
 func (s *Service) ListMyCardActions(ctx context.Context, tenantID, actorID int64) ([]*MyAction, error) {
 	return s.store.ListMyCardActions(ctx, tenantID, actorID)
 }
+
+func (s *Service) GetApprovalRules(ctx context.Context, tenantID int64) (map[string]any, error) {
+	return s.store.GetApprovalRules(ctx, tenantID)
+}
+func (s *Service) SaveApprovalRules(ctx context.Context, tenantID int64, rules map[string]any) error {
+	return s.store.SaveApprovalRules(ctx, tenantID, rules)
+}
