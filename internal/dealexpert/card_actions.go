@@ -171,9 +171,10 @@ func (s *Store) ListMyCardActions(ctx context.Context, tenantID, actorEmployeeID
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT a.id, a.recording_id, COALESCE(r.customer_name, ''), a.action_type, a.note, a.created_at
+		SELECT a.id, a.recording_id, COALESCE(c.name, ''), a.action_type, a.note, a.created_at
 		FROM deal_card_actions a
 		LEFT JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id
+		LEFT JOIN customers c ON c.id = r.customer_id
 		WHERE a.tenant_id = $1 AND a.actor_employee_id = $2
 		ORDER BY a.id DESC
 		LIMIT 100
