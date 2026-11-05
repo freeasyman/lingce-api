@@ -313,7 +313,14 @@ func main() {
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
 	// 赢客专家分析消费者：消费 Worker 已落库的清洗转写，调用专属模型配置生成经营结案卡。
-	dealExpertAnalyzer := dealexpert.NewAnalyzer(pool, llmClient)
+	// 后台分析版本由配置显式选择：默认 v200，dev 可切 v210-rc11（新流水线 + 服务端 v1.1 适配）。
+	dealExpertAnalyzer, err := dealexpert.NewAnalyzerWithVersion(pool, llmClient, cfg.Deal.DealAnalysisVersion())
+	if err != nil {
+		slog.Error("invalid deal analysis version", "error", err, "analysis_version", cfg.Deal.DealAnalysisVersion())
+		os.Exit(1)
+	}
+	slog.Info("deal expert analyzer started", "analysis_version", dealExpertAnalyzer.AnalysisVersion())
+	dealExpertAnalyzer.SetSMSNotifier(dealexpert.NewTestConsultantSMSNotifier(pool, slog.Default(), cfg.External.EmployeeWebBaseURL))
 	go dealExpertAnalyzer.Run(context.Background(), 20*time.Second)
 
 	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID, emrRecordService)

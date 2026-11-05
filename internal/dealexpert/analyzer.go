@@ -50,6 +50,8 @@ type Analyzer struct {
 	log          *slog.Logger
 	// analysisVersion 由配置显式选择；默认 v200，v210-rc11 走新流水线 + 服务端适配层。
 	analysisVersion string
+	// smsNotifier 咨询师实时短信触达；nil 表示不启用（测试/关闭时安全）。
+	smsNotifier ConsultantSMSNotifier
 }
 
 func NewAnalyzer(pool *pgxpool.Pool, llm *llmgateway.Client) *Analyzer {
@@ -306,6 +308,7 @@ func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "SAVE_ERROR", err)
 		return
 	}
+	a.maybeNotifyConsultantSMS(ctx, item, card)
 	if err := a.ensureFollowUp(ctx, item, card); err != nil {
 		// 卡片已保存；任务创建失败不回滚分析结果，但要留下可排查日志。
 		a.log.Warn("create follow up from card failed", "id", item.ID, "error", err)
@@ -594,6 +597,22 @@ func (a *Analyzer) saveResult(ctx context.Context, item *pendingAnalysis, result
 }
 
 // saveRawResponse 保留原始模型响应与调用元数据，便于排查 schema / 业务校验失败，不写 result。
+// SetSMSNotifier 设置咨询师实时短信触达通道；不设置则不启用。
+func (a *Analyzer) SetSMSNotifier(notifier ConsultantSMSNotifier) {
+	if a != nil {
+		a.smsNotifier = notifier
+	}
+}
+
+func (a *Analyzer) maybeNotifyConsultantSMS(ctx context.Context, item *pendingAnalysis, card map[string]any) {
+	if a.smsNotifier == nil || item == nil {
+		return
+	}
+	if err := a.smsNotifier.NotifyConsultantCard(ctx, item.TenantID, item.RecordingID, card); err != nil && a.log != nil {
+		a.log.Warn("deal consultant sms notify failed", "id", item.ID, "error", err)
+	}
+}
+
 func (a *Analyzer) saveRawResponse(ctx context.Context, item *pendingAnalysis, resp *llmgateway.TextInferenceResponse, cause error) error {
 	content := resp.Content
 	if len(content) > 20000 {

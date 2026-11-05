@@ -160,6 +160,7 @@ func (a *Analyzer) processV210(ctx context.Context, item *pendingAnalysis) {
 		a.fail(ctx, item, "SAVE_ERROR", err)
 		return
 	}
+	a.maybeNotifyConsultantSMS(ctx, item, adapted)
 	a.log.Info("deal expert v210 card saved",
 		"id", item.ID,
 		"rules", bundle.RulesVersion(),
