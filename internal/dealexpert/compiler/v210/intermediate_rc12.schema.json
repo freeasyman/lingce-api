@@ -1,0 +1,1764 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lingce.local/schema/deal-analysis-v2.1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "input_snapshot_id",
+    "conclusion",
+    "decision",
+    "clinical_risk",
+    "contact_request",
+    "product_findings",
+    "proposed_action",
+    "secondary_findings",
+    "quality",
+    "coach",
+    "confidence",
+    "unknowns",
+    "event_reports",
+    "additional_decisions"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "deal-analysis-v2.1"
+    },
+    "input_snapshot_id": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "verification",
+        "source_refs"
+      ],
+      "properties": {
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[sf][1-9][0-9]*$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    },
+    "clinical_risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assessment",
+        "summary",
+        "source_refs"
+      ],
+      "properties": {
+        "assessment": {
+          "enum": [
+            "no_unresolved_issue_observed",
+            "unresolved",
+            "unknown"
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[sf][1-9][0-9]*$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "contact_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "summary",
+        "source_refs"
+      ],
+      "properties": {
+        "value": {
+          "enum": [
+            "no_restriction_observed",
+            "stop",
+            "unknown"
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[sf][1-9][0-9]*$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "product_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "catalog_product_id",
+          "mentioned_name",
+          "finding_type",
+          "customer_evidence_summary",
+          "matching_reason",
+          "recommended_by_consultant",
+          "suggested_action",
+          "confidence",
+          "source_refs"
+        ],
+        "properties": {
+          "catalog_product_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mentioned_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finding_type": {
+            "enum": [
+              "已正确推荐",
+              "推荐不清",
+              "可能漏推",
+              "升级机会",
+              "联合机会",
+              "替代方案"
+            ]
+          },
+          "customer_evidence_summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "matching_reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommended_by_consultant": {
+            "type": "boolean"
+          },
+          "suggested_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[sf][1-9][0-9]*$"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "proposed_action": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "template",
+            "source_refs",
+            "customer_window_source_refs"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "sales_follow_up",
+                "internal_coordination",
+                "internal_review"
+              ]
+            },
+            "template": {
+              "enum": [
+                "confirm_next_step",
+                "professional_handoff",
+                "review_sources"
+              ]
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^s[1-9][0-9]*$"
+              },
+              "uniqueItems": true
+            },
+            "customer_window_source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^s[1-9][0-9]*$"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "secondary_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "summary",
+          "source_refs"
+        ],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[sf][1-9][0-9]*$"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "standard_version",
+        "dimensions"
+      ],
+      "properties": {
+        "standard_version": {
+          "const": "compass-sales-v1.1"
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "开场建立权威",
+            "需求探索",
+            "问题放大",
+            "专业呈现",
+            "方案定制",
+            "异议化解",
+            "促成与收尾"
+          ],
+          "properties": {
+            "开场建立权威": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "需求探索": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "问题放大": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "专业呈现": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "方案定制": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "异议化解": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "促成与收尾": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "assessment",
+                "score",
+                "comment",
+                "impact_on_deal",
+                "highlight_narrative",
+                "source_refs"
+              ],
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "scored",
+                    "not_applicable",
+                    "insufficient_evidence"
+                  ]
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "comment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "impact_on_deal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "highlight_narrative": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[sf][1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "assessment": {
+                        "const": "scored"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5
+                      }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "score": {
+                        "type": "null"
+                      },
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "score": {
+                        "type": "integer",
+                        "maximum": 3
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "highlight_narrative": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "coach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observations",
+        "improvement"
+      ],
+      "properties": {
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "behavior",
+              "source_refs",
+              "response_source_refs"
+            ],
+            "properties": {
+              "behavior": {
+                "enum": [
+                  "clarify_question",
+                  "confirm_understanding",
+                  "explain_process",
+                  "request_permission",
+                  "professional_handoff"
+                ]
+              },
+              "source_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^s[1-9][0-9]*$"
+                },
+                "uniqueItems": true
+              },
+              "response_source_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^s[1-9][0-9]*$"
+                },
+                "uniqueItems": true
+              }
+            }
+          }
+        },
+        "improvement": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "template",
+                "source_refs"
+              ],
+              "properties": {
+                "template": {
+                  "enum": [
+                    "clarify_question",
+                    "confirm_understanding",
+                    "explain_process",
+                    "request_permission",
+                    "professional_handoff"
+                  ]
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^s[1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "event_reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "state",
+          "subject",
+          "source_refs"
+        ],
+        "properties": {
+          "event_type": {
+            "enum": [
+              "预约",
+              "付款",
+              "定金",
+              "退款",
+              "联系",
+              "其他"
+            ]
+          },
+          "state": {
+            "enum": [
+              "planned",
+              "claimed_completed",
+              "denied",
+              "unknown"
+            ]
+          },
+          "subject": {
+            "enum": [
+              "target_customer",
+              "other_person",
+              "unknown"
+            ]
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[sf][1-9][0-9]*$"
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "additional_decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/decision"
+      },
+      "maxItems": 20
+    },
+    "analysis_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source_refs"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "business",
+            "non_business",
+            "unclear"
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^s[1-9][0-9]*$"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "local_observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "summary",
+          "source_refs"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "timing",
+              "willingness",
+              "exam",
+              "symptom",
+              "question",
+              "staff_statement",
+              "other"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^s[1-9][0-9]*$"
+            },
+            "uniqueItems": true,
+            "minItems": 1
+          },
+          "timing_kind": {
+            "enum": [
+              "absolute_date",
+              "relative_window",
+              "sequence"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "source_refs",
+        "condition",
+        "trust",
+        "need",
+        "concerns",
+        "outcome_signals",
+        "target",
+        "confidence"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "了解比较中",
+            "有意向但未决定",
+            "暂缓",
+            "明确不考虑",
+            "无法判断"
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[sf][1-9][0-9]*$"
+          },
+          "uniqueItems": true
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "summary",
+                "source_refs"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "family_discussion",
+                    "clinical_confirmation",
+                    "customer_window",
+                    "practical_constraint",
+                    "other"
+                  ]
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^s[1-9][0-9]*$"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trust": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "target",
+              "target_label",
+              "state",
+              "summary",
+              "source_refs"
+            ],
+            "properties": {
+              "target": {
+                "enum": [
+                  "医生",
+                  "机构",
+                  "方案",
+                  "承诺",
+                  "其他"
+                ]
+              },
+              "target_label": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "enum": [
+                  "已建立",
+                  "部分建立",
+                  "存疑",
+                  "无法判断"
+                ]
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[sf][1-9][0-9]*$"
+                },
+                "uniqueItems": true
+              },
+              "support": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/statementSupport"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "target": {
+                      "const": "其他"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "target_label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 12
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "target_label": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "need": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "summary",
+            "source_refs"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "明确",
+                "部分明确",
+                "不清",
+                "无法判断"
+              ]
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[sf][1-9][0-9]*$"
+              },
+              "uniqueItems": true
+            },
+            "support": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/statementSupport"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "type_label",
+              "summary",
+              "is_primary",
+              "source_refs"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "效果与适配",
+                  "安全与恢复",
+                  "价格与价值",
+                  "医生与机构信任",
+                  "家属或共同决策人",
+                  "时间与流程",
+                  "竞品比较",
+                  "疼痛隐私情绪",
+                  "其他"
+                ]
+              },
+              "type_label": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "is_primary": {
+                "type": "boolean"
+              },
+              "source_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[sf][1-9][0-9]*$"
+                },
+                "uniqueItems": true
+              },
+              "support": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/statementSupport"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "其他"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "type_label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 12
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "type_label": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "outcome_signals": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "level",
+            "scope"
+          ],
+          "properties": {
+            "level": {
+              "enum": [
+                "high",
+                "medium",
+                "low",
+                "unknown"
+              ]
+            },
+            "scope": {
+              "const": "scheme"
+            }
+          }
+        }
+      }
+    },
+    "statementSupport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement_type",
+        "confidence",
+        "spans"
+      ],
+      "properties": {
+        "statement_type": {
+          "enum": [
+            "customer_need",
+            "customer_feeling",
+            "customer_constraint",
+            "customer_trust",
+            "customer_choice",
+            "customer_question",
+            "staff_claim",
+            "inference",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "unknown"
+          ]
+        },
+        "spans": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_ref",
+              "start",
+              "end"
+            ],
+            "properties": {
+              "source_ref": {
+                "type": "string",
+                "pattern": "^s[1-9][0-9]*$"
+              },
+              "start": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "end": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

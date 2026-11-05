@@ -314,3 +314,25 @@ func (s *Store) EncounterConsultant(ctx context.Context, tenantID, encounterID i
 	}
 	return employeeID, nil
 }
+
+// CreateDraftFollowUp 建一条人工确认草案：不满足自动条件时由咨询师起草，确认后转正。
+func (s *Store) CreateDraftFollowUp(ctx context.Context, tenantID int64, req CreateFollowUpRequest, dueAt *time.Time) (*FollowUp, error) {
+	const query = `
+		INSERT INTO deal_follow_ups (
+			tenant_id, encounter_id, recording_id, customer_id, customer_name,
+			objective, action, suggested_content, owner_employee_id, owner_name, due_at, status
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + FollowUpDraft + `')
+		RETURNING ` + followUpColumns
+	return scanFollowUp(s.pool.QueryRow(ctx, query,
+		tenantID, req.EncounterID, req.RecordingID, req.CustomerID, req.CustomerName,
+		req.Objective, req.Action, req.SuggestedContent, req.OwnerEmployeeID, req.OwnerName, dueAt))
+}
+
+// ConfirmDraft 把草案转正为待处理任务，记录确认备注。
+func (s *Store) ConfirmDraft(ctx context.Context, tenantID, followUpID int64, note string) (*FollowUp, error) {
+	query := `UPDATE deal_follow_ups
+		SET status = '` + FollowUpPending + `', result_note = $3, updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2 AND status = '` + FollowUpDraft + `'
+		RETURNING ` + followUpColumns
+	return scanFollowUp(s.pool.QueryRow(ctx, query, followUpID, tenantID, note))
+}

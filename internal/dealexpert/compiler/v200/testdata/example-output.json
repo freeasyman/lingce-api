@@ -1,0 +1,203 @@
+{
+  "protocol_version": "deal-analysis-v2",
+  "input_snapshot_id": "sha256:74498305d60780d94e6ceb48845eae5fe922c293d729a37863364748950a16cc",
+  "conclusion": {
+    "summary": "客户交过定金，目前等待与家人商量后再联系。",
+    "verification": "核对定金和后续意向，尊重客户联系窗口。",
+    "source_refs": [
+      "f1",
+      "s2",
+      "s4"
+    ]
+  },
+  "decision": {
+    "state": "暂缓",
+    "source_refs": [
+      "s2",
+      "s4"
+    ],
+    "condition": {
+      "summary": "与家人商量后再联系",
+      "source_refs": [
+        "s2",
+        "s4"
+      ]
+    },
+    "trust": [
+      {
+        "target": "方案",
+        "target_label": null,
+        "state": "部分建立",
+        "summary": "客户反馈说明较清楚，尚不能证明全面认可。",
+        "source_refs": [
+          "s4"
+        ]
+      }
+    ],
+    "need": {
+      "state": "部分明确",
+      "summary": "了解视力矫正",
+      "source_refs": [
+        "s2"
+      ]
+    },
+    "concerns": [
+      {
+        "type": "家属或共同决策人",
+        "type_label": null,
+        "summary": "需与家人商量",
+        "is_primary": true,
+        "source_refs": [
+          "s2"
+        ]
+      }
+    ],
+    "outcome_signals": [
+      {
+        "type": "定金",
+        "summary": "录音提及之前交过定金",
+        "source_refs": [
+          "s2"
+        ]
+      }
+    ]
+  },
+  "clinical_risk": {
+    "assessment": "no_unresolved_issue_observed",
+    "summary": null,
+    "source_refs": []
+  },
+  "contact_request": {
+    "value": "no_restriction_observed",
+    "summary": null,
+    "source_refs": []
+  },
+  "product_findings": [
+    {
+      "catalog_product_id": 301,
+      "mentioned_name": null,
+      "finding_type": "已正确推荐",
+      "customer_evidence_summary": "客户希望了解矫正方案",
+      "matching_reason": "顾问解释方案并说明需医生确认，客户反馈较清楚。",
+      "recommended_by_consultant": true,
+      "suggested_action": "整理客户需向医生确认的问题",
+      "confidence": "medium",
+      "source_refs": [
+        "s2",
+        "s3",
+        "s4"
+      ]
+    }
+  ],
+  "proposed_action": {
+    "type": "internal_review",
+    "goal": "整理待确认事项",
+    "action": "顾问整理待医生确认的问题，等待客户主动联系。",
+    "suggested_content": null,
+    "due_basis": "after_family_discussion",
+    "timing_source_refs": [
+      "s4"
+    ],
+    "source_refs": [
+      "s2",
+      "s3",
+      "s4"
+    ]
+  },
+  "secondary_findings": [
+    {
+      "summary": "具体适应性需医生确认",
+      "source_refs": [
+        "s3"
+      ]
+    }
+  ],
+  "quality": {
+    "standard_version": "compass-sales-v1.1",
+    "dimensions": {
+      "开场建立权威": {
+        "assessment": "scored",
+        "score": 3,
+        "comment": "介绍了接待职责，进一步背景信息未观察到。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": [
+          "s1"
+        ]
+      },
+      "需求探索": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "问题放大": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "专业呈现": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "方案定制": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "异议化解": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "促成与收尾": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      }
+    }
+  },
+  "coach": {
+    "successful_practices": [
+      {
+        "behavior": "说明需专业确认的边界",
+        "customer_response": "客户表示说明较清楚",
+        "reusable_when": "方案说明阶段",
+        "source_refs": [
+          "s3",
+          "s4"
+        ]
+      }
+    ],
+    "improvement": {
+      "suggestion": "把待专业确认的问题整理后供内部核对",
+      "source_refs": [
+        "s3"
+      ]
+    },
+    "refund_review": null
+  },
+  "confidence": "medium",
+  "unknowns": [
+    "家属具体顾虑未明确",
+    "专业适应性尚未确认"
+  ]
+}

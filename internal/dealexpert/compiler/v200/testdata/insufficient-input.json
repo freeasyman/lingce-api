@@ -1,0 +1,31 @@
+{
+  "input_snapshot_id": "sha256:565c6eb20dc83d068b32c41a6a095bcaf18f5583f64dcfcc19fcb1d278a1580a",
+  "input": {
+    "protocol_version": "deal-input-v2",
+    "recording": {
+      "recording_id": 1001,
+      "tenant_id": 101,
+      "encounter_id": 9001,
+      "employee_id": 501,
+      "consultant_name": "演示顾问",
+      "recorded_at": "2026-10-31T09:00:00+08:00"
+    },
+    "context": {
+      "analysis_at": "2026-10-31T10:00:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "identity_confirmed": false,
+      "contact_authorized": null,
+      "contact_forbidden": false,
+      "clinical_hold": false,
+      "coverage": "unknown",
+      "truncated": true,
+      "omitted_source_count": null,
+      "catalog_complete": false,
+      "allow_missed_opportunity": true,
+      "allow_extended_opportunities": false
+    },
+    "transcript_sources": [],
+    "business_facts": [],
+    "product_catalog": []
+  }
+}

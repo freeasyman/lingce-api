@@ -23,6 +23,8 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/complete", Handler: h.CompleteFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/confirm", Handler: h.ConfirmFollowUpDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/action-drafts", Handler: h.CreateActionDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -381,4 +383,97 @@ func (h *Handler) TriggerRecordingAnalysis(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"status": status})
+}
+
+// CreateActionDraft 从卡片创建人工确认草案（不满足自动条件时的可执行候选）。
+func (h *Handler) CreateActionDraft(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, recordingID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	var req struct {
+		Objective string `json:"objective"`
+		Action    string `json:"action"`
+		Note      string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Action) == "" {
+		httputil.WriteBadRequest(w, "action is required")
+		return
+	}
+	rec, err := h.service.RecordingBrief(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	var ownerID int64
+	if claims != nil {
+		ownerID = claims.UserID
+	}
+	customerID := rec.CustomerID
+	var customerIDPtr *int64
+	if customerID > 0 {
+		customerIDPtr = &customerID
+	}
+	var ownerIDPtr *int64
+	if ownerID > 0 {
+		ownerIDPtr = &ownerID
+	}
+	draft, err := h.service.CreateDraftFollowUp(r.Context(), scope.TenantID, CreateFollowUpRequest{
+		EncounterID:     rec.EncounterID,
+		RecordingID:     recordingID,
+		CustomerID:      customerIDPtr,
+		CustomerName:    rec.CustomerName,
+		Objective:       strings.TrimSpace(req.Objective),
+		Action:          strings.TrimSpace(req.Action),
+		OwnerEmployeeID: ownerIDPtr,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, draft)
+}
+
+// ConfirmFollowUpDraft 人工确认后把草案转正为待处理任务。
+func (h *Handler) ConfirmFollowUpDraft(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid follow up id")
+		return
+	}
+	current, err := h.service.GetFollowUp(r.Context(), scope.TenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if accessErr := h.checkEncounterAccess(r.Context(), scope, current.EncounterID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	var req struct {
+		Note string `json:"note"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	confirmed, err := h.service.ConfirmDraft(r.Context(), scope.TenantID, id, strings.TrimSpace(req.Note))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, confirmed)
 }

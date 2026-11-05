@@ -55,3 +55,13 @@ func (s *Service) ActorName(ctx context.Context, tenantID, employeeID int64) str
 	_ = s.store.pool.QueryRow(ctx, `SELECT COALESCE(NULLIF(full_name,''), name, '') FROM employees WHERE tenant_id=$1 AND id=$2`, tenantID, employeeID).Scan(&name)
 	return name
 }
+
+func (s *Service) CreateDraftFollowUp(ctx context.Context, tenantID int64, req CreateFollowUpRequest) (*FollowUp, error) {
+	return s.store.CreateDraftFollowUp(ctx, tenantID, req, nil)
+}
+func (s *Service) ConfirmDraft(ctx context.Context, tenantID, followUpID int64, note string) (*FollowUp, error) {
+	return s.store.ConfirmDraft(ctx, tenantID, followUpID, note)
+}
+func (s *Service) RecordingBrief(ctx context.Context, tenantID, recordingID int64) (*RecordingBrief, error) {
+	return s.store.RecordingBrief(ctx, tenantID, recordingID)
+}

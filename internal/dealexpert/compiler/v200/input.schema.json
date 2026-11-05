@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lingce.local/schema/deal-input-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "input_snapshot_id",
+    "input"
+  ],
+  "properties": {
+    "input_snapshot_id": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "recording",
+        "context",
+        "transcript_sources",
+        "business_facts",
+        "product_catalog"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": "deal-input-v2"
+        },
+        "recording": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "recording_id",
+            "tenant_id",
+            "encounter_id",
+            "employee_id",
+            "consultant_name",
+            "recorded_at"
+          ],
+          "properties": {
+            "recording_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tenant_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "encounter_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "employee_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "consultant_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recorded_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "analysis_at",
+            "timezone",
+            "identity_confirmed",
+            "contact_authorized",
+            "contact_forbidden",
+            "clinical_hold",
+            "coverage",
+            "truncated",
+            "omitted_source_count",
+            "catalog_complete",
+            "allow_missed_opportunity",
+            "allow_extended_opportunities"
+          ],
+          "properties": {
+            "analysis_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "timezone": {
+              "type": "string",
+              "minLength": 1
+            },
+            "identity_confirmed": {
+              "type": "boolean"
+            },
+            "contact_authorized": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "contact_forbidden": {
+              "type": "boolean"
+            },
+            "clinical_hold": {
+              "type": "boolean"
+            },
+            "coverage": {
+              "enum": [
+                "complete",
+                "partial",
+                "unknown"
+              ]
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "omitted_source_count": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "catalog_complete": {
+              "type": "boolean"
+            },
+            "allow_missed_opportunity": {
+              "type": "boolean"
+            },
+            "allow_extended_opportunities": {
+              "type": "boolean"
+            }
+          }
+        },
+        "transcript_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text",
+              "speaker",
+              "start_ms",
+              "timing_basis",
+              "role_basis"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^s[1-9][0-9]*$"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "speaker": {
+                "enum": [
+                  "客户",
+                  "咨询师",
+                  "家属",
+                  "医生",
+                  "未知"
+                ]
+              },
+              "start_ms": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timing_basis": {
+                "enum": [
+                  "asr",
+                  "aligned",
+                  "unknown"
+                ]
+              },
+              "role_basis": {
+                "enum": [
+                  "cleaned_transcription",
+                  "human_verified",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        },
+        "business_facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "type",
+              "text",
+              "source_record_id",
+              "occurred_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^f[1-9][0-9]*$"
+              },
+              "type": {
+                "enum": [
+                  "预约",
+                  "定金",
+                  "付款",
+                  "退款"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_record_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "occurred_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "product_catalog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "version",
+              "description",
+              "requires_clinical_confirmation"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requires_clinical_confirmation": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

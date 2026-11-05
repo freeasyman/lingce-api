@@ -60,3 +60,22 @@ func (s *Store) Receive(ctx context.Context, req ReceiveRequest) (*Analysis, boo
 	row.CustomerID, row.RecordedAt = customerID, recordedAt
 	return &row, inserted, nil
 }
+
+// RecordingBrief 是任务草案所需的录音最小信息。
+type RecordingBrief struct {
+	EncounterID  int64  `json:"encounter_id"`
+	CustomerID   int64  `json:"customer_id"`
+	CustomerName string `json:"customer_name"`
+}
+
+func (s *Store) RecordingBrief(ctx context.Context, tenantID, recordingID int64) (*RecordingBrief, error) {
+	var out RecordingBrief
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(encounter_id, 0), COALESCE(customer_id, 0), COALESCE(customer_name, '')
+		FROM recordings WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, tenantID, recordingID).Scan(&out.EncounterID, &out.CustomerID, &out.CustomerName)
+	if err != nil {
+		return nil, fmt.Errorf("recording brief: %w", err)
+	}
+	return &out, nil
+}

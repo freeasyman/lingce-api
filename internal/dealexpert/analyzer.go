@@ -48,15 +48,18 @@ type Analyzer struct {
 	productStore *product.Store
 	llm          *llmgateway.Client
 	log          *slog.Logger
+	// analysisVersion 由配置显式选择；默认 v200，v210-rc11 走新流水线 + 服务端适配层。
+	analysisVersion string
 }
 
 func NewAnalyzer(pool *pgxpool.Pool, llm *llmgateway.Client) *Analyzer {
 	return &Analyzer{
-		pool:         pool,
-		store:        NewStore(pool),
-		productStore: product.NewStore(pool),
-		llm:          llm,
-		log:          slog.Default(),
+		pool:            pool,
+		store:           NewStore(pool),
+		productStore:    product.NewStore(pool),
+		llm:             llm,
+		log:             slog.Default(),
+		analysisVersion: AnalysisVersionV200,
 	}
 }
 
@@ -212,6 +215,11 @@ func pruneEvidenceArrays(v any, valid map[string]bool) int {
 }
 
 func (a *Analyzer) process(ctx context.Context, item *pendingAnalysis) {
+	// v210 走独立流水线；v200 分支保持原样，默认行为不变。
+	if a.AnalysisVersion() == AnalysisVersionV210RC11 {
+		a.processV210(ctx, item)
+		return
+	}
 	prompt, err := a.loadPrompt(ctx, item.TenantID)
 	if err != nil {
 		a.fail(ctx, item, "PROMPT_ERROR", err)

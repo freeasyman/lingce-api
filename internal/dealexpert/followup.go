@@ -10,6 +10,7 @@ import (
 
 // 销售跟进状态。与随访中心的任务状态完全分开，不复用同一套枚举。
 const (
+	FollowUpDraft           = "草案"
 	FollowUpPending         = "待处理"
 	FollowUpProcessing      = "处理中"
 	FollowUpWaitingCustomer = "等待客户"

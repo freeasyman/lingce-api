@@ -1,0 +1,105 @@
+{
+  "protocol_version": "deal-analysis-v2",
+  "input_snapshot_id": "sha256:565c6eb20dc83d068b32c41a6a095bcaf18f5583f64dcfcc19fcb1d278a1580a",
+  "conclusion": {
+    "summary": null,
+    "verification": "核对定金和后续意向，尊重客户联系窗口。",
+    "source_refs": []
+  },
+  "decision": {
+    "state": "无法判断",
+    "source_refs": [],
+    "condition": null,
+    "trust": [],
+    "need": {
+      "state": "无法判断",
+      "summary": null,
+      "source_refs": []
+    },
+    "concerns": [],
+    "outcome_signals": []
+  },
+  "clinical_risk": {
+    "assessment": "unknown",
+    "summary": null,
+    "source_refs": []
+  },
+  "contact_request": {
+    "value": "unknown",
+    "summary": null,
+    "source_refs": []
+  },
+  "product_findings": [],
+  "proposed_action": null,
+  "secondary_findings": [],
+  "quality": {
+    "standard_version": "compass-sales-v1.1",
+    "dimensions": {
+      "开场建立权威": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "需求探索": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "问题放大": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "专业呈现": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "方案定制": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "异议化解": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      },
+      "促成与收尾": {
+        "assessment": "insufficient_evidence",
+        "score": null,
+        "comment": "片段不足以评估该维度。",
+        "impact_on_deal": null,
+        "highlight_narrative": null,
+        "source_refs": []
+      }
+    }
+  },
+  "coach": {
+    "successful_practices": [],
+    "improvement": null,
+    "refund_review": null
+  },
+  "confidence": "low",
+  "unknowns": [
+    "输入无有效证据，需要人工复核"
+  ]
+}

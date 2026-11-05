@@ -1,0 +1,80 @@
+{
+  "input_snapshot_id": "sha256:74498305d60780d94e6ceb48845eae5fe922c293d729a37863364748950a16cc",
+  "input": {
+    "protocol_version": "deal-input-v2",
+    "recording": {
+      "recording_id": 1001,
+      "tenant_id": 101,
+      "encounter_id": 9001,
+      "employee_id": 501,
+      "consultant_name": "演示顾问",
+      "recorded_at": "2026-10-31T09:00:00+08:00"
+    },
+    "context": {
+      "analysis_at": "2026-10-31T10:00:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "identity_confirmed": true,
+      "contact_authorized": true,
+      "contact_forbidden": false,
+      "clinical_hold": false,
+      "coverage": "complete",
+      "truncated": false,
+      "omitted_source_count": 0,
+      "catalog_complete": true,
+      "allow_missed_opportunity": true,
+      "allow_extended_opportunities": false
+    },
+    "transcript_sources": [
+      {
+        "id": "s1",
+        "text": "您好，我是今天负责接待的顾问。",
+        "speaker": "咨询师",
+        "start_ms": 1000,
+        "timing_basis": "asr",
+        "role_basis": "cleaned_transcription"
+      },
+      {
+        "id": "s2",
+        "text": "我想了解视力矫正，之前交了定金，后续还是要等家里人商量好。",
+        "speaker": "客户",
+        "start_ms": 8000,
+        "timing_basis": "asr",
+        "role_basis": "cleaned_transcription"
+      },
+      {
+        "id": "s3",
+        "text": "先了解一下方案甲，具体适应性需要医生确认。我们可以先整理问题。",
+        "speaker": "咨询师",
+        "start_ms": 16000,
+        "timing_basis": "aligned",
+        "role_basis": "cleaned_transcription"
+      },
+      {
+        "id": "s4",
+        "text": "这样比较清楚，等商量好了我再联系你。",
+        "speaker": "客户",
+        "start_ms": 24000,
+        "timing_basis": "asr",
+        "role_basis": "cleaned_transcription"
+      }
+    ],
+    "business_facts": [
+      {
+        "id": "f1",
+        "type": "定金",
+        "text": "已确认定金",
+        "source_record_id": 701,
+        "occurred_at": "2026-10-30T10:00:00+08:00"
+      }
+    ],
+    "product_catalog": [
+      {
+        "id": 301,
+        "name": "方案甲",
+        "version": "1",
+        "description": "需专业确认的演示方案",
+        "requires_clinical_confirmation": true
+      }
+    ]
+  }
+}
