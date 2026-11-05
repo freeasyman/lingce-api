@@ -445,8 +445,10 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 	if err := s.store.ValidateDoctor(ctx, tenantID, actorID); err != nil {
 		return nil, err
 	}
-	if req.CustomerID == nil || *req.CustomerID <= 0 {
-		return nil, fmt.Errorf("请先绑定患者后再开始接诊")
+	// 允许不绑定患者直接开始录音（极简录音：桌面端先录、回看时再关联患者）。
+	// 仅在显式传了非法 customer_id 时报错。
+	if req.CustomerID != nil && *req.CustomerID <= 0 {
+		return nil, fmt.Errorf("customer_id 无效")
 	}
 	doctorName, departmentCode, err := s.store.DoctorContext(ctx, tenantID, actorID)
 	if err != nil {
