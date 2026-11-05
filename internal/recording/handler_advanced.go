@@ -909,7 +909,8 @@ func (h *Handler) AcceptTrialAgreement(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, status)
 }
 
-// GetPlayURL handles getting play URL
+// GetPlayURL handles getting play URL.
+// 播放策略：机构开关 → 本人 → 90 天窗口 → 审批授权；成功生成地址即留痕。
 func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
@@ -928,10 +929,13 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
-	if claims.UserType != auth.UserTypeAdmin {
-		accessRef, accessErr := h.service.store.GetRecordingAccessRef(r.Context(), id)
-		if accessErr != nil {
-			httputil.WriteNotFound(w, accessErr.Error())
+
+	isAdmin := claims.UserType == auth.UserTypeAdmin
+	var accessRef *RecordingAccessRef
+	if !isAdmin {
+		accessRef, err = h.service.store.GetRecordingAccessRef(r.Context(), id)
+		if err != nil {
+			httputil.WriteNotFound(w, err.Error())
 			return
 		}
 		if claims.TenantID == nil || *claims.TenantID != accessRef.TenantID {
@@ -943,6 +947,60 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	tenantID := ref.TenantID
+	cfg, cfgErr := h.service.store.GetRecordingPlaybackConfig(r.Context(), tenantID)
+	if cfgErr != nil {
+		httputil.WriteInternalError(w, cfgErr.Error())
+		return
+	}
+
+	isOwner := !isAdmin && accessRef != nil && accessRef.EmployeeID > 0 && accessRef.EmployeeID == claims.UserID
+	isTenantAdmin := false
+	if !isAdmin && claims.TenantID != nil {
+		isTenantAdmin = h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID)
+	}
+	isListener := false
+	if !isAdmin && !isOwner && !isTenantAdmin && accessRef != nil && accessRef.EmployeeID > 0 {
+		isListener, err = h.service.store.IsPlaybackListener(r.Context(), tenantID, accessRef.EmployeeID, claims.UserID)
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+	}
+	withinWindow := accessRef == nil || time.Since(accessRef.RecordedAt) <= time.Duration(cfg.PlaybackWindowDays)*24*time.Hour
+
+	hasViewAbility := isAdmin || isTenantAdmin
+	if !hasViewAbility {
+		hasViewAbility, err = h.service.store.EmployeeHasEmrAbility(r.Context(), tenantID, claims.UserID, "consultation.read")
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+	}
+	policyAllowed := isAdmin || (hasViewAbility && cfg.PlaybackEnabled && (isOwner || isListener || isTenantAdmin) && withinWindow)
+
+	var grant *PlaybackGrant
+	if !policyAllowed {
+		grant, err = h.service.store.GetActivePlaybackGrant(r.Context(), id, claims.UserID)
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+	}
+	if !policyAllowed && grant == nil {
+		if !cfg.PlaybackEnabled {
+			httputil.WriteError(w, http.StatusForbidden, "RECORDING_PLAYBACK_DISABLED", "本机构未开放原始录音播放", map[string]any{"recording_id": id})
+			return
+		}
+		if !isOwner {
+			httputil.WriteError(w, http.StatusForbidden, "PLAYBACK_ACCESS_REQUIRED", "非本人录音，需审批调取", map[string]any{"recording_id": id})
+			return
+		}
+		httputil.WriteError(w, http.StatusForbidden, "PLAYBACK_WINDOW_EXPIRED", "已超过播放期，需申请调取", map[string]any{"recording_id": id})
+		return
+	}
+
 	ossEndpoint := strings.TrimSpace(h.ossConfig.Endpoint)
 	ossBucket := strings.TrimSpace(h.ossConfig.Bucket)
 	ossAccessKeyID := strings.TrimSpace(h.ossConfig.AccessKeyID)
@@ -955,7 +1013,10 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 			ref = refreshed
 		}
 	}
-	if strings.TrimSpace(ref.OSSKey) != "" && ossEndpoint != "" && ossBucket != "" && ossAccessKeyID != "" && ossAccessKeySecret != "" {
+
+	var finalURL string
+	switch {
+	case strings.TrimSpace(ref.OSSKey) != "" && ossEndpoint != "" && ossBucket != "" && ossAccessKeyID != "" && ossAccessKeySecret != "":
 		client, cErr := ossutil.NewClient(ossEndpoint, ossAccessKeyID, ossAccessKeySecret, ossBucket, strings.TrimSpace(h.ossConfig.PublicBaseURL))
 		if cErr != nil {
 			httputil.WriteInternalError(w, "failed to init oss client")
@@ -966,23 +1027,356 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteInternalError(w, "failed to sign play url")
 			return
 		}
-		httputil.WriteSuccess(w, PlayURLResponse{
-			URL:       signedURL,
-			ExpiresAt: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
-		})
-		return
-	}
-	if requireOwned {
+		finalURL = signedURL
+	case requireOwned:
 		httputil.WriteError(w, http.StatusPreconditionFailed, "MEDIA_NOT_MIGRATED", "recording media has not been migrated to owned storage", map[string]any{"recording_id": id})
 		return
-	}
-	if strings.TrimSpace(ref.FileURL) == "" {
+	case strings.TrimSpace(ref.FileURL) == "":
 		httputil.WriteError(w, http.StatusNotFound, "PLAY_URL_NOT_FOUND", "recording file url is empty", map[string]any{"recording_id": id})
 		return
+	default:
+		finalURL = ref.FileURL
 	}
+
+	reason := "review"
+	var authorizerID *int64
+	if grant != nil {
+		reason = "granted_access"
+		authorizerID = &grant.AuthorizerID
+	}
+	_ = h.service.store.InsertRecordingPlayLog(r.Context(), id, tenantID, claims.UserID, reason, authorizerID)
+
 	httputil.WriteSuccess(w, PlayURLResponse{
-		URL:       ref.FileURL,
+		URL:       finalURL,
 		ExpiresAt: time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+	})
+}
+
+// RequestPlaybackAccess 为窗口外/跨人调取签发限时授权（轻量版：申请人填理由即放行）。
+func (h *Handler) RequestPlaybackAccess(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	accessRef, err := h.service.store.GetRecordingAccessRef(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+
+	isAdmin := claims.UserType == auth.UserTypeAdmin
+	isOwner := accessRef.EmployeeID > 0 && accessRef.EmployeeID == claims.UserID
+	if !isAdmin {
+		if claims.TenantID == nil || *claims.TenantID != accessRef.TenantID {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		isListener := false
+		if !isOwner && accessRef.EmployeeID > 0 {
+			isListener, err = h.service.store.IsPlaybackListener(r.Context(), *claims.TenantID, accessRef.EmployeeID, claims.UserID)
+			if err != nil {
+				httputil.WriteInternalError(w, err.Error())
+				return
+			}
+		}
+		tenantAdmin := h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID)
+		if !isOwner && !isListener && !tenantAdmin {
+			httputil.WriteForbidden(w, "只有本人、授权名单内的人员或管理员可申请播放")
+			return
+		}
+		if !tenantAdmin {
+			hasView, viewErr := h.service.store.EmployeeHasEmrAbility(r.Context(), *claims.TenantID, claims.UserID, "consultation.read")
+			if viewErr != nil {
+				httputil.WriteInternalError(w, viewErr.Error())
+				return
+			}
+			if !hasView {
+				httputil.WriteForbidden(w, "当前账号没有查看接诊记录权限")
+				return
+			}
+		}
+	}
+
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		httputil.WriteBadRequest(w, "请填写播放原因")
+		return
+	}
+
+	expiresAt := time.Now().Add(24 * time.Hour)
+	if err := h.service.store.InsertRecordingPlaybackGrant(r.Context(), id, accessRef.TenantID, claims.UserID, reason, expiresAt); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"granted": true, "expires_at": expiresAt.Format(time.RFC3339)})
+}
+
+// GetPlaybackConfig 返回当前机构的录音播放开关与窗口，供前端渲染播放入口。
+func (h *Handler) GetPlaybackConfig(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	tenantID := int64(0)
+	if claims.UserType == auth.UserTypeAdmin {
+		q := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+		if q == "" {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+		parsed, parseErr := strconv.ParseInt(q, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			httputil.WriteBadRequest(w, "invalid tenant_id")
+			return
+		}
+		tenantID = parsed
+	} else {
+		if claims.TenantID == nil || *claims.TenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+		tenantID = *claims.TenantID
+	}
+
+	cfg, err := h.service.store.GetRecordingPlaybackConfig(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"tenant_id":            tenantID,
+		"playback_enabled":     cfg.PlaybackEnabled,
+		"playback_window_days": cfg.PlaybackWindowDays,
+	})
+}
+
+// UpdatePlaybackConfig 配置机构级录音播放开关与窗口（平台管理员或租户录音管理员）。
+func (h *Handler) UpdatePlaybackConfig(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	var req struct {
+		TenantID           *int64 `json:"tenant_id"`
+		PlaybackEnabled    *bool  `json:"playback_enabled"`
+		PlaybackWindowDays *int   `json:"playback_window_days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+
+	tenantID := int64(0)
+	if claims.UserType == auth.UserTypeAdmin {
+		if req.TenantID == nil || *req.TenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+		tenantID = *req.TenantID
+	} else {
+		if claims.TenantID == nil || *claims.TenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant_id is required")
+			return
+		}
+		tenantID = *claims.TenantID
+		if !h.isTenantRecordingAdmin(r.Context(), tenantID, claims.UserID) {
+			httputil.WriteForbidden(w, "只有机构录音管理员或平台管理员可配置")
+			return
+		}
+	}
+
+	cfg, err := h.service.store.GetRecordingPlaybackConfig(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	enabled := cfg.PlaybackEnabled
+	if req.PlaybackEnabled != nil {
+		enabled = *req.PlaybackEnabled
+	}
+	windowDays := cfg.PlaybackWindowDays
+	if req.PlaybackWindowDays != nil {
+		if *req.PlaybackWindowDays < 0 {
+			httputil.WriteBadRequest(w, "playback_window_days 不能为负")
+			return
+		}
+		windowDays = *req.PlaybackWindowDays
+	}
+
+	if err := h.service.store.UpsertRecordingPlaybackConfig(r.Context(), tenantID, enabled, windowDays); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"tenant_id":            tenantID,
+		"playback_enabled":     enabled,
+		"playback_window_days": windowDays,
+	})
+}
+
+// GetPlaybackPermission 返回当前用户对某条录音的播放权限，供前端决定按钮形态。
+func (h *Handler) GetPlaybackPermission(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+
+	accessRef, err := h.service.store.GetRecordingAccessRef(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if claims.TenantID == nil || *claims.TenantID != accessRef.TenantID {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	tenantID := accessRef.TenantID
+	cfg, cfgErr := h.service.store.GetRecordingPlaybackConfig(r.Context(), tenantID)
+	if cfgErr != nil {
+		httputil.WriteInternalError(w, cfgErr.Error())
+		return
+	}
+
+	isPlatformAdmin := claims.UserType == auth.UserTypeAdmin
+	isOwner := accessRef.EmployeeID > 0 && accessRef.EmployeeID == claims.UserID
+	isTenantAdmin := h.isTenantRecordingAdmin(r.Context(), tenantID, claims.UserID)
+	isListener := false
+	if !isOwner && !isTenantAdmin && accessRef.EmployeeID > 0 {
+		isListener, err = h.service.store.IsPlaybackListener(r.Context(), tenantID, accessRef.EmployeeID, claims.UserID)
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+	}
+	withinWindow := time.Since(accessRef.RecordedAt) <= time.Duration(cfg.PlaybackWindowDays)*24*time.Hour
+
+	hasViewAbility := isPlatformAdmin || isTenantAdmin
+	if !hasViewAbility {
+		hasViewAbility, err = h.service.store.EmployeeHasEmrAbility(r.Context(), tenantID, claims.UserID, "consultation.read")
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+	}
+	isPlaybackSubject := isOwner || isListener || isTenantAdmin
+	canPlay := isPlatformAdmin || (hasViewAbility && isPlaybackSubject && cfg.PlaybackEnabled && withinWindow)
+	canRequest := isPlatformAdmin || (hasViewAbility && isPlaybackSubject)
+
+	httputil.WriteSuccess(w, map[string]any{
+		"is_owner":           isOwner,
+		"is_listener":        isListener,
+		"is_admin":           isPlatformAdmin || isTenantAdmin,
+		"within_window":      withinWindow,
+		"playback_enabled":   cfg.PlaybackEnabled,
+		"can_view":           hasViewAbility,
+		"can_play":           canPlay,
+		"can_request_access": canRequest,
+	})
+}
+
+// ListPlaybackListeners 返回机构内全部录音播放授权名单（owner → listener）。
+func (h *Handler) ListPlaybackListeners(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.TenantID == nil {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	if !h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID) {
+		httputil.WriteForbidden(w, "只有机构录音管理员可配置授权名单")
+		return
+	}
+	list, err := h.service.store.ListPlaybackListeners(r.Context(), *claims.TenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		items = append(items, map[string]any{
+			"owner_employee_id":    item.OwnerEmployeeID,
+			"listener_employee_id": item.ListenerEmployeeID,
+			"is_active":            item.IsActive,
+		})
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// UpsertPlaybackListener 打勾/取消打勾一条录音播放授权。
+func (h *Handler) UpsertPlaybackListener(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.TenantID == nil {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	if !h.isTenantRecordingAdmin(r.Context(), *claims.TenantID, claims.UserID) {
+		httputil.WriteForbidden(w, "只有机构录音管理员可配置授权名单")
+		return
+	}
+
+	var req struct {
+		OwnerEmployeeID    int64 `json:"owner_employee_id"`
+		ListenerEmployeeID int64 `json:"listener_employee_id"`
+		Active             *bool `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "invalid body")
+		return
+	}
+	if req.OwnerEmployeeID <= 0 || req.ListenerEmployeeID <= 0 {
+		httputil.WriteBadRequest(w, "owner_employee_id 与 listener_employee_id 必填")
+		return
+	}
+	if req.OwnerEmployeeID == req.ListenerEmployeeID {
+		httputil.WriteBadRequest(w, "本人无需授权")
+		return
+	}
+	active := true
+	if req.Active != nil {
+		active = *req.Active
+	}
+	if err := h.service.store.UpsertPlaybackListener(r.Context(), *claims.TenantID, req.OwnerEmployeeID, req.ListenerEmployeeID, active, claims.UserID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"owner_employee_id":    req.OwnerEmployeeID,
+		"listener_employee_id": req.ListenerEmployeeID,
+		"is_active":            active,
 	})
 }
 

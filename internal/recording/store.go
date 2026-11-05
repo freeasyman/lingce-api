@@ -79,6 +79,8 @@ type RecordingAccessRef struct {
 	RecordingID   int64
 	TenantID      int64
 	BusinessScope string
+	EmployeeID    int64
+	RecordedAt    time.Time
 }
 
 type TrialTenantProfile struct {
@@ -1919,18 +1921,24 @@ func (s *Store) GetRecordingMediaRef(ctx context.Context, id int64) (*RecordingM
 
 func (s *Store) GetRecordingAccessRef(ctx context.Context, id int64) (*RecordingAccessRef, error) {
 	const query = `
-		SELECT id, tenant_id, COALESCE(business_scope, '')
+		SELECT id, tenant_id, COALESCE(business_scope, ''), COALESCE(employee_id, 0), COALESCE(recorded_at, created_at)
 		FROM recordings
 		WHERE id = $1
 		  AND deleted_at IS NULL
 		LIMIT 1
 	`
 	var ref RecordingAccessRef
-	if err := s.pool.QueryRow(ctx, query, id).Scan(&ref.RecordingID, &ref.TenantID, &ref.BusinessScope); err != nil {
+	var recordedAt sql.NullTime
+	if err := s.pool.QueryRow(ctx, query, id).Scan(&ref.RecordingID, &ref.TenantID, &ref.BusinessScope, &ref.EmployeeID, &recordedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("recording not found")
 		}
 		return nil, fmt.Errorf("failed to query recording access ref: %w", err)
+	}
+	if recordedAt.Valid {
+		ref.RecordedAt = recordedAt.Time
+	} else {
+		ref.RecordedAt = time.Now()
 	}
 	return &ref, nil
 }

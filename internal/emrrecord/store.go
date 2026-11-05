@@ -172,6 +172,119 @@ func (s *Store) ListScoped(ctx context.Context, tenantID int64, status string, a
 	return s.list(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
 }
 
+// ListFilter 病历列表过滤条件。
+type ListFilter struct {
+	Status         string // 精确状态
+	Queue          string // pending / archived / returned（审核归档队列）
+	Keyword        string
+	DoctorID       int64
+	DepartmentCode string // 医疗科室 code（encounter_context_json.medical_department_code）
+	ScoreStatus    string // 质控评分状态（current_score_status）
+}
+
+// ListScopedPaginated 分页列出授权范围内的病历，支持多种过滤。
+func (s *Store) ListScopedPaginated(ctx context.Context, tenantID int64, filter ListFilter, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	args := []any{tenantID}
+	where := "r.tenant_id=$1"
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		where += fmt.Sprintf(" AND r.status=$%d", len(args))
+	}
+	switch filter.Queue {
+	case "archived":
+		args = append(args, "已归档")
+		where += fmt.Sprintf(" AND r.status=$%d", len(args))
+	case "returned":
+		args = append(args, "退回")
+		where += fmt.Sprintf(" AND r.status=$%d", len(args))
+	case "pending":
+		where += " AND r.status NOT IN ('草稿','需补全','已归档','退回')"
+	}
+	if filter.DoctorID > 0 {
+		args = append(args, filter.DoctorID)
+		where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
+	}
+	if filter.DepartmentCode != "" {
+		args = append(args, filter.DepartmentCode)
+		where += fmt.Sprintf(" AND r.encounter_context_json->>'medical_department_code'=$%d", len(args))
+	}
+	if filter.ScoreStatus != "" {
+		args = append(args, filter.ScoreStatus)
+		where += fmt.Sprintf(" AND COALESCE(r.current_score_status,'未评分')=$%d", len(args))
+	}
+	if filter.Keyword != "" {
+		args = append(args, "%"+filter.Keyword+"%")
+		n := len(args)
+		where += fmt.Sprintf(` AND (
+			CAST(r.id AS TEXT) ILIKE $%d
+			OR r.document_type ILIKE $%d
+			OR r.visit_type ILIKE $%d
+			OR r.patient_snapshot_json::text ILIKE $%d
+			OR EXISTS (SELECT 1 FROM employees e WHERE e.id=r.doctor_id AND e.tenant_id=r.tenant_id AND (e.full_name ILIKE $%d OR e.name ILIKE $%d OR e.username ILIKE $%d))
+		)`, n, n, n, n, n, n, n)
+	}
+	if access != nil && !access.Admin && access.Scope != "tenant" {
+		switch access.Scope {
+		case "self":
+			args = append(args, access.UserID)
+			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
+		case "department":
+			if access.DepartmentID == nil {
+				return []*Record{}, 0, nil
+			}
+			args = append(args, *access.DepartmentID)
+			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+		default:
+			return []*Record{}, 0, nil
+		}
+	}
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM emr_records r WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count emr records: %w", err)
+	}
+	args = append(args, pageSize, (page-1)*pageSize)
+	query := "SELECT " + recordColumns + " FROM emr_records r WHERE " + where + " ORDER BY r.updated_at DESC LIMIT $" + strconv.Itoa(len(args)-1) + " OFFSET $" + strconv.Itoa(len(args))
+	items, err := s.list(ctx, query, args...)
+	return items, total, err
+}
+
+// CountByState 返回授权范围内各队列的病历数（pending/archived/returned）。
+func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access) (pending, archived, returned int, err error) {
+	args := []any{tenantID}
+	where := "r.tenant_id=$1"
+	if access != nil && !access.Admin && access.Scope != "tenant" {
+		switch access.Scope {
+		case "self":
+			args = append(args, access.UserID)
+			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
+		case "department":
+			if access.DepartmentID == nil {
+				return 0, 0, 0, nil
+			}
+			args = append(args, *access.DepartmentID)
+			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+		default:
+			return 0, 0, 0, nil
+		}
+	}
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE r.status NOT IN ('草稿','需补全','已归档','退回')),
+			COUNT(*) FILTER (WHERE r.status = '已归档'),
+			COUNT(*) FILTER (WHERE r.status = '退回')
+		FROM emr_records r WHERE `+where, args...).Scan(&pending, &archived, &returned)
+	return pending, archived, returned, err
+}
+
 func (s *Store) list(ctx context.Context, query string, args ...any) ([]*Record, error) {
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {

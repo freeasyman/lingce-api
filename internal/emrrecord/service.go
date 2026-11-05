@@ -63,6 +63,19 @@ func (s *Service) ListScoped(ctx context.Context, tenantID int64, status string,
 	return s.store.ListScoped(ctx, tenantID, strings.TrimSpace(status), access)
 }
 
+func (s *Service) ListScopedPaginated(ctx context.Context, tenantID int64, filter ListFilter, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
+	filter.Status = strings.TrimSpace(filter.Status)
+	filter.Queue = strings.TrimSpace(filter.Queue)
+	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.DepartmentCode = strings.TrimSpace(filter.DepartmentCode)
+	filter.ScoreStatus = strings.TrimSpace(filter.ScoreStatus)
+	return s.store.ListScopedPaginated(ctx, tenantID, filter, page, pageSize, access)
+}
+
+func (s *Service) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access) (int, int, int, error) {
+	return s.store.CountByState(ctx, tenantID, access)
+}
+
 func (s *Service) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {
 	return s.store.ListByPatient(ctx, tenantID, patientID, page, pageSize)
 }

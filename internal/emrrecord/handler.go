@@ -96,12 +96,57 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	items, err := h.service.ListScoped(r.Context(), tenantID, r.URL.Query().Get("status"), access)
-	if err != nil {
-		httputil.WriteInternalError(w, err.Error())
+	status := r.URL.Query().Get("status")
+	keyword := r.URL.Query().Get("keyword")
+
+	// 带 page 参数走服务端分页；不带则返回全部（兼容内部 list() 的整表读取场景）。
+	if r.URL.Query().Get("page") == "" {
+		items, listErr := h.service.ListScoped(r.Context(), tenantID, status, access)
+		if listErr != nil {
+			httputil.WriteInternalError(w, listErr.Error())
+			return
+		}
+		httputil.WriteSuccess(w, map[string]any{"items": items})
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items})
+
+	pagination := httputil.ParsePagination(r)
+	filter := ListFilter{
+		Status:         status,
+		Queue:          r.URL.Query().Get("queue"),
+		Keyword:        keyword,
+		DoctorID:       parseOptionalID(r.URL.Query().Get("doctor_id")),
+		DepartmentCode: r.URL.Query().Get("department_code"),
+		ScoreStatus:    r.URL.Query().Get("score_status"),
+	}
+	items, total, listErr := h.service.ListScopedPaginated(r.Context(), tenantID, filter, pagination.Page, pagination.PageSize, access)
+	if listErr != nil {
+		httputil.WriteInternalError(w, listErr.Error())
+		return
+	}
+	resp := map[string]any{
+		"items":     items,
+		"total":     total,
+		"page":      pagination.Page,
+		"page_size": pagination.PageSize,
+	}
+	if r.URL.Query().Get("with_counts") == "1" {
+		pending, archived, returned, countErr := h.service.CountByState(r.Context(), tenantID, access)
+		if countErr != nil {
+			httputil.WriteInternalError(w, countErr.Error())
+			return
+		}
+		resp["counts"] = map[string]int{"pending": pending, "archived": archived, "returned": returned}
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
+func parseOptionalID(raw string) int64 {
+	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }
 
 func (h *Handler) ListByPatient(w http.ResponseWriter, r *http.Request) {
