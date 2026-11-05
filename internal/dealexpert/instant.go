@@ -74,7 +74,7 @@ func (a *InstantAnalyzer) RunInstant(ctx context.Context, tenantID, recordingID 
 	}
 	var transcript string
 	_ = a.pool.QueryRow(ctx, `
-		SELECT COALESCE(cleaned_transcription, transcription_text, '')
+		SELECT COALESCE(NULLIF(cleaned_transcription::text, 'null'), transcription_text, '')
 		FROM recordings WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
 	`, tenantID, recordingID).Scan(&transcript)
 	transcript = strings.TrimSpace(transcript)
