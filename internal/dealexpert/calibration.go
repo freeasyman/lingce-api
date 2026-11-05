@@ -47,7 +47,12 @@ func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*
 		) a
 		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id
 		LEFT JOIN customers c ON c.id = r.customer_id
-		LEFT JOIN outcome_sum os ON os.tenant_id = a.tenant_id AND os.encounter_id = r.encounter_id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(CASE WHEN type IN ('付款','定金') THEN amount ELSE 0 END)
+				- SUM(CASE WHEN type = '退款' THEN amount ELSE 0 END), 0) AS net
+			FROM deal_outcome_events e
+			WHERE e.tenant_id = a.tenant_id AND e.encounter_id = r.encounter_id
+		) os ON true
 		LEFT JOIN LATERAL (
 			SELECT id, name, price FROM products
 			WHERE id = COALESCE((a.result->'product_findings'->0->>'product_id')::bigint, 0)
