@@ -26,14 +26,15 @@ type LoginResponse struct {
 
 // LoginUser represents a backward-compatible nested user payload.
 type LoginUser struct {
-	ID         int64   `json:"id"`
-	Name       string  `json:"name"`
-	Phone      string  `json:"phone,omitempty"`
-	Role       string  `json:"role"`
-	RoleCode   string  `json:"role_code,omitempty"`
-	RoleName   string  `json:"role_name,omitempty"`
-	TenantID   *int64  `json:"tenant_id"`
-	TenantName *string `json:"tenant_name,omitempty"`
+	ID             int64   `json:"id"`
+	Name           string  `json:"name"`
+	Phone          string  `json:"phone,omitempty"`
+	Role           string  `json:"role"`
+	RoleCode       string  `json:"role_code,omitempty"`
+	RoleName       string  `json:"role_name,omitempty"`
+	DepartmentName string  `json:"department_name,omitempty"`
+	TenantID       *int64  `json:"tenant_id"`
+	TenantName     *string `json:"tenant_name,omitempty"`
 }
 
 // MeResponse represents current user info

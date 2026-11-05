@@ -210,6 +210,10 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 
 	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
 	roleName, _ := s.store.GetLatestEmployeeRoleName(ctx, employee.TenantID, employee.ID)
+	departmentName := ""
+	if employee.DepartmentID != nil && *employee.DepartmentID > 0 {
+		departmentName, _ = s.store.GetDepartmentName(ctx, employee.TenantID, *employee.DepartmentID)
+	}
 
 	if err := s.store.RecordEmployeeLoginEvent(ctx, employee.TenantID, employee.ID, "institution_web", "", ""); err != nil {
 		return nil, fmt.Errorf("failed to persist login event: %w", err)
@@ -225,14 +229,15 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 		TenantID:    &employee.TenantID,
 		ExpiresAt:   expiresAt,
 		User: &LoginUser{
-			ID:         employee.ID,
-			Name:       firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
-			Phone:      employee.Phone,
-			Role:       firstNonEmpty(roleName, roleCode, string(auth.UserTypeEmployee)),
-			RoleCode:   roleCode,
-			RoleName:   roleName,
-			TenantID:   &employee.TenantID,
-			TenantName: &tenant.Name,
+			ID:             employee.ID,
+			Name:           firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
+			Phone:          employee.Phone,
+			Role:           firstNonEmpty(roleName, roleCode, string(auth.UserTypeEmployee)),
+			RoleCode:       roleCode,
+			RoleName:       roleName,
+			DepartmentName: departmentName,
+			TenantID:       &employee.TenantID,
+			TenantName:     &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
 			"name":                    firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
@@ -327,6 +332,10 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 	}
 
 	roleCode := s.resolveInstitutionRoleCode(ctx, employee.TenantID, employee.ID)
+	departmentName := ""
+	if employee.DepartmentID != nil && *employee.DepartmentID > 0 {
+		departmentName, _ = s.store.GetDepartmentName(ctx, employee.TenantID, *employee.DepartmentID)
+	}
 
 	return &LoginResponse{
 		Token:       token,
@@ -338,12 +347,14 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 		TenantID:    &employee.TenantID,
 		ExpiresAt:   expiresAt,
 		User: &LoginUser{
-			ID:         employee.ID,
-			Name:       firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
-			Phone:      employee.Phone,
-			Role:       firstNonEmpty(roleCode, string(auth.UserTypeMobile)),
-			TenantID:   &employee.TenantID,
-			TenantName: &tenant.Name,
+			ID:             employee.ID,
+			Name:           firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),
+			Phone:          employee.Phone,
+			Role:           firstNonEmpty(roleCode, string(auth.UserTypeMobile)),
+			RoleCode:       roleCode,
+			DepartmentName: departmentName,
+			TenantID:       &employee.TenantID,
+			TenantName:     &tenant.Name,
 		},
 		UserInfo: map[string]interface{}{
 			"name":      firstNonEmpty(employee.FullName, employee.Name, employee.Username, employee.Phone),

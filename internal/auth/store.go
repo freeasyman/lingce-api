@@ -506,6 +506,26 @@ func (s *Store) GetLatestEmployeeRoleName(ctx context.Context, tenantID, employe
 	return strings.TrimSpace(roleName), nil
 }
 
+// GetDepartmentName 返回租户下指定部门的名称（用于登录返回给桌面端显示科室）。
+func (s *Store) GetDepartmentName(ctx context.Context, tenantID, departmentID int64) (string, error) {
+	if departmentID <= 0 {
+		return "", nil
+	}
+	var name string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(name, '')
+		FROM departments
+		WHERE id = $1 AND tenant_id = $2
+	`, departmentID, tenantID).Scan(&name)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to query department name: %w", err)
+	}
+	return strings.TrimSpace(name), nil
+}
+
 func (s *Store) GetLatestEmployeeRoleCode(ctx context.Context, tenantID, employeeID int64) (string, error) {
 	var roleCode string
 	err := s.pool.QueryRow(ctx, `
