@@ -31,3 +31,27 @@ func (s *Service) Receive(ctx context.Context, req ReceiveRequest) (*Analysis, b
 	}
 	return s.store.Receive(ctx, req)
 }
+
+func (s *Service) EnsureCardActionsTable(ctx context.Context) error {
+	return s.store.EnsureCardActionsTable(ctx)
+}
+func (s *Service) ListCardActions(ctx context.Context, tenantID, recordingID int64) ([]*DealCardAction, error) {
+	if err := s.store.EnsureCardActionsTable(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.ListCardActions(ctx, tenantID, recordingID)
+}
+func (s *Service) CreateCardAction(ctx context.Context, tenantID, recordingID, actorID int64, actorName, actionType, note string) (*DealCardAction, error) {
+	if err := s.store.EnsureCardActionsTable(ctx); err != nil {
+		return nil, err
+	}
+	return s.store.CreateCardAction(ctx, tenantID, recordingID, actorID, actorName, actionType, note)
+}
+func (s *Service) ActorName(ctx context.Context, tenantID, employeeID int64) string {
+	if employeeID <= 0 {
+		return ""
+	}
+	var name string
+	_ = s.store.pool.QueryRow(ctx, `SELECT COALESCE(NULLIF(full_name,''), name, '') FROM employees WHERE tenant_id=$1 AND id=$2`, tenantID, employeeID).Scan(&name)
+	return name
+}
