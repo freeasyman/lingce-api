@@ -18,6 +18,7 @@ type Config struct {
 	JWT       JWTConfig       `toml:"jwt"`
 	Recording RecordingConfig `toml:"recording"`
 	Content   ContentConfig   `toml:"content"`
+	Deal      DealConfig      `toml:"deal"`
 	External  ExternalConfig  `toml:"external"`
 	DashScope DashScopeConfig `toml:"dashscope"`
 	Aliyun    AliyunConfig    `toml:"aliyun"`
@@ -74,6 +75,22 @@ type ContentConfig struct {
 // AnalysisOn 是否开启自动补齐（默认开启）。
 func (c ContentConfig) AnalysisOn() bool {
 	return c.AnalysisEnabled == nil || *c.AnalysisEnabled
+}
+
+// DealConfig 赢客专家后台分析配置。
+// analysis_version 为空表示沿用默认 v200；dev 可显式切到 v210-rc11（v2.1 新流水线）。
+type DealConfig struct {
+	AnalysisVersion      string `toml:"analysis_version"`
+	InstantEnabled       bool   `toml:"instant_enabled"`
+	ConsultantSMSEnabled bool   `toml:"consultant_sms_enabled"`
+}
+
+// DealAnalysisVersion 返回配置的分析版本；未配置时保持 v200。
+func (c DealConfig) DealAnalysisVersion() string {
+	if version := strings.TrimSpace(c.AnalysisVersion); version != "" {
+		return version
+	}
+	return "v200"
 }
 
 type RecordingConfig struct {
