@@ -65,3 +65,7 @@ func (s *Service) ConfirmDraft(ctx context.Context, tenantID, followUpID int64, 
 func (s *Service) RecordingBrief(ctx context.Context, tenantID, recordingID int64) (*RecordingBrief, error) {
 	return s.store.RecordingBrief(ctx, tenantID, recordingID)
 }
+
+func (s *Service) ListMyCardActions(ctx context.Context, tenantID, actorID int64) ([]*MyAction, error) {
+	return s.store.ListMyCardActions(ctx, tenantID, actorID)
+}

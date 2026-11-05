@@ -155,3 +155,59 @@ func (h *Handler) CreateCardAction(w http.ResponseWriter, r *http.Request) {
 	}
 	httputil.WriteSuccess(w, item)
 }
+
+// MyAction 是“我的批复/回填”列表项：我处理过的卡片动作。
+type MyAction struct {
+	ID           int64      `json:"id"`
+	RecordingID  int64      `json:"recording_id"`
+	CustomerName string     `json:"customer_name"`
+	ActionType   string     `json:"action_type"`
+	Note         string     `json:"note"`
+	CreatedAt    *time.Time `json:"created_at,omitempty"`
+}
+
+func (s *Store) ListMyCardActions(ctx context.Context, tenantID, actorEmployeeID int64) ([]*MyAction, error) {
+	if err := s.EnsureCardActionsTable(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id, a.recording_id, COALESCE(r.customer_name, ''), a.action_type, a.note, a.created_at
+		FROM deal_card_actions a
+		LEFT JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id
+		WHERE a.tenant_id = $1 AND a.actor_employee_id = $2
+		ORDER BY a.id DESC
+		LIMIT 100
+	`, tenantID, actorEmployeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*MyAction, 0, 32)
+	for rows.Next() {
+		var item MyAction
+		if err := rows.Scan(&item.ID, &item.RecordingID, &item.CustomerName, &item.ActionType, &item.Note, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &item)
+	}
+	return out, rows.Err()
+}
+
+func (h *Handler) ListMyActions(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserID <= 0 {
+		httputil.WriteSuccess(w, map[string]any{"items": []*MyAction{}})
+		return
+	}
+	items, err := h.service.ListMyCardActions(r.Context(), scope.TenantID, claims.UserID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
