@@ -303,6 +303,7 @@ func main() {
 	opportunityAlertStore := opportunityalert.NewStore(pool)
 	delegatedWeComModule := wecomdelegated.NewModule(pool, cfg.WeCom, cfg.JWT.Secret, cfg.JWT.ExpiryHours)
 	opportunityAlertService := opportunityalert.NewService(opportunityAlertStore, delegatedWeComModule.MessageSender(), cfg.External.EmployeeWebBaseURL)
+	go opportunityAlertService.StartEscalationLoop(ctx, 30*time.Second)
 	opportunityAlertHandler := opportunityalert.NewHandler(opportunityAlertService)
 	opportunityAlertHandler.RegisterConfigRoutes(mux, cfg.JWT.Secret)
 	opportunityAlertHandler.RegisterMobileRoutes(mux, cfg.JWT.Secret)

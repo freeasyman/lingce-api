@@ -3,6 +3,7 @@ package opportunityalert
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -620,5 +621,40 @@ func toCCRuleResponse(item *CCRule) *CCRuleResponse {
 		IsActive:       item.IsActive,
 		CreatedAt:      formatTime(item.CreatedAt),
 		UpdatedAt:      formatTime(item.UpdatedAt),
+	}
+}
+
+func (s *Service) RecordAlertAction(ctx context.Context, tenantID, alertID, actorID int64, actionType, note string) error {
+	return s.store.RecordAlertAction(ctx, tenantID, alertID, actorID, actionType, note)
+}
+
+func (s *Service) ListEscalations(ctx context.Context, alertID int64) ([]map[string]any, error) {
+	return s.store.ListEscalations(ctx, alertID)
+}
+
+// StartEscalationLoop 每 30 秒扫描：pending 且创建超过 15 分钟的信号升级一次。
+func (s *Service) StartEscalationLoop(ctx context.Context, interval time.Duration) {
+	if s == nil || s.store == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-15 * time.Minute)
+			items, err := s.store.ListPendingOlderThan(ctx, cutoff)
+			if err != nil {
+				continue
+			}
+			for _, item := range items {
+				escalated, err := s.store.AddEscalation(ctx, item.ID, "转上级", "15分钟未处理")
+				if err == nil && escalated {
+					slog.Info("opportunity alert escalated", "alert_id", item.ID, "tenant_id", item.TenantID)
+				}
+			}
+		}
 	}
 }

@@ -26,8 +26,9 @@ type RecentDeliveriesRequest struct {
 }
 
 type ActionRequest struct {
-	Note   string `json:"note,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ActionType string `json:"action_type,omitempty"`
 }
 
 type AlertResponse struct {

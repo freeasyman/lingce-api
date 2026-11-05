@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -783,4 +784,113 @@ func normalizePriority(priority string) string {
 	default:
 		return "medium"
 	}
+}
+
+// 工作台动作与升级表（懒建）。
+func (s *Store) EnsureActionSchema(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS opportunity_alert_actions (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			alert_id BIGINT NOT NULL,
+			actor_employee_id BIGINT NOT NULL,
+			action_type TEXT NOT NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_opp_alert_actions_alert
+			ON opportunity_alert_actions (alert_id, id DESC);
+		CREATE TABLE IF NOT EXISTS opportunity_alert_escalations (
+			id BIGSERIAL PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			alert_id BIGINT NOT NULL,
+			level TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_opp_alert_escalations_alert
+			ON opportunity_alert_escalations (alert_id, id DESC);
+	`)
+	return err
+}
+
+func (s *Store) RecordAlertAction(ctx context.Context, tenantID, alertID, actorID int64, actionType, note string) error {
+	if err := s.EnsureActionSchema(ctx); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO opportunity_alert_actions (tenant_id, alert_id, actor_employee_id, action_type, note)
+		VALUES ($1,$2,$3,$4,$5)
+	`, tenantID, alertID, actorID, actionType, note)
+	return err
+}
+
+// ListPendingOlderThan 返回创建超过 cutoff 且仍是 pending 的信号，供升级扫描。
+func (s *Store) ListPendingOlderThan(ctx context.Context, cutoffTime time.Time) ([]*Alert, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, recording_id, employee_id, customer_name, status, created_at
+		FROM opportunity_alerts
+		WHERE status = 'pending' AND created_at < $1
+		ORDER BY id DESC
+	`, cutoffTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]*Alert, 0, 32)
+	for rows.Next() {
+		var item Alert
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.RecordingID, &item.EmployeeID, &item.CustomerName, &item.Status, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &item)
+	}
+	return out, rows.Err()
+}
+
+// AddEscalation 同一信号 30 分钟内只升级一次。
+func (s *Store) AddEscalation(ctx context.Context, alertID int64, level, reason string) (bool, error) {
+	if err := s.EnsureActionSchema(ctx); err != nil {
+		return false, err
+	}
+	var count int
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM opportunity_alert_escalations
+		WHERE alert_id = $1 AND created_at > NOW() - INTERVAL '30 minutes'
+	`, alertID).Scan(&count)
+	if count > 0 {
+		return false, nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO opportunity_alert_escalations (tenant_id, alert_id, level, reason)
+		SELECT tenant_id, id, $2, $3 FROM opportunity_alerts WHERE id = $1
+	`, alertID, level, reason)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) ListEscalations(ctx context.Context, alertID int64) ([]map[string]any, error) {
+	if err := s.EnsureActionSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT level, reason, created_at FROM opportunity_alert_escalations
+		WHERE alert_id = $1 ORDER BY id DESC LIMIT 20
+	`, alertID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0, 4)
+	for rows.Next() {
+		var level, reason string
+		var createdAt time.Time
+		if err := rows.Scan(&level, &reason, &createdAt); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"level": level, "reason": reason, "created_at": createdAt.Format(time.RFC3339)})
+	}
+	return out, nil
 }

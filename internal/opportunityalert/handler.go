@@ -52,6 +52,7 @@ func (h *Handler) RegisterConfigRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/recipients", Handler: h.ListAdminAlertRecipients, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/deliveries", Handler: h.ListAdminAlertDeliveries, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/logs", Handler: h.ListAdminAlertLogs, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/ops/opportunity-alerts/{id}/escalations", Handler: h.ListAlertEscalations, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/ops/opportunity-alerts/{id}/resend", Handler: h.ResendAlert, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/ops/opportunity-alerts/{id}/recipients/{employee_id}/resend", Handler: h.ResendAlertRecipient, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
@@ -428,6 +429,9 @@ func (h *Handler) handleAction(w http.ResponseWriter, r *http.Request, action fu
 		httpError(w, err)
 		return
 	}
+	if req.ActionType != "" {
+		_ = h.service.RecordAlertAction(r.Context(), item.TenantID, alertID, claims.UserID, req.ActionType, req.Note)
+	}
 	httputil.WriteSuccess(w, item)
 }
 
@@ -469,4 +473,18 @@ func httpError(w http.ResponseWriter, err error) {
 		return
 	}
 	httputil.WriteBadRequest(w, msg)
+}
+
+// ListAlertEscalations 升级记录。
+func (h *Handler) ListAlertEscalations(w http.ResponseWriter, r *http.Request) {
+	alertID, ok := parseAlertID(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListEscalations(r.Context(), alertID)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
