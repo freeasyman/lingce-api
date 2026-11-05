@@ -481,6 +481,8 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		}
 	}
 
+	startedAt := time.Now().UTC()
+
 	var patient *patientInfo
 	var patientErr error
 	if req.CustomerID != nil && *req.CustomerID > 0 {
@@ -488,12 +490,18 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		if patientErr != nil {
 			return nil, patientErr
 		}
+	} else {
+		// 无患者：自动建匿名占位客户（与工牌一致，统一使用 customer_id）。
+		patient, patientErr = s.store.EnsureAnonymousCustomer(ctx, tenantID, actorID, startedAt)
+		if patientErr != nil {
+			return nil, patientErr
+		}
+		req.CustomerID = &patient.ID
 	}
 	templateVersionID, documentType, err := s.store.GetPublishedTemplateVersion(ctx, tenantID, req.TemplateVersionID, req.DocumentType, req.VisitType)
 	if err != nil {
 		return nil, err
 	}
-	startedAt := time.Now().UTC()
 	if !found {
 		encounterID, err = s.encounters.EnsureRealtime(ctx, encounter.RealtimeRequest{
 			TenantID: tenantID, ProviderID: actorID, DepartmentID: req.DepartmentID,

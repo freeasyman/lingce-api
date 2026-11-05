@@ -373,6 +373,53 @@ func (s *Store) GetPatient(ctx context.Context, tenantID, customerID int64) (*pa
 	return item, nil
 }
 
+// EnsureAnonymousCustomer 为无患者的实时接诊自动建一个匿名占位客户，
+// 与工牌录音的占位客户完全一致（统一使用 customer_id，不涉及 patient_id）。
+func (s *Store) EnsureAnonymousCustomer(ctx context.Context, tenantID, employeeID int64, recordedAt time.Time) (*patientInfo, error) {
+	employeeName := ""
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), '')
+		FROM employees
+		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`, employeeID, tenantID).Scan(&employeeName)
+	employeeName = strings.TrimSpace(employeeName)
+	if employeeName == "" {
+		employeeName = "员工"
+	}
+
+	// 占位名里的时间是给医生看的，统一用北京时间（UTC+8，中国无夏令时）。
+	cst := time.FixedZone("CST", 8*3600)
+	name := fmt.Sprintf("[%s %s接待的客户]", recordedAt.In(cst).Format("01-02 15:04"), employeeName)
+	extraData, err := json.Marshal(map[string]any{
+		"source_type": "recording_auto_archive",
+		"anonymous":   true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode anonymous customer extra data: %w", err)
+	}
+	notes := "录音自动建匿名档：信息待补"
+
+	var id int64
+	if err := s.pool.QueryRow(ctx, `
+		INSERT INTO customers (
+			tenant_id, name, source, lifecycle_stage, status, momentum, notes, extra_data, created_by, created_at, updated_at
+		)
+		VALUES ($1, $2, 'recording_auto_archive', 'unknown', 'lead', 50, $3, $4::jsonb, $5, NOW(), NOW())
+		RETURNING id
+	`, tenantID, name, notes, string(extraData), employeeID).Scan(&id); err != nil {
+		return nil, fmt.Errorf("create anonymous customer: %w", err)
+	}
+
+	return &patientInfo{
+		ID:   id,
+		Name: name,
+		ExtraData: map[string]any{
+			"source_type": "recording_auto_archive",
+			"anonymous":   true,
+		},
+	}, nil
+}
+
 func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64, versionID, documentType, visitType string) (string, string, error) {
 	args := []any{tenantID}
 	where := `t.status='published' AND t.is_current=true AND t.tenant_id IN (0,$1)`
