@@ -310,6 +310,7 @@ func main() {
 
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
+	dealExpertHandler.SetInstantAnalyzer(dealexpert.NewInstantAnalyzer(pool, llmClient, slog.Default()))
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
 	// 赢客专家分析消费者：消费 Worker 已落库的清洗转写，调用专属模型配置生成经营结案卡。
