@@ -30,6 +30,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.ListCardActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.CreateCardAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.TriggerRecordingAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

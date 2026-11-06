@@ -1,0 +1,16 @@
+【接待信息】
+客户称呼：{{customer_name}}
+咨询师：{{consultant_name}}
+接待时间：{{recorded_at}}
+业务类型：{{business_scope}}
+
+【产品目录】（可能为空；为空时 forecast 必须为 null）
+{{catalog}}
+
+【已有业务事实】（可能为空）
+{{facts}}
+
+【转写全文】
+{{transcript}}
+
+请按系统要求分析并输出 JSON。

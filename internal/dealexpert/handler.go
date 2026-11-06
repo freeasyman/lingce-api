@@ -17,6 +17,14 @@ type Handler struct {
 	service *Service
 	pool    *pgxpool.Pool
 	instant *InstantAnalyzer
+	v2card  *V2CardGenerator
+}
+
+// SetV2CardGenerator 设置 v2 决定卡生成器。
+func (h *Handler) SetV2CardGenerator(gen *V2CardGenerator) {
+	if h != nil {
+		h.v2card = gen
+	}
 }
 
 // SetInstantAnalyzer 设置轻量即时分析器；nil 时不启用。
@@ -34,6 +42,7 @@ func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken strin
 	router.Register(mux, []router.Route{
 		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings", Handler: h.Receive, AuthMode: "internal"},
 		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings/{id}/instant", Handler: h.RunInstant, AuthMode: "internal"},
+		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2Card, AuthMode: "internal"},
 	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
 }
 
@@ -114,4 +123,59 @@ func parsePathID(value string) (int64, error) {
 	var id int64
 	_, err := fmt.Sscanf(value, "%d", &id)
 	return id, err
+}
+
+// GenerateV2Card 内部接口：用 v0.4 提示词生成决定卡。
+func (h *Handler) GenerateV2Card(w http.ResponseWriter, r *http.Request) {
+	if h.v2card == nil {
+		httputil.WriteInternalError(w, "v2 card generator unavailable")
+		return
+	}
+	id, err := parsePathID(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	var body struct {
+		TenantID int64 `json:"tenant_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	card, err := h.v2card.Generate(r.Context(), body.TenantID, id)
+	if err != nil {
+		httputil.WriteError(w, 500, "V2CARD_ERROR", err.Error(), nil)
+		return
+	}
+	httputil.WriteSuccess(w, card)
+}
+
+// GetV2Card 前端读取决定卡。
+func (h *Handler) GetV2Card(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	id, err := parsePathID(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, id); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	if h.v2card == nil {
+		httputil.WriteSuccess(w, map[string]any{"status": "unavailable"})
+		return
+	}
+	item, err := h.v2card.Get(r.Context(), scope.TenantID, id)
+	if err != nil {
+		httputil.WriteSuccess(w, map[string]any{"status": "none"})
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }
