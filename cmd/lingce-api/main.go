@@ -311,6 +311,7 @@ func main() {
 
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
+	dealExpertHandler.SetV2CardGenerator(dealexpert.NewV2CardGenerator(pool, llmClient, slog.Default()))
 	if cfg.Deal.InstantEnabled {
 		dealExpertHandler.SetInstantAnalyzer(dealexpert.NewInstantAnalyzer(pool, llmClient, slog.Default()))
 	}
