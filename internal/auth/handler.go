@@ -151,6 +151,7 @@ func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 		TenantID    int64  `json:"tenant_id"`
 		CaptchaID   string `json:"captcha_id,omitempty"`
 		CaptchaCode string `json:"captcha_code,omitempty"`
+		Remember    bool   `json:"remember,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -173,7 +174,12 @@ func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.LoginEmployee(r.Context(), loginID, req.Password, req.TenantID)
+	// 记住登录（桌面端）：签发 30 天长期 token，减少重复登录/验证码
+	expiryHours := 0
+	if req.Remember {
+		expiryHours = 30 * 24
+	}
+	resp, err := h.service.LoginEmployee(r.Context(), loginID, req.Password, req.TenantID, expiryHours)
 	h.recordInstitutionLoginLog(r, req.TenantID, loginID, resp, err)
 	if err != nil {
 		var authErr *AuthError

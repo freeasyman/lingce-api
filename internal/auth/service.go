@@ -129,7 +129,7 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 }
 
 // LoginEmployee authenticates an institution employee
-func (s *Service) LoginEmployee(ctx context.Context, username, password string, tenantID int64) (*LoginResponse, error) {
+func (s *Service) LoginEmployee(ctx context.Context, username, password string, tenantID int64, expiryHours int) (*LoginResponse, error) {
 	if tenantID == 0 {
 		options, optErr := s.store.ListEmployeeTenantOptionsByLoginID(ctx, username)
 		if optErr != nil {
@@ -196,13 +196,16 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	}
 
 	// Generate JWT token
+	if expiryHours <= 0 {
+		expiryHours = s.jwtExpiryHours
+	}
 	token, expiresAt, err := auth.GenerateToken(
 		s.jwtSecret,
 		employee.ID,
 		auth.UserTypeEmployee,
 		&employee.TenantID,
 		employee.SessionVersion,
-		s.jwtExpiryHours,
+		expiryHours,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
