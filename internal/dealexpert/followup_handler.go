@@ -523,7 +523,7 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := h.pool.Query(r.Context(), `
-		SELECT c.recording_id, c.status, c.card,
+		SELECT c.recording_id, c.status, c.card, COALESCE(r.encounter_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at
 		FROM deal_cards_v2 c
 		JOIN recordings r ON r.id = c.recording_id
@@ -540,23 +540,24 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0, 64)
 	for rows.Next() {
-		var recordingID int64
+		var recordingID, encID int64
 		var status, customer, consultant string
 		var card []byte
 		var recordedAt any
-		if err := rows.Scan(&recordingID, &status, &card, &customer, &consultant, &recordedAt); err != nil {
+		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt); err != nil {
 			continue
 		}
 		var parsed map[string]any
 		_ = json.Unmarshal(card, &parsed)
 		slim := map[string]any{}
-		for _, key := range []string{"headline", "deal_status", "scene_type", "stuck_point_headline", "real_reason", "killer_evidence", "deal_confidence", "blocker_label", "customer_context_tags", "follow_up_tasks", "amount_hints", "pattern"} {
+		for _, key := range []string{"headline", "deal_status", "scene_type", "stuck_point_headline", "real_reason", "killer_evidence", "deal_confidence", "blocker_label", "customer_context_tags", "follow_up_tasks", "amount_hints", "pattern", "intent_project"} {
 			if v, ok := parsed[key]; ok {
 				slim[key] = v
 			}
 		}
 		items = append(items, map[string]any{
 			"recording_id": recordingID,
+			"encounter_id": encID,
 			"status":       status,
 			"customer":     customer,
 			"consultant":   consultant,
