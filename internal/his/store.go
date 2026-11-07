@@ -698,7 +698,10 @@ func (s *Store) ListPatientIdentifiers(ctx context.Context, tenantID, customerID
 // ---------------------------------------------------------------------------
 // 排班与号源
 
-const scheduleColumns = `s.id, s.doctor_id, s.department_id, s.room_id, s.work_date::text,
+const scheduleColumns = `s.id, s.doctor_id,
+	(SELECT COALESCE(e.full_name, e.name, e.username, '') FROM his_doctors d
+	  JOIN employees e ON e.id = d.employee_id WHERE d.id = s.doctor_id) AS doctor_name,
+	s.department_id, s.room_id, s.work_date::text,
 	s.period, to_char(s.start_time, 'HH24:MI'), to_char(s.end_time, 'HH24:MI'),
 	s.slot_interval_minutes, s.status, s.remark`
 
@@ -719,7 +722,7 @@ type scheduleQuery struct {
 
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var sched Schedule
-	err := row.Scan(&sched.ID, &sched.DoctorID, &sched.DepartmentID, &sched.RoomID, &sched.WorkDate,
+	err := row.Scan(&sched.ID, &sched.DoctorID, &sched.DoctorName, &sched.DepartmentID, &sched.RoomID, &sched.WorkDate,
 		&sched.Period, &sched.StartTime, &sched.EndTime, &sched.SlotIntervalMinutes, &sched.Status, &sched.Remark,
 		&sched.TotalSlots, &sched.FreeSlots, &sched.ReservedSlots, &sched.RegisteredSlots)
 	return sched, err
@@ -2457,7 +2460,9 @@ func (s *Store) ListPharmacyPrescriptions(ctx context.Context, tenantID int64, s
 		status = "charged"
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+prescriptionColumns+`, COALESCE(c.name, ''), COALESCE(pi.value, '')
+		SELECT p.id, p.encounter_id, p.customer_id, p.doctor_id, COALESCE(p.prescription_no, ''),
+		       p.type, p.diagnosis, p.status, p.created_at,
+		       COALESCE(c.name, ''), COALESCE(pi.value, '')
 		FROM his_prescriptions p
 		JOIN customers c ON c.id = p.customer_id
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = p.customer_id
@@ -2564,7 +2569,7 @@ func (s *Store) ListStock(ctx context.Context, tenantID int64, keyword string) (
 		SELECT d.id, d.name, d.spec, d.unit, COALESCE(st.batch_no, ''), COALESCE(st.quantity, 0),
 		       to_char(st.expiry_date, 'YYYY-MM-DD'), COALESCE(st.location, '')
 		FROM his_drugs d
-		LEFT JOIN his_stock st ON st.drug_id = d.id AND st.tenant_id = d.tenant_id
+		JOIN his_stock st ON st.drug_id = d.id AND st.tenant_id = d.tenant_id
 		WHERE d.tenant_id = $1 AND ($2 = '%%' OR d.name ILIKE $2)
 		ORDER BY d.id`, tenantID, kw)
 	if err != nil {

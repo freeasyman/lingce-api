@@ -1093,3 +1093,55 @@ func TestStaffRoles(t *testing.T) {
 		t.Fatalf("missing employee err: %v", err)
 	}
 }
+
+func TestPharmacyQueueQuery(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	drug, err := svc.CreateDrug(ctx, 1, CreateDrugRequest{
+		Code: "PH01", Name: "甲硝唑片", Spec: "0.2g*21片", Unit: "盒", DrugType: "western", RetailPrice: 6.5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encounterID, _ := walkinEncounter(t, svc, 1)
+	rx, err := svc.CreatePrescription(ctx, 1, CreatePrescriptionRequest{
+		EncounterID: encounterID, Diagnosis: "阴道炎",
+		Items: []PrescriptionItemInput{{DrugID: drug.ID, Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := svc.IssuePrescription(ctx, 1, rx.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 未收费：不在待发药队列
+	queue, err := svc.ListPharmacyPrescriptions(ctx, 1, "charged")
+	if err != nil {
+		t.Fatalf("list pharmacy queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue should be empty before payment, got %d", len(queue))
+	}
+
+	// 收费后：出现在待发药队列，且带患者姓名/病案号（JOIN 无歧义）
+	order, err := svc.CreateOrder(ctx, 1, 10, CreateOrderRequest{
+		EncounterID: encounterID,
+		Items:       []OrderLineInput{{ItemType: "drug", RefID: drug.ID, Quantity: 1, PrescriptionID: &issued.ID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddPayment(ctx, 1, 10, order.ID, CreatePaymentRequest{Method: "cash", Amount: order.PayableTotal}); err != nil {
+		t.Fatal(err)
+	}
+	queue, err = svc.ListPharmacyPrescriptions(ctx, 1, "charged")
+	if err != nil {
+		t.Fatalf("list pharmacy queue after payment: %v", err)
+	}
+	if len(queue) != 1 || queue[0].CustomerName == "" || queue[0].MRN == "" || len(queue[0].Items) != 1 {
+		t.Fatalf("queue item incomplete: %+v", queue)
+	}
+}

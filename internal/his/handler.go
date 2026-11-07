@@ -2,6 +2,7 @@ package his
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1389,6 +1390,7 @@ func (h *Handler) ListPharmacyPrescriptions(w http.ResponseWriter, r *http.Reque
 	}
 	items, err := h.service.ListPharmacyPrescriptions(r.Context(), tenantID, r.URL.Query().Get("status"))
 	if err != nil {
+		slog.Error("his: list pharmacy prescriptions", "error", err)
 		httputil.WriteInternalError(w, "failed to list pharmacy prescriptions")
 		return
 	}

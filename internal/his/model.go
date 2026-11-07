@@ -203,6 +203,7 @@ type RegisterPatientResponse struct {
 type Schedule struct {
 	ID                  int64  `json:"id"`
 	DoctorID            int64  `json:"doctor_id"`
+	DoctorName          string `json:"doctor_name"`
 	DepartmentID        *int64 `json:"department_id"`
 	RoomID              *int64 `json:"room_id"`
 	WorkDate            string `json:"work_date"`  // YYYY-MM-DD
