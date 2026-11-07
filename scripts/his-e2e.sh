@@ -23,7 +23,7 @@ echo "== 1. 主数据（种子）=="
 jqok "药品>=17" "$(json /api/v1/his/master/drugs)" 'length >= 17'
 jqok "收费项目>=11" "$(json /api/v1/his/master/charge-items)" 'length >= 11'
 jqok "打包产品>=3" "$(json /api/v1/his/master/bundles)" 'length >= 3'
-jqok "打包价 88" "$(json /api/v1/his/master/bundles)" '.[0].price == 88'
+jqok "打包价 68" "$(json /api/v1/his/master/bundles)" '.[0].price == 68'
 jqok "病历模板>=4" "$(json /api/v1/his/workbench/templates)" 'length >= 4'
 
 echo "== 2. 医生与排班 =="
@@ -60,7 +60,7 @@ jqok "处方开具(P号)" "$RX_ISSUED" '.prescription_no | startswith("P")'
 echo "== 6. 打包收费 =="
 ORDER="$(post /api/v1/his/orders "{\"encounter_id\":$ENC_ID,\"discount_total\":0,\"items\":[{\"item_type\":\"bundle\",\"ref_id\":1,\"quantity\":1},{\"item_type\":\"drug\",\"ref_id\":1,\"quantity\":1,\"prescription_id\":$RX_ID}]}")"
 ORDER_ID="$(echo "$ORDER" | jq -r '.id')"; PAYABLE="$(echo "$ORDER" | jq -r '.payable_total')"
-jqok "收费单(88+6.5=94.5)" "$ORDER" '.items_total == 94.5'
+jqok "收费单(68+6.5=74.5)" "$ORDER" '.items_total == 74.5'
 PAID="$(post "/api/v1/his/orders/$ORDER_ID/payments" "{\"method\":\"wechat\",\"amount\":$PAYABLE}")"
 jqok "收款->paid" "$PAID" '.status == "paid"'
 jqok "处方联动 charged" "$(json "/api/v1/his/prescriptions?encounter_id=$ENC_ID")" '.[0].status == "charged"'
@@ -80,7 +80,7 @@ jqok "打印标记" "$PRINTED" '.status == "printed"'
 
 echo "== 9. 报表 =="
 RPT="$(json "/api/v1/his/reports/summary?date_from=2026-11-01&date_to=2027-01-01")"
-jqok "报表收入>=94.5" "$RPT" '.revenue >= 94.5'
+jqok "报表收入>=74.5" "$RPT" '.revenue >= 74.5'
 jqok "报表门诊量>=1" "$RPT" '.visits >= 1'
 jqok "支付方式含微信" "$RPT" '.payment_methods | map(.method) | index("wechat") != null'
 
