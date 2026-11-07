@@ -321,6 +321,7 @@ type EMRRecordSummary struct {
 	ID              string         `json:"id"`
 	EncounterID     int64          `json:"encounter_id"`
 	CustomerID      int64          `json:"customer_id"`
+	TemplateID      string         `json:"template_id,omitempty"`
 	DocumentType    string         `json:"document_type"`
 	VisitType       string         `json:"visit_type"`
 	TemplateName    string         `json:"template_name"`
@@ -340,9 +341,11 @@ type EnsureEMRRequest struct {
 
 // SaveEMRRequest 保存病历内容（走 emrrecord 手动保存）。
 type SaveEMRRequest struct {
-	Content         map[string]any `json:"content"`
-	PatientSnapshot map[string]any `json:"patient_snapshot,omitempty"`
-	Note            string         `json:"note,omitempty"`
+	Content          map[string]any `json:"content"`
+	PatientSnapshot  map[string]any `json:"patient_snapshot,omitempty"`
+	Note             string         `json:"note,omitempty"`
+	AllowNonBlocking bool           `json:"allow_non_blocking,omitempty"`
+	QualityRunID     string         `json:"quality_run_id,omitempty"`
 }
 
 // PrescriptionItemInput 处方明细输入（药品必须来自药品字典）。
@@ -766,4 +769,51 @@ type UpdateStaffRolesRequest struct {
 type ICDDiagnosis struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
+}
+
+// TemplateField 模板字段（复用 emr_fields / emr_template_fields，HIS 只读）。
+type TemplateField struct {
+	Code        string   `json:"code"`
+	Name        string   `json:"name"`
+	IsVisible   bool     `json:"is_visible"`
+	IsRequired  bool     `json:"is_required"`
+	Category    string   `json:"category"`
+	InputType   string   `json:"input_type"`
+	Description string   `json:"description"`
+	Options     []string `json:"options"`
+}
+
+// QualityResult 质控报告（复用听写病历质检引擎的输出，只读透传）。
+type QualityResult struct {
+	RunID          string           `json:"run_id"`
+	RuleSetVersion string           `json:"rule_set_version"`
+	TotalScore     int              `json:"total_score"`
+	Grade          string           `json:"grade"`
+	BlockingCount  int              `json:"blocking_count"`
+	PendingCount   int              `json:"pending_count"`
+	OverallResult  string           `json:"overall_result"`
+	Results        []QualityFinding `json:"results"`
+}
+
+// QualityFinding 单条质控结果。
+type QualityFinding struct {
+	RuleCode     string `json:"rule_code"`
+	SectionCode  string `json:"section_code"`
+	Result       string `json:"result"`
+	Message      string `json:"message"`
+	Blocking     bool   `json:"blocking"`
+	ManualReview bool   `json:"manual_review"`
+}
+
+// EMRSaveResponse 病历保存/完成响应：病历摘要 + 质控报告（复用引擎输出）。
+type EMRSaveResponse struct {
+	Record  *EMRRecordSummary `json:"record"`
+	Quality *QualityResult    `json:"quality,omitempty"`
+}
+
+// CompleteEMRResponse 完成病历响应：正常完成或需确认非阻断问题。
+type CompleteEMRResponse struct {
+	Record      *EMRRecordSummary `json:"record"`
+	Quality     *QualityResult    `json:"quality,omitempty"`
+	NeedConfirm bool              `json:"need_confirm,omitempty"`
 }

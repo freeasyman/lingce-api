@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrquality"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/jackc/pgx/v5"
 )
@@ -470,8 +471,41 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 	return s.store.GetEMRRecordSummary(ctx, tenantID, record.ID)
 }
 
-// SaveEMRRecord 保存病历内容（复用 emrrecord 手动保存）。
-func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*EMRRecordSummary, error) {
+// TemplateFields 读取模板字段（复用 EMR 模板字段配置）。
+func (s *Service) TemplateFields(ctx context.Context, tenantID int64, templateID string) ([]TemplateField, error) {
+	return s.store.TemplateFields(ctx, tenantID, templateID)
+}
+
+// toQualityResult 透传质控报告（只读映射，不重实现质检）。
+func toQualityResult(report *emrquality.Report) *QualityResult {
+	if report == nil {
+		return nil
+	}
+	quality := &QualityResult{
+		RunID:          report.RunID,
+		RuleSetVersion: report.RuleSetVersion,
+		TotalScore:     report.TotalScore,
+		Grade:          report.Grade,
+		BlockingCount:  report.BlockingCount,
+		PendingCount:   report.PendingCount,
+		OverallResult:  report.OverallResult,
+		Results:        make([]QualityFinding, 0, len(report.Results)),
+	}
+	for _, item := range report.Results {
+		quality.Results = append(quality.Results, QualityFinding{
+			RuleCode:     item.RuleCode,
+			SectionCode:  item.SectionCode,
+			Result:       item.Result,
+			Message:      item.Message,
+			Blocking:     item.Blocking,
+			ManualReview: item.ManualReview,
+		})
+	}
+	return quality
+}
+
+// SaveEMRRecord 保存病历内容（复用 emrrecord 手动保存，附质检报告）。
+func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*EMRSaveResponse, error) {
 	if s.emr == nil {
 		return nil, ErrNotFound
 	}
@@ -483,23 +517,46 @@ func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, re
 	if err != nil {
 		return nil, err
 	}
-	return s.store.GetEMRRecordSummary(ctx, tenantID, outcome.Record.ID)
+	record, err := s.store.GetEMRRecordSummary(ctx, tenantID, outcome.Record.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &EMRSaveResponse{Record: record, Quality: toQualityResult(outcome.QualityReport)}, nil
 }
 
-// CompleteEMRRecord 完成病历（复用 emrrecord 完成动作，含质检）。
-func (s *Service) CompleteEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*EMRRecordSummary, error) {
+// CompleteEMRRecord 完成病历（复用 emrrecord 完成动作，含质检与确认流）。
+// 返回 err 时仍可能携带报告：阻断项为硬失败，提示项返回 ErrQualityConfirmationRequired 供前端确认。
+func (s *Service) CompleteEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*CompleteEMRResponse, error) {
 	if s.emr == nil {
 		return nil, ErrNotFound
 	}
 	outcome, err := s.emr.Complete(ctx, tenantID, actorID, recordID, emrrecord.ActionRequest{
-		Content:         req.Content,
-		PatientSnapshot: req.PatientSnapshot,
-		Note:            req.Note,
+		Content:          req.Content,
+		PatientSnapshot:  req.PatientSnapshot,
+		Note:             req.Note,
+		AllowNonBlocking: req.AllowNonBlocking,
+		QualityRunID:     req.QualityRunID,
 	})
-	if err != nil {
+	needConfirm := errors.Is(err, emrrecord.ErrQualityConfirmationRequired)
+	if err != nil && !needConfirm {
 		return nil, err
 	}
-	return s.store.GetEMRRecordSummary(ctx, tenantID, outcome.Record.ID)
+	var record *EMRRecordSummary
+	if outcome != nil && outcome.Record != nil {
+		record, _ = s.store.GetEMRRecordSummary(ctx, tenantID, outcome.Record.ID)
+	}
+	return &CompleteEMRResponse{
+		Record:      record,
+		Quality:     toQualityResult(outcomeQuality(outcome)),
+		NeedConfirm: needConfirm,
+	}, err
+}
+
+func outcomeQuality(outcome *emrrecord.WriteOutcome) *emrquality.Report {
+	if outcome == nil {
+		return nil
+	}
+	return outcome.QualityReport
 }
 
 // ---------------------------------------------------------------------------

@@ -214,6 +214,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/emr/ensure", Handler: h.EnsureEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/save", Handler: h.SaveEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/complete", Handler: h.CompleteEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/emr/templates/{id}/fields", Handler: h.TemplateFields, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 医生工作站：处方
 		{Method: "GET", Path: "/api/v1/his/prescriptions", Handler: h.ListPrescriptions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -994,6 +995,26 @@ func (h *Handler) SaveEMRRecord(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, record)
 }
 
+// TemplateFields 模板字段（复用 EMR 模板配置，只读）。
+func (h *Handler) TemplateFields(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	templateID := strings.TrimSpace(r.PathValue("id"))
+	if templateID == "" {
+		httputil.WriteBadRequest(w, "template id is required")
+		return
+	}
+	fields, err := h.service.TemplateFields(r.Context(), tenantID, templateID)
+	if err != nil {
+		slog.Error("his: template fields", "error", err)
+		httputil.WriteInternalError(w, "failed to load template fields")
+		return
+	}
+	httputil.WriteSuccess(w, fields)
+}
+
 // CompleteEMRRecord 完成病历。
 func (h *Handler) CompleteEMRRecord(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
@@ -1009,12 +1030,16 @@ func (h *Handler) CompleteEMRRecord(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	record, err := h.service.CompleteEMRRecord(r.Context(), tenantID, claims.UserID, recordID, req)
+	response, err := h.service.CompleteEMRRecord(r.Context(), tenantID, claims.UserID, recordID, req)
+	if err != nil && response != nil {
+		httputil.WriteSuccess(w, response)
+		return
+	}
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, record)
+	httputil.WriteSuccess(w, response)
 }
 
 // ListPrescriptions 就诊处方列表（?encounter_id=）。

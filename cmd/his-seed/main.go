@@ -180,6 +180,32 @@ func main() {
 		}
 	}
 
-	fmt.Printf("种子完成：租户 %d\n  房间 %d 间、药品 %d 种、收费项目 %d 项、打包产品 %d 个、病历模板 %d 套\n",
-		*tenantID, len(rooms), len(drugs), len(items), len(bundles), len(templates))
+	// 模板字段：复用听写病历现有字段库（emr_fields），把通用模板的字段组复制给 HIS 专科模板。
+	// 数据复用不改 EMR 代码；幂等（按 template_id+field_id 去重）。
+	fieldSources := []struct{ source, target string }{
+		{"gynecology", "gyn_first"},
+		{"gynecology", "gyn_follow"},
+		{"tcm", "tcm_first"},
+		{"tcm", "tcm_follow"},
+	}
+	copied := 0
+	for _, pair := range fieldSources {
+		tag, err := pool.Exec(ctx, `
+			INSERT INTO emr_template_fields (tenant_id, template_id, field_id, display_order, is_visible, is_required)
+			SELECT tf.tenant_id, tgt.id, tf.field_id, tf.display_order, tf.is_visible, tf.is_required
+			FROM emr_template_fields tf
+			JOIN emr_templates src ON src.id = tf.template_id AND src.code = $1
+			JOIN emr_templates tgt ON tgt.code = $2
+			WHERE NOT EXISTS (
+				SELECT 1 FROM emr_template_fields existing
+				WHERE existing.template_id = tgt.id AND existing.field_id = tf.field_id
+			)`, pair.source, pair.target)
+		if err != nil {
+			log.Fatalf("复制模板字段 %s→%s: %v", pair.source, pair.target, err)
+		}
+		copied += int(tag.RowsAffected())
+	}
+
+	fmt.Printf("种子完成：租户 %d\n  房间 %d 间、药品 %d 种、收费项目 %d 项、打包产品 %d 个、病历模板 %d 套、复制模板字段 %d 条\n",
+		*tenantID, len(rooms), len(drugs), len(items), len(bundles), len(templates), copied)
 }

@@ -1492,13 +1492,13 @@ func (s *Store) GetEMRRecordSummary(ctx context.Context, tenantID int64, recordI
 	var summary EMRRecordSummary
 	var content, snapshot []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.id::text, r.encounter_id, r.customer_id, r.document_type, r.visit_type,
+		SELECT r.id::text, r.encounter_id, r.customer_id, r.template_id::text, r.document_type, r.visit_type,
 		       COALESCE(t.name, ''), r.status, r.started_at, r.updated_at,
 		       r.content_json, r.patient_snapshot_json
 		FROM emr_records r
 		LEFT JOIN emr_templates t ON t.id = r.template_id
 		WHERE r.tenant_id = $1 AND r.id = $2::uuid`, tenantID, recordID).
-		Scan(&summary.ID, &summary.EncounterID, &summary.CustomerID, &summary.DocumentType, &summary.VisitType,
+		Scan(&summary.ID, &summary.EncounterID, &summary.CustomerID, &summary.TemplateID, &summary.DocumentType, &summary.VisitType,
 			&summary.TemplateName, &summary.Status, &summary.StartedAt, &summary.UpdatedAt, &content, &snapshot)
 	if err != nil {
 		return nil, err
@@ -3369,4 +3369,70 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// TemplateFields 读取模板字段（复用 emr_template_fields + emr_fields，HIS 只读不写）。
+func (s *Store) TemplateFields(ctx context.Context, tenantID int64, templateID string) ([]TemplateField, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT f.code, f.name, tf.is_visible, tf.is_required, f.content_category,
+		       COALESCE(f.input_type, '长文本'), COALESCE(f.description, ''), f.options_json
+		FROM emr_template_fields tf
+		JOIN emr_fields f ON f.id = tf.field_id
+		WHERE tf.template_id = $1::uuid
+		ORDER BY tf.display_order, tf.created_at`,
+		templateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	fields := make([]TemplateField, 0)
+	for rows.Next() {
+		var field TemplateField
+		var optionsRaw []byte
+		if err := rows.Scan(&field.Code, &field.Name, &field.IsVisible, &field.IsRequired, &field.Category,
+			&field.InputType, &field.Description, &optionsRaw); err != nil {
+			return nil, err
+		}
+		field.Options = parseFieldOptions(optionsRaw)
+		fields = append(fields, field)
+	}
+	return fields, rows.Err()
+}
+
+// parseFieldOptions 解析字段选项（options_json 兼容 {"options":[...]} 与 [...])。
+func parseFieldOptions(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var wrapper struct {
+		Options []string `json:"options"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper.Options) > 0 {
+		return wrapper.Options
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if options, ok := obj["options"].([]any); ok {
+			out := make([]string, 0, len(options))
+			for _, option := range options {
+				switch value := option.(type) {
+				case string:
+					out = append(out, value)
+				case map[string]any:
+					if label, ok := value["label"].(string); ok {
+						out = append(out, label)
+					} else if name, ok := value["name"].(string); ok {
+						out = append(out, name)
+					}
+				}
+			}
+			return out
+		}
+	}
+	return nil
 }
