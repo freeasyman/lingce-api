@@ -1044,7 +1044,7 @@ func (s *Store) ListRegistrations(ctx context.Context, tenantID int64, date, sta
 func (s *Store) ListQueue(ctx context.Context, tenantID int64, date string, doctorID int64, status string) ([]QueueEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT q.id, q.encounter_id, q.registration_id, r.customer_id, COALESCE(c.name, ''),
-		       COALESCE(c.phone, ''), q.seq_no, q.status, q.called_at,
+		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0), q.seq_no, q.status, q.called_at,
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
@@ -1065,7 +1065,7 @@ func (s *Store) ListQueue(ctx context.Context, tenantID int64, date string, doct
 	for rows.Next() {
 		var q QueueEntry
 		if err := rows.Scan(&q.ID, &q.EncounterID, &q.RegistrationID, &q.CustomerID, &q.CustomerName,
-			&q.Phone, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName); err != nil {
+			&q.Phone, &q.Gender, &q.Age, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName); err != nil {
 			return nil, err
 		}
 		items = append(items, q)
@@ -1424,7 +1424,7 @@ func (s *Store) queueItemByRegistration(ctx context.Context, tenantID, registrat
 	var q QueueEntry
 	err := s.pool.QueryRow(ctx, `
 		SELECT q.id, q.encounter_id, q.registration_id, r.customer_id, COALESCE(c.name, ''),
-		       COALESCE(c.phone, ''), q.seq_no, q.status, q.called_at,
+		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0), q.seq_no, q.status, q.called_at,
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
@@ -1433,7 +1433,7 @@ func (s *Store) queueItemByRegistration(ctx context.Context, tenantID, registrat
 		LEFT JOIN employees e ON e.id = d.employee_id
 		WHERE q.tenant_id = $1 AND q.registration_id = $2`, tenantID, registrationID).
 		Scan(&q.ID, &q.EncounterID, &q.RegistrationID, &q.CustomerID, &q.CustomerName,
-			&q.Phone, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName)
+			&q.Phone, &q.Gender, &q.Age, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName)
 	if err != nil {
 		return QueueEntry{}, err
 	}
@@ -3337,4 +3337,36 @@ func (s *Store) TenantHasRoleAssignments(ctx context.Context, tenantID int64) (b
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM his_staff_roles WHERE tenant_id = $1)`, tenantID).Scan(&exists)
 	return exists, err
+}
+
+// SearchDiagnosisCatalog 检索 ICD-10 诊断目录（名称模糊 / 编码前缀）。
+func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limit int) ([]ICDDiagnosis, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	kw := strings.TrimSpace(keyword)
+	if kw == "" {
+		return []ICDDiagnosis{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT diagnosis_code, diagnosis_name
+		FROM emr_icd10_diagnosis_catalog
+		WHERE is_active
+		  AND (diagnosis_name ILIKE $1 OR normalized_name ILIKE $1 OR diagnosis_code ILIKE $2)
+		ORDER BY CASE WHEN diagnosis_code ILIKE $2 THEN 0 ELSE 1 END, diagnosis_code
+		LIMIT $3`, "%"+kw+"%", kw+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]ICDDiagnosis, 0, limit)
+	for rows.Next() {
+		var item ICDDiagnosis
+		if err := rows.Scan(&item.Code, &item.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

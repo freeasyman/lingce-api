@@ -295,6 +295,8 @@ type QueueEntry struct {
 	CustomerID     int64      `json:"customer_id"`
 	CustomerName   string     `json:"customer_name"`
 	Phone          string     `json:"phone"`
+	Gender         string     `json:"gender"`
+	Age            int        `json:"age"`
 	SeqNo          int        `json:"seq_no"`
 	Status         string     `json:"status"`
 	CalledAt       *time.Time `json:"called_at"`
@@ -758,4 +760,10 @@ type StaffRole struct {
 // UpdateStaffRolesRequest 覆盖式设置员工角色（角色可叠加）。
 type UpdateStaffRolesRequest struct {
 	Roles []string `json:"roles"`
+}
+
+// ICDDiagnosis ICD-10 诊断目录条目（工作站诊断检索）。
+type ICDDiagnosis struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
 }

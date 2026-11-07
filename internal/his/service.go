@@ -1042,3 +1042,8 @@ func (s *Service) RequireRole(ctx context.Context, tenantID, employeeID int64, r
 	}
 	return nil
 }
+
+// SearchDiagnosis 诊断检索（工作站诊断录入）。
+func (s *Service) SearchDiagnosis(ctx context.Context, tenantID int64, keyword string) ([]ICDDiagnosis, error) {
+	return s.store.SearchDiagnosisCatalog(ctx, keyword, 20)
+}

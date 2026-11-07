@@ -256,6 +256,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 基础报表
 		{Method: "GET", Path: "/api/v1/his/reports/summary", Handler: h.ReportSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 诊断检索（ICD-10 目录）
+		{Method: "GET", Path: "/api/v1/his/icd10", Handler: h.SearchDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 员工角色（管理台配置 + 当前员工查询）
 		{Method: "GET", Path: "/api/v1/his/staff-roles", Handler: h.ListStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/his/staff-roles/{employee_id}", Handler: h.UpdateStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1818,4 +1821,19 @@ func (h *Handler) MyRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, roles)
+}
+
+// SearchDiagnosis ICD-10 诊断检索（?keyword=）。
+func (h *Handler) SearchDiagnosis(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.SearchDiagnosis(r.Context(), tenantID, r.URL.Query().Get("keyword"))
+	if err != nil {
+		slog.Error("his: search diagnosis", "error", err)
+		httputil.WriteInternalError(w, "failed to search diagnosis")
+		return
+	}
+	httputil.WriteSuccess(w, items)
 }
