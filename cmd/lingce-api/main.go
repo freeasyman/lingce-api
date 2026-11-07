@@ -313,6 +313,9 @@ func main() {
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
 	dealExpertHandler.SetV2CardGenerator(dealexpert.NewV2CardGenerator(pool, llmClient, slog.Default()))
+	if !strings.EqualFold(cfg.App.Env, "production") {
+		dealExpertHandler.RegisterDevLoginRoute(mux, cfg.JWT.Secret)
+	}
 	if cfg.Deal.InstantEnabled {
 		dealExpertHandler.SetInstantAnalyzer(dealexpert.NewInstantAnalyzer(pool, llmClient, slog.Default()))
 	}
