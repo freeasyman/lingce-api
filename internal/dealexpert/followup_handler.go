@@ -83,7 +83,7 @@ func (h *Handler) ListFollowUps(w http.ResponseWriter, r *http.Request) {
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
+	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 20
 	}
 	items, total, err := h.service.ListFollowUps(r.Context(), scope.TenantID, strings.TrimSpace(r.URL.Query().Get("status")), page, pageSize, scope.EmployeeFilter)

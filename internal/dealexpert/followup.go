@@ -198,7 +198,7 @@ func (s *Service) ListFollowUps(ctx context.Context, tenantID int64, status stri
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
+	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 20
 	}
 	if status != "" && !IsActiveFollowUpStatus(status) && status != FollowUpCompleted && status != FollowUpCancelled && status != FollowUpRescheduled {
