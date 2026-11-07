@@ -2,27 +2,64 @@ package dealexpert
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
-//go:embed v2_prompt.txt
-var v2CardSystemPrompt string
-
-//go:embed v2_user_template.txt
-var v2CardUserTemplate string
+// V2CardPromptCode 是 v2 决定卡在提示词库里的稳定 code；版本放在 version 字段。
+const V2CardPromptCode = "deal_expert_v2_card"
 
 var v2JSONFence = regexp.MustCompile(`(?s)\{.*\}`)
 
-// V2CardGenerator 用 v0.4 提示词生成“决定卡”内容。
+type v2Prompt struct {
+	SystemPrompt string
+	UserTemplate string
+	Version      string
+}
+
+// loadPrompt 从提示词库加载 v2 决定卡提示词（支持租户覆盖），不在代码里硬编码。
+func (g *V2CardGenerator) loadPrompt(ctx context.Context, tenantID int64) (*v2Prompt, error) {
+	pr := &v2Prompt{}
+	err := g.pool.QueryRow(ctx, `
+		SELECT COALESCE(system_prompt, ''), COALESCE(user_prompt_template, ''), COALESCE(version, 'v1')
+		FROM recording_analysis_prompts
+		WHERE code = $1 AND is_active = true
+		LIMIT 1
+	`, V2CardPromptCode).Scan(&pr.SystemPrompt, &pr.UserTemplate, &pr.Version)
+	if err != nil {
+		return nil, fmt.Errorf("prompt %q not found or inactive: %w", V2CardPromptCode, err)
+	}
+	var customSystem, customUser *string
+	err = g.pool.QueryRow(ctx, `
+		SELECT custom_system_prompt, custom_user_prompt_template
+		FROM recording_analysis_tenant_configs
+		WHERE tenant_id = $1 AND prompt_code = $2 AND is_enabled = true
+		ORDER BY priority DESC, id DESC
+		LIMIT 1
+	`, tenantID, V2CardPromptCode).Scan(&customSystem, &customUser)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("load tenant prompt override: %w", err)
+	}
+	if customSystem != nil && strings.TrimSpace(*customSystem) != "" {
+		pr.SystemPrompt = strings.TrimSpace(*customSystem)
+	}
+	if customUser != nil && strings.TrimSpace(*customUser) != "" {
+		pr.UserTemplate = strings.TrimSpace(*customUser)
+	}
+	return pr, nil
+}
+
+// V2CardGenerator 用提示词库中的“决定卡”提示词生成内容。
 type V2CardGenerator struct {
 	pool *pgxpool.Pool
 	llm  *llmgateway.Client
@@ -74,10 +111,16 @@ func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID in
 		"{{recorded_at}}", recordedAt,
 		"{{business_scope}}", scope,
 		"{{catalog}}", catalog,
+		"{{product_catalog}}", catalog,
 		"{{facts}}", facts,
 		"{{transcript}}", transcript,
 	)
-	userPrompt := replacer.Replace(v2CardUserTemplate)
+	prompt, err := g.loadPrompt(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	userPrompt := replacer.Replace(prompt.UserTemplate)
+	systemPrompt := replacer.Replace(prompt.SystemPrompt)
 
 	cfg := g.loadModelConfig(ctx, tenantID)
 	resp, err := g.llm.TextInference(ctx, llmgateway.TextInferenceRequest{
@@ -89,26 +132,27 @@ func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID in
 		Provider:      cfg.provider,
 		ModelCode:     cfg.modelCode,
 		Messages: []llmgateway.Message{
-			{Role: "system", Content: v2CardSystemPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		Params: &llmgateway.Params{Temperature: 0.2, MaxTokens: 3000, TimeoutSeconds: 180, ResponseFormat: "json"},
 	})
 	if err != nil {
-		g.save(ctx, tenantID, recordingID, "failed", nil, err.Error(), cfg.modelCode)
+		g.save(ctx, tenantID, recordingID, "failed", nil, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
 	match := v2JSONFence.FindString(strings.TrimSpace(resp.Content))
 	var card map[string]any
 	if match == "" || json.Unmarshal([]byte(match), &card) != nil {
-		g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode)
+		g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode, prompt.Version)
 		return nil, fmt.Errorf("invalid json output")
 	}
+	card["prompt_version"] = prompt.Version
 	if err := g.validate(card); err != nil {
-		g.save(ctx, tenantID, recordingID, "failed", card, err.Error(), cfg.modelCode)
+		g.save(ctx, tenantID, recordingID, "failed", card, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
-	g.save(ctx, tenantID, recordingID, "analyzed", card, "", cfg.modelCode)
+	g.save(ctx, tenantID, recordingID, "analyzed", card, "", cfg.modelCode, prompt.Version)
 	return card, nil
 }
 
@@ -117,27 +161,79 @@ func (g *V2CardGenerator) validate(card map[string]any) error {
 	if strings.TrimSpace(headline) == "" {
 		return fmt.Errorf("headline is required")
 	}
-	decision, _ := card["decision"].(map[string]any)
-	if decision == nil {
-		return fmt.Errorf("decision is required")
+	// v0.8 使用 deal_status；旧结构使用 decision.state。两者都接受。
+	state, _ := card["deal_status"].(string)
+	if state == "" {
+		if decision, ok := card["decision"].(map[string]any); ok {
+			state, _ = decision["state"].(string)
+		}
 	}
-	state, _ := decision["state"].(string)
-	switch state {
-	case "还没选择我们", "已经选择我们", "已不选择", "无法判断":
-	default:
-		return fmt.Errorf("invalid decision state: %q", state)
+	if state == "" {
+		return fmt.Errorf("deal_status is required")
 	}
-	actions, _ := card["actions"].([]any)
-	if len(actions) == 0 {
-		card["actions"] = []map[string]any{{
-			"text": "先核实录音中的未解决事项", "type": "internal_confirm",
-			"owner": "consultant", "due": "48h", "basis": "没有可执行动作",
-		}}
-	}
+	// v0.11 质量维度：模型可能输出 {阶段名: {score,evidence,impact}} 对象；统一成 dimensions 数组 + score。
+	normalizeQualityReview(card)
 	return nil
 }
 
-func (g *V2CardGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, card map[string]any, errMsg, modelCode string) {
+var qualityStages = []string{"开场建立权威", "需求探索", "问题放大", "专业呈现", "方案定制", "异议化解", "促成与收尾"}
+
+func normalizeQualityReview(card map[string]any) {
+	qr, ok := card["quality_review"].(map[string]any)
+	if !ok || qr == nil {
+		return
+	}
+	if _, has := qr["dimensions"]; has {
+		return
+	}
+	dims := make([]map[string]any, 0, len(qualityStages))
+	sum, count := 0.0, 0
+	for i, name := range qualityStages {
+		var item map[string]any
+		if raw, ok := qr[fmt.Sprintf("%d %s", i+1, name)]; ok {
+			item, _ = raw.(map[string]any)
+		}
+		if item == nil {
+			if raw, ok := qr[name]; ok {
+				item, _ = raw.(map[string]any)
+			}
+		}
+		if item == nil {
+			item = map[string]any{"score": nil, "evidence": "", "impact_on_deal": "该段未发生"}
+		}
+		label := name
+		item["label"] = label
+		dims = append(dims, item)
+		if v, ok := item["score"].(float64); ok {
+			sum += v
+			count++
+		}
+	}
+	qr["dimensions"] = dims
+	if count > 0 {
+		avg := sum / float64(count)
+		qr["score"] = math.Round(avg*10) / 10
+		qr["grade"] = gradeForScore(avg)
+	}
+	delete(qr, "total_score")
+}
+
+func gradeForScore(score float64) string {
+	switch {
+	case score >= 4.5:
+		return "卓越"
+	case score >= 4:
+		return "优秀"
+	case score >= 3.5:
+		return "良好"
+	case score >= 3:
+		return "待提升"
+	default:
+		return "需辅导"
+	}
+}
+
+func (g *V2CardGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, card map[string]any, errMsg, modelCode, promptVersion string) {
 	raw := []byte("null")
 	if card != nil {
 		if b, err := json.Marshal(card); err == nil {
@@ -145,13 +241,13 @@ func (g *V2CardGenerator) save(ctx context.Context, tenantID, recordingID int64,
 		}
 	}
 	_, _ = g.pool.Exec(ctx, `
-		INSERT INTO deal_cards_v2 (tenant_id, recording_id, status, card, error_message, model_code)
-		VALUES ($1,$2,$3,$4::jsonb,$5,$6)
+		INSERT INTO deal_cards_v2 (tenant_id, recording_id, status, card, error_message, model_code, prompt_version)
+		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
 		ON CONFLICT (tenant_id, recording_id)
 		DO UPDATE SET status = EXCLUDED.status, card = EXCLUDED.card,
 			error_message = EXCLUDED.error_message, model_code = EXCLUDED.model_code,
-			prompt_version = 'v0.4', updated_at = NOW()
-	`, tenantID, recordingID, status, raw, errMsg, modelCode)
+			prompt_version = EXCLUDED.prompt_version, updated_at = NOW()
+	`, tenantID, recordingID, status, raw, errMsg, modelCode, promptVersion)
 }
 
 func (g *V2CardGenerator) Get(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
