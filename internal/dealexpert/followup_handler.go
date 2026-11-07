@@ -31,6 +31,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2CardForUser, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.ListCardActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.CreateCardAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.TriggerRecordingAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -483,4 +484,32 @@ func (h *Handler) ConfirmFollowUpDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, confirmed)
+}
+
+// GenerateV2Card 用提示词库中的 v0.11 提示词生成（或重新生成）决定卡。
+func (h *Handler) GenerateV2CardForUser(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	if h.v2card == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "V2_CARD_UNAVAILABLE", "V2 card generator is not configured", nil)
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, recordingID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	card, err := h.v2card.Generate(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "V2_CARD_GENERATE_FAILED", err.Error(), nil)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": "analyzed", "card": card})
 }
