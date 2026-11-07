@@ -894,6 +894,8 @@ type BenchmarkClip struct {
 	Dimension        string   `json:"dimension"`
 	Score            float64  `json:"score"`
 	ClipText         string   `json:"clip_text"`
+	ContextText      string   `json:"context_text,omitempty"`
+	UseWhen          string   `json:"use_when,omitempty"`
 	AIComment        string   `json:"ai_comment,omitempty"`
 	LearningPoints   []string `json:"learning_points,omitempty"`
 	Source           string   `json:"source"`
