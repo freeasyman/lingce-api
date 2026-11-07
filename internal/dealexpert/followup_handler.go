@@ -32,6 +32,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2CardForUser, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/cards", Handler: h.ListV2Cards, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.ListCardActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.CreateCardAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.TriggerRecordingAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -512,4 +513,56 @@ func (h *Handler) GenerateV2CardForUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"status": "analyzed", "card": card})
+}
+
+// ListV2Cards 返回本租户已生成的决定卡（按接待时间倒序），供列表与看板使用。
+func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT c.recording_id, c.status, c.card,
+		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at
+		FROM deal_cards_v2 c
+		JOIN recordings r ON r.id = c.recording_id
+		LEFT JOIN customers cu ON cu.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE c.tenant_id = $1 AND c.status = 'analyzed' AND r.deleted_at IS NULL
+		ORDER BY r.recorded_at DESC
+		LIMIT 500
+	`, scope.TenantID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "LIST_CARDS_FAILED", err.Error(), nil)
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0, 64)
+	for rows.Next() {
+		var recordingID int64
+		var status, customer, consultant string
+		var card []byte
+		var recordedAt any
+		if err := rows.Scan(&recordingID, &status, &card, &customer, &consultant, &recordedAt); err != nil {
+			continue
+		}
+		var parsed map[string]any
+		_ = json.Unmarshal(card, &parsed)
+		slim := map[string]any{}
+		for _, key := range []string{"headline", "deal_status", "scene_type", "stuck_point_headline", "real_reason", "killer_evidence", "deal_confidence", "blocker_label", "customer_context_tags", "follow_up_tasks", "amount_hints", "pattern"} {
+			if v, ok := parsed[key]; ok {
+				slim[key] = v
+			}
+		}
+		items = append(items, map[string]any{
+			"recording_id": recordingID,
+			"status":       status,
+			"customer":     customer,
+			"consultant":   consultant,
+			"recorded_at":  recordedAt,
+			"card":         slim,
+		})
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
 }

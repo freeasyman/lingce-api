@@ -31,16 +31,21 @@ func (h *Handler) RegisterDevLoginRoute(mux *http.ServeMux, jwtSecret string) {
 			       e.tenant_id, COALESCE(e.session_version,1)
 			FROM employees e
 			WHERE e.tenant_id = 4 AND e.is_active = 1 AND e.deleted_at IS NULL
-			ORDER BY CASE WHEN e.role = 'consultant' THEN 0 ELSE 1 END, e.id
+			ORDER BY CASE WHEN e.role = 'admin' THEN 0 WHEN e.role = 'operating_manager' THEN 1 ELSE 2 END, e.id
 			LIMIT 1
 		`).Scan(&id, &name, &phone, &role, &tenantID, &sessionVersion)
 		if err != nil {
 			httputil.WriteError(w, http.StatusServiceUnavailable, "DEV_LOGIN_CANDIDATE_MISSING", "no employee for dev login", nil)
 			return
 		}
-		if role == "consultant" {
+		switch role {
+		case "admin":
+			roleName = "院长"
+		case "operating_manager":
+			roleName = "运营负责人"
+		case "consultant":
 			roleName = "咨询师"
-		} else {
+		default:
 			roleName = role
 		}
 		tid := tenantID
