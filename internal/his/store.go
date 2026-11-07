@@ -3230,3 +3230,106 @@ func (s *Store) CancelAppointment(ctx context.Context, tenantID, id int64) (Regi
 	}
 	return s.loadRegistration(ctx, s.pool, tenantID, id)
 }
+
+// ---------------------------------------------------------------------------
+// 员工角色（admin/doctor/pharmacist/cashier/nurse，可叠加）
+
+var hisRoleSet = map[string]bool{"admin": true, "doctor": true, "pharmacist": true, "cashier": true, "nurse": true}
+
+// ListStaffRoles 员工角色列表（含未分配员工，供管理台配置）。
+func (s *Store) ListStaffRoles(ctx context.Context, tenantID int64) ([]StaffRole, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id, COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), COALESCE(e.username, ''), COALESCE(e.phone, ''), '员工' || e.id),
+		       COALESCE(array_agg(r.role ORDER BY r.role) FILTER (WHERE r.role IS NOT NULL), '{}')
+		FROM employees e
+		LEFT JOIN his_staff_roles r ON r.employee_id = e.id AND r.tenant_id = $1
+		WHERE e.tenant_id = $1 AND e.deleted_at IS NULL
+		GROUP BY e.id, e.full_name, e.name, e.username, e.phone
+		ORDER BY e.id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]StaffRole, 0)
+	for rows.Next() {
+		var item StaffRole
+		if err := rows.Scan(&item.EmployeeID, &item.EmployeeName, &item.Roles); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// ReplaceStaffRoles 覆盖式设置员工角色。
+func (s *Store) ReplaceStaffRoles(ctx context.Context, tenantID, employeeID int64, roles []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM employees WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)`,
+		employeeID, tenantID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM his_staff_roles WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err != nil {
+		return err
+	}
+	for _, role := range roles {
+		if !hisRoleSet[role] {
+			return ErrInvalidRequest
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO his_staff_roles (tenant_id, employee_id, role) VALUES ($1, $2, $3)`,
+			tenantID, employeeID, role); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// MyRoles 当前员工的角色列表。
+func (s *Store) MyRoles(ctx context.Context, tenantID, employeeID int64) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT role FROM his_staff_roles WHERE tenant_id = $1 AND employee_id = $2 ORDER BY role`,
+		tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	roles := make([]string, 0)
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			return nil, err
+		}
+		roles = append(roles, role)
+	}
+	return roles, rows.Err()
+}
+
+// HasAnyRole 判断员工是否拥有任一指定角色。
+func (s *Store) HasAnyRole(ctx context.Context, tenantID, employeeID int64, roles ...string) (bool, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM his_staff_roles
+		WHERE tenant_id = $1 AND employee_id = $2 AND role = ANY($3::text[])`,
+		tenantID, employeeID, roles).Scan(&count)
+	return count > 0, err
+}
+
+// TenantHasRoleAssignments 租户是否已配置过任何角色（未配置时前端全开放，便于首用）。
+func (s *Store) TenantHasRoleAssignments(ctx context.Context, tenantID int64) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM his_staff_roles WHERE tenant_id = $1)`, tenantID).Scan(&exists)
+	return exists, err
+}

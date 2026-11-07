@@ -746,3 +746,15 @@ type OpenAppointment struct {
 	DoctorName     string `json:"doctor_name"`
 	DepartmentName string `json:"department_name"`
 }
+
+// StaffRole 员工角色分配。
+type StaffRole struct {
+	EmployeeID   int64    `json:"employee_id"`
+	EmployeeName string   `json:"employee_name"`
+	Roles        []string `json:"roles"`
+}
+
+// UpdateStaffRolesRequest 覆盖式设置员工角色（角色可叠加）。
+type UpdateStaffRolesRequest struct {
+	Roles []string `json:"roles"`
+}

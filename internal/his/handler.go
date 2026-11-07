@@ -97,6 +97,19 @@ func (h *Handler) requireTenant(w http.ResponseWriter, r *http.Request) (*auth.C
 	return claims, tenantID, true
 }
 
+// requireHisRole 关键操作角色校验（租户未配置角色时放行，首用兼容）。
+func (h *Handler) requireHisRole(w http.ResponseWriter, r *http.Request, tenantID, employeeID int64, roles ...string) bool {
+	if err := h.service.RequireRole(r.Context(), tenantID, employeeID, roles...); err != nil {
+		if err == ErrForbiddenRole {
+			httputil.WriteForbidden(w, "当前角色无权执行该操作")
+			return false
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return false
+	}
+	return true
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
@@ -134,6 +147,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "库存不足，无法发药")
 	case ErrSignatureMismatch:
 		httputil.WriteBadRequest(w, "文书内容与签名不一致，可能存在改动，禁止归档/打印")
+	case ErrForbiddenRole:
+		httputil.WriteForbidden(w, "当前角色无权执行该操作")
 	default:
 		httputil.WriteInternalError(w, err.Error())
 	}
@@ -240,6 +255,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 基础报表
 		{Method: "GET", Path: "/api/v1/his/reports/summary", Handler: h.ReportSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 员工角色（管理台配置 + 当前员工查询）
+		{Method: "GET", Path: "/api/v1/his/staff-roles", Handler: h.ListStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/his/staff-roles/{employee_id}", Handler: h.UpdateStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/my-roles", Handler: h.MyRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 开放 API 客户端管理（管理台）
 		{Method: "GET", Path: "/api/v1/his/open-clients", Handler: h.ListOpenClients, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/open-clients", Handler: h.CreateOpenClient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -288,8 +308,11 @@ func (h *Handler) ListDoctors(w http.ResponseWriter, r *http.Request) {
 
 // CreateDoctor 新增医生。
 func (h *Handler) CreateDoctor(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateDoctorRequest
@@ -306,8 +329,11 @@ func (h *Handler) CreateDoctor(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDoctor 更新医生。
 func (h *Handler) UpdateDoctor(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -342,8 +368,11 @@ func (h *Handler) ListRooms(w http.ResponseWriter, r *http.Request) {
 
 // CreateRoom 新增房间。
 func (h *Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateRoomRequest
@@ -360,8 +389,11 @@ func (h *Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 
 // UpdateRoom 更新房间。
 func (h *Handler) UpdateRoom(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -396,8 +428,11 @@ func (h *Handler) ListDrugs(w http.ResponseWriter, r *http.Request) {
 
 // CreateDrug 新增药品。
 func (h *Handler) CreateDrug(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateDrugRequest
@@ -414,8 +449,11 @@ func (h *Handler) CreateDrug(w http.ResponseWriter, r *http.Request) {
 
 // UpdateDrug 更新药品。
 func (h *Handler) UpdateDrug(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -450,8 +488,11 @@ func (h *Handler) ListChargeItems(w http.ResponseWriter, r *http.Request) {
 
 // CreateChargeItem 新增原子收费项目。
 func (h *Handler) CreateChargeItem(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateChargeItemRequest
@@ -468,8 +509,11 @@ func (h *Handler) CreateChargeItem(w http.ResponseWriter, r *http.Request) {
 
 // UpdateChargeItem 更新原子收费项目。
 func (h *Handler) UpdateChargeItem(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -522,8 +566,11 @@ func (h *Handler) GetBundle(w http.ResponseWriter, r *http.Request) {
 
 // CreateBundle 新增打包产品。
 func (h *Handler) CreateBundle(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateBundleRequest
@@ -540,8 +587,11 @@ func (h *Handler) CreateBundle(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBundle 更新打包产品。
 func (h *Handler) UpdateBundle(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -564,6 +614,9 @@ func (h *Handler) UpdateBundle(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RegisterPatient(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier", "nurse", "doctor") {
 		return
 	}
 	var req RegisterPatientRequest
@@ -622,8 +675,11 @@ func (h *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 
 // CreateSchedule 新增排班并生成号源。
 func (h *Handler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateScheduleRequest
@@ -658,8 +714,11 @@ func (h *Handler) GetSchedule(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSchedule 更新排班（时间/间隔受已约号源保护）。
 func (h *Handler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -724,6 +783,9 @@ func (h *Handler) CreateRegistration(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+		return
+	}
 	var req CreateRegistrationRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -738,8 +800,11 @@ func (h *Handler) CreateRegistration(w http.ResponseWriter, r *http.Request) {
 
 // ConfirmRegistration 预约到院确认。
 func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -756,8 +821,11 @@ func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
 
 // RefundRegistration 退号。
 func (h *Handler) RefundRegistration(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -774,8 +842,11 @@ func (h *Handler) RefundRegistration(w http.ResponseWriter, r *http.Request) {
 
 // NoShowRegistration 爽约。
 func (h *Handler) NoShowRegistration(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -963,8 +1034,11 @@ func (h *Handler) ListPrescriptions(w http.ResponseWriter, r *http.Request) {
 
 // CreatePrescription 开具处方（草稿）。
 func (h *Handler) CreatePrescription(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	var req CreatePrescriptionRequest
@@ -981,8 +1055,11 @@ func (h *Handler) CreatePrescription(w http.ResponseWriter, r *http.Request) {
 
 // IssuePrescription 处方开具（生成处方号）。
 func (h *Handler) IssuePrescription(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -999,8 +1076,11 @@ func (h *Handler) IssuePrescription(w http.ResponseWriter, r *http.Request) {
 
 // UpdatePrescription 修改处方明细。
 func (h *Handler) UpdatePrescription(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1021,8 +1101,11 @@ func (h *Handler) UpdatePrescription(w http.ResponseWriter, r *http.Request) {
 
 // VoidPrescription 作废处方。
 func (h *Handler) VoidPrescription(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1058,8 +1141,11 @@ func (h *Handler) ListServiceRequests(w http.ResponseWriter, r *http.Request) {
 
 // CreateServiceRequest 开检查/检验申请。
 func (h *Handler) CreateServiceRequest(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	var req CreateServiceRequestRequest
@@ -1095,8 +1181,11 @@ func (h *Handler) ListTreatmentOrders(w http.ResponseWriter, r *http.Request) {
 
 // CreateTreatmentOrder 开治疗医嘱。
 func (h *Handler) CreateTreatmentOrder(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor") {
 		return
 	}
 	var req CreateTreatmentOrderRequest
@@ -1115,6 +1204,9 @@ func (h *Handler) CreateTreatmentOrder(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ExecuteTreatment(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1178,6 +1270,9 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+		return
+	}
 	var req CreateOrderRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -1192,8 +1287,11 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 // UpdateOrder 调整收费单（未收费前）。
 func (h *Handler) UpdateOrder(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1218,6 +1316,9 @@ func (h *Handler) AddPayment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
@@ -1240,6 +1341,9 @@ func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
@@ -1258,8 +1362,11 @@ func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request) {
 
 // VoidOrder 作废收费单。
 func (h *Handler) VoidOrder(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1294,6 +1401,9 @@ func (h *Handler) DispensePrescription(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "pharmacist") {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
@@ -1324,6 +1434,9 @@ func (h *Handler) ListStock(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) InboundStock(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "pharmacist") {
 		return
 	}
 	var req InboundStockRequest
@@ -1503,8 +1616,11 @@ func (h *Handler) ListOpenClients(w http.ResponseWriter, r *http.Request) {
 
 // CreateOpenClient 创建客户端（API Key 仅返回一次）。
 func (h *Handler) CreateOpenClient(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	var req CreateOpenClientRequest
@@ -1521,8 +1637,11 @@ func (h *Handler) CreateOpenClient(w http.ResponseWriter, r *http.Request) {
 
 // UpdateOpenClient 更新客户端（停用/启用/限流）。
 func (h *Handler) UpdateOpenClient(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1642,4 +1761,59 @@ func (h *Handler) OpenCancelAppointment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// ListStaffRoles 员工角色列表（管理台）。
+func (h *Handler) ListStaffRoles(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	items, err := h.service.ListStaffRoles(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, "failed to list staff roles")
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// UpdateStaffRoles 覆盖式设置员工角色。
+func (h *Handler) UpdateStaffRoles(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	employeeID, ok := parseIDParam(w, r, "employee_id")
+	if !ok {
+		return
+	}
+	var req UpdateStaffRolesRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.service.UpdateStaffRoles(r.Context(), tenantID, employeeID, req.Roles); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"employee_id": employeeID, "roles": req.Roles})
+}
+
+// MyRoles 当前员工角色（nil 表示租户未配置角色，前端全开放）。
+func (h *Handler) MyRoles(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	roles, err := h.service.MyRoles(r.Context(), tenantID, claims.UserID)
+	if err != nil {
+		httputil.WriteInternalError(w, "failed to load my roles")
+		return
+	}
+	httputil.WriteSuccess(w, roles)
 }

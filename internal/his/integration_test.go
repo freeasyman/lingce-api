@@ -60,7 +60,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		);
 		CREATE TABLE employees (
 			id bigint PRIMARY KEY, tenant_id bigint, name text, full_name text,
-			username text, deleted_at timestamp
+			username text, phone text, deleted_at timestamp
 		);
 		CREATE TABLE encounters (
 			id bigserial PRIMARY KEY,
@@ -119,13 +119,18 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, string(migrationSQL)); err != nil {
 		t.Fatalf("apply his migration: %v", err)
 	}
-	// 082 扩展 encounters source_type（作用在 shim 上，同时校验 SQL 可执行性）。
-	sourceSQL, err := os.ReadFile("../store/migrations/20261107_082_encounter_source_his.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(sourceSQL)); err != nil {
-		t.Fatalf("apply encounter source migration: %v", err)
+	// 082 扩展 encounters source_type；084 员工角色表（作用在 shim 上，同时校验 SQL 可执行性）。
+	for _, migration := range []string{
+		"20261107_082_encounter_source_his.sql",
+		"20261107_084_his_staff_roles.sql",
+	} {
+		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(sourceSQL)); err != nil {
+			t.Fatalf("apply %s: %v", migration, err)
+		}
 	}
 	return NewService(NewStore(pool)), pool
 }
@@ -1019,5 +1024,72 @@ func TestRateLimiter(t *testing.T) {
 	}
 	if !limiter.allow(2, 5) {
 		t.Fatal("other client should not be affected")
+	}
+}
+
+func TestStaffRoles(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// 未配置任何角色 → MyRoles 返回 nil（前端全开放），RequireRole 放行
+	roles, err := svc.MyRoles(ctx, 1, 10)
+	if err != nil || roles != nil {
+		t.Fatalf("my roles before config: %v %v", err, roles)
+	}
+	if err := svc.RequireRole(ctx, 1, 10, "admin"); err != nil {
+		t.Fatalf("require role before config should pass: %v", err)
+	}
+
+	// 分配角色：员工 10 = cashier + pharmacist（可叠加）
+	if err := svc.UpdateStaffRoles(ctx, 1, 10, []string{"cashier", "pharmacist"}); err != nil {
+		t.Fatalf("update roles: %v", err)
+	}
+	list, err := svc.ListStaffRoles(ctx, 1)
+	if err != nil || len(list) == 0 {
+		t.Fatalf("list roles: %v %+v", err, list)
+	}
+	found := false
+	for _, item := range list {
+		if item.EmployeeID == 10 {
+			found = true
+			if len(item.Roles) != 2 || item.Roles[0] != "cashier" || item.Roles[1] != "pharmacist" {
+				t.Fatalf("roles for 10: %v", item.Roles)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("employee 10 not in role list")
+	}
+
+	roles, err = svc.MyRoles(ctx, 1, 10)
+	if err != nil || len(roles) != 2 {
+		t.Fatalf("my roles: %v %v", err, roles)
+	}
+
+	// 权限校验
+	if err := svc.RequireRole(ctx, 1, 10, "cashier"); err != nil {
+		t.Fatalf("cashier should pass: %v", err)
+	}
+	if err := svc.RequireRole(ctx, 1, 10, "doctor"); !errors.Is(err, ErrForbiddenRole) {
+		t.Fatalf("doctor should be forbidden: %v", err)
+	}
+
+	// 覆盖式更新
+	if err := svc.UpdateStaffRoles(ctx, 1, 10, []string{"admin"}); err != nil {
+		t.Fatalf("replace roles: %v", err)
+	}
+	roles, _ = svc.MyRoles(ctx, 1, 10)
+	if len(roles) != 1 || roles[0] != "admin" {
+		t.Fatalf("replaced roles: %v", roles)
+	}
+
+	// 非法角色拒绝
+	if err := svc.UpdateStaffRoles(ctx, 1, 10, []string{"superman"}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid role err: %v", err)
+	}
+
+	// 不存在员工拒绝
+	if err := svc.UpdateStaffRoles(ctx, 1, 99999, []string{"admin"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing employee err: %v", err)
 	}
 }

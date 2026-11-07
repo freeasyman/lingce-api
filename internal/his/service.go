@@ -42,6 +42,9 @@ var ErrInsufficientStock = errors.New("insufficient stock")
 // ErrSignatureMismatch 表示文书内容与签名时的哈希不一致（内容被改动）。
 var ErrSignatureMismatch = errors.New("signature mismatch")
 
+// ErrForbiddenRole 表示员工没有执行该操作的角色权限。
+var ErrForbiddenRole = errors.New("forbidden role")
+
 // Service 是 HIS 域的业务层。
 type Service struct {
 	store *Store
@@ -996,4 +999,46 @@ func (s *Service) CancelOpenAppointment(ctx context.Context, tenantID, registrat
 // GetOpenAppointment 挂号单状态。
 func (s *Service) GetOpenAppointment(ctx context.Context, tenantID, registrationID int64) (OpenAppointment, error) {
 	return s.store.LoadOpenAppointment(ctx, tenantID, registrationID)
+}
+
+// ---------------------------------------------------------------------------
+// 员工角色
+
+func (s *Service) ListStaffRoles(ctx context.Context, tenantID int64) ([]StaffRole, error) {
+	return s.store.ListStaffRoles(ctx, tenantID)
+}
+
+func (s *Service) UpdateStaffRoles(ctx context.Context, tenantID, employeeID int64, roles []string) error {
+	return s.store.ReplaceStaffRoles(ctx, tenantID, employeeID, roles)
+}
+
+// MyRoles 当前员工角色；租户未配置任何角色时返回 nil（前端视为全开放，便于首用）。
+func (s *Service) MyRoles(ctx context.Context, tenantID, employeeID int64) ([]string, error) {
+	configured, err := s.store.TenantHasRoleAssignments(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
+		return nil, nil
+	}
+	return s.store.MyRoles(ctx, tenantID, employeeID)
+}
+
+// RequireRole 关键操作权限校验（未配置角色时放行，首用兼容）。
+func (s *Service) RequireRole(ctx context.Context, tenantID, employeeID int64, roles ...string) error {
+	configured, err := s.store.TenantHasRoleAssignments(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return nil
+	}
+	has, err := s.store.HasAnyRole(ctx, tenantID, employeeID, roles...)
+	if err != nil {
+		return err
+	}
+	if !has {
+		return ErrForbiddenRole
+	}
+	return nil
 }
