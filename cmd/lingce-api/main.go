@@ -34,6 +34,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/externaldata"
 	"github.com/freeasyman/lingce-api/internal/followup"
 	"github.com/freeasyman/lingce-api/internal/followuppermission"
+	"github.com/freeasyman/lingce-api/internal/his"
 	"github.com/freeasyman/lingce-api/internal/knowledge"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/mobile"
@@ -317,6 +318,10 @@ func main() {
 	}
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
+
+	// HIS：灵策门诊系统（P1 标准诊疗闭环）。设计基线：lingce-web/docs/his。
+	hisModule := his.NewModule(pool, emrRecordService)
+	hisModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 	// 赢客专家分析消费者：消费 Worker 已落库的清洗转写，调用专属模型配置生成经营结案卡。
 	// 后台分析版本由配置显式选择：默认 v200，dev 可切 v210-rc11（新流水线 + 服务端 v1.1 适配）。
 	dealExpertAnalyzer, err := dealexpert.NewAnalyzerWithVersion(pool, llmClient, cfg.Deal.DealAnalysisVersion())
