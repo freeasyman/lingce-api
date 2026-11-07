@@ -1090,7 +1090,8 @@ func (s *Service) RequireRole(ctx context.Context, tenantID, employeeID int64, r
 	if !configured {
 		return nil
 	}
-	has, err := s.store.HasAnyRole(ctx, tenantID, employeeID, roles...)
+	// 管理员是超级角色：可执行所有 HIS 业务操作（与操作手册权限矩阵一致）。
+	has, err := s.store.HasAnyRole(ctx, tenantID, employeeID, append(roles, "admin")...)
 	if err != nil {
 		return err
 	}
