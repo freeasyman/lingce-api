@@ -524,11 +524,20 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT c.recording_id, c.status, c.card, COALESCE(r.encounter_id,0),
-		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at
+		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at,
+		       COALESCE(ov.type,''), ov.amount, ov.occurred_at
 		FROM deal_cards_v2 c
 		JOIN recordings r ON r.id = c.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN LATERAL (
+			SELECT o.type, o.amount, o.occurred_at
+			FROM deal_outcome_events o
+			WHERE o.tenant_id = c.tenant_id
+			  AND ((r.encounter_id > 0 AND o.encounter_id = r.encounter_id) OR o.recording_id = c.recording_id)
+			ORDER BY o.occurred_at DESC, o.id DESC
+			LIMIT 1
+		) ov ON TRUE
 		WHERE c.tenant_id = $1 AND c.status = 'analyzed' AND r.deleted_at IS NULL
 		ORDER BY r.recorded_at DESC
 		LIMIT 500
@@ -541,10 +550,11 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, 64)
 	for rows.Next() {
 		var recordingID, encID int64
-		var status, customer, consultant string
+		var status, customer, consultant, outcomeType string
 		var card []byte
-		var recordedAt any
-		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt); err != nil {
+		var recordedAt, outcomeAt any
+		var outcomeAmount *float64
+		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt); err != nil {
 			continue
 		}
 		var parsed map[string]any
@@ -556,13 +566,16 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		items = append(items, map[string]any{
-			"recording_id": recordingID,
-			"encounter_id": encID,
-			"status":       status,
-			"customer":     customer,
-			"consultant":   consultant,
-			"recorded_at":  recordedAt,
-			"card":         slim,
+			"recording_id":   recordingID,
+			"encounter_id":   encID,
+			"status":         status,
+			"customer":       customer,
+			"consultant":     consultant,
+			"recorded_at":    recordedAt,
+			"outcome_type":   outcomeType,
+			"outcome_amount": outcomeAmount,
+			"outcome_at":     outcomeAt,
+			"card":           slim,
 		})
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
