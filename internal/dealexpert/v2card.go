@@ -329,6 +329,33 @@ func (g *V2CardGenerator) loadCatalog(ctx context.Context, tenantID int64) strin
 }
 
 func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID int64) string {
+	var b strings.Builder
+	histRows, histErr := g.pool.Query(ctx, `
+		SELECT to_char(r.recorded_at, 'YYYY-MM-DD'),
+		       COALESCE(c.card->>'deal_status',''),
+		       COALESCE(c.card->>'stuck_point_headline',''),
+		       COALESCE(c.card->>'real_reason','')
+		FROM recordings r
+		JOIN deal_cards_v2 c ON c.recording_id = r.id AND c.tenant_id = r.tenant_id
+		WHERE c.tenant_id = $1 AND r.id <> $2
+		  AND r.customer_id = (SELECT customer_id FROM recordings WHERE id = $2 AND tenant_id = $1)
+		ORDER BY r.recorded_at DESC
+		LIMIT 3
+	`, tenantID, recordingID)
+	if histErr == nil {
+		defer histRows.Close()
+		first := true
+		for histRows.Next() {
+			var day, status, stuck, reason string
+			if histRows.Scan(&day, &status, &stuck, &reason) == nil {
+				if first {
+					b.WriteString("客户历史接待（最近3次）：\n")
+					first = false
+				}
+				fmt.Fprintf(&b, "- %s：%s；上次卡点：%s；判断：%s\n", day, status, stuck, reason)
+			}
+		}
+	}
 	rows, err := g.pool.Query(ctx, `
 		SELECT type, COALESCE(amount, 0), COALESCE(occurred_at::text, '')
 		FROM deal_outcome_events
@@ -340,7 +367,9 @@ func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID i
 		return "（无）"
 	}
 	defer rows.Close()
-	var b strings.Builder
+	if b.Len() > 0 {
+		b.WriteString("\n本接待已入账：\n")
+	}
 	for rows.Next() {
 		var typ string
 		var amount float64
@@ -382,6 +411,9 @@ func sanitizeCardTasks(card map[string]any) {
 			bad = true
 		}
 		if containsAnyText(status, "意向明确未成交", "意向不明") && postOp {
+			bad = true
+		}
+		if containsAnyText(status, "意向明确未成交", "意向不明") && money {
 			bad = true
 		}
 		if containsAnyText(status, "已预约") && containsAnyText(script, "昨天手术", "今天手术", "手术顺利", "手术结束", "手术做完", "辛苦了", "恢复得挺") {
