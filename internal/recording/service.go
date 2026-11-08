@@ -3365,7 +3365,7 @@ func isUnsafeFollowUpTask(task map[string]interface{}, dealStatus string) bool {
 	if postOp && money {
 		return true
 	}
-	if strings.Contains(title, "手术") && money && strings.Contains(timing, "术后") {
+	if containsAny(script, "昨天手术", "手术顺利结束", "手术结束了", "手术做完了", "手术已完成", "辛苦了", "恢复得挺") {
 		return true
 	}
 	if containsAny(dealStatus, "意向明确未成交", "意向不明") && postOp {

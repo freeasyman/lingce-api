@@ -378,6 +378,9 @@ func sanitizeCardTasks(card map[string]any) {
 		postOp := containsAnyText(text, "术后", "手术后", "复查", "恢复期")
 		money := containsAnyText(text, "缴费", "交费", "付款", "费用", "结清", "尾款", "欠费", "补缴", "刷卡", "转账")
 		bad := postOp && money
+		if containsAnyText(script, "昨天手术", "手术顺利结束", "手术结束了", "手术做完了", "手术已完成", "辛苦了", "恢复得挺") {
+			bad = true
+		}
 		if containsAnyText(status, "意向明确未成交", "意向不明") && postOp {
 			bad = true
 		}
