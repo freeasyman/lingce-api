@@ -28,6 +28,9 @@ const (
 	AnalysisActionCompleted      = "completed"
 	AnalysisActionNotApplicable  = "not_applicable"
 	AnalysisActionNeedSupervisor = "need_supervisor"
+	AnalysisActionIntervened     = "intervened"
+	AnalysisActionEscalated      = "escalated"
+	AnalysisActionDismissed      = "dismissed"
 )
 
 // ensureAnalysisActionsTable 懒建表，避免依赖迁移脚本在开发环境手动执行。
@@ -137,7 +140,8 @@ func (h *Handler) CreateAnalysisAction(w http.ResponseWriter, r *http.Request) {
 	}
 	actionType := strings.TrimSpace(req.ActionType)
 	switch actionType {
-	case AnalysisActionCompleted, AnalysisActionNotApplicable, AnalysisActionNeedSupervisor:
+	case AnalysisActionCompleted, AnalysisActionNotApplicable, AnalysisActionNeedSupervisor,
+		AnalysisActionIntervened, AnalysisActionEscalated, AnalysisActionDismissed:
 	default:
 		httputil.WriteBadRequest(w, "invalid action_type")
 		return

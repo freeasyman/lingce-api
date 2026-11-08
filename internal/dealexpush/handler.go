@@ -57,7 +57,11 @@ func (h *Handler) ResolveRedirect(w http.ResponseWriter, r *http.Request) {
 	if base == "" {
 		base = "https://employee.khgl.xyz"
 	}
-	target := base + "/h5/encounters/" + strconv.FormatInt(item.RecordingID, 10) + "?code=" + item.Code
+	page := "/h5/encounters/"
+	if h.service.EmployeeIsManager(r.Context(), item.EmployeeID) {
+		page = "/h5/intervene/"
+	}
+	target := base + page + strconv.FormatInt(item.RecordingID, 10) + "?code=" + item.Code
 	http.Redirect(w, r, target, http.StatusFound)
 }
 

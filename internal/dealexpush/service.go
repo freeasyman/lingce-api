@@ -38,21 +38,21 @@ func NewService(pool *pgxpool.Pool, cfg config.DealPushConfig, log *slog.Logger)
 
 // PushEvent 是一次推送事件（当前阶段只有 dry_run 状态）。
 type PushEvent struct {
-	ID                   int64           `json:"id"`
-	TenantID             int64           `json:"tenant_id"`
-	RecordingID          int64           `json:"recording_id"`
-	AnalysisVersion      string          `json:"analysis_version"`
-	RecipientEmployeeID  int64           `json:"recipient_employee_id"`
-	Channel              string          `json:"channel"`
-	TemplateCode         string          `json:"template_code"`
-	ShortCode            string          `json:"short_code"`
-	Payload              json.RawMessage `json:"payload"`
-	Status               string          `json:"status"`
-	Error                string          `json:"error"`
-	CreatedAt            time.Time       `json:"created_at"`
-	SentAt               *time.Time      `json:"sent_at,omitempty"`
-	ReadAt               *time.Time      `json:"read_at,omitempty"`
-	HandledAt            *time.Time      `json:"handled_at,omitempty"`
+	ID                  int64           `json:"id"`
+	TenantID            int64           `json:"tenant_id"`
+	RecordingID         int64           `json:"recording_id"`
+	AnalysisVersion     string          `json:"analysis_version"`
+	RecipientEmployeeID int64           `json:"recipient_employee_id"`
+	Channel             string          `json:"channel"`
+	TemplateCode        string          `json:"template_code"`
+	ShortCode           string          `json:"short_code"`
+	Payload             json.RawMessage `json:"payload"`
+	Status              string          `json:"status"`
+	Error               string          `json:"error"`
+	CreatedAt           time.Time       `json:"created_at"`
+	SentAt              *time.Time      `json:"sent_at,omitempty"`
+	ReadAt              *time.Time      `json:"read_at,omitempty"`
+	HandledAt           *time.Time      `json:"handled_at,omitempty"`
 }
 
 type ResolvedLink struct {
@@ -279,4 +279,18 @@ func (s *Service) ListEvents(ctx context.Context, tenantID, recordingID int64) (
 		items = append(items, &item)
 	}
 	return items, rows.Err()
+}
+
+// EmployeeIsManager 判断员工是否为负责人角色（决定短链落到咨询师页还是负责人介入页）。
+func (s *Service) EmployeeIsManager(ctx context.Context, employeeID int64) bool {
+	var role string
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(role, '') FROM employees WHERE id = $1`, employeeID).Scan(&role); err != nil {
+		return false
+	}
+	switch role {
+	case "admin", "manager", "operating_manager":
+		return true
+	default:
+		return false
+	}
 }
