@@ -110,7 +110,7 @@ func (s *Store) ListUnreportedClaims(ctx context.Context, tenantID int64, employ
 		  AND c.card->>'deal_status' = ANY(ARRAY['已预约','付款待治疗','已成交','疗程进行中','已经选择我们'])
 		  AND NOT EXISTS (
 		    SELECT 1 FROM deal_outcome_events o
-		    WHERE o.tenant_id = c.tenant_id AND o.voided_at IS NULL
+		    WHERE o.tenant_id = c.tenant_id AND o.voided_at IS NULL AND COALESCE(o.amount,0) > 0
 		      AND (o.recording_id = c.recording_id OR (r.encounter_id > 0 AND o.encounter_id = r.encounter_id))
 		  )`+extra+`
 		ORDER BY r.recorded_at DESC

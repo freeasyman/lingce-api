@@ -39,6 +39,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/outcome", Handler: h.GetRecordingOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2CardForUser, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/cards", Handler: h.ListV2Cards, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.ListCardActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -533,15 +534,15 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT c.recording_id, c.status, c.card, COALESCE(r.encounter_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at,
-		       COALESCE(ov.type,''), ov.amount, ov.occurred_at
+		       COALESCE(ov.type,''), ov.amount, ov.occurred_at, ov.voided_at, COALESCE(ov.void_reason,'')
 		FROM deal_cards_v2 c
 		JOIN recordings r ON r.id = c.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN LATERAL (
-			SELECT o.type, o.amount, o.occurred_at
+			SELECT o.type, o.amount, o.occurred_at, o.voided_at, o.void_reason
 			FROM deal_outcome_events o
-			WHERE o.tenant_id = c.tenant_id AND o.voided_at IS NULL
+			WHERE o.tenant_id = c.tenant_id
 			  AND ((r.encounter_id > 0 AND o.encounter_id = r.encounter_id) OR o.recording_id = c.recording_id)
 			ORDER BY o.occurred_at DESC, o.id DESC
 			LIMIT 1
@@ -559,11 +560,11 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, 64)
 	for rows.Next() {
 		var recordingID, encID int64
-		var status, customer, consultant, outcomeType string
+		var status, customer, consultant, outcomeType, outcomeVoidReason string
 		var card []byte
-		var recordedAt, outcomeAt any
+		var recordedAt, outcomeAt, outcomeVoidedAt any
 		var outcomeAmount *float64
-		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt); err != nil {
+		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
 			continue
 		}
 		var parsed map[string]any
@@ -575,16 +576,18 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		items = append(items, map[string]any{
-			"recording_id":   recordingID,
-			"encounter_id":   encID,
-			"status":         status,
-			"customer":       customer,
-			"consultant":     consultant,
-			"recorded_at":    recordedAt,
-			"outcome_type":   outcomeType,
-			"outcome_amount": outcomeAmount,
-			"outcome_at":     outcomeAt,
-			"card":           slim,
+			"recording_id":        recordingID,
+			"encounter_id":        encID,
+			"status":              status,
+			"customer":            customer,
+			"consultant":          consultant,
+			"recorded_at":         recordedAt,
+			"outcome_type":        outcomeType,
+			"outcome_amount":      outcomeAmount,
+			"outcome_at":          outcomeAt,
+			"outcome_voided":      outcomeVoidedAt != nil,
+			"outcome_void_reason": outcomeVoidReason,
+			"card":                slim,
 		})
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
@@ -886,6 +889,36 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 	item, err := h.service.CreateOutcome(r.Context(), scope.TenantID, actorID, req)
 	if err != nil {
 		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"outcome": item})
+}
+
+// GetRecordingOutcome 返回一条接待最近一笔业绩记录（含已驳回），供接待详情展示。
+func (h *Handler) GetRecordingOutcome(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, id); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	var encounterID int64
+	_ = h.pool.QueryRow(r.Context(), `SELECT COALESCE(encounter_id,0) FROM recordings WHERE id = $1 AND tenant_id = $2`, id, scope.TenantID).Scan(&encounterID)
+	row := h.pool.QueryRow(r.Context(), `
+		SELECT `+outcomeColumns+` FROM deal_outcome_events
+		WHERE tenant_id = $1 AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))
+		ORDER BY occurred_at DESC, id DESC LIMIT 1`, scope.TenantID, id, encounterID)
+	item, scanErr := scanOutcome(row)
+	if scanErr != nil {
+		httputil.WriteSuccess(w, map[string]any{"outcome": nil})
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"outcome": item})
