@@ -72,7 +72,7 @@ consultant_sms_enabled = false
 [deal.push]
 enabled = false
 dry_run = true
-h5_base_url = "https://employee.khgl.xyz"
+h5_base_url = "http://127.0.0.1:3012"
 short_link_base = "https://khgl.xyz/s"
 sms_sign_name = "天津灵策科技"
 sms_template_consultant = "SMS_512628042"
