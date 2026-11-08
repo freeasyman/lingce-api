@@ -3335,10 +3335,62 @@ func extractFollowUpTasks(analysisResult map[string]interface{}) []map[string]in
 	for _, candidate := range candidates {
 		items := toMapSliceFromUnknown(candidate)
 		if len(items) > 0 {
-			return items
+			dealStatus := firstNonEmptyText(
+				pickMap(analysisResult, "persuasive")["deal_status"],
+				analysisResult["deal_status"],
+			)
+			filtered := make([]map[string]interface{}, 0, len(items))
+			for _, item := range items {
+				if isUnsafeFollowUpTask(item, dealStatus) {
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			return filtered
 		}
 	}
 	return nil
+}
+
+// isUnsafeFollowUpTask 拦掉违反业务常识的跟进任务：
+// 术后追缴费、术前写术后话术、编造手术已完成、刚预约就写术后复查。
+func isUnsafeFollowUpTask(task map[string]interface{}, dealStatus string) bool {
+	title := strings.TrimSpace(firstNonEmptyText(task["title"]))
+	timing := strings.TrimSpace(firstNonEmptyText(task["timing"]))
+	script := strings.TrimSpace(firstNonEmptyText(task["script"]))
+	description := strings.TrimSpace(firstNonEmptyText(task["description"]))
+	text := title + timing + script + description
+	postOp := containsAny(text, "术后", "手术后", "复查", "恢复期")
+	money := containsAny(text, "缴费", "交费", "付款", "费用", "结清", "尾款", "欠费", "补缴", "刷卡", "转账")
+	if postOp && money {
+		return true
+	}
+	if strings.Contains(title, "手术") && money && strings.Contains(timing, "术后") {
+		return true
+	}
+	if containsAny(dealStatus, "意向明确未成交", "意向不明") && postOp {
+		return true
+	}
+	if containsAny(dealStatus, "已预约") && containsAny(script, "昨天手术", "今天手术", "手术顺利", "手术结束", "手术做完", "辛苦了", "恢复得挺") {
+		return true
+	}
+	if containsAny(dealStatus, "意向明确未成交", "意向不明") && containsAny(script, "手术顺利", "手术结束", "手术做完", "手术已") {
+		return true
+	}
+	if containsAny(script, "手术顺利", "手术结束", "手术做完") &&
+		!containsAny(dealStatus, "付款待治疗", "已成交", "疗程进行中", "已经选择我们") {
+		return true
+	}
+	return false
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func toMapSliceFromUnknown(raw interface{}) []map[string]interface{} {
