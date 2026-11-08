@@ -298,7 +298,7 @@ func (g *ConsultationAnalysisGenerator) UpsertPending(ctx context.Context, tenan
 	return err
 }
 
-// Get 读取一条接待记录分析（无分析结果时 analysis 为空）。
+// Get 读取一条接待记录分析（无分析结果时 analysis 为空）；同时带接待简档（客户/咨询师/时间）供 H5 落地页使用。
 func (g *ConsultationAnalysisGenerator) Get(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
 	if err := g.ensureSchema(ctx); err != nil {
 		return nil, err
@@ -306,12 +306,19 @@ func (g *ConsultationAnalysisGenerator) Get(ctx context.Context, tenantID, recor
 	var raw []byte
 	var status, errMsg, promptVersion, modelCode string
 	var analyzedAt *time.Time
+	var customerName, consultantName, recordedAt string
 	err := g.pool.QueryRow(ctx, `
-		SELECT status, COALESCE(analysis::text, 'null'), error_message, prompt_version, model_code, analyzed_at
-		FROM consultation_analyses WHERE tenant_id = $1 AND recording_id = $2
-	`, tenantID, recordingID).Scan(&status, &raw, &errMsg, &promptVersion, &modelCode, &analyzedAt)
+		SELECT a.status, COALESCE(a.analysis::text, 'null'), a.error_message, a.prompt_version, a.model_code, a.analyzed_at,
+		       COALESCE(c.name, ''), COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), ''), COALESCE(r.recorded_at::text, '')
+		FROM consultation_analyses a
+		LEFT JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id AND r.deleted_at IS NULL
+		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE a.tenant_id = $1 AND a.recording_id = $2
+	`, tenantID, recordingID).Scan(&status, &raw, &errMsg, &promptVersion, &modelCode, &analyzedAt, &customerName, &consultantName, &recordedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return map[string]any{"status": "none", "analysis": nil, "prompt_version": "", "error_message": ""}, nil
+		return map[string]any{"status": "none", "analysis": nil, "prompt_version": "", "error_message": "",
+			"customer_name": "", "consultant_name": "", "recorded_at": ""}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -321,6 +328,7 @@ func (g *ConsultationAnalysisGenerator) Get(ctx context.Context, tenantID, recor
 	return map[string]any{
 		"status": status, "analysis": analysis, "error_message": errMsg,
 		"prompt_version": promptVersion, "model_code": modelCode, "analyzed_at": analyzedAt,
+		"customer_name": customerName, "consultant_name": consultantName, "recorded_at": recordedAt,
 	}, nil
 }
 

@@ -73,7 +73,7 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 	}
 	version := strings.TrimSpace(analysisVersion)
 	if version == "" {
-		version = "v0.16"
+		version = "v0.17"
 	}
 
 	// 只按录音分析已有字段判断，不取拿不到的信息。
@@ -82,10 +82,12 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 		return err
 	}
 	dealStatus, _ := analysis["deal_status"].(string)
-	dealConfidence, _ := analysis["deal_confidence"].(string)
-	blockerLabel, _ := analysis["blocker_label"].(string)
 	salesTasks, ok := analysis["sales_tasks"].([]any)
 	hasTasks := ok && len(salesTasks) > 0
+	signalLevel := ""
+	if signal, ok := analysis["manager_signal"].(map[string]any); ok {
+		signalLevel, _ = signal["level"].(string)
+	}
 
 	var employeeID int64
 	var customerName, gender string
@@ -113,11 +115,8 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 			"recording_id", recordingID, "deal_status", dealStatus, "tasks", len(salesTasks))
 	}
 
-	// 2. 负责人事件：与咨询师事件同时生成（无定时器），条件全部满足才生成。
-	if hasTasks &&
-		(dealStatus == "意向明确未成交" || dealStatus == "意向不明") &&
-		dealConfidence == "高" &&
-		managerBlockerLabels[blockerLabel] {
+	// 2. 负责人事件：manager_signal.level == '紧要' 且 sales_tasks 非空；与咨询师事件同时生成（无定时器）。
+	if hasTasks && signalLevel == "紧要" {
 		var adminID int64
 		if err := s.pool.QueryRow(ctx, `
 			SELECT id FROM employees
@@ -130,16 +129,11 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 		} else {
 			s.log.Info("DRY RUN push: manager recipient not found, skip", "recording_id", recordingID)
 		}
+	} else {
+		s.log.Info("DRY RUN push: manager event skipped",
+			"recording_id", recordingID, "signal_level", signalLevel, "tasks", len(salesTasks))
 	}
 	return nil
-}
-
-// managerBlockerLabels 是负责人事件关注的阻碍八类子集。
-var managerBlockerLabels = map[string]bool{
-	"价格与价值":     true,
-	"竞品比较":      true,
-	"安全与恢复":     true,
-	"医生与机构信任": true,
 }
 
 // loadAnalysis 读取录音最新的已分析结果（v0.16 JSON）。
