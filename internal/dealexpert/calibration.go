@@ -39,9 +39,9 @@ func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*
 		       COALESCE(p.price::float8, 0) AS estimated,
 		       COALESCE(os.net, 0) AS actual
 		FROM (
-			SELECT DISTINCT ON (recording_id) recording_id, tenant_id, result, id
-			FROM deal_expert_analyses
-			WHERE tenant_id = $1 AND status = 'analyzed' AND result IS NOT NULL
+			SELECT DISTINCT ON (recording_id) recording_id, tenant_id, analysis, id
+			FROM consultation_analyses
+			WHERE tenant_id = $1 AND status = 'analyzed' AND analysis IS NOT NULL
 			  AND analyzed_at >= NOW() - INTERVAL '90 days'
 			ORDER BY recording_id, id DESC
 		) a
@@ -55,7 +55,7 @@ func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*
 		) os ON true
 		LEFT JOIN LATERAL (
 			SELECT id, name, price FROM products
-			WHERE id = COALESCE((a.result->'product_findings'->0->>'product_id')::bigint, 0)
+			WHERE id = COALESCE((a.analysis->'intent_project'->>'product_id')::bigint, 0)
 			  AND deleted_at IS NULL
 			LIMIT 1
 		) p ON true

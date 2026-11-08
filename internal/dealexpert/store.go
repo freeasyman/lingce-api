@@ -2,9 +2,10 @@ package dealexpert
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -12,53 +13,20 @@ type Store struct{ pool *pgxpool.Pool }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-func (s *Store) Receive(ctx context.Context, req ReceiveRequest) (*Analysis, bool, error) {
-	if s == nil || s.pool == nil {
-		return nil, false, fmt.Errorf("deal expert store is nil")
-	}
-	if req.TenantID <= 0 || req.RecordingID <= 0 {
-		return nil, false, fmt.Errorf("tenant_id and recording_id are required")
-	}
-	var recordingTenantID int64
-	var businessScope, resolvedRole string
-	if err := s.pool.QueryRow(ctx, `
-		SELECT tenant_id, lower(trim(COALESCE(business_scope,''))), lower(trim(COALESCE(resolved_role_code,'')))
-		FROM recordings WHERE id=$1 AND deleted_at IS NULL
-	`, req.RecordingID).Scan(&recordingTenantID, &businessScope, &resolvedRole); err != nil {
-		return nil, false, fmt.Errorf("load recording for deal analysis: %w", err)
-	}
-	if recordingTenantID != req.TenantID {
-		return nil, false, fmt.Errorf("recording tenant mismatch")
-	}
-	if businessScope != "consultant" && resolvedRole != "consultant" {
-		return nil, false, fmt.Errorf("deal analysis only accepts consultant recordings")
-	}
-	var row Analysis
-	var customerID *int64
-	var recordedAt *time.Time
-	var inserted bool
+// RecordingConsultant 返回一条接待的负责咨询师，用于数据范围校验。
+func (s *Store) RecordingConsultant(ctx context.Context, tenantID, recordingID int64) (int64, error) {
+	var employeeID int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO deal_expert_analyses (
-		 tenant_id, recording_id, encounter_id, employee_id, customer_id, customer_name,
-		 business_scope, role_code, recorded_at, cleaned_transcript,
-		 analysis_pipeline_version, prompt_version, status
-		) VALUES ($1,$2,$3,$4,NULLIF($5,0),$6,$7,$8,NULLIF($9,'')::timestamptz,$10,$11,$12,'received')
-		ON CONFLICT (tenant_id, recording_id, analysis_pipeline_version, prompt_version)
-		DO UPDATE SET updated_at = NOW()
-		RETURNING id, tenant_id, recording_id, encounter_id, employee_id, customer_id, customer_name,
-		 business_scope, role_code, recorded_at, analysis_pipeline_version, prompt_version,
-		 status, received_at, updated_at,
-		 (xmax = 0) AS inserted
-	`, req.TenantID, req.RecordingID, req.EncounterID, req.EmployeeID, req.CustomerID, req.CustomerName,
-		req.BusinessScope, req.RoleCode, req.RecordedAt, req.CleanedTranscript, req.AnalysisPipelineVersion, req.PromptVersion).
-		Scan(&row.ID, &row.TenantID, &row.RecordingID, &row.EncounterID, &row.EmployeeID, &customerID, &row.CustomerName,
-			&row.BusinessScope, &row.RoleCode, &recordedAt, &row.AnalysisPipelineVersion, &row.PromptVersion,
-			&row.Status, &row.ReceivedAt, &row.UpdatedAt, &inserted)
-	if err != nil {
-		return nil, false, fmt.Errorf("receive deal expert analysis: %w", err)
+		SELECT employee_id FROM recordings
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+	`, tenantID, recordingID).Scan(&employeeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("recording not found")
 	}
-	row.CustomerID, row.RecordedAt = customerID, recordedAt
-	return &row, inserted, nil
+	if err != nil {
+		return 0, fmt.Errorf("query recording consultant: %w", err)
+	}
+	return employeeID, nil
 }
 
 // RecordingBrief 是任务草案所需的录音最小信息。

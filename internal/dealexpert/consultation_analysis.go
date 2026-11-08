@@ -9,6 +9,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,28 +17,31 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 )
 
-// V2CardPromptCode 是 v2 决定卡在提示词库里的稳定 code；版本放在 version 字段。
-const V2CardPromptCode = "deal_expert_v2_card"
+// AnalysisFunctionType 是赢客专家专属的模型配置类型，在运营控制台配置，不在代码里写模型名。
+const AnalysisFunctionType = "deal_expert_analysis"
 
-var v2JSONFence = regexp.MustCompile(`(?s)\{.*\}`)
+// ConsultationAnalysisPromptCode 是接待记录分析在提示词库里的稳定 code；版本放在 version 字段。
+const ConsultationAnalysisPromptCode = "deal_expert_consultation_analysis"
 
-type v2Prompt struct {
+var consultationJSONFence = regexp.MustCompile(`(?s)\{.*\}`)
+
+type consultationPrompt struct {
 	SystemPrompt string
 	UserTemplate string
 	Version      string
 }
 
-// loadPrompt 从提示词库加载 v2 决定卡提示词（支持租户覆盖），不在代码里硬编码。
-func (g *V2CardGenerator) loadPrompt(ctx context.Context, tenantID int64) (*v2Prompt, error) {
-	pr := &v2Prompt{}
+// loadPrompt 从提示词库加载接待记录分析提示词（支持租户覆盖），不在代码里硬编码。
+func (g *ConsultationAnalysisGenerator) loadPrompt(ctx context.Context, tenantID int64) (*consultationPrompt, error) {
+	pr := &consultationPrompt{}
 	err := g.pool.QueryRow(ctx, `
 		SELECT COALESCE(system_prompt, ''), COALESCE(user_prompt_template, ''), COALESCE(version, 'v1')
 		FROM recording_analysis_prompts
 		WHERE code = $1 AND is_active = true
 		LIMIT 1
-	`, V2CardPromptCode).Scan(&pr.SystemPrompt, &pr.UserTemplate, &pr.Version)
+	`, ConsultationAnalysisPromptCode).Scan(&pr.SystemPrompt, &pr.UserTemplate, &pr.Version)
 	if err != nil {
-		return nil, fmt.Errorf("prompt %q not found or inactive: %w", V2CardPromptCode, err)
+		return nil, fmt.Errorf("prompt %q not found or inactive: %w", ConsultationAnalysisPromptCode, err)
 	}
 	var customSystem, customUser *string
 	err = g.pool.QueryRow(ctx, `
@@ -46,7 +50,7 @@ func (g *V2CardGenerator) loadPrompt(ctx context.Context, tenantID int64) (*v2Pr
 		WHERE tenant_id = $1 AND prompt_code = $2 AND is_enabled = true
 		ORDER BY priority DESC, id DESC
 		LIMIT 1
-	`, tenantID, V2CardPromptCode).Scan(&customSystem, &customUser)
+	`, tenantID, ConsultationAnalysisPromptCode).Scan(&customSystem, &customUser)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("load tenant prompt override: %w", err)
 	}
@@ -59,28 +63,29 @@ func (g *V2CardGenerator) loadPrompt(ctx context.Context, tenantID int64) (*v2Pr
 	return pr, nil
 }
 
-// V2CardGenerator 用提示词库中的“决定卡”提示词生成内容。
-type V2CardGenerator struct {
+// ConsultationAnalysisGenerator 用提示词库中的“接待记录分析”提示词生成内容。
+type ConsultationAnalysisGenerator struct {
 	pool *pgxpool.Pool
 	llm  *llmgateway.Client
 	log  *slog.Logger
 }
 
-func NewV2CardGenerator(pool *pgxpool.Pool, llm *llmgateway.Client, log *slog.Logger) *V2CardGenerator {
-	return &V2CardGenerator{pool: pool, llm: llm, log: log}
+func NewConsultationAnalysisGenerator(pool *pgxpool.Pool, llm *llmgateway.Client, log *slog.Logger) *ConsultationAnalysisGenerator {
+	return &ConsultationAnalysisGenerator{pool: pool, llm: llm, log: log}
 }
 
-func (g *V2CardGenerator) ensureSchema(ctx context.Context) error {
+func (g *ConsultationAnalysisGenerator) ensureSchema(ctx context.Context) error {
 	_, err := g.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS deal_cards_v2 (
+		CREATE TABLE IF NOT EXISTS consultation_analyses (
 			id BIGSERIAL PRIMARY KEY,
 			tenant_id BIGINT NOT NULL,
 			recording_id BIGINT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'analyzing',
-			card JSONB,
+			analysis JSONB,
 			error_message TEXT NOT NULL DEFAULT '',
-			prompt_version TEXT NOT NULL DEFAULT 'v0.4',
+			prompt_version TEXT NOT NULL DEFAULT '',
 			model_code TEXT NOT NULL DEFAULT '',
+			analyzed_at TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (tenant_id, recording_id)
@@ -89,8 +94,8 @@ func (g *V2CardGenerator) ensureSchema(ctx context.Context) error {
 	return err
 }
 
-// Generate 读取转写/目录/事实，调用模型生成决定卡并存库。
-func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
+// Generate 读取转写/目录/事实，调用模型生成接待记录分析并存库，并重建销售任务。
+func (g *ConsultationAnalysisGenerator) Generate(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
 	if err := g.ensureSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -126,8 +131,8 @@ func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID in
 	resp, err := g.llm.TextInference(ctx, llmgateway.TextInferenceRequest{
 		TenantID:      tenantID,
 		CallerService: "lingce-api",
-		CallerModule:  "deal-expert.v2card",
-		TraceID:       fmt.Sprintf("deal-v2card-%d", recordingID),
+		CallerModule:  "deal-expert.consultation-analysis",
+		TraceID:       fmt.Sprintf("deal-consultation-analysis-%d", recordingID),
 		FunctionType:  cfg.functionType,
 		Provider:      cfg.provider,
 		ModelCode:     cfg.modelCode,
@@ -141,46 +146,61 @@ func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID in
 		g.save(ctx, tenantID, recordingID, "failed", nil, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
-	match := v2JSONFence.FindString(strings.TrimSpace(resp.Content))
-	var card map[string]any
-	if match == "" || json.Unmarshal([]byte(match), &card) != nil {
+	match := consultationJSONFence.FindString(strings.TrimSpace(resp.Content))
+	var analysis map[string]any
+	if match == "" || json.Unmarshal([]byte(match), &analysis) != nil {
 		g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode, prompt.Version)
 		return nil, fmt.Errorf("invalid json output")
 	}
-	card["prompt_version"] = prompt.Version
-	if err := g.validate(card); err != nil {
-		g.save(ctx, tenantID, recordingID, "failed", card, err.Error(), cfg.modelCode, prompt.Version)
+	normalizeSalesTasksKey(analysis)
+	analysis["prompt_version"] = prompt.Version
+	if err := g.validate(analysis); err != nil {
+		g.save(ctx, tenantID, recordingID, "failed", analysis, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
-	sanitizeCardTasks(card)
-	g.save(ctx, tenantID, recordingID, "analyzed", card, "", cfg.modelCode, prompt.Version)
-	return card, nil
+	sanitizeSalesTasks(analysis)
+	g.save(ctx, tenantID, recordingID, "analyzed", analysis, "", cfg.modelCode, prompt.Version)
+	if err := g.rebuildSalesTasks(ctx, tenantID, recordingID, analysis); err != nil && g.log != nil {
+		g.log.Warn("rebuild sales tasks failed", "recording_id", recordingID, "error", err)
+	}
+	return analysis, nil
 }
 
-func (g *V2CardGenerator) validate(card map[string]any) error {
-	headline, _ := card["headline"].(string)
+// normalizeSalesTasksKey 统一任务字段名：模型可能输出 follow_up_tasks，本系统统一为 sales_tasks。
+func normalizeSalesTasksKey(analysis map[string]any) {
+	if _, ok := analysis["sales_tasks"]; ok {
+		return
+	}
+	if raw, ok := analysis["follow_up_tasks"]; ok {
+		analysis["sales_tasks"] = raw
+		delete(analysis, "follow_up_tasks")
+	}
+}
+
+func (g *ConsultationAnalysisGenerator) validate(analysis map[string]any) error {
+	headline, _ := analysis["headline"].(string)
 	if strings.TrimSpace(headline) == "" {
 		return fmt.Errorf("headline is required")
 	}
-	// v0.8 使用 deal_status；旧结构使用 decision.state。两者都接受。
-	state, _ := card["deal_status"].(string)
+	// v0.8 起使用 deal_status；旧结构使用 decision.state。两者都接受。
+	state, _ := analysis["deal_status"].(string)
 	if state == "" {
-		if decision, ok := card["decision"].(map[string]any); ok {
+		if decision, ok := analysis["decision"].(map[string]any); ok {
 			state, _ = decision["state"].(string)
 		}
 	}
 	if state == "" {
 		return fmt.Errorf("deal_status is required")
 	}
-	// v0.11 质量维度：模型可能输出 {阶段名: {score,evidence,impact}} 对象；统一成 dimensions 数组 + score。
-	normalizeQualityReview(card)
+	// 模型可能输出 {阶段名: {score,evidence,impact}} 对象；统一成 dimensions 数组 + score。
+	normalizeQualityReview(analysis)
 	return nil
 }
 
 var qualityStages = []string{"开场建立权威", "需求探索", "问题放大", "专业呈现", "方案定制", "异议化解", "促成与收尾"}
 
-func normalizeQualityReview(card map[string]any) {
-	qr, ok := card["quality_review"].(map[string]any)
+func normalizeQualityReview(analysis map[string]any) {
+	qr, ok := analysis["quality_review"].(map[string]any)
 	if !ok || qr == nil {
 		return
 	}
@@ -234,50 +254,71 @@ func gradeForScore(score float64) string {
 	}
 }
 
-func (g *V2CardGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, card map[string]any, errMsg, modelCode, promptVersion string) {
+func (g *ConsultationAnalysisGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, analysis map[string]any, errMsg, modelCode, promptVersion string) {
 	raw := []byte("null")
-	if card != nil {
-		if b, err := json.Marshal(card); err == nil {
+	if analysis != nil {
+		if b, err := json.Marshal(analysis); err == nil {
 			raw = b
 		}
 	}
 	_, _ = g.pool.Exec(ctx, `
-		INSERT INTO deal_cards_v2 (tenant_id, recording_id, status, card, error_message, model_code, prompt_version)
-		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
+		INSERT INTO consultation_analyses (tenant_id, recording_id, status, analysis, error_message, model_code, prompt_version, analyzed_at)
+		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7, CASE WHEN $3 = 'analyzed' THEN NOW() ELSE NULL END)
 		ON CONFLICT (tenant_id, recording_id)
-		DO UPDATE SET status = EXCLUDED.status, card = EXCLUDED.card,
+		DO UPDATE SET status = EXCLUDED.status, analysis = EXCLUDED.analysis,
 			error_message = EXCLUDED.error_message, model_code = EXCLUDED.model_code,
-			prompt_version = EXCLUDED.prompt_version, updated_at = NOW()
+			prompt_version = EXCLUDED.prompt_version,
+			analyzed_at = CASE WHEN EXCLUDED.status = 'analyzed' THEN NOW() ELSE consultation_analyses.analyzed_at END,
+			updated_at = NOW()
 	`, tenantID, recordingID, status, raw, errMsg, modelCode, promptVersion)
 }
 
-func (g *V2CardGenerator) Get(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
+// UpsertPending 由内部入口先落一条 pending 记录，随后异步 Generate 覆盖。
+func (g *ConsultationAnalysisGenerator) UpsertPending(ctx context.Context, tenantID, recordingID int64) error {
+	if err := g.ensureSchema(ctx); err != nil {
+		return err
+	}
+	_, err := g.pool.Exec(ctx, `
+		INSERT INTO consultation_analyses (tenant_id, recording_id, status, error_message, prompt_version, model_code)
+		VALUES ($1,$2,'pending','','','')
+		ON CONFLICT (tenant_id, recording_id)
+		DO UPDATE SET status = 'pending', error_message = '', updated_at = NOW()
+	`, tenantID, recordingID)
+	return err
+}
+
+// Get 读取一条接待记录分析（无分析结果时 analysis 为空）。
+func (g *ConsultationAnalysisGenerator) Get(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
 	if err := g.ensureSchema(ctx); err != nil {
 		return nil, err
 	}
 	var raw []byte
 	var status, errMsg, promptVersion, modelCode string
+	var analyzedAt *time.Time
 	err := g.pool.QueryRow(ctx, `
-		SELECT status, COALESCE(card::text, 'null'), error_message, prompt_version, model_code
-		FROM deal_cards_v2 WHERE tenant_id = $1 AND recording_id = $2
-	`, tenantID, recordingID).Scan(&status, &raw, &errMsg, &promptVersion, &modelCode)
+		SELECT status, COALESCE(analysis::text, 'null'), error_message, prompt_version, model_code, analyzed_at
+		FROM consultation_analyses WHERE tenant_id = $1 AND recording_id = $2
+	`, tenantID, recordingID).Scan(&status, &raw, &errMsg, &promptVersion, &modelCode, &analyzedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return map[string]any{"status": "none", "analysis": nil, "prompt_version": "", "error_message": ""}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var card map[string]any
-	_ = json.Unmarshal(raw, &card)
+	var analysis map[string]any
+	_ = json.Unmarshal(raw, &analysis)
 	return map[string]any{
-		"status": status, "card": card, "error_message": errMsg,
-		"prompt_version": promptVersion, "model_code": modelCode,
+		"status": status, "analysis": analysis, "error_message": errMsg,
+		"prompt_version": promptVersion, "model_code": modelCode, "analyzed_at": analyzedAt,
 	}, nil
 }
 
-type v2ModelConfig struct {
+type consultationModelConfig struct {
 	functionType, provider, modelCode string
 }
 
-func (g *V2CardGenerator) loadModelConfig(ctx context.Context, tenantID int64) v2ModelConfig {
-	cfg := v2ModelConfig{}
+func (g *ConsultationAnalysisGenerator) loadModelConfig(ctx context.Context, tenantID int64) consultationModelConfig {
+	cfg := consultationModelConfig{}
 	_ = g.pool.QueryRow(ctx, `
 		SELECT COALESCE(function_type,''), COALESCE(provider,''), COALESCE(model_code,'')
 		FROM llm_model_configs
@@ -291,7 +332,16 @@ func (g *V2CardGenerator) loadModelConfig(ctx context.Context, tenantID int64) v
 	return cfg
 }
 
-func (g *V2CardGenerator) loadRecording(ctx context.Context, tenantID, recordingID int64) (transcript, customerName, consultantName, recordedAt, scope string) {
+// recordingMeta 是重建销售任务所需的录音基础信息。
+type recordingMeta struct {
+	encounterID   int64
+	customerID    int64
+	customerName  string
+	employeeID    int64
+	employeeName  string
+}
+
+func (g *ConsultationAnalysisGenerator) loadRecording(ctx context.Context, tenantID, recordingID int64) (transcript, customerName, consultantName, recordedAt, scope string) {
 	_ = g.pool.QueryRow(ctx, `
 		SELECT COALESCE(NULLIF(cleaned_transcription::text,'null'), transcription_text, ''),
 		       COALESCE(c.name, ''), COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), ''),
@@ -304,7 +354,20 @@ func (g *V2CardGenerator) loadRecording(ctx context.Context, tenantID, recording
 	return
 }
 
-func (g *V2CardGenerator) loadCatalog(ctx context.Context, tenantID int64) string {
+func (g *ConsultationAnalysisGenerator) loadRecordingMeta(ctx context.Context, tenantID, recordingID int64) (recordingMeta, error) {
+	var m recordingMeta
+	err := g.pool.QueryRow(ctx, `
+		SELECT COALESCE(r.encounter_id,0), COALESCE(r.customer_id,0), COALESCE(c.name,''),
+		       COALESCE(r.employee_id,0), COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''),'')
+		FROM recordings r
+		LEFT JOIN customers c ON c.id = r.customer_id
+		LEFT JOIN employees e ON e.id = r.employee_id
+		WHERE r.tenant_id = $1 AND r.id = $2 AND r.deleted_at IS NULL
+	`, tenantID, recordingID).Scan(&m.encounterID, &m.customerID, &m.customerName, &m.employeeID, &m.employeeName)
+	return m, err
+}
+
+func (g *ConsultationAnalysisGenerator) loadCatalog(ctx context.Context, tenantID int64) string {
 	rows, err := g.pool.Query(ctx, `
 		SELECT name, price FROM products
 		WHERE tenant_id = $1 AND deleted_at IS NULL
@@ -328,16 +391,16 @@ func (g *V2CardGenerator) loadCatalog(ctx context.Context, tenantID int64) strin
 	return b.String()
 }
 
-func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID int64) string {
+func (g *ConsultationAnalysisGenerator) loadFacts(ctx context.Context, tenantID, recordingID int64) string {
 	var b strings.Builder
 	histRows, histErr := g.pool.Query(ctx, `
 		SELECT to_char(r.recorded_at, 'YYYY-MM-DD'),
-		       COALESCE(c.card->>'deal_status',''),
-		       COALESCE(c.card->>'stuck_point_headline',''),
-		       COALESCE(c.card->>'real_reason','')
+		       COALESCE(a.analysis->>'deal_status',''),
+		       COALESCE(a.analysis->>'stuck_point_headline',''),
+		       COALESCE(a.analysis->>'real_reason','')
 		FROM recordings r
-		JOIN deal_cards_v2 c ON c.recording_id = r.id AND c.tenant_id = r.tenant_id
-		WHERE c.tenant_id = $1 AND r.id <> $2
+		JOIN consultation_analyses a ON a.recording_id = r.id AND a.tenant_id = r.tenant_id
+		WHERE a.tenant_id = $1 AND r.id <> $2 AND a.status = 'analyzed'
 		  AND r.customer_id = (SELECT customer_id FROM recordings WHERE id = $2 AND tenant_id = $1)
 		ORDER BY r.recorded_at DESC
 		LIMIT 3
@@ -364,7 +427,10 @@ func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID i
 		ORDER BY occurred_at
 	`, tenantID, recordingID)
 	if err != nil {
-		return "（无）"
+		if b.Len() == 0 {
+			return "（无）"
+		}
+		return b.String()
 	}
 	defer rows.Close()
 	if b.Len() > 0 {
@@ -384,14 +450,14 @@ func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID i
 	return b.String()
 }
 
-// sanitizeCardTasks 去掉违反业务常识的跟进任务：术后追费、未成交写术后、编造手术完成。
-func sanitizeCardTasks(card map[string]any) {
-	rawTasks, ok := card["follow_up_tasks"].([]any)
+// sanitizeSalesTasks 去掉违反业务常识的销售任务：术后追费、未成交催款、编造手术完成、锁价逼单话术。
+func sanitizeSalesTasks(analysis map[string]any) {
+	rawTasks, ok := analysis["sales_tasks"].([]any)
 	if !ok {
 		return
 	}
-	status, _ := card["deal_status"].(string)
-	nextAction, _ := card["next_action"].(string)
+	status, _ := analysis["deal_status"].(string)
+	nextAction, _ := analysis["next_action"].(string)
 	kept := make([]any, 0, len(rawTasks))
 	removed := map[string]bool{}
 	for _, raw := range rawTasks {
@@ -428,14 +494,14 @@ func sanitizeCardTasks(card map[string]any) {
 		}
 		kept = append(kept, task)
 	}
-	card["follow_up_tasks"] = kept
+	analysis["sales_tasks"] = kept
 	if removed[nextAction] {
 		if len(kept) > 0 {
 			if first, ok := kept[0].(map[string]any); ok {
-				card["next_action"], _ = first["title"].(string)
+				analysis["next_action"], _ = first["title"].(string)
 			}
 		} else {
-			card["next_action"] = ""
+			analysis["next_action"] = ""
 		}
 	}
 }
@@ -447,4 +513,55 @@ func containsAnyText(text string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+// rebuildSalesTasks 以 analysis.sales_tasks 重建销售任务：先清掉该录音待处理/待确认任务，再按新结果插入。
+func (g *ConsultationAnalysisGenerator) rebuildSalesTasks(ctx context.Context, tenantID, recordingID int64, analysis map[string]any) error {
+	meta, err := g.loadRecordingMeta(ctx, tenantID, recordingID)
+	if err != nil {
+		return fmt.Errorf("load recording meta: %w", err)
+	}
+	if _, err := g.pool.Exec(ctx, `
+		DELETE FROM sales_tasks
+		WHERE tenant_id = $1 AND recording_id = $2 AND status IN ('待处理','待确认')
+	`, tenantID, recordingID); err != nil {
+		return fmt.Errorf("clear sales tasks: %w", err)
+	}
+	rawTasks, _ := analysis["sales_tasks"].([]any)
+	now := time.Now()
+	for i, raw := range rawTasks {
+		task, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		title, _ := task["title"].(string)
+		description, _ := task["description"].(string)
+		script, _ := task["script"].(string)
+		priority, _ := task["priority"].(string)
+		dueAt := now.Add(time.Duration(2*(i+1)) * 24 * time.Hour)
+		if strings.TrimSpace(priority) == "高" {
+			dueAt = now.Add(24 * time.Hour)
+		}
+		customerID := meta.customerID
+		var customerIDPtr *int64
+		if customerID > 0 {
+			customerIDPtr = &customerID
+		}
+		var ownerIDPtr *int64
+		if meta.employeeID > 0 {
+			ownerIDPtr = &meta.employeeID
+		}
+		_, err := g.pool.Exec(ctx, `
+			INSERT INTO sales_tasks (
+				tenant_id, encounter_id, recording_id, customer_id, customer_name,
+				objective, action, suggested_content, owner_employee_id, owner_name, due_at, status
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'待处理')
+		`, tenantID, meta.encounterID, recordingID, customerIDPtr, meta.customerName,
+			strings.TrimSpace(title), strings.TrimSpace(description), strings.TrimSpace(script),
+			ownerIDPtr, meta.employeeName, dueAt)
+		if err != nil {
+			return fmt.Errorf("insert sales task: %w", err)
+		}
+	}
+	return nil
 }

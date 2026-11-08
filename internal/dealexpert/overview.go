@@ -31,15 +31,15 @@ type Overview struct {
 	OpportunityCount int `json:"opportunity_count"`
 	ProductMissed    int `json:"product_missed"`
 
-	FollowUpPending   int `json:"follow_up_pending"`
-	FollowUpOverdue   int `json:"follow_up_overdue"`
-	FollowUpCompleted int `json:"follow_up_completed"`
+	SalesTaskPending   int `json:"follow_up_pending"`
+	SalesTaskOverdue   int `json:"follow_up_overdue"`
+	SalesTaskCompleted int `json:"follow_up_completed"`
 
 	// 数据缺口：这些接待可以继续分析，但下游经营统计会缺一块。
 	UnlinkedEncounters int `json:"unlinked_encounters"`
 	IdentityPending    int `json:"identity_pending"`
 	AmountPending      int `json:"amount_pending"`
-	FollowUpMissing    int `json:"follow_up_missing"`
+	SalesTaskMissing    int `json:"follow_up_missing"`
 }
 
 func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
@@ -49,20 +49,6 @@ func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo
 	return s.store.Overview(ctx, tenantID, dateFrom, dateTo, employeeFilter)
 }
 
-func (s *Service) LatestCard(ctx context.Context, tenantID, recordingID int64) (*EncounterCard, error) {
-	if tenantID <= 0 || recordingID <= 0 {
-		return nil, fmt.Errorf("tenant_id and recording_id are required")
-	}
-	return s.store.LatestCard(ctx, tenantID, recordingID)
-}
-
 func (s *Service) RecordingConsultant(ctx context.Context, tenantID, recordingID int64) (int64, error) {
 	return s.store.RecordingConsultant(ctx, tenantID, recordingID)
-}
-
-func (s *Service) EnqueueAnalysis(ctx context.Context, tenantID, recordingID int64) (string, error) {
-	if tenantID <= 0 || recordingID <= 0 {
-		return "", fmt.Errorf("tenant_id and recording_id are required")
-	}
-	return s.store.EnqueueAnalysis(ctx, tenantID, recordingID)
 }

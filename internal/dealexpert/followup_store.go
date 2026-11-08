@@ -21,8 +21,8 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanFollowUp(row rowScanner) (*FollowUp, error) {
-	var item FollowUp
+func scanSalesTask(row rowScanner) (*SalesTask, error) {
+	var item SalesTask
 	err := row.Scan(&item.ID, &item.TenantID, &item.EncounterID, &item.RecordingID, &item.CustomerID,
 		&item.CustomerName, &item.Objective, &item.Action, &item.SuggestedContent,
 		&item.OwnerEmployeeID, &item.OwnerName, &item.DueAt, &item.Status, &item.Result,
@@ -39,21 +39,21 @@ func scanOutcome(row rowScanner) (*OutcomeEvent, error) {
 	return &item, err
 }
 
-func (s *Store) CreateFollowUp(ctx context.Context, tenantID int64, req CreateFollowUpRequest, dueAt *time.Time) (*FollowUp, bool, error) {
+func (s *Store) CreateSalesTask(ctx context.Context, tenantID int64, req CreateSalesTaskRequest, dueAt *time.Time) (*SalesTask, bool, error) {
 	if s == nil || s.pool == nil {
 		return nil, false, fmt.Errorf("deal expert store is nil")
 	}
 	const query = `
-		INSERT INTO deal_follow_ups (
+		INSERT INTO sales_tasks (
 			tenant_id, encounter_id, recording_id, customer_id, customer_name,
 			objective, action, suggested_content, owner_employee_id, owner_name, due_at, status
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + FollowUpPending + `')
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + SalesTaskPending + `')
 		ON CONFLICT (tenant_id, encounter_id)
-			WHERE status IN ('` + FollowUpPending + `','` + FollowUpProcessing + `','` + FollowUpWaitingCustomer + `','` + FollowUpWaitingInternal + `','` + FollowUpPaused + `')
+			WHERE status IN ('` + SalesTaskPending + `','` + SalesTaskProcessing + `','` + SalesTaskWaitingCustomer + `','` + SalesTaskWaitingInternal + `','` + SalesTaskPaused + `')
 			DO NOTHING
 		RETURNING ` + followUpColumns
 
-	item, err := scanFollowUp(s.pool.QueryRow(ctx, query,
+	item, err := scanSalesTask(s.pool.QueryRow(ctx, query,
 		tenantID, req.EncounterID, req.RecordingID, req.CustomerID, req.CustomerName,
 		req.Objective, req.Action, req.SuggestedContent, req.OwnerEmployeeID, req.OwnerName, dueAt))
 	if err == nil {
@@ -64,21 +64,21 @@ func (s *Store) CreateFollowUp(ctx context.Context, tenantID int64, req CreateFo
 	}
 
 	// 已有活动任务：不新建，返回原任务，由前端提示「已存在」。
-	existing, err := s.getActiveFollowUp(ctx, tenantID, req.EncounterID)
+	existing, err := s.getActiveSalesTask(ctx, tenantID, req.EncounterID)
 	if err != nil {
 		return nil, false, err
 	}
 	return existing, false, nil
 }
 
-func (s *Store) getActiveFollowUp(ctx context.Context, tenantID, encounterID int64) (*FollowUp, error) {
+func (s *Store) getActiveSalesTask(ctx context.Context, tenantID, encounterID int64) (*SalesTask, error) {
 	query := `SELECT ` + followUpColumns + `
-		FROM deal_follow_ups
+		FROM sales_tasks
 		WHERE tenant_id = $1 AND encounter_id = $2 AND status = ANY($3)
 		ORDER BY id DESC LIMIT 1`
-	item, err := scanFollowUp(s.pool.QueryRow(ctx, query, tenantID, encounterID, activeStatuses()))
+	item, err := scanSalesTask(s.pool.QueryRow(ctx, query, tenantID, encounterID, activeStatuses()))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrFollowUpNotFound
+		return nil, ErrSalesTaskNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get active follow up: %w", err)
@@ -86,11 +86,11 @@ func (s *Store) getActiveFollowUp(ctx context.Context, tenantID, encounterID int
 	return item, nil
 }
 
-func (s *Store) GetFollowUp(ctx context.Context, tenantID, id int64) (*FollowUp, error) {
-	query := `SELECT ` + followUpColumns + ` FROM deal_follow_ups WHERE tenant_id = $1 AND id = $2`
-	item, err := scanFollowUp(s.pool.QueryRow(ctx, query, tenantID, id))
+func (s *Store) GetSalesTask(ctx context.Context, tenantID, id int64) (*SalesTask, error) {
+	query := `SELECT ` + followUpColumns + ` FROM sales_tasks WHERE tenant_id = $1 AND id = $2`
+	item, err := scanSalesTask(s.pool.QueryRow(ctx, query, tenantID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrFollowUpNotFound
+		return nil, ErrSalesTaskNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get follow up: %w", err)
@@ -98,9 +98,9 @@ func (s *Store) GetFollowUp(ctx context.Context, tenantID, id int64) (*FollowUp,
 	return item, nil
 }
 
-func (s *Store) ListFollowUpsByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*FollowUp, error) {
+func (s *Store) ListSalesTasksByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*SalesTask, error) {
 	query := `SELECT ` + followUpColumns + `
-		FROM deal_follow_ups
+		FROM sales_tasks
 		WHERE tenant_id = $1 AND encounter_id = $2
 		ORDER BY id DESC`
 	rows, err := s.pool.Query(ctx, query, tenantID, encounterID)
@@ -109,9 +109,9 @@ func (s *Store) ListFollowUpsByEncounter(ctx context.Context, tenantID, encounte
 	}
 	defer rows.Close()
 
-	items := make([]*FollowUp, 0, 4)
+	items := make([]*SalesTask, 0, 4)
 	for rows.Next() {
-		item, err := scanFollowUp(rows)
+		item, err := scanSalesTask(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan follow up: %w", err)
 		}
@@ -120,7 +120,7 @@ func (s *Store) ListFollowUpsByEncounter(ctx context.Context, tenantID, encounte
 	return items, rows.Err()
 }
 
-func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*FollowUp, int, error) {
+func (s *Store) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*SalesTask, int, error) {
 	where := "tenant_id = $1"
 	args := []any{tenantID}
 	if status == "" {
@@ -136,11 +136,11 @@ func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string
 	}
 
 	var total int
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deal_follow_ups WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM sales_tasks WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count follow ups: %w", err)
 	}
 
-	query := fmt.Sprintf(`SELECT %s FROM deal_follow_ups WHERE %s
+	query := fmt.Sprintf(`SELECT %s FROM sales_tasks WHERE %s
 		ORDER BY due_at NULLS LAST, id DESC LIMIT $%d OFFSET $%d`, followUpColumns, where, len(args)+1, len(args)+2)
 	rows, err := s.pool.Query(ctx, query, append(args, pageSize, (page-1)*pageSize)...)
 	if err != nil {
@@ -148,9 +148,9 @@ func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string
 	}
 	defer rows.Close()
 
-	items := make([]*FollowUp, 0, pageSize)
+	items := make([]*SalesTask, 0, pageSize)
 	for rows.Next() {
-		item, err := scanFollowUp(rows)
+		item, err := scanSalesTask(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan follow up: %w", err)
 		}
@@ -159,40 +159,40 @@ func (s *Store) ListFollowUps(ctx context.Context, tenantID int64, status string
 	return items, total, rows.Err()
 }
 
-func (s *Store) CompleteFollowUp(
+func (s *Store) CompleteSalesTask(
 	ctx context.Context,
 	tenantID, id int64,
-	req CompleteFollowUpRequest,
+	req CompleteSalesTaskRequest,
 	rule resultRule,
 	occurredAt *time.Time,
 	actorID *int64,
 	actorName string,
-) (*FollowUp, []*FollowUpEvent, *OutcomeEvent, error) {
+) (*SalesTask, []*SalesTaskEvent, *OutcomeEvent, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("begin complete follow up: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	query := `SELECT ` + followUpColumns + ` FROM deal_follow_ups WHERE tenant_id = $1 AND id = $2 FOR UPDATE`
-	current, err := scanFollowUp(tx.QueryRow(ctx, query, tenantID, id))
+	query := `SELECT ` + followUpColumns + ` FROM sales_tasks WHERE tenant_id = $1 AND id = $2 FOR UPDATE`
+	current, err := scanSalesTask(tx.QueryRow(ctx, query, tenantID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, nil, ErrFollowUpNotFound
+		return nil, nil, nil, ErrSalesTaskNotFound
 	}
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("lock follow up: %w", err)
 	}
-	if !IsActiveFollowUpStatus(current.Status) {
-		return nil, nil, nil, ErrFollowUpNotActive
+	if !IsActiveSalesTaskStatus(current.Status) {
+		return nil, nil, nil, ErrSalesTaskNotActive
 	}
 
-	update := `UPDATE deal_follow_ups
+	update := `UPDATE sales_tasks
 		SET status = $3, result = $4, result_note = $5, next_action = $6,
-		    closed_at = CASE WHEN $3 IN ('` + FollowUpCompleted + `','` + FollowUpCancelled + `') THEN NOW() ELSE NULL END,
+		    closed_at = CASE WHEN $3 IN ('` + SalesTaskCompleted + `','` + SalesTaskCancelled + `') THEN NOW() ELSE NULL END,
 		    updated_at = NOW()
 		WHERE tenant_id = $1 AND id = $2
 		RETURNING ` + followUpColumns
-	updated, err := scanFollowUp(tx.QueryRow(ctx, update, tenantID, id, rule.nextStatus,
+	updated, err := scanSalesTask(tx.QueryRow(ctx, update, tenantID, id, rule.nextStatus,
 		req.Result, req.ResultNote, req.NextAction))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("update follow up: %w", err)
@@ -227,21 +227,21 @@ func (s *Store) CompleteFollowUp(
 		return nil, nil, nil, fmt.Errorf("commit complete follow up: %w", err)
 	}
 
-	events, err := s.ListFollowUpEvents(ctx, tenantID, id)
+	events, err := s.ListSalesTaskEvents(ctx, tenantID, id)
 	if err != nil {
 		return updated, nil, outcome, nil
 	}
 	return updated, events, outcome, nil
 }
 
-func scanEvent(row rowScanner) (*FollowUpEvent, error) {
-	var item FollowUpEvent
-	err := row.Scan(&item.ID, &item.FollowUpID, &item.FromStatus, &item.ToStatus, &item.Result,
+func scanEvent(row rowScanner) (*SalesTaskEvent, error) {
+	var item SalesTaskEvent
+	err := row.Scan(&item.ID, &item.SalesTaskID, &item.FromStatus, &item.ToStatus, &item.Result,
 		&item.Note, &item.ActorEmployeeID, &item.ActorName, &item.CreatedAt)
 	return &item, err
 }
 
-func (s *Store) ListFollowUpEvents(ctx context.Context, tenantID, followUpID int64) ([]*FollowUpEvent, error) {
+func (s *Store) ListSalesTaskEvents(ctx context.Context, tenantID, followUpID int64) ([]*SalesTaskEvent, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, follow_up_id, from_status, to_status, result, note, actor_employee_id, actor_name, created_at
 		FROM deal_follow_up_events
@@ -252,7 +252,7 @@ func (s *Store) ListFollowUpEvents(ctx context.Context, tenantID, followUpID int
 	}
 	defer rows.Close()
 
-	items := make([]*FollowUpEvent, 0, 4)
+	items := make([]*SalesTaskEvent, 0, 4)
 	for rows.Next() {
 		item, err := scanEvent(rows)
 		if err != nil {
@@ -317,24 +317,24 @@ func (s *Store) EncounterConsultant(ctx context.Context, tenantID, encounterID i
 	return employeeID, nil
 }
 
-// CreateDraftFollowUp 建一条人工确认草案：不满足自动条件时由咨询师起草，确认后转正。
-func (s *Store) CreateDraftFollowUp(ctx context.Context, tenantID int64, req CreateFollowUpRequest, dueAt *time.Time) (*FollowUp, error) {
+// CreateDraftSalesTask 建一条人工确认草案：不满足自动条件时由咨询师起草，确认后转正。
+func (s *Store) CreateDraftSalesTask(ctx context.Context, tenantID int64, req CreateSalesTaskRequest, dueAt *time.Time) (*SalesTask, error) {
 	const query = `
-		INSERT INTO deal_follow_ups (
+		INSERT INTO sales_tasks (
 			tenant_id, encounter_id, recording_id, customer_id, customer_name,
 			objective, action, suggested_content, owner_employee_id, owner_name, due_at, status
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + FollowUpDraft + `')
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + SalesTaskDraft + `')
 		RETURNING ` + followUpColumns
-	return scanFollowUp(s.pool.QueryRow(ctx, query,
+	return scanSalesTask(s.pool.QueryRow(ctx, query,
 		tenantID, req.EncounterID, req.RecordingID, req.CustomerID, req.CustomerName,
 		req.Objective, req.Action, req.SuggestedContent, req.OwnerEmployeeID, req.OwnerName, dueAt))
 }
 
 // ConfirmDraft 把草案转正为待处理任务，记录确认备注。
-func (s *Store) ConfirmDraft(ctx context.Context, tenantID, followUpID int64, note string) (*FollowUp, error) {
-	query := `UPDATE deal_follow_ups
-		SET status = '` + FollowUpPending + `', result_note = $3, updated_at = NOW()
-		WHERE id = $1 AND tenant_id = $2 AND status = '` + FollowUpDraft + `'
+func (s *Store) ConfirmDraft(ctx context.Context, tenantID, followUpID int64, note string) (*SalesTask, error) {
+	query := `UPDATE sales_tasks
+		SET status = '` + SalesTaskPending + `', result_note = $3, updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2 AND status = '` + SalesTaskDraft + `'
 		RETURNING ` + followUpColumns
-	return scanFollowUp(s.pool.QueryRow(ctx, query, followUpID, tenantID, note))
+	return scanSalesTask(s.pool.QueryRow(ctx, query, followUpID, tenantID, note))
 }

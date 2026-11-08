@@ -312,12 +312,9 @@ func main() {
 
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
-	dealExpertHandler.SetV2CardGenerator(dealexpert.NewV2CardGenerator(pool, llmClient, slog.Default()))
+	dealExpertHandler.SetConsultationAnalysisGenerator(dealexpert.NewConsultationAnalysisGenerator(pool, llmClient, slog.Default()))
 	if !strings.EqualFold(cfg.App.Env, "production") {
 		dealExpertHandler.RegisterDevLoginRoute(mux, cfg.JWT.Secret)
-	}
-	if cfg.Deal.InstantEnabled {
-		dealExpertHandler.SetInstantAnalyzer(dealexpert.NewInstantAnalyzer(pool, llmClient, slog.Default()))
 	}
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
@@ -325,18 +322,6 @@ func main() {
 	// HIS：灵策门诊系统（P1 标准诊疗闭环）。设计基线：lingce-web/docs/his。
 	hisModule := his.NewModule(pool, emrRecordService)
 	hisModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
-	// 赢客专家分析消费者：消费 Worker 已落库的清洗转写，调用专属模型配置生成经营结案卡。
-	// 后台分析版本由配置显式选择：默认 v200，dev 可切 v210-rc11（新流水线 + 服务端 v1.1 适配）。
-	dealExpertAnalyzer, err := dealexpert.NewAnalyzerWithVersion(pool, llmClient, cfg.Deal.DealAnalysisVersion())
-	if err != nil {
-		slog.Error("invalid deal analysis version", "error", err, "analysis_version", cfg.Deal.DealAnalysisVersion())
-		os.Exit(1)
-	}
-	slog.Info("deal expert analyzer started", "analysis_version", dealExpertAnalyzer.AnalysisVersion())
-	if cfg.Deal.ConsultantSMSEnabled {
-		dealExpertAnalyzer.SetSMSNotifier(dealexpert.NewTestConsultantSMSNotifier(pool, slog.Default(), cfg.External.EmployeeWebBaseURL))
-	}
-	go dealExpertAnalyzer.Run(context.Background(), 20*time.Second)
 
 	externalDataHandler := externaldata.NewHandler(pool, cfg.External.ExternalDataTenantID, emrRecordService)
 	externalDataToken := cfg.External.ExternalDataInternalToken

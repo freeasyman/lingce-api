@@ -10,7 +10,7 @@ import (
 // 口径：
 //   - 到院、有效成交状态来自 recordings + 结果事件；
 //   - 金额优先来自 deal_outcome_events，没有结果事件时才退回 recordings 的人工确认金额，并写明来源；
-//   - 跟进完成度与数据缺口来自 deal_follow_ups，不进入个人排名。
+//   - 跟进完成度与数据缺口来自 sales_tasks，不进入个人排名。
 func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
 	if s == nil || s.pool == nil {
 		return nil, fmt.Errorf("deal expert store is nil")
@@ -52,7 +52,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id AND o.voided_at IS NULL
 			) os ON TRUE
 			LEFT JOIN LATERAL (
-				SELECT status FROM deal_follow_ups f
+				SELECT status FROM sales_tasks f
 				WHERE f.tenant_id = r.tenant_id AND f.encounter_id = r.encounter_id AND f.status = ANY($5)
 				ORDER BY f.id DESC LIMIT 1
 			) af ON TRUE
@@ -81,7 +81,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 	`, tenantID, dateFrom, dateTo, employeeFilter, active).Scan(
 		&out.TotalEncounters, &out.Converted, &out.Following, &out.NotConverted, &out.Unknown,
 		&out.OpportunityCount, &out.GrossAmount, &out.RefundAmount, &out.ProductMissed,
-		&out.UnlinkedEncounters, &out.IdentityPending, &out.AmountPending, &out.FollowUpMissing,
+		&out.UnlinkedEncounters, &out.IdentityPending, &out.AmountPending, &out.SalesTaskMissing,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("overview recordings: %w", err)
@@ -145,10 +145,10 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COUNT(*) FILTER (WHERE status = '待处理'),
 			COUNT(*) FILTER (WHERE status = ANY($2) AND due_at IS NOT NULL AND due_at < NOW()),
 			COUNT(*) FILTER (WHERE status = '已完成')
-		FROM deal_follow_ups
+		FROM sales_tasks
 		WHERE tenant_id = $1
 		  AND ($3::bigint IS NULL OR owner_employee_id = $3)
-	`, tenantID, active, employeeFilter).Scan(&out.FollowUpPending, &out.FollowUpOverdue, &out.FollowUpCompleted); err != nil {
+	`, tenantID, active, employeeFilter).Scan(&out.SalesTaskPending, &out.SalesTaskOverdue, &out.SalesTaskCompleted); err != nil {
 		return nil, fmt.Errorf("overview follow ups: %w", err)
 	}
 

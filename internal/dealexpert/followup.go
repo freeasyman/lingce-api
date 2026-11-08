@@ -10,15 +10,15 @@ import (
 
 // 销售跟进状态。与随访中心的任务状态完全分开，不复用同一套枚举。
 const (
-	FollowUpDraft           = "草案"
-	FollowUpPending         = "待处理"
-	FollowUpProcessing      = "处理中"
-	FollowUpWaitingCustomer = "等待客户"
-	FollowUpWaitingInternal = "等待内部协作"
-	FollowUpCompleted       = "已完成"
-	FollowUpRescheduled     = "已改期"
-	FollowUpCancelled       = "已取消"
-	FollowUpPaused          = "暂停联系"
+	SalesTaskDraft           = "草案"
+	SalesTaskPending         = "待处理"
+	SalesTaskProcessing      = "处理中"
+	SalesTaskWaitingCustomer = "等待客户"
+	SalesTaskWaitingInternal = "等待内部协作"
+	SalesTaskCompleted       = "已完成"
+	SalesTaskRescheduled     = "已改期"
+	SalesTaskCancelled       = "已取消"
+	SalesTaskPaused          = "暂停联系"
 )
 
 // 销售结果。医疗随访结果使用另一套枚举，不能混用。
@@ -35,19 +35,17 @@ const (
 )
 
 var (
-	ErrFollowUpNotFound      = errors.New("follow up not found")
-	ErrFollowUpNotActive     = errors.New("follow up is not active")
-	ErrInvalidResult         = errors.New("invalid follow up result")
-	ErrInvalidOutcomeType    = errors.New("invalid outcome type")
-	ErrAmountRequired        = errors.New("amount is required for this outcome")
-	ErrInvalidOutcomeStatus  = errors.New("invalid outcome status filter")
-	ErrInvalidFollowUpState  = errors.New("invalid follow up state filter")
-	ErrInvalidDecisionFilter = errors.New("invalid decision filter")
-	ErrCardNotFound          = errors.New("encounter card not found")
-	ErrNoTranscript          = errors.New("recording has no transcript")
+	ErrSalesTaskNotFound      = errors.New("sales task not found")
+	ErrSalesTaskNotActive     = errors.New("sales task is not active")
+	ErrInvalidResult          = errors.New("invalid sales task result")
+	ErrInvalidOutcomeType     = errors.New("invalid outcome type")
+	ErrAmountRequired         = errors.New("amount is required for this outcome")
+	ErrInvalidOutcomeStatus   = errors.New("invalid outcome status filter")
+	ErrInvalidSalesTaskState  = errors.New("invalid sales task state filter")
+	ErrInvalidDecisionFilter  = errors.New("invalid decision filter")
 )
 
-type FollowUp struct {
+type SalesTask struct {
 	ID               int64      `json:"id"`
 	TenantID         int64      `json:"tenant_id"`
 	EncounterID      int64      `json:"encounter_id"`
@@ -69,9 +67,9 @@ type FollowUp struct {
 	ClosedAt         *time.Time `json:"closed_at,omitempty"`
 }
 
-type FollowUpEvent struct {
+type SalesTaskEvent struct {
 	ID              int64     `json:"id"`
-	FollowUpID      int64     `json:"follow_up_id"`
+	SalesTaskID      int64     `json:"follow_up_id"`
 	FromStatus      string    `json:"from_status"`
 	ToStatus        string    `json:"to_status"`
 	Result          string    `json:"result,omitempty"`
@@ -120,7 +118,7 @@ type UnreportedClaim struct {
 	Suggested      *float64 `json:"suggested_amount,omitempty"`
 }
 
-type CreateFollowUpRequest struct {
+type CreateSalesTaskRequest struct {
 	EncounterID      int64   `json:"encounter_id"`
 	RecordingID      int64   `json:"recording_id"`
 	CustomerID       *int64  `json:"customer_id"`
@@ -133,7 +131,7 @@ type CreateFollowUpRequest struct {
 	DueAt            *string `json:"due_at"`
 }
 
-type CompleteFollowUpRequest struct {
+type CompleteSalesTaskRequest struct {
 	Result     string   `json:"result"`
 	ResultNote string   `json:"result_note"`
 	NextAction string   `json:"next_action"`
@@ -159,15 +157,15 @@ type resultRule struct {
 }
 
 var resultRules = map[string]resultRule{
-	ResultAppointed:       {nextStatus: FollowUpCompleted, outcomeType: "预约"},
-	ResultDeposit:         {nextStatus: FollowUpCompleted, outcomeType: "定金"},
-	ResultPaid:            {nextStatus: FollowUpCompleted, outcomeType: "付款", needAmount: true},
-	ResultPostponed:       {nextStatus: FollowUpCompleted, outcomeType: "暂缓"},
-	ResultAbandoned:       {nextStatus: FollowUpCompleted, outcomeType: "放弃"},
-	ResultWaitingCustomer: {nextStatus: FollowUpWaitingCustomer},
-	ResultNeedManager:     {nextStatus: FollowUpWaitingInternal},
-	ResultNeedSpecialist:  {nextStatus: FollowUpWaitingInternal},
-	ResultPauseContact:    {nextStatus: FollowUpPaused},
+	ResultAppointed:       {nextStatus: SalesTaskCompleted, outcomeType: "预约"},
+	ResultDeposit:         {nextStatus: SalesTaskCompleted, outcomeType: "定金"},
+	ResultPaid:            {nextStatus: SalesTaskCompleted, outcomeType: "付款", needAmount: true},
+	ResultPostponed:       {nextStatus: SalesTaskCompleted, outcomeType: "暂缓"},
+	ResultAbandoned:       {nextStatus: SalesTaskCompleted, outcomeType: "放弃"},
+	ResultWaitingCustomer: {nextStatus: SalesTaskWaitingCustomer},
+	ResultNeedManager:     {nextStatus: SalesTaskWaitingInternal},
+	ResultNeedSpecialist:  {nextStatus: SalesTaskWaitingInternal},
+	ResultPauseContact:    {nextStatus: SalesTaskPaused},
 }
 
 var allowedOutcomeTypes = map[string]bool{
@@ -176,10 +174,10 @@ var allowedOutcomeTypes = map[string]bool{
 }
 
 func activeStatuses() []string {
-	return []string{FollowUpPending, FollowUpProcessing, FollowUpWaitingCustomer, FollowUpWaitingInternal, FollowUpPaused}
+	return []string{SalesTaskPending, SalesTaskProcessing, SalesTaskWaitingCustomer, SalesTaskWaitingInternal, SalesTaskPaused}
 }
 
-func IsActiveFollowUpStatus(status string) bool {
+func IsActiveSalesTaskStatus(status string) bool {
 	for _, item := range activeStatuses() {
 		if item == status {
 			return true
@@ -199,7 +197,7 @@ func parseTime(value *string) (*time.Time, error) {
 	return &parsed, nil
 }
 
-func (s *Service) CreateFollowUp(ctx context.Context, tenantID int64, req CreateFollowUpRequest) (*FollowUp, bool, error) {
+func (s *Service) CreateSalesTask(ctx context.Context, tenantID int64, req CreateSalesTaskRequest) (*SalesTask, bool, error) {
 	if tenantID <= 0 {
 		return nil, false, errors.New("tenant_id is required")
 	}
@@ -215,35 +213,35 @@ func (s *Service) CreateFollowUp(ctx context.Context, tenantID int64, req Create
 	if err != nil {
 		return nil, false, err
 	}
-	return s.store.CreateFollowUp(ctx, tenantID, req, dueAt)
+	return s.store.CreateSalesTask(ctx, tenantID, req, dueAt)
 }
 
-func (s *Service) ListFollowUps(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*FollowUp, int, error) {
+func (s *Service) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*SalesTask, int, error) {
 	if page <= 0 {
 		page = 1
 	}
 	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 20
 	}
-	if status != "" && !IsActiveFollowUpStatus(status) && status != FollowUpCompleted && status != FollowUpCancelled && status != FollowUpRescheduled {
+	if status != "" && !IsActiveSalesTaskStatus(status) && status != SalesTaskCompleted && status != SalesTaskCancelled && status != SalesTaskRescheduled {
 		return nil, 0, errors.New("invalid status filter")
 	}
-	return s.store.ListFollowUps(ctx, tenantID, status, page, pageSize, employeeFilter)
+	return s.store.ListSalesTasks(ctx, tenantID, status, page, pageSize, employeeFilter)
 }
 
-func (s *Service) GetFollowUp(ctx context.Context, tenantID, id int64) (*FollowUp, error) {
-	return s.store.GetFollowUp(ctx, tenantID, id)
+func (s *Service) GetSalesTask(ctx context.Context, tenantID, id int64) (*SalesTask, error) {
+	return s.store.GetSalesTask(ctx, tenantID, id)
 }
 
-func (s *Service) ListFollowUpsByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*FollowUp, error) {
-	return s.store.ListFollowUpsByEncounter(ctx, tenantID, encounterID)
+func (s *Service) ListSalesTasksByEncounter(ctx context.Context, tenantID, encounterID int64) ([]*SalesTask, error) {
+	return s.store.ListSalesTasksByEncounter(ctx, tenantID, encounterID)
 }
 
-func (s *Service) ListFollowUpEvents(ctx context.Context, tenantID, followUpID int64) ([]*FollowUpEvent, error) {
-	return s.store.ListFollowUpEvents(ctx, tenantID, followUpID)
+func (s *Service) ListSalesTaskEvents(ctx context.Context, tenantID, followUpID int64) ([]*SalesTaskEvent, error) {
+	return s.store.ListSalesTaskEvents(ctx, tenantID, followUpID)
 }
 
-func (s *Service) CompleteFollowUp(ctx context.Context, tenantID, id int64, req CompleteFollowUpRequest, actorID *int64, actorName string) (*FollowUp, []*FollowUpEvent, *OutcomeEvent, error) {
+func (s *Service) CompleteSalesTask(ctx context.Context, tenantID, id int64, req CompleteSalesTaskRequest, actorID *int64, actorName string) (*SalesTask, []*SalesTaskEvent, *OutcomeEvent, error) {
 	rule, ok := resultRules[strings.TrimSpace(req.Result)]
 	if !ok {
 		return nil, nil, nil, ErrInvalidResult
@@ -255,7 +253,7 @@ func (s *Service) CompleteFollowUp(ctx context.Context, tenantID, id int64, req 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return s.store.CompleteFollowUp(ctx, tenantID, id, req, rule, occurredAt, actorID, actorName)
+	return s.store.CompleteSalesTask(ctx, tenantID, id, req, rule, occurredAt, actorID, actorName)
 }
 
 func (s *Service) CreateOutcome(ctx context.Context, tenantID, actorID int64, req CreateOutcomeRequest) (*OutcomeEvent, error) {

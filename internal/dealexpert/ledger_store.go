@@ -62,12 +62,12 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 		SELECT o.id, o.tenant_id, o.encounter_id, o.recording_id, o.type, o.amount, o.occurred_at,
 		       o.source, o.source_ref, o.note, o.confirmed_by, o.created_at,
 		       o.voided_at, o.void_reason, o.updated_by, o.update_reason, o.updated_at,
-		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(NULLIF(c.card->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
+		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(NULLIF(c.analysis->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
 		FROM deal_outcome_events o
 		JOIN recordings r ON r.id = o.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
-		LEFT JOIN deal_cards_v2 c ON c.recording_id = o.recording_id AND c.tenant_id = o.tenant_id AND c.status = 'analyzed'
+		LEFT JOIN consultation_analyses c ON c.recording_id = o.recording_id AND c.tenant_id = o.tenant_id AND c.status = 'analyzed'
 		WHERE `+where+`
 		ORDER BY o.occurred_at DESC, o.id DESC
 		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
@@ -99,15 +99,15 @@ func (s *Store) ListUnreportedClaims(ctx context.Context, tenantID int64, employ
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.recording_id, COALESCE(r.encounter_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''),
-		       COALESCE(c.card->>'deal_status',''), COALESCE(c.card->>'stuck_point_headline',''),
-		       r.recorded_at, COALESCE(c.card->'amount_hints','[]'::jsonb),
-		       COALESCE(NULLIF(c.card->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
-		FROM deal_cards_v2 c
+		       COALESCE(c.analysis->>'deal_status',''), COALESCE(c.analysis->>'stuck_point_headline',''),
+		       r.recorded_at, COALESCE(c.analysis->'amount_hints','[]'::jsonb),
+		       COALESCE(NULLIF(c.analysis->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
+		FROM consultation_analyses c
 		JOIN recordings r ON r.id = c.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		WHERE c.tenant_id = $1 AND c.status = 'analyzed' AND r.deleted_at IS NULL
-		  AND c.card->>'deal_status' = ANY(ARRAY['已预约','付款待治疗','已成交','疗程进行中','已经选择我们'])
+		  AND c.analysis->>'deal_status' = ANY(ARRAY['已预约','付款待治疗','已成交','疗程进行中','已经选择我们'])
 		  AND NOT EXISTS (
 		    SELECT 1 FROM deal_outcome_events o
 		    WHERE o.tenant_id = c.tenant_id AND o.voided_at IS NULL AND COALESCE(o.amount,0) > 0

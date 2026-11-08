@@ -44,14 +44,14 @@ func TestEvaluateDealScope(t *testing.T) {
 	}
 }
 
-func TestIsActiveFollowUpStatus(t *testing.T) {
-	active := []string{FollowUpPending, FollowUpProcessing, FollowUpWaitingCustomer, FollowUpWaitingInternal, FollowUpPaused}
+func TestIsActiveSalesTaskStatus(t *testing.T) {
+	active := []string{SalesTaskPending, SalesTaskProcessing, SalesTaskWaitingCustomer, SalesTaskWaitingInternal, SalesTaskPaused}
 	for _, status := range active {
-		if !IsActiveFollowUpStatus(status) {
+		if !IsActiveSalesTaskStatus(status) {
 			t.Fatalf("%s should be active", status)
 		}
 	}
-	if IsActiveFollowUpStatus(FollowUpCompleted) {
+	if IsActiveSalesTaskStatus(SalesTaskCompleted) {
 		t.Fatal("completed should not be active")
 	}
 }

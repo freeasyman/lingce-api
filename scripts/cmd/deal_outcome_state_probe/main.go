@@ -43,7 +43,7 @@ func main() {
 	before := find(service, ctx, tenantID, recordingID)
 	fmt.Printf("before: status=%s net=%s latest=%s\n", before.EffectiveDealStatus, amountText(before.EffectiveNetAmount), dash(before.LatestOutcomeType))
 
-	if _, err := service.CreateOutcome(ctx, tenantID, dealexpert.CreateOutcomeRequest{
+	if _, err := service.CreateOutcome(ctx, tenantID, int64(9101), dealexpert.CreateOutcomeRequest{
 		EncounterID: encounterID,
 		RecordingID: recordingID,
 		Type:        "付款",

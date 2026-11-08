@@ -22,7 +22,7 @@ type EncounterListItem struct {
 	RefundAmount        *float64       `json:"refund_amount,omitempty"`
 	EffectiveNetAmount  *float64       `json:"effective_net_amount,omitempty"`
 	LatestOutcomeType   string         `json:"latest_outcome_type,omitempty"`
-	FollowUpStatus      string         `json:"follow_up_status,omitempty"`
+	SalesTaskStatus      string         `json:"follow_up_status,omitempty"`
 	ProductName         string         `json:"product_name,omitempty"`
 	ConcernType         string         `json:"concern_type,omitempty"`
 	NextAction          string         `json:"next_action,omitempty"`
@@ -38,8 +38,8 @@ type EncounterListParams struct {
 	DateTo   *time.Time
 	// CustomerLinked: nil 不筛选；true 只看已关联客户；false 只看未关联客户。
 	CustomerLinked *bool
-	// FollowUpState: "" 不筛选；none / active / completed / paused。
-	FollowUpState string
+	// SalesTaskState: "" 不筛选；none / active / completed / paused。
+	SalesTaskState string
 	// Decision: "" 不筛选；paid / appointed / deposit / postponed / abandoned / high_intent。
 	Decision string
 }
@@ -56,10 +56,10 @@ func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params Enc
 	default:
 		return nil, 0, ErrInvalidOutcomeStatus
 	}
-	switch params.FollowUpState {
+	switch params.SalesTaskState {
 	case "", "none", "active", "completed", "paused":
 	default:
-		return nil, 0, ErrInvalidFollowUpState
+		return nil, 0, ErrInvalidSalesTaskState
 	}
 	switch params.Decision {
 	case "", "paid", "appointed", "deposit", "postponed", "abandoned", "high_intent":

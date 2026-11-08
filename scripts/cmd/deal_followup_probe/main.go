@@ -39,10 +39,10 @@ func main() {
 
 	defer func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM deal_outcome_events WHERE tenant_id = $1 AND encounter_id = $2`, tenantID, encounterID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM deal_follow_ups WHERE tenant_id = $1 AND encounter_id = $2`, tenantID, encounterID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM sales_tasks WHERE tenant_id = $1 AND encounter_id = $2`, tenantID, encounterID)
 	}()
 
-	followUp, inserted, err := service.CreateFollowUp(ctx, tenantID, dealexpert.CreateFollowUpRequest{
+	followUp, inserted, err := service.CreateSalesTask(ctx, tenantID, dealexpert.CreateSalesTaskRequest{
 		EncounterID:     encounterID,
 		RecordingID:     7001,
 		CustomerName:    "王女士",
@@ -58,7 +58,7 @@ func main() {
 	}
 	fmt.Printf("create: id=%d status=%s inserted=%v owner=%s\n", followUp.ID, followUp.Status, inserted, followUp.OwnerName)
 
-	duplicated, insertedAgain, err := service.CreateFollowUp(ctx, tenantID, dealexpert.CreateFollowUpRequest{
+	duplicated, insertedAgain, err := service.CreateSalesTask(ctx, tenantID, dealexpert.CreateSalesTaskRequest{
 		EncounterID: encounterID,
 		RecordingID: 7001,
 		Objective:   "确认家属决策条件",
@@ -70,7 +70,7 @@ func main() {
 	}
 	fmt.Printf("duplicate: id=%d inserted=%v\n", duplicated.ID, insertedAgain)
 
-	completed, events, outcome, err := service.CompleteFollowUp(ctx, tenantID, followUp.ID, dealexpert.CompleteFollowUpRequest{
+	completed, events, outcome, err := service.CompleteSalesTask(ctx, tenantID, followUp.ID, dealexpert.CompleteSalesTaskRequest{
 		Result:     dealexpert.ResultAppointed,
 		ResultNote: "客户同意周六上午到院，家属一同前来",
 		NextAction: "到院前 1 天确认时间",
@@ -94,9 +94,9 @@ func main() {
 	}
 	fmt.Printf("overview: total=%d converted=%d following=%d notConverted=%d unknown=%d net=%.2f source=%s missed=%d followUp(completed=%d)\n",
 		overview.TotalEncounters, overview.Converted, overview.Following, overview.NotConverted, overview.Unknown,
-		overview.NetAmount, overview.AmountSource, overview.ProductMissed, overview.FollowUpCompleted)
+		overview.NetAmount, overview.AmountSource, overview.ProductMissed, overview.SalesTaskCompleted)
 	fmt.Printf("gaps: unlinked=%d identityPending=%d amountPending=%d followUpMissing=%d\n",
-		overview.UnlinkedEncounters, overview.IdentityPending, overview.AmountPending, overview.FollowUpMissing)
+		overview.UnlinkedEncounters, overview.IdentityPending, overview.AmountPending, overview.SalesTaskMissing)
 
 	outcomes, err := service.ListOutcomesByEncounter(ctx, tenantID, encounterID)
 	if err != nil {
@@ -105,7 +105,7 @@ func main() {
 	}
 	fmt.Printf("encounter outcomes: %d\n", len(outcomes))
 
-	if _, _, _, err := service.CompleteFollowUp(ctx, tenantID, followUp.ID, dealexpert.CompleteFollowUpRequest{Result: dealexpert.ResultPaid, Amount: ptrFloat(23800)}, nil, ""); err == nil {
+	if _, _, _, err := service.CompleteSalesTask(ctx, tenantID, followUp.ID, dealexpert.CompleteSalesTaskRequest{Result: dealexpert.ResultPaid, Amount: ptrFloat(23800)}, nil, ""); err == nil {
 		fmt.Fprintln(os.Stderr, "expected not-active error on second completion")
 		os.Exit(1)
 	} else {

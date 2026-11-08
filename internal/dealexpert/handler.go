@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -14,23 +16,15 @@ import (
 )
 
 type Handler struct {
-	service *Service
-	pool    *pgxpool.Pool
-	instant *InstantAnalyzer
-	v2card  *V2CardGenerator
+	service      *Service
+	pool         *pgxpool.Pool
+	consultation *ConsultationAnalysisGenerator
 }
 
-// SetV2CardGenerator 设置 v2 决定卡生成器。
-func (h *Handler) SetV2CardGenerator(gen *V2CardGenerator) {
+// SetConsultationAnalysisGenerator 设置接待记录分析生成器。
+func (h *Handler) SetConsultationAnalysisGenerator(gen *ConsultationAnalysisGenerator) {
 	if h != nil {
-		h.v2card = gen
-	}
-}
-
-// SetInstantAnalyzer 设置轻量即时分析器；nil 时不启用。
-func (h *Handler) SetInstantAnalyzer(analyzer *InstantAnalyzer) {
-	if h != nil {
-		h.instant = analyzer
+		h.consultation = gen
 	}
 }
 
@@ -40,33 +34,28 @@ func NewHandler(service *Service, pool *pgxpool.Pool) *Handler {
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {
 	router.Register(mux, []router.Route{
-		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings", Handler: h.Receive, AuthMode: "internal"},
-		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings/{id}/instant", Handler: h.RunInstant, AuthMode: "internal"},
-		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2Card, AuthMode: "internal"},
+		{Method: "POST", Path: "/api/v1/internal/deal-expert/recordings/{id}/analyze", Handler: h.AnalyzeRecordingInternal, AuthMode: "internal"},
 	}, router.RouteDeps{InternalToken: strings.TrimSpace(internalToken)})
 }
 
-func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
-	var req ReceiveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	row, inserted, err := h.service.Receive(r.Context(), req)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	if h.instant != nil && req.BusinessScope == "consultant" {
-		go h.instant.RunInstant(context.Background(), req.TenantID, req.RecordingID)
-	}
-	httputil.WriteSuccess(w, map[string]any{"code": "ACCEPTED", "status": "accepted", "request_id": fmt.Sprintf("deal-expert-%d", row.ID), "recording_id": row.RecordingID, "encounter_id": row.EncounterID, "inserted": inserted})
+// RecordingAnalyzeRequest 是 Worker 侧发起接待记录分析的请求体。
+type RecordingAnalyzeRequest struct {
+	TenantID          int64  `json:"tenant_id"`
+	RecordingID       int64  `json:"recording_id"`
+	EncounterID       int64  `json:"encounter_id"`
+	EmployeeID        int64  `json:"employee_id"`
+	CustomerID        int64  `json:"customer_id"`
+	CustomerName      string `json:"customer_name"`
+	BusinessScope     string `json:"business_scope"`
+	RoleCode          string `json:"role_code"`
+	RecordedAt        string `json:"recorded_at"`
+	CleanedTranscript string `json:"cleaned_transcript"`
 }
 
-// RunInstant 内部接口：对单条录音立即执行轻量即时分析（同步，供 Worker/测试调用）。
-func (h *Handler) RunInstant(w http.ResponseWriter, r *http.Request) {
-	if h.instant == nil {
-		httputil.WriteInternalError(w, "instant analyzer unavailable")
+// AnalyzeRecordingInternal 内部接口：校验引用后落 pending 记录并异步生成接待记录分析，不阻塞 Worker。
+func (h *Handler) AnalyzeRecordingInternal(w http.ResponseWriter, r *http.Request) {
+	if h.consultation == nil {
+		httputil.WriteInternalError(w, "consultation analysis generator unavailable")
 		return
 	}
 	id, err := parsePathID(r.PathValue("id"))
@@ -74,108 +63,81 @@ func (h *Handler) RunInstant(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid recording id")
 		return
 	}
-	var body struct {
-		TenantID int64 `json:"tenant_id"`
+	var body RecordingAnalyzeRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.TenantID <= 0 {
 		httputil.WriteBadRequest(w, "tenant_id is required")
 		return
 	}
-	h.instant.RunInstant(r.Context(), body.TenantID, id)
-	item, err := h.instant.LatestInstant(r.Context(), body.TenantID, id)
-	if err != nil {
+	if body.RecordingID > 0 && body.RecordingID != id {
+		httputil.WriteBadRequest(w, "recording_id mismatch")
+		return
+	}
+	if err := h.validateAnalysisRefs(r.Context(), body.TenantID, id, body.EncounterID, body.EmployeeID, body.CustomerID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.consultation.UpsertPending(r.Context(), body.TenantID, id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, item)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		if _, err := h.consultation.Generate(ctx, body.TenantID, id); err != nil {
+			slog.Error("async consultation analysis failed", "recording_id", id, "error", err)
+		}
+	}()
+	httputil.WriteSuccess(w, map[string]any{"code": "ACCEPTED", "status": "accepted"})
 }
 
-// GetInstantCard 前端手机卡读取即时三字段。
-func (h *Handler) GetInstantCard(w http.ResponseWriter, r *http.Request) {
-	scope, httpErr := h.resolveDealScope(r)
-	if httpErr != nil {
-		writeTenantError(w, httpErr)
-		return
+// validateAnalysisRefs 校验录音、接待、员工、客户引用都存在且同租户。
+func (h *Handler) validateAnalysisRefs(ctx context.Context, tenantID, recordingID, encounterID, employeeID, customerID int64) error {
+	var recTenant, recEncounter, recEmployee, recCustomer int64
+	if err := h.pool.QueryRow(ctx, `
+		SELECT tenant_id, COALESCE(encounter_id,0), COALESCE(employee_id,0), COALESCE(customer_id,0)
+		FROM recordings WHERE id = $1 AND deleted_at IS NULL
+	`, recordingID).Scan(&recTenant, &recEncounter, &recEmployee, &recCustomer); err != nil {
+		return fmt.Errorf("recording not found")
 	}
-	id, err := parsePathID(r.PathValue("id"))
-	if err != nil || id <= 0 {
-		httputil.WriteBadRequest(w, "invalid recording id")
-		return
+	if recTenant != tenantID {
+		return fmt.Errorf("recording tenant mismatch")
 	}
-	if accessErr := h.checkRecordingAccess(r.Context(), scope, id); accessErr != nil {
-		writeTenantError(w, accessErr)
-		return
+	if encounterID > 0 {
+		var encTenant int64
+		if err := h.pool.QueryRow(ctx, `SELECT tenant_id FROM encounters WHERE id = $1`, encounterID).Scan(&encTenant); err != nil {
+			return fmt.Errorf("encounter not found")
+		}
+		if encTenant != tenantID {
+			return fmt.Errorf("encounter tenant mismatch")
+		}
 	}
-	if h.instant == nil {
-		httputil.WriteSuccess(w, map[string]any{"status": "unavailable"})
-		return
+	if employeeID > 0 {
+		var empTenant int64
+		if err := h.pool.QueryRow(ctx, `SELECT tenant_id FROM employees WHERE id = $1`, employeeID).Scan(&empTenant); err != nil {
+			return fmt.Errorf("employee not found")
+		}
+		if empTenant != tenantID {
+			return fmt.Errorf("employee tenant mismatch")
+		}
 	}
-	item, err := h.instant.LatestInstant(r.Context(), scope.TenantID, id)
-	if err != nil {
-		httputil.WriteSuccess(w, map[string]any{"status": "none"})
-		return
+	if customerID > 0 {
+		var cusTenant int64
+		if err := h.pool.QueryRow(ctx, `SELECT tenant_id FROM customers WHERE id = $1`, customerID).Scan(&cusTenant); err != nil {
+			return fmt.Errorf("customer not found")
+		}
+		if cusTenant != tenantID {
+			return fmt.Errorf("customer tenant mismatch")
+		}
 	}
-	httputil.WriteSuccess(w, item)
+	return nil
 }
 
 func parsePathID(value string) (int64, error) {
 	var id int64
 	_, err := fmt.Sscanf(value, "%d", &id)
 	return id, err
-}
-
-// GenerateV2Card 内部接口：用 v0.4 提示词生成决定卡。
-func (h *Handler) GenerateV2Card(w http.ResponseWriter, r *http.Request) {
-	if h.v2card == nil {
-		httputil.WriteInternalError(w, "v2 card generator unavailable")
-		return
-	}
-	id, err := parsePathID(r.PathValue("id"))
-	if err != nil || id <= 0 {
-		httputil.WriteBadRequest(w, "invalid recording id")
-		return
-	}
-	var body struct {
-		TenantID int64 `json:"tenant_id"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.TenantID <= 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
-		return
-	}
-	card, err := h.v2card.Generate(r.Context(), body.TenantID, id)
-	if err != nil {
-		httputil.WriteError(w, 500, "V2CARD_ERROR", err.Error(), nil)
-		return
-	}
-	httputil.WriteSuccess(w, card)
-}
-
-// GetV2Card 前端读取决定卡。
-func (h *Handler) GetV2Card(w http.ResponseWriter, r *http.Request) {
-	scope, httpErr := h.resolveDealScope(r)
-	if httpErr != nil {
-		writeTenantError(w, httpErr)
-		return
-	}
-	id, err := parsePathID(r.PathValue("id"))
-	if err != nil || id <= 0 {
-		httputil.WriteBadRequest(w, "invalid recording id")
-		return
-	}
-	if accessErr := h.checkRecordingAccess(r.Context(), scope, id); accessErr != nil {
-		writeTenantError(w, accessErr)
-		return
-	}
-	if h.v2card == nil {
-		httputil.WriteSuccess(w, map[string]any{"status": "unavailable"})
-		return
-	}
-	item, err := h.v2card.Get(r.Context(), scope.TenantID, id)
-	if err != nil {
-		httputil.WriteSuccess(w, map[string]any{"status": "none"})
-		return
-	}
-	httputil.WriteSuccess(w, item)
 }

@@ -52,13 +52,13 @@ type DiagnosisResponse struct {
 	TopProjects    []DiagnosisBucket `json:"top_projects"`
 }
 
-// GetDiagnosis 经营诊断：近 30 天最新已分析卡的三个数字 + 阻碍八类分布 + 项目卡点。
+// GetDiagnosis 经营诊断：近 30 天最新接待记录分析的三个数字 + 阻碍八类分布 + 项目分布。
 func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64) (*DiagnosisResponse, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT result FROM (
-			SELECT DISTINCT ON (recording_id) result, analyzed_at
-			FROM deal_expert_analyses
-			WHERE tenant_id = $1 AND status = 'analyzed' AND result IS NOT NULL
+		SELECT analysis FROM (
+			SELECT DISTINCT ON (recording_id) analysis, analyzed_at
+			FROM consultation_analyses
+			WHERE tenant_id = $1 AND status = 'analyzed' AND analysis IS NOT NULL
 			  AND analyzed_at >= NOW() - INTERVAL '30 days'
 			ORDER BY recording_id, id DESC
 		) latest
@@ -76,38 +76,27 @@ func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64) (*DiagnosisR
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		var card map[string]any
-		if json.Unmarshal(raw, &card) != nil {
+		var analysis map[string]any
+		if json.Unmarshal(raw, &analysis) != nil {
 			continue
 		}
 		out.Total++
-		decision, _ := card["decision"].(map[string]any)
-		state := ""
-		if decision != nil {
-			state, _ = decision["decision_state"].(string)
-		}
+		state, _ := analysis["deal_status"].(string)
 		switch {
-		case strings.Contains(state, "已付款") || strings.Contains(state, "已成交") || strings.Contains(state, "已预约") || strings.Contains(state, "已交定金"):
+		case containsAnyText(state, "已成交", "已付款", "已预约", "已交定金", "付款待治疗", "疗程进行中"):
 			out.Chosen++
-		case strings.Contains(state, "明确不考虑") || strings.Contains(state, "已不选") || strings.Contains(state, "放弃"):
+		case containsAnyText(state, "明确拒绝", "已不选", "放弃"):
 			out.NotChosen++
 		default:
 			out.Undecided++
 		}
-		if concerns, ok := decision["concerns"].([]any); ok {
-			for _, rawConcern := range concerns {
-				concern, _ := rawConcern.(map[string]any)
-				concernType, _ := concern["type"].(string)
-				buckets[BlockerBucket(concernType)]++
-			}
+		if blocker, _ := analysis["blocker_label"].(string); strings.TrimSpace(blocker) != "" {
+			buckets[BlockerBucket(blocker)]++
 		}
-		if findings, ok := card["product_findings"].([]any); ok {
-			for _, rawFinding := range findings {
-				finding, _ := rawFinding.(map[string]any)
-				name, _ := finding["product_name"].(string)
-				if strings.TrimSpace(name) != "" {
-					projects[strings.TrimSpace(name)]++
-				}
+		if intent, ok := analysis["intent_project"].(map[string]any); ok {
+			name, _ := intent["name"].(string)
+			if strings.TrimSpace(name) != "" {
+				projects[strings.TrimSpace(name)]++
 			}
 		}
 	}

@@ -47,7 +47,7 @@ func main() {
 		{"决策=高意向", dealexpert.EncounterListParams{Decision: "high_intent"}, 4},
 		{"已关联客户", dealexpert.EncounterListParams{CustomerLinked: &linked}, 7},
 		{"未关联客户", dealexpert.EncounterListParams{CustomerLinked: &unlinked}, 1},
-		{"无跟进", dealexpert.EncounterListParams{FollowUpState: "none"}, 8},
+		{"无跟进", dealexpert.EncounterListParams{SalesTaskState: "none"}, 8},
 		{"关键词=王女士", dealexpert.EncounterListParams{Keyword: "王女士"}, 1},
 	}
 

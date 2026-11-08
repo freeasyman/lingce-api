@@ -21,13 +21,13 @@ import (
 func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters", Handler: h.ListEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups", Handler: h.ListFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/complete", Handler: h.CompleteFollowUp, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/confirm", Handler: h.ConfirmFollowUpDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups", Handler: h.ListSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/complete", Handler: h.CompleteSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/confirm", Handler: h.ConfirmSalesTaskDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/action-drafts", Handler: h.CreateActionDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/claim", Handler: h.ClaimOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -36,15 +36,12 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "PATCH", Path: "/api/v1/deal-expert/outcomes/{id}", Handler: h.UpdateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/{id}/void", Handler: h.VoidOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/claims/unreported", Handler: h.ListUnreportedClaims, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis", Handler: h.GetConsultationAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/outcome", Handler: h.GetRecordingOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GenerateV2CardForUser, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/cards", Handler: h.ListV2Cards, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.AnalyzeRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/analyses", Handler: h.ListConsultationAnalyses, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.ListCardActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/card-actions", Handler: h.CreateCardAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.TriggerRecordingAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/my-actions", Handler: h.ListMyActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/diagnosis", Handler: h.GetDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -65,23 +62,19 @@ func writeTenantError(w http.ResponseWriter, err *tenantError) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrCardNotFound):
+	case errors.Is(err, ErrSalesTaskNotFound):
 		httputil.WriteNotFound(w, err.Error())
-	case errors.Is(err, ErrNoTranscript):
-		httputil.WriteBadRequest(w, "这次接待没有可用转写，无法生成结案卡")
-	case errors.Is(err, ErrFollowUpNotFound):
-		httputil.WriteNotFound(w, err.Error())
-	case errors.Is(err, ErrFollowUpNotActive):
+	case errors.Is(err, ErrSalesTaskNotActive):
 		httputil.WriteError(w, http.StatusConflict, "CONFLICT", err.Error(), nil)
 	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrInvalidOutcomeType), errors.Is(err, ErrAmountRequired),
-		errors.Is(err, ErrInvalidOutcomeStatus), errors.Is(err, ErrInvalidFollowUpState), errors.Is(err, ErrInvalidDecisionFilter):
+		errors.Is(err, ErrInvalidOutcomeStatus), errors.Is(err, ErrInvalidSalesTaskState), errors.Is(err, ErrInvalidDecisionFilter):
 		httputil.WriteBadRequest(w, err.Error())
 	default:
 		httputil.WriteInternalError(w, err.Error())
 	}
 }
 
-func (h *Handler) ListFollowUps(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListSalesTasks(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -95,7 +88,7 @@ func (h *Handler) ListFollowUps(w http.ResponseWriter, r *http.Request) {
 	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 20
 	}
-	items, total, err := h.service.ListFollowUps(r.Context(), scope.TenantID, strings.TrimSpace(r.URL.Query().Get("status")), page, pageSize, scope.EmployeeFilter)
+	items, total, err := h.service.ListSalesTasks(r.Context(), scope.TenantID, strings.TrimSpace(r.URL.Query().Get("status")), page, pageSize, scope.EmployeeFilter)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -103,13 +96,13 @@ func (h *Handler) ListFollowUps(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
 }
 
-func (h *Handler) CreateFollowUp(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateSalesTask(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
 		return
 	}
-	var req CreateFollowUpRequest
+	var req CreateSalesTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
@@ -118,7 +111,7 @@ func (h *Handler) CreateFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
-	item, inserted, err := h.service.CreateFollowUp(r.Context(), scope.TenantID, req)
+	item, inserted, err := h.service.CreateSalesTask(r.Context(), scope.TenantID, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -126,7 +119,7 @@ func (h *Handler) CreateFollowUp(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"follow_up": item, "inserted": inserted})
 }
 
-func (h *Handler) GetFollowUp(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetSalesTask(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -137,7 +130,7 @@ func (h *Handler) GetFollowUp(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid follow up id")
 		return
 	}
-	item, err := h.service.GetFollowUp(r.Context(), scope.TenantID, id)
+	item, err := h.service.GetSalesTask(r.Context(), scope.TenantID, id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -146,7 +139,7 @@ func (h *Handler) GetFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
-	events, err := h.service.ListFollowUpEvents(r.Context(), scope.TenantID, id)
+	events, err := h.service.ListSalesTaskEvents(r.Context(), scope.TenantID, id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -154,7 +147,7 @@ func (h *Handler) GetFollowUp(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"follow_up": item, "events": events})
 }
 
-func (h *Handler) CompleteFollowUp(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CompleteSalesTask(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -165,7 +158,7 @@ func (h *Handler) CompleteFollowUp(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid follow up id")
 		return
 	}
-	current, err := h.service.GetFollowUp(r.Context(), scope.TenantID, id)
+	current, err := h.service.GetSalesTask(r.Context(), scope.TenantID, id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -174,7 +167,7 @@ func (h *Handler) CompleteFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
-	var req CompleteFollowUpRequest
+	var req CompleteSalesTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
@@ -185,7 +178,7 @@ func (h *Handler) CompleteFollowUp(w http.ResponseWriter, r *http.Request) {
 		value := claims.UserID
 		actorID = &value
 	}
-	item, events, outcome, err := h.service.CompleteFollowUp(r.Context(), scope.TenantID, id, req, actorID, "")
+	item, events, outcome, err := h.service.CompleteSalesTask(r.Context(), scope.TenantID, id, req, actorID, "")
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -193,7 +186,7 @@ func (h *Handler) CompleteFollowUp(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"follow_up": item, "events": events, "outcome": outcome})
 }
 
-func (h *Handler) ListEncounterFollowUps(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListEncounterSalesTasks(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -208,7 +201,7 @@ func (h *Handler) ListEncounterFollowUps(w http.ResponseWriter, r *http.Request)
 		writeTenantError(w, accessErr)
 		return
 	}
-	items, err := h.service.ListFollowUpsByEncounter(r.Context(), scope.TenantID, encounterID)
+	items, err := h.service.ListSalesTasksByEncounter(r.Context(), scope.TenantID, encounterID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -341,7 +334,7 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		DateFrom:       dateFrom,
 		DateTo:         dateTo,
 		CustomerLinked: customerLinked,
-		FollowUpState:  strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
+		SalesTaskState:  strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
 		Decision:       strings.TrimSpace(r.URL.Query().Get("decision")),
 	}, scope.EmployeeFilter)
 	if err != nil {
@@ -357,7 +350,8 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
 }
 
-func (h *Handler) GetRecordingCard(w http.ResponseWriter, r *http.Request) {
+// AnalyzeRecording 前端入口：同步生成（或重新生成）接待记录分析并返回结果。
+func (h *Handler) AnalyzeRecording(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -372,15 +366,20 @@ func (h *Handler) GetRecordingCard(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
-	card, err := h.service.LatestCard(r.Context(), scope.TenantID, recordingID)
-	if err != nil {
-		writeServiceError(w, err)
+	if h.consultation == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "ANALYSIS_UNAVAILABLE", "consultation analysis generator is not configured", nil)
 		return
 	}
-	httputil.WriteSuccess(w, card)
+	analysis, err := h.consultation.Generate(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "ANALYSIS_GENERATE_FAILED", err.Error(), nil)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": "analyzed", "analysis": analysis})
 }
 
-func (h *Handler) TriggerRecordingAnalysis(w http.ResponseWriter, r *http.Request) {
+// GetConsultationAnalysis 前端读取接待记录分析；无结果时 analysis 为空。
+func (h *Handler) GetConsultationAnalysis(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -395,12 +394,16 @@ func (h *Handler) TriggerRecordingAnalysis(w http.ResponseWriter, r *http.Reques
 		writeTenantError(w, accessErr)
 		return
 	}
-	status, err := h.service.EnqueueAnalysis(r.Context(), scope.TenantID, recordingID)
-	if err != nil {
-		writeServiceError(w, err)
+	if h.consultation == nil {
+		httputil.WriteSuccess(w, map[string]any{"status": "unavailable"})
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"status": status})
+	item, err := h.consultation.Get(r.Context(), scope.TenantID, recordingID)
+	if err != nil {
+		httputil.WriteSuccess(w, map[string]any{"status": "none"})
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }
 
 // CreateActionDraft 从卡片创建人工确认草案（不满足自动条件时的可执行候选）。
@@ -447,7 +450,7 @@ func (h *Handler) CreateActionDraft(w http.ResponseWriter, r *http.Request) {
 	if ownerID > 0 {
 		ownerIDPtr = &ownerID
 	}
-	draft, err := h.service.CreateDraftFollowUp(r.Context(), scope.TenantID, CreateFollowUpRequest{
+	draft, err := h.service.CreateDraftSalesTask(r.Context(), scope.TenantID, CreateSalesTaskRequest{
 		EncounterID:     rec.EncounterID,
 		RecordingID:     recordingID,
 		CustomerID:      customerIDPtr,
@@ -463,8 +466,8 @@ func (h *Handler) CreateActionDraft(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, draft)
 }
 
-// ConfirmFollowUpDraft 人工确认后把草案转正为待处理任务。
-func (h *Handler) ConfirmFollowUpDraft(w http.ResponseWriter, r *http.Request) {
+// ConfirmSalesTaskDraft 人工确认后把草案转正为待处理任务。
+func (h *Handler) ConfirmSalesTaskDraft(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
@@ -475,7 +478,7 @@ func (h *Handler) ConfirmFollowUpDraft(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid follow up id")
 		return
 	}
-	current, err := h.service.GetFollowUp(r.Context(), scope.TenantID, id)
+	current, err := h.service.GetSalesTask(r.Context(), scope.TenantID, id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -496,64 +499,36 @@ func (h *Handler) ConfirmFollowUpDraft(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, confirmed)
 }
 
-// GenerateV2Card 用提示词库中的 v0.11 提示词生成（或重新生成）决定卡。
-func (h *Handler) GenerateV2CardForUser(w http.ResponseWriter, r *http.Request) {
-	scope, httpErr := h.resolveDealScope(r)
-	if httpErr != nil {
-		writeTenantError(w, httpErr)
-		return
-	}
-	if h.v2card == nil {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "V2_CARD_UNAVAILABLE", "V2 card generator is not configured", nil)
-		return
-	}
-	recordingID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || recordingID <= 0 {
-		httputil.WriteBadRequest(w, "invalid recording id")
-		return
-	}
-	if accessErr := h.checkRecordingAccess(r.Context(), scope, recordingID); accessErr != nil {
-		writeTenantError(w, accessErr)
-		return
-	}
-	card, err := h.v2card.Generate(r.Context(), scope.TenantID, recordingID)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "V2_CARD_GENERATE_FAILED", err.Error(), nil)
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"status": "analyzed", "card": card})
-}
-
-// ListV2Cards 返回本租户已生成的决定卡（按接待时间倒序），供列表与看板使用。
-func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
+// ListConsultationAnalyses 返回本租户已分析的接待记录（按接待时间倒序），供接待列表与看板使用。
+func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
 		writeTenantError(w, httpErr)
 		return
 	}
 	rows, err := h.pool.Query(r.Context(), `
-		SELECT c.recording_id, c.status, c.card, COALESCE(r.encounter_id,0),
+		SELECT a.recording_id, a.status, a.analysis, COALESCE(r.encounter_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at,
 		       COALESCE(ov.type,''), ov.amount, ov.occurred_at, ov.voided_at, COALESCE(ov.void_reason,'')
-		FROM deal_cards_v2 c
-		JOIN recordings r ON r.id = c.recording_id
+		FROM consultation_analyses a
+		JOIN recordings r ON r.id = a.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN LATERAL (
 			SELECT o.type, o.amount, o.occurred_at, o.voided_at, o.void_reason
 			FROM deal_outcome_events o
-			WHERE o.tenant_id = c.tenant_id
-			  AND ((r.encounter_id > 0 AND o.encounter_id = r.encounter_id) OR o.recording_id = c.recording_id)
+			WHERE o.tenant_id = a.tenant_id
+			  AND ((r.encounter_id > 0 AND o.encounter_id = r.encounter_id) OR o.recording_id = a.recording_id)
 			ORDER BY o.occurred_at DESC, o.id DESC
 			LIMIT 1
 		) ov ON TRUE
-		WHERE c.tenant_id = $1 AND c.status = 'analyzed' AND r.deleted_at IS NULL
+		WHERE a.tenant_id = $1 AND a.status = 'analyzed' AND r.deleted_at IS NULL
 		  AND ($2::bigint IS NULL OR r.employee_id = $2)
 		ORDER BY r.recorded_at DESC
 		LIMIT 500
 	`, scope.TenantID, scope.EmployeeFilter)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "LIST_CARDS_FAILED", err.Error(), nil)
+		httputil.WriteError(w, http.StatusInternalServerError, "LIST_ANALYSES_FAILED", err.Error(), nil)
 		return
 	}
 	defer rows.Close()
@@ -561,16 +536,16 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var recordingID, encID int64
 		var status, customer, consultant, outcomeType, outcomeVoidReason string
-		var card []byte
+		var raw []byte
 		var recordedAt, outcomeAt, outcomeVoidedAt any
 		var outcomeAmount *float64
-		if err := rows.Scan(&recordingID, &status, &card, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
+		if err := rows.Scan(&recordingID, &status, &raw, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
 			continue
 		}
 		var parsed map[string]any
-		_ = json.Unmarshal(card, &parsed)
+		_ = json.Unmarshal(raw, &parsed)
 		slim := map[string]any{}
-		for _, key := range []string{"headline", "deal_status", "scene_type", "stuck_point_headline", "real_reason", "killer_evidence", "deal_confidence", "blocker_label", "customer_context_tags", "follow_up_tasks", "amount_hints", "pattern", "intent_project"} {
+		for _, key := range []string{"headline", "deal_status", "scene_type", "stuck_point_headline", "real_reason", "killer_evidence", "deal_confidence", "blocker_label", "customer_context_tags", "sales_tasks", "amount_hints", "pattern", "intent_project"} {
 			if v, ok := parsed[key]; ok {
 				slim[key] = v
 			}
@@ -587,7 +562,7 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 			"outcome_at":          outcomeAt,
 			"outcome_voided":      outcomeVoidedAt != nil,
 			"outcome_void_reason": outcomeVoidReason,
-			"card":                slim,
+			"analysis":            slim,
 		})
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
