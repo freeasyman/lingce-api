@@ -806,55 +806,81 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		RecordingID int64    `json:"recording_id"`
-		Type        string   `json:"type"`
 		Amount      *float64 `json:"amount"`
 		OccurredAt  string   `json:"occurred_at"`
 		Note        string   `json:"note"`
+		Supplement  bool     `json:"supplement"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RecordingID <= 0 {
 		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if body.Amount == nil || *body.Amount <= 0 {
+		httputil.WriteBadRequest(w, "请填写实际收款金额")
 		return
 	}
 	if accessErr := h.checkRecordingAccess(r.Context(), scope, body.RecordingID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
 	}
-	if !allowedOutcomeTypes[body.Type] {
-		httputil.WriteBadRequest(w, "invalid outcome type")
-		return
-	}
-	if (body.Type == "付款" || body.Type == "退款" || body.Type == "定金") && (body.Amount == nil || *body.Amount <= 0) {
-		httputil.WriteBadRequest(w, "amount is required")
-		return
-	}
 	var encounterID int64
 	_ = h.pool.QueryRow(r.Context(), `SELECT COALESCE(encounter_id,0) FROM recordings WHERE id = $1 AND tenant_id = $2`, body.RecordingID, scope.TenantID).Scan(&encounterID)
+	actorID := int64(0)
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		actorID = claims.UserID
+	}
+
+	var existingID int64
+	var existingAmount *float64
+	var existingNote string
+	err := h.pool.QueryRow(r.Context(), `
+		SELECT id, amount, COALESCE(note,'') FROM deal_outcome_events
+		WHERE tenant_id = $1 AND voided_at IS NULL
+		  AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))
+		ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+		scope.TenantID, body.RecordingID, encounterID).Scan(&existingID, &existingAmount, &existingNote)
+	if err == nil {
+		if !body.Supplement {
+			httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已有业绩，补尾款请用「补录尾款」", nil)
+			return
+		}
+		total := *body.Amount
+		if existingAmount != nil {
+			total += *existingAmount
+		}
+		note := strings.TrimSpace(existingNote)
+		if body.Note != "" {
+			note = strings.TrimSpace(note + "；补录尾款：" + body.Note)
+		} else {
+			note = strings.TrimSpace(note + "；补录尾款")
+		}
+		row := h.pool.QueryRow(r.Context(), `
+			UPDATE deal_outcome_events
+			SET amount = $3, note = $4, updated_by = $5, update_reason = '补录尾款', updated_at = now()
+			WHERE tenant_id = $1 AND id = $2
+			RETURNING `+outcomeColumns,
+			scope.TenantID, existingID, total, note, actorID)
+		item, scanErr := scanOutcome(row)
+		if scanErr != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "SUPPLEMENT_FAILED", scanErr.Error(), nil)
+			return
+		}
+		httputil.WriteSuccess(w, map[string]any{"outcome": item})
+		return
+	}
+
 	var occurredAt *string
 	if strings.TrimSpace(body.OccurredAt) != "" {
-		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(body.OccurredAt))
-		if err != nil {
+		parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(body.OccurredAt))
+		if parseErr != nil {
 			httputil.WriteBadRequest(w, "invalid occurred_at")
 			return
 		}
 		value := parsed.Format(time.RFC3339)
 		occurredAt = &value
 	}
-	var existing int
-	_ = h.pool.QueryRow(r.Context(), `
-		SELECT COUNT(*) FROM deal_outcome_events
-		WHERE tenant_id = $1 AND voided_at IS NULL AND type = $4
-		  AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))`,
-		scope.TenantID, body.RecordingID, encounterID, body.Type).Scan(&existing)
-	if existing > 0 {
-		httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已经认过同类型业绩", nil)
-		return
-	}
-	actorID := int64(0)
-	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
-		actorID = claims.UserID
-	}
 	req := CreateOutcomeRequest{
-		EncounterID: encounterID, RecordingID: body.RecordingID, Type: body.Type,
+		EncounterID: encounterID, RecordingID: body.RecordingID, Type: "付款",
 		Amount: body.Amount, OccurredAt: occurredAt, Source: "consultant_claim", Note: body.Note,
 	}
 	item, err := h.service.CreateOutcome(r.Context(), scope.TenantID, actorID, req)
