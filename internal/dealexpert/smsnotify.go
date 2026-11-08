@@ -67,7 +67,7 @@ func (n *TestConsultantSMSNotifier) inHospitalWindow(ctx context.Context, tenant
 	var count int
 	if err := n.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM deal_outcome_events
-		WHERE tenant_id = $1 AND (encounter_id = $2 OR recording_id = $3)
+		WHERE tenant_id = $1 AND voided_at IS NULL AND (encounter_id = $2 OR recording_id = $3)
 	`, tenantID, encounterID, recordingID).Scan(&count); err != nil {
 		return false, "outcome check failed"
 	}

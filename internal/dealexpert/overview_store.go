@@ -44,12 +44,12 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			FROM recordings r
 			LEFT JOIN LATERAL (
 				SELECT type FROM deal_outcome_events o
-				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id
+				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id AND o.voided_at IS NULL
 				ORDER BY occurred_at DESC, id DESC LIMIT 1
 			) lo ON TRUE
 			LEFT JOIN LATERAL (
 				SELECT COUNT(*) AS cnt FROM deal_outcome_events o
-				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id
+				WHERE o.tenant_id = r.tenant_id AND o.encounter_id = r.encounter_id AND o.voided_at IS NULL
 			) os ON TRUE
 			LEFT JOIN LATERAL (
 				SELECT status FROM deal_follow_ups f
@@ -94,7 +94,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 	rows, err := s.pool.Query(ctx, `
 		SELECT type, COUNT(*), COALESCE(SUM(amount), 0)::float8
 		FROM deal_outcome_events
-		WHERE tenant_id = $1
+		WHERE tenant_id = $1 AND voided_at IS NULL
 		  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
 		  AND ($3::timestamptz IS NULL OR occurred_at < $3)
 		GROUP BY type

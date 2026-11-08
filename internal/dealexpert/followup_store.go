@@ -14,7 +14,8 @@ const followUpColumns = `id, tenant_id, encounter_id, recording_id, customer_id,
 	status, result, result_note, next_action, created_at, updated_at, closed_at`
 
 const outcomeColumns = `id, tenant_id, encounter_id, recording_id, type, amount, occurred_at,
-	source, source_ref, note, confirmed_by, created_at`
+	source, source_ref, note, confirmed_by, created_at,
+	voided_at, void_reason, updated_by, update_reason, updated_at`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -33,7 +34,8 @@ func scanOutcome(row rowScanner) (*OutcomeEvent, error) {
 	var item OutcomeEvent
 	err := row.Scan(&item.ID, &item.TenantID, &item.EncounterID, &item.RecordingID, &item.Type,
 		&item.Amount, &item.OccurredAt, &item.Source, &item.SourceRef, &item.Note,
-		&item.ConfirmedBy, &item.CreatedAt)
+		&item.ConfirmedBy, &item.CreatedAt,
+		&item.VoidedAt, &item.VoidReason, &item.UpdatedBy, &item.UpdateReason, &item.UpdatedAt)
 	return &item, err
 }
 

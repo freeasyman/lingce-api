@@ -318,7 +318,7 @@ func (a *Analyzer) loadBusinessFacts(ctx context.Context, item *pendingAnalysis)
 	rows, err := a.pool.Query(ctx, `
 		SELECT type, amount::float8, occurred_at, source
 		FROM deal_outcome_events
-		WHERE tenant_id = $1 AND encounter_id = $2
+		WHERE tenant_id = $1 AND encounter_id = $2 AND voided_at IS NULL
 		ORDER BY occurred_at ASC, id ASC
 	`, item.TenantID, item.EncounterID)
 	if err != nil {

@@ -51,7 +51,7 @@ func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*
 			SELECT COALESCE(SUM(CASE WHEN type IN ('付款','定金') THEN amount ELSE 0 END)
 				- SUM(CASE WHEN type = '退款' THEN amount ELSE 0 END), 0) AS net
 			FROM deal_outcome_events e
-			WHERE e.tenant_id = a.tenant_id AND e.encounter_id = r.encounter_id
+			WHERE e.tenant_id = a.tenant_id AND e.encounter_id = r.encounter_id AND e.voided_at IS NULL
 		) os ON true
 		LEFT JOIN LATERAL (
 			SELECT id, name, price FROM products

@@ -70,10 +70,10 @@ func (c *compiler) rc11OrLater() bool {
 // so rc12 can de-duplicate identical excerpts across schemes without changing the
 // rc11 output order.
 type publishedObservation struct {
-	row      object
-	path     string
-	kind     string
-	summary  string
+	row       object
+	path      string
+	kind      string
+	summary   string
 	dedupeKey string
 }
 
@@ -165,9 +165,9 @@ func (c *compiler) verbatimLocalSummary(row object, refs []string, path string) 
 // not degrade a recording to a template-only card.
 func (c *compiler) localObservationEntries() []publishedObservation {
 	type candidate struct {
-		entry   publishedObservation
-		index   int
-		kind    string
+		entry publishedObservation
+		index int
+		kind  string
 	}
 	candidates := []candidate{}
 	for i, raw := range rc12OptionalArr(c.model["local_observations"]) {

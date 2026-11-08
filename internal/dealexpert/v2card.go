@@ -331,7 +331,8 @@ func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID i
 	rows, err := g.pool.Query(ctx, `
 		SELECT type, COALESCE(amount, 0), COALESCE(occurred_at::text, '')
 		FROM deal_outcome_events
-		WHERE tenant_id = $1 AND (recording_id = $2 OR encounter_id = (SELECT encounter_id FROM recordings WHERE id = $2 AND tenant_id = $1))
+		WHERE tenant_id = $1 AND voided_at IS NULL
+		  AND (recording_id = $2 OR encounter_id = (SELECT encounter_id FROM recordings WHERE id = $2 AND tenant_id = $1))
 		ORDER BY occurred_at
 	`, tenantID, recordingID)
 	if err != nil {

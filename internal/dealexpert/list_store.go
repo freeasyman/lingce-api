@@ -39,6 +39,7 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 		WITH latest_outcome AS (
 			SELECT DISTINCT ON (tenant_id, encounter_id) tenant_id, encounter_id, type
 			FROM deal_outcome_events
+			WHERE voided_at IS NULL
 			ORDER BY tenant_id, encounter_id, occurred_at DESC, id DESC
 		),
 		outcome_sum AS (
@@ -46,6 +47,7 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			       COALESCE(SUM(CASE WHEN type IN ('付款','定金') THEN amount WHEN type = '退款' THEN -amount ELSE 0 END), 0)::float8 AS net,
 			       COUNT(*) AS cnt
 			FROM deal_outcome_events
+			WHERE voided_at IS NULL
 			GROUP BY tenant_id, encounter_id
 		),
 		latest_follow AS (

@@ -503,7 +503,7 @@ func (a *Analyzer) loadOutcomeFacts(ctx context.Context, tenantID, encounterID i
 	rows, err := a.pool.Query(ctx, `
 		SELECT type, COALESCE(amount, 0)::float8, occurred_at, source
 		FROM deal_outcome_events
-		WHERE tenant_id = $1 AND encounter_id = $2
+		WHERE tenant_id = $1 AND encounter_id = $2 AND voided_at IS NULL
 		ORDER BY occurred_at ASC, id ASC
 	`, tenantID, encounterID)
 	if err != nil {

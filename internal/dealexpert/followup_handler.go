@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/xuri/excelize/v2"
 )
 
 // RegisterUserRoutes 注册赢客专家前端使用的业务接口。
@@ -28,6 +30,12 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterFollowUps, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/claim", Handler: h.ClaimOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/outcomes", Handler: h.ListOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/outcomes/export.xlsx", Handler: h.ExportOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/deal-expert/outcomes/{id}", Handler: h.UpdateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/{id}/void", Handler: h.VoidOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/claims/unreported", Handler: h.ListUnreportedClaims, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/card", Handler: h.GetRecordingCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/instant", Handler: h.GetInstantCard, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/v2-card", Handler: h.GetV2Card, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -533,15 +541,16 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN LATERAL (
 			SELECT o.type, o.amount, o.occurred_at
 			FROM deal_outcome_events o
-			WHERE o.tenant_id = c.tenant_id
+			WHERE o.tenant_id = c.tenant_id AND o.voided_at IS NULL
 			  AND ((r.encounter_id > 0 AND o.encounter_id = r.encounter_id) OR o.recording_id = c.recording_id)
 			ORDER BY o.occurred_at DESC, o.id DESC
 			LIMIT 1
 		) ov ON TRUE
 		WHERE c.tenant_id = $1 AND c.status = 'analyzed' AND r.deleted_at IS NULL
+		  AND ($2::bigint IS NULL OR r.employee_id = $2)
 		ORDER BY r.recorded_at DESC
 		LIMIT 500
-	`, scope.TenantID)
+	`, scope.TenantID, scope.EmployeeFilter)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "LIST_CARDS_FAILED", err.Error(), nil)
 		return
@@ -579,4 +588,279 @@ func (h *Handler) ListV2Cards(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
+}
+
+func (h *Handler) outcomeFilterFromRequest(r *http.Request, scope *dealScope) (OutcomeFilter, error) {
+	from, err := parseDateParam(r.URL.Query().Get("date_from"), false)
+	if err != nil {
+		return OutcomeFilter{}, err
+	}
+	to, err := parseDateParam(r.URL.Query().Get("date_to"), true)
+	if err != nil {
+		return OutcomeFilter{}, err
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	f := OutcomeFilter{
+		DateFrom: from, DateTo: to, Type: strings.TrimSpace(r.URL.Query().Get("type")),
+		IncludeVoided: r.URL.Query().Get("include_voided") == "1",
+		Page:          page, PageSize: pageSize,
+	}
+	if scope.EmployeeFilter != nil {
+		f.EmployeeID = scope.EmployeeFilter
+	} else if raw := r.URL.Query().Get("employee_id"); raw != "" {
+		if id, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && id > 0 {
+			f.EmployeeID = &id
+		}
+	}
+	return f, nil
+}
+
+func (h *Handler) ListOutcomes(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	f, err := h.outcomeFilterFromRequest(r, scope)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, total, err := h.service.ListOutcomes(r.Context(), scope.TenantID, f)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": f.Page, "page_size": f.PageSize})
+}
+
+func (h *Handler) ListUnreportedClaims(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	items, err := h.service.ListUnreportedClaims(r.Context(), scope.TenantID, scope.EmployeeFilter)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
+}
+
+func (h *Handler) requireManager(w http.ResponseWriter, scope *dealScope) bool {
+	if scope.EmployeeFilter != nil {
+		httputil.WriteError(w, http.StatusForbidden, "MANAGER_ONLY", "只有负责人可以更正或驳回业绩", nil)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) UpdateOutcome(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	if !h.requireManager(w, scope) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid outcome id")
+		return
+	}
+	var patch OutcomePatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	var occurredAt *time.Time
+	if patch.OccurredAt != nil && strings.TrimSpace(*patch.OccurredAt) != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(*patch.OccurredAt))
+		if parseErr != nil {
+			httputil.WriteBadRequest(w, "invalid occurred_at")
+			return
+		}
+		occurredAt = &parsed
+	}
+	actorID := int64(0)
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		actorID = claims.UserID
+	}
+	item, err := h.service.UpdateOutcome(r.Context(), scope.TenantID, id, actorID, patch, occurredAt)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"outcome": item})
+}
+
+func (h *Handler) VoidOutcome(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	if !h.requireManager(w, scope) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid outcome id")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	actorID := int64(0)
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		actorID = claims.UserID
+	}
+	item, err := h.service.VoidOutcome(r.Context(), scope.TenantID, id, actorID, body.Reason)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"outcome": item})
+}
+
+func (h *Handler) ExportOutcomes(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	f, err := h.outcomeFilterFromRequest(r, scope)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	f.Page = 1
+	f.PageSize = 1000
+	items, _, err := h.service.ListOutcomes(r.Context(), scope.TenantID, f)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	file := excelize.NewFile()
+	sheet := "业绩台账"
+	_ = file.SetSheetName("Sheet1", sheet)
+	headers := []string{"客户", "咨询师", "产品", "类型", "金额", "发生日期", "备注", "状态", "驳回/更正原因", "提交时间"}
+	for i, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		_ = file.SetCellValue(sheet, cell, header)
+	}
+	style, _ := file.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	_ = file.SetCellStyle(sheet, "A1", "J1", style)
+	var total float64
+	for idx, item := range items {
+		row := idx + 2
+		status := "已入账"
+		reason := item.UpdateReason
+		if item.VoidedAt != nil {
+			status = "已驳回"
+			reason = item.VoidReason
+		}
+		amount := any("")
+		if item.Amount != nil {
+			amount = *item.Amount
+			if item.Type == "付款" || item.Type == "定金" {
+				total += *item.Amount
+			}
+		}
+		values := []any{item.CustomerName, item.ConsultantName, item.ProductName, item.Type, amount,
+			item.OccurredAt.Format("2006-01-02 15:04"), item.Note, status, reason, item.CreatedAt.Format("2006-01-02 15:04")}
+		for col, value := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			_ = file.SetCellValue(sheet, cell, value)
+		}
+	}
+	totalRow := len(items) + 2
+	cell, _ := excelize.CoordinatesToCellName(4, totalRow)
+	_ = file.SetCellValue(sheet, cell, "合计（付款+定金）")
+	cell, _ = excelize.CoordinatesToCellName(5, totalRow)
+	_ = file.SetCellValue(sheet, cell, total)
+	_ = file.SetColWidth(sheet, "A", "C", 18)
+	_ = file.SetColWidth(sheet, "D", "J", 14)
+	buf, err := file.WriteToBuffer()
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "EXPORT_FAILED", err.Error(), nil)
+		return
+	}
+	filename := "业绩台账-" + time.Now().Format("20060102") + ".xlsx"
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.QueryEscape(filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+}
+
+// ClaimOutcome 咨询师认业绩：默认入账，不等负责人确认；负责人后续可更正或驳回。
+func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
+	scope, httpErr := h.resolveDealScope(r)
+	if httpErr != nil {
+		writeTenantError(w, httpErr)
+		return
+	}
+	var body struct {
+		RecordingID int64    `json:"recording_id"`
+		Type        string   `json:"type"`
+		Amount      *float64 `json:"amount"`
+		OccurredAt  string   `json:"occurred_at"`
+		Note        string   `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RecordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	if accessErr := h.checkRecordingAccess(r.Context(), scope, body.RecordingID); accessErr != nil {
+		writeTenantError(w, accessErr)
+		return
+	}
+	if !allowedOutcomeTypes[body.Type] {
+		httputil.WriteBadRequest(w, "invalid outcome type")
+		return
+	}
+	if (body.Type == "付款" || body.Type == "退款" || body.Type == "定金") && (body.Amount == nil || *body.Amount <= 0) {
+		httputil.WriteBadRequest(w, "amount is required")
+		return
+	}
+	var encounterID int64
+	_ = h.pool.QueryRow(r.Context(), `SELECT COALESCE(encounter_id,0) FROM recordings WHERE id = $1 AND tenant_id = $2`, body.RecordingID, scope.TenantID).Scan(&encounterID)
+	var occurredAt *string
+	if strings.TrimSpace(body.OccurredAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(body.OccurredAt))
+		if err != nil {
+			httputil.WriteBadRequest(w, "invalid occurred_at")
+			return
+		}
+		value := parsed.Format(time.RFC3339)
+		occurredAt = &value
+	}
+	var existing int
+	_ = h.pool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM deal_outcome_events
+		WHERE tenant_id = $1 AND voided_at IS NULL
+		  AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))`,
+		scope.TenantID, body.RecordingID, encounterID).Scan(&existing)
+	if existing > 0 {
+		httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已经认过业绩，如需修改请联系负责人", nil)
+		return
+	}
+	actorID := int64(0)
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		actorID = claims.UserID
+	}
+	req := CreateOutcomeRequest{
+		EncounterID: encounterID, RecordingID: body.RecordingID, Type: body.Type,
+		Amount: body.Amount, OccurredAt: occurredAt, Source: "consultant_claim", Note: body.Note,
+	}
+	item, err := h.service.CreateOutcome(r.Context(), scope.TenantID, actorID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"outcome": item})
 }

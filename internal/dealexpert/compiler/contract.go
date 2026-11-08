@@ -14,11 +14,11 @@ type Contract struct{ version string }
 // Exported aliases keep rule strings in one place for explicit selection. rc8,
 // rc9, rc10, rc11 and rc12 are independent candidates, never the default.
 const (
-	RulesVersionV210RC7  = v210.RulesVersion
-	RulesVersionV210RC8  = v210.RulesVersionRC8
-	RulesVersionV210RC9  = v210.RulesVersionRC9
-	RulesVersionV210RC10 = v210.RulesVersionRC10
-	RulesVersionV210RC11 = v210.RulesVersionRC11
+	RulesVersionV210RC7    = v210.RulesVersion
+	RulesVersionV210RC8    = v210.RulesVersionRC8
+	RulesVersionV210RC9    = v210.RulesVersionRC9
+	RulesVersionV210RC10   = v210.RulesVersionRC10
+	RulesVersionV210RC11   = v210.RulesVersionRC11
 	RulesVersionV210RC12   = v210.RulesVersionRC12
 	RulesVersionV210RC12P1 = v210.RulesVersionRC12P1
 )

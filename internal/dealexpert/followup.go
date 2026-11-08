@@ -82,18 +82,42 @@ type FollowUpEvent struct {
 }
 
 type OutcomeEvent struct {
-	ID          int64     `json:"id"`
-	TenantID    int64     `json:"tenant_id"`
-	EncounterID int64     `json:"encounter_id"`
-	RecordingID int64     `json:"recording_id"`
-	Type        string    `json:"type"`
-	Amount      *float64  `json:"amount,omitempty"`
-	OccurredAt  time.Time `json:"occurred_at"`
-	Source      string    `json:"source"`
-	SourceRef   string    `json:"source_ref,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	ConfirmedBy *int64    `json:"confirmed_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID           int64      `json:"id"`
+	TenantID     int64      `json:"tenant_id"`
+	EncounterID  int64      `json:"encounter_id"`
+	RecordingID  int64      `json:"recording_id"`
+	Type         string     `json:"type"`
+	Amount       *float64   `json:"amount,omitempty"`
+	OccurredAt   time.Time  `json:"occurred_at"`
+	Source       string     `json:"source"`
+	SourceRef    string     `json:"source_ref,omitempty"`
+	Note         string     `json:"note,omitempty"`
+	ConfirmedBy  *int64     `json:"confirmed_by,omitempty"`
+	VoidedAt     *time.Time `json:"voided_at,omitempty"`
+	VoidReason   string     `json:"void_reason,omitempty"`
+	UpdatedBy    *int64     `json:"updated_by,omitempty"`
+	UpdateReason string     `json:"update_reason,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type OutcomeListItem struct {
+	OutcomeEvent
+	CustomerName   string `json:"customer_name"`
+	ConsultantName string `json:"consultant_name"`
+	ProductName    string `json:"product_name"`
+}
+
+type UnreportedClaim struct {
+	RecordingID    int64    `json:"recording_id"`
+	EncounterID    int64    `json:"encounter_id"`
+	CustomerName   string   `json:"customer_name"`
+	ConsultantName string   `json:"consultant_name"`
+	DealStatus     string   `json:"deal_status"`
+	StuckPoint     string   `json:"stuck_point"`
+	RecordedAt     string   `json:"recorded_at"`
+	AmountHints    any      `json:"amount_hints"`
+	Suggested      *float64 `json:"suggested_amount,omitempty"`
 }
 
 type CreateFollowUpRequest struct {
@@ -235,8 +259,8 @@ func (s *Service) CompleteFollowUp(ctx context.Context, tenantID, id int64, req 
 }
 
 func (s *Service) CreateOutcome(ctx context.Context, tenantID, actorID int64, req CreateOutcomeRequest) (*OutcomeEvent, error) {
-	if req.EncounterID <= 0 || req.RecordingID <= 0 {
-		return nil, errors.New("encounter_id and recording_id are required")
+	if req.RecordingID <= 0 {
+		return nil, errors.New("recording_id is required")
 	}
 	req.Type = strings.TrimSpace(req.Type)
 	if !allowedOutcomeTypes[req.Type] {
@@ -262,4 +286,44 @@ func (s *Service) ListOutcomesByEncounter(ctx context.Context, tenantID, encount
 // EncounterConsultant 暴露建议归属，供权限层判断数据范围。
 func (s *Service) EncounterConsultant(ctx context.Context, tenantID, encounterID int64) (int64, error) {
 	return s.store.EncounterConsultant(ctx, tenantID, encounterID)
+}
+
+func (s *Service) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilter) ([]*OutcomeListItem, int, error) {
+	if tenantID <= 0 {
+		return nil, 0, fmt.Errorf("tenant_id is required")
+	}
+	return s.store.ListOutcomes(ctx, tenantID, f)
+}
+
+func (s *Service) ListUnreportedClaims(ctx context.Context, tenantID int64, employeeID *int64) ([]*UnreportedClaim, error) {
+	if tenantID <= 0 {
+		return nil, fmt.Errorf("tenant_id is required")
+	}
+	return s.store.ListUnreportedClaims(ctx, tenantID, employeeID)
+}
+
+func (s *Service) UpdateOutcome(ctx context.Context, tenantID, id, actorID int64, patch OutcomePatch, occurredAt *time.Time) (*OutcomeEvent, error) {
+	if tenantID <= 0 || id <= 0 {
+		return nil, fmt.Errorf("invalid outcome")
+	}
+	if strings.TrimSpace(patch.Reason) == "" {
+		return nil, fmt.Errorf("更正原因不能为空")
+	}
+	if patch.Type != "" && !allowedOutcomeTypes[patch.Type] {
+		return nil, ErrInvalidOutcomeType
+	}
+	if patch.Amount != nil && *patch.Amount <= 0 {
+		return nil, ErrAmountRequired
+	}
+	return s.store.UpdateOutcome(ctx, tenantID, id, actorID, patch, occurredAt)
+}
+
+func (s *Service) VoidOutcome(ctx context.Context, tenantID, id, actorID int64, reason string) (*OutcomeEvent, error) {
+	if tenantID <= 0 || id <= 0 {
+		return nil, fmt.Errorf("invalid outcome")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("驳回原因不能为空")
+	}
+	return s.store.VoidOutcome(ctx, tenantID, id, actorID, reason)
 }

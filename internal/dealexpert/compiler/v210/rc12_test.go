@@ -88,10 +88,10 @@ func rc12TwoQuoteConcern(t *testing.T, customerBound bool) ([]byte, []byte) {
 	}
 	d := m["decision"].(map[string]any)
 	d["concerns"] = []any{map[string]any{
-		"type":       "时间与流程",
-		"type_label": nil,
-		"summary":    "客户需要上班和接送孩子",
-		"is_primary": true,
+		"type":        "时间与流程",
+		"type_label":  nil,
+		"summary":     "客户需要上班和接送孩子",
+		"is_primary":  true,
 		"source_refs": []any{"s2", "s4"},
 		"support": map[string]any{
 			"statement_type": "customer_feeling",
