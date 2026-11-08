@@ -812,7 +812,6 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 		Amount      *float64 `json:"amount"`
 		OccurredAt  string   `json:"occurred_at"`
 		Note        string   `json:"note"`
-		Supplement  bool     `json:"supplement"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RecordingID <= 0 {
 		httputil.WriteBadRequest(w, "invalid request body")
@@ -843,32 +842,7 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 		ORDER BY occurred_at DESC, id DESC LIMIT 1`,
 		scope.TenantID, body.RecordingID, encounterID).Scan(&existingID, &existingAmount, &existingNote)
 	if err == nil {
-		if !body.Supplement {
-			httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已有业绩，补尾款请用「补录尾款」", nil)
-			return
-		}
-		total := *body.Amount
-		if existingAmount != nil {
-			total += *existingAmount
-		}
-		note := strings.TrimSpace(existingNote)
-		if body.Note != "" {
-			note = strings.TrimSpace(note + "；补录尾款：" + body.Note)
-		} else {
-			note = strings.TrimSpace(note + "；补录尾款")
-		}
-		row := h.pool.QueryRow(r.Context(), `
-			UPDATE deal_outcome_events
-			SET amount = $3, note = $4, updated_by = $5, update_reason = '补录尾款', updated_at = now()
-			WHERE tenant_id = $1 AND id = $2
-			RETURNING `+outcomeColumns,
-			scope.TenantID, existingID, total, note, actorID)
-		item, scanErr := scanOutcome(row)
-		if scanErr != nil {
-			httputil.WriteError(w, http.StatusInternalServerError, "SUPPLEMENT_FAILED", scanErr.Error(), nil)
-			return
-		}
-		httputil.WriteSuccess(w, map[string]any{"outcome": item})
+		httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已经报过业绩，金额有误请联系负责人更正", nil)
 		return
 	}
 
