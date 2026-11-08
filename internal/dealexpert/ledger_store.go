@@ -62,11 +62,12 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 		SELECT o.id, o.tenant_id, o.encounter_id, o.recording_id, o.type, o.amount, o.occurred_at,
 		       o.source, o.source_ref, o.note, o.confirmed_by, o.created_at,
 		       o.voided_at, o.void_reason, o.updated_by, o.update_reason, o.updated_at,
-		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(NULLIF(r.analysis_result->>'business_title',''),'')
+		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(NULLIF(c.card->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
 		FROM deal_outcome_events o
 		JOIN recordings r ON r.id = o.recording_id
 		LEFT JOIN customers cu ON cu.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
+		LEFT JOIN deal_cards_v2 c ON c.recording_id = o.recording_id AND c.tenant_id = o.tenant_id AND c.status = 'analyzed'
 		WHERE `+where+`
 		ORDER BY o.occurred_at DESC, o.id DESC
 		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
