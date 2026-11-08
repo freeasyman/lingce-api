@@ -126,6 +126,10 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 			if err := s.createEvent(ctx, tenantID, recordingID, version, adminID, "manager", name, map[string]any{"reason": "manager_signal"}); err != nil {
 				return err
 			}
+			// 同步 upsert 介入信号（Web 工作台与 H5 共用数据源）。
+			if err := s.upsertInterventionSignal(ctx, tenantID, recordingID, version, adminID, analysis, name); err != nil {
+				s.log.Warn("upsert intervention signal failed", "recording_id", recordingID, "error", err)
+			}
 		} else {
 			s.log.Info("DRY RUN push: manager recipient not found, skip", "recording_id", recordingID)
 		}
@@ -134,6 +138,101 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 			"recording_id", recordingID, "signal_level", signalLevel, "tasks", len(salesTasks))
 	}
 	return nil
+}
+
+// upsertInterventionSignal 在负责人事件生成时同步 upsert 介入信号（幂等，已处理状态保留）。
+// short_code 优先复用现有负责人事件短链，没有则生成一条。
+func (s *Service) upsertInterventionSignal(ctx context.Context, tenantID, recordingID int64, analysisVersion string, managerID int64, analysis map[string]any, customerName string) error {
+	var consultantID int64
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(employee_id, 0) FROM recordings WHERE id = $1 AND tenant_id = $2
+	`, recordingID, tenantID).Scan(&consultantID)
+
+	shortCode := ""
+	_ = s.pool.QueryRow(ctx, `
+		SELECT short_code FROM deal_push_events
+		WHERE tenant_id = $1 AND recording_id = $2 AND analysis_version = $3
+		  AND payload->>'recipient_role' = 'manager'
+		ORDER BY id DESC LIMIT 1
+	`, tenantID, recordingID, analysisVersion).Scan(&shortCode)
+	if shortCode == "" {
+		if code, err := s.createShortLink(ctx, tenantID, recordingID, managerID); err == nil {
+			shortCode = code
+		}
+	}
+
+	signal, _ := analysis["manager_signal"].(map[string]any)
+	level, _ := signal["level"].(string)
+	reason, _ := signal["reason"].(string)
+	action, _ := signal["action"].(string)
+	evidence, _ := analysis["killer_evidence"].(string)
+	project := ""
+	if intent, ok := analysis["intent_project"].(map[string]any); ok {
+		project, _ = intent["name"].(string)
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO deal_intervention_signals
+		  (tenant_id, recording_id, analysis_version, consultant_employee_id, manager_employee_id,
+		   level, reason, action, evidence, customer_name, project_name, status, short_code)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12)
+		ON CONFLICT (tenant_id, recording_id, analysis_version) DO NOTHING
+	`, tenantID, recordingID, analysisVersion, consultantID, managerID,
+		level, reason, action, evidence, customerName, project, shortCode)
+	if err != nil {
+		return fmt.Errorf("upsert intervention signal: %w", err)
+	}
+	s.log.Info("intervention signal upserted", "recording_id", recordingID, "level", level, "short_code", shortCode)
+	return nil
+}
+
+// BackfillInterventionSignals 回填存量介入信号：最新 v0.17 分析中
+// manager_signal.level='紧要' 且 sales_tasks 非空、且尚无信号行的记录。
+func (s *Service) BackfillInterventionSignals(ctx context.Context, tenantID int64) (int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.recording_id, a.prompt_version, COALESCE(a.analysis, '{}'::jsonb), COALESCE(c.name, '')
+		FROM consultation_analyses a
+		LEFT JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id
+		LEFT JOIN customers c ON c.id = r.customer_id
+		WHERE a.tenant_id = $1 AND a.status = 'analyzed'
+		  AND a.analysis->'manager_signal'->>'level' = '紧要'
+		  AND jsonb_array_length(COALESCE(a.analysis->'sales_tasks', '[]'::jsonb)) > 0
+		  AND NOT EXISTS (
+		    SELECT 1 FROM deal_intervention_signals sig
+		    WHERE sig.tenant_id = a.tenant_id AND sig.recording_id = a.recording_id
+		      AND sig.analysis_version = a.prompt_version
+		  )
+	`, tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("query intervention backfill: %w", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var recordingID int64
+		var version, customerName string
+		var raw []byte
+		if err := rows.Scan(&recordingID, &version, &raw, &customerName); err != nil {
+			return count, fmt.Errorf("scan intervention backfill: %w", err)
+		}
+		var analysis map[string]any
+		if err := json.Unmarshal(raw, &analysis); err != nil {
+			continue
+		}
+		var adminID int64
+		if err := s.pool.QueryRow(ctx, `
+			SELECT id FROM employees
+			WHERE tenant_id = $1 AND role = 'admin' AND deleted_at IS NULL
+			ORDER BY id LIMIT 1
+		`, tenantID).Scan(&adminID); err != nil || adminID <= 0 {
+			continue
+		}
+		if err := s.upsertInterventionSignal(ctx, tenantID, recordingID, version, adminID, analysis, customerName); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, rows.Err()
 }
 
 // loadAnalysis 读取录音最新的已分析结果（v0.16 JSON）。
