@@ -17,6 +17,10 @@ func (h *Handler) RegisterDevLoginRoute(mux *http.ServeMux, jwtSecret string) {
 	}
 	mux.HandleFunc("POST /api/v1/deal-expert/dev-session", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		var body struct {
+			EmployeeID int64 `json:"employee_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		var (
 			id             int64
 			name           string
@@ -26,17 +30,30 @@ func (h *Handler) RegisterDevLoginRoute(mux *http.ServeMux, jwtSecret string) {
 			sessionVersion int
 			roleName       string
 		)
-		err := h.pool.QueryRow(ctx, `
-			SELECT e.id, COALESCE(NULLIF(e.full_name,''), e.name, ''), COALESCE(e.phone,''), COALESCE(e.role,''),
-			       e.tenant_id, COALESCE(e.session_version,1)
-			FROM employees e
-			WHERE e.tenant_id = 4 AND e.is_active = 1 AND e.deleted_at IS NULL
-			ORDER BY CASE WHEN e.role = 'admin' THEN 0 WHEN e.role = 'operating_manager' THEN 1 ELSE 2 END, e.id
-			LIMIT 1
-		`).Scan(&id, &name, &phone, &role, &tenantID, &sessionVersion)
-		if err != nil {
-			httputil.WriteError(w, http.StatusServiceUnavailable, "DEV_LOGIN_CANDIDATE_MISSING", "no employee for dev login", nil)
-			return
+		if body.EmployeeID > 0 {
+			err := h.pool.QueryRow(ctx, `
+				SELECT e.id, COALESCE(NULLIF(e.full_name,''), e.name, ''), COALESCE(e.phone,''), COALESCE(e.role,''),
+				       e.tenant_id, COALESCE(e.session_version,1)
+				FROM employees e
+				WHERE e.tenant_id = 4 AND e.id = $1 AND e.is_active = 1 AND e.deleted_at IS NULL
+			`, body.EmployeeID).Scan(&id, &name, &phone, &role, &tenantID, &sessionVersion)
+			if err != nil {
+				httputil.WriteError(w, http.StatusServiceUnavailable, "DEV_LOGIN_CANDIDATE_MISSING", "no active tenant-4 employee for dev login", nil)
+				return
+			}
+		} else {
+			err := h.pool.QueryRow(ctx, `
+				SELECT e.id, COALESCE(NULLIF(e.full_name,''), e.name, ''), COALESCE(e.phone,''), COALESCE(e.role,''),
+				       e.tenant_id, COALESCE(e.session_version,1)
+				FROM employees e
+				WHERE e.tenant_id = 4 AND e.is_active = 1 AND e.deleted_at IS NULL
+				ORDER BY CASE WHEN e.role = 'admin' THEN 0 WHEN e.role = 'operating_manager' THEN 1 ELSE 2 END, e.id
+				LIMIT 1
+			`).Scan(&id, &name, &phone, &role, &tenantID, &sessionVersion)
+			if err != nil {
+				httputil.WriteError(w, http.StatusServiceUnavailable, "DEV_LOGIN_CANDIDATE_MISSING", "no employee for dev login", nil)
+				return
+			}
 		}
 		switch role {
 		case "admin":

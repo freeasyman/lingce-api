@@ -1,0 +1,131 @@
+package dealexpertpermission
+
+import "time"
+
+const (
+	RoleAdmin = "deal_admin"
+	RoleStaff = "deal_staff"
+
+	AbilityConsultationRead = "deal.consultation.read"
+	AbilityTaskRead         = "deal.task.read"
+	AbilityTaskExecute      = "deal.task.execute"
+	AbilityPerformanceRead  = "deal.performance.read"
+	AbilityProductRead      = "deal.product.read"
+	AbilityWorkbenchRead    = "deal.workbench.read"
+	AbilityLedgerRead       = "deal.ledger.read"
+	AbilityLedgerExport     = "deal.ledger.export"
+	AbilityLedgerCorrect    = "deal.ledger.correct"
+	AbilityQuotesRead       = "deal.quotes.read"
+	AbilityQuotesManage     = "deal.quotes.manage"
+	AbilityProductManage    = "deal.product.manage"
+	AbilityPermissionManage = "deal.permission.manage"
+)
+
+// AllAbilities 是能力码的固定顺序（权限页展示顺序与此一致）。
+var AllAbilities = []string{
+	AbilityConsultationRead,
+	AbilityTaskRead,
+	AbilityTaskExecute,
+	AbilityPerformanceRead,
+	AbilityProductRead,
+	AbilityWorkbenchRead,
+	AbilityLedgerRead,
+	AbilityLedgerExport,
+	AbilityLedgerCorrect,
+	AbilityQuotesRead,
+	AbilityQuotesManage,
+	AbilityProductManage,
+	AbilityPermissionManage,
+}
+
+// DefaultStaffAbilities 是咨询师（deal_staff）默认能力包。
+var DefaultStaffAbilities = []string{
+	AbilityConsultationRead,
+	AbilityTaskRead,
+	AbilityTaskExecute,
+	AbilityPerformanceRead,
+	AbilityProductRead,
+}
+
+// dealManagerRoles 是“负责人”类角色：未配置权限时默认全开（deal_admin）。
+var dealManagerRoles = map[string]bool{
+	"admin":                true,
+	"director":             true,
+	"president":            true,
+	"dean":                 true,
+	"manager":              true,
+	"sales_manager":        true,
+	"operating_manager":    true,
+	"reception_manager":    true,
+	"operating_supervisor": true,
+	"marketing_manager":    true,
+}
+
+func IsManagerRole(role string) bool {
+	return dealManagerRoles[role]
+}
+
+type Assignment struct {
+	ID         int64     `json:"id"`
+	TenantID   int64     `json:"tenant_id"`
+	EmployeeID int64     `json:"employee_id"`
+	Enabled    bool      `json:"enabled"`
+	RoleCode   string    `json:"role_code"`
+	Abilities  []string  `json:"abilities"`
+	CreatedBy  *int64    `json:"created_by,omitempty"`
+	UpdatedBy  *int64    `json:"updated_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type EmployeePermissionRow struct {
+	EmployeeID int64       `json:"employee_id"`
+	Username   string      `json:"username"`
+	FullName   string      `json:"full_name"`
+	Phone      string      `json:"phone"`
+	Department string      `json:"department_name,omitempty"`
+	IsActive   bool        `json:"is_active"`
+	Role       string      `json:"role"`
+	Permission *Assignment `json:"permission,omitempty"`
+}
+
+type Access struct {
+	UserID    int64
+	TenantID  int64
+	Admin     bool
+	Enabled   bool
+	RoleCode  string
+	Abilities map[string]struct{}
+}
+
+func (a *Access) Has(ability string) bool {
+	if a == nil || !a.Enabled {
+		return false
+	}
+	if a.Admin {
+		return true
+	}
+	_, ok := a.Abilities[ability]
+	return ok
+}
+
+func (a *Access) CanManagePermissions() bool {
+	return a != nil && (a.Admin || a.Has(AbilityPermissionManage))
+}
+
+func (a *Access) AbilityList() []string {
+	if a == nil {
+		return []string{}
+	}
+	result := make([]string, 0, len(AllAbilities))
+	for _, ability := range AllAbilities {
+		if a.Admin {
+			result = append(result, ability)
+			continue
+		}
+		if _, ok := a.Abilities[ability]; ok {
+			result = append(result, ability)
+		}
+	}
+	return result
+}
