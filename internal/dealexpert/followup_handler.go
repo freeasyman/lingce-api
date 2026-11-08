@@ -842,11 +842,11 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 	var existing int
 	_ = h.pool.QueryRow(r.Context(), `
 		SELECT COUNT(*) FROM deal_outcome_events
-		WHERE tenant_id = $1 AND voided_at IS NULL
+		WHERE tenant_id = $1 AND voided_at IS NULL AND type = $4
 		  AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))`,
-		scope.TenantID, body.RecordingID, encounterID).Scan(&existing)
+		scope.TenantID, body.RecordingID, encounterID, body.Type).Scan(&existing)
 	if existing > 0 {
-		httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已经认过业绩，如需修改请联系负责人", nil)
+		httputil.WriteError(w, http.StatusConflict, "ALREADY_CLAIMED", "这条接待已经认过同类型业绩", nil)
 		return
 	}
 	actorID := int64(0)
