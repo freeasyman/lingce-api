@@ -334,7 +334,7 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		DateFrom:       dateFrom,
 		DateTo:         dateTo,
 		CustomerLinked: customerLinked,
-		SalesTaskState:  strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
+		SalesTaskState: strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
 		Decision:       strings.TrimSpace(r.URL.Query().Get("decision")),
 	}, scope.EmployeeFilter)
 	if err != nil {
@@ -812,7 +812,7 @@ func (h *Handler) ClaimOutcome(w http.ResponseWriter, r *http.Request) {
 	var existingNote string
 	err := h.pool.QueryRow(r.Context(), `
 		SELECT id, amount, COALESCE(note,'') FROM deal_outcome_events
-		WHERE tenant_id = $1 AND voided_at IS NULL
+		WHERE tenant_id = $1 AND voided_at IS NULL AND COALESCE(amount,0) > 0
 		  AND (recording_id = $2 OR ($3 > 0 AND encounter_id = $3))
 		ORDER BY occurred_at DESC, id DESC LIMIT 1`,
 		scope.TenantID, body.RecordingID, encounterID).Scan(&existingID, &existingAmount, &existingNote)
