@@ -1,21 +1,25 @@
 package dealexpush
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
 type Handler struct {
-	service *Service
-	access  *dealexpertpermission.Service
+	service   *Service
+	access    *dealexpertpermission.Service
+	jwtSecret string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -23,9 +27,12 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
+	h.jwtSecret = jwtSecret
 	router.Register(mux, []router.Route{
 		// 短链解析：公开访问，无鉴权。
 		{Method: "GET", Path: "/s/{code}", Handler: h.ResolveRedirect},
+		// H5 短链换会话：用短链员工身份签发 7 天 JWT（只含 employee/tenant，不提升管理员）。
+		{Method: "POST", Path: "/api/v1/deal-expert/h5/session", Handler: h.CreateH5Session},
 		// 推送事件列表：管理员只读，便于验收。
 		{Method: "GET", Path: "/api/v1/deal-expert/push-events", Handler: h.ListEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
@@ -52,6 +59,61 @@ func (h *Handler) ResolveRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 	target := base + "/h5/encounters/" + strconv.FormatInt(item.RecordingID, 10) + "?code=" + item.Code
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// H5SessionRequest 是短链换会话的请求体。
+type H5SessionRequest struct {
+	Code string `json:"code"`
+}
+
+// CreateH5Session 用短链员工身份签发 7 天 H5 JWT；短链不存在 404、过期 410。
+// 只含 employee/tenant，UserType 为 employee，不提升管理员。
+func (h *Handler) CreateH5Session(w http.ResponseWriter, r *http.Request) {
+	var body H5SessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.service.ResolveShortLink(r.Context(), strings.TrimSpace(body.Code))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrShortLinkExpired):
+			httputil.WriteError(w, http.StatusGone, "SHORT_LINK_EXPIRED", "短链已过期", nil)
+		case errors.Is(err, ErrShortLinkNotFound):
+			httputil.WriteNotFound(w, "短链不存在或已失效")
+		default:
+			httputil.WriteInternalError(w, err.Error())
+		}
+		return
+	}
+	var (
+		employeeID     int64
+		employeeName   string
+		employeeRole   string
+		tenantID       int64
+		sessionVersion int
+	)
+	if err := h.service.pool.QueryRow(r.Context(), `
+		SELECT id, COALESCE(NULLIF(full_name,''), name, ''), COALESCE(role,''), tenant_id, COALESCE(session_version,1)
+		FROM employees WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+	`, item.EmployeeID, item.TenantID).Scan(&employeeID, &employeeName, &employeeRole, &tenantID, &sessionVersion); err != nil {
+		httputil.WriteNotFound(w, "短链对应员工不存在")
+		return
+	}
+	token, expiresUnix, err := auth.GenerateToken(h.jwtSecret, employeeID, auth.UserTypeEmployee, &tenantID, sessionVersion, 24*7)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	expiresAt := time.Unix(expiresUnix, 0).Format(time.RFC3339)
+	httputil.WriteSuccess(w, map[string]any{
+		"token": token,
+		"employee": map[string]any{
+			"id": employeeID, "name": employeeName, "role": employeeRole,
+		},
+		"expires_at":   expiresAt,
+		"recording_id": item.RecordingID,
+	})
 }
 
 // ListEvents 管理员只读推送事件列表（供验收核对干跑结果）。
