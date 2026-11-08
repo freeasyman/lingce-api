@@ -71,9 +71,25 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 	if tenantID <= 0 || recordingID <= 0 {
 		return fmt.Errorf("tenant_id and recording_id are required")
 	}
+	version := strings.TrimSpace(analysisVersion)
+	if version == "" {
+		version = "v0.16"
+	}
+
+	// 只按录音分析已有字段判断，不取拿不到的信息。
+	analysis, err := s.loadAnalysis(ctx, tenantID, recordingID)
+	if err != nil {
+		return err
+	}
+	dealStatus, _ := analysis["deal_status"].(string)
+	dealConfidence, _ := analysis["deal_confidence"].(string)
+	blockerLabel, _ := analysis["blocker_label"].(string)
+	salesTasks, ok := analysis["sales_tasks"].([]any)
+	hasTasks := ok && len(salesTasks) > 0
+
 	var employeeID int64
 	var customerName, gender string
-	err := s.pool.QueryRow(ctx, `
+	err = s.pool.QueryRow(ctx, `
 		SELECT COALESCE(r.employee_id, 0), COALESCE(c.name, ''), COALESCE(c.gender, '')
 		FROM recordings r
 		LEFT JOIN customers c ON c.id = r.customer_id
@@ -85,39 +101,109 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 	if employeeID <= 0 {
 		return fmt.Errorf("recording has no consultant, skip push")
 	}
-	version := strings.TrimSpace(analysisVersion)
-	if version == "" {
-		version = "v0.16"
+	name := salutationFor(customerName, gender)
+
+	// 1. 咨询师事件：sales_tasks 非空且不是明确拒绝。
+	if hasTasks && dealStatus != "明确拒绝" {
+		if err := s.createEvent(ctx, tenantID, recordingID, version, employeeID, "consultant", name, nil); err != nil {
+			return err
+		}
+	} else {
+		s.log.Info("DRY RUN push: consultant event skipped",
+			"recording_id", recordingID, "deal_status", dealStatus, "tasks", len(salesTasks))
 	}
 
-	// 幂等：同一 recording+version+recipient 已存在事件则直接跳过，不重复生成短链。
+	// 2. 负责人事件：与咨询师事件同时生成（无定时器），条件全部满足才生成。
+	if hasTasks &&
+		(dealStatus == "意向明确未成交" || dealStatus == "意向不明") &&
+		dealConfidence == "高" &&
+		managerBlockerLabels[blockerLabel] {
+		var adminID int64
+		if err := s.pool.QueryRow(ctx, `
+			SELECT id FROM employees
+			WHERE tenant_id = $1 AND role = 'admin' AND deleted_at IS NULL
+			ORDER BY id LIMIT 1
+		`, tenantID).Scan(&adminID); err == nil && adminID > 0 {
+			if err := s.createEvent(ctx, tenantID, recordingID, version, adminID, "manager", name, map[string]any{"reason": "manager_signal"}); err != nil {
+				return err
+			}
+		} else {
+			s.log.Info("DRY RUN push: manager recipient not found, skip", "recording_id", recordingID)
+		}
+	}
+	return nil
+}
+
+// managerBlockerLabels 是负责人事件关注的阻碍八类子集。
+var managerBlockerLabels = map[string]bool{
+	"价格与价值":     true,
+	"竞品比较":      true,
+	"安全与恢复":     true,
+	"医生与机构信任": true,
+}
+
+// loadAnalysis 读取录音最新的已分析结果（v0.16 JSON）。
+func (s *Service) loadAnalysis(ctx context.Context, tenantID, recordingID int64) (map[string]any, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(analysis::text, 'null')
+		FROM consultation_analyses
+		WHERE tenant_id = $1 AND recording_id = $2 AND status = 'analyzed'
+	`, tenantID, recordingID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("consultation analysis not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load consultation analysis: %w", err)
+	}
+	var analysis map[string]any
+	if err := json.Unmarshal(raw, &analysis); err != nil {
+		return nil, fmt.Errorf("decode consultation analysis: %w", err)
+	}
+	return analysis, nil
+}
+
+// createEvent 幂等生成一条干跑推送事件：同一 recording+version+recipient 不重复生成，短链各自独立。
+//
+// TODO(real send)：产品确认推送内容后，按 cfg.Enabled && !cfg.IsDryRun() 在此调用短信/企微发送接口，
+// 并更新事件状态（dry_run → sent）。当前阶段绝不发送。
+func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, version string, recipient int64, recipientRole, customerName string, extra map[string]any) error {
+	channel := "sms"
+	template := s.cfg.SMSTemplateConsultant
+	if recipientRole == "manager" {
+		template = s.cfg.SMSTemplateManager
+	}
+	if strings.TrimSpace(template) == "" {
+		template = s.cfg.SMSTemplateFallback
+	}
+
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM deal_push_events
 		              WHERE tenant_id=$1 AND recording_id=$2 AND analysis_version=$3 AND recipient_employee_id=$4)
-	`, tenantID, recordingID, version, employeeID).Scan(&exists); err != nil {
+	`, tenantID, recordingID, version, recipient).Scan(&exists); err != nil {
 		return fmt.Errorf("check push event exists: %w", err)
 	}
 	if exists {
-		s.log.Info("DRY RUN push: event already exists, skip", "recording_id", recordingID, "recipient", employeeID)
+		s.log.Info("DRY RUN push: event already exists, skip",
+			"recording_id", recordingID, "recipient", recipient, "recipient_role", recipientRole)
 		return nil
 	}
 
-	code, err := s.createShortLink(ctx, tenantID, recordingID, employeeID)
+	code, err := s.createShortLink(ctx, tenantID, recordingID, recipient)
 	if err != nil {
 		return fmt.Errorf("create short link: %w", err)
 	}
-
-	// 本期只生成咨询师模板事件；负责人模板/P0 信号留待产品确认（TODO）。
-	// channel 先固定 sms；企微通道后续扩展。
-	channel := "sms"
-	template := s.pickTemplate()
 	payload := map[string]any{
-		"name":     salutationFor(customerName, gender),
-		"code":     code,
-		"link":     s.shortURL(code),
-		"template": template,
-		"sign":     s.cfg.SMSSignName,
+		"name":           customerName,
+		"code":           code,
+		"link":           s.shortURL(code),
+		"template":       template,
+		"sign":           s.cfg.SMSSignName,
+		"recipient_role": recipientRole,
+	}
+	for key, value := range extra {
+		payload[key] = value
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -128,7 +214,7 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 		  (tenant_id, recording_id, analysis_version, recipient_employee_id, channel, template_code, short_code, payload, status)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'dry_run')
 		ON CONFLICT (tenant_id, recording_id, analysis_version, recipient_employee_id) DO NOTHING
-	`, tenantID, recordingID, version, employeeID, channel, template, code, string(raw))
+	`, tenantID, recordingID, version, recipient, channel, template, code, string(raw))
 	if err != nil {
 		return fmt.Errorf("insert push event: %w", err)
 	}
@@ -138,22 +224,15 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 		"tenant_id", tenantID,
 		"recording_id", recordingID,
 		"analysis_version", version,
-		"recipient", employeeID,
+		"recipient", recipient,
+		"recipient_role", recipientRole,
 		"channel", channel,
 		"template", template,
 		"short_code", code,
 		"link", s.shortURL(code),
-		"name", salutationFor(customerName, gender),
+		"name", customerName,
 	)
 	return nil
-}
-
-// pickTemplate 选择模板：默认咨询师模板，未配置时用兜底模板。
-func (s *Service) pickTemplate() string {
-	if template := strings.TrimSpace(s.cfg.SMSTemplateConsultant); template != "" {
-		return template
-	}
-	return strings.TrimSpace(s.cfg.SMSTemplateFallback)
 }
 
 // shortURL 拼接完整短链地址。
