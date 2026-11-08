@@ -67,3 +67,14 @@ analysis_version = "v200"
 # v2 即时分析与咨询师短信默认关闭；新界面联调时再打开。
 instant_enabled = false
 consultant_sms_enabled = false
+
+# 实时推送：当前只干跑（只记录事件与短链，不发送短信/企微）。
+[deal.push]
+enabled = false
+dry_run = true
+h5_base_url = "https://employee.khgl.xyz"
+short_link_base = "https://khgl.xyz/s"
+sms_sign_name = "天津灵策科技"
+sms_template_consultant = "SMS_512628042"
+sms_template_manager = "SMS_512538140"
+sms_template_fallback = "SMS_512617916"

@@ -80,9 +80,28 @@ func (c ContentConfig) AnalysisOn() bool {
 // DealConfig 赢客专家后台分析配置。
 // analysis_version 为空表示沿用默认 v200；dev 可显式切到 v210-rc11（v2.1 新流水线）。
 type DealConfig struct {
-	AnalysisVersion      string `toml:"analysis_version"`
-	InstantEnabled       bool   `toml:"instant_enabled"`
-	ConsultantSMSEnabled bool   `toml:"consultant_sms_enabled"`
+	AnalysisVersion      string         `toml:"analysis_version"`
+	InstantEnabled       bool           `toml:"instant_enabled"`
+	ConsultantSMSEnabled bool           `toml:"consultant_sms_enabled"`
+	Push                 DealPushConfig `toml:"push"`
+}
+
+// DealPushConfig 分析完成后的实时推送配置。
+// 当前阶段只干跑（只记录事件与短链，不发送短信/企微）；真实发送待产品确认后打开 enabled。
+type DealPushConfig struct {
+	Enabled               bool   `toml:"enabled"`
+	DryRun                *bool  `toml:"dry_run"`
+	H5BaseURL             string `toml:"h5_base_url"`
+	ShortLinkBase         string `toml:"short_link_base"`
+	SMSSignName           string `toml:"sms_sign_name"`
+	SMSTemplateConsultant string `toml:"sms_template_consultant"`
+	SMSTemplateManager    string `toml:"sms_template_manager"`
+	SMSTemplateFallback   string `toml:"sms_template_fallback"`
+}
+
+// IsDryRun 返回是否干跑：未显式配置时默认 true，保证绝不真实发送。
+func (c DealPushConfig) IsDryRun() bool {
+	return c.DryRun == nil || *c.DryRun
 }
 
 // DealAnalysisVersion 返回配置的分析版本；未配置时保持 v200。

@@ -23,6 +23,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/dealexpert"
 	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
+	"github.com/freeasyman/lingce-api/internal/dealexpush"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
@@ -313,7 +314,9 @@ func main() {
 
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
-	dealExpertHandler.SetConsultationAnalysisGenerator(dealexpert.NewConsultationAnalysisGenerator(pool, llmClient, slog.Default()))
+	dealExpertGenerator := dealexpert.NewConsultationAnalysisGenerator(pool, llmClient, slog.Default())
+	dealExpertGenerator.SetPushNotifier(dealexpush.NewService(pool, cfg.Deal.Push, slog.Default()))
+	dealExpertHandler.SetConsultationAnalysisGenerator(dealExpertGenerator)
 	if !strings.EqualFold(cfg.App.Env, "production") {
 		dealExpertHandler.RegisterDevLoginRoute(mux, cfg.JWT.Secret)
 	}
@@ -323,6 +326,10 @@ func main() {
 	// 赢客专家访问权限：角色/能力配置与菜单守卫数据源。
 	dealExpertPermissionModule := dealexpertpermission.NewModule(pool)
 	dealExpertPermissionModule.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	// 赢客专家实时推送（干跑链路）：短链解析与推送事件记录，不发送短信/企微。
+	dealPushModule := dealexpush.NewModule(pool, cfg.Deal.Push, slog.Default())
+	dealPushModule.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// HIS：灵策门诊系统（P1 标准诊疗闭环）。设计基线：lingce-web/docs/his。
 	hisModule := his.NewModule(pool, emrRecordService)

@@ -63,15 +63,28 @@ func (g *ConsultationAnalysisGenerator) loadPrompt(ctx context.Context, tenantID
 	return pr, nil
 }
 
+// PushNotifier 在分析成功后异步生成推送事件（当前阶段为干跑，只记录不发送）。
+type PushNotifier interface {
+	CreateForAnalysis(ctx context.Context, tenantID, recordingID int64, analysisVersion string) error
+}
+
 // ConsultationAnalysisGenerator 用提示词库中的“接待记录分析”提示词生成内容。
 type ConsultationAnalysisGenerator struct {
 	pool *pgxpool.Pool
 	llm  *llmgateway.Client
 	log  *slog.Logger
+	push PushNotifier
 }
 
 func NewConsultationAnalysisGenerator(pool *pgxpool.Pool, llm *llmgateway.Client, log *slog.Logger) *ConsultationAnalysisGenerator {
 	return &ConsultationAnalysisGenerator{pool: pool, llm: llm, log: log}
+}
+
+// SetPushNotifier 设置推送事件生成器；nil 表示不启用（当前阶段为干跑）。
+func (g *ConsultationAnalysisGenerator) SetPushNotifier(notifier PushNotifier) {
+	if g != nil {
+		g.push = notifier
+	}
 }
 
 func (g *ConsultationAnalysisGenerator) ensureSchema(ctx context.Context) error {
@@ -161,6 +174,16 @@ func (g *ConsultationAnalysisGenerator) Generate(ctx context.Context, tenantID, 
 	g.save(ctx, tenantID, recordingID, "analyzed", analysis, "", cfg.modelCode, prompt.Version)
 	if err := g.rebuildSalesTasks(ctx, tenantID, recordingID, analysis); err != nil && g.log != nil {
 		g.log.Warn("rebuild sales tasks failed", "recording_id", recordingID, "error", err)
+	}
+	// 分析保存成功后异步生成推送事件（干跑：只记录短链与事件，不发送）；失败只记日志，不影响分析结果。
+	if g.push != nil {
+		go func() {
+			pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := g.push.CreateForAnalysis(pushCtx, tenantID, recordingID, prompt.Version); err != nil && g.log != nil {
+				g.log.Warn("deal push event failed", "recording_id", recordingID, "error", err)
+			}
+		}()
 	}
 	return analysis, nil
 }
