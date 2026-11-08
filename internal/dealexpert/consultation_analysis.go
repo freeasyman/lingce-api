@@ -152,7 +152,6 @@ func (g *ConsultationAnalysisGenerator) Generate(ctx context.Context, tenantID, 
 		g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode, prompt.Version)
 		return nil, fmt.Errorf("invalid json output")
 	}
-	normalizeSalesTasksKey(analysis)
 	analysis["prompt_version"] = prompt.Version
 	if err := g.validate(analysis); err != nil {
 		g.save(ctx, tenantID, recordingID, "failed", analysis, err.Error(), cfg.modelCode, prompt.Version)
@@ -164,17 +163,6 @@ func (g *ConsultationAnalysisGenerator) Generate(ctx context.Context, tenantID, 
 		g.log.Warn("rebuild sales tasks failed", "recording_id", recordingID, "error", err)
 	}
 	return analysis, nil
-}
-
-// normalizeSalesTasksKey 统一任务字段名：模型可能输出 follow_up_tasks，本系统统一为 sales_tasks。
-func normalizeSalesTasksKey(analysis map[string]any) {
-	if _, ok := analysis["sales_tasks"]; ok {
-		return
-	}
-	if raw, ok := analysis["follow_up_tasks"]; ok {
-		analysis["sales_tasks"] = raw
-		delete(analysis, "follow_up_tasks")
-	}
 }
 
 func (g *ConsultationAnalysisGenerator) validate(analysis map[string]any) error {

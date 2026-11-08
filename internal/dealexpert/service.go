@@ -8,20 +8,20 @@ type Service struct{ store *Store }
 
 func NewService(store *Store) *Service { return &Service{store: store} }
 
-func (s *Service) EnsureCardActionsTable(ctx context.Context) error {
-	return s.store.EnsureCardActionsTable(ctx)
+func (s *Service) EnsureAnalysisActionsTable(ctx context.Context) error {
+	return s.store.EnsureAnalysisActionsTable(ctx)
 }
-func (s *Service) ListCardActions(ctx context.Context, tenantID, recordingID int64) ([]*DealCardAction, error) {
-	if err := s.store.EnsureCardActionsTable(ctx); err != nil {
+func (s *Service) ListAnalysisActions(ctx context.Context, tenantID, recordingID int64) ([]*AnalysisAction, error) {
+	if err := s.store.EnsureAnalysisActionsTable(ctx); err != nil {
 		return nil, err
 	}
-	return s.store.ListCardActions(ctx, tenantID, recordingID)
+	return s.store.ListAnalysisActions(ctx, tenantID, recordingID)
 }
-func (s *Service) CreateCardAction(ctx context.Context, tenantID, recordingID, actorID int64, actorName, actionType, note string) (*DealCardAction, error) {
-	if err := s.store.EnsureCardActionsTable(ctx); err != nil {
+func (s *Service) CreateAnalysisAction(ctx context.Context, tenantID, recordingID, actorID int64, actorName, actionType, note string) (*AnalysisAction, error) {
+	if err := s.store.EnsureAnalysisActionsTable(ctx); err != nil {
 		return nil, err
 	}
-	return s.store.CreateCardAction(ctx, tenantID, recordingID, actorID, actorName, actionType, note)
+	return s.store.CreateAnalysisAction(ctx, tenantID, recordingID, actorID, actorName, actionType, note)
 }
 func (s *Service) ActorName(ctx context.Context, tenantID, employeeID int64) string {
 	if employeeID <= 0 {
@@ -42,8 +42,8 @@ func (s *Service) RecordingBrief(ctx context.Context, tenantID, recordingID int6
 	return s.store.RecordingBrief(ctx, tenantID, recordingID)
 }
 
-func (s *Service) ListMyCardActions(ctx context.Context, tenantID, actorID int64) ([]*MyAction, error) {
-	return s.store.ListMyCardActions(ctx, tenantID, actorID)
+func (s *Service) ListMyAnalysisActions(ctx context.Context, tenantID, actorID int64) ([]*MyAction, error) {
+	return s.store.ListMyAnalysisActions(ctx, tenantID, actorID)
 }
 
 func (s *Service) GetApprovalRules(ctx context.Context, tenantID int64) (map[string]any, error) {
