@@ -152,6 +152,7 @@ func (g *V2CardGenerator) Generate(ctx context.Context, tenantID, recordingID in
 		g.save(ctx, tenantID, recordingID, "failed", card, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
+	sanitizeCardTasks(card)
 	g.save(ctx, tenantID, recordingID, "analyzed", card, "", cfg.modelCode, prompt.Version)
 	return card, nil
 }
@@ -352,4 +353,63 @@ func (g *V2CardGenerator) loadFacts(ctx context.Context, tenantID, recordingID i
 		return "（无）"
 	}
 	return b.String()
+}
+
+// sanitizeCardTasks 去掉违反业务常识的跟进任务：术后追费、未成交写术后、编造手术完成。
+func sanitizeCardTasks(card map[string]any) {
+	rawTasks, ok := card["follow_up_tasks"].([]any)
+	if !ok {
+		return
+	}
+	status, _ := card["deal_status"].(string)
+	nextAction, _ := card["next_action"].(string)
+	kept := make([]any, 0, len(rawTasks))
+	removed := map[string]bool{}
+	for _, raw := range rawTasks {
+		task, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		title, _ := task["title"].(string)
+		timing, _ := task["timing"].(string)
+		script, _ := task["script"].(string)
+		description, _ := task["description"].(string)
+		text := title + timing + script + description
+		postOp := containsAnyText(text, "术后", "手术后", "复查", "恢复期")
+		money := containsAnyText(text, "缴费", "交费", "付款", "费用", "结清", "尾款", "欠费", "补缴", "刷卡", "转账")
+		bad := postOp && money
+		if containsAnyText(status, "意向明确未成交", "意向不明") && postOp {
+			bad = true
+		}
+		if containsAnyText(status, "已预约") && containsAnyText(script, "昨天手术", "今天手术", "手术顺利", "手术结束", "手术做完", "辛苦了", "恢复得挺") {
+			bad = true
+		}
+		if containsAnyText(status, "意向明确未成交", "意向不明") && containsAnyText(script, "手术顺利", "手术结束", "手术做完", "手术已") {
+			bad = true
+		}
+		if bad {
+			removed[title] = true
+			continue
+		}
+		kept = append(kept, task)
+	}
+	card["follow_up_tasks"] = kept
+	if removed[nextAction] {
+		if len(kept) > 0 {
+			if first, ok := kept[0].(map[string]any); ok {
+				card["next_action"], _ = first["title"].(string)
+			}
+		} else {
+			card["next_action"] = ""
+		}
+	}
+}
+
+func containsAnyText(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
