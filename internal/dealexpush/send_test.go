@@ -134,11 +134,14 @@ func TestSendOnceWithFakeProvider(t *testing.T) {
 
 func TestTemplateParams(t *testing.T) {
 	params := templateParams([]byte(`{"name":"杜舒然","code":"ABC","link":"https://khgl.xyz/s/ABC","template":"SMS_512628042"}`))
-	if params["name"] != "杜舒然" || params["code"] != "ABC" || params["link"] != "https://khgl.xyz/s/ABC" {
+	if params["name"] != "杜舒然" || params["code"] != "ABC" {
 		t.Fatalf("unexpected params: %v", params)
 	}
 	if _, ok := params["template"]; ok {
 		t.Fatal("template must not be forwarded as a param")
+	}
+	if _, ok := params["link"]; ok {
+		t.Fatal("link must not be forwarded as a param")
 	}
 }
 
