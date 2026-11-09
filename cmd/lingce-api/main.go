@@ -328,8 +328,10 @@ func main() {
 	dealExpertPermissionModule := dealexpertpermission.NewModule(pool)
 	dealExpertPermissionModule.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	// 赢客专家实时推送（干跑链路）：短链解析与推送事件记录，不发送短信/企微。
-	dealPushModule := dealexpush.NewModule(pool, cfg.Deal.Push, slog.Default())
+	// 赢客专家实时推送（干跑链路）：短链解析与推送事件记录；真实发送默认关闭（enabled=false）。
+	dealPushService := dealexpush.NewService(pool, cfg.Deal.Push, slog.Default())
+	dealPushService.SetSender(dealexpush.NewAliyunTemplateSender(smsClient))
+	dealPushModule := dealexpush.NewModuleWithService(dealPushService)
 	dealPushModule.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	// 介入信号：Web 工作台「待我处理」与 H5「待介入」共用数据源。

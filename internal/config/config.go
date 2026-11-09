@@ -89,8 +89,9 @@ type DealConfig struct {
 // DealPushConfig 分析完成后的实时推送配置。
 // 当前阶段只干跑（只记录事件与短链，不发送短信/企微）；真实发送待产品确认后打开 enabled。
 type DealPushConfig struct {
-	Enabled               bool   `toml:"enabled"`
-	DryRun                *bool  `toml:"dry_run"`
+	Enabled               bool     `toml:"enabled"`
+	DryRun                *bool    `toml:"dry_run"`
+	Whitelist             []string `toml:"whitelist"`
 	H5BaseURL             string `toml:"h5_base_url"`
 	ShortLinkBase         string `toml:"short_link_base"`
 	SMSSignName           string `toml:"sms_sign_name"`

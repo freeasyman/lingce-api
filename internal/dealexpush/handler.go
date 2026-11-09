@@ -35,6 +35,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/deal-expert/h5/session", Handler: h.CreateH5Session},
 		// 推送事件列表：管理员只读，便于验收。
 		{Method: "GET", Path: "/api/v1/deal-expert/push-events", Handler: h.ListEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 单号补发：管理员显式触发一条事件真实发送（白名单内），用于单号测试。
+		{Method: "POST", Path: "/api/v1/deal-expert/push-events/{id}/send", Handler: h.SendEvent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
@@ -144,4 +146,61 @@ func (h *Handler) ListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
+}
+
+// SendEvent 管理员显式发送一条事件（单号测试用）：
+// 校验事件存在、同租户、enabled=true、收件人在白名单；已 sent 幂等返回，不重发。
+func (h *Handler) SendEvent(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	access, err := h.access.AccessFor(r.Context(), claims, tenantID)
+	if err != nil || !access.CanManagePermissions() {
+		httputil.WriteForbidden(w, "deal expert permission management required")
+		return
+	}
+	eventID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || eventID <= 0 {
+		httputil.WriteBadRequest(w, "invalid event id")
+		return
+	}
+	if !h.service.cfg.Enabled {
+		httputil.WriteError(w, http.StatusBadRequest, "PUSH_NOT_ENABLED", "推送未开启（enabled=false），仅干跑", nil)
+		return
+	}
+	row, err := h.service.loadEvent(r.Context(), eventID)
+	if err != nil {
+		httputil.WriteNotFound(w, "推送事件不存在")
+		return
+	}
+	if row.TenantID != tenantID {
+		httputil.WriteForbidden(w, "无权发送该事件")
+		return
+	}
+	if row.Status == "sent" {
+		httputil.WriteSuccess(w, map[string]any{"status": "sent", "biz_id": row.ProviderBizID, "error": ""})
+		return
+	}
+	phone, err := h.service.EmployeePhone(r.Context(), row.RecipientEmployeeID)
+	if err != nil || phone == "" {
+		httputil.WriteBadRequest(w, "收件人没有手机号")
+		return
+	}
+	if !whitelisted(h.service.cfg.Whitelist, phone) {
+		httputil.WriteError(w, http.StatusBadRequest, "NOT_IN_WHITELIST", "收件人不在白名单，拒绝发送", nil)
+		return
+	}
+	status, bizID, sendErr := h.service.sendEvent(r.Context(), eventID)
+	if sendErr != nil {
+		httputil.WriteSuccess(w, map[string]any{"status": "failed", "biz_id": "", "error": sendErr.Error()})
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"status": status, "biz_id": bizID, "error": ""})
 }

@@ -45,8 +45,51 @@ func (c *AliyunClient) SendCode(phone, code string) error {
 	return c.request(params)
 }
 
+// SendResult 是模板短信发送结果。
+type SendResult struct {
+	BizID     string
+	RequestID string
+}
+
+// SendTemplate 发送模板短信（显式指定签名与模板），返回阿里云 BizId/RequestId。
+func (c *AliyunClient) SendTemplate(phone, signName, templateCode string, templateParams map[string]string) (*SendResult, error) {
+	paramJSON := "{}"
+	if len(templateParams) > 0 {
+		if raw, err := json.Marshal(templateParams); err == nil {
+			paramJSON = string(raw)
+		}
+	}
+	params := map[string]string{
+		"PhoneNumbers":  phone,
+		"SignName":      signName,
+		"TemplateCode":  templateCode,
+		"TemplateParam": paramJSON,
+	}
+	body, err := c.requestRaw(params)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if code, ok := result["Code"].(string); ok && code != "OK" {
+		message, _ := result["Message"].(string)
+		return nil, fmt.Errorf("SMS API error: %s - %s", code, message)
+	}
+	bizID, _ := result["BizId"].(string)
+	requestID, _ := result["RequestId"].(string)
+	return &SendResult{BizID: bizID, RequestID: requestID}, nil
+}
+
 // request makes a request to Aliyun SMS API
 func (c *AliyunClient) request(params map[string]string) error {
+	_, err := c.requestRaw(params)
+	return err
+}
+
+// requestRaw makes a request to Aliyun SMS API and returns the raw response body.
+func (c *AliyunClient) requestRaw(params map[string]string) ([]byte, error) {
 	// Add common parameters
 	params["Format"] = "JSON"
 	params["Version"] = "2017-05-25"
@@ -67,28 +110,28 @@ func (c *AliyunClient) request(params map[string]string) error {
 	// Make HTTP request
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		return fmt.Errorf("failed to send SMS: %w", err)
+		return nil, fmt.Errorf("failed to send SMS: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Parse response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Check for errors
 	if code, ok := result["Code"].(string); ok && code != "OK" {
-		message := result["Message"].(string)
-		return fmt.Errorf("SMS API error: %s - %s", code, message)
+		message, _ := result["Message"].(string)
+		return nil, fmt.Errorf("SMS API error: %s - %s", code, message)
 	}
 
-	return nil
+	return body, nil
 }
 
 // calculateSignature calculates the signature for Aliyun API

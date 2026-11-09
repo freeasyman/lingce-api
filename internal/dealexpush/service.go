@@ -24,9 +24,10 @@ var (
 const ShortLinkTTL = 7 * 24 * time.Hour
 
 type Service struct {
-	pool *pgxpool.Pool
-	cfg  config.DealPushConfig
-	log  *slog.Logger
+	pool   *pgxpool.Pool
+	cfg    config.DealPushConfig
+	log    *slog.Logger
+	sender TemplateSender
 }
 
 func NewService(pool *pgxpool.Pool, cfg config.DealPushConfig, log *slog.Logger) *Service {
@@ -302,17 +303,22 @@ func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, 
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	var eventID int64
+	err = s.pool.QueryRow(ctx, `
 		INSERT INTO deal_push_events
 		  (tenant_id, recording_id, analysis_version, recipient_employee_id, channel, template_code, short_code, payload, status)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'dry_run')
 		ON CONFLICT (tenant_id, recording_id, analysis_version, recipient_employee_id) DO NOTHING
-	`, tenantID, recordingID, version, recipient, channel, template, code, string(raw))
+		RETURNING id
+	`, tenantID, recordingID, version, recipient, channel, template, code, string(raw)).Scan(&eventID)
 	if err != nil {
 		return fmt.Errorf("insert push event: %w", err)
 	}
 
-	// 干跑日志：只记录摘要，不调用任何发送接口。
+	// 按开关决定是否真实发送（enabled && !dry_run && 白名单内）；否则保持 dry_run。
+	s.tryAutoSend(ctx, eventID, recipient)
+
+	// 干跑日志：只记录摘要；真实发送只在白名单内触发。
 	s.log.Info("DRY RUN push",
 		"tenant_id", tenantID,
 		"recording_id", recordingID,

@@ -72,6 +72,7 @@ consultant_sms_enabled = false
 [deal.push]
 enabled = false
 dry_run = true
+whitelist = ["18610815948"]
 h5_base_url = "http://127.0.0.1:3012"
 short_link_base = "https://khgl.xyz/s"
 sms_sign_name = "天津灵策科技"
