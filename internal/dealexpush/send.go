@@ -80,13 +80,13 @@ func (s *Service) EmployeePhone(ctx context.Context, employeeID int64) (string, 
 
 // pushEventRow 是发送所需的单条事件信息。
 type pushEventRow struct {
-	ID                   int64
-	TenantID             int64
-	RecipientEmployeeID  int64
-	TemplateCode         string
-	Status               string
-	ProviderBizID        string
-	Payload              json.RawMessage
+	ID                  int64
+	TenantID            int64
+	RecipientEmployeeID int64
+	TemplateCode        string
+	Status              string
+	ProviderBizID       string
+	Payload             json.RawMessage
 }
 
 // loadEvent 读取单条推送事件。
@@ -102,14 +102,14 @@ func (s *Service) loadEvent(ctx context.Context, eventID int64) (*pushEventRow, 
 	return &row, nil
 }
 
-// templateParams 从事件 payload 提取模板变量（name/code/link）。
+// templateParams 从事件 payload 提取模板变量（name/code）。
 func templateParams(payload []byte) map[string]string {
 	out := map[string]string{}
 	var obj map[string]any
 	if payload == nil || json.Unmarshal(payload, &obj) != nil {
 		return out
 	}
-	for _, key := range []string{"name", "code", "link"} {
+	for _, key := range []string{"name", "code"} {
 		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
 			out[key] = strings.TrimSpace(value)
 		}
