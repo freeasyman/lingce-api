@@ -68,7 +68,7 @@ analysis_version = "v200"
 instant_enabled = false
 consultant_sms_enabled = false
 
-# 实时推送：当前只干跑（只记录事件与短链，不发送短信/企微）。
+# 实时推送：短信默认干跑；Expo App 推送在事件生成后发送（无 token 静默跳过）。
 [deal.push]
 enabled = false
 dry_run = true
@@ -79,3 +79,5 @@ sms_sign_name = "天津灵策科技"
 sms_template_consultant = "SMS_512628042"
 sms_template_manager = "SMS_512538140"
 sms_template_fallback = "SMS_512617916"
+# Expo Push 不需要密钥；如启用 Enhanced Push Security，在这里填 access token，默认留空。
+expo_access_token = ""

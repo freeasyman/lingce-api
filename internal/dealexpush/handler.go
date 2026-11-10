@@ -37,6 +37,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/push-events", Handler: h.ListEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		// 单号补发：管理员显式触发一条事件真实发送（白名单内），用于单号测试。
 		{Method: "POST", Path: "/api/v1/deal-expert/push-events/{id}/send", Handler: h.SendEvent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// Expo 设备 token 注册/注销：员工 App 登录（mobile/employee）与管理员均可调用。
+		{Method: "POST", Path: "/api/v1/deal-expert/push-devices", Handler: h.RegisterPushDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "DELETE", Path: "/api/v1/deal-expert/push-devices/{token}", Handler: h.UnregisterPushDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
@@ -203,4 +206,70 @@ func (h *Handler) SendEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"status": status, "biz_id": bizID, "error": ""})
+}
+
+// RegisterPushDevice 注册 Expo 设备 token；按 tenant+employee+token 幂等 upsert。
+func (h *Handler) RegisterPushDevice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+
+	var body RegisterPushDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	device, err := h.service.RegisterDevice(r.Context(), tenantID, claims.UserID, body)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidPushToken):
+			httputil.WriteBadRequest(w, "token 不能为空、不能包含空白且长度不能超过 255")
+		case errors.Is(err, ErrInvalidPushPlatform):
+			httputil.WriteBadRequest(w, "platform 仅支持 ios/android")
+		default:
+			httputil.WriteInternalError(w, err.Error())
+		}
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"ok":        true,
+		"id":        device.ID,
+		"platform":  device.Platform,
+		"is_active": device.IsActive,
+	})
+}
+
+// UnregisterPushDevice 注销当前员工的一条 token；不存在也返回 ok（幂等）。
+func (h *Handler) UnregisterPushDevice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	token := strings.TrimSpace(r.PathValue("token"))
+	if token == "" {
+		httputil.WriteBadRequest(w, "token 不能为空")
+		return
+	}
+	if err := h.service.UnregisterDevice(r.Context(), tenantID, claims.UserID, token); err != nil {
+		if errors.Is(err, ErrInvalidPushToken) {
+			httputil.WriteBadRequest(w, "token 不能为空")
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }

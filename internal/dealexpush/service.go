@@ -24,20 +24,42 @@ var (
 const ShortLinkTTL = 7 * 24 * time.Hour
 
 type Service struct {
-	pool   *pgxpool.Pool
-	cfg    config.DealPushConfig
-	log    *slog.Logger
-	sender TemplateSender
+	pool    *pgxpool.Pool
+	cfg     config.DealPushConfig
+	log     *slog.Logger
+	sender  TemplateSender
+	devices PushDeviceStore
+	expo    ExpoSender
 }
 
 func NewService(pool *pgxpool.Pool, cfg config.DealPushConfig, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, cfg: cfg, log: log}
+	return &Service{
+		pool:    pool,
+		cfg:     cfg,
+		log:     log,
+		devices: newPostgresPushDeviceStore(pool),
+		expo:    NewExpoClient(cfg.ExpoAccessToken, log),
+	}
 }
 
-// PushEvent 是一次推送事件（当前阶段只有 dry_run 状态）。
+// SetExpoSender 注入 Expo 发送器（单测用 fake；未注入时使用真实 HTTP 客户端）。
+func (s *Service) SetExpoSender(sender ExpoSender) {
+	if s != nil {
+		s.expo = sender
+	}
+}
+
+// SetPushDeviceStore 注入设备存储（单测用 fake；未注入时使用 Postgres）。
+func (s *Service) SetPushDeviceStore(store PushDeviceStore) {
+	if s != nil {
+		s.devices = store
+	}
+}
+
+// PushEvent 是一次推送事件（短信 status 与 Expo expo_status 分开记录）。
 type PushEvent struct {
 	ID                  int64           `json:"id"`
 	TenantID            int64           `json:"tenant_id"`
@@ -50,10 +72,13 @@ type PushEvent struct {
 	Payload             json.RawMessage `json:"payload"`
 	Status              string          `json:"status"`
 	Error               string          `json:"error"`
+	ExpoStatus          string          `json:"expo_status"`
+	ExpoError           string          `json:"expo_error"`
 	CreatedAt           time.Time       `json:"created_at"`
 	SentAt              *time.Time      `json:"sent_at,omitempty"`
 	ReadAt              *time.Time      `json:"read_at,omitempty"`
 	HandledAt           *time.Time      `json:"handled_at,omitempty"`
+	ExpoSentAt          *time.Time      `json:"expo_sent_at,omitempty"`
 }
 
 type ResolvedLink struct {
@@ -64,10 +89,9 @@ type ResolvedLink struct {
 	ExpiresAt   time.Time
 }
 
-// CreateForAnalysis 在分析保存成功后生成推送事件（干跑：只记录、不发送）。
-//
-// TODO(real send)：产品确认推送内容后，在此处按 cfg.Enabled && !cfg.IsDryRun() 调用
-// 短信/企微发送接口，并更新事件状态（dry_run → sent）。当前阶段绝不发送。
+// CreateForAnalysis 在分析保存成功后生成推送事件。
+// 短信按 cfg.Enabled && !cfg.IsDryRun() 决定是否真实发送；Expo App 推送在事件生成后
+// 立即按设备 token 发送，失败只记录，不影响分析结果。
 func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID int64, analysisVersion string) error {
 	if tenantID <= 0 || recordingID <= 0 {
 		return fmt.Errorf("tenant_id and recording_id are required")
@@ -105,14 +129,15 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 		return fmt.Errorf("recording has no consultant, skip push")
 	}
 	name := salutationFor(customerName, gender)
+	pushName := pushSalutation(customerName, gender)
 
 	// 1. 咨询师事件：sales_tasks 非空且不是明确拒绝。
 	if hasTasks && dealStatus != "明确拒绝" {
-		if err := s.createEvent(ctx, tenantID, recordingID, version, employeeID, "consultant", name, nil); err != nil {
+		if err := s.createEvent(ctx, tenantID, recordingID, version, employeeID, "consultant", name, pushName, nil); err != nil {
 			return err
 		}
 	} else {
-		s.log.Info("DRY RUN push: consultant event skipped",
+		s.log.Info("push: consultant event skipped",
 			"recording_id", recordingID, "deal_status", dealStatus, "tasks", len(salesTasks))
 	}
 
@@ -124,7 +149,7 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 			WHERE tenant_id = $1 AND role = 'admin' AND deleted_at IS NULL
 			ORDER BY id LIMIT 1
 		`, tenantID).Scan(&adminID); err == nil && adminID > 0 {
-			if err := s.createEvent(ctx, tenantID, recordingID, version, adminID, "manager", name, map[string]any{"reason": "manager_signal"}); err != nil {
+			if err := s.createEvent(ctx, tenantID, recordingID, version, adminID, "manager", name, pushName, map[string]any{"reason": "manager_signal"}); err != nil {
 				return err
 			}
 			// 同步 upsert 介入信号（Web 工作台与 H5 共用数据源）。
@@ -132,10 +157,10 @@ func (s *Service) CreateForAnalysis(ctx context.Context, tenantID, recordingID i
 				s.log.Warn("upsert intervention signal failed", "recording_id", recordingID, "error", err)
 			}
 		} else {
-			s.log.Info("DRY RUN push: manager recipient not found, skip", "recording_id", recordingID)
+			s.log.Info("push: manager recipient not found, skip", "recording_id", recordingID)
 		}
 	} else {
-		s.log.Info("DRY RUN push: manager event skipped",
+		s.log.Info("push: manager event skipped",
 			"recording_id", recordingID, "signal_level", signalLevel, "tasks", len(salesTasks))
 	}
 	return nil
@@ -257,11 +282,9 @@ func (s *Service) loadAnalysis(ctx context.Context, tenantID, recordingID int64)
 	return analysis, nil
 }
 
-// createEvent 幂等生成一条干跑推送事件：同一 recording+version+recipient 不重复生成，短链各自独立。
-//
-// TODO(real send)：产品确认推送内容后，按 cfg.Enabled && !cfg.IsDryRun() 在此调用短信/企微发送接口，
-// 并更新事件状态（dry_run → sent）。当前阶段绝不发送。
-func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, version string, recipient int64, recipientRole, customerName string, extra map[string]any) error {
+// createEvent 幂等生成一条推送事件：同一 recording+version+recipient 不重复生成，短链各自独立。
+// 事件插入后立即尝试 Expo App 推送；短信仍按 enabled/dry_run/白名单决定。
+func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, version string, recipient int64, recipientRole, customerName, pushName string, extra map[string]any) error {
 	channel := "sms"
 	template := s.cfg.SMSTemplateConsultant
 	if recipientRole == "manager" {
@@ -279,7 +302,7 @@ func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, 
 		return fmt.Errorf("check push event exists: %w", err)
 	}
 	if exists {
-		s.log.Info("DRY RUN push: event already exists, skip",
+		s.log.Info("push: event already exists, skip",
 			"recording_id", recordingID, "recipient", recipient, "recipient_role", recipientRole)
 		return nil
 	}
@@ -312,14 +335,28 @@ func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, 
 		RETURNING id
 	`, tenantID, recordingID, version, recipient, channel, template, code, string(raw)).Scan(&eventID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.log.Info("push: event already exists (insert race), skip",
+				"recording_id", recordingID, "recipient", recipient)
+			return nil
+		}
 		return fmt.Errorf("insert push event: %w", err)
 	}
 
-	// 按开关决定是否真实发送（enabled && !dry_run && 白名单内）；否则保持 dry_run。
+	// 事件生成后立即尝试 Expo 推送；无 token 静默跳过，发送失败只记录，不阻断分析。
+	s.sendExpoForEvent(ctx, expoPushEvent{
+		EventID:             eventID,
+		TenantID:            tenantID,
+		RecordingID:         recordingID,
+		RecipientEmployeeID: recipient,
+		RecipientRole:       recipientRole,
+		CustomerName:        pushName,
+	})
+
+	// 短信按开关决定是否真实发送（enabled && !dry_run && 白名单内）；否则保持 dry_run。
 	s.tryAutoSend(ctx, eventID, recipient)
 
-	// 干跑日志：只记录摘要；真实发送只在白名单内触发。
-	s.log.Info("DRY RUN push",
+	s.log.Info("push event created",
 		"tenant_id", tenantID,
 		"recording_id", recordingID,
 		"analysis_version", version,
@@ -432,7 +469,7 @@ func (s *Service) ListEvents(ctx context.Context, tenantID, recordingID int64) (
 	query := `
 		SELECT id, tenant_id, recording_id, analysis_version, recipient_employee_id,
 		       channel, template_code, short_code, payload, status, error,
-		       created_at, sent_at, read_at, handled_at
+		       expo_status, expo_error, created_at, sent_at, read_at, handled_at, expo_sent_at
 		FROM deal_push_events
 		WHERE tenant_id = $1`
 	args := []any{tenantID}
@@ -451,7 +488,7 @@ func (s *Service) ListEvents(ctx context.Context, tenantID, recordingID int64) (
 		var item PushEvent
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.RecordingID, &item.AnalysisVersion, &item.RecipientEmployeeID,
 			&item.Channel, &item.TemplateCode, &item.ShortCode, &item.Payload, &item.Status, &item.Error,
-			&item.CreatedAt, &item.SentAt, &item.ReadAt, &item.HandledAt); err != nil {
+			&item.ExpoStatus, &item.ExpoError, &item.CreatedAt, &item.SentAt, &item.ReadAt, &item.HandledAt, &item.ExpoSentAt); err != nil {
 			return nil, fmt.Errorf("scan push event: %w", err)
 		}
 		items = append(items, &item)

@@ -87,17 +87,21 @@ type DealConfig struct {
 }
 
 // DealPushConfig 分析完成后的实时推送配置。
-// 当前阶段只干跑（只记录事件与短链，不发送短信/企微）；真实发送待产品确认后打开 enabled。
+// 短信按 enabled/dry_run/白名单干跑或真实发送；Expo App 推送在事件生成后直接发送，
+// 无需密钥，token 失效时只标记设备，不阻断分析。
 type DealPushConfig struct {
 	Enabled               bool     `toml:"enabled"`
 	DryRun                *bool    `toml:"dry_run"`
 	Whitelist             []string `toml:"whitelist"`
-	H5BaseURL             string `toml:"h5_base_url"`
-	ShortLinkBase         string `toml:"short_link_base"`
-	SMSSignName           string `toml:"sms_sign_name"`
-	SMSTemplateConsultant string `toml:"sms_template_consultant"`
-	SMSTemplateManager    string `toml:"sms_template_manager"`
-	SMSTemplateFallback   string `toml:"sms_template_fallback"`
+	H5BaseURL             string   `toml:"h5_base_url"`
+	ShortLinkBase         string   `toml:"short_link_base"`
+	SMSSignName           string   `toml:"sms_sign_name"`
+	SMSTemplateConsultant string   `toml:"sms_template_consultant"`
+	SMSTemplateManager    string   `toml:"sms_template_manager"`
+	SMSTemplateFallback   string   `toml:"sms_template_fallback"`
+	// ExpoAccessToken 是 Expo Push 的可选 access token；留空表示不使用鉴权头。
+	// Expo Push API 本身不需要密钥，只有启用 Enhanced Push Security 时才需要。
+	ExpoAccessToken string `toml:"expo_access_token"`
 }
 
 // IsDryRun 返回是否干跑：未显式配置时默认 true，保证绝不真实发送。
