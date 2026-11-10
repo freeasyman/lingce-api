@@ -66,12 +66,14 @@
 
 | # | 任务 | 目标 | 改动点 | 验收 | 依赖 | 估时 |
 |---|---|---|---|---|---|---|
+| D0 | 内部扣量接口（跨进程） | worker 与 api 都能扣量 | `POST /internal/v1/billing/deduct`（AuthMode=internal）：入参 tenant/product/unit/amount/idempotency_key，内部转调 D1；api 同进程模块直接调 D1 函数 | worker 调接口能扣成功；重复调用幂等 | A3 | 0.5d |
 | D1 | 扣量服务（内部） | 幂等扣量+行锁防超扣 | `internal/billing/deduct.go`：入参(tenant, product, unit, amount, idempotency_key)；事务：查余额→按顺序扣(rollover→trial→official)→写 usage ledger→更新 balance；余额不足返回"额度不足"；**返回本次扣量明细（各 unit 扣了多少）供交付接口透传给前端** | 并发重复扣只扣一次；余额不足不超扣；返回明细与 ledger 一致 | A3 | 2d |
-| D2 | 交付判定接入（六产品） | 每个产品交付成功点挂扣量 | 各模块交付成功处调用 D1：病历草稿生成(emrrecord)、完整质控(emrquality, ActionComplete 且未复用)、成交分析(deal)、随访(followup)、合规检查(compliance)、截图解读/专项建议/经营方案(客户总监)、洞察/AI诊断/文稿/图片(获客) | 每类交付成功扣一次，量符合《销售速查》计量例子 | D1 | 3d |
+| D2 | 交付判定接入（六产品） | 每个产品交付成功点挂扣量 | **api 内**：病历草稿生成(emrrecord)、完整质控(emrquality, ActionComplete 且未复用)、截图解读/专项建议/经营方案(patientops)、合规检查(complianceguard)、文稿/图片/AI诊断(content)；**worker 侧**：成交分析(dealexpert)、随访分析(followup) → 分析成功后调 D0 | 每类交付成功扣一次，量符合《销售速查》计量例子 | D1 | 3d |
+| D2.1 | 幂等键规范 | 统一防重 | 统一 `<模块>:<业务对象>:<交付类型>`，例：`emr:record:12345:draft`、`emr:record:12345:quality`、`deal:recording:67890:analysis`、`patientops:screenshot:333:review`、`content:article:444:deliver` | 同一键重复调用只扣一次 | D1 | 0.5d |
 | D3 | 病历质控特例 | 提交新跑扣 1 轮、复用不扣 | emrrecord Submit 里：ReusableReport 分支不扣；新跑 Evaluate 后扣 1 轮；保存级不扣 | 提交复用 QualityRunID 不重复扣轮次 | D1 | 1d |
 | D4 | 阈值拦截 | 80% 提醒、100% 暂停 | 扣量后检查：≤20% 记提醒(站内)；=0 时对应产品交付入口返回"额度已用完"；进行中任务跑完 | 余额 0 后新交付被拒，提醒可见 | D2 | 1d |
 
-**阶段 D 小计：7d**
+**阶段 D 小计：8d**
 
 ### 阶段 E：赠送、续费与到期
 
@@ -93,7 +95,7 @@
 
 **阶段 F 小计：2d**
 
-**后端合计：约 23 人日**
+**后端合计：约 24 人日**
 
 ---
 
