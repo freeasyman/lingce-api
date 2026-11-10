@@ -232,12 +232,8 @@ func (s *Store) ActivateOrder(ctx context.Context, input ActivateOrderInput) (Or
 	}
 
 	// 锁租户行，串行化同一租户的首次开通，避免两个订单并发时各插一条服务期。
-	var lockedTenantID int64
-	if err := tx.QueryRow(ctx, `SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&lockedTenantID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Order{}, ServicePeriod{}, fmt.Errorf("tenant %d not found", tenantID)
-		}
-		return Order{}, ServicePeriod{}, fmt.Errorf("lock tenant for activation: %w", err)
+	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
+		return Order{}, ServicePeriod{}, err
 	}
 
 	period, err := ensureServicePeriod(ctx, tx, tenantID)
@@ -280,6 +276,19 @@ func (s *Store) ActivateOrder(ctx context.Context, input ActivateOrderInput) (Or
 		return Order{}, ServicePeriod{}, fmt.Errorf("commit activate order transaction: %w", err)
 	}
 	return order, period, nil
+}
+
+// lockTenantRow 锁住租户行：开通、续费与每日到期处理都先拿这把锁，
+// 保证同一租户的服务期与额度变更串行执行（不会出现"续费的同时被到期任务清零"）。
+func lockTenantRow(ctx context.Context, tx pgx.Tx, tenantID int64) error {
+	var lockedTenantID int64
+	if err := tx.QueryRow(ctx, `SELECT id FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&lockedTenantID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("tenant %d not found: %w", tenantID, pgx.ErrNoRows)
+		}
+		return fmt.Errorf("lock tenant: %w", err)
+	}
+	return nil
 }
 
 // ensureServicePeriod 读回租户统一服务期；没有订阅时按"今天起 12 个月 - 1 天"新建一条。

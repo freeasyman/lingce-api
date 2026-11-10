@@ -13,6 +13,9 @@ import (
 // 金额在 service 层用"分"整数加总：total_amount = Σ price，payable_amount = total_amount；
 // order_type=gift 时两者强制为 0（行金额仍保留，用于展示"相当于 X 元"）。
 // price 缺省的 item 从 product_catalog 带出：increment 订单用增量包价，其余用年价。
+//
+// E1 赠送规则：gift 行的数额度必须能按价目表 increments 反推出正整数包数，
+// 行金额强制改写成"包数 × increment_price"（相当于多少元）；包数 > 1 时必须记 approved_by。
 func (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (Order, error) {
 	draft, err := req.normalize()
 	if err != nil {
@@ -30,13 +33,37 @@ func (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (Orde
 
 	priceVersion := draft.PriceListVersion
 	totalCents := int64(0)
+	giftNeedsApproval := false
 	for index := range draft.Items {
 		item := &draft.Items[index]
 		catalogItem, found := catalogIndex[catalogKey(item.ProductCode, item.Edition)]
 		if found && priceVersion == "" && comparePriceVersion(catalogItem.PriceVersion, priceVersion) > 0 {
 			priceVersion = catalogItem.PriceVersion
 		}
-		if item.Price == "" {
+		if draft.OrderType == OrderTypeGift {
+			// 赠送：从 items.quotas 反推包数，再按价目表增量包价算"相当于多少元"。
+			// 这里必须能命中价目表（否则无法校验包数与审批），所以不能缺省行金额。
+			if !found {
+				return Order{}, invalidItemsf("items[%d]: product %s edition %s not found in price list %q",
+					index, item.ProductCode, item.Edition, draft.PriceListVersion)
+			}
+			increments, err := parseGiftIncrements(catalogItem)
+			if err != nil {
+				return Order{}, invalidItemsf("items[%d]: %s", index, err)
+			}
+			packs, err := giftPacks(item.Quotas, increments)
+			if err != nil {
+				return Order{}, invalidItemsf("items[%d]: %s", index, err)
+			}
+			if packs > maxGiftPacksWithoutApproval {
+				giftNeedsApproval = true
+			}
+			cents, err := giftEquivalentCents(catalogItem, packs)
+			if err != nil {
+				return Order{}, invalidItemsf("items[%d]: %s", index, err)
+			}
+			item.Price = centsToDecimal(cents)
+		} else if item.Price == "" {
 			if !found {
 				return Order{}, invalidItemsf("items[%d]: product %s edition %s not found in price list %q",
 					index, item.ProductCode, item.Edition, draft.PriceListVersion)
@@ -61,6 +88,10 @@ func (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (Orde
 		totalCents += cents
 	}
 	if draft.OrderType == OrderTypeGift {
+		// > 1 个增量包必须老板点头：没有 approved_by 直接拒绝，避免运营绕过审批挂大额赠送。
+		if giftNeedsApproval && draft.ApprovedBy == nil {
+			return Order{}, ErrGiftApprovalRequired
+		}
 		totalCents = 0
 	}
 
@@ -195,60 +226,6 @@ func (s *Service) SettleOrder(ctx context.Context, orderID int64, req SettleOrde
 	return settled, nil
 }
 
-// ActivateOrder 开通订单（C3）：先抢订单行，再建服务期、发额度、写流水，全在一个事务里。
-//
-// 幂等的关键：service 只做前置校验，真正的"只能开通一次"由 store 事务里的
-// UPDATE ... WHERE activated_at IS NULL AND status IN (...) 保证；影响 0 行即返回冲突，
-// 绝不重复发额度。开通成功后返回该租户最新额度（复用 ListEntitlements）。
-func (s *Service) ActivateOrder(ctx context.Context, orderID, adminID int64) (*ActivationResult, error) {
-	if orderID <= 0 {
-		return nil, invalidf("order id is required")
-	}
-	if adminID <= 0 {
-		return nil, invalidf("activated_by is required")
-	}
-
-	order, err := s.repo.GetOrder(ctx, orderID)
-	if err != nil {
-		return nil, mapOrderError(err, "get order")
-	}
-	if order.ActivatedAt != nil {
-		return nil, ErrOrderAlreadyActivated
-	}
-	allowedStatuses := allowedActivationStatuses(order.OrderType)
-	if !containsString(allowedStatuses, order.Status) {
-		return nil, ErrOrderStatusInvalid
-	}
-	grants, err := order.GrantLines()
-	if err != nil {
-		return nil, err
-	}
-	source, reason := activationLedgerMeta(order)
-
-	activated, period, err := s.repo.ActivateOrder(ctx, ActivateOrderInput{
-		OrderID:         order.ID,
-		ActorID:         adminID,
-		Operator:        s.resolveOperator(ctx, adminID),
-		AllowedStatuses: allowedStatuses,
-		Grants:          grants,
-		LedgerSource:    source,
-		Reason:          reason,
-	})
-	if err != nil {
-		return nil, mapOrderError(err, "activate order")
-	}
-
-	entitlements, err := s.ListEntitlements(ctx, activated.TenantID, "", false)
-	if err != nil {
-		return nil, err
-	}
-	return &ActivationResult{
-		Order:         activated,
-		ServicePeriod: &period,
-		Entitlements:  entitlements,
-	}, nil
-}
-
 // RefundOrder 做开通前全额退款（C4）：只有 settled 且未开通的订单能退；
 // 已开通返回 ORDER_ALREADY_ACTIVATED，其余状态返回 ORDER_STATUS_INVALID。
 func (s *Service) RefundOrder(ctx context.Context, orderID, adminID int64) (Order, error) {
@@ -334,6 +311,7 @@ func mapOrderError(err error, action string) error {
 		ErrOrderAmountMismatch,
 		ErrOrderAlreadyActivated,
 		ErrOrderStatusInvalid,
+		ErrNoSubscription,
 	} {
 		if errors.Is(err, known) {
 			return known

@@ -308,8 +308,10 @@ func TestCreateOrderForcesGiftAmountsToZero(t *testing.T) {
 	if order.TotalAmount != Decimal("0.00") || order.PayableAmount != Decimal("0.00") {
 		t.Fatalf("gift order amounts must be forced to 0, got total=%s payable=%s", order.TotalAmount, order.PayableAmount)
 	}
-	if len(order.Items) != 1 || order.Items[0].Price != Decimal("21600.00") {
-		t.Fatalf("gift item should keep its equivalent price, got %+v", order.Items)
+	// E1 起赠送行金额改写为"包数 × increment_price"（500 份 = 1 个增量包 × 2500 元），
+	// 不再沿用年价；总额仍强制为 0。
+	if len(order.Items) != 1 || order.Items[0].Price != Decimal("2500.00") {
+		t.Fatalf("gift item should keep its equivalent price (1 pack × 2500.00), got %+v", order.Items)
 	}
 	if order.Reason != "老板同意补 500 份" {
 		t.Fatalf("reason not trimmed: %q", order.Reason)

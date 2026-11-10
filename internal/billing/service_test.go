@@ -81,6 +81,20 @@ type fakeRepository struct {
 	recomputeCalls   int
 	commitCalls      int
 	rollbackCalls    int
+
+	// 阶段 E：续费结转与到期处理。subscriptions 模拟 tenant_subscriptions，
+	// entitlementsByTenant 模拟按租户分组的 product_entitlements；
+	// renewLedger/expireLedger 记录写出的流水，供"流水与余额一致"的断言。
+	subscriptions        map[int64]fakeSubscription
+	entitlementsByTenant map[int64][]Entitlement
+	renewInput           RenewOrderInput
+	renewCalls           int
+	renewErr             error
+	renewLedger          []fakeLedgerWrite
+	expireListCalls      int
+	expireCalls          []int64
+	expireErr            error
+	expireLedger         []fakeLedgerWrite
 }
 
 func (f *fakeRepository) ListCatalog(_ context.Context, filter CatalogFilter) ([]CatalogItem, error) {
@@ -103,6 +117,9 @@ func (f *fakeRepository) ListEntitlements(_ context.Context, tenantID int64, pro
 	f.entitlementTenantID = tenantID
 	f.entitlementProduct = product
 	f.entitlementIncludeZero = includeZero
+	if rows, ok := f.entitlementsByTenant[tenantID]; ok {
+		return cloneEntitlements(rows), f.entitlementErr
+	}
 	return f.entitlementItems, f.entitlementErr
 }
 

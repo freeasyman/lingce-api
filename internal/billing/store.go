@@ -31,6 +31,11 @@ type Repository interface {
 
 	// 阶段 D：扣量。BeginDeduct 开启一个事务，后续锁行/流水/更新/读回都在同事务内完成。
 	BeginDeduct(ctx context.Context) (DeductTx, error)
+
+	// 阶段 E：续费结转（activate mode=renew）与每日到期处理。
+	RenewOrder(ctx context.Context, input RenewOrderInput) (Order, ServicePeriod, error)
+	ListExpiringTenantIDs(ctx context.Context, today string) ([]int64, error)
+	ExpireTenant(ctx context.Context, tenantID int64, today string) (int, error)
 }
 
 // Store 是 Repository 的 pgx 实现：读价目表/额度/流水，写订单、服务期、额度与流水。

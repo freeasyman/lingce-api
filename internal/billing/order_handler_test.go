@@ -43,6 +43,7 @@ func TestOpsOrderRoutesRequireAdmin(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/ops/orders", `{}`},
 		{http.MethodGet, "/api/v1/ops/orders", ""},
+		{http.MethodPost, "/api/v1/ops/orders/gift/preview", `{}`},
 		{http.MethodGet, "/api/v1/ops/orders/1", ""},
 		{http.MethodPost, "/api/v1/ops/orders/1/settle", `{"paid_amount":0}`},
 		{http.MethodPost, "/api/v1/ops/orders/1/activate", ""},

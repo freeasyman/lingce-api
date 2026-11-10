@@ -1,7 +1,9 @@
 package billing
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,3 +23,12 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken str
 
 // Service 暴露服务层，供同进程其他模块（如 D 阶段扣量前查余额）直接调用。
 func (m *Module) Service() *Service { return m.handler.service }
+
+// StartExpiryWorker 启动每日到期处理（E3）：启动先跑一次，之后每天一次。
+// 仓库没有统一调度器，由 main.go 以 goroutine 方式调用。
+func (m *Module) StartExpiryWorker(ctx context.Context, interval time.Duration) {
+	if m == nil || m.handler == nil || m.handler.service == nil {
+		return
+	}
+	m.handler.service.StartExpiryWorker(ctx, interval)
+}

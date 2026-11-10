@@ -200,6 +200,10 @@ func writeBillingError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "ORDER_ALREADY_ACTIVATED", "订单已开通，不能重复开通", nil)
 	case errors.Is(err, ErrOrderStatusInvalid):
 		httputil.WriteError(w, http.StatusConflict, "ORDER_STATUS_INVALID", "订单当前状态不允许该操作", nil)
+	case errors.Is(err, ErrGiftApprovalRequired):
+		httputil.WriteError(w, http.StatusBadRequest, "GIFT_APPROVAL_REQUIRED", "赠送超过 1 个增量包，需要老板审批", nil)
+	case errors.Is(err, ErrNoSubscription):
+		httputil.WriteError(w, http.StatusConflict, "NO_SUBSCRIPTION", "租户尚未开通服务期，请先开通后再续费", nil)
 	case errors.Is(err, ErrCatalogVersionExists):
 		httputil.WriteError(w, http.StatusConflict, "CATALOG_VERSION_EXISTS", "该产品档位的价目版本已存在，请使用新的 price_version", nil)
 	default:
