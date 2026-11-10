@@ -39,6 +39,15 @@ type fakeRepository struct {
 	ledgerCalls int
 	ledgerErr   error
 
+	// 阶段 F：流水 CSV 导出。exportRows 模拟 entitlement_ledger JOIN product_catalog 的结果；
+	// exportFillLimit 让 fake 直接返回 limit 行，用来触发"超过上限"的 400。
+	exportRows      []LedgerExportRow
+	exportErr       error
+	exportFillLimit bool
+	exportCalls     int
+	exportQuery     LedgerQuery
+	exportLimit     int
+
 	// 阶段 C：订单状态。orders 模拟 billing_orders 表，方法按真实 store 的约束改它，
 	// 这样"激活一次后不能再激活/退款"这类规则在 service 单测里也能被验证。
 	orders            map[int64]Order

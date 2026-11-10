@@ -105,21 +105,10 @@ func (s *Service) GetServicePeriod(ctx context.Context, tenantID int64) (*Servic
 
 // ListLedger 分页查询额度流水。page/page_size 越界时按约定收敛，不做报错。
 func (s *Service) ListLedger(ctx context.Context, query LedgerQuery) (*LedgerPage, error) {
-	if query.TenantID <= 0 {
-		return nil, invalidf("tenant_id is required")
+	query, err := normalizeLedgerFilters(query)
+	if err != nil {
+		return nil, err
 	}
-	query.Product = strings.TrimSpace(query.Product)
-	if len(query.Product) > 32 {
-		return nil, invalidf("product must be at most 32 characters")
-	}
-	query.Unit = strings.ToLower(strings.TrimSpace(query.Unit))
-	if query.Unit != "" && !IsValidUnit(query.Unit) {
-		return nil, invalidf("unit must be one of %s", strings.Join(Units, "/"))
-	}
-	if query.From != nil && query.To != nil && query.From.After(*query.To) {
-		return nil, invalidf("from must not be after to")
-	}
-	query = NormalizeLedgerQuery(query)
 
 	items, total, err := s.repo.ListLedger(ctx, query)
 	if err != nil {
@@ -134,6 +123,28 @@ func (s *Service) ListLedger(ctx context.Context, query LedgerQuery) (*LedgerPag
 		Page:     query.Page,
 		PageSize: query.PageSize,
 	}, nil
+}
+
+// normalizeLedgerFilters 校验并归一化流水过滤条件（分页查询与 CSV 导出共用）。
+//
+// tenant_id 必填；product/unit 归一化后再校验枚举；from 不能晚于 to；
+// 分页参数统一按 NormalizeLedgerQuery 收敛（导出不使用分页，收敛结果无副作用）。
+func normalizeLedgerFilters(query LedgerQuery) (LedgerQuery, error) {
+	if query.TenantID <= 0 {
+		return LedgerQuery{}, invalidf("tenant_id is required")
+	}
+	query.Product = strings.TrimSpace(query.Product)
+	if len(query.Product) > 32 {
+		return LedgerQuery{}, invalidf("product must be at most 32 characters")
+	}
+	query.Unit = strings.ToLower(strings.TrimSpace(query.Unit))
+	if query.Unit != "" && !IsValidUnit(query.Unit) {
+		return LedgerQuery{}, invalidf("unit must be one of %s", strings.Join(Units, "/"))
+	}
+	if query.From != nil && query.To != nil && query.From.After(*query.To) {
+		return LedgerQuery{}, invalidf("from must not be after to")
+	}
+	return NormalizeLedgerQuery(query), nil
 }
 
 // latestCatalogVersions 在每个 product+edition 内只保留 price_version 最大的一行。

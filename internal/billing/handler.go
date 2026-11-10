@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/ops/billing/catalog", Handler: h.CreateCatalogVersion, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/tenants/{id}/entitlements", Handler: h.ListEntitlements, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/tenants/{id}/entitlement-ledger", Handler: h.ListLedger, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 流水导出是运营对账用途（可跨租户、一次最多 10 万行），只给 admin。
+		{Method: "GET", Path: "/api/v1/ops/entitlement-ledger/export", Handler: h.ExportLedger, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	routes = append(routes, h.orderRoutes()...)
 	routes = append(routes, h.internalRoutes()...)
@@ -107,6 +110,54 @@ func (h *Handler) ListLedger(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ledgerQuery, err := parseLedgerQuery(r, tenantID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	page, err := h.service.ListLedger(r.Context(), ledgerQuery)
+	if err != nil {
+		writeBillingError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, page)
+}
+
+// ExportLedger 导出额度流水 CSV（F2，运营端 admin）。
+//
+// 过滤参数与分页查询完全一致（tenant_id 从 query 取，因为导出是运营跨租户对账），
+// 响应是 attachment + UTF-8 BOM 的 CSV；超过 MaxLedgerExportRows 行返回 400 提示收窄时间范围。
+func (h *Handler) ExportLedger(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := parseTenantIDQuery(r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	ledgerQuery, err := parseLedgerQuery(r, tenantID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	export, err := h.service.ExportLedger(r.Context(), ledgerQuery)
+	if err != nil {
+		writeBillingError(w, err)
+		return
+	}
+
+	// 行数已在 service 校验过，这里只写数据；CSV 一旦开始写就没法再改成 JSON 错误，
+	// 写失败（通常是客户端断开）只记日志，不额外污染响应。
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", export.Filename))
+	if err := writeLedgerCSV(w, export.Rows); err != nil {
+		slog.Error("write billing ledger csv", "error", err, "tenant_id", tenantID)
+	}
+}
+
+// parseLedgerQuery 解析流水过滤参数，列表查询与 CSV 导出共用同一套语义：
+// product/unit/from/to 直接透传，from/to 支持 RFC3339 或 YYYY-MM-DD。
+func parseLedgerQuery(r *http.Request, tenantID int64) (LedgerQuery, error) {
 	query := r.URL.Query()
 	ledgerQuery := LedgerQuery{
 		TenantID: tenantID,
@@ -117,22 +168,23 @@ func (h *Handler) ListLedger(w http.ResponseWriter, r *http.Request) {
 	}
 	from, err := parseTimeQuery("from", query.Get("from"))
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
+		return LedgerQuery{}, err
 	}
 	to, err := parseTimeQuery("to", query.Get("to"))
 	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
+		return LedgerQuery{}, err
 	}
 	ledgerQuery.From, ledgerQuery.To = from, to
+	return ledgerQuery, nil
+}
 
-	page, err := h.service.ListLedger(r.Context(), ledgerQuery)
-	if err != nil {
-		writeBillingError(w, err)
-		return
+// parseTenantIDQuery 解析导出接口的 tenant_id 查询参数（必填正整数）。
+func parseTenantIDQuery(raw string) (int64, error) {
+	tenantID, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || tenantID <= 0 {
+		return 0, invalidf("tenant_id must be a positive integer")
 	}
-	httputil.WriteSuccess(w, page)
+	return tenantID, nil
 }
 
 // requireTenantAccess 校验调用者有权访问路径里的租户。

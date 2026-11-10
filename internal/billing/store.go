@@ -19,6 +19,8 @@ type Repository interface {
 	ListEntitlements(ctx context.Context, tenantID int64, product string, includeZero bool) ([]Entitlement, error)
 	GetServicePeriod(ctx context.Context, tenantID int64) (*ServicePeriod, error)
 	ListLedger(ctx context.Context, query LedgerQuery) ([]LedgerEntry, int64, error)
+	// ListLedgerForExport 按同一套过滤条件取导出用的流水（含价目表产品名），最多 limit 行。
+	ListLedgerForExport(ctx context.Context, query LedgerQuery, limit int) ([]LedgerExportRow, error)
 
 	// 阶段 C：订单录入、回款确认、开通与退款。
 	InsertOrder(ctx context.Context, input CreateOrderInput) (Order, error)
@@ -242,29 +244,36 @@ func (s *Store) GetServicePeriod(ctx context.Context, tenantID int64) (*ServiceP
 // ledgerColumns 是流水查询的公共列，金额转 text 保留 decimal 精度。
 const ledgerColumns = `id, product_code, unit, type, amount::text, source, reason, linked_order_id, operator, created_at`
 
+// ledgerConditions 把流水的过滤条件编译成 WHERE 子句与参数，分页查询与 CSV 导出共用同一套语义。
+//
+// prefix 是列前缀（导出要 JOIN 价目表取 product_name，用来消除列名歧义；分页查询传空串）。
+func ledgerConditions(query LedgerQuery, prefix string) (string, []any) {
+	conditions := []string{prefix + "tenant_id = $1"}
+	args := []any{query.TenantID}
+	if query.Product != "" {
+		args = append(args, query.Product)
+		conditions = append(conditions, fmt.Sprintf("%sproduct_code = $%d", prefix, len(args)))
+	}
+	if query.Unit != "" {
+		args = append(args, query.Unit)
+		conditions = append(conditions, fmt.Sprintf("%sunit = $%d", prefix, len(args)))
+	}
+	if query.From != nil {
+		args = append(args, query.From.UTC())
+		conditions = append(conditions, fmt.Sprintf("%screated_at >= $%d", prefix, len(args)))
+	}
+	if query.To != nil {
+		args = append(args, query.To.UTC())
+		conditions = append(conditions, fmt.Sprintf("%screated_at <= $%d", prefix, len(args)))
+	}
+	return strings.Join(conditions, " AND "), args
+}
+
 // ListLedger 分页查询额度流水，返回当页数据与总条数。
 func (s *Store) ListLedger(ctx context.Context, query LedgerQuery) ([]LedgerEntry, int64, error) {
 	query = NormalizeLedgerQuery(query)
 
-	conditions := []string{"tenant_id = $1"}
-	args := []any{query.TenantID}
-	if query.Product != "" {
-		args = append(args, query.Product)
-		conditions = append(conditions, fmt.Sprintf("product_code = $%d", len(args)))
-	}
-	if query.Unit != "" {
-		args = append(args, query.Unit)
-		conditions = append(conditions, fmt.Sprintf("unit = $%d", len(args)))
-	}
-	if query.From != nil {
-		args = append(args, query.From.UTC())
-		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", len(args)))
-	}
-	if query.To != nil {
-		args = append(args, query.To.UTC())
-		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", len(args)))
-	}
-	where := strings.Join(conditions, " AND ")
+	where, args := ledgerConditions(query, "")
 
 	var total int64
 	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM entitlement_ledger WHERE "+where, args...).Scan(&total); err != nil {
@@ -311,6 +320,80 @@ LIMIT $%d OFFSET $%d`, ledgerColumns, where, len(args)+1, len(args)+2)
 		return nil, 0, fmt.Errorf("iterate entitlement ledger: %w", err)
 	}
 	return items, total, nil
+}
+
+// listLedgerForExportSQL 取导出用的流水，并补上价目表里的产品名。
+// 产品名口径与额度查询一致：同产品任意一条非空名字，按 price_version 倒序取最新。
+const listLedgerForExportSQL = `
+SELECT l.tenant_id,
+       l.product_code,
+       COALESCE(pc.product_name, ''),
+       l.unit,
+       l.type,
+       l.amount::text,
+       l.source,
+       l.reason,
+       l.linked_order_id,
+       l.operator,
+       l.created_at
+FROM entitlement_ledger l
+LEFT JOIN LATERAL (
+    SELECT c.product_name
+      FROM product_catalog c
+     WHERE c.product_code = l.product_code
+       AND c.product_name <> ''
+     ORDER BY c.price_version DESC, c.id DESC
+     LIMIT 1
+) pc ON TRUE
+WHERE %s
+ORDER BY l.created_at DESC, l.id DESC
+LIMIT $%d`
+
+// ListLedgerForExport 按与分页查询相同的过滤条件取导出流水，最多 limit 行。
+//
+// limit 由 service 传 MaxLedgerExportRows+1：多取一行用来判断"是否超限"，
+// 避免为了报错再跑一次 COUNT(*)。
+func (s *Store) ListLedgerForExport(ctx context.Context, query LedgerQuery, limit int) ([]LedgerExportRow, error) {
+	if limit <= 0 {
+		limit = MaxLedgerExportRows + 1
+	}
+	where, args := ledgerConditions(query, "l.")
+	args = append(args, int64(limit))
+
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(listLedgerForExportSQL, where, len(args)), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query entitlement ledger for export: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]LedgerExportRow, 0, min(limit, 1024))
+	for rows.Next() {
+		var (
+			item   LedgerExportRow
+			amount string
+		)
+		if err := rows.Scan(
+			&item.TenantID,
+			&item.ProductCode,
+			&item.ProductName,
+			&item.Unit,
+			&item.Type,
+			&amount,
+			&item.Source,
+			&item.Reason,
+			&item.LinkedOrderID,
+			&item.Operator,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan entitlement ledger for export: %w", err)
+		}
+		item.Amount = Decimal(amount)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate entitlement ledger for export: %w", err)
+	}
+	return items, nil
 }
 
 // scanCatalogItem 统一解析价目表一行（Query 与 QueryRow 共用）。
