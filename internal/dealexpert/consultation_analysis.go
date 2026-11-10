@@ -74,6 +74,10 @@ type ConsultationAnalysisGenerator struct {
 	llm  *llmgateway.Client
 	log  *slog.Logger
 	push PushNotifier
+	// billing 是计费能力（nil 表示未接入）：调模型前做额度软闸门，分析落库后扣 hour。
+	billing billingService
+	// lookupRecordingDuration 是录音时长查询的单测注入点；nil 时走 pool。
+	lookupRecordingDuration func(ctx context.Context, tenantID, recordingID int64) (int64, error)
 }
 
 func NewConsultationAnalysisGenerator(pool *pgxpool.Pool, llm *llmgateway.Client, log *slog.Logger) *ConsultationAnalysisGenerator {
@@ -141,37 +145,44 @@ func (g *ConsultationAnalysisGenerator) Generate(ctx context.Context, tenantID, 
 	systemPrompt := replacer.Replace(prompt.SystemPrompt)
 
 	cfg := g.loadModelConfig(ctx, tenantID)
-	resp, err := g.llm.TextInference(ctx, llmgateway.TextInferenceRequest{
-		TenantID:      tenantID,
-		CallerService: "lingce-api",
-		CallerModule:  "deal-expert.consultation-analysis",
-		TraceID:       fmt.Sprintf("deal-consultation-analysis-%d", recordingID),
-		FunctionType:  cfg.functionType,
-		Provider:      cfg.provider,
-		ModelCode:     cfg.modelCode,
-		Messages: []llmgateway.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		Params: &llmgateway.Params{Temperature: 0.2, MaxTokens: 3000, TimeoutSeconds: 180, ResponseFormat: "json"},
+	// 调模型前先过额度软闸门：额度不足时不调模型、不扣量，把分析记录置为 failed。
+	resp, err := g.callLLMWithQuotaGate(ctx, tenantID, recordingID, func() (*llmgateway.TextInferenceResponse, error) {
+		return g.llm.TextInference(ctx, llmgateway.TextInferenceRequest{
+			TenantID:      tenantID,
+			CallerService: "lingce-api",
+			CallerModule:  "deal-expert.consultation-analysis",
+			TraceID:       fmt.Sprintf("deal-consultation-analysis-%d", recordingID),
+			FunctionType:  cfg.functionType,
+			Provider:      cfg.provider,
+			ModelCode:     cfg.modelCode,
+			Messages: []llmgateway.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+			Params: &llmgateway.Params{Temperature: 0.2, MaxTokens: 3000, TimeoutSeconds: 180, ResponseFormat: "json"},
+		})
 	})
 	if err != nil {
-		g.save(ctx, tenantID, recordingID, "failed", nil, err.Error(), cfg.modelCode, prompt.Version)
+		_ = g.save(ctx, tenantID, recordingID, "failed", nil, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
 	match := consultationJSONFence.FindString(strings.TrimSpace(resp.Content))
 	var analysis map[string]any
 	if match == "" || json.Unmarshal([]byte(match), &analysis) != nil {
-		g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode, prompt.Version)
+		_ = g.save(ctx, tenantID, recordingID, "failed", nil, "invalid json output", cfg.modelCode, prompt.Version)
 		return nil, fmt.Errorf("invalid json output")
 	}
 	analysis["prompt_version"] = prompt.Version
 	if err := g.validate(analysis); err != nil {
-		g.save(ctx, tenantID, recordingID, "failed", analysis, err.Error(), cfg.modelCode, prompt.Version)
+		_ = g.save(ctx, tenantID, recordingID, "failed", analysis, err.Error(), cfg.modelCode, prompt.Version)
 		return nil, err
 	}
 	sanitizeSalesTasks(analysis)
-	g.save(ctx, tenantID, recordingID, "analyzed", analysis, "", cfg.modelCode, prompt.Version)
+	if err := g.save(ctx, tenantID, recordingID, "analyzed", analysis, "", cfg.modelCode, prompt.Version); err != nil {
+		return nil, fmt.Errorf("save consultation analysis: %w", err)
+	}
+	// 成交分析已经成功落库，按录音时长扣 hour；扣量失败只告警，不回滚分析结果。
+	g.chargeAnalysis(ctx, tenantID, recordingID)
 	if err := g.rebuildSalesTasks(ctx, tenantID, recordingID, analysis); err != nil && g.log != nil {
 		g.log.Warn("rebuild sales tasks failed", "recording_id", recordingID, "error", err)
 	}
@@ -265,14 +276,14 @@ func gradeForScore(score float64) string {
 	}
 }
 
-func (g *ConsultationAnalysisGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, analysis map[string]any, errMsg, modelCode, promptVersion string) {
+func (g *ConsultationAnalysisGenerator) save(ctx context.Context, tenantID, recordingID int64, status string, analysis map[string]any, errMsg, modelCode, promptVersion string) error {
 	raw := []byte("null")
 	if analysis != nil {
 		if b, err := json.Marshal(analysis); err == nil {
 			raw = b
 		}
 	}
-	_, _ = g.pool.Exec(ctx, `
+	_, err := g.pool.Exec(ctx, `
 		INSERT INTO consultation_analyses (tenant_id, recording_id, status, analysis, error_message, model_code, prompt_version, analyzed_at)
 		VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7, CASE WHEN $3 = 'analyzed' THEN NOW() ELSE NULL END)
 		ON CONFLICT (tenant_id, recording_id)
@@ -282,6 +293,7 @@ func (g *ConsultationAnalysisGenerator) save(ctx context.Context, tenantID, reco
 			analyzed_at = CASE WHEN EXCLUDED.status = 'analyzed' THEN NOW() ELSE consultation_analyses.analyzed_at END,
 			updated_at = NOW()
 	`, tenantID, recordingID, status, raw, errMsg, modelCode, promptVersion)
+	return err
 }
 
 // UpsertPending 由内部入口先落一条 pending 记录，随后异步 Generate 覆盖。

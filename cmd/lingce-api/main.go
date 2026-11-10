@@ -523,6 +523,10 @@ func main() {
 	complianceGuardModule.UseBilling(billingModule.Service())
 	// 获客先锋接入计费：需求洞察扣 hour，AI 诊断扣 prompt，文稿 record，图片 shot。
 	contentService.UseBilling(billingModule.Service())
+	// 赢客专家接入计费：成交分析落库后扣 hour（调模型前额度软闸门）。
+	dealExpertGenerator.UseBilling(billingModule.Service())
+	// 随访顾问接入计费：随访任务落库后扣 hour（调模型前额度软闸门）。
+	followupModule.UseBilling(billingModule.Service())
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)

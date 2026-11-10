@@ -30,6 +30,10 @@ type Service struct {
 	generatedTasksPath string
 	llm                *llmgateway.Client
 	pool               *pgxpool.Pool
+	// billing 是计费能力（nil 表示未接入）：调模型前做额度软闸门，任务落库后扣 hour。
+	billing billingService
+	// lookupRecordingDuration 是录音时长查询的单测注入点；nil 时走 pool。
+	lookupRecordingDuration func(ctx context.Context, tenantID, recordingID int64) (int64, error)
 }
 
 const (
@@ -434,9 +438,17 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 			return
 		}
 	} else {
-		resp, err = s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
+		// 调模型前先过额度软闸门：额度不足时不调模型、不扣量，把本次 run 标记为失败。
+		resp, err = s.callLLMWithQuotaGate(ctx, req, func() (*llmgateway.TextInferenceResponse, error) {
+			return s.callLLM(ctx, req, prompt.SystemPrompt, userPrompt, cfg)
+		})
 		if err != nil {
 			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if errors.Is(err, ErrFollowupQuotaExhausted) {
+				_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, followupQuotaExhaustedCode, err, false)
+				failureCancel()
+				return
+			}
 			_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, classifyFollowupErrorCode(err), err, isRetryableFollowupError(err))
 			failureCancel()
 			_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, nil, err)
@@ -461,6 +473,8 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
 		return
 	}
+	// 随访任务已经成功持久化，按录音时长扣 hour；扣量失败只告警，不回滚任务。
+	s.chargeFollowupAnalysis(ctx, req.TenantID, req.RecordingID)
 	s.markRunSucceeded(ctx, run.ID, prompt.Version, cfg.ModelCode, resp, generatedPayload, taskCount)
 	completed = true
 }
