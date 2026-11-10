@@ -119,6 +119,10 @@ type PlanCandidate struct {
 	Goal    string `json:"goal,omitempty"`
 	Action  string `json:"action,omitempty"`
 	Content string `json:"content,omitempty"`
+
+	// ContentGenerated 标记该会员的方案内容由大模型真实生成成功；发布/加员落库后
+	// 按会员扣 person 1 的计费依据，回退模板的会员为 false（不扣量）。
+	ContentGenerated bool `json:"-"`
 }
 
 type PlanExcluded struct {

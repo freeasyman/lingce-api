@@ -163,6 +163,10 @@ func (h *Handler) PublishPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.PublishPlan(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
+		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+			writeQuotaExhausted(w, err)
+			return
+		}
 		var admission *PlanAdmissionError
 		if errors.As(err, &admission) {
 			httputil.WriteError(w, http.StatusUnprocessableEntity, "PLAN_ADMISSION_REQUIRED", err.Error(), admission)
@@ -197,6 +201,10 @@ func (h *Handler) AddPlanMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.AddPlanMembers(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
+		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+			writeQuotaExhausted(w, err)
+			return
+		}
 		var admission *PlanAdmissionError
 		if errors.As(err, &admission) {
 			httputil.WriteError(w, http.StatusUnprocessableEntity, "PLAN_ADMISSION_REQUIRED", err.Error(), admission)

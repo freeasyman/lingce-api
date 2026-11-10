@@ -168,35 +168,44 @@ func (s *Service) enrichPlanCandidatesWithLLM(ctx context.Context, plan *Plan, c
 			slog.Warn("plan member content parse failed, keep template", "plan_id", plan.ID, "error", err)
 			continue
 		}
-		for _, item := range parsed.Members {
-			i, ok := index[item.CustomerID]
-			if !ok {
-				continue
-			}
-			if strings.TrimSpace(item.Goal) != "" {
-				candidates[i].Goal = strings.TrimSpace(item.Goal)
-			}
-			if strings.TrimSpace(item.Action) != "" {
-				candidates[i].Action = strings.TrimSpace(item.Action)
-			}
-			if strings.TrimSpace(item.Content) != "" {
-				candidates[i].Content = ensurePlanSalutation(strings.TrimSpace(item.Content), candidates[i].Salutation)
-			}
-			if strings.TrimSpace(item.RiskMedical) != "" {
-				candidates[i].RiskMedical = strings.TrimSpace(item.RiskMedical)
-			}
-			if strings.TrimSpace(item.RiskCommercial) != "" {
-				candidates[i].RiskCommercial = strings.TrimSpace(item.RiskCommercial)
-			}
-			if strings.TrimSpace(item.ExpectedResult) != "" {
-				candidates[i].ExpectedResult = strings.TrimSpace(item.ExpectedResult)
-			}
-			if strings.TrimSpace(item.ConditionSummary) != "" {
-				candidates[i].ConditionSummary = strings.TrimSpace(item.ConditionSummary)
-			}
-		}
+		applyPlanMemberContentOutput(candidates, index, parsed)
 	}
 	return candidates
+}
+
+// applyPlanMemberContentOutput 把大模型返回的会员方案写回候选。
+//
+// 只有真正拿到了非空 content 的会员才标记 ContentGenerated：发布/加员成功落库后
+// 按会员扣 person 1，回退模板的会员不算一次内容交付，不扣量。
+func applyPlanMemberContentOutput(candidates []PlanCandidate, index map[int64]int, parsed planMemberContentOutput) {
+	for _, item := range parsed.Members {
+		i, ok := index[item.CustomerID]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(item.Goal) != "" {
+			candidates[i].Goal = strings.TrimSpace(item.Goal)
+		}
+		if strings.TrimSpace(item.Action) != "" {
+			candidates[i].Action = strings.TrimSpace(item.Action)
+		}
+		if strings.TrimSpace(item.Content) != "" {
+			candidates[i].Content = ensurePlanSalutation(strings.TrimSpace(item.Content), candidates[i].Salutation)
+			candidates[i].ContentGenerated = true
+		}
+		if strings.TrimSpace(item.RiskMedical) != "" {
+			candidates[i].RiskMedical = strings.TrimSpace(item.RiskMedical)
+		}
+		if strings.TrimSpace(item.RiskCommercial) != "" {
+			candidates[i].RiskCommercial = strings.TrimSpace(item.RiskCommercial)
+		}
+		if strings.TrimSpace(item.ExpectedResult) != "" {
+			candidates[i].ExpectedResult = strings.TrimSpace(item.ExpectedResult)
+		}
+		if strings.TrimSpace(item.ConditionSummary) != "" {
+			candidates[i].ConditionSummary = strings.TrimSpace(item.ConditionSummary)
+		}
+	}
 }
 
 func planProductSummary(candidates []PlanCandidate) string {

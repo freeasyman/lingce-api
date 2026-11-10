@@ -21,6 +21,11 @@ import (
 type Service struct {
 	pool *pgxpool.Pool
 	llm  *llmgateway.Client
+
+	// billing 是客户总监（kehu）的计费能力，未接入时为 nil（旧部署/测试）。
+	billing billingService
+	// lookupRecordingDuration 是录音时长查询的单测注入点，生产环境走 DB。
+	lookupRecordingDuration func(ctx context.Context, tenantID, recordingID int64) (int64, error)
 }
 
 var (
@@ -137,6 +142,9 @@ func (s *Service) processRecordingRun(ctx context.Context, tenantID, recordingID
 			}
 		}
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='succeeded',updated_at=NOW() WHERE id=$1`, runID)
+		// 录音分析已成功落库：按录音时长扣 hour（时长未知跳过）。worker 异步交付
+		// 不设预检闸门，扣量失败只告警，不影响已生成的分析结果。
+		s.chargeRecordingAnalysis(ctx, tenantID, recordingID)
 	} else {
 		_, _ = s.pool.Exec(ctx, `UPDATE patient_operation_recording_runs SET status='failed',error_message=$2,updated_at=NOW() WHERE id=$1`, runID, err.Error())
 	}
@@ -869,9 +877,6 @@ func (s *Service) SaveAction(ctx context.Context, tenantID, employeeID, customer
 }
 
 func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, customerID int64, req GenerateActionRequest) (*GenerateActionResponse, error) {
-	if s.pool == nil || s.llm == nil {
-		return nil, fmt.Errorf("patient operations dependencies are not configured")
-	}
 	if tenantID <= 0 || employeeID <= 0 || strings.TrimSpace(req.Action) == "" {
 		return nil, fmt.Errorf("customer and action are required")
 	}
@@ -884,6 +889,13 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 	}
 	if req.SourceID <= 0 {
 		return nil, fmt.Errorf("source_id is required")
+	}
+	// 建议动作生成入口的交付前预检：record 1 条。额度不足拒绝生成，预检故障放行。
+	if err := s.ensureQuota(ctx, tenantID, billingUnitRecord, 1); err != nil {
+		return nil, err
+	}
+	if s.pool == nil || s.llm == nil {
+		return nil, fmt.Errorf("patient operations dependencies are not configured")
 	}
 	sourceID := int64(req.SourceID)
 	var analysisRaw []byte
@@ -977,6 +989,8 @@ func (s *Service) GenerateAction(ctx context.Context, tenantID, employeeID, cust
 			return nil, fmt.Errorf("解析机构产品证据失败：%w", err)
 		}
 	}
+	// 动作生成成功：按记录 1 条建议扣量（同截图同动作由幂等键保证只扣一次）。
+	s.chargeScreenshotAction(ctx, tenantID, sourceID, req.Action)
 	return result, nil
 }
 
@@ -995,14 +1009,18 @@ func (s *Service) loadActionPrompt(ctx context.Context, action string) (*patient
 }
 
 func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRequest) (*ScreenshotAnalyzeResponse, error) {
-	if s.pool == nil || s.llm == nil {
-		return nil, fmt.Errorf("patient operations dependencies are not configured")
-	}
 	if req.TenantID <= 0 || req.EmployeeID <= 0 || strings.TrimSpace(req.ImageData) == "" {
 		return nil, fmt.Errorf("tenant_id, employee_id and image_data are required")
 	}
 	if !strings.HasPrefix(req.ImageData, "data:image/") {
 		return nil, fmt.Errorf("image_data must be a data image URL")
+	}
+	// 截图解读入口的交付前预检：shot 1 张。额度不足拒绝解读，预检故障放行。
+	if err := s.ensureQuota(ctx, req.TenantID, billingUnitShot, 1); err != nil {
+		return nil, err
+	}
+	if s.pool == nil || s.llm == nil {
+		return nil, fmt.Errorf("patient operations dependencies are not configured")
 	}
 	// A customer-context screenshot is already bound to the customer selected
 	// in the customer detail page. Validate that binding on the server instead
@@ -1205,6 +1223,9 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 	if candidates == nil {
 		candidates = []CustomerCandidate{}
 	}
+	// 截图解读已跑完 LLM 并落库（recognition_payload + 客户绑定）：扣 shot 1 张。
+	// 同一条截图重复解读由幂等键保证只扣一次；扣量失败只告警，不影响本次返回。
+	s.chargeScreenshotReview(analysisCtx, req.TenantID, sourceID)
 
 	return &ScreenshotAnalyzeResponse{SourceID: sourceID, CustomerID: boundCustomerID, Analysis: analysis, Candidates: candidates, MatchStatus: boundMatchStatus, AnalysisStatus: "succeeded"}, nil
 }

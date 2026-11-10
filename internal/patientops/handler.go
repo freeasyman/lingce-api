@@ -152,6 +152,10 @@ func (h *Handler) GenerateActionAuthenticated(w http.ResponseWriter, r *http.Req
 	}
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
 	if err != nil {
+		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+			writeQuotaExhausted(w, err)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -177,6 +181,10 @@ func (h *Handler) GenerateScreenshotActionAuthenticated(w http.ResponseWriter, r
 	req.SourceID = FlexibleInt64(sourceID)
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, 0, req)
 	if err != nil {
+		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+			writeQuotaExhausted(w, err)
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
@@ -632,6 +640,10 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req ScreenshotAnalyzeRequest) {
 	resp, err := h.service.AnalyzeScreenshot(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+			writeQuotaExhausted(w, err)
+			return
+		}
 		if errors.Is(err, ErrScreenshotCustomerConflict) {
 			httputil.WriteError(w, http.StatusConflict, "SCREENSHOT_CUSTOMER_CONFLICT", "这张截图已经关联了其他客户，请重新选择截图。", nil)
 			return

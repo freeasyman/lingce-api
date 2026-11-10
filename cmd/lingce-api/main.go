@@ -517,6 +517,8 @@ func main() {
 	// 听写病历接入计费：草稿生成扣 record+hour，提交新跑完整质控扣 round。
 	emrRecordService.UseBilling(billingModule.Service())
 	emrInternalHandler.UseBilling(billingModule.Service())
+	// 客户总监接入计费：录音分析扣 hour，截图解读扣 shot，建议动作扣 record，方案内容扣 person。
+	patientOpsModule.UseBilling(billingModule.Service())
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)

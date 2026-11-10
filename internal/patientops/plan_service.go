@@ -645,6 +645,10 @@ func (s *Service) insertPlanTask(ctx context.Context, tx pgx.Tx, plan *Plan, can
 }
 
 func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID int64, req PublishPlanRequest) (*PlanDetail, error) {
+	// 经营方案内容生成入口的交付前预检：person 1 人。额度不足拒绝生成，预检故障放行。
+	if err := s.ensurePlanContentQuota(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	plan, err := s.loadPlan(ctx, tenantID, planID)
 	if err != nil {
 		return nil, err
@@ -690,6 +694,7 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 		return nil, err
 	}
 	published := 0
+	generatedMemberIDs := make([]int64, 0, len(ordered))
 	for _, cand := range ordered {
 		memberID, err := s.insertPlanMember(ctx, tx, plan, cand)
 		if err != nil {
@@ -702,6 +707,9 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 		if _, err := tx.Exec(ctx, `UPDATE patient_ops_plan_members SET task_id=$1,status='published',updated_at=NOW() WHERE id=$2`, taskID, memberID); err != nil {
 			return nil, fmt.Errorf("link plan member task: %w", err)
 		}
+		if cand.ContentGenerated {
+			generatedMemberIDs = append(generatedMemberIDs, memberID)
+		}
 		published++
 	}
 	if published == 0 {
@@ -713,10 +721,16 @@ func (s *Service) PublishPlan(ctx context.Context, tenantID, employeeID, planID 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit publish plan: %w", err)
 	}
+	// 方案内容已随发布落库：按会员扣 person 1，重复发布由幂等键拦截。
+	s.chargePlanMembersContent(ctx, plan.TenantID, planID, generatedMemberIDs)
 	return s.GetPlan(ctx, tenantID, planID)
 }
 
 func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, planID int64, req AddPlanMembersRequest) (*PlanDetail, error) {
+	// 经营方案内容生成入口的交付前预检：person 1 人。额度不足拒绝生成，预检故障放行。
+	if err := s.ensurePlanContentQuota(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	plan, err := s.loadPlan(ctx, tenantID, planID)
 	if err != nil {
 		return nil, err
@@ -753,6 +767,7 @@ func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, plan
 	if err := savePlanSuitabilityReviews(ctx, tx, plan, employeeID, ordered, req.SuitabilityConfirmations); err != nil {
 		return nil, err
 	}
+	generatedMemberIDs := make([]int64, 0, len(ordered))
 	for _, cand := range ordered {
 		customerID := cand.CustomerID
 		var exists bool
@@ -773,10 +788,15 @@ func (s *Service) AddPlanMembers(ctx context.Context, tenantID, employeeID, plan
 		if _, err := tx.Exec(ctx, `UPDATE patient_ops_plan_members SET task_id=$1,status='published',updated_at=NOW() WHERE id=$2`, taskID, memberID); err != nil {
 			return nil, fmt.Errorf("link added plan member task: %w", err)
 		}
+		if cand.ContentGenerated {
+			generatedMemberIDs = append(generatedMemberIDs, memberID)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit add plan members: %w", err)
 	}
+	// 方案内容已随加员落库：按会员扣 person 1，重复加员由幂等键拦截。
+	s.chargePlanMembersContent(ctx, plan.TenantID, planID, generatedMemberIDs)
 	return s.GetPlan(ctx, tenantID, planID)
 }
 
