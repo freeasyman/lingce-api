@@ -4,15 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// Service 封装计费查询的业务规则。除新增价目版本外，本服务只读。
-type Service struct{ repo Repository }
+// Service 封装计费业务规则：价目与额度查询，以及阶段 C 的订单/回款/开通/退款。
+type Service struct {
+	repo Repository
+
+	// now/orderNoRand 是时间与订单号随机后缀的注入点，单测可替换以保证可断言。
+	now         func() time.Time
+	orderNoRand func(n int) int
+}
 
 // NewService 用给定的数据访问实现构造服务层（单元测试传入 fake Repository）。
-func NewService(repo Repository) *Service { return &Service{repo: repo} }
+func NewService(repo Repository) *Service {
+	return &Service{repo: repo, now: time.Now, orderNoRand: rand.IntN}
+}
 
 // ListCatalog 查询价目表。
 //

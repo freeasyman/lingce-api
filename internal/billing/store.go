@@ -19,10 +19,18 @@ type Repository interface {
 	ListEntitlements(ctx context.Context, tenantID int64, product string, includeZero bool) ([]Entitlement, error)
 	GetServicePeriod(ctx context.Context, tenantID int64) (*ServicePeriod, error)
 	ListLedger(ctx context.Context, query LedgerQuery) ([]LedgerEntry, int64, error)
+
+	// 阶段 C：订单录入、回款确认、开通与退款。
+	InsertOrder(ctx context.Context, input CreateOrderInput) (Order, error)
+	ListOrders(ctx context.Context, query OrderQuery) ([]Order, int64, error)
+	GetOrder(ctx context.Context, orderID int64) (Order, error)
+	SettleOrder(ctx context.Context, input SettleOrderInput) (Order, error)
+	ActivateOrder(ctx context.Context, input ActivateOrderInput) (Order, ServicePeriod, error)
+	RefundOrder(ctx context.Context, input RefundOrderInput) (Order, error)
+	GetAdminDisplayName(ctx context.Context, adminID int64) (string, error)
 }
 
-// Store 是 Repository 的 pgx 实现：只读 product_catalog / product_entitlements / entitlement_ledger，
-// 外加只读 tenant_subscriptions 取服务期；billing_orders 不在本阶段。
+// Store 是 Repository 的 pgx 实现：读价目表/额度/流水，写订单、服务期、额度与流水。
 type Store struct{ pool *pgxpool.Pool }
 
 // NewStore 构造基于连接池的存储层。

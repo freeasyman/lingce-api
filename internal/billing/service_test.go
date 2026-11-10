@@ -38,6 +38,36 @@ type fakeRepository struct {
 	ledgerTotal int64
 	ledgerCalls int
 	ledgerErr   error
+
+	// 阶段 C：订单状态。orders 模拟 billing_orders 表，方法按真实 store 的约束改它，
+	// 这样"激活一次后不能再激活/退款"这类规则在 service 单测里也能被验证。
+	orders            map[int64]Order
+	nextOrderID       int64
+	insertOrderInput  CreateOrderInput
+	insertOrderInputs []CreateOrderInput
+	insertOrderCalls  int
+	insertOrderErrs   []error
+	listOrdersQuery   OrderQuery
+	listOrdersItems   []Order
+	listOrdersTotal   int64
+	listOrdersErr     error
+	getOrderErr       error
+	settleInput       SettleOrderInput
+	settleCalls       int
+	settleErr         error
+	activateInput     ActivateOrderInput
+	activateInputs    []ActivateOrderInput
+	activateCalls     int
+	activateErr       error
+	activationPeriod  ServicePeriod
+	refundInput       RefundOrderInput
+	refundCalls       int
+	refundErr         error
+	adminName         string
+	adminNameID       int64
+	adminNameErr      error
+	grantCalls        int
+	grantedLines      []GrantLine
 }
 
 func (f *fakeRepository) ListCatalog(_ context.Context, filter CatalogFilter) ([]CatalogItem, error) {

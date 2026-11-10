@@ -19,7 +19,7 @@ import (
 // maxCatalogBodyBytes 限制价目表请求体大小：一条价目最多几 KB，1MB 足够且不会放大异常请求。
 const maxCatalogBodyBytes = 1 << 20
 
-// Handler 暴露计费查询接口（价目表新增版本是唯一写入口）。
+// Handler 暴露计费查询接口与运营端订单接口（价目表新增版本、录单、回款、开通、退款是写入口）。
 type Handler struct{ service *Service }
 
 // NewHandler 构造 HTTP handler。
@@ -27,12 +27,14 @@ func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
 // RegisterRoutes 注册计费路由：运营端只给 admin，机构端给 admin + employee。
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
-	router.Register(mux, []router.Route{
+	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/ops/billing/catalog", Handler: h.ListCatalog, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/ops/billing/catalog", Handler: h.CreateCatalogVersion, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/tenants/{id}/entitlements", Handler: h.ListEntitlements, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/tenants/{id}/entitlement-ledger", Handler: h.ListLedger, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-	}, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
+	}
+	routes = append(routes, h.orderRoutes()...)
+	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
 }
 
 // ListCatalog 查询价目表。
@@ -177,10 +179,23 @@ func parseTimeQuery(field, raw string) (*time.Time, error) {
 
 // writeBillingError 把 service/store 错误映射成仓库既有的错误响应格式。
 func writeBillingError(w http.ResponseWriter, err error) {
-	var validation *ValidationError
+	var (
+		validation *ValidationError
+		items      *OrderItemsError
+	)
 	switch {
 	case errors.As(err, &validation):
 		httputil.WriteBadRequest(w, validation.Message)
+	case errors.As(err, &items):
+		httputil.WriteError(w, http.StatusBadRequest, "ORDER_ITEMS_INVALID", items.Message, nil)
+	case errors.Is(err, ErrOrderNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "ORDER_NOT_FOUND", "订单不存在", nil)
+	case errors.Is(err, ErrOrderAmountMismatch):
+		httputil.WriteError(w, http.StatusBadRequest, "ORDER_AMOUNT_MISMATCH", "回款金额必须等于应付金额（MVP 只支持全款确认）", nil)
+	case errors.Is(err, ErrOrderAlreadyActivated):
+		httputil.WriteError(w, http.StatusConflict, "ORDER_ALREADY_ACTIVATED", "订单已开通，不能重复开通", nil)
+	case errors.Is(err, ErrOrderStatusInvalid):
+		httputil.WriteError(w, http.StatusConflict, "ORDER_STATUS_INVALID", "订单当前状态不允许该操作", nil)
 	case errors.Is(err, ErrCatalogVersionExists):
 		httputil.WriteError(w, http.StatusConflict, "CATALOG_VERSION_EXISTS", "该产品档位的价目版本已存在，请使用新的 price_version", nil)
 	default:

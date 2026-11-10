@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS billing_orders (
   paid_at TIMESTAMPTZ,
   confirmed_by BIGINT,
   status VARCHAR(16) NOT NULL DEFAULT 'created',
+  activated_at TIMESTAMPTZ,
+  activated_by BIGINT,
   reason TEXT NOT NULL DEFAULT '',
   approved_by BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
