@@ -28,6 +28,9 @@ type Repository interface {
 	ActivateOrder(ctx context.Context, input ActivateOrderInput) (Order, ServicePeriod, error)
 	RefundOrder(ctx context.Context, input RefundOrderInput) (Order, error)
 	GetAdminDisplayName(ctx context.Context, adminID int64) (string, error)
+
+	// 阶段 D：扣量。BeginDeduct 开启一个事务，后续锁行/流水/更新/读回都在同事务内完成。
+	BeginDeduct(ctx context.Context) (DeductTx, error)
 }
 
 // Store 是 Repository 的 pgx 实现：读价目表/额度/流水，写订单、服务期、额度与流水。

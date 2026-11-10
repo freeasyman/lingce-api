@@ -19,6 +19,9 @@ import (
 // maxCatalogBodyBytes 限制价目表请求体大小：一条价目最多几 KB，1MB 足够且不会放大异常请求。
 const maxCatalogBodyBytes = 1 << 20
 
+// maxDeductBodyBytes 限制扣量请求体大小：一次交付最多几十个单位，1MB 足够。
+const maxDeductBodyBytes = 1 << 20
+
 // Handler 暴露计费查询接口与运营端订单接口（价目表新增版本、录单、回款、开通、退款是写入口）。
 type Handler struct{ service *Service }
 
@@ -34,6 +37,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/tenants/{id}/entitlement-ledger", Handler: h.ListLedger, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}
 	routes = append(routes, h.orderRoutes()...)
+	routes = append(routes, h.internalRoutes()...)
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
 }
 
@@ -201,4 +205,73 @@ func writeBillingError(w http.ResponseWriter, err error) {
 	default:
 		httputil.WriteInternalError(w, err.Error())
 	}
+}
+
+// internalRoutes 是跨进程内部接口（D0）：worker 与 api 都能扣量/预检，
+// 认证方式沿用仓库既有的 AuthMode=internal（X-Internal-Token），不校验 JWT。
+func (h *Handler) internalRoutes() []router.Route {
+	return []router.Route{
+		{Method: "POST", Path: "/api/v1/internal/billing/deduct", Handler: h.InternalDeduct, AuthMode: "internal"},
+		{Method: "POST", Path: "/api/v1/internal/billing/check-quota", Handler: h.InternalCheckQuota, AuthMode: "internal"},
+	}
+}
+
+// InternalDeduct 执行一次幂等扣量：锁定额度行 → 写 usage 流水 → 更新余额 → 返回明细。
+//
+// 成功 200；幂等键已扣过 409 ALREADY_DEDUCTED（调用方视为成功，不再重试）；
+// 额度不足 409 INSUFFICIENT_ENTITLEMENT（details 带 unit/current/required/shortfall）；
+// 入参不合法 400 INVALID_REQUEST。
+func (h *Handler) InternalDeduct(w http.ResponseWriter, r *http.Request) {
+	var input DeductInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxDeductBodyBytes)).Decode(&input); err != nil {
+		writeInternalBillingError(w, invalidf("invalid request body"))
+		return
+	}
+	result, err := h.service.Deduct(r.Context(), input)
+	if err != nil {
+		writeInternalBillingError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// InternalCheckQuota 是只读额度预检：够返回 200 {"ok":true}，不够返回
+// 409 INSUFFICIENT_ENTITLEMENT（details 同扣量接口），不写任何流水与余额。
+func (h *Handler) InternalCheckQuota(w http.ResponseWriter, r *http.Request) {
+	var input DeductInput
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxDeductBodyBytes)).Decode(&input); err != nil {
+		writeInternalBillingError(w, invalidf("invalid request body"))
+		return
+	}
+	if err := h.service.CheckQuota(r.Context(), input.TenantID, input.ProductCode, input.Items); err != nil {
+		writeInternalBillingError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, CheckQuotaResponse{OK: true})
+}
+
+// writeInternalBillingError 是内部扣量接口的错误映射：
+// 扣量/预检的约定与运营端不同（INVALID_REQUEST / ALREADY_DEDUCTED / INSUFFICIENT_ENTITLEMENT），
+// 其余错误继续走 writeBillingError 的通用映射。
+func writeInternalBillingError(w http.ResponseWriter, err error) {
+	var validation *ValidationError
+	if errors.As(err, &validation) {
+		httputil.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", validation.Message, nil)
+		return
+	}
+	var insufficient *InsufficientEntitlementError
+	if errors.As(err, &insufficient) {
+		httputil.WriteError(w, http.StatusConflict, "INSUFFICIENT_ENTITLEMENT", "额度不足", map[string]any{
+			"unit":      insufficient.Unit,
+			"current":   insufficient.Current,
+			"required":  insufficient.Required,
+			"shortfall": insufficient.Shortfall,
+		})
+		return
+	}
+	if errors.Is(err, ErrAlreadyDeducted) {
+		httputil.WriteError(w, http.StatusConflict, "ALREADY_DEDUCTED", "该幂等键已扣量，请勿重复提交", nil)
+		return
+	}
+	writeBillingError(w, err)
 }

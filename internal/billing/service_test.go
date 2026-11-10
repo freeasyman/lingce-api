@@ -68,6 +68,19 @@ type fakeRepository struct {
 	adminNameErr      error
 	grantCalls        int
 	grantedLines      []GrantLine
+
+	// 阶段 D：扣量。deductRows/deductKeys 模拟 product_entitlements 与
+	// entitlement_ledger 的部分唯一索引；usageLedger 保存已提交的 usage 流水，
+	// 让"同键第二次不重复扣"能在内存里断言。
+	deductTenantID   int64
+	deductRows       []Entitlement
+	deductKeys       map[string]struct{}
+	usageLedger      []DeductLedgerEntry
+	beginDeductCalls int
+	applyCalls       int
+	recomputeCalls   int
+	commitCalls      int
+	rollbackCalls    int
 }
 
 func (f *fakeRepository) ListCatalog(_ context.Context, filter CatalogFilter) ([]CatalogItem, error) {
