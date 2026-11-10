@@ -15,6 +15,7 @@ tenant_id / product_code / unit（hour/record/round/shot/prompt/person）
 edition（standard/light/trial）
 quota_type（official 正式 / trial 试用）
 granted / used / balance（= granted − used）
+rollover_bal（结转余额：续费时从上期 balance 挪入，优先扣，第二周期清零）
 period_end（统一到期日）
 ```
 
@@ -112,17 +113,23 @@ product_code + edition（standard/light/trial）
 销售对客户说："我送你 500 份病历。"（说额度，不说钱）
 运营在后台录入：产品 + 档位 + 数量（如 500 份，或直接选"1 个听写增量包"）
 系统按价目表自动显示："相当于 2,600 元" → 销售/客户一眼看懂价值
-超过阈值（默认 3,000 元）需老板点头，订单上记 approved_by
+≤ 1 个增量包：运营直接挂（订单记 reason + 操作人）
+> 1 个增量包：老板点头（订单记 approved_by）
 → 运营写 ledger（grant，source=gift，reason 必填）
 ```
 
-### 2.4 续费与结转（人工）
+### 2.4 续费与结转（人工，规则：结转一次）
 
 ```text
-到期前销售催续费 → 客户付款 → 财务确认
-→ 运营：把到期时的 balance 手工抄成新周期的 grant（source=rollover）
-→ 新周期额度照常发
-不续费：balance 作废（ledger 记一条 expired）
+到期不续费 → 余额清零（ledger 记 expired）
+
+到期续费 → 三步：
+  ① 冻结的余额变"结转"：rollover_bal = 上期 balance
+  ② 发新年度额度（grant，正常下发）
+  ③ 扣量先扣 rollover_bal，再扣试用，再扣正式
+  第二个周期结束时 rollover_bal 没用完 → 清零，不再结转
+
+试用额度（trial）：到期直接清零，不冻结、不结转。
 ```
 
 ---
@@ -167,7 +174,7 @@ product_code + edition（standard/light/trial）
 ## 6. 遗留问题（都不阻塞 MVP）
 
 ```text
-· 赠送阈值 3,000 元是否合适（老板定）
+· 赠送阈值已定：≤1 个增量包直接挂，>1 个老板点头
 · 试用包默认规格（任一单品 7 天，额度=年额度×7/365）
 · 扣量顺序已定：结转 → 试用 → 正式
 · 轻量档将来再说，价目表已留字段
