@@ -40,7 +40,7 @@ period_end（统一到期日）
 tenant_id / product_code / unit
 type        grant（发额度）/ usage（扣量）
 amount      正数（grant）或负数（usage）
-source      purchase / gift / trial / rollover / correction
+source      purchase / gift / trial / rollover / correction / expired
 reason      原因（"回款确认按单下发" / "赠送：老板同意" / "交付扣量"）
 linked_order_id / idempotency_key（幂等：重试不重复扣）
 operator    操作人（人工）或"系统"
