@@ -202,6 +202,8 @@ go test ./...                                       仅 internal/content 预置�
 - 目标环境需执行 `lingce-api --migrate-only` 应用
   `20261110_003_mobile_app_skip_legacy_analysis.sql`（dev 已应用并登记
   `api_schema_migrations`）。
+- 生产/dev-real 是 baseline 模式，不会自动执行 versioned migration；上线前需把
+  该触发器并入 convergence 基线或单独执行 SQL（本次未碰生产）。
 - 触发器只阻止 mobile_app 的旧 analyze；Worker 的转写/clean 不变。
 - 已存在的 `analysis_status=failed` 历史记录不会重置（例如 recording 1995）。
 - 本机 18080 已用新构建重启。注意：本机直接执行重建后的 `bin/lingce-api`
