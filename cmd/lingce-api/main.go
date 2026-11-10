@@ -514,6 +514,9 @@ func main() {
 	// Register billing module (计费缴费 MVP：价目表 / 租户额度 / 额度流水查询)
 	billingModule := billing.NewModule(pool)
 	billingModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
+	// 听写病历接入计费：草稿生成扣 record+hour，提交新跑完整质控扣 round。
+	emrRecordService.UseBilling(billingModule.Service())
+	emrInternalHandler.UseBilling(billingModule.Service())
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)

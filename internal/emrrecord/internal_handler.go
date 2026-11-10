@@ -41,6 +41,11 @@ type InternalHandler struct {
 	resultBinder interface {
 		BindWorkerResult(context.Context, int64, int64, int64, string) error
 	}
+	// billing 用于草稿生成的交付前预检与生成成功后的 record+hour 扣量；
+	// nil 表示未接入计费（旧部署）。
+	billing billingService
+	// lookupDuration 是录音时长读取的测试注入点；nil 时走 recordings 表。
+	lookupDuration func(context.Context, int64, int64) (int64, error)
 }
 
 // IncrementalDraftInput is used only by the isolated EMR consultation lab.
@@ -218,6 +223,10 @@ func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerR
 	if err := payload.validateBasic(); err != nil {
 		return nil, err
 	}
+	// 交付前闸门：额度不足时不开始生成。
+	if err := h.ensureDraftQuota(ctx, payload.TenantID, payload.RecordingID); err != nil {
+		return nil, err
+	}
 	requestID := fmt.Sprintf("emr-realtime-%d", time.Now().UnixNano())
 	prepared, err := h.preparePrompt(ctx, payload)
 	if err != nil {
@@ -244,6 +253,8 @@ func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerR
 	if err != nil {
 		return nil, err
 	}
+	// 草稿已成功落库：扣 record + hour（失败只告警，不影响本次生成结果）。
+	h.chargeGeneratedDraft(ctx, payload, outcome.Record)
 	if err := h.appendGeneratedProcessRecord(ctx, payload, requestID, outcome, llmResponse); err != nil {
 		return nil, err
 	}
@@ -320,6 +331,11 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		h.writeFailure(w, payload, err)
 		return
 	}
+	// 交付前闸门：额度不足时不开始生成，按模块既有错误格式返回 402。
+	if err := h.ensureDraftQuota(r.Context(), payload.TenantID, payload.RecordingID); err != nil {
+		h.writeQuotaExhausted(w, payload, err)
+		return
+	}
 
 	requestID := fmt.Sprintf("emr-%d", time.Now().UnixNano())
 	prepared, err := h.preparePrompt(r.Context(), payload)
@@ -356,6 +372,8 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
 		return
 	}
+	// 草稿已成功落库：扣 record + hour（失败只告警，不影响本次生成结果）。
+	h.chargeGeneratedDraft(r.Context(), payload, writeOutcome.Record)
 	if err := h.appendGeneratedProcessRecord(r.Context(), payload, requestID, writeOutcome, llmResponse); err != nil {
 		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
 		return

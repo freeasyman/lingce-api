@@ -20,6 +20,8 @@ type Service struct {
 	store   *Store
 	process *emrprocess.Service
 	quality *emrquality.Service
+	// billing 用于提交时新跑完整质控后的 round 扣量；nil 表示未接入计费。
+	billing billingService
 }
 
 func anonymousPatient(snapshot map[string]any) bool {
@@ -274,6 +276,13 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		if err != nil {
 			return nil, err
 		}
+		// 本轮完整质控是真实新跑的（复用报告的分支不会走到这里）：按轮次扣 round 1。
+		// 放在 defer 里保证无论这次提交最终成功、被阻断还是需要医生确认，都只扣这一轮，
+		// 且扣量发生在业务结果落库之后；扣量失败只告警，不影响病历业务。
+		roundToken := newQualityRoundToken(current.ID)
+		defer func() {
+			s.chargeQualityRound(ctx, tenantID, current.ID, report, roundToken, reusedReport)
+		}()
 		if strings.TrimSpace(report.FailureReason) != "" {
 			if persistErr := s.quality.Persist(ctx, report); persistErr != nil {
 				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("%s；质量检查记录保存失败：%w", report.FailureReason, persistErr)
