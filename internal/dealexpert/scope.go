@@ -195,6 +195,40 @@ func (h *Handler) checkEncounterAccess(ctx context.Context, scope *dealScope, en
 	return nil
 }
 
+// checkSalesTaskAccess 用于 encounter_id<=0 的历史销售任务：没有可解析的接待时，
+// 先按任务关联的录音归属校验；录音已删除/缺失时再回落到任务负责人。
+// 管理员/负责人仍直接放行；普通咨询师不能读/改别人的无接待任务。
+func (h *Handler) checkSalesTaskAccess(ctx context.Context, scope *dealScope, recordingID int64, ownerEmployeeID *int64) *tenantError {
+	if scope.allowsAllEmployees() {
+		return nil
+	}
+	if recordingID > 0 {
+		ownerID, err := h.service.RecordingConsultant(ctx, scope.TenantID, recordingID)
+		if err == nil {
+			if salesTaskAccessAllowed(scope, ownerID, true, ownerEmployeeID) {
+				return nil
+			}
+			return &tenantError{status: http.StatusForbidden, message: "无权访问该跟进任务"}
+		}
+	}
+	if salesTaskAccessAllowed(scope, 0, false, ownerEmployeeID) {
+		return nil
+	}
+	return &tenantError{status: http.StatusForbidden, message: "无权访问该跟进任务"}
+}
+
+// salesTaskAccessAllowed 是 checkSalesTaskAccess 的纯决策部分：
+// recordingFound=true 时以录音归属为准；false 时回落到任务负责人。
+func salesTaskAccessAllowed(scope *dealScope, recordingOwnerID int64, recordingFound bool, ownerEmployeeID *int64) bool {
+	if scope.allowsAllEmployees() {
+		return true
+	}
+	if recordingFound {
+		return scope.allowsEmployee(recordingOwnerID)
+	}
+	return ownerEmployeeID != nil && *ownerEmployeeID > 0 && scope.allowsEmployee(*ownerEmployeeID)
+}
+
 // checkOutcomeAccess 校验一笔业绩是否落在当前数据可见范围内。
 func (h *Handler) checkOutcomeAccess(ctx context.Context, scope *dealScope, outcomeID int64, action string) *tenantError {
 	if scope.allowsAllEmployees() {

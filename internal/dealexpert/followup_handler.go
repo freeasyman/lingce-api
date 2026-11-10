@@ -18,34 +18,37 @@ import (
 
 // RegisterUserRoutes 注册赢客专家前端使用的业务接口。
 // 权限：登录员工；租户与数据范围由 resolveDealScope 统一收敛。
+// 员工 App 登录后拿到的是 mobile token，因此员工可用业务接口放行
+// admin/employee/mobile；审批规则、权限管理、推送补发等管理接口仍只允许
+// admin/employee，不对 mobile 开放。
 func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
-		{Method: "GET", Path: "/api/v1/deal-expert/encounters", Handler: h.ListEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups", Handler: h.ListSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/complete", Handler: h.CompleteSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/confirm", Handler: h.ConfirmSalesTaskDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/action-drafts", Handler: h.CreateActionDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/claim", Handler: h.ClaimOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/outcomes", Handler: h.ListOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/outcomes/export.xlsx", Handler: h.ExportOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "PATCH", Path: "/api/v1/deal-expert/outcomes/{id}", Handler: h.UpdateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/{id}/void", Handler: h.VoidOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/claims/unreported", Handler: h.ListUnreportedClaims, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis", Handler: h.GetConsultationAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/outcome", Handler: h.GetRecordingOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.AnalyzeRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/analyses", Handler: h.ListConsultationAnalyses, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis-actions", Handler: h.ListAnalysisActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analysis-actions", Handler: h.CreateAnalysisAction, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/my-actions", Handler: h.ListMyActions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/diagnosis", Handler: h.GetDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/forecast-calibration", Handler: h.GetForecastCalibration, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/encounters", Handler: h.ListEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups", Handler: h.ListSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups", Handler: h.CreateSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/follow-ups/{id}", Handler: h.GetSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/complete", Handler: h.CompleteSalesTask, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/follow-ups/{id}/actions/confirm", Handler: h.ConfirmSalesTaskDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/action-drafts", Handler: h.CreateActionDraft, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/follow-ups", Handler: h.ListEncounterSalesTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/encounters/{id}/outcomes", Handler: h.ListEncounterOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/outcomes", Handler: h.CreateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/claim", Handler: h.ClaimOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/outcomes", Handler: h.ListOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/outcomes/export.xlsx", Handler: h.ExportOutcomes, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "PATCH", Path: "/api/v1/deal-expert/outcomes/{id}", Handler: h.UpdateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/{id}/void", Handler: h.VoidOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/claims/unreported", Handler: h.ListUnreportedClaims, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis", Handler: h.GetConsultationAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/outcome", Handler: h.GetRecordingOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.AnalyzeRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/analyses", Handler: h.ListConsultationAnalyses, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis-actions", Handler: h.ListAnalysisActions, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analysis-actions", Handler: h.CreateAnalysisAction, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/my-actions", Handler: h.ListMyActions, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/diagnosis", Handler: h.GetDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/forecast-calibration", Handler: h.GetForecastCalibration, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/approval-rules", Handler: h.GetApprovalRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/deal-expert/approval-rules", Handler: h.SaveApprovalRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret, Pool: h.pool})
@@ -107,7 +110,13 @@ func (h *Handler) CreateSalesTask(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	if accessErr := h.checkEncounterAccess(r.Context(), scope, req.EncounterID); accessErr != nil {
+	if req.EncounterID > 0 {
+		if accessErr := h.checkEncounterAccess(r.Context(), scope, req.EncounterID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	} else if accessErr := h.checkRecordingAccess(r.Context(), scope, req.RecordingID); accessErr != nil {
+		// encounter_id=0 的录音没有可解析的接待，按关联录音归属校验。
 		writeTenantError(w, accessErr)
 		return
 	}
@@ -135,7 +144,12 @@ func (h *Handler) GetSalesTask(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	if accessErr := h.checkEncounterAccess(r.Context(), scope, item.EncounterID); accessErr != nil {
+	if item.EncounterID > 0 {
+		if accessErr := h.checkEncounterAccess(r.Context(), scope, item.EncounterID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	} else if accessErr := h.checkSalesTaskAccess(r.Context(), scope, item.RecordingID, item.OwnerEmployeeID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
 	}
@@ -163,7 +177,12 @@ func (h *Handler) CompleteSalesTask(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	if accessErr := h.checkEncounterAccess(r.Context(), scope, current.EncounterID); accessErr != nil {
+	if current.EncounterID > 0 {
+		if accessErr := h.checkEncounterAccess(r.Context(), scope, current.EncounterID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	} else if accessErr := h.checkSalesTaskAccess(r.Context(), scope, current.RecordingID, current.OwnerEmployeeID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
 	}
@@ -243,7 +262,12 @@ func (h *Handler) CreateOutcome(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	if accessErr := h.checkEncounterAccess(r.Context(), scope, req.EncounterID); accessErr != nil {
+	if req.EncounterID > 0 {
+		if accessErr := h.checkEncounterAccess(r.Context(), scope, req.EncounterID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	} else if accessErr := h.checkRecordingAccess(r.Context(), scope, req.RecordingID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
 	}
@@ -483,7 +507,12 @@ func (h *Handler) ConfirmSalesTaskDraft(w http.ResponseWriter, r *http.Request) 
 		writeServiceError(w, err)
 		return
 	}
-	if accessErr := h.checkEncounterAccess(r.Context(), scope, current.EncounterID); accessErr != nil {
+	if current.EncounterID > 0 {
+		if accessErr := h.checkEncounterAccess(r.Context(), scope, current.EncounterID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	} else if accessErr := h.checkSalesTaskAccess(r.Context(), scope, current.RecordingID, current.OwnerEmployeeID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
 	}

@@ -48,7 +48,7 @@ func (s *Store) CreateSalesTask(ctx context.Context, tenantID int64, req CreateS
 			tenant_id, encounter_id, recording_id, customer_id, customer_name,
 			objective, action, suggested_content, owner_employee_id, owner_name, due_at, status
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'` + SalesTaskPending + `')
-		ON CONFLICT (tenant_id, encounter_id)
+		ON CONFLICT (tenant_id, recording_id, objective)
 			WHERE status IN ('` + SalesTaskPending + `','` + SalesTaskProcessing + `','` + SalesTaskWaitingCustomer + `','` + SalesTaskWaitingInternal + `','` + SalesTaskPaused + `')
 			DO NOTHING
 		RETURNING ` + followUpColumns
@@ -64,19 +64,19 @@ func (s *Store) CreateSalesTask(ctx context.Context, tenantID int64, req CreateS
 	}
 
 	// 已有活动任务：不新建，返回原任务，由前端提示「已存在」。
-	existing, err := s.getActiveSalesTask(ctx, tenantID, req.EncounterID)
+	existing, err := s.getActiveSalesTask(ctx, tenantID, req.RecordingID, req.Objective)
 	if err != nil {
 		return nil, false, err
 	}
 	return existing, false, nil
 }
 
-func (s *Store) getActiveSalesTask(ctx context.Context, tenantID, encounterID int64) (*SalesTask, error) {
+func (s *Store) getActiveSalesTask(ctx context.Context, tenantID, recordingID int64, objective string) (*SalesTask, error) {
 	query := `SELECT ` + followUpColumns + `
 		FROM sales_tasks
-		WHERE tenant_id = $1 AND encounter_id = $2 AND status = ANY($3)
+		WHERE tenant_id = $1 AND recording_id = $2 AND objective = $3 AND status = ANY($4)
 		ORDER BY id DESC LIMIT 1`
-	item, err := scanSalesTask(s.pool.QueryRow(ctx, query, tenantID, encounterID, activeStatuses()))
+	item, err := scanSalesTask(s.pool.QueryRow(ctx, query, tenantID, recordingID, objective, activeStatuses()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSalesTaskNotFound
 	}

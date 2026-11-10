@@ -202,8 +202,10 @@ func (s *Service) CreateSalesTask(ctx context.Context, tenantID int64, req Creat
 	if tenantID <= 0 {
 		return nil, false, errors.New("tenant_id is required")
 	}
-	if req.EncounterID <= 0 || req.RecordingID <= 0 {
-		return nil, false, errors.New("encounter_id and recording_id are required")
+	// encounter_id 允许为 0：手机端录音可能尚未关联 encounter。
+	// 归属校验由 Handler 按 recording_id 完成，任务本身必须绑定录音。
+	if req.RecordingID <= 0 {
+		return nil, false, errors.New("recording_id is required")
 	}
 	req.Objective = strings.TrimSpace(req.Objective)
 	req.Action = strings.TrimSpace(req.Action)

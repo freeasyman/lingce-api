@@ -26,9 +26,9 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
-		{Method: "GET", Path: "/api/v1/deal-expert/interventions", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/deal-expert/interventions/by-recording/{recordingID}", Handler: h.GetByRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/deal-expert/interventions/{recordingID}/actions", Handler: h.Act, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/interventions", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/interventions/by-recording/{recordingID}", Handler: h.GetByRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/interventions/{recordingID}/actions", Handler: h.Act, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 

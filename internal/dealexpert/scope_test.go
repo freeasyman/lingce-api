@@ -112,3 +112,32 @@ func TestDealScopeManagerIndependentFromVisibility(t *testing.T) {
 		t.Fatal("consultant must not be manager")
 	}
 }
+
+func TestSalesTaskAccessForZeroEncounter(t *testing.T) {
+	self := &dealScope{EmployeeIDs: []int64{91}}
+	owner := int64(91)
+	other := int64(88)
+
+	cases := []struct {
+		name             string
+		scope            *dealScope
+		recordingOwnerID int64
+		recordingFound   bool
+		ownerEmployeeID  *int64
+		want             bool
+	}{
+		{name: "own recording", scope: self, recordingOwnerID: 91, recordingFound: true, ownerEmployeeID: &other, want: true},
+		{name: "other recording denied even if owner is self", scope: self, recordingOwnerID: 88, recordingFound: true, ownerEmployeeID: &owner, want: false},
+		{name: "missing recording falls back to own owner", scope: self, recordingFound: false, ownerEmployeeID: &owner, want: true},
+		{name: "missing recording and other owner denied", scope: self, recordingFound: false, ownerEmployeeID: &other, want: false},
+		{name: "missing recording and no owner denied", scope: self, recordingFound: false, ownerEmployeeID: nil, want: false},
+		{name: "manager can access other recording", scope: &dealScope{EmployeeIDs: nil}, recordingOwnerID: 88, recordingFound: true, ownerEmployeeID: &other, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := salesTaskAccessAllowed(tc.scope, tc.recordingOwnerID, tc.recordingFound, tc.ownerEmployeeID); got != tc.want {
+				t.Fatalf("salesTaskAccessAllowed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

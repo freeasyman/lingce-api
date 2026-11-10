@@ -22,7 +22,7 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
-		{Method: "GET", Path: "/api/v1/deal-expert/access/me", Handler: h.Me, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/access/me", Handler: h.Me, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/permissions", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/permissions/{employee_id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/deal-expert/permissions/{employee_id}", Handler: h.Upsert, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
