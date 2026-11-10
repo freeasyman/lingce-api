@@ -1,7 +1,17 @@
 # 计费缴费系统 · MVP 最小方案
 
 编写日期：2026-11-10
+状态：**定稿**（2026-11-10 与业务方逐条确认）
 原则：**系统只做"额度 + 扣量 + 订单"，其余全部人肉。**
+
+```text
+已定规则一览：
+· 赠送 = 挂包：≤1 个增量包运营直接挂，>1 个老板点头；系统自动算金额
+· 正式额度结转一次：到期冻结 → 续费解冻接着用 → 第二周期结束清零
+· 试用额度到期清零：不冻结、不结转、不退款
+· 扣量顺序：结转 → 试用 → 正式
+· 试用包默认规格：任一单品 7 天，额度 = 年额度 × 7/365（先这么做，向上取整）
+```
 （完整演进版见同目录《计费缴费设计.md》，MVP 不实现它的审批流/对账/纠正/异议等系统功能。）
 
 ---
@@ -14,7 +24,7 @@
 tenant_id / product_code / unit（hour/record/round/shot/prompt/person）
 edition（standard/light/trial）
 quota_type（official 正式 / trial 试用）
-granted / used / balance（= granted − used）
+granted / used / balance（= rollover_bal + granted − used）
 rollover_bal（结转余额：续费时从上期 balance 挪入，优先扣，第二周期清零）
 period_end（统一到期日）
 ```
@@ -38,7 +48,7 @@ created_at
 ```
 
 ```text
-balance 始终 = Σgrant − Σusage，改余额只许写 ledger，禁止直接 UPDATE balance。
+balance 始终 = Σgrant（含结转）− Σusage，改余额只许写 ledger，禁止直接 UPDATE balance。
 ```
 
 ### 1.3 `billing_orders` 订单（支付信息合并进来）
@@ -54,7 +64,7 @@ price_list_version（价目表版本，对账用）
 paid_amount / paid_at / confirmed_by（财务确认人）
 status       created / paid / settled / refunded / cancelled
 reason       赠送原因（gift 必填）
-approved_by  赠送同意人（老板/商务）
+approved_by  赠送同意人（仅 >1 个增量包时老板点头，≤1 包运营直接挂）
 created_at
 ```
 
@@ -96,7 +106,7 @@ product_code + edition（standard/light/trial）
 
 ```text
 中途加购（增量/后买产品）：Excel 按"剩余天数 ÷ 365"算好价格和额度，运营照录。
-开通时选档位；试用 = trial 档位（试用额度包，见 2.3）。
+开通时选档位；试用 = trial 档位，按 2.3 挂包方式下发，到期按 2.4 清零。
 ```
 
 ### 2.2 交付扣量（唯一自动化的地方）
@@ -163,7 +173,7 @@ product_code + edition（standard/light/trial）
 ## 5. 上线顺序
 
 ```text
-① 三张表 + 交付扣量（自动）+ 剩余额度页
+① 四张表 + 交付扣量（自动）+ 剩余额度页
 ② 价目表 + 订单录入 + 回款确认 + 开通（建服务期 + 按档位发额度）
 ③ 赠送录入（自动算金额）+ 100% 暂停
 ④ 到期/结转的人工操作入口
@@ -174,8 +184,13 @@ product_code + edition（standard/light/trial）
 ## 6. 遗留问题（都不阻塞 MVP）
 
 ```text
-· 赠送阈值已定：≤1 个增量包直接挂，>1 个老板点头
-· 试用包默认规格（任一单品 7 天，额度=年额度×7/365）
-· 扣量顺序已定：结转 → 试用 → 正式
-· 轻量档将来再说，价目表已留字段
+已定（按 2026-11-10 讨论执行）：
+· 赠送阈值：≤1 个增量包直接挂，>1 个老板点头
+· 试用包默认规格：任一单品 7 天，额度 = 年额度 × 7/365（先这么做）
+· 扣量顺序：结转 → 试用 → 正式
+· 正式额度结转一次；试用额度到期清零
+
+仍待定：
+· 轻量档（light edition）的规格与价格：将来再说，价目表已留字段
+· 渠道佣金、发票税率：Excel/人工，不建系统
 ```
