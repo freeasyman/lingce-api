@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/complianceguard"
 	"github.com/freeasyman/lingce-api/internal/compliancepermission"
 	"github.com/freeasyman/lingce-api/internal/config"
@@ -509,6 +510,10 @@ func main() {
 	// private LLM gateway; it never accesses DashScope directly.
 	patientOpsModule := patientops.NewModule(pool, llmClient)
 	patientOpsModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
+
+	// Register billing module (计费缴费 MVP：价目表 / 租户额度 / 额度流水查询)
+	billingModule := billing.NewModule(pool)
+	billingModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)
