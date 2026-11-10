@@ -18,6 +18,7 @@ type OwnedAudioIngestRequest struct {
 	RecordedAt        *time.Time
 	OrderNo           string
 	OSSKey            string
+	Notes             string
 	Source            string
 	BusinessScope     string
 	Scene             string

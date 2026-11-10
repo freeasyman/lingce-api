@@ -2022,15 +2022,18 @@ func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIng
 				source, scene, business_scope, status,
 				transcription_status, cleaned_transcription_status, analysis_status,
 				transcription_text, analysis_result, analysis_display,
-				cleaned_transcription, transcription_segments, recorded_at, order_no, oss_key, created_at, updated_at
+				cleaned_transcription, transcription_segments, recorded_at, order_no, oss_key, notes, created_at, updated_at
 			)
 			SELECT
 				$1::bigint, $2::bigint, $3::bigint, $4::bigint, $5::bigint, $6::text, $7::text, NULLIF($8::integer, 0), $9::text,
 				$10::text, $11::text, $12::text, 'uploaded',
-				'pending', 'pending', 'pending',
+				'pending', 'pending',
+				-- 手机 App 直传走赢客专家新分析（consultation_analyses），不进入
+				-- Worker 的旧自动分析；这里把初始状态直接置为 skipped。
+				CASE WHEN $10::text = 'mobile_app' THEN 'skipped' ELSE 'pending' END,
 				COALESCE(NULLIF($13::text, ''), ''),
 				COALESCE($14::jsonb, '{}'::jsonb), COALESCE($15::jsonb, '{}'::jsonb),
-				COALESCE($16::jsonb, '{}'::jsonb), COALESCE($17::jsonb, '[]'::jsonb), COALESCE($18::timestamp, NOW()), NULLIF($19::text, ''), NULLIF($20::text, ''), NOW(), NOW()
+				COALESCE($16::jsonb, '{}'::jsonb), COALESCE($17::jsonb, '[]'::jsonb), COALESCE($18::timestamp, NOW()), NULLIF($19::text, ''), NULLIF($20::text, ''), NULLIF($21::text, ''), NOW(), NOW()
 		WHERE ($3::bigint IS NULL OR EXISTS (
 			SELECT 1 FROM encounters e WHERE e.id = $3::bigint AND e.tenant_id = $1::bigint
 		))
@@ -2049,7 +2052,7 @@ func (s *Store) CreateOwnedAudioRecording(ctx context.Context, req OwnedAudioIng
 		  ))
 		  AND NOT EXISTS (SELECT 1 FROM ins)
 		LIMIT 1
-	`, req.TenantID, req.EmployeeID, req.EncounterID, req.CustomerID, req.PatientID, req.FileURL, req.FileName, req.DurationSeconds, req.MIMEType, req.Source, req.Scene, req.BusinessScope, "", encodeAny(analysisResult), encodeAny(analysisDisplay), nil, nil, req.RecordedAt, req.OrderNo, req.OSSKey).Scan(&recordingID, &created)
+	`, req.TenantID, req.EmployeeID, req.EncounterID, req.CustomerID, req.PatientID, req.FileURL, req.FileName, req.DurationSeconds, req.MIMEType, req.Source, req.Scene, req.BusinessScope, "", encodeAny(analysisResult), encodeAny(analysisDisplay), nil, nil, req.RecordedAt, req.OrderNo, req.OSSKey, req.Notes).Scan(&recordingID, &created)
 	if err != nil {
 		return 0, false, fmt.Errorf("create owned audio recording: %w", err)
 	}

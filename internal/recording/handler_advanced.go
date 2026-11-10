@@ -839,11 +839,34 @@ func (h *Handler) GetDailyStats(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, items)
 }
 
-// UploadRecording handles uploading recording
+const (
+	// 手机 App 录音直传上限。App 端单次录音最长约 60 分钟、50-60MB，
+	// 留足余量后按 200MB 限制；超过时返回可读的 413。
+	mobileUploadMaxFileBytes = 200 * 1024 * 1024
+	mobileUploadMaxFormBytes = mobileUploadMaxFileBytes + 2*1024*1024
+	mobileUploadMemoryBytes  = 32 << 20
+	// 弱网大文件上传可能远超全局 ReadTimeout(30s)。net/http 没有按路由的
+	// ReadTimeout，这里在 multipart 分支内用 ResponseController 只放宽本次请求。
+	mobileUploadReadTimeout = 15 * time.Minute
+)
+
+// UploadRecording handles uploading recording.
+//
+// 同一个入口支持两种契约：
+//   - application/json: 旧的 CreateRecordingRequest（recording_url + patient_name），
+//     行为保持不变；
+//   - multipart/form-data: 手机 App 直传 file（可选 duration/source/patient_name），
+//     服务端写 OSS 后创建 recording。multipart 不自动入队 transcribe，
+//     由 App 随后调用 POST /recordings/{id}/actions/transcribe 触发。
 func (h *Handler) UploadRecording(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+
+	if isMultipartUploadRequest(r) {
+		h.uploadRecordingMultipart(w, r, claims)
 		return
 	}
 
@@ -870,6 +893,225 @@ func (h *Handler) UploadRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, rec)
+}
+
+func isMultipartUploadRequest(r *http.Request) bool {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	return strings.HasPrefix(contentType, "multipart/form-data")
+}
+
+func (h *Handler) uploadRecordingMultipart(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
+	// 只在本次上传请求上放宽读写超时：文件先整体读入 multipart 临时文件，
+	// 再流式写入 OSS。全局 http.Server 的 30s ReadTimeout 保持不动。
+	if controller := http.NewResponseController(w); controller != nil {
+		deadline := time.Now().Add(mobileUploadReadTimeout)
+		if err := controller.SetReadDeadline(deadline); err != nil {
+			slog.Debug("extend upload read deadline failed", "error", err)
+		}
+		if err := controller.SetWriteDeadline(deadline); err != nil {
+			slog.Debug("extend upload write deadline failed", "error", err)
+		}
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, mobileUploadMaxFormBytes)
+	if err := r.ParseMultipartForm(mobileUploadMemoryBytes); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) || strings.Contains(strings.ToLower(err.Error()), "request body too large") {
+			httputil.WriteError(w, http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "录音文件过大，最大支持 200MB", nil)
+			return
+		}
+		httputil.WriteBadRequest(w, "上传表单无效，请使用 multipart/form-data 并携带 file 字段")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
+	}
+
+	file, fileHeader, err := r.FormFile("file")
+	if err != nil {
+		httputil.WriteBadRequest(w, "请上传音频文件（file 字段）")
+		return
+	}
+	defer file.Close()
+
+	if fileHeader.Size > mobileUploadMaxFileBytes {
+		httputil.WriteError(w, http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "录音文件过大，最大支持 200MB", nil)
+		return
+	}
+
+	declaredContentType, ext, err := validateTrialUploadFileHeader(fileHeader)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	// 只读文件头做格式嗅探，然后回到文件开头，避免把 200MB 全读进内存。
+	headerBytes := make([]byte, 4096)
+	n, readErr := io.ReadFull(file, headerBytes)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		httputil.WriteInternalError(w, "读取文件失败")
+		return
+	}
+	contentType, err := validateTrialUploadPayload(ext, declaredContentType, headerBytes[:n])
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		httputil.WriteInternalError(w, "读取文件失败")
+		return
+	}
+
+	duration, err := parseMobileUploadDuration(r.FormValue("duration"), r.FormValue("duration_seconds"))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	source := strings.ToLower(strings.TrimSpace(r.FormValue("source")))
+	if source == "" {
+		source = "mobile_app"
+	}
+	if len(source) > 64 {
+		httputil.WriteBadRequest(w, "source 无效")
+		return
+	}
+	patientName := strings.TrimSpace(r.FormValue("patient_name"))
+
+	if claims.UserType != auth.UserTypeAdmin && (claims.TenantID == nil || *claims.TenantID <= 0) {
+		httputil.WriteForbidden(w, "No tenant access")
+		return
+	}
+	tenantID, employeeID, err := h.resolveMobileUploadIdentity(r, claims)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	ossClient, err := ossutil.NewClient(
+		h.ossConfig.Endpoint,
+		h.ossConfig.AccessKeyID,
+		h.ossConfig.AccessKeySecret,
+		h.ossConfig.Bucket,
+		h.ossConfig.PublicBaseURL,
+	)
+	if err != nil {
+		httputil.WriteInternalError(w, fmt.Sprintf("初始化存储失败: %v", err))
+		return
+	}
+	prefix := fmt.Sprintf("recordings/%d/mobile/%s", tenantID, time.Now().Format("2006/01/02"))
+	objectKey := ossutil.GenerateObjectKey(prefix, ext)
+	fileURL, err := ossClient.UploadFile(r.Context(), objectKey, file, &ossutil.UploadOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		httputil.WriteInternalError(w, fmt.Sprintf("上传录音失败: %v", err))
+		return
+	}
+
+	recording, created, err := h.service.IngestOwnedAudioAndEnqueue(r.Context(), OwnedAudioIngestRequest{
+		TenantID:        tenantID,
+		EmployeeID:      employeeID,
+		FileURL:         fileURL,
+		FileName:        strings.TrimSpace(fileHeader.Filename),
+		MIMEType:        contentType,
+		DurationSeconds: duration,
+		OSSKey:          objectKey,
+		Notes:           patientName,
+		Source:          source,
+		Scene:           "consultation",
+		TriggerSource:   "mobile_app_upload",
+		// App 上传后会显式调用 transcribe。这里不再入队，避免 App 的
+		// transcribe 请求撞上 "transcription is already queued" 而失败。
+		SkipWorkerEnqueue: true,
+	})
+	if err != nil {
+		if shouldRollbackTrialUploadObject(created, recording) {
+			if deleteErr := ossClient.DeleteFile(r.Context(), objectKey); deleteErr != nil {
+				slog.Error("mobile upload rollback failed",
+					"tenant_id", tenantID,
+					"employee_id", employeeID,
+					"object_key", objectKey,
+					"error", deleteErr,
+				)
+			}
+		}
+		if IsRecordingValidationError(err) {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
+	recordingID := int64(0)
+	recordingURL := fileURL
+	if recording != nil {
+		recordingID = recording.ID
+		if strings.TrimSpace(recording.RecordingURL) != "" {
+			recordingURL = recording.RecordingURL
+		}
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"id":            recordingID,
+		"recording_id":  recordingID,
+		"recording_url": recordingURL,
+		"file_url":      recordingURL,
+		"duration":      duration,
+		"source":        source,
+		"status":        "uploaded",
+		"message":       "上传成功",
+	})
+}
+
+func (h *Handler) resolveMobileUploadIdentity(r *http.Request, claims *auth.Claims) (int64, int64, error) {
+	if claims.TenantID == nil && claims.UserType != auth.UserTypeAdmin {
+		return 0, 0, fmt.Errorf("no tenant access")
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		return *claims.TenantID, claims.UserID, nil
+	}
+
+	tenantID := int64(0)
+	if claims.TenantID != nil {
+		tenantID = *claims.TenantID
+	}
+	if raw := strings.TrimSpace(r.FormValue("tenant_id")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return 0, 0, fmt.Errorf("tenant_id 无效")
+		}
+		tenantID = value
+	}
+	employeeID := claims.UserID
+	if raw := strings.TrimSpace(r.FormValue("employee_id")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			return 0, 0, fmt.Errorf("employee_id 无效")
+		}
+		employeeID = value
+	}
+	if tenantID <= 0 {
+		return 0, 0, fmt.Errorf("tenant_id is required for admin upload")
+	}
+	if employeeID <= 0 {
+		return 0, 0, fmt.Errorf("employee_id is required")
+	}
+	return tenantID, employeeID, nil
+}
+
+func parseMobileUploadDuration(raw, legacyRaw string) (int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		value = strings.TrimSpace(legacyRaw)
+	}
+	if value == "" {
+		return 0, nil
+	}
+	duration, err := strconv.Atoi(value)
+	if err != nil || duration < 0 || duration > 24*60*60 {
+		return 0, fmt.Errorf("duration 无效")
+	}
+	return duration, nil
 }
 
 func (h *Handler) GetTrialAgreementStatus(w http.ResponseWriter, r *http.Request) {
