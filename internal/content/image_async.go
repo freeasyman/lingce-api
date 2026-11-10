@@ -35,6 +35,11 @@ func (s *Service) generateImageAsync(ctx context.Context, tenantID, contentID in
 	newImgs, _ := json.Marshal(imgs)
 	if err := s.store.updateContentItemV2(ctx, tenantID, contentID, "", rec.Title, rec.Body, rec.PublishPackage, newImgs); err != nil {
 		slog.Error("async image: save", "error", err, "content_id", contentID)
+		return
+	}
+	// 图片生成并写入内容成功：扣 shot 1 张；扣量失败只告警，不回滚图片。
+	if len(imgs) > 0 && imgs[0] != "" {
+		s.chargeSingleImage(ctx, tenantID, contentID)
 	}
 }
 
@@ -55,6 +60,11 @@ func (h *Handler) GenerateImageAsync(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ContentID <= 0 || strings.TrimSpace(req.Prompt) == "" {
 		httputil.WriteBadRequest(w, "content_id and prompt are required")
+		return
+	}
+	// 图片生成入口的交付前预检：shot 1 张。额度不足拒绝开始生成。
+	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, 1); err != nil {
+		writeContentError(w, err)
 		return
 	}
 	go func() {
@@ -94,6 +104,9 @@ func (s *Service) generateImagesAsync(ctx context.Context, tenantID, contentID i
 		newImgs, _ := json.Marshal(imgs)
 		if err := s.store.updateContentItemV2(ctx, tenantID, contentID, "", rec.Title, rec.Body, rec.PublishPackage, newImgs); err != nil {
 			slog.Error("async images: save", "error", err, "index", i)
+		} else if len(urls) > 0 {
+			// 该图位生成并写入内容成功：扣 shot 1 张（同一图位重复生成不重复扣）。
+			s.chargeImageSlot(ctx, tenantID, contentID, i)
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -116,6 +129,11 @@ func (h *Handler) GenerateImagesAsync(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ContentID <= 0 || len(req.Prompts) == 0 {
 		httputil.WriteBadRequest(w, "content_id and prompts are required")
+		return
+	}
+	// 图片生成入口的交付前预检：shot 1 张。额度不足拒绝开始生成。
+	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, 1); err != nil {
+		writeContentError(w, err)
 		return
 	}
 	go func() {

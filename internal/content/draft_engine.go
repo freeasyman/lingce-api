@@ -29,6 +29,10 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 	if strings.TrimSpace(req.TopicTitle) == "" {
 		return nil, fmt.Errorf("topic_title is required")
 	}
+	// 文稿生成入口的交付前预检：record 1 份。额度不足拒绝开始生成。
+	if err := s.ensureContentQuota(ctx, tenantID, contentBillingUnitRecord, 1); err != nil {
+		return nil, err
+	}
 	cardCount := req.CardCount
 	if cardCount <= 0 {
 		cardCount = 3
@@ -71,7 +75,13 @@ func (s *Service) GenerateGraphicNoteDraft(ctx context.Context, tenantID int64, 
 
 // SaveContentV2 保存内容到 content_items。
 func (s *Service) SaveContentV2(ctx context.Context, tenantID int64, topicID *int64, form, title, body string, publishPackage, images json.RawMessage) (int64, error) {
-	return s.store.insertContentItemV2(ctx, tenantID, valueOrZero(topicID), form, title, body, publishPackage, images)
+	id, err := s.store.insertContentItemV2(ctx, tenantID, valueOrZero(topicID), form, title, body, publishPackage, images)
+	if err != nil {
+		return 0, err
+	}
+	// 文稿已保存为正式内容：按文章 ID 扣 record 1 份（同一篇重复保存不会重复扣）。
+	s.chargeArticle(ctx, tenantID, id)
+	return id, nil
 }
 
 func valueOrZero(v *int64) int64 {

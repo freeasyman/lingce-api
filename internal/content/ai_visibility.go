@@ -283,6 +283,10 @@ func (s *Service) StartAIVisibility(ctx context.Context, tenantID int64, questio
 	if question == "" {
 		return 0, fmt.Errorf("question is required")
 	}
+	// AI 诊断入口的交付前预检：prompt 1 题次。额度不足拒绝开始诊断。
+	if err := s.ensureContentQuota(ctx, tenantID, contentBillingUnitPrompt, 1); err != nil {
+		return 0, err
+	}
 	region = strings.TrimSpace(region)
 
 	orgName := "我们机构"
@@ -387,5 +391,8 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 	if err := s.store.finishAIVisibilityRun(ctx, tenantID, runID, engAny, gap); err != nil {
 		slog.Error("ai visibility: finish run failed", "error", err)
 		_ = s.store.failAIVisibilityRun(ctx, tenantID, runID)
+		return
 	}
+	// 诊断完成并落库后扣 prompt 1 题次；扣量失败只告警，不回滚诊断结果。
+	s.chargeAIVisibility(ctx, tenantID, runID)
 }

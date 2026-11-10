@@ -19,6 +19,11 @@ type Service struct {
 	llmClient    *llmgateway.Client
 	ossClient    *oss.Client
 	searchAPIKey string
+
+	// billing 是获客先锋（huoke）的计费能力，未接入时为 nil（旧部署/测试）。
+	billing billingService
+	// lookupRecordingDuration 是录音时长查询的单测注入点，生产环境走 DB。
+	lookupRecordingDuration func(ctx context.Context, tenantID, recordingID int64) (int64, error)
 }
 
 // SetSearchAPIKey 注入 DeepSeek 搜索 API key（供 AI 可见性取真实信源）。

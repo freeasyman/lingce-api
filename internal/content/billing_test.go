@@ -2,23 +2,16 @@ package content
 
 import "testing"
 
-func TestNewContentBillingMetadataSetsDedicatedIDs(t *testing.T) {
-	contentID := int64(101)
-	topicID := int64(202)
-	req := GenerateContentRequest{
-		ContentID: &contentID,
-		TopicID:   &topicID,
-	}
+func TestNewBillingMetadataSetsBusinessObject(t *testing.T) {
+	billing := newBillingMetadata("content", "recording", 101, "insight_extraction", "content_insight", 202)
 
-	billing := newContentBillingMetadata(req, "content_generation", "xiaohongshu_note")
-
-	if billing.BusinessDomain != "content" || billing.BusinessObjectType != "content_item" || billing.BusinessObjectID != contentID {
+	if billing.BusinessDomain != "content" || billing.BusinessObjectType != "recording" || billing.BusinessObjectID != 101 {
 		t.Fatalf("unexpected business object attribution: %#v", billing)
 	}
-	if billing.ContentID != contentID || billing.TopicID != topicID {
-		t.Fatalf("dedicated content fields were not set: %#v", billing)
+	if billing.RecordingID != 202 {
+		t.Fatalf("recording id was not set: %#v", billing)
 	}
-	if billing.BillingSubject != "content_generation" || billing.BillingScene != "xiaohongshu_note" || billing.BillingRuleVersion != "v1" {
+	if billing.BillingSubject != "insight_extraction" || billing.BillingScene != "content_insight" || billing.BillingRuleVersion != "v1" || billing.CostLayer != "product" {
 		t.Fatalf("unexpected billing fields: %#v", billing)
 	}
 }

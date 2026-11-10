@@ -211,6 +211,8 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 	if err != nil {
 		return nil, err
 	}
+	// 需求洞察已成功落库：按录音时长扣 hour（worker 异步交付，无预检闸门）。
+	s.chargeInsight(ctx, tenantID, recordingID)
 	return stored, nil
 }
 

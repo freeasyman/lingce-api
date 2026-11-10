@@ -827,6 +827,10 @@ func (s *Service) GenerateContentV2(ctx context.Context, tenantID, topicID int64
 	if topicID <= 0 {
 		return nil, fmt.Errorf("topic_id is required")
 	}
+	// 文稿生成入口的交付前预检：record 1 份。额度不足拒绝开始生成。
+	if err := s.ensureContentQuota(ctx, tenantID, contentBillingUnitRecord, 1); err != nil {
+		return nil, err
+	}
 
 	outSchema, err := s.resolveContentOutputSchema(ctx, tenantID, form)
 	if err != nil {

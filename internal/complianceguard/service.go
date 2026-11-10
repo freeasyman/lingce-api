@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,11 @@ type Service struct {
 	pool         *pgxpool.Pool
 	llm          *llmgateway.Client
 	processLogMu sync.Mutex
+
+	// billing 是合规卫士（hegui）的计费能力，未接入时为 nil（旧部署/测试）。
+	billing billingService
+	// lookupRecordingDuration 是录音时长查询的单测注入点，生产环境走 DB。
+	lookupRecordingDuration func(ctx context.Context, tenantID, recordingID int64) (int64, error)
 }
 
 type FindingListFilter struct {
@@ -1273,6 +1279,16 @@ func (s *Service) AcceptCommunicationCheck(ctx context.Context, req Communicatio
 		return existing, runtime, nil
 	}
 
+	// "开始检查"入口的交付前预检：只有真正要跑模型的新检查才过闸门，
+	// 重放已完成的检查直接返回既有结果，不会因为额度刚刚用完而把重试打成 402。
+	if err := s.ensureCommunicationQuota(ctx, req.TenantID, req.RecordingID); err != nil {
+		if releaseErr := s.releaseCommunicationRunClaim(ctx, existing.RunID, executionKey); releaseErr != nil {
+			slog.Warn("compliance quota rejection: release run claim failed",
+				"tenant_id", req.TenantID, "recording_id", req.RecordingID, "run_id", existing.RunID, "error", releaseErr)
+		}
+		return nil, runtime, err
+	}
+
 	requestID := existing.RunID
 	llmRequest := buildCommunicationLLMRequest(req.TenantID, fmt.Sprintf("%d", req.RecordingID), runtime.RuleSetCode, runtime.RuleSetCode, runtime.RuleSetVersion, runtime.RuleSetName, modelConfig, runtime)
 	llmResponse, requestJSON, responseJSON, err := s.llm.TextInferenceWithRaw(ctx, llmRequest)
@@ -1688,6 +1704,8 @@ func (s *Service) completeCommunicationRun(ctx context.Context, response *Commun
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit communication run: %w", err)
 	}
+	// 检查结果已成功落库，按录音时长扣 hour；扣量失败只告警，不回滚结果。
+	s.chargeCommunicationCheck(ctx, response.TenantID, response.RecordingID, response.RunID)
 	return nil
 }
 

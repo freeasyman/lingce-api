@@ -519,6 +519,10 @@ func main() {
 	emrInternalHandler.UseBilling(billingModule.Service())
 	// 客户总监接入计费：录音分析扣 hour，截图解读扣 shot，建议动作扣 record，方案内容扣 person。
 	patientOpsModule.UseBilling(billingModule.Service())
+	// 合规卫士接入计费：沟通合规检查完成扣 hour（入口预检）。
+	complianceGuardModule.UseBilling(billingModule.Service())
+	// 获客先锋接入计费：需求洞察扣 hour，AI 诊断扣 prompt，文稿 record，图片 shot。
+	contentService.UseBilling(billingModule.Service())
 
 	// Register dashboard module
 	dashboardStore := dashboard.NewStore(pool)

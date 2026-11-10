@@ -25,6 +25,10 @@ func (s *Service) GenerateDraft(ctx context.Context, tenantID int64, form string
 	if strings.TrimSpace(req.TopicTitle) == "" {
 		return nil, fmt.Errorf("topic_title is required")
 	}
+	// 文稿生成入口的交付前预检：record 1 份。额度不足拒绝开始生成。
+	if err := s.ensureContentQuota(ctx, tenantID, contentBillingUnitRecord, 1); err != nil {
+		return nil, err
+	}
 
 	var user strings.Builder
 	user.WriteString(s.buildDraftUserPrompt(ctx, tenantID, req))

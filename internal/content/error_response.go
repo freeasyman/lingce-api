@@ -29,6 +29,7 @@ var contentFieldLabels = map[string]string{
 }
 
 // writeContentError 把业务错误映射成正确的 HTTP 语义：
+//   - 额度不足         → 402（CONTENT_QUOTA_EXHAUSTED）
 //   - BizError        → 按其 code/status 返回
 //   - 参数缺失         → 400（缺少必填参数：xxx）
 //   - 资源不存在       → 404（记录不存在或已被删除）
@@ -36,6 +37,11 @@ var contentFieldLabels = map[string]string{
 //
 // 之前这些情况统一返回 500「服务暂时不可用」，用户完全不知道该怎么办。
 func writeContentError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrContentQuotaExhausted) {
+		writeContentQuotaExhausted(w, err)
+		return
+	}
+
 	var bizErr *BizError
 	if errors.As(err, &bizErr) {
 		status := http.StatusBadRequest

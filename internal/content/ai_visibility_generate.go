@@ -47,6 +47,10 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	if channel == "" {
 		return nil, fmt.Errorf("目标渠道不合法：%s", target)
 	}
+	// 文稿生成入口的交付前预检：record 1 份。额度不足拒绝开始生成。
+	if err := s.ensureContentQuota(ctx, tenantID, contentBillingUnitRecord, 1); err != nil {
+		return nil, err
+	}
 	targetLabel := channel
 	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_article", "chat"})
 	if err != nil {
@@ -85,6 +89,8 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 			if uerr := s.store.overwriteContentItemBody(ctx, tenantID, existingID, title, body, channel); uerr != nil {
 				return nil, uerr
 			}
+			// 文稿已保存：按文章 ID 扣 record 1 份（同一篇重复覆盖不会重复扣）。
+			s.chargeArticle(ctx, tenantID, existingID)
 			return map[string]any{
 				"content_id": existingID, "title": title, "channel": channel,
 				"topic_id": run.TopicID, "insight_id": run.InsightID, "overwritten": true,
@@ -100,6 +106,8 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	if err := s.store.updateContentItemChannel(ctx, tenantID, id, channel); err != nil {
 		return nil, err
 	}
+	// 文稿已保存：按文章 ID 扣 record 1 份；扣量失败只告警，不影响交付结果。
+	s.chargeArticle(ctx, tenantID, id)
 	return map[string]any{
 		"content_id": id, "title": title, "channel": channel,
 		"topic_id": run.TopicID, "insight_id": run.InsightID,
