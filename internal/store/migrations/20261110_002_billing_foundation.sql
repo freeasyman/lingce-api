@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS product_catalog (
   id BIGSERIAL PRIMARY KEY,
   product_code VARCHAR(32) NOT NULL,
+  product_name VARCHAR(64) NOT NULL DEFAULT '',
   edition VARCHAR(16) NOT NULL DEFAULT 'standard',
   price_version VARCHAR(32) NOT NULL DEFAULT '2026',
   annual_price NUMERIC(12,2) NOT NULL DEFAULT 0,
