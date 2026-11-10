@@ -164,8 +164,20 @@ product_code + edition（standard/light/trial）
 ## 4. 前端最小
 
 ```text
-客户侧：剩余额度页（每产品还剩多少、到期日、用量明细）—— 读 product_entitlements + ledger
+客户侧：
+  ① 剩余额度页（每产品还剩多少、到期日、用量明细）—— 读 product_entitlements + ledger
+  ② 每个产品应用内"本次消耗"提示（必须项，像聊天框下的 Token 计数）：
+     交付结果下方一行小字——本次消耗 X ｜ 剩余 Y ｜ 到期日
+     余额 0 时变红："额度已用完，请及时联系客服，加购增量包"
+
 运营侧：一个简单后台 —— 订单列表、录订单、回款确认、**开通租户（建服务期 + 按档位发额度）**、录赠送、查任意客户余额
+```
+
+```text
+"本次消耗"提示由共享组件 QuotaUsageLine 统一实现，六产品复用：
+  听写病历 apps/emr ｜ 赢客专家 apps/deal-v2 ｜ 随访顾问 apps/followup
+  合规卫士 apps/compliance ｜ 获客先锋 apps/content-studio ｜ 客户总监 apps/patients
+文案红线：客户看得到的文字不出现"销售"，统一用"客服"。
 ```
 
 ---
@@ -173,7 +185,7 @@ product_code + edition（standard/light/trial）
 ## 5. 上线顺序
 
 ```text
-① 四张表 + 交付扣量（自动）+ 剩余额度页
+① 四张表 + 交付扣量（自动）+ 剩余额度页 + 各产品"本次消耗"提示
 ② 价目表 + 订单录入 + 回款确认 + 开通（建服务期 + 按档位发额度）
 ③ 赠送录入（自动算金额）+ 100% 暂停
 ④ 到期/结转的人工操作入口
