@@ -62,7 +62,7 @@ func writeTenantError(w http.ResponseWriter, err *tenantError) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrSalesTaskNotFound):
+	case errors.Is(err, ErrSalesTaskNotFound), errors.Is(err, ErrOutcomeNotFound):
 		httputil.WriteNotFound(w, err.Error())
 	case errors.Is(err, ErrSalesTaskNotActive):
 		httputil.WriteError(w, http.StatusConflict, "CONFLICT", err.Error(), nil)
@@ -88,7 +88,7 @@ func (h *Handler) ListSalesTasks(w http.ResponseWriter, r *http.Request) {
 	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 20
 	}
-	items, total, err := h.service.ListSalesTasks(r.Context(), scope.TenantID, strings.TrimSpace(r.URL.Query().Get("status")), page, pageSize, scope.EmployeeFilter)
+	items, total, err := h.service.ListSalesTasks(r.Context(), scope.TenantID, strings.TrimSpace(r.URL.Query().Get("status")), page, pageSize, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -291,7 +291,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	overview, err := h.service.Overview(r.Context(), scope.TenantID, dateFrom, dateTo, scope.EmployeeFilter)
+	overview, err := h.service.Overview(r.Context(), scope.TenantID, dateFrom, dateTo, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -336,7 +336,7 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		CustomerLinked: customerLinked,
 		SalesTaskState: strings.TrimSpace(r.URL.Query().Get("follow_up_state")),
 		Decision:       strings.TrimSpace(r.URL.Query().Get("decision")),
-	}, scope.EmployeeFilter)
+	}, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -523,10 +523,10 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 			LIMIT 1
 		) ov ON TRUE
 		WHERE a.tenant_id = $1 AND a.status = 'analyzed' AND r.deleted_at IS NULL
-		  AND ($2::bigint IS NULL OR r.employee_id = $2)
+		  AND ($2::bigint[] IS NULL OR r.employee_id = ANY($2))
 		ORDER BY r.recorded_at DESC
 		LIMIT 500
-	`, scope.TenantID, scope.EmployeeFilter)
+	`, scope.TenantID, scope.EmployeeIDs)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "LIST_ANALYSES_FAILED", err.Error(), nil)
 		return
@@ -584,11 +584,17 @@ func (h *Handler) outcomeFilterFromRequest(r *http.Request, scope *dealScope) (O
 		IncludeVoided: r.URL.Query().Get("include_voided") == "1",
 		Page:          page, PageSize: pageSize,
 	}
-	if scope.EmployeeFilter != nil {
-		f.EmployeeID = scope.EmployeeFilter
+	if !scope.allowsAllEmployees() {
+		f.EmployeeIDs = scope.EmployeeIDs
+		// 限定范围内仍允许按具体员工再收窄，但不能借参数扩大范围。
+		if raw := r.URL.Query().Get("employee_id"); raw != "" {
+			if id, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && id > 0 && scope.allowsEmployee(id) {
+				f.EmployeeIDs = []int64{id}
+			}
+		}
 	} else if raw := r.URL.Query().Get("employee_id"); raw != "" {
 		if id, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && id > 0 {
-			f.EmployeeID = &id
+			f.EmployeeIDs = []int64{id}
 		}
 	}
 	return f, nil
@@ -619,7 +625,7 @@ func (h *Handler) ListUnreportedClaims(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, httpErr)
 		return
 	}
-	items, err := h.service.ListUnreportedClaims(r.Context(), scope.TenantID, scope.EmployeeFilter)
+	items, err := h.service.ListUnreportedClaims(r.Context(), scope.TenantID, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -628,7 +634,7 @@ func (h *Handler) ListUnreportedClaims(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireManager(w http.ResponseWriter, scope *dealScope) bool {
-	if scope.EmployeeFilter != nil {
+	if !scope.Manager {
 		httputil.WriteError(w, http.StatusForbidden, "MANAGER_ONLY", "只有负责人可以更正或驳回业绩", nil)
 		return false
 	}
@@ -647,6 +653,10 @@ func (h *Handler) UpdateOutcome(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		httputil.WriteBadRequest(w, "invalid outcome id")
+		return
+	}
+	if accessErr := h.checkOutcomeAccess(r.Context(), scope, id, "更正"); accessErr != nil {
+		writeTenantError(w, accessErr)
 		return
 	}
 	var patch OutcomePatch
@@ -687,6 +697,10 @@ func (h *Handler) VoidOutcome(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		httputil.WriteBadRequest(w, "invalid outcome id")
+		return
+	}
+	if accessErr := h.checkOutcomeAccess(r.Context(), scope, id, "驳回"); accessErr != nil {
+		writeTenantError(w, accessErr)
 		return
 	}
 	var body struct {

@@ -74,3 +74,41 @@ func TestResultRulesCoverAllResults(t *testing.T) {
 		t.Fatal("appointment must not require amount")
 	}
 }
+
+func TestDealScopeAllowsEmployee(t *testing.T) {
+	all := &dealScope{EmployeeIDs: nil}
+	if !all.allowsAllEmployees() || !all.allowsEmployee(42) {
+		t.Fatal("tenant scope should allow every employee")
+	}
+	self := &dealScope{EmployeeIDs: []int64{7}}
+	if self.allowsAllEmployees() {
+		t.Fatal("self scope must not be treated as all employees")
+	}
+	if !self.allowsEmployee(7) || self.allowsEmployee(8) {
+		t.Fatal("self scope should only allow the current employee")
+	}
+	custom := &dealScope{EmployeeIDs: []int64{2, 3}}
+	if !custom.allowsEmployee(2) || !custom.allowsEmployee(3) || custom.allowsEmployee(1) {
+		t.Fatal("custom scope should only allow listed employees")
+	}
+	empty := &dealScope{EmployeeIDs: []int64{}}
+	if empty.allowsAllEmployees() || empty.allowsEmployee(1) {
+		t.Fatal("empty custom scope must not allow anyone")
+	}
+	var nilScope *dealScope
+	if nilScope.allowsEmployee(1) {
+		t.Fatal("nil scope must not allow anyone")
+	}
+}
+
+func TestDealScopeManagerIndependentFromVisibility(t *testing.T) {
+	// 负责人即使按 custom 只看部分员工，仍然拥有更正/驳回等负责人动作。
+	scope := &dealScope{EmployeeIDs: []int64{2, 3}, Manager: true}
+	if !scope.Manager {
+		t.Fatal("manager flag should stay true for custom scope")
+	}
+	consultant := &dealScope{EmployeeIDs: []int64{7}, Manager: false}
+	if consultant.Manager {
+		t.Fatal("consultant must not be manager")
+	}
+}

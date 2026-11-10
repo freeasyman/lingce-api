@@ -22,7 +22,7 @@ type EncounterListItem struct {
 	RefundAmount        *float64       `json:"refund_amount,omitempty"`
 	EffectiveNetAmount  *float64       `json:"effective_net_amount,omitempty"`
 	LatestOutcomeType   string         `json:"latest_outcome_type,omitempty"`
-	SalesTaskStatus      string         `json:"follow_up_status,omitempty"`
+	SalesTaskStatus     string         `json:"follow_up_status,omitempty"`
 	ProductName         string         `json:"product_name,omitempty"`
 	ConcernType         string         `json:"concern_type,omitempty"`
 	NextAction          string         `json:"next_action,omitempty"`
@@ -44,7 +44,7 @@ type EncounterListParams struct {
 	Decision string
 }
 
-func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params EncounterListParams, employeeFilter *int64) ([]*EncounterListItem, int, error) {
+func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params EncounterListParams, employeeIDs []int64) ([]*EncounterListItem, int, error) {
 	if params.Page <= 0 {
 		params.Page = 1
 	}
@@ -66,5 +66,5 @@ func (s *Service) ListEncounters(ctx context.Context, tenantID int64, params Enc
 	default:
 		return nil, 0, ErrInvalidDecisionFilter
 	}
-	return s.store.ListEncounters(ctx, tenantID, params, employeeFilter)
+	return s.store.ListEncounters(ctx, tenantID, params, employeeIDs)
 }

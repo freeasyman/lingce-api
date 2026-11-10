@@ -1,9 +1,10 @@
-// 赢客专家权限验收脚本：检查角色分配、数据范围决策与可见数据是否符合预期。
+// 赢客专家权限验收脚本：检查角色分配、数据可见范围与可见数据是否符合预期。
 //
 //	DATABASE_URL='postgresql://...' go run ./scripts/cmd/deal_permission_check
 //	DATABASE_URL='...' go run ./scripts/cmd/deal_permission_check -apply-roles
 //
-// -apply-roles 会为验收租户 9001 的 9101～9106 补齐角色关联（仅验收数据，可重复执行）。
+// -apply-roles 会为验收租户 9001 的 9101～9106 补齐角色关联和默认数据可见范围
+// （仅验收数据，可重复执行）。
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/freeasyman/lingce-api/internal/dealexpert"
+	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
 )
 
 const tenantID = int64(9001)
@@ -25,21 +27,24 @@ type expectation struct {
 	employeeID int64
 	name       string
 	role       string
+	scope      string
 	visible    int
 	allowed    bool
 }
 
 var expectations = []expectation{
-	{employeeID: 9101, name: "王晓", role: "consultant", visible: 4, allowed: true},
-	{employeeID: 9102, name: "陈琳", role: "consultant", visible: 4, allowed: true},
-	{employeeID: 9103, name: "赵主管", role: "sales_manager", visible: 8, allowed: true},
-	{employeeID: 9104, name: "周院长", role: "director", visible: 8, allowed: true},
+	{employeeID: 9101, name: "王晓", role: "consultant", scope: dealexpertpermission.DataScopeSelf, visible: 4, allowed: true},
+	{employeeID: 9102, name: "陈琳", role: "consultant", scope: dealexpertpermission.DataScopeSelf, visible: 4, allowed: true},
+	{employeeID: 9103, name: "赵主管", role: "sales_manager", scope: dealexpertpermission.DataScopeCustom, visible: 8, allowed: true},
+	{employeeID: 9104, name: "周院长", role: "director", scope: dealexpertpermission.DataScopeCustom, visible: 8, allowed: true},
 	{employeeID: 9105, name: "李护士", role: "followup", visible: 0, allowed: false},
 	{employeeID: 9106, name: "无权限员工", role: "staff", visible: 0, allowed: false},
 }
 
+var acceptanceEmployeeIDs = []int64{9101, 9102, 9103, 9104, 9105, 9106}
+
 func main() {
-	applyRoles := flag.Bool("apply-roles", false, "补齐验收租户 9001 的员工角色关联")
+	applyRoles := flag.Bool("apply-roles", false, "补齐验收租户 9001 的员工角色关联和数据可见范围")
 	flag.Parse()
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -62,26 +67,34 @@ func main() {
 			fmt.Fprintln(os.Stderr, "apply roles:", err)
 			os.Exit(1)
 		}
-		fmt.Println("已补齐 9101～9106 的验收角色关联")
+		if err := seedDataScopes(ctx, pool); err != nil {
+			fmt.Fprintln(os.Stderr, "apply data scopes:", err)
+			os.Exit(1)
+		}
+		fmt.Println("已补齐 9101～9106 的验收角色关联和默认数据可见范围")
 	}
 
 	service := dealexpert.NewService(dealexpert.NewStore(pool))
+	permission := dealexpertpermission.NewService(pool)
 	failures := 0
-	fmt.Printf("%-6s %-8s %-14s %-18s %-10s %-10s %s\n", "员工", "姓名", "实际角色", "范围决策", "可见接待", "期望", "结果")
+	fmt.Printf("%-6s %-8s %-14s %-10s %-10s %-10s %s\n", "员工", "姓名", "实际角色", "可见范围", "可见接待", "期望", "结果")
 	for _, item := range expectations {
 		roles := rolesOf(ctx, pool, item.employeeID)
 		rule := dealexpert.EvaluateDealScope(roles)
 
+		scope := "-"
 		visible := 0
 		if rule.Allowed {
-			var filter *int64
-			if !rule.AllEmployees {
-				employeeID := item.employeeID
-				filter = &employeeID
-			}
-			overview, err := service.Overview(ctx, tenantID, nil, nil, filter)
+			visibility, err := permission.VisibilityFor(ctx, tenantID, item.employeeID)
 			if err != nil {
-				fmt.Printf("%-6d %-8s %-14s %-18s %-10s %-10s %s\n", item.employeeID, item.name, joinRoles(roles), rule.Code, "查询失败", item.visible, "FAIL")
+				fmt.Printf("%-6d %-8s %-14s %-10s %s\n", item.employeeID, item.name, joinRoles(roles), "查询失败", "FAIL")
+				failures++
+				continue
+			}
+			scope = visibility.Scope
+			overview, err := service.Overview(ctx, tenantID, nil, nil, visibility.VisibilityEmployeeIDs())
+			if err != nil {
+				fmt.Printf("%-6d %-8s %-14s %-10s %-10s %-10d %s\n", item.employeeID, item.name, joinRoles(roles), scope, "查询失败", item.visible, "FAIL")
 				fmt.Fprintln(os.Stderr, "overview:", err)
 				failures++
 				continue
@@ -89,13 +102,13 @@ func main() {
 			visible = overview.TotalEncounters
 		}
 
-		ok := rule.Allowed == item.allowed && (!rule.Allowed || visible == item.visible)
+		ok := rule.Allowed == item.allowed && (!rule.Allowed || (scope == item.scope && visible == item.visible))
 		result := "PASS"
 		if !ok {
 			result = "FAIL"
 			failures++
 		}
-		fmt.Printf("%-6d %-8s %-14s %-18s %-10d %-10d %s\n", item.employeeID, item.name, joinRoles(roles), rule.Code, visible, item.visible, result)
+		fmt.Printf("%-6d %-8s %-14s %-10s %-10d %-10d %s\n", item.employeeID, item.name, joinRoles(roles), scope, visible, item.visible, result)
 	}
 
 	// 接待归属校验：8001 属于 9101，9102 不应看到。
@@ -110,10 +123,13 @@ func main() {
 		fmt.Println("接待归属：8001 → 9101，PASS")
 	}
 
-	// 越权访问模拟：咨询师 9102 请求 8001 应被拒绝。
-	rule9102 := dealexpert.EvaluateDealScope(rolesOf(ctx, pool, 9102))
-	if rule9102.Allowed && !rule9102.AllEmployees && owner8001 != 9102 {
-		fmt.Println("越权校验：9102 访问 8001 会被拒绝（负责人不匹配），PASS")
+	// 越权访问模拟：咨询师 9102（self）请求 8001 应被拒绝。
+	visibility9102, err := permission.VisibilityFor(ctx, tenantID, 9102)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "visibility 9102:", err)
+		failures++
+	} else if !visibility9102.Allows(owner8001) && owner8001 != 9102 {
+		fmt.Println("越权校验：9102 访问 8001 会被拒绝（接待归属不在可见范围），PASS")
 	} else {
 		fmt.Println("越权校验：9102 的可见范围无法拦截 8001，FAIL")
 		failures++
@@ -170,6 +186,38 @@ func seedRoles(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// seedDataScopes 通过真实 Upsert 路径写入验收数据：
+// 咨询师 self；主管 custom 且默认填入验收机构全部员工（等价于 Web「选择本部门所有人」）。
+func seedDataScopes(ctx context.Context, pool *pgxpool.Pool) error {
+	permission := dealexpertpermission.NewService(pool)
+	staffAbilities := append([]string{}, dealexpertpermission.DefaultStaffAbilities...)
+	adminAbilities := append([]string{}, dealexpertpermission.AllAbilities...)
+	items := []struct {
+		employeeID int64
+		roleCode   string
+		abilities  []string
+		scope      string
+		visible    []int64
+	}{
+		{9101, dealexpertpermission.RoleStaff, staffAbilities, dealexpertpermission.DataScopeSelf, nil},
+		{9102, dealexpertpermission.RoleStaff, staffAbilities, dealexpertpermission.DataScopeSelf, nil},
+		{9103, dealexpertpermission.RoleAdmin, adminAbilities, dealexpertpermission.DataScopeCustom, acceptanceEmployeeIDs},
+		{9104, dealexpertpermission.RoleAdmin, adminAbilities, dealexpertpermission.DataScopeCustom, acceptanceEmployeeIDs},
+	}
+	for _, item := range items {
+		if _, err := permission.Upsert(ctx, tenantID, item.employeeID, 9104, dealexpertpermission.UpsertRequest{
+			Enabled:            true,
+			RoleCode:           item.roleCode,
+			Abilities:          item.abilities,
+			DataScope:          item.scope,
+			VisibleEmployeeIDs: item.visible,
+		}); err != nil {
+			return fmt.Errorf("upsert %d: %w", item.employeeID, err)
+		}
+	}
+	return nil
 }
 
 func joinRoles(roles []string) string {

@@ -26,11 +26,19 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 		       COALESCE(e.username, ''),
 		       COALESCE(NULLIF(NULLIF(e.full_name, 'unknown'), ''), NULLIF(NULLIF(e.name, 'unknown'), ''), NULLIF(e.username, ''), NULLIF(e.phone, ''), '未知员工'),
 		       COALESCE(e.phone, ''),
+		       COALESCE(e.department_id, 0),
 		       COALESCE(d.name, ''),
 		       COALESCE(e.role, ''),
 		       CASE WHEN e.is_active::text IN ('1','t','true','TRUE','yes') THEN true ELSE false END,
+		       COALESCE((
+		           SELECT json_agg(DISTINCT lower(trim(ier.role_code)))
+		           FROM institution_employee_roles ier
+		           WHERE ier.employee_id = e.id AND ier.tenant_id = e.tenant_id
+		             AND trim(COALESCE(ier.role_code, '')) <> ''
+		       ), '[]'::json) AS role_codes,
 		       dp.id, dp.tenant_id, dp.employee_id, COALESCE(dp.enabled, false),
 		       COALESCE(dp.role_code, ''), COALESCE(dp.abilities_json, '[]'::jsonb),
+		       COALESCE(dp.data_scope, 'self'), COALESCE(dp.visible_employee_ids, '{}'::bigint[]),
 		       dp.created_by, dp.updated_by, dp.created_at, dp.updated_at
 		FROM employees e
 		LEFT JOIN departments d ON d.id = e.department_id AND d.tenant_id = e.tenant_id AND d.deleted_at IS NULL
@@ -49,13 +57,19 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 		var id, assignmentTenant, assignmentEmployee *int64
 		var enabled bool
 		var role string
+		var roleCodesRaw []byte
 		var abilitiesRaw []byte
+		var dataScope string
+		var visibleEmployeeIDs []int64
 		var createdBy, updatedBy *int64
 		var createdAt, updatedAt *time.Time
-		if err := rows.Scan(&item.EmployeeID, &item.Username, &item.FullName, &item.Phone, &item.Department, &item.Role, &item.IsActive,
-			&id, &assignmentTenant, &assignmentEmployee, &enabled, &role, &abilitiesRaw, &createdBy, &updatedBy,
+		if err := rows.Scan(&item.EmployeeID, &item.Username, &item.FullName, &item.Phone, &item.DepartmentID, &item.Department, &item.Role, &item.IsActive, &roleCodesRaw,
+			&id, &assignmentTenant, &assignmentEmployee, &enabled, &role, &abilitiesRaw, &dataScope, &visibleEmployeeIDs, &createdBy, &updatedBy,
 			&createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan deal expert permission row: %w", err)
+		}
+		if len(roleCodesRaw) > 0 {
+			_ = json.Unmarshal(roleCodesRaw, &item.RoleCodes)
 		}
 		if id != nil && assignmentTenant != nil && assignmentEmployee != nil {
 			abilities := []string{}
@@ -64,7 +78,18 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 					return nil, fmt.Errorf("decode deal expert abilities: %w", err)
 				}
 			}
-			item.Permission = &Assignment{ID: *id, TenantID: *assignmentTenant, EmployeeID: *assignmentEmployee, Enabled: enabled, RoleCode: role, Abilities: normalizeAbilities(abilities), CreatedBy: createdBy, UpdatedBy: updatedBy}
+			item.Permission = &Assignment{
+				ID:                 *id,
+				TenantID:           *assignmentTenant,
+				EmployeeID:         *assignmentEmployee,
+				Enabled:            enabled,
+				RoleCode:           role,
+				Abilities:          normalizeAbilities(abilities),
+				DataScope:          NormalizeDataScope(dataScope),
+				VisibleEmployeeIDs: NormalizeVisibleEmployeeIDs(visibleEmployeeIDs),
+				CreatedBy:          createdBy,
+				UpdatedBy:          updatedBy,
+			}
 			if createdAt != nil {
 				item.Permission.CreatedAt = *createdAt
 			}
@@ -83,12 +108,15 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 func (s *Service) Get(ctx context.Context, tenantID, employeeID int64) (*Assignment, error) {
 	var item Assignment
 	var raw []byte
+	var visibleEmployeeIDs []int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, employee_id, enabled, role_code, COALESCE(abilities_json, '[]'::jsonb),
+		       COALESCE(data_scope, 'self'), COALESCE(visible_employee_ids, '{}'::bigint[]),
 		       created_by, updated_by, created_at, updated_at
 		FROM deal_expert_permission_assignments
 		WHERE tenant_id=$1 AND employee_id=$2
-	`, tenantID, employeeID).Scan(&item.ID, &item.TenantID, &item.EmployeeID, &item.Enabled, &item.RoleCode, &raw, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+	`, tenantID, employeeID).Scan(&item.ID, &item.TenantID, &item.EmployeeID, &item.Enabled, &item.RoleCode, &raw,
+		&item.DataScope, &visibleEmployeeIDs, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -99,6 +127,8 @@ func (s *Service) Get(ctx context.Context, tenantID, employeeID int64) (*Assignm
 		return nil, fmt.Errorf("decode deal expert permission: %w", err)
 	}
 	item.Abilities = normalizeAbilities(item.Abilities)
+	item.DataScope = NormalizeDataScope(item.DataScope)
+	item.VisibleEmployeeIDs = NormalizeVisibleEmployeeIDs(visibleEmployeeIDs)
 	return &item, nil
 }
 
@@ -106,6 +136,21 @@ func (s *Service) EmployeeExists(ctx context.Context, tenantID, employeeID int64
 	var exists bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM employees WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL)`, employeeID, tenantID).Scan(&exists)
 	return exists, err
+}
+
+// EmployeesExist 校验一组员工都属于当前机构且未删除。
+func (s *Service) EmployeesExist(ctx context.Context, tenantID int64, employeeIDs []int64) (bool, error) {
+	if len(employeeIDs) == 0 {
+		return true, nil
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM employees
+		WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::bigint[])
+	`, tenantID, employeeIDs).Scan(&count); err != nil {
+		return false, fmt.Errorf("check visible employees: %w", err)
+	}
+	return count == len(employeeIDs), nil
 }
 
 // EmployeeRole 返回员工在机构里的角色（employees.role）。
@@ -122,6 +167,26 @@ func (s *Service) EmployeeRole(ctx context.Context, tenantID, employeeID int64) 
 		return "", fmt.Errorf("load employee role: %w", err)
 	}
 	return role, nil
+}
+
+// VisibilityFor 解析某个员工当前生效的数据可见范围。
+// 管理员固定全机构；未配置权限时按机构角色给默认（负责人 custom、其余 self）。
+func (s *Service) VisibilityFor(ctx context.Context, tenantID, employeeID int64) (*Visibility, error) {
+	employeeRole, err := s.EmployeeRole(ctx, tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	if employeeRole == "admin" {
+		return ResolveVisibility(DataScopeTenant, nil, employeeID, true), nil
+	}
+	assignment, err := s.Get(ctx, tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	if assignment == nil {
+		return ResolveVisibility(DefaultDataScopeForRole(employeeRole), nil, employeeID, false), nil
+	}
+	return ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, employeeID, false), nil
 }
 
 // DefaultAbilities 返回角色的默认能力包：负责人全开，其他咨询师默认包。
@@ -159,20 +224,79 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 	if !exists {
 		return nil, fmt.Errorf("employee not found")
 	}
+	targetRole, err := s.EmployeeRole(ctx, tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	isAdmin := targetRole == "admin"
+
+	existing, err := s.Get(ctx, tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+
+	dataScope := ""
+	visibleEmployeeIDs := []int64{}
+	if strings.TrimSpace(req.DataScope) != "" {
+		dataScope = NormalizeDataScope(req.DataScope)
+		visibleEmployeeIDs = NormalizeVisibleEmployeeIDs(req.VisibleEmployeeIDs)
+	} else if existing != nil {
+		// 旧客户端不传 data_scope 时保留原配置，避免保存能力时把可见范围重置。
+		dataScope = NormalizeDataScope(existing.DataScope)
+		visibleEmployeeIDs = NormalizeVisibleEmployeeIDs(existing.VisibleEmployeeIDs)
+	} else {
+		dataScope = DefaultDataScopeForRole(targetRole)
+		visibleEmployeeIDs = NormalizeVisibleEmployeeIDs(req.VisibleEmployeeIDs)
+	}
+
+	if isAdmin {
+		// 机构管理员固定全机构，忽略请求里的自定义范围。
+		dataScope = DataScopeTenant
+		visibleEmployeeIDs = []int64{}
+	}
+	switch dataScope {
+	case DataScopeTenant:
+		if !isAdmin {
+			return nil, fmt.Errorf("全机构可见范围仅限机构管理员")
+		}
+		visibleEmployeeIDs = []int64{}
+	case DataScopeSelf:
+		visibleEmployeeIDs = []int64{}
+	case DataScopeCustom:
+		if len(visibleEmployeeIDs) == 0 {
+			return nil, fmt.Errorf("指定人员可见范围至少需要选择 1 名员工")
+		}
+		ok, err := s.EmployeesExist(ctx, tenantID, visibleEmployeeIDs)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("指定人员不存在或不属于当前机构")
+		}
+	default:
+		return nil, fmt.Errorf("invalid data_scope")
+	}
+
 	raw, err := json.Marshal(abilities)
 	if err != nil {
 		return nil, err
 	}
 	var item Assignment
 	var stored []byte
+	var storedVisible []int64
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO deal_expert_permission_assignments (tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by)
-		VALUES ($1,$2,$3,$4,$5::jsonb,$6,$6)
+		INSERT INTO deal_expert_permission_assignments
+			(tenant_id, employee_id, enabled, role_code, abilities_json, data_scope, visible_employee_ids, created_by, updated_by)
+		VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::bigint[],$8,$8)
 		ON CONFLICT (tenant_id, employee_id) DO UPDATE SET
 		  enabled=EXCLUDED.enabled, role_code=EXCLUDED.role_code, abilities_json=EXCLUDED.abilities_json,
+		  data_scope=EXCLUDED.data_scope, visible_employee_ids=EXCLUDED.visible_employee_ids,
 		  updated_by=EXCLUDED.updated_by, updated_at=NOW()
-		RETURNING id, tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by, created_at, updated_at
-	`, tenantID, employeeID, req.Enabled, roleCode, string(raw), actorID).Scan(&item.ID, &item.TenantID, &item.EmployeeID, &item.Enabled, &item.RoleCode, &stored, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
+		RETURNING id, tenant_id, employee_id, enabled, role_code, abilities_json, data_scope,
+		          visible_employee_ids, created_by, updated_by, created_at, updated_at
+	`, tenantID, employeeID, req.Enabled, roleCode, string(raw), dataScope, visibleEmployeeIDs, actorID).Scan(
+		&item.ID, &item.TenantID, &item.EmployeeID, &item.Enabled, &item.RoleCode, &stored, &item.DataScope,
+		&storedVisible, &item.CreatedBy, &item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("upsert deal expert permission: %w", err)
 	}
@@ -180,6 +304,8 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 		return nil, err
 	}
 	item.Abilities = normalizeAbilities(item.Abilities)
+	item.DataScope = NormalizeDataScope(item.DataScope)
+	item.VisibleEmployeeIDs = NormalizeVisibleEmployeeIDs(storedVisible)
 	return &item, nil
 }
 
@@ -190,7 +316,8 @@ func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID i
 		return nil, fmt.Errorf("invalid token")
 	}
 	if claims.UserType == auth.UserTypeAdmin {
-		return &Access{UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true, RoleCode: RoleAdmin, Abilities: abilitySet(AllAbilities)}, nil
+		return &Access{UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true, RoleCode: RoleAdmin,
+			Abilities: abilitySet(AllAbilities), DataScope: DataScopeTenant, VisibleEmployeeIDs: []int64{}}, nil
 	}
 	if claims.TenantID == nil || *claims.TenantID != tenantID {
 		return nil, fmt.Errorf("access denied")
@@ -200,7 +327,8 @@ func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID i
 		return nil, err
 	}
 	if employeeRole == "admin" {
-		return &Access{UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true, RoleCode: RoleAdmin, Abilities: abilitySet(AllAbilities)}, nil
+		return &Access{UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true, RoleCode: RoleAdmin,
+			Abilities: abilitySet(AllAbilities), DataScope: DataScopeTenant, VisibleEmployeeIDs: []int64{}}, nil
 	}
 	assignment, err := s.Get(ctx, tenantID, claims.UserID)
 	if err != nil {
@@ -209,12 +337,17 @@ func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID i
 	if assignment == nil {
 		roleCode := DefaultRoleForEmployee(employeeRole)
 		abilities := DefaultAbilities(roleCode)
-		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: true, RoleCode: roleCode, Abilities: abilitySet(abilities)}, nil
+		visibility := ResolveVisibility(DefaultDataScopeForRole(employeeRole), nil, claims.UserID, false)
+		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: true, RoleCode: roleCode,
+			Abilities: abilitySet(abilities), DataScope: visibility.Scope, VisibleEmployeeIDs: visibility.EmployeeIDs}, nil
 	}
+	visibility := ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, claims.UserID, false)
 	if !assignment.Enabled {
-		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: false, RoleCode: assignment.RoleCode, Abilities: map[string]struct{}{}}, nil
+		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: false, RoleCode: assignment.RoleCode,
+			Abilities: map[string]struct{}{}, DataScope: visibility.Scope, VisibleEmployeeIDs: visibility.EmployeeIDs}, nil
 	}
-	return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: true, RoleCode: assignment.RoleCode, Abilities: abilitySet(assignment.Abilities)}, nil
+	return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: true, RoleCode: assignment.RoleCode,
+		Abilities: abilitySet(assignment.Abilities), DataScope: visibility.Scope, VisibleEmployeeIDs: visibility.EmployeeIDs}, nil
 }
 
 func abilitySet(values []string) map[string]struct{} {
@@ -247,7 +380,9 @@ func normalizeAbilities(values []string) []string {
 }
 
 type UpsertRequest struct {
-	Enabled   bool     `json:"enabled"`
-	RoleCode  string   `json:"role_code"`
-	Abilities []string `json:"abilities"`
+	Enabled            bool     `json:"enabled"`
+	RoleCode           string   `json:"role_code"`
+	Abilities          []string `json:"abilities"`
+	DataScope          string   `json:"data_scope"`
+	VisibleEmployeeIDs []int64  `json:"visible_employee_ids"`
 }

@@ -3,14 +3,17 @@ package dealexpert
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type OutcomeFilter struct {
 	DateFrom      *time.Time
 	DateTo        *time.Time
-	EmployeeID    *int64
+	EmployeeIDs   []int64
 	Type          string
 	IncludeVoided bool
 	Page          int
@@ -44,8 +47,8 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 	if f.DateTo != nil {
 		add("o.occurred_at < $%d", *f.DateTo)
 	}
-	if f.EmployeeID != nil {
-		add("r.employee_id = $%d", *f.EmployeeID)
+	if f.EmployeeIDs != nil {
+		add("r.employee_id = ANY($%d::bigint[])", f.EmployeeIDs)
 	}
 	if f.Type != "" {
 		add("o.type = $%d", f.Type)
@@ -89,12 +92,12 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 	return items, total, rows.Err()
 }
 
-func (s *Store) ListUnreportedClaims(ctx context.Context, tenantID int64, employeeID *int64) ([]*UnreportedClaim, error) {
+func (s *Store) ListUnreportedClaims(ctx context.Context, tenantID int64, employeeIDs []int64) ([]*UnreportedClaim, error) {
 	args := []any{tenantID}
 	extra := ""
-	if employeeID != nil {
-		args = append(args, *employeeID)
-		extra = fmt.Sprintf(" AND r.employee_id = $%d", len(args))
+	if employeeIDs != nil {
+		args = append(args, employeeIDs)
+		extra = fmt.Sprintf(" AND r.employee_id = ANY($%d::bigint[])", len(args))
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.recording_id, COALESCE(r.encounter_id,0),
@@ -217,4 +220,22 @@ func maxAmountHint(raw []byte) *float64 {
 		return nil
 	}
 	return &max
+}
+
+// OutcomeEmployee 返回一笔业绩归属的咨询师，用于数据可见范围校验。
+func (s *Store) OutcomeEmployee(ctx context.Context, tenantID, outcomeID int64) (int64, error) {
+	var employeeID int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(r.employee_id, 0)
+		FROM deal_outcome_events o
+		JOIN recordings r ON r.id = o.recording_id AND r.tenant_id = o.tenant_id
+		WHERE o.tenant_id = $1 AND o.id = $2
+	`, tenantID, outcomeID).Scan(&employeeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrOutcomeNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("query outcome employee: %w", err)
+	}
+	return employeeID, nil
 }

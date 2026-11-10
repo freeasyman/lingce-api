@@ -8,7 +8,7 @@ import (
 
 // ListEncounters 返回接待读模型。排序与筛选都基于「结果事件优先」的有效状态，
 // 保证列表、详情和经营汇总看到的是同一件事。
-func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params EncounterListParams, employeeFilter *int64) ([]*EncounterListItem, int, error) {
+func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params EncounterListParams, employeeIDs []int64) ([]*EncounterListItem, int, error) {
 	if s == nil || s.pool == nil {
 		return nil, 0, fmt.Errorf("deal expert store is nil")
 	}
@@ -16,9 +16,9 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 	args := []any{tenantID}
 	conditions := "WHERE r.tenant_id = $1 AND r.deleted_at IS NULL AND lower(coalesce(r.business_scope, '')) = 'consultant'"
 
-	if employeeFilter != nil {
-		args = append(args, *employeeFilter)
-		conditions += fmt.Sprintf(" AND r.employee_id = $%d", len(args))
+	if employeeIDs != nil {
+		args = append(args, employeeIDs)
+		conditions += fmt.Sprintf(" AND r.employee_id = ANY($%d::bigint[])", len(args))
 	}
 	if keyword := strings.TrimSpace(params.Keyword); keyword != "" {
 		args = append(args, "%"+keyword+"%")

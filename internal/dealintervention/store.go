@@ -14,24 +14,25 @@ var ErrSignalNotFound = errors.New("intervention signal not found")
 
 // Signal 是介入信号读模型：Web 工作台与 H5 共用。
 type Signal struct {
-	ID              int64      `json:"id"`
-	RecordingID     int64      `json:"recording_id"`
-	CustomerName    string     `json:"customer_name"`
-	ProjectName     string     `json:"project_name"`
-	ConsultantName  string     `json:"consultant_name"`
-	RecordedAt      string     `json:"recorded_at,omitempty"`
-	Level           string     `json:"level"`
-	Reason          string     `json:"reason"`
-	Action          string     `json:"action"`
-	Evidence        string     `json:"evidence,omitempty"`
-	Status          string     `json:"status"`
-	ShortCode       string     `json:"short_code,omitempty"`
-	Note            string     `json:"note,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	HandledAt       *time.Time `json:"handled_at,omitempty"`
-	HandledBy       *int64     `json:"handled_by,omitempty"`
-	HandledByName   string     `json:"handled_by_name,omitempty"`
-	ManagerID       int64      `json:"manager_employee_id"`
+	ID             int64      `json:"id"`
+	RecordingID    int64      `json:"recording_id"`
+	CustomerName   string     `json:"customer_name"`
+	ProjectName    string     `json:"project_name"`
+	ConsultantName string     `json:"consultant_name"`
+	RecordedAt     string     `json:"recorded_at,omitempty"`
+	Level          string     `json:"level"`
+	Reason         string     `json:"reason"`
+	Action         string     `json:"action"`
+	Evidence       string     `json:"evidence,omitempty"`
+	Status         string     `json:"status"`
+	ShortCode      string     `json:"short_code,omitempty"`
+	Note           string     `json:"note,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	HandledAt      *time.Time `json:"handled_at,omitempty"`
+	HandledBy      *int64     `json:"handled_by,omitempty"`
+	HandledByName  string     `json:"handled_by_name,omitempty"`
+	ManagerID      int64      `json:"manager_employee_id"`
+	ConsultantID   int64      `json:"consultant_employee_id"`
 }
 
 type Service struct {
@@ -45,13 +46,13 @@ func NewService(pool *pgxpool.Pool) *Service {
 const signalColumns = `s.id, s.recording_id, s.customer_name, s.project_name, s.level, s.reason, s.action,
 	s.evidence, s.status, s.short_code, s.note, s.created_at, s.handled_at, s.handled_by,
 	COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), ''), COALESCE(r.recorded_at::text, ''),
-	COALESCE(NULLIF(h.full_name,''), NULLIF(h.name,''), ''), s.manager_employee_id`
+	COALESCE(NULLIF(h.full_name,''), NULLIF(h.name,''), ''), s.manager_employee_id, s.consultant_employee_id`
 
 func scanSignal(row rowScanner) (*Signal, error) {
 	var item Signal
 	err := row.Scan(&item.ID, &item.RecordingID, &item.CustomerName, &item.ProjectName, &item.Level, &item.Reason, &item.Action,
 		&item.Evidence, &item.Status, &item.ShortCode, &item.Note, &item.CreatedAt, &item.HandledAt, &item.HandledBy,
-		&item.ConsultantName, &item.RecordedAt, &item.HandledByName, &item.ManagerID)
+		&item.ConsultantName, &item.RecordedAt, &item.HandledByName, &item.ManagerID, &item.ConsultantID)
 	return &item, err
 }
 
@@ -59,8 +60,9 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// List 返回介入信号列表：status=pending/handled（intervened+dismissed）；managerID 非空时只看自己的信号。
-func (s *Service) List(ctx context.Context, tenantID int64, status string, managerID *int64, page, pageSize int) ([]*Signal, int, error) {
+// List 返回介入信号列表：status=pending/handled（intervened+dismissed）。
+// employeeIDs 来自统一数据可见范围：nil 表示全机构，否则只看这些咨询师名下的信号。
+func (s *Service) List(ctx context.Context, tenantID int64, status string, employeeIDs []int64, page, pageSize int) ([]*Signal, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -76,9 +78,9 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string, manag
 	}
 	args := []any{tenantID}
 	where := fmt.Sprintf("s.tenant_id = $1 AND %s", statusCond)
-	if managerID != nil {
-		args = append(args, *managerID)
-		where += fmt.Sprintf(" AND s.manager_employee_id = $%d", len(args))
+	if employeeIDs != nil {
+		args = append(args, employeeIDs)
+		where += fmt.Sprintf(" AND s.consultant_employee_id = ANY($%d::bigint[])", len(args))
 	}
 
 	var total int

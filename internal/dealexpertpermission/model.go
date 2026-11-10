@@ -66,36 +66,42 @@ func IsManagerRole(role string) bool {
 }
 
 type Assignment struct {
-	ID         int64     `json:"id"`
-	TenantID   int64     `json:"tenant_id"`
-	EmployeeID int64     `json:"employee_id"`
-	Enabled    bool      `json:"enabled"`
-	RoleCode   string    `json:"role_code"`
-	Abilities  []string  `json:"abilities"`
-	CreatedBy  *int64    `json:"created_by,omitempty"`
-	UpdatedBy  *int64    `json:"updated_by,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	TenantID           int64     `json:"tenant_id"`
+	EmployeeID         int64     `json:"employee_id"`
+	Enabled            bool      `json:"enabled"`
+	RoleCode           string    `json:"role_code"`
+	Abilities          []string  `json:"abilities"`
+	DataScope          string    `json:"data_scope"`
+	VisibleEmployeeIDs []int64   `json:"visible_employee_ids"`
+	CreatedBy          *int64    `json:"created_by,omitempty"`
+	UpdatedBy          *int64    `json:"updated_by,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type EmployeePermissionRow struct {
-	EmployeeID int64       `json:"employee_id"`
-	Username   string      `json:"username"`
-	FullName   string      `json:"full_name"`
-	Phone      string      `json:"phone"`
-	Department string      `json:"department_name,omitempty"`
-	IsActive   bool        `json:"is_active"`
-	Role       string      `json:"role"`
-	Permission *Assignment `json:"permission,omitempty"`
+	EmployeeID   int64       `json:"employee_id"`
+	Username     string      `json:"username"`
+	FullName     string      `json:"full_name"`
+	Phone        string      `json:"phone"`
+	DepartmentID int64       `json:"department_id,omitempty"`
+	Department   string      `json:"department_name,omitempty"`
+	IsActive     bool        `json:"is_active"`
+	Role         string      `json:"role"`
+	RoleCodes    []string    `json:"role_codes,omitempty"`
+	Permission   *Assignment `json:"permission,omitempty"`
 }
 
 type Access struct {
-	UserID    int64
-	TenantID  int64
-	Admin     bool
-	Enabled   bool
-	RoleCode  string
-	Abilities map[string]struct{}
+	UserID             int64
+	TenantID           int64
+	Admin              bool
+	Enabled            bool
+	RoleCode           string
+	Abilities          map[string]struct{}
+	DataScope          string
+	VisibleEmployeeIDs []int64
 }
 
 func (a *Access) Has(ability string) bool {
@@ -128,4 +134,16 @@ func (a *Access) AbilityList() []string {
 		}
 	}
 	return result
+}
+
+// Visibility 返回当前生效的数据可见集合；管理员始终为全机构。
+func (a *Access) Visibility() *Visibility {
+	if a == nil {
+		return &Visibility{Scope: DataScopeSelf, EmployeeIDs: []int64{}}
+	}
+	if a.Admin {
+		return &Visibility{Scope: DataScopeTenant, All: true, EmployeeIDs: []int64{}}
+	}
+	scope := NormalizeDataScope(a.DataScope)
+	return &Visibility{Scope: scope, EmployeeIDs: NormalizeVisibleEmployeeIDs(a.VisibleEmployeeIDs)}
 }

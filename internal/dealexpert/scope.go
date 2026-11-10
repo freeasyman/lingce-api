@@ -2,33 +2,33 @@ package dealexpert
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 )
 
 // dealScope 描述一次请求能看到的数据范围。
-// 规则（与产品方案一致，不做个人排名）：
-//   - 管理员：按 tenant_id 参数跨租户；
-//   - 管理员 / 院长 / 运营经理 / 接待经理 / 运营主管 / 市场经理：本租户全部；
-//   - 咨询师：只看自己负责的接待与跟进；
-//   - 随访 / 普通员工：不能进入赢客专家。
+// 角色只决定「能不能进赢客专家、是不是负责人」，具体可见到哪些员工的数据
+// 由 dealexpertpermission 的 data_scope 统一决定：
+//   - self  ：employee_id = 当前员工
+//   - custom：employee_id IN visible_employee_ids
+//   - tenant：本租户全部（仅管理员）
 //
-// 默认权限（2026-10-20 确认）：
-//   - 医生 / 护士 / 治疗师：不看（不接触销售顾虑、话术和营收）；
-//   - 运营经理 / 接待经理 / 运营主管：看本租户全部明细，但页面不做个人排名；
-//   - 客服 / 前台：默认不开启，需要时单独授权；
-//   - 没有角色记录：拒绝，提示联系管理员开通，不再默认放行。
+// 所有列表/详情/导出都只使用这里解析出的 EmployeeIDs，不在页面层各自判断。
 type dealScope struct {
-	TenantID       int64
-	EmployeeFilter *int64
-	RoleCode       string
+	TenantID    int64
+	EmployeeIDs []int64 // nil 表示全机构；非 nil（含空切片）表示精确可见集合
+	DataScope   string
+	Manager     bool
+	RoleCode    string
 }
 
-// ScopeRule 是「角色 → 数据范围」的纯决策结果，便于单测和验收脚本复用。
+// ScopeRule 是「角色 → 能否进入/是否负责人」的纯决策结果，便于单测和验收脚本复用。
 type ScopeRule struct {
 	Allowed      bool
 	AllEmployees bool
@@ -36,8 +36,8 @@ type ScopeRule struct {
 	Reason       string
 }
 
-// EvaluateDealScope 只根据角色判断可见范围，不依赖数据库和 HTTP。
-// dealManagerRoles 是“看本租户全部接待”的角色集合。
+// EvaluateDealScope 只根据角色判断能否进入赢客专家以及是否负责人，不依赖数据库和 HTTP。
+// dealManagerRoles 是“负责人”角色集合；数据可见范围在 resolveDealScope 里再按 data_scope 收敛。
 // 各机构角色命名不完全一致（admin/director/operating_manager/...），在这里统一收敛。
 var dealManagerRoles = map[string]bool{
 	"admin":                true,
@@ -62,7 +62,7 @@ func EvaluateDealScope(roles []string) ScopeRule {
 	}
 	consultant := hasRole(roles, "consultant")
 	if manager {
-		return ScopeRule{Allowed: true, AllEmployees: true, Code: "manager", Reason: "主管/院长可见本租户全部接待"}
+		return ScopeRule{Allowed: true, AllEmployees: true, Code: "manager", Reason: "主管/院长可进入赢客专家"}
 	}
 	if consultant {
 		return ScopeRule{Allowed: true, AllEmployees: false, Code: "consultant", Reason: "咨询师只看自己负责的接待"}
@@ -73,7 +73,22 @@ func EvaluateDealScope(roles []string) ScopeRule {
 	return ScopeRule{Allowed: false, Code: "unassigned", Reason: "账号尚未分配机构角色，请联系管理员开通赢客专家"}
 }
 
-func (s *dealScope) allowsAllEmployees() bool { return s.EmployeeFilter == nil }
+func (s *dealScope) allowsAllEmployees() bool { return s.EmployeeIDs == nil }
+
+func (s *dealScope) allowsEmployee(employeeID int64) bool {
+	if s == nil {
+		return false
+	}
+	if s.allowsAllEmployees() {
+		return true
+	}
+	for _, id := range s.EmployeeIDs {
+		if id == employeeID {
+			return true
+		}
+	}
+	return false
+}
 
 func (h *Handler) employeeRoles(ctx context.Context, employeeID int64) []string {
 	rows, err := h.pool.Query(ctx, `
@@ -120,7 +135,7 @@ func (h *Handler) resolveDealScope(r *http.Request) (*dealScope, *tenantError) {
 		if scope == nil || scope.TenantID == nil {
 			return nil, &tenantError{status: http.StatusBadRequest, message: "tenant_id is required"}
 		}
-		return &dealScope{TenantID: *scope.TenantID, RoleCode: "admin"}, nil
+		return &dealScope{TenantID: *scope.TenantID, RoleCode: "admin", DataScope: dealexpertpermission.DataScopeTenant, Manager: true}, nil
 	}
 
 	if claims.TenantID == nil || *claims.TenantID <= 0 {
@@ -133,16 +148,23 @@ func (h *Handler) resolveDealScope(r *http.Request) (*dealScope, *tenantError) {
 		roleCode = strings.Join(roles, ",")
 	}
 
+	visibility, err := h.access.VisibilityFor(r.Context(), tenantID, claims.UserID)
+	if err != nil {
+		return nil, &tenantError{status: http.StatusInternalServerError, message: "解析数据可见范围失败"}
+	}
 	rule := EvaluateDealScope(roles)
-	if !rule.Allowed {
+	// 机构管理员固定全机构（即使机构角色表还没补 admin 角色）。
+	if !rule.Allowed && !visibility.All {
 		// 随访人员不自动看到销售顾虑与话术；普通员工没有赢客专家权限。
 		return nil, &tenantError{status: http.StatusForbidden, message: rule.Reason}
 	}
-	if rule.AllEmployees {
-		return &dealScope{TenantID: tenantID, RoleCode: roleCode}, nil
-	}
-	employeeID := claims.UserID
-	return &dealScope{TenantID: tenantID, EmployeeFilter: &employeeID, RoleCode: roleCode}, nil
+	return &dealScope{
+		TenantID:    tenantID,
+		EmployeeIDs: visibility.VisibilityEmployeeIDs(),
+		DataScope:   visibility.Scope,
+		Manager:     rule.AllEmployees || visibility.All,
+		RoleCode:    roleCode,
+	}, nil
 }
 
 func (h *Handler) checkRecordingAccess(ctx context.Context, scope *dealScope, recordingID int64) *tenantError {
@@ -153,7 +175,7 @@ func (h *Handler) checkRecordingAccess(ctx context.Context, scope *dealScope, re
 	if err != nil {
 		return &tenantError{status: http.StatusNotFound, message: "recording not found"}
 	}
-	if consultantID != *scope.EmployeeFilter {
+	if !scope.allowsEmployee(consultantID) {
 		return &tenantError{status: http.StatusForbidden, message: "无权访问该接待"}
 	}
 	return nil
@@ -167,8 +189,26 @@ func (h *Handler) checkEncounterAccess(ctx context.Context, scope *dealScope, en
 	if err != nil {
 		return &tenantError{status: http.StatusNotFound, message: "encounter not found"}
 	}
-	if consultantID != *scope.EmployeeFilter {
+	if !scope.allowsEmployee(consultantID) {
 		return &tenantError{status: http.StatusForbidden, message: "无权访问该接待"}
+	}
+	return nil
+}
+
+// checkOutcomeAccess 校验一笔业绩是否落在当前数据可见范围内。
+func (h *Handler) checkOutcomeAccess(ctx context.Context, scope *dealScope, outcomeID int64, action string) *tenantError {
+	if scope.allowsAllEmployees() {
+		return nil
+	}
+	employeeID, err := h.service.OutcomeEmployee(ctx, scope.TenantID, outcomeID)
+	if err != nil {
+		if errors.Is(err, ErrOutcomeNotFound) {
+			return &tenantError{status: http.StatusNotFound, message: "outcome not found"}
+		}
+		return &tenantError{status: http.StatusInternalServerError, message: "读取业绩归属失败"}
+	}
+	if !scope.allowsEmployee(employeeID) {
+		return &tenantError{status: http.StatusForbidden, message: "无权" + action + "该业绩"}
 	}
 	return nil
 }

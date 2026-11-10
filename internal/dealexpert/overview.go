@@ -39,14 +39,14 @@ type Overview struct {
 	UnlinkedEncounters int `json:"unlinked_encounters"`
 	IdentityPending    int `json:"identity_pending"`
 	AmountPending      int `json:"amount_pending"`
-	SalesTaskMissing    int `json:"follow_up_missing"`
+	SalesTaskMissing   int `json:"follow_up_missing"`
 }
 
-func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
+func (s *Service) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeIDs []int64) (*Overview, error) {
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("tenant_id is required")
 	}
-	return s.store.Overview(ctx, tenantID, dateFrom, dateTo, employeeFilter)
+	return s.store.Overview(ctx, tenantID, dateFrom, dateTo, employeeIDs)
 }
 
 func (s *Service) RecordingConsultant(ctx context.Context, tenantID, recordingID int64) (int64, error) {

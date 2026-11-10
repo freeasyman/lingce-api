@@ -35,14 +35,15 @@ const (
 )
 
 var (
-	ErrSalesTaskNotFound      = errors.New("sales task not found")
-	ErrSalesTaskNotActive     = errors.New("sales task is not active")
-	ErrInvalidResult          = errors.New("invalid sales task result")
-	ErrInvalidOutcomeType     = errors.New("invalid outcome type")
-	ErrAmountRequired         = errors.New("amount is required for this outcome")
-	ErrInvalidOutcomeStatus   = errors.New("invalid outcome status filter")
-	ErrInvalidSalesTaskState  = errors.New("invalid sales task state filter")
-	ErrInvalidDecisionFilter  = errors.New("invalid decision filter")
+	ErrSalesTaskNotFound     = errors.New("sales task not found")
+	ErrOutcomeNotFound       = errors.New("outcome not found")
+	ErrSalesTaskNotActive    = errors.New("sales task is not active")
+	ErrInvalidResult         = errors.New("invalid sales task result")
+	ErrInvalidOutcomeType    = errors.New("invalid outcome type")
+	ErrAmountRequired        = errors.New("amount is required for this outcome")
+	ErrInvalidOutcomeStatus  = errors.New("invalid outcome status filter")
+	ErrInvalidSalesTaskState = errors.New("invalid sales task state filter")
+	ErrInvalidDecisionFilter = errors.New("invalid decision filter")
 )
 
 type SalesTask struct {
@@ -69,7 +70,7 @@ type SalesTask struct {
 
 type SalesTaskEvent struct {
 	ID              int64     `json:"id"`
-	SalesTaskID      int64     `json:"follow_up_id"`
+	SalesTaskID     int64     `json:"follow_up_id"`
 	FromStatus      string    `json:"from_status"`
 	ToStatus        string    `json:"to_status"`
 	Result          string    `json:"result,omitempty"`
@@ -216,7 +217,7 @@ func (s *Service) CreateSalesTask(ctx context.Context, tenantID int64, req Creat
 	return s.store.CreateSalesTask(ctx, tenantID, req, dueAt)
 }
 
-func (s *Service) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*SalesTask, int, error) {
+func (s *Service) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeIDs []int64) ([]*SalesTask, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -226,7 +227,7 @@ func (s *Service) ListSalesTasks(ctx context.Context, tenantID int64, status str
 	if status != "" && !IsActiveSalesTaskStatus(status) && status != SalesTaskCompleted && status != SalesTaskCancelled && status != SalesTaskRescheduled {
 		return nil, 0, errors.New("invalid status filter")
 	}
-	return s.store.ListSalesTasks(ctx, tenantID, status, page, pageSize, employeeFilter)
+	return s.store.ListSalesTasks(ctx, tenantID, status, page, pageSize, employeeIDs)
 }
 
 func (s *Service) GetSalesTask(ctx context.Context, tenantID, id int64) (*SalesTask, error) {
@@ -293,11 +294,11 @@ func (s *Service) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFil
 	return s.store.ListOutcomes(ctx, tenantID, f)
 }
 
-func (s *Service) ListUnreportedClaims(ctx context.Context, tenantID int64, employeeID *int64) ([]*UnreportedClaim, error) {
+func (s *Service) ListUnreportedClaims(ctx context.Context, tenantID int64, employeeIDs []int64) ([]*UnreportedClaim, error) {
 	if tenantID <= 0 {
 		return nil, fmt.Errorf("tenant_id is required")
 	}
-	return s.store.ListUnreportedClaims(ctx, tenantID, employeeID)
+	return s.store.ListUnreportedClaims(ctx, tenantID, employeeIDs)
 }
 
 func (s *Service) UpdateOutcome(ctx context.Context, tenantID, id, actorID int64, patch OutcomePatch, occurredAt *time.Time) (*OutcomeEvent, error) {

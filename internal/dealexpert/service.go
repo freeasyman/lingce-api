@@ -42,6 +42,10 @@ func (s *Service) RecordingBrief(ctx context.Context, tenantID, recordingID int6
 	return s.store.RecordingBrief(ctx, tenantID, recordingID)
 }
 
+func (s *Service) OutcomeEmployee(ctx context.Context, tenantID, outcomeID int64) (int64, error) {
+	return s.store.OutcomeEmployee(ctx, tenantID, outcomeID)
+}
+
 func (s *Service) ListMyAnalysisActions(ctx context.Context, tenantID, actorID int64) ([]*MyAction, error) {
 	return s.store.ListMyAnalysisActions(ctx, tenantID, actorID)
 }

@@ -32,17 +32,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
-// scope 决定数据范围：管理员/负责人看租户全部；普通员工只看 manager_employee_id=自己。
-func (h *Handler) scope(r *http.Request, claims *auth.Claims, tenantID int64) (*int64, bool) {
+// visibility 返回统一的数据可见范围：管理员全机构，其余按 data_scope（self/custom/tenant）。
+func (h *Handler) visibility(r *http.Request, claims *auth.Claims, tenantID int64) (*dealexpertpermission.Visibility, error) {
 	if claims.UserType == auth.UserTypeAdmin {
-		return nil, true
+		return &dealexpertpermission.Visibility{Scope: dealexpertpermission.DataScopeTenant, All: true, EmployeeIDs: []int64{}}, nil
 	}
-	role, err := h.access.EmployeeRole(r.Context(), tenantID, claims.UserID)
-	if err == nil && dealexpertpermission.IsManagerRole(role) {
-		return nil, true
-	}
-	userID := claims.UserID
-	return &userID, true
+	return h.access.VisibilityFor(r.Context(), tenantID, claims.UserID)
 }
 
 func (h *Handler) tenantAndClaims(w http.ResponseWriter, r *http.Request) (*auth.Claims, int64, bool) {
@@ -64,7 +59,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	managerID, _ := h.scope(r, claims, tenantID)
+	visibility, err := h.visibility(r, claims, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, "无法解析数据可见范围")
+		return
+	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -74,7 +73,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if pageSize <= 0 || pageSize > 100 {
 		pageSize = 20
 	}
-	items, total, err := h.service.List(r.Context(), tenantID, status, managerID, page, pageSize)
+	items, total, err := h.service.List(r.Context(), tenantID, status, visibility.VisibilityEmployeeIDs(), page, pageSize)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -87,7 +86,11 @@ func (h *Handler) GetByRecording(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	managerID, _ := h.scope(r, claims, tenantID)
+	visibility, err := h.visibility(r, claims, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, "无法解析数据可见范围")
+		return
+	}
 	recordingID, err := strconv.ParseInt(r.PathValue("recordingID"), 10, 64)
 	if err != nil || recordingID <= 0 {
 		httputil.WriteBadRequest(w, "invalid recording id")
@@ -102,7 +105,7 @@ func (h *Handler) GetByRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	if managerID != nil && item.ManagerID != *managerID {
+	if !visibility.Allows(item.ConsultantID) {
 		httputil.WriteForbidden(w, "无权查看该介入信号")
 		return
 	}
@@ -114,7 +117,11 @@ func (h *Handler) Act(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	managerID, _ := h.scope(r, claims, tenantID)
+	visibility, err := h.visibility(r, claims, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, "无法解析数据可见范围")
+		return
+	}
 	recordingID, err := strconv.ParseInt(r.PathValue("recordingID"), 10, 64)
 	if err != nil || recordingID <= 0 {
 		httputil.WriteBadRequest(w, "invalid recording id")
@@ -134,7 +141,7 @@ func (h *Handler) Act(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	if managerID != nil && current.ManagerID != *managerID {
+	if !visibility.Allows(current.ConsultantID) {
 		httputil.WriteForbidden(w, "无权处理该介入信号")
 		return
 	}

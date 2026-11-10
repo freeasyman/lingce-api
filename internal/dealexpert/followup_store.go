@@ -120,7 +120,7 @@ func (s *Store) ListSalesTasksByEncounter(ctx context.Context, tenantID, encount
 	return items, rows.Err()
 }
 
-func (s *Store) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeFilter *int64) ([]*SalesTask, int, error) {
+func (s *Store) ListSalesTasks(ctx context.Context, tenantID int64, status string, page, pageSize int, employeeIDs []int64) ([]*SalesTask, int, error) {
 	where := "tenant_id = $1"
 	args := []any{tenantID}
 	if status == "" {
@@ -130,9 +130,9 @@ func (s *Store) ListSalesTasks(ctx context.Context, tenantID int64, status strin
 		args = append(args, status)
 		where += fmt.Sprintf(" AND status = $%d", len(args))
 	}
-	if employeeFilter != nil {
-		args = append(args, *employeeFilter)
-		where += fmt.Sprintf(" AND owner_employee_id = $%d", len(args))
+	if employeeIDs != nil {
+		args = append(args, employeeIDs)
+		where += fmt.Sprintf(" AND owner_employee_id = ANY($%d::bigint[])", len(args))
 	}
 
 	var total int

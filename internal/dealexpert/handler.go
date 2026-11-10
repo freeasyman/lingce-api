@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -19,6 +20,7 @@ type Handler struct {
 	service      *Service
 	pool         *pgxpool.Pool
 	consultation *ConsultationAnalysisGenerator
+	access       *dealexpertpermission.Service
 }
 
 // SetConsultationAnalysisGenerator 设置接待记录分析生成器。
@@ -29,7 +31,7 @@ func (h *Handler) SetConsultationAnalysisGenerator(gen *ConsultationAnalysisGene
 }
 
 func NewHandler(service *Service, pool *pgxpool.Pool) *Handler {
-	return &Handler{service: service, pool: pool}
+	return &Handler{service: service, pool: pool, access: dealexpertpermission.NewService(pool)}
 }
 
 func (h *Handler) RegisterInternalRoutes(mux *http.ServeMux, internalToken string) {

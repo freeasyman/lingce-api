@@ -33,7 +33,7 @@ type CalibrationStats struct {
 	MedianAbsError float64 `json:"median_abs_error"`
 }
 
-func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*ForecastCalibration, error) {
+func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64, employeeIDs []int64) (*ForecastCalibration, error) {
 	rows, err := s.store.pool.Query(ctx, `
 		SELECT a.recording_id, COALESCE(c.name, ''), COALESCE(p.name, ''),
 		       COALESCE(p.price::float8, 0) AS estimated,
@@ -59,8 +59,10 @@ func (s *Service) GetForecastCalibration(ctx context.Context, tenantID int64) (*
 			  AND deleted_at IS NULL
 			LIMIT 1
 		) p ON true
+		WHERE r.deleted_at IS NULL
+		  AND ($2::bigint[] IS NULL OR r.employee_id = ANY($2))
 		ORDER BY a.id DESC
-	`, tenantID)
+	`, tenantID, employeeIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +112,7 @@ func (h *Handler) GetForecastCalibration(w http.ResponseWriter, r *http.Request)
 		writeTenantError(w, httpErr)
 		return
 	}
-	result, err := h.service.GetForecastCalibration(r.Context(), scope.TenantID)
+	result, err := h.service.GetForecastCalibration(r.Context(), scope.TenantID, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return

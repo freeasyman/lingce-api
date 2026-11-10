@@ -11,7 +11,7 @@ import (
 //   - 到院、有效成交状态来自 recordings + 结果事件；
 //   - 金额优先来自 deal_outcome_events，没有结果事件时才退回 recordings 的人工确认金额，并写明来源；
 //   - 跟进完成度与数据缺口来自 sales_tasks，不进入个人排名。
-func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeFilter *int64) (*Overview, error) {
+func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *time.Time, employeeIDs []int64) (*Overview, error) {
 	if s == nil || s.pool == nil {
 		return nil, fmt.Errorf("deal expert store is nil")
 	}
@@ -61,7 +61,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			  AND lower(COALESCE(r.business_scope, '')) = 'consultant'
 			  AND ($2::timestamptz IS NULL OR r.recorded_at >= $2)
 			  AND ($3::timestamptz IS NULL OR r.recorded_at < $3)
-			  AND ($4::bigint IS NULL OR r.employee_id = $4)
+			  AND ($4::bigint[] IS NULL OR r.employee_id = ANY($4))
 		)
 		SELECT
 			COUNT(*),
@@ -78,7 +78,7 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COUNT(*) FILTER (WHERE effective_status = '成交了' AND outcome_count = 0 AND converted = 0),
 			COUNT(*) FILTER (WHERE effective_status = '还在跟进' AND follow_status = '')
 		FROM scope
-	`, tenantID, dateFrom, dateTo, employeeFilter, active).Scan(
+	`, tenantID, dateFrom, dateTo, employeeIDs, active).Scan(
 		&out.TotalEncounters, &out.Converted, &out.Following, &out.NotConverted, &out.Unknown,
 		&out.OpportunityCount, &out.GrossAmount, &out.RefundAmount, &out.ProductMissed,
 		&out.UnlinkedEncounters, &out.IdentityPending, &out.AmountPending, &out.SalesTaskMissing,
@@ -92,13 +92,15 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 	eventRefund := 0.0
 	eventCount := 0
 	rows, err := s.pool.Query(ctx, `
-		SELECT type, COUNT(*), COALESCE(SUM(amount), 0)::float8
-		FROM deal_outcome_events
-		WHERE tenant_id = $1 AND voided_at IS NULL
-		  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
-		  AND ($3::timestamptz IS NULL OR occurred_at < $3)
-		GROUP BY type
-	`, tenantID, dateFrom, dateTo)
+		SELECT o.type, COUNT(*), COALESCE(SUM(o.amount), 0)::float8
+		FROM deal_outcome_events o
+		JOIN recordings r ON r.id = o.recording_id AND r.tenant_id = o.tenant_id AND r.deleted_at IS NULL
+		WHERE o.tenant_id = $1 AND o.voided_at IS NULL
+		  AND ($2::timestamptz IS NULL OR o.occurred_at >= $2)
+		  AND ($3::timestamptz IS NULL OR o.occurred_at < $3)
+		  AND ($4::bigint[] IS NULL OR r.employee_id = ANY($4))
+		GROUP BY o.type
+	`, tenantID, dateFrom, dateTo, employeeIDs)
 	if err != nil {
 		return nil, fmt.Errorf("overview outcomes: %w", err)
 	}
@@ -147,8 +149,8 @@ func (s *Store) Overview(ctx context.Context, tenantID int64, dateFrom, dateTo *
 			COUNT(*) FILTER (WHERE status = '已完成')
 		FROM sales_tasks
 		WHERE tenant_id = $1
-		  AND ($3::bigint IS NULL OR owner_employee_id = $3)
-	`, tenantID, active, employeeFilter).Scan(&out.SalesTaskPending, &out.SalesTaskOverdue, &out.SalesTaskCompleted); err != nil {
+		  AND ($3::bigint[] IS NULL OR owner_employee_id = ANY($3))
+	`, tenantID, active, employeeIDs).Scan(&out.SalesTaskPending, &out.SalesTaskOverdue, &out.SalesTaskCompleted); err != nil {
 		return nil, fmt.Errorf("overview follow ups: %w", err)
 	}
 

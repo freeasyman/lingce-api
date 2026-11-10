@@ -64,12 +64,14 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{
-		"user_id":    access.UserID,
-		"tenant_id":  access.TenantID,
-		"admin":      access.Admin,
-		"enabled":    access.Enabled,
-		"role_code":  access.RoleCode,
-		"abilities":  access.AbilityList(),
+		"user_id":              access.UserID,
+		"tenant_id":            access.TenantID,
+		"admin":                access.Admin,
+		"enabled":              access.Enabled,
+		"role_code":            access.RoleCode,
+		"abilities":            access.AbilityList(),
+		"data_scope":           access.DataScope,
+		"visible_employee_ids": access.VisibleEmployeeIDs,
 	})
 }
 

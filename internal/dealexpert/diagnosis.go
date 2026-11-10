@@ -53,16 +53,18 @@ type DiagnosisResponse struct {
 }
 
 // GetDiagnosis 经营诊断：近 30 天最新接待记录分析的三个数字 + 阻碍八类分布 + 项目分布。
-func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64) (*DiagnosisResponse, error) {
+func (s *Service) GetDiagnosis(ctx context.Context, tenantID int64, employeeIDs []int64) (*DiagnosisResponse, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT analysis FROM (
-			SELECT DISTINCT ON (recording_id) analysis, analyzed_at
+		SELECT a.analysis FROM (
+			SELECT DISTINCT ON (recording_id) recording_id, tenant_id, analysis, analyzed_at
 			FROM consultation_analyses
 			WHERE tenant_id = $1 AND status = 'analyzed' AND analysis IS NOT NULL
 			  AND analyzed_at >= NOW() - INTERVAL '30 days'
 			ORDER BY recording_id, id DESC
-		) latest
-	`, tenantID)
+		) a
+		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id AND r.deleted_at IS NULL
+		WHERE ($2::bigint[] IS NULL OR r.employee_id = ANY($2))
+	`, tenantID, employeeIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +125,7 @@ func (h *Handler) GetDiagnosis(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, httpErr)
 		return
 	}
-	result, err := h.service.GetDiagnosis(r.Context(), scope.TenantID)
+	result, err := h.service.GetDiagnosis(r.Context(), scope.TenantID, scope.EmployeeIDs)
 	if err != nil {
 		writeServiceError(w, err)
 		return
