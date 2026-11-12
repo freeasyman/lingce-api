@@ -472,6 +472,63 @@ type TreatmentExecution struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
+// LabRequest 检验申请单（LIS）。
+// 列表额外填充患者姓名/病案号/结果项数；详情额外填充 result_items。
+type LabRequest struct {
+	ID              int64           `json:"id"`
+	EncounterID     int64           `json:"encounter_id"`
+	CustomerID      int64           `json:"customer_id"`
+	RequestNo       string          `json:"request_no"`
+	ItemName        string          `json:"item_name"`
+	SpecimenType    string          `json:"specimen_type"`
+	Purpose         string          `json:"purpose"`
+	Status          string          `json:"status"`
+	SampledAt       *time.Time      `json:"sampled_at"`
+	ReportedAt      *time.Time      `json:"reported_at"`
+	CreatedBy       *int64          `json:"created_by"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+	CustomerName    string          `json:"customer_name,omitempty"`
+	MRN             string          `json:"mrn,omitempty"`
+	ResultItemCount int             `json:"result_item_count"`
+	ResultItems     []LabResultItem `json:"result_items,omitempty"`
+}
+
+// CreateLabRequestRequest 开检验申请。
+type CreateLabRequestRequest struct {
+	EncounterID  int64  `json:"encounter_id"`
+	ItemName     string `json:"item_name"`
+	SpecimenType string `json:"specimen_type"`
+	Purpose      string `json:"purpose"`
+}
+
+// LabResultItemInput 录入结果项（report 入参，替换式写入）。
+type LabResultItemInput struct {
+	ItemCode       string `json:"item_code"`
+	ItemName       string `json:"item_name"`
+	Value          string `json:"value"`
+	Unit           string `json:"unit"`
+	ReferenceRange string `json:"reference_range"`
+	Flag           string `json:"flag"`
+}
+
+// ReportLabRequestRequest 录入检验结果。
+type ReportLabRequestRequest struct {
+	Items []LabResultItemInput `json:"items"`
+}
+
+// LabResultItem 检验结果项。
+type LabResultItem struct {
+	ID             int64  `json:"id"`
+	RequestID      int64  `json:"request_id"`
+	ItemCode       string `json:"item_code"`
+	ItemName       string `json:"item_name"`
+	Value          string `json:"value"`
+	Unit           string `json:"unit"`
+	ReferenceRange string `json:"reference_range"`
+	Flag           string `json:"flag"`
+}
+
 // CustomerSummary 接诊患者摘要。
 type CustomerSummary struct {
 	CustomerID int64  `json:"customer_id"`

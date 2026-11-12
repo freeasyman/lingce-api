@@ -242,6 +242,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ExecuteTreatment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ListTreatmentExecutions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 检验工作站（LIS）
+		{Method: "GET", Path: "/api/v1/his/lab/requests", Handler: h.ListLabRequests, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/lab/requests", Handler: h.CreateLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/lab/requests/{id}", Handler: h.GetLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/lab/requests/{id}/sample", Handler: h.SampleLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/lab/requests/{id}/report", Handler: h.ReportLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/lab/requests/{id}/cancel", Handler: h.CancelLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 打包收费
 		{Method: "GET", Path: "/api/v1/his/orders", Handler: h.ListOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/orders/{id}", Handler: h.GetOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1302,6 +1310,128 @@ func (h *Handler) ListTreatmentExecutions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httputil.WriteSuccess(w, items)
+}
+
+// ListLabRequests 检验工作站列表（?status=&date=&keyword=）。
+func (h *Handler) ListLabRequests(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	items, err := h.service.ListLabRequests(r.Context(), tenantID,
+		query.Get("status"), query.Get("date"), query.Get("keyword"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// CreateLabRequest 开检验申请。
+func (h *Handler) CreateLabRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse", "labtech") {
+		return
+	}
+	var req CreateLabRequestRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := h.service.CreateLabRequest(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusCreated, item)
+}
+
+// GetLabRequest 检验申请详情（含结果项）。
+func (h *Handler) GetLabRequest(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.GetLabRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// SampleLabRequest 采样（仅待采样）。
+func (h *Handler) SampleLabRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "nurse", "labtech", "doctor") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.SampleLabRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ReportLabRequest 录入检验结果（仅已采样；事务内替换结果项）。
+func (h *Handler) ReportLabRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "labtech", "doctor", "nurse") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req ReportLabRequestRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := h.service.ReportLabRequest(r.Context(), tenantID, id, req.Items)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// CancelLabRequest 取消检验申请（仅待采样）。
+func (h *Handler) CancelLabRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse", "labtech") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.CancelLabRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }
 
 // ListOrders 收费单列表（?status=&encounter_id=&customer_id=）。
