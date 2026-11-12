@@ -49,6 +49,9 @@ var ErrForbiddenRole = errors.New("forbidden role")
 // ErrPurchaseAlreadyReceived 表示采购单已经收货入库，不能重复收货。
 var ErrPurchaseAlreadyReceived = errors.New("purchase order already received")
 
+// ErrChargeItemCodeExists 表示同租户收费项目编码已存在。
+var ErrChargeItemCodeExists = errors.New("charge item code exists")
+
 // Service 是 HIS 域的业务层。
 type Service struct {
 	store *Store
@@ -152,13 +155,16 @@ func (s *Service) ListChargeItems(ctx context.Context, tenantID int64) ([]Charge
 }
 
 func (s *Service) CreateChargeItem(ctx context.Context, tenantID int64, req CreateChargeItemRequest) (ChargeItem, error) {
-	if strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" {
-		return ChargeItem{}, ErrInvalidRequest
+	if err := normalizeCreateChargeItem(&req); err != nil {
+		return ChargeItem{}, err
 	}
 	return s.store.CreateChargeItem(ctx, tenantID, req)
 }
 
 func (s *Service) UpdateChargeItem(ctx context.Context, tenantID, id int64, req UpdateChargeItemRequest) (ChargeItem, error) {
+	if err := normalizeUpdateChargeItem(&req); err != nil {
+		return ChargeItem{}, err
+	}
 	item, err := s.store.UpdateChargeItem(ctx, tenantID, id, req)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -271,6 +277,17 @@ func (s *Service) GetSchedule(ctx context.Context, tenantID, id int64) (Schedule
 	return sched, nil
 }
 
+// isValidSchedulePeriod 校验排班班次。空值表示默认上午班。
+// 上午/下午/晚间/小夜/大夜/全天与界面基线一致；跨日班次按当日 23:59 截止。
+func isValidSchedulePeriod(period string) bool {
+	switch period {
+	case "", "morning", "afternoon", "evening", "early_night", "late_night", "full_day":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) CreateSchedule(ctx context.Context, tenantID int64, req CreateScheduleRequest) (Schedule, error) {
 	if req.DoctorID <= 0 {
 		return Schedule{}, ErrInvalidRequest
@@ -296,9 +313,7 @@ func (s *Service) CreateSchedule(ctx context.Context, tenantID int64, req Create
 	if workDate.IsZero() {
 		return Schedule{}, ErrInvalidRequest
 	}
-	switch req.Period {
-	case "", "morning", "afternoon", "evening":
-	default:
+	if !isValidSchedulePeriod(req.Period) {
 		return Schedule{}, ErrInvalidRequest
 	}
 	return s.store.CreateSchedule(ctx, tenantID, req)
@@ -336,6 +351,11 @@ func (s *Service) ListSlots(ctx context.Context, tenantID, scheduleID int64) ([]
 		return nil, ErrNotFound
 	}
 	return s.store.ListSlots(ctx, tenantID, scheduleID)
+}
+
+// DeleteSchedule 删除排班（仅无占用号源时允许）。
+func (s *Service) DeleteSchedule(ctx context.Context, tenantID, id int64) error {
+	return s.store.DeleteSchedule(ctx, tenantID, id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,6 +1174,50 @@ func (s *Service) DefaultRoleModules(ctx context.Context, tenantID int64) (map[s
 		out[row.Role] = append(out[row.Role], row.Module)
 	}
 	return out, nil
+}
+
+// RoleModuleConfig 当前租户生效的「角色 → 模块」配置（租户覆盖优先，缺省回退默认模板）。
+func (s *Service) RoleModuleConfig(ctx context.Context, tenantID int64) (map[string][]string, error) {
+	defaults, err := s.DefaultRoleModules(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.store.TenantRoleModuleRows(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	tenant := map[string][]string{}
+	for _, row := range rows {
+		if !hisModuleSet[row.Module] {
+			continue
+		}
+		tenant[row.Role] = append(tenant[row.Role], row.Module)
+	}
+	return buildRoleModuleConfig(defaults, tenant), nil
+}
+
+// UpdateRoleModules 覆盖式写入某角色的模块配置（admin 固定全量，不可修改）。
+func (s *Service) UpdateRoleModules(ctx context.Context, tenantID int64, role string, modules []string) ([]string, error) {
+	if tenantID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	normalized, err := normalizeRoleModules(role, modules)
+	if err != nil {
+		return nil, err
+	}
+	role = strings.TrimSpace(role)
+	if err := s.store.ReplaceRoleModules(ctx, tenantID, role, normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+// SetEmployeeActive 启用/停用本租户员工。
+func (s *Service) SetEmployeeActive(ctx context.Context, tenantID, employeeID int64, active bool) (bool, error) {
+	if tenantID <= 0 || employeeID <= 0 {
+		return false, ErrInvalidRequest
+	}
+	return s.store.SetEmployeeActive(ctx, tenantID, employeeID, active)
 }
 
 // ListEmployeesWithRoles 管理页员工列表（员工 + 角色 + 医生档案）。

@@ -136,6 +136,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteNotFound(w, "not found")
 	case ErrScheduleHasBookings:
 		httputil.WriteBadRequest(w, "排班已有已约/已挂号号源，不能修改时间或间隔；请先处理号源或停诊")
+	case ErrScheduleOccupied:
+		httputil.WriteBadRequest(w, "排班已有占用号源，不能删除；请先取消相关挂号或预约")
 	case ErrScheduleNotOpen:
 		httputil.WriteBadRequest(w, "排班未开放（已停诊）")
 	case ErrSlotUnavailable:
@@ -152,6 +154,16 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "文书内容与签名不一致，可能存在改动，禁止归档/打印")
 	case ErrPurchaseAlreadyReceived:
 		httputil.WriteError(w, http.StatusConflict, "purchase_already_received", "该采购单已入库，不能重复收货", nil)
+	case ErrChargeItemCodeExists:
+		httputil.WriteError(w, http.StatusConflict, "charge_item_code_exists", "收费项目编码已存在，请换一个编码", nil)
+	case ErrInvalidRole:
+		httputil.WriteBadRequest(w, "角色不存在")
+	case ErrInvalidModule:
+		httputil.WriteBadRequest(w, "模块不存在")
+	case ErrEmptyRoleModules:
+		httputil.WriteBadRequest(w, "请至少为一个角色保留一个模块")
+	case ErrAdminRoleLocked:
+		httputil.WriteBadRequest(w, "管理员固定拥有全部模块，不可修改")
 	case ErrForbiddenRole:
 		httputil.WriteForbidden(w, "当前角色无权执行该操作")
 	case ErrInvalidDateRange, ErrInvalidWorkbenchDate:
@@ -171,6 +183,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 主数据：医生
 		{Method: "GET", Path: "/api/v1/his/master/doctors", Handler: h.ListDoctors, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/master/employees", Handler: h.ListMasterEmployees, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/his/master/employees/{id}", Handler: h.UpdateMasterEmployee, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/master/doctors", Handler: h.CreateDoctor, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/master/doctors/{id}", Handler: h.UpdateDoctor, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -209,6 +222,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/schedules", Handler: h.CreateSchedule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/schedules/{id}", Handler: h.GetSchedule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/schedules/{id}", Handler: h.UpdateSchedule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/his/schedules/{id}", Handler: h.DeleteSchedule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/schedules/{id}/slots", Handler: h.ListSlots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 挂号与分诊队列
@@ -305,6 +319,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/staff-roles", Handler: h.ListStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/role-modules", Handler: h.MyModules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/role-modules/defaults", Handler: h.DefaultRoleModules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/role-modules/config", Handler: h.RoleModuleConfig, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/his/role-modules/{role}", Handler: h.UpdateRoleModules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/his/staff-roles/{employee_id}", Handler: h.UpdateStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/my-roles", Handler: h.MyRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -797,6 +813,26 @@ func (h *Handler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, sched)
+}
+
+// DeleteSchedule 删除排班（仅无占用号源时允许，级联删除号源）。
+func (h *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteSchedule(r.Context(), tenantID, id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"id": id, "deleted": true})
 }
 
 // ListSlots 返回排班号源。
@@ -2262,6 +2298,46 @@ func (h *Handler) DefaultRoleModules(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, modules)
 }
 
+// RoleModuleConfig 当前租户生效的「角色 × 模块」配置（管理页权限矩阵）。
+func (h *Handler) RoleModuleConfig(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	config, err := h.service.RoleModuleConfig(r.Context(), tenantID)
+	if err != nil {
+		slog.Error("his: role module config", "error", err)
+		httputil.WriteInternalError(w, "failed to load role module config")
+		return
+	}
+	httputil.WriteSuccess(w, config)
+}
+
+// UpdateRoleModules 覆盖式写入某角色的模块配置（管理员；admin 角色固定全量）。
+func (h *Handler) UpdateRoleModules(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	role := strings.TrimSpace(r.PathValue("role"))
+	var req UpdateRoleModulesRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	modules, err := h.service.UpdateRoleModules(r.Context(), tenantID, role, req.Modules)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"role": role, "modules": modules})
+}
+
 // ListMasterEmployees 员工 + HIS 角色 + 医生档案（管理页员工列表）。
 func (h *Handler) ListMasterEmployees(w http.ResponseWriter, r *http.Request) {
 	_, tenantID, ok := h.requireTenant(w, r)
@@ -2275,6 +2351,39 @@ func (h *Handler) ListMasterEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, rows)
+}
+
+// UpdateMasterEmployee 启用/停用员工（管理页员工列表；不允许停用当前登录账号）。
+func (h *Handler) UpdateMasterEmployee(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	employeeID, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req UpdateEmployeeStatusRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.IsActive == nil {
+		httputil.WriteBadRequest(w, "is_active is required")
+		return
+	}
+	if claims.UserID == employeeID && !*req.IsActive {
+		httputil.WriteBadRequest(w, "不能停用当前登录账号")
+		return
+	}
+	active, err := h.service.SetEmployeeActive(r.Context(), tenantID, employeeID, *req.IsActive)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"id": employeeID, "is_active": active})
 }
 
 // SearchPatients 挂号查重（手机号/姓名）。

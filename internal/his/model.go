@@ -207,7 +207,7 @@ type Schedule struct {
 	DepartmentID        *int64 `json:"department_id"`
 	RoomID              *int64 `json:"room_id"`
 	WorkDate            string `json:"work_date"`  // YYYY-MM-DD
-	Period              string `json:"period"`     // morning/afternoon/evening
+	Period              string `json:"period"`     // morning/afternoon/evening/early_night/late_night/full_day
 	StartTime           string `json:"start_time"` // HH:MM
 	EndTime             string `json:"end_time"`   // HH:MM
 	SlotIntervalMinutes int    `json:"slot_interval_minutes"`
@@ -944,6 +944,16 @@ type UpdateStaffRolesRequest struct {
 	Roles []string `json:"roles"`
 }
 
+// UpdateRoleModulesRequest 覆盖式设置某角色的可见模块（管理员）。
+type UpdateRoleModulesRequest struct {
+	Modules []string `json:"modules"`
+}
+
+// UpdateEmployeeStatusRequest 启用/停用员工（管理员）。
+type UpdateEmployeeStatusRequest struct {
+	IsActive *bool `json:"is_active"`
+}
+
 // ICDDiagnosis ICD-10 诊断目录条目（工作站诊断检索）。
 type ICDDiagnosis struct {
 	Code string `json:"code"`
@@ -999,17 +1009,18 @@ type CompleteEMRResponse struct {
 
 // EmployeeWithRoles 员工（共享 employees）+ HIS 角色 + 医生档案聚合，供管理页员工列表使用。
 type EmployeeWithRoles struct {
-	ID        int64    `json:"id"`
-	Name      string   `json:"name"`
-	Phone     string   `json:"phone"`
-	Email     string   `json:"email"`
-	IsActive  bool     `json:"is_active"`
-	Roles     []string `json:"roles"`
-	DoctorID  *int64   `json:"doctor_id,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	LicenseNo string   `json:"license_no,omitempty"`
-	Prescribe bool     `json:"is_prescribing"`
-	Doctor    string   `json:"doctor_status,omitempty"`
+	ID           int64    `json:"id"`
+	Name         string   `json:"name"`
+	Phone        string   `json:"phone"`
+	Email        string   `json:"email"`
+	IsActive     bool     `json:"is_active"`
+	Roles        []string `json:"roles"`
+	DoctorID     *int64   `json:"doctor_id,omitempty"`
+	DepartmentID *int64   `json:"department_id,omitempty"`
+	Title        string   `json:"title,omitempty"`
+	LicenseNo    string   `json:"license_no,omitempty"`
+	Prescribe    bool     `json:"is_prescribing"`
+	Doctor       string   `json:"doctor_status,omitempty"`
 }
 
 // PatientSearchRow 挂号查重结果（客户 + 病案号）。

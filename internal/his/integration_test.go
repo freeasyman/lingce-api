@@ -60,7 +60,8 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		);
 		CREATE TABLE employees (
 			id bigint PRIMARY KEY, tenant_id bigint, name text, full_name text,
-			username text, phone text, deleted_at timestamp
+			username text, phone text, deleted_at timestamp,
+			email text, is_active integer DEFAULT 1, updated_at timestamp
 		);
 		CREATE TABLE encounters (
 			id bigserial PRIMARY KEY,
@@ -106,8 +107,8 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 			patient_snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
 			created_at timestamptz NOT NULL DEFAULT NOW()
 		);
-		INSERT INTO tenants VALUES (1, '测试机构', 't1', NULL);
-		INSERT INTO employees VALUES (10, 1, '李医生', '李医生', NULL, NULL);
+		INSERT INTO tenants VALUES (0, '系统模板', 'system', NULL), (1, '测试机构', 't1', NULL);
+		INSERT INTO employees (id, tenant_id, name, full_name) VALUES (10, 1, '李医生', '李医生');
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -119,10 +120,12 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, string(migrationSQL)); err != nil {
 		t.Fatalf("apply his migration: %v", err)
 	}
-	// 082 扩展 encounters source_type；084 员工角色表；002 治疗执行序号（作用在 shim 上，同时校验 SQL 可执行性）。
+	// 082 扩展 encounters source_type；084 员工角色表；085 角色模块与 9 角色；
+	// 002 治疗执行序号（作用在 shim 上，同时校验 SQL 可执行性）。
 	for _, migration := range []string{
 		"20261107_082_encounter_source_his.sql",
 		"20261107_084_his_staff_roles.sql",
+		"20261112_085_his_roles_modules.sql",
 		"20261113_002_his_treatment_execution_seq.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)

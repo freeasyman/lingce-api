@@ -3,6 +3,7 @@ package his
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -354,10 +355,18 @@ func (s *Store) CreateChargeItem(ctx context.Context, tenantID int64, req Create
 	if unit == "" {
 		unit = "次"
 	}
-	return scanChargeItem(s.pool.QueryRow(ctx, `
+	item, err := scanChargeItem(s.pool.QueryRow(ctx, `
 		INSERT INTO his_charge_items (tenant_id, code, name, category, unit, price)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+chargeItemColumns, tenantID, req.Code, req.Name, category, unit, req.Price))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ChargeItem{}, ErrChargeItemCodeExists
+		}
+		return ChargeItem{}, err
+	}
+	return item, nil
 }
 
 // UpdateChargeItem 部分更新原子收费项目。
@@ -980,6 +989,42 @@ func (s *Store) UpdateSchedule(ctx context.Context, tenantID, id int64, req Upda
 		return Schedule{}, err
 	}
 	return s.GetSchedule(ctx, tenantID, id)
+}
+
+// DeleteSchedule 删除排班：仅当排班无任何已占用号源（registration_id 非空）时允许，
+// 同事务内级联删除该排班的号源。有占用返回 ErrScheduleOccupied，排班不存在返回 ErrNotFound。
+func (s *Store) DeleteSchedule(ctx context.Context, tenantID, id int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var lockedID int64
+	if err := tx.QueryRow(ctx, `
+		SELECT id FROM his_schedules WHERE tenant_id = $1 AND id = $2
+		FOR UPDATE`, tenantID, id).Scan(&lockedID); err != nil {
+		if err == pgx.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	var occupied int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM his_slots
+		WHERE schedule_id = $1 AND registration_id IS NOT NULL`, id).Scan(&occupied); err != nil {
+		return err
+	}
+	if occupied > 0 {
+		return ErrScheduleOccupied
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM his_slots WHERE schedule_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM his_schedules WHERE tenant_id = $1 AND id = $2`, tenantID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -3366,9 +3411,7 @@ func (s *Store) CancelAppointment(ctx context.Context, tenantID, id int64) (Regi
 }
 
 // ---------------------------------------------------------------------------
-// 员工角色（admin/doctor/pharmacist/cashier/nurse，可叠加）
-
-var hisRoleSet = map[string]bool{"admin": true, "doctor": true, "pharmacist": true, "cashier": true, "nurse": true}
+// 员工角色（9 角色，可叠加；角色与模块目录见 role_modules.go）
 
 // ListStaffRoles 员工角色列表（含未分配员工，供管理台配置）。
 func (s *Store) ListStaffRoles(ctx context.Context, tenantID int64) ([]StaffRole, error) {
@@ -3566,12 +3609,15 @@ func parseFieldOptions(raw []byte) []string {
 	return nil
 }
 
-// RoleModules 返回某角色可见模块：优先租户自定义，缺省用 tenant_id=0 模板。
+// RoleModules 返回某角色可见模块：租户存在该角色的任一覆盖行时整体使用租户配置，
+// 否则回退 tenant_id=0 默认模板（租户覆盖是“替换”而不是“并集”）。
 func (s *Store) RoleModules(ctx context.Context, tenantID int64, role string) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT module FROM his_role_modules
-		WHERE role = $1 AND tenant_id IN ($2, 0)
-		ORDER BY (tenant_id = $2) DESC`, role, tenantID)
+		WHERE role = $1 AND tenant_id = CASE
+			WHEN EXISTS (SELECT 1 FROM his_role_modules ov WHERE ov.role = $1 AND ov.tenant_id = $2)
+			THEN $2 ELSE 0 END
+		ORDER BY module`, role, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -3594,14 +3640,22 @@ func (s *Store) ModulesForEmployee(ctx context.Context, tenantID, employeeID int
 		return nil, err
 	}
 	if has {
-		return []string{"home", "register", "clinic", "billing", "pharmacy", "execute", "lab", "check", "inventory", "purchase", "patients", "stats", "admin"}, nil
+		return HISModules(), nil
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT rm.module
 		FROM his_staff_roles sr
-		JOIN his_role_modules rm ON rm.role = sr.role AND rm.tenant_id IN (sr.tenant_id, 0)
+		JOIN his_role_modules rm ON rm.role = sr.role
+			AND rm.tenant_id = CASE
+				WHEN EXISTS (
+					SELECT 1 FROM his_role_modules ov
+					WHERE ov.tenant_id = sr.tenant_id AND ov.role = sr.role
+				) THEN sr.tenant_id
+				ELSE 0
+			END
 		WHERE sr.tenant_id = $1 AND sr.employee_id = $2
-		ORDER BY rm.module`, tenantID, employeeID)
+		  AND rm.module = ANY($3::text[])
+		ORDER BY rm.module`, tenantID, employeeID, HISModules())
 	if err != nil {
 		return nil, err
 	}
@@ -3625,7 +3679,21 @@ type RoleModuleRow struct {
 
 // RoleModuleRows 读取租户 0 模板的全部角色模块行。
 func (s *Store) RoleModuleRows(ctx context.Context) ([]RoleModuleRow, error) {
-	rows, err := s.pool.Query(ctx, `SELECT role, module FROM his_role_modules WHERE tenant_id = 0 ORDER BY role, module`)
+	return s.roleModuleRows(ctx, 0)
+}
+
+// TenantRoleModuleRows 读取某租户的「角色 → 模块」覆盖行。
+func (s *Store) TenantRoleModuleRows(ctx context.Context, tenantID int64) ([]RoleModuleRow, error) {
+	if tenantID <= 0 {
+		return []RoleModuleRow{}, nil
+	}
+	return s.roleModuleRows(ctx, tenantID)
+}
+
+func (s *Store) roleModuleRows(ctx context.Context, tenantID int64) ([]RoleModuleRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT role, module FROM his_role_modules
+		WHERE tenant_id = $1 ORDER BY role, module`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -3641,6 +3709,37 @@ func (s *Store) RoleModuleRows(ctx context.Context) ([]RoleModuleRow, error) {
 	return out, rows.Err()
 }
 
+// ReplaceRoleModules 覆盖式写入租户的角色模块配置（先删该角色租户行，再插入，事务）。
+func (s *Store) ReplaceRoleModules(ctx context.Context, tenantID int64, role string, modules []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var tenantExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1 AND deleted_at IS NULL)`,
+		tenantID).Scan(&tenantExists); err != nil {
+		return err
+	}
+	if !tenantExists {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM his_role_modules WHERE tenant_id = $1 AND role = $2`, tenantID, role); err != nil {
+		return err
+	}
+	for _, module := range modules {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO his_role_modules (tenant_id, role, module) VALUES ($1, $2, $3)
+			ON CONFLICT (tenant_id, role, module) DO NOTHING`, tenantID, role, module); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // ListEmployeesWithRoles 员工 + 角色 + 医生档案（仅本租户、未删除）。
 func (s *Store) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]EmployeeWithRoles, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -3648,12 +3747,12 @@ func (s *Store) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]E
 		       COALESCE(NULLIF(e.full_name, ''), e.name, ''),
 		       COALESCE(e.phone, ''), COALESCE(e.email, ''), COALESCE(e.is_active, 1) = 1,
 		       COALESCE(array_agg(DISTINCT sr.role) FILTER (WHERE sr.role IS NOT NULL), '{}') AS roles,
-		       d.id, COALESCE(d.title, ''), COALESCE(d.license_no, ''), COALESCE(d.is_prescribing, false), COALESCE(d.status, '')
+		       d.id, d.department_id, COALESCE(d.title, ''), COALESCE(d.license_no, ''), COALESCE(d.is_prescribing, false), COALESCE(d.status, '')
 		FROM employees e
 		LEFT JOIN his_staff_roles sr ON sr.tenant_id = e.tenant_id AND sr.employee_id = e.id
 		LEFT JOIN his_doctors d ON d.tenant_id = e.tenant_id AND d.employee_id = e.id
 		WHERE e.tenant_id = $1 AND e.deleted_at IS NULL
-		GROUP BY e.id, e.full_name, e.name, e.phone, e.email, e.is_active, d.id, d.title, d.license_no, d.is_prescribing, d.status
+		GROUP BY e.id, e.full_name, e.name, e.phone, e.email, e.is_active, d.id, d.department_id, d.title, d.license_no, d.is_prescribing, d.status
 		ORDER BY e.id`, tenantID)
 	if err != nil {
 		return nil, err
@@ -3663,12 +3762,34 @@ func (s *Store) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]E
 	for rows.Next() {
 		var row EmployeeWithRoles
 		if err := rows.Scan(&row.ID, &row.Name, &row.Phone, &row.Email, &row.IsActive, &row.Roles,
-			&row.DoctorID, &row.Title, &row.LicenseNo, &row.Prescribe, &row.Doctor); err != nil {
+			&row.DoctorID, &row.DepartmentID, &row.Title, &row.LicenseNo, &row.Prescribe, &row.Doctor); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// SetEmployeeActive 启用/停用本租户员工（共享 employees 表，is_active 为整数标记）。
+func (s *Store) SetEmployeeActive(ctx context.Context, tenantID, employeeID int64, active bool) (bool, error) {
+	flag := "0"
+	if active {
+		flag = "1"
+	}
+	var result bool
+	err := s.pool.QueryRow(ctx, `
+		UPDATE employees
+		SET is_active = $3, updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+		RETURNING CASE WHEN is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END`,
+		tenantID, employeeID, flag).Scan(&result)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	return result, nil
 }
 
 // SearchPatients 挂号查重：手机号 / 姓名模糊匹配，返回客户与病案号。
