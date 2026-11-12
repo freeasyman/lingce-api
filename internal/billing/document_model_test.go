@@ -65,7 +65,7 @@ func TestDocumentFormatters(t *testing.T) {
 	if got := formatDocumentPhone("010-88886666", "-"); got != "010-88886666" {
 		t.Fatalf("非手机号应原样返回，实际 %q", got)
 	}
-	if got := documentPeriodDays("2026-11-12", "2026-11-26"); got != 14 {
+	if got := documentPeriodDays("2026-11-12", "2026-11-25"); got != 14 {
 		t.Fatalf("试用天数 = %d, want 14", got)
 	}
 	if got := documentPeriodDays("", "2026-11-26"); got != 0 {
@@ -84,7 +84,7 @@ func trialInstitution() *Institution {
 		Phone:   "13900002002",
 		Sales:   "胡晓敏",
 		Start:   "2026-11-12",
-		End:     "2026-11-26",
+		End:     "2026-11-25",
 		Mode:    AccountModeTrial,
 		Open:    true,
 		Products: map[string]map[string]InstitutionQuota{
@@ -129,7 +129,7 @@ func TestBuildDocumentLetterTrial(t *testing.T) {
 	if len(letter.InfoRows) != 2 || !strings.Contains(letter.InfoRows[1].Value, "¥ 0") || !letter.InfoRows[1].ValueBold {
 		t.Fatalf("试用费用行不对: %+v", letter.InfoRows)
 	}
-	if !strings.Contains(letter.InfoRows[0].Value, "共 14 天") || !strings.Contains(letter.InfoRows[0].Value, "2026 年 11 月 26 日") {
+	if !strings.Contains(letter.InfoRows[0].Value, "共 14 天") || !strings.Contains(letter.InfoRows[0].Value, "2026 年 11 月 25 日") {
 		t.Fatalf("试用期限行不对: %+v", letter.InfoRows[0])
 	}
 	if len(letter.Products) != 3 {
@@ -182,7 +182,7 @@ func TestBuildDocumentLetterFormalFeeText(t *testing.T) {
 	if got := letter.InfoRows[1].Value; got != "¥ 68,800（已收讫）" {
 		t.Fatalf("已收讫费用 = %q", got)
 	}
-	if !strings.Contains(letter.InfoRows[0].Value, "共 364 天") {
+	if !strings.Contains(letter.InfoRows[0].Value, "共 365 天") {
 		t.Fatalf("服务期文案 = %q", letter.InfoRows[0].Value)
 	}
 

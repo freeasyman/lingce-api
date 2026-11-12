@@ -470,7 +470,9 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 
 	today := s.today()
 	days := int64(req.Days)
-	endDate := addDaysDate(today, req.Days)
+	// 「N 天试用」按含首尾计算：今天算第 1 天，到期日 = 今天 + N - 1。
+	// 否则 14 天试用实际跨 15 天，和通知函上「共 14 天」对不上。
+	endDate := addDaysDate(today, int(req.Days)-1)
 	quotasByProduct := make(map[string][]quotaPair, len(products))
 	for _, product := range products {
 		quotas := make([]quotaPair, 0, len(product.Quotas))
@@ -1194,6 +1196,7 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 			currentEnd = parsed
 		}
 	}
+	// 现到期日就是含首尾的最后一天，再延 N 天就是 +N
 	newEnd := addDaysDate(currentEnd, req.Days)
 	periodStart := today
 	if base.StartedOn != nil {
@@ -1203,7 +1206,8 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 	}
 	// 延长试用按「从试用开始到新到期日」的总天数重算整额，再补差额：
 	// 不用新增天数单独折算后叠加，避免两次取整累积误差。
-	totalDays := int64(newEnd.Sub(periodStart).Hours() / 24)
+	// 含首尾：2026-11-12 ~ 2026-12-02 是 21 天，不是 20 天
+	totalDays := int64(newEnd.Sub(periodStart).Hours()/24) + 1
 	if totalDays < 0 {
 		totalDays = 0
 	}

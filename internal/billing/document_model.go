@@ -239,7 +239,9 @@ func formatDocumentPhone(phone, separator string) string {
 	return trimmed
 }
 
-// documentPeriodDays 计算服务期天数：与设计稿一致，取「到期日 - 开始日」，最小 1 天。
+// documentPeriodDays 计算服务期天数（含首尾两天），最小 1 天。
+//
+// 满一年 2026-11-12 ~ 2027-11-11 应显示 365 天，早先按差值算是 364 天。
 func documentPeriodDays(start, end string) int {
 	startDate, err := time.Parse("2006-01-02", strings.TrimSpace(start))
 	if err != nil {
@@ -249,7 +251,7 @@ func documentPeriodDays(start, end string) int {
 	if err != nil {
 		return 0
 	}
-	days := int(endDate.Sub(startDate).Hours() / 24)
+	days := int(endDate.Sub(startDate).Hours()/24) + 1
 	if days < 1 {
 		days = 1
 	}

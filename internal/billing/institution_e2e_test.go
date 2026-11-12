@@ -616,7 +616,8 @@ INSERT INTO ops_organizations (name, type, status) VALUES ($1, 'agency', 'active
 	if trial.Mode != "trial" || !trial.Open {
 		t.Fatalf("试用状态不对: mode=%s open=%v", trial.Mode, trial.Open)
 	}
-	expectedEnd := time.Now().AddDate(0, 0, 14).Format("2006-01-02")
+	// 14 天试用按含首尾计算：今天算第 1 天，到期日 = 今天 + 13
+	expectedEnd := time.Now().AddDate(0, 0, 13).Format("2006-01-02")
 	if trial.End != expectedEnd {
 		t.Fatalf("试用到期日应为 %s，实际 %s", expectedEnd, trial.End)
 	}
@@ -637,7 +638,8 @@ INSERT INTO ops_organizations (name, type, status) VALUES ($1, 'agency', 'active
 	if err != nil {
 		t.Fatalf("延长试用失败: %v", err)
 	}
-	expectedExtendedEnd := time.Now().AddDate(0, 0, 21).Format("2006-01-02")
+	// 14 天 + 延 7 天 = 21 天（含首尾），到期日 = 今天 + 20
+	expectedExtendedEnd := time.Now().AddDate(0, 0, 20).Format("2006-01-02")
 	if extended.End != expectedExtendedEnd {
 		t.Fatalf("延长后到期日应为 %s，实际 %s", expectedExtendedEnd, extended.End)
 	}
