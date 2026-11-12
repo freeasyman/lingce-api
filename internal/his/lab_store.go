@@ -52,20 +52,31 @@ func (s *Store) CreateLabRequest(ctx context.Context, tenantID, createdBy int64,
 	}
 	requestNo := labRequestNoFormat(seq, time.Now())
 
+	// 收费联动：显式选择的收费项目，或按项目名自动匹配「检验」类收费项目；
+	// 命中则在同一事务内生成 pending 收费单（挂单），未命中则金额 0、不建单。
+	charge, err := s.attachChargeToLabExamRequestTx(ctx, tx, tenantID, createdBy, customerID,
+		req.EncounterID, req.ChargeItemID, req.ItemName, chargeCategoryLab)
+	if err != nil {
+		return LabRequest{}, err
+	}
+
 	var item LabRequest
 	err = tx.QueryRow(ctx, `
 		INSERT INTO his_lab_requests (
 			tenant_id, encounter_id, customer_id, request_no, item_name, specimen_type,
-			purpose, status, created_by
+			purpose, status, created_by, charge_item_id, charge_amount, order_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), $10, $11, $12)
 		RETURNING id, encounter_id, customer_id, request_no, item_name, specimen_type, purpose,
-		          status, sampled_at, reported_at, created_by, created_at, updated_at`,
+		          status, sampled_at, reported_at, created_by, created_at, updated_at,
+		          charge_item_id, charge_amount, order_id`,
 		tenantID, req.EncounterID, customerID, requestNo, req.ItemName, req.SpecimenType,
-		req.Purpose, labStatusPending, createdBy).
+		req.Purpose, labStatusPending, createdBy,
+		charge.ChargeItemID, charge.ChargeAmount, charge.OrderID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 			&item.SpecimenType, &item.Purpose, &item.Status, &item.SampledAt, &item.ReportedAt,
-			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+			&item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
 	if err != nil {
 		return LabRequest{}, err
 	}
@@ -82,7 +93,8 @@ func (s *Store) CreateLabRequest(ctx context.Context, tenantID, createdBy int64,
 const labRequestSelectSQL = `
 	SELECT l.id, l.encounter_id, l.customer_id, l.request_no, l.item_name, l.specimen_type,
 	       l.purpose, l.status, l.sampled_at, l.reported_at, l.created_by, l.created_at, l.updated_at,
-	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0)
+	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0),
+	       l.charge_item_id, l.charge_amount, l.order_id
 	FROM his_lab_requests l
 	LEFT JOIN customers c ON c.tenant_id = l.tenant_id AND c.id = l.customer_id
 	LEFT JOIN LATERAL (
@@ -100,7 +112,7 @@ func scanLabRequest(row pgx.Row) (LabRequest, error) {
 	err := row.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 		&item.SpecimenType, &item.Purpose, &item.Status, &item.SampledAt, &item.ReportedAt,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CustomerName, &item.MRN,
-		&item.ResultItemCount)
+		&item.ResultItemCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
 	return item, err
 }
 
@@ -180,9 +192,10 @@ func (s *Store) transitionLabRequest(ctx context.Context, tenantID, id int64, ac
 	defer tx.Rollback(ctx)
 
 	var status string
+	var orderID *int64
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM his_lab_requests
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status)
+		SELECT status, order_id FROM his_lab_requests
+		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID)
 	if err == pgx.ErrNoRows {
 		return LabRequest{}, ErrNotFound
 	}
@@ -201,6 +214,11 @@ func (s *Store) transitionLabRequest(ctx context.Context, tenantID, id int64, ac
 	if timestampColumn != "" {
 		query = `UPDATE his_lab_requests SET status = $3, ` + timestampColumn + ` = NOW(), updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2`
+	}
+	if action == labActionCancel && orderID != nil {
+		if err := s.voidPendingOrderTx(ctx, tx, tenantID, *orderID); err != nil {
+			return LabRequest{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, query, tenantID, id, nextStatus); err != nil {
 		return LabRequest{}, err
@@ -230,9 +248,10 @@ func (s *Store) ReportLabRequest(ctx context.Context, tenantID, id int64, items 
 	defer tx.Rollback(ctx)
 
 	var status string
+	var orderID *int64
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM his_lab_requests
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status)
+		SELECT status, order_id FROM his_lab_requests
+		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID)
 	if err == pgx.ErrNoRows {
 		return LabRequest{}, ErrNotFound
 	}

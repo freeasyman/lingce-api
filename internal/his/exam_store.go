@@ -53,20 +53,31 @@ func (s *Store) CreateExamRequest(ctx context.Context, tenantID, createdBy int64
 	}
 	requestNo := examRequestNoFormat(seq, time.Now())
 
+	// 收费联动：显式选择的收费项目，或按项目名自动匹配「检查」类收费项目；
+	// 命中则在同一事务内生成 pending 收费单（挂单），未命中则金额 0、不建单。
+	charge, err := s.attachChargeToLabExamRequestTx(ctx, tx, tenantID, createdBy, customerID,
+		req.EncounterID, req.ChargeItemID, req.ItemName, chargeCategoryExam)
+	if err != nil {
+		return ExamRequest{}, err
+	}
+
 	var item ExamRequest
 	err = tx.QueryRow(ctx, `
 		INSERT INTO his_exam_requests (
 			tenant_id, encounter_id, customer_id, request_no, item_name, body_part,
-			purpose, status, created_by
+			purpose, status, created_by, charge_item_id, charge_amount, order_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), $10, $11, $12)
 		RETURNING id, encounter_id, customer_id, request_no, item_name, body_part, purpose,
-		          status, started_at, reported_at, created_by, created_at, updated_at`,
+		          status, started_at, reported_at, created_by, created_at, updated_at,
+		          charge_item_id, charge_amount, order_id`,
 		tenantID, req.EncounterID, customerID, requestNo, req.ItemName, req.BodyPart,
-		req.Purpose, examStatusPending, createdBy).
+		req.Purpose, examStatusPending, createdBy,
+		charge.ChargeItemID, charge.ChargeAmount, charge.OrderID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 			&item.BodyPart, &item.Purpose, &item.Status, &item.StartedAt, &item.ReportedAt,
-			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+			&item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
 	if err != nil {
 		return ExamRequest{}, err
 	}
@@ -83,7 +94,8 @@ func (s *Store) CreateExamRequest(ctx context.Context, tenantID, createdBy int64
 const examRequestSelectSQL = `
 	SELECT e.id, e.encounter_id, e.customer_id, e.request_no, e.item_name, e.body_part,
 	       e.purpose, e.status, e.started_at, e.reported_at, e.created_by, e.created_at, e.updated_at,
-	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0)
+	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0),
+	       e.charge_item_id, e.charge_amount, e.order_id
 	FROM his_exam_requests e
 	LEFT JOIN customers c ON c.tenant_id = e.tenant_id AND c.id = e.customer_id
 	LEFT JOIN LATERAL (
@@ -101,7 +113,7 @@ func scanExamRequest(row pgx.Row) (ExamRequest, error) {
 	err := row.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 		&item.BodyPart, &item.Purpose, &item.Status, &item.StartedAt, &item.ReportedAt,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CustomerName, &item.MRN,
-		&item.ReportCount)
+		&item.ReportCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
 	return item, err
 }
 
@@ -184,9 +196,10 @@ func (s *Store) transitionExamRequest(ctx context.Context, tenantID, id int64, a
 	defer tx.Rollback(ctx)
 
 	var status string
+	var orderID *int64
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM his_exam_requests
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status)
+		SELECT status, order_id FROM his_exam_requests
+		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID)
 	if err == pgx.ErrNoRows {
 		return ExamRequest{}, ErrNotFound
 	}
@@ -205,6 +218,11 @@ func (s *Store) transitionExamRequest(ctx context.Context, tenantID, id int64, a
 	if timestampColumn != "" {
 		query = `UPDATE his_exam_requests SET status = $3, ` + timestampColumn + ` = NOW(), updated_at = NOW()
 			WHERE tenant_id = $1 AND id = $2`
+	}
+	if action == examActionCancel && orderID != nil {
+		if err := s.voidPendingOrderTx(ctx, tx, tenantID, *orderID); err != nil {
+			return ExamRequest{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, query, tenantID, id, nextStatus); err != nil {
 		return ExamRequest{}, err
@@ -234,9 +252,10 @@ func (s *Store) ReportExamRequest(ctx context.Context, tenantID, reportedBy, id 
 	defer tx.Rollback(ctx)
 
 	var status string
+	var orderID *int64
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM his_exam_requests
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status)
+		SELECT status, order_id FROM his_exam_requests
+		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID)
 	if err == pgx.ErrNoRows {
 		return ExamRequest{}, ErrNotFound
 	}

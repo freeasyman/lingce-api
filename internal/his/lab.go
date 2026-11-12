@@ -103,6 +103,10 @@ func normalizeCreateLabRequest(req CreateLabRequestRequest) (CreateLabRequestReq
 	req.ItemName = itemName
 	req.SpecimenType = specimenType
 	req.Purpose = purpose
+	// 收费项目可选：0 表示未选（按项目名自动匹配），负数直接拒绝。
+	if err := normalizeChargeItemID(req.ChargeItemID); err != nil {
+		return req, err
+	}
 	return req, nil
 }
 

@@ -492,14 +492,20 @@ type LabRequest struct {
 	MRN             string          `json:"mrn,omitempty"`
 	ResultItemCount int             `json:"result_item_count"`
 	ResultItems     []LabResultItem `json:"result_items,omitempty"`
+	// 收费联动：开单时选择/自动匹配的收费项目，以及生成的 pending 收费单（未匹配时为空、金额 0）。
+	ChargeItemID *int64  `json:"charge_item_id"`
+	ChargeAmount float64 `json:"charge_amount"`
+	OrderID      *int64  `json:"order_id"`
 }
 
 // CreateLabRequestRequest 开检验申请。
+// charge_item_id 可选：传了则按 id 校验（本租户 + active）；不传则按 item_name 精确匹配「检验」类收费项目。
 type CreateLabRequestRequest struct {
 	EncounterID  int64  `json:"encounter_id"`
 	ItemName     string `json:"item_name"`
 	SpecimenType string `json:"specimen_type"`
 	Purpose      string `json:"purpose"`
+	ChargeItemID int64  `json:"charge_item_id,omitempty"`
 }
 
 // LabResultItemInput 录入结果项（report 入参，替换式写入）。
@@ -549,14 +555,20 @@ type ExamRequest struct {
 	MRN          string      `json:"mrn,omitempty"`
 	ReportCount  int         `json:"report_count"`
 	Report       *ExamReport `json:"report,omitempty"`
+	// 收费联动：开单时选择/自动匹配的收费项目，以及生成的 pending 收费单（未匹配时为空、金额 0）。
+	ChargeItemID *int64  `json:"charge_item_id"`
+	ChargeAmount float64 `json:"charge_amount"`
+	OrderID      *int64  `json:"order_id"`
 }
 
 // CreateExamRequestRequest 开检查申请。
+// charge_item_id 可选：传了则按 id 校验（本租户 + active）；不传则按 item_name 精确匹配「检查」类收费项目。
 type CreateExamRequestRequest struct {
-	EncounterID int64  `json:"encounter_id"`
-	ItemName    string `json:"item_name"`
-	BodyPart    string `json:"body_part"`
-	Purpose     string `json:"purpose"`
+	EncounterID  int64  `json:"encounter_id"`
+	ItemName     string `json:"item_name"`
+	BodyPart     string `json:"body_part"`
+	Purpose      string `json:"purpose"`
+	ChargeItemID int64  `json:"charge_item_id,omitempty"`
 }
 
 // ReportExamRequestRequest 录入检查报告（report 入参）。
