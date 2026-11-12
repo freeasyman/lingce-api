@@ -1158,6 +1158,35 @@ func (s *Service) SearchDiagnosis(ctx context.Context, tenantID int64, keyword s
 	return s.store.SearchDiagnosisCatalog(ctx, keyword, 20)
 }
 
+// RequireModule 按「角色→模块」权限校验（管理员直通；租户未配置角色时放行便于首用）。
+// 用于收费/药房等按 ABC「模块权限」模型授权的操作。
+func (s *Service) RequireModule(ctx context.Context, tenantID, employeeID int64, module string) error {
+	configured, err := s.store.TenantHasRoleAssignments(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return nil
+	}
+	has, err := s.store.HasAnyRole(ctx, tenantID, employeeID, "admin")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	modules, err := s.store.ModulesForEmployee(ctx, tenantID, employeeID)
+	if err != nil {
+		return err
+	}
+	for _, item := range modules {
+		if item == module {
+			return nil
+		}
+	}
+	return ErrForbiddenRole
+}
+
 // ModulesForEmployee 员工可见模块（角色并集，admin 全量）。
 func (s *Service) ModulesForEmployee(ctx context.Context, tenantID, employeeID int64) ([]string, error) {
 	return s.store.ModulesForEmployee(ctx, tenantID, employeeID)

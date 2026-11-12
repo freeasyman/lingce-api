@@ -99,6 +99,18 @@ func (h *Handler) requireTenant(w http.ResponseWriter, r *http.Request) (*auth.C
 }
 
 // requireHisRole 关键操作角色校验（租户未配置角色时放行，首用兼容）。
+func (h *Handler) requireModule(w http.ResponseWriter, r *http.Request, tenantID, employeeID int64, module string) bool {
+	if err := h.service.RequireModule(r.Context(), tenantID, employeeID, module); err != nil {
+		if err == ErrForbiddenRole {
+			httputil.WriteForbidden(w, "当前角色无权执行该操作")
+			return false
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return false
+	}
+	return true
+}
+
 func (h *Handler) requireHisRole(w http.ResponseWriter, r *http.Request, tenantID, employeeID int64, roles ...string) bool {
 	if err := h.service.RequireRole(r.Context(), tenantID, employeeID, roles...); err != nil {
 		if err == ErrForbiddenRole {
@@ -694,7 +706,7 @@ func (h *Handler) RegisterPatient(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier", "nurse", "doctor") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "register") {
 		return
 	}
 	var req RegisterPatientRequest
@@ -881,7 +893,7 @@ func (h *Handler) CreateRegistration(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	var req CreateRegistrationRequest
@@ -902,7 +914,7 @@ func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -923,7 +935,7 @@ func (h *Handler) RefundRegistration(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -944,7 +956,7 @@ func (h *Handler) NoShowRegistration(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1665,7 +1677,7 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	var req CreateOrderRequest
@@ -1686,7 +1698,7 @@ func (h *Handler) CreateOrderFromEncounter(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	var req CreateOrderFromEncounterRequest
@@ -1707,7 +1719,7 @@ func (h *Handler) UpdateOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1732,7 +1744,7 @@ func (h *Handler) AddPayment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1757,7 +1769,7 @@ func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1782,7 +1794,7 @@ func (h *Handler) VoidOrder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1818,7 +1830,7 @@ func (h *Handler) DispensePrescription(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "pharmacist") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "pharmacy") {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -1853,7 +1865,7 @@ func (h *Handler) InboundStock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "pharmacist") {
+	if !h.requireModule(w, r, tenantID, claims.UserID, "pharmacy") {
 		return
 	}
 	var req InboundStockRequest
