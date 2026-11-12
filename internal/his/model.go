@@ -429,28 +429,47 @@ type CreateServiceRequestRequest struct {
 }
 
 // TreatmentOrder 治疗医嘱（简化版）。
+// 执行站列表会额外填充患者姓名/病案号/最近执行信息；工作站按 encounter 查询时这些字段为空。
 type TreatmentOrder struct {
-	ID             int64     `json:"id"`
-	EncounterID    int64     `json:"encounter_id"`
-	CustomerID     int64     `json:"customer_id"`
-	ChargeItemID   *int64    `json:"charge_item_id"`
-	ChargeItemName string    `json:"charge_item_name"`
-	PlanTotalTimes int       `json:"plan_total_times"`
-	CompletedTimes int       `json:"completed_times"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               int64      `json:"id"`
+	EncounterID      int64      `json:"encounter_id"`
+	CustomerID       int64      `json:"customer_id"`
+	ChargeItemID     *int64     `json:"charge_item_id"`
+	ChargeItemName   string     `json:"charge_item_name"`
+	PlanTotalTimes   int        `json:"plan_total_times"`
+	CompletedTimes   int        `json:"completed_times"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"created_at"`
+	CustomerName     string     `json:"customer_name,omitempty"`
+	MRN              string     `json:"mrn,omitempty"`
+	LastExecutedAt   *time.Time `json:"last_executed_at,omitempty"`
+	LastExecutorName string     `json:"last_executor_name,omitempty"`
 }
 
 // CreateTreatmentOrderRequest 开治疗医嘱。
+// charge_item_id 与 charge_item_name 二选一；只传名称时按租户内启用的收费项目精确匹配。
 type CreateTreatmentOrderRequest struct {
-	EncounterID    int64 `json:"encounter_id"`
-	ChargeItemID   int64 `json:"charge_item_id"`
-	PlanTotalTimes int   `json:"plan_total_times"`
+	EncounterID    int64  `json:"encounter_id"`
+	ChargeItemID   int64  `json:"charge_item_id"`
+	ChargeItemName string `json:"charge_item_name"`
+	PlanTotalTimes int    `json:"plan_total_times"`
 }
 
 // ExecuteTreatmentRequest 治疗执行登记（每次治疗一条）。
 type ExecuteTreatmentRequest struct {
 	Note string `json:"note"`
+}
+
+// TreatmentExecution 治疗执行记录（seq 为医嘱内第几次执行）。
+type TreatmentExecution struct {
+	ID               int64     `json:"id"`
+	TreatmentOrderID int64     `json:"treatment_order_id"`
+	Seq              int       `json:"seq"`
+	ExecutedAt       time.Time `json:"executed_at"`
+	ExecutorID       *int64    `json:"executor_id"`
+	ExecutorName     string    `json:"executor_name"`
+	Note             string    `json:"note"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // CustomerSummary 接诊患者摘要。

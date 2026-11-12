@@ -1896,31 +1896,50 @@ func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID int64, req Cr
 	var customerID int64
 	if err := s.pool.QueryRow(ctx, `
 		SELECT r.customer_id FROM his_registrations r
-		JOIN encounters e ON e.source_type = 'his' AND e.source_id = r.id
+		JOIN encounters e ON e.tenant_id = r.tenant_id AND e.source_type = 'his' AND e.source_id = r.id
 		WHERE r.tenant_id = $1 AND e.id = $2`, tenantID, req.EncounterID).Scan(&customerID); err != nil {
 		if err == pgx.ErrNoRows {
 			return TreatmentOrder{}, ErrNotFound
 		}
 		return TreatmentOrder{}, err
 	}
+
+	// 收费项目：优先按 id，其次按租户内启用的项目名称精确匹配（兼容只传 charge_item_name 的调用方）。
+	var chargeItemID int64
 	var name string
-	if err := s.pool.QueryRow(ctx, `SELECT name FROM his_charge_items WHERE tenant_id = $1 AND id = $2 AND status = 'active'`,
-		tenantID, req.ChargeItemID).Scan(&name); err != nil {
+	var err error
+	if req.ChargeItemID > 0 {
+		err = s.pool.QueryRow(ctx, `
+			SELECT id, name FROM his_charge_items
+			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, req.ChargeItemID).
+			Scan(&chargeItemID, &name)
+	} else {
+		err = s.pool.QueryRow(ctx, `
+			SELECT id, name FROM his_charge_items
+			WHERE tenant_id = $1 AND LOWER(btrim(name)) = LOWER($2) AND status = 'active'
+			ORDER BY id LIMIT 1`, tenantID, req.ChargeItemName).
+			Scan(&chargeItemID, &name)
+	}
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return TreatmentOrder{}, ErrNotFound
 		}
 		return TreatmentOrder{}, err
 	}
+
 	var item TreatmentOrder
-	err := s.pool.QueryRow(ctx, `
+	err = s.pool.QueryRow(ctx, `
 		INSERT INTO his_treatment_orders (tenant_id, encounter_id, customer_id, charge_item_id, plan_total_times)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, encounter_id, customer_id, charge_item_id, plan_total_times, completed_times, status, created_at`,
-		tenantID, req.EncounterID, customerID, req.ChargeItemID, req.PlanTotalTimes).
+		tenantID, req.EncounterID, customerID, chargeItemID, req.PlanTotalTimes).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.PlanTotalTimes,
 			&item.CompletedTimes, &item.Status, &item.CreatedAt)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
 	item.ChargeItemName = name
-	return item, err
+	return item, nil
 }
 
 func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID int64) ([]TreatmentOrder, error) {
@@ -1928,7 +1947,7 @@ func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID i
 		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
 		       t.plan_total_times, t.completed_times, t.status, t.created_at
 		FROM his_treatment_orders t
-		LEFT JOIN his_charge_items ci ON ci.id = t.charge_item_id
+		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
 		WHERE t.tenant_id = $1 AND t.encounter_id = $2 ORDER BY t.id`, tenantID, encounterID)
 	if err != nil {
 		return nil, err
@@ -1947,7 +1966,63 @@ func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID i
 	return items, rows.Err()
 }
 
-// AddTreatmentExecution 治疗执行登记：每次治疗一条记录，completed_times + 1。
+// ListTreatmentStationOrders 执行站列表：按状态集合与业务日期筛选，并带患者、病案号、最近执行信息。
+// date 为空表示不筛选；否则匹配创建日期或任一次执行日期（便于当天执行站看到跨日医嘱的当日执行）。
+func (s *Store) ListTreatmentStationOrders(ctx context.Context, tenantID int64, statuses []string, date string) ([]TreatmentOrder, error) {
+	if statuses == nil {
+		statuses = []string{}
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
+		       t.plan_total_times, t.completed_times, t.status, t.created_at,
+		       COALESCE(c.name, ''), COALESCE(pi.value, ''),
+		       last.executed_at, COALESCE(last.executor_name, '')
+		FROM his_treatment_orders t
+		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
+		LEFT JOIN customers c ON c.tenant_id = t.tenant_id AND c.id = t.customer_id
+		LEFT JOIN LATERAL (
+			SELECT p.value FROM patient_identifiers p
+			WHERE p.tenant_id = t.tenant_id AND p.customer_id = t.customer_id
+			  AND p.identifier_type = 'mrn' AND p.status = 'active'
+			ORDER BY p.id DESC LIMIT 1
+		) pi ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT ex.executed_at, COALESCE(e.name, '') AS executor_name
+			FROM his_treatment_executions ex
+			LEFT JOIN employees e ON e.tenant_id = t.tenant_id AND e.id = ex.executor_id
+			WHERE ex.treatment_order_id = t.id
+			ORDER BY ex.executed_at DESC, ex.id DESC LIMIT 1
+		) last ON TRUE
+		WHERE t.tenant_id = $1
+		  AND (cardinality($2::text[]) = 0 OR t.status = ANY($2::text[]))
+		  AND (NULLIF($3, '') IS NULL
+		       OR t.created_at::date = NULLIF($3, '')::date
+		       OR EXISTS (
+		           SELECT 1 FROM his_treatment_executions ex2
+		           WHERE ex2.treatment_order_id = t.id
+		             AND ex2.executed_at::date = NULLIF($3, '')::date
+		       ))
+		ORDER BY CASE t.status WHEN 'executing' THEN 0 WHEN 'ordered' THEN 1 WHEN 'charged' THEN 1 ELSE 2 END,
+		         t.created_at ASC, t.id ASC`, tenantID, statuses, date)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]TreatmentOrder, 0)
+	for rows.Next() {
+		var item TreatmentOrder
+		if err := rows.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
+			&item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt,
+			&item.CustomerName, &item.MRN, &item.LastExecutedAt, &item.LastExecutorName); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// AddTreatmentExecution 治疗执行登记：每次治疗一条记录，seq = completed_times + 1，completed_times + 1。
 func (s *Store) AddTreatmentExecution(ctx context.Context, tenantID, orderID, executorID int64, note string) (TreatmentOrder, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -1968,17 +2043,19 @@ func (s *Store) AddTreatmentExecution(ctx context.Context, tenantID, orderID, ex
 		return TreatmentOrder{}, err
 	}
 	if status == "completed" {
+		return TreatmentOrder{}, ErrTreatmentCompleted
+	}
+	if status != "ordered" && status != "charged" && status != "executing" {
 		return TreatmentOrder{}, ErrInvalidState
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO his_treatment_executions (treatment_order_id, executor_id, note)
-		VALUES ($1, $2, $3)`, orderID, executorID, note); err != nil {
+	newCompleted, newStatus, err := nextTreatmentProgress(planTotal, completed)
+	if err != nil {
 		return TreatmentOrder{}, err
 	}
-	newCompleted := completed + 1
-	newStatus := "executing"
-	if newCompleted >= planTotal {
-		newStatus = "completed"
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO his_treatment_executions (treatment_order_id, seq, executor_id, executed_at, note)
+		VALUES ($1, $2, $3, NOW(), $4)`, orderID, newCompleted, executorID, note); err != nil {
+		return TreatmentOrder{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE his_treatment_orders SET completed_times = $2, status = $3, updated_at = NOW()
@@ -1991,13 +2068,49 @@ func (s *Store) AddTreatmentExecution(ctx context.Context, tenantID, orderID, ex
 	return s.loadTreatmentOrder(ctx, tenantID, orderID)
 }
 
+// ListTreatmentExecutions 治疗执行历史（按 seq 升序；租户隔离通过医嘱归属校验）。
+func (s *Store) ListTreatmentExecutions(ctx context.Context, tenantID, orderID int64) ([]TreatmentExecution, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM his_treatment_orders WHERE tenant_id = $1 AND id = $2)`,
+		tenantID, orderID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT ex.id, ex.treatment_order_id, ex.seq, ex.executed_at, ex.executor_id,
+		       COALESCE(e.name, ''), ex.note, ex.created_at
+		FROM his_treatment_executions ex
+		JOIN his_treatment_orders t ON t.id = ex.treatment_order_id
+		LEFT JOIN employees e ON e.tenant_id = t.tenant_id AND e.id = ex.executor_id
+		WHERE t.tenant_id = $1 AND t.id = $2
+		ORDER BY ex.seq ASC, ex.id ASC`, tenantID, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]TreatmentExecution, 0)
+	for rows.Next() {
+		var item TreatmentExecution
+		if err := rows.Scan(&item.ID, &item.TreatmentOrderID, &item.Seq, &item.ExecutedAt, &item.ExecutorID,
+			&item.ExecutorName, &item.Note, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) loadTreatmentOrder(ctx context.Context, tenantID, orderID int64) (TreatmentOrder, error) {
 	var item TreatmentOrder
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
 		       t.plan_total_times, t.completed_times, t.status, t.created_at
 		FROM his_treatment_orders t
-		LEFT JOIN his_charge_items ci ON ci.id = t.charge_item_id
+		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
 		WHERE t.tenant_id = $1 AND t.id = $2`, tenantID, orderID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
 			&item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt)

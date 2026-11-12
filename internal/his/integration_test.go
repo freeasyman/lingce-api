@@ -119,10 +119,11 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 	if _, err := pool.Exec(ctx, string(migrationSQL)); err != nil {
 		t.Fatalf("apply his migration: %v", err)
 	}
-	// 082 扩展 encounters source_type；084 员工角色表（作用在 shim 上，同时校验 SQL 可执行性）。
+	// 082 扩展 encounters source_type；084 员工角色表；002 治疗执行序号（作用在 shim 上，同时校验 SQL 可执行性）。
 	for _, migration := range []string{
 		"20261107_082_encounter_source_his.sql",
 		"20261107_084_his_staff_roles.sql",
+		"20261113_002_his_treatment_execution_seq.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {

@@ -615,18 +615,47 @@ func (s *Service) ListServiceRequests(ctx context.Context, tenantID, encounterID
 }
 
 func (s *Service) CreateTreatmentOrder(ctx context.Context, tenantID int64, req CreateTreatmentOrderRequest) (TreatmentOrder, error) {
-	if req.EncounterID <= 0 || req.ChargeItemID <= 0 || req.PlanTotalTimes <= 0 {
-		return TreatmentOrder{}, ErrInvalidRequest
+	normalized, err := normalizeCreateTreatmentOrder(req)
+	if err != nil {
+		return TreatmentOrder{}, err
 	}
-	return s.store.CreateTreatmentOrder(ctx, tenantID, req)
+	return s.store.CreateTreatmentOrder(ctx, tenantID, normalized)
 }
 
 func (s *Service) ListTreatmentOrders(ctx context.Context, tenantID, encounterID int64) ([]TreatmentOrder, error) {
 	return s.store.ListTreatmentOrders(ctx, tenantID, encounterID)
 }
 
+// ListTreatmentStationOrders 执行站列表：按页签状态与业务日期筛选。
+func (s *Service) ListTreatmentStationOrders(ctx context.Context, tenantID int64, status, date string) ([]TreatmentOrder, error) {
+	statuses, err := normalizeTreatmentStatusFilter(status)
+	if err != nil {
+		return nil, err
+	}
+	normalizedDate, err := normalizeTreatmentDate(date)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.ListTreatmentStationOrders(ctx, tenantID, statuses, normalizedDate)
+}
+
 func (s *Service) ExecuteTreatment(ctx context.Context, tenantID, orderID, executorID int64, note string) (TreatmentOrder, error) {
-	return s.store.AddTreatmentExecution(ctx, tenantID, orderID, executorID, note)
+	if orderID <= 0 || executorID <= 0 {
+		return TreatmentOrder{}, ErrInvalidRequest
+	}
+	normalizedNote, err := normalizeTreatmentNote(note)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	return s.store.AddTreatmentExecution(ctx, tenantID, orderID, executorID, normalizedNote)
+}
+
+// ListTreatmentExecutions 治疗执行历史（按执行序号升序）。
+func (s *Service) ListTreatmentExecutions(ctx context.Context, tenantID, orderID int64) ([]TreatmentExecution, error) {
+	if orderID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.ListTreatmentExecutions(ctx, tenantID, orderID)
 }
 
 // ---------------------------------------------------------------------------

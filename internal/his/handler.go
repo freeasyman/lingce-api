@@ -140,6 +140,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "排班未开放（已停诊）")
 	case ErrSlotUnavailable:
 		httputil.WriteError(w, http.StatusConflict, "slot_unavailable", "号源已被占用或不可用", nil)
+	case ErrTreatmentCompleted:
+		httputil.WriteError(w, http.StatusConflict, "treatment_completed", "该治疗已完成计划次数，不能重复执行", nil)
 	case ErrInvalidState:
 		httputil.WriteBadRequest(w, "当前状态不允许该操作")
 	case ErrDispensedCannotRefund:
@@ -236,7 +238,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/service-requests", Handler: h.CreateServiceRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/treatment-orders", Handler: h.ListTreatmentOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/treatment-orders", Handler: h.CreateTreatmentOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/execute", Handler: h.ExecuteTreatment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ExecuteTreatment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ListTreatmentExecutions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 打包收费
 		{Method: "GET", Path: "/api/v1/his/orders", Handler: h.ListOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1206,20 +1210,31 @@ func (h *Handler) CreateServiceRequest(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusCreated, item)
 }
 
-// ListTreatmentOrders 治疗医嘱列表（?encounter_id=）。
+// ListTreatmentOrders 治疗医嘱列表。
+// 带 encounter_id 时按就诊查询（医生工作站）；否则按执行站页签 status + date 查询。
 func (h *Handler) ListTreatmentOrders(w http.ResponseWriter, r *http.Request) {
 	_, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
 		return
 	}
-	encounterID, err := strconv.ParseInt(r.URL.Query().Get("encounter_id"), 10, 64)
-	if err != nil || encounterID <= 0 {
-		httputil.WriteBadRequest(w, "encounter_id is required")
+	if raw := strings.TrimSpace(r.URL.Query().Get("encounter_id")); raw != "" {
+		encounterID, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || encounterID <= 0 {
+			httputil.WriteBadRequest(w, "invalid encounter_id")
+			return
+		}
+		items, err := h.service.ListTreatmentOrders(r.Context(), tenantID, encounterID)
+		if err != nil {
+			httputil.WriteInternalError(w, "failed to list treatment orders")
+			return
+		}
+		httputil.WriteSuccess(w, items)
 		return
 	}
-	items, err := h.service.ListTreatmentOrders(r.Context(), tenantID, encounterID)
+	items, err := h.service.ListTreatmentStationOrders(r.Context(), tenantID,
+		r.URL.Query().Get("status"), r.URL.Query().Get("date"))
 	if err != nil {
-		httputil.WriteInternalError(w, "failed to list treatment orders")
+		writeServiceError(w, err)
 		return
 	}
 	httputil.WriteSuccess(w, items)
@@ -1269,6 +1284,24 @@ func (h *Handler) ExecuteTreatment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// ListTreatmentExecutions 治疗执行历史（第 N 次 / 执行时间 / 执行人 / 备注）。
+func (h *Handler) ListTreatmentExecutions(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	items, err := h.service.ListTreatmentExecutions(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
 }
 
 // ListOrders 收费单列表（?status=&encounter_id=&customer_id=）。
