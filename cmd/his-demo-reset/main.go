@@ -75,6 +75,8 @@ func main() {
 		{"治疗执行", `SELECT COUNT(*) FROM his_treatment_executions WHERE treatment_order_id IN ` + trt, `DELETE FROM his_treatment_executions WHERE treatment_order_id IN ` + trt},
 		{"治疗医嘱", `SELECT COUNT(*) FROM his_treatment_orders WHERE encounter_id IN ` + enc, `DELETE FROM his_treatment_orders WHERE encounter_id IN ` + enc},
 		{"检查检验申请(旧)", `SELECT COUNT(*) FROM his_service_requests WHERE encounter_id IN ` + enc, `DELETE FROM his_service_requests WHERE encounter_id IN ` + enc},
+		{"检查报告", `SELECT COUNT(*) FROM his_exam_reports WHERE request_id IN (SELECT id FROM his_exam_requests WHERE encounter_id IN ` + enc + `)`, `DELETE FROM his_exam_reports WHERE request_id IN (SELECT id FROM his_exam_requests WHERE encounter_id IN ` + enc + `)`},
+		{"检查申请", `SELECT COUNT(*) FROM his_exam_requests WHERE encounter_id IN ` + enc, `DELETE FROM his_exam_requests WHERE encounter_id IN ` + enc},
 		{"检验结果", `SELECT COUNT(*) FROM his_lab_result_items WHERE request_id IN (SELECT id FROM his_lab_requests WHERE encounter_id IN ` + enc + `)`, `DELETE FROM his_lab_result_items WHERE request_id IN (SELECT id FROM his_lab_requests WHERE encounter_id IN ` + enc + `)`},
 		{"检验申请", `SELECT COUNT(*) FROM his_lab_requests WHERE encounter_id IN ` + enc, `DELETE FROM his_lab_requests WHERE encounter_id IN ` + enc},
 		{"处方明细", `SELECT COUNT(*) FROM his_prescription_items WHERE prescription_id IN ` + rx, `DELETE FROM his_prescription_items WHERE prescription_id IN ` + rx},

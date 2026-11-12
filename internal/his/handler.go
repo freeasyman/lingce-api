@@ -250,6 +250,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/lab/requests/{id}/report", Handler: h.ReportLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/lab/requests/{id}/cancel", Handler: h.CancelLabRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 检查工作站（PACS）
+		{Method: "GET", Path: "/api/v1/his/exam/requests", Handler: h.ListExamRequests, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/exam/requests", Handler: h.CreateExamRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/exam/requests/{id}", Handler: h.GetExamRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/exam/requests/{id}/start", Handler: h.StartExamRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/exam/requests/{id}/report", Handler: h.ReportExamRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/exam/requests/{id}/cancel", Handler: h.CancelExamRequest, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 打包收费
 		{Method: "GET", Path: "/api/v1/his/orders", Handler: h.ListOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/orders/{id}", Handler: h.GetOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1427,6 +1435,128 @@ func (h *Handler) CancelLabRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item, err := h.service.CancelLabRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ListExamRequests 检查工作站列表（?status=&date=&keyword=）。
+func (h *Handler) ListExamRequests(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	items, err := h.service.ListExamRequests(r.Context(), tenantID,
+		query.Get("status"), query.Get("date"), query.Get("keyword"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// CreateExamRequest 开检查申请。
+func (h *Handler) CreateExamRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse", "checktech") {
+		return
+	}
+	var req CreateExamRequestRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := h.service.CreateExamRequest(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusCreated, item)
+}
+
+// GetExamRequest 检查申请详情（含报告）。
+func (h *Handler) GetExamRequest(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.GetExamRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// StartExamRequest 开始检查（仅待检查）。
+func (h *Handler) StartExamRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "checktech", "doctor", "nurse") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.StartExamRequest(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ReportExamRequest 录入检查报告（仅检查中；事务内 upsert 报告）。
+func (h *Handler) ReportExamRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "checktech", "doctor") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req ReportExamRequestRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := h.service.ReportExamRequest(r.Context(), tenantID, claims.UserID, id, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// CancelExamRequest 取消检查申请（仅待检查）。
+func (h *Handler) CancelExamRequest(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse", "checktech") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.CancelExamRequest(r.Context(), tenantID, id)
 	if err != nil {
 		writeServiceError(w, err)
 		return

@@ -529,6 +529,57 @@ type LabResultItem struct {
 	Flag           string `json:"flag"`
 }
 
+// ExamRequest 检查申请单（PACS）。
+// 列表额外填充患者姓名/病案号/报告数；详情额外填充 report。
+type ExamRequest struct {
+	ID           int64       `json:"id"`
+	EncounterID  int64       `json:"encounter_id"`
+	CustomerID   int64       `json:"customer_id"`
+	RequestNo    string      `json:"request_no"`
+	ItemName     string      `json:"item_name"`
+	BodyPart     string      `json:"body_part"`
+	Purpose      string      `json:"purpose"`
+	Status       string      `json:"status"`
+	StartedAt    *time.Time  `json:"started_at"`
+	ReportedAt   *time.Time  `json:"reported_at"`
+	CreatedBy    *int64      `json:"created_by"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	CustomerName string      `json:"customer_name,omitempty"`
+	MRN          string      `json:"mrn,omitempty"`
+	ReportCount  int         `json:"report_count"`
+	Report       *ExamReport `json:"report,omitempty"`
+}
+
+// CreateExamRequestRequest 开检查申请。
+type CreateExamRequestRequest struct {
+	EncounterID int64  `json:"encounter_id"`
+	ItemName    string `json:"item_name"`
+	BodyPart    string `json:"body_part"`
+	Purpose     string `json:"purpose"`
+}
+
+// ReportExamRequestRequest 录入检查报告（report 入参）。
+// findings 所见 / impression 印象（必填）/ suggestion 建议；image_refs 为影像地址列表。
+type ReportExamRequestRequest struct {
+	Findings   string   `json:"findings"`
+	Impression string   `json:"impression"`
+	Suggestion string   `json:"suggestion"`
+	ImageRefs  []string `json:"image_refs"`
+}
+
+// ExamReport 检查报告（一份申请单对应一份报告）。
+type ExamReport struct {
+	ID         int64      `json:"id"`
+	RequestID  int64      `json:"request_id"`
+	Findings   string     `json:"findings"`
+	Impression string     `json:"impression"`
+	Suggestion string     `json:"suggestion"`
+	ImageRefs  []string   `json:"image_refs"`
+	ReportedBy *int64     `json:"reported_by"`
+	ReportedAt *time.Time `json:"reported_at"`
+}
+
 // CustomerSummary 接诊患者摘要。
 type CustomerSummary struct {
 	CustomerID int64  `json:"customer_id"`
