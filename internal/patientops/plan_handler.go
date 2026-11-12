@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -163,7 +164,7 @@ func (h *Handler) PublishPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.PublishPlan(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
-		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeQuotaExhausted(w, err)
 			return
 		}
@@ -201,7 +202,7 @@ func (h *Handler) AddPlanMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := h.service.AddPlanMembers(r.Context(), tenantID, employeeID, planID, req)
 	if err != nil {
-		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeQuotaExhausted(w, err)
 			return
 		}

@@ -32,13 +32,11 @@ const (
 
 	billingReasonDraft   = "听写病历-病历草稿生成"
 	billingReasonQuality = "听写病历-完整质控"
-
-	// billingQuotaExhaustedCode 是交付前闸门拒绝时返回给调用方的错误码。
-	billingQuotaExhaustedCode = "EMR_QUOTA_EXHAUSTED"
 )
 
 // ErrEMRQuotaExhausted 表示预检发现听写病历额度不足，生成入口据此拒绝开始生成。
-var ErrEMRQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+// 文案与错误码统一由 billing.GateRejection 提供（客户口径）。
+var ErrEMRQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
 
 // quotaExhaustedError 是闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrEMRQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -167,16 +165,22 @@ func (h *InternalHandler) ensureDraftQuota(ctx context.Context, tenantID, record
 	}
 	items := draftBillingItems(seconds)
 	if err := h.billing.CheckQuota(ctx, tenantID, billingProductCode, items); err != nil {
-		if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+		gate, ok := billing.GateRejection(err)
+		if !ok {
+			// 计费自身故障（连不上库等）仍 fail-open，不能拖垮病历生成。
 			slog.Warn("emr draft quota check failed, allowing generation",
 				"tenant_id", tenantID, "recording_id", recordingID, "error", err)
 			return nil
 		}
-		var insufficient *billing.InsufficientEntitlementError
-		if errors.As(err, &insufficient) {
-			return &quotaExhaustedError{insufficient: insufficient}
+		// 额度不足沿用带缺口明细的类型；暂停/到期直接返回计费层错误，
+		// 由 writeQuotaExhausted 映射成统一的客户口径。
+		if gate.Insufficient != nil {
+			return &quotaExhaustedError{insufficient: gate.Insufficient}
 		}
-		return ErrEMRQuotaExhausted
+		if gate.Code == billing.CodeInsufficientEntitlement {
+			return ErrEMRQuotaExhausted
+		}
+		return err
 	}
 	return nil
 }
@@ -189,16 +193,25 @@ func (h *InternalHandler) writeQuotaExhausted(w http.ResponseWriter, payload Emr
 		"recording_id": payload.RecordingID,
 		"product_code": billingProductCode,
 	}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(cause, &insufficient) {
-		details["unit"] = insufficient.Unit
-		details["current"] = insufficient.Current
-		details["required"] = insufficient.Required
-		details["shortfall"] = insufficient.Shortfall
+	gate, ok := billing.GateRejection(cause)
+	if !ok {
+		// 理论上不会走到这里：调用方只在 ensureDraftQuota 拒绝时写响应。
+		gate = &billing.CustomerGate{
+			Status:  http.StatusPaymentRequired,
+			Code:    billing.CodeInsufficientEntitlement,
+			Message: billing.MessageInsufficientEntitlement,
+		}
 	}
-	slog.Warn("emr draft generation rejected: quota exhausted",
-		"tenant_id", payload.TenantID, "recording_id", payload.RecordingID, "error", cause)
-	httputil.WriteError(w, http.StatusPaymentRequired, billingQuotaExhaustedCode, ErrEMRQuotaExhausted.Error(), details)
+	if gate.Insufficient != nil {
+		details["unit"] = gate.Insufficient.Unit
+		details["current"] = gate.Insufficient.Current
+		details["required"] = gate.Insufficient.Required
+		details["shortfall"] = gate.Insufficient.Shortfall
+	}
+	slog.Warn("emr draft generation rejected: quota gate",
+		"tenant_id", payload.TenantID, "recording_id", payload.RecordingID,
+		"code", gate.Code, "error", cause)
+	httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 }
 
 // chargeGeneratedDraft 在病历草稿已成功落库后扣 record + hour。
@@ -245,6 +258,35 @@ func qualityRoundDeductionInput(tenantID int64, recordID string, report *emrqual
 		IdempotencyKey: fmt.Sprintf("emr:record:%s:quality:%s", strings.TrimSpace(recordID), runID),
 		Reason:         billingReasonQuality,
 	}
+}
+
+// ensureQualityRoundQuota 是提交病历（完成级质控）的交付前预检：round 1 轮。
+//
+// 只有真正要新跑一轮质控时才调用（复用 QualityRunID 的提交不调用）。额度不足 /
+// 服务暂停 / 服务到期都在这里阻断，避免额度已经耗尽还先调大模型再扣量失败。
+func (s *Service) ensureQualityRoundQuota(ctx context.Context, tenantID int64) error {
+	if s == nil || s.billing == nil {
+		return nil
+	}
+	err := s.billing.CheckQuota(ctx, tenantID, billingProductCode,
+		[]billing.DeductItem{{Unit: billingUnitRound, Amount: 1}})
+	if err == nil {
+		return nil
+	}
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		// 计费自身故障 fail-open，不能因为计费不可用阻断医生提交病历。
+		slog.Warn("emr quality quota check failed, allowing submit",
+			"tenant_id", tenantID, "error", err)
+		return nil
+	}
+	if gate.Insufficient != nil {
+		return &quotaExhaustedError{insufficient: gate.Insufficient}
+	}
+	if gate.Code == billing.CodeInsufficientEntitlement {
+		return fmt.Errorf("%w: %w", ErrEMRQuotaExhausted, billing.ErrInsufficientEntitlement)
+	}
+	return err
 }
 
 // chargeQualityRound 在提交病历实际新跑一轮完整质控后扣 round 1 轮。

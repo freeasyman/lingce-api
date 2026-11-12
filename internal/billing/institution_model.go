@@ -149,6 +149,8 @@ var (
 	ErrBundleMismatch = errors.New("billing: bundle does not match selected products")
 	// ErrSubscriptionPaused 表示机构服务已被暂停，扣量/预检拒绝执行（409）。
 	ErrSubscriptionPaused = errors.New("billing: subscription is paused")
+	// ErrSubscriptionExpired 表示机构服务期已到期，扣量/预检拒绝执行。
+	ErrSubscriptionExpired = errors.New("billing: subscription is expired")
 	// ErrOrderNotVoidable 表示订单已收款/已核销/状态不允许作废（409）。
 	ErrOrderNotVoidable = errors.New("billing: order is not voidable")
 	// ErrInvoiceNotFound 表示开票记录不存在（404）。

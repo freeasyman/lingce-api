@@ -284,13 +284,12 @@ func TestQuotaGateRejectsThreeEntries(t *testing.T) {
 	svc := &Service{billing: fake}
 	ctx := context.Background()
 
-	// 1) 截图解读入口：CheckQuota(shot:1)
-	if _, err := svc.AnalyzeScreenshot(ctx, ScreenshotAnalyzeRequest{
-		TenantID: 7, EmployeeID: 1, ImageData: "data:image/png;base64,AAAA",
-	}); !errors.Is(err, ErrPatientOpsQuotaExhausted) {
-		t.Fatalf("screenshot entry error = %v, want ErrPatientOpsQuotaExhausted", err)
-	} else if !strings.Contains(err.Error(), "额度已用完，请及时联系客服，加购增量包") {
-		t.Fatalf("screenshot entry message = %q", err.Error())
+	// 1) 截图解读入口：CheckQuota(shot:1)。截图入口只在真正要跑模型时预检，
+	// 直接调 AnalyzeScreenshot 需要数据库，这里直接校验同一个 ensureQuota 口径。
+	if err := svc.ensureQuota(ctx, 7, billingUnitShot, 1); !errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		t.Fatalf("screenshot quota error = %v, want ErrPatientOpsQuotaExhausted", err)
+	} else if !strings.Contains(err.Error(), billing.MessageInsufficientEntitlement) {
+		t.Fatalf("screenshot quota message = %q", err.Error())
 	}
 
 	// 2) 建议动作生成入口：CheckQuota(record:1)
@@ -392,10 +391,10 @@ func TestQuotaExhaustedResponseFormat(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Code != "PATIENT_OPS_QUOTA_EXHAUSTED" {
+	if body.Code != billing.CodeInsufficientEntitlement {
 		t.Fatalf("code = %q", body.Code)
 	}
-	if body.Message != "额度已用完，请及时联系客服，加购增量包" {
+	if body.Message != billing.MessageInsufficientEntitlement {
 		t.Fatalf("message = %q", body.Message)
 	}
 	if body.Details["product_code"] != "kehu" || body.Details["unit"] != "shot" {

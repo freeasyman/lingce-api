@@ -255,10 +255,10 @@ func TestWriteComplianceQuotaExhausted(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Code != complianceQuotaExhaustedCode {
-		t.Fatalf("code = %q, want %q", body.Code, complianceQuotaExhaustedCode)
+	if body.Code != billing.CodeInsufficientEntitlement {
+		t.Fatalf("code = %q, want %q", body.Code, billing.CodeInsufficientEntitlement)
 	}
-	if body.Message != "额度已用完，请及时联系客服，加购增量包" {
+	if body.Message != billing.MessageInsufficientEntitlement {
 		t.Fatalf("message = %q", body.Message)
 	}
 }

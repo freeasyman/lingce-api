@@ -24,20 +24,36 @@ func (s *Store) BeginDeduct(ctx context.Context) (DeductTx, error) {
 	return &deductTx{tx: tx}, nil
 }
 
-// GetSubscriptionState 返回机构的服务闸门状态：暂停优先，其余返回空串。
+// GetSubscriptionState 返回机构的服务闸门状态：暂停优先，其次到期，其余返回空串。
 //
-// 与机构详情的 status 口径保持一致。找不到租户时返回空串，
-// 让后续额度查询按「没有额度」走（避免把不存在租户误报成服务暂停）。
+// 与机构详情的 status 口径保持一致（暂停 > 未开通 > 已到期）：
+//   - 暂停：tenants.paused_at 非空；
+//   - 到期：当前服务期（active/expired 中最新一条）status='expired'，
+//     或 expired_on 早于今天（到期任务每天只跑一次，白天跨过到期日也要挡住）。
+//
+// 找不到租户时返回空串，让后续额度查询按「没有额度」走
+// （避免把不存在租户误报成服务暂停）。
 func (s *Store) GetSubscriptionState(ctx context.Context, tenantID int64) (string, error) {
 	var state string
 	err := s.pool.QueryRow(ctx, `
 SELECT CASE
-           WHEN paused_at IS NOT NULL THEN 'paused'
+           WHEN t.paused_at IS NOT NULL THEN 'paused'
+           WHEN p.status = 'expired' THEN 'expired'
+           WHEN p.expired_on IS NOT NULL AND p.expired_on < CURRENT_DATE THEN 'expired'
            ELSE ''
        END
-FROM tenants
-WHERE id = $1
-  AND deleted_at IS NULL`, tenantID).Scan(&state)
+FROM tenants t
+LEFT JOIN LATERAL (
+    -- 与续费/到期任务读同一行：tenant_subscriptions 最新一条服务期。
+    -- 到期任务每天只跑一次，白天跨过到期日时也要在这里挡住。
+    SELECT ts.status, ts.expired_on
+    FROM tenant_subscriptions ts
+    WHERE ts.tenant_id = t.id
+    ORDER BY ts.created_at DESC NULLS LAST, ts.id DESC
+    LIMIT 1
+) p ON TRUE
+WHERE t.id = $1
+  AND t.deleted_at IS NULL`, tenantID).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -48,11 +64,18 @@ WHERE id = $1
 }
 
 // subscriptionGuard 把服务闸门状态映射成扣量/预检的错误；正常状态返回 nil。
+//
+// 到期与暂停都必须拒绝：暂停优先（恢复后自然落到到期）。这两种错误不是
+// 「计费故障」，产品端不能 fail-open，必须按客户口径拒绝本次交付。
 func subscriptionGuard(state string) error {
-	if state == InstitutionStatusPaused {
+	switch state {
+	case InstitutionStatusPaused:
 		return ErrSubscriptionPaused
+	case InstitutionStatusExpired:
+		return ErrSubscriptionExpired
+	default:
+		return nil
 	}
-	return nil
 }
 
 const lockEntitlementsSQL = `

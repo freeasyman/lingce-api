@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -37,7 +38,7 @@ var contentFieldLabels = map[string]string{
 //
 // 之前这些情况统一返回 500「服务暂时不可用」，用户完全不知道该怎么办。
 func writeContentError(w http.ResponseWriter, err error) {
-	if errors.Is(err, ErrContentQuotaExhausted) {
+	if billing.IsGateRejection(err) {
 		writeContentQuotaExhausted(w, err)
 		return
 	}

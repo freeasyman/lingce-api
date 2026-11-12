@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,11 @@ func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID
 	record, err := h.recordStore.Get(ctx, tenantID, input.RecordID)
 	if err != nil || record == nil || record.EncounterID != input.EncounterID {
 		return nil, fmt.Errorf("实验病案不存在或接诊不匹配")
+	}
+	// 增量草稿同样是一份病历草稿的生成入口：调模型前先过额度预检。
+	recordingID := recordingIDFromRecord(record)
+	if err := h.ensureDraftQuota(ctx, tenantID, recordingID); err != nil {
+		return nil, err
 	}
 	prepared, err := h.preparePrompt(ctx, EmrWorkerRequest{
 		TenantID: tenantID, RecordingID: 1, EncounterID: input.EncounterID, EmployeeID: employeeID,
@@ -205,7 +211,38 @@ updates 只能使用当前模板中的栏位编码。没有足够信息时返回
 			updates[code] = formatEMRContentValue(value)
 		}
 	}
+	if len(updates) > 0 {
+		// 只有真正产出了字段增量才算一次草稿交付：按与正式草稿完全相同的
+		// 幂等键（emr:record:<recordID>:draft）扣 record + hour。同一份病历
+		// 无论走正式生成还是实验增量，都只会扣一次；空 updates 不扣。
+		h.chargeGeneratedDraft(ctx, EmrWorkerRequest{TenantID: tenantID, RecordingID: recordingID}, record)
+	}
 	return &IncrementalDraftResult{Updates: updates, UnresolvedItems: envelope.UnresolvedItems}, nil
+}
+
+// recordingIDFromRecord 从病历来源引用里取录音 id；取不到返回 0，
+// 此时扣量只计 record、不计 hour（与正式草稿“时长未知”口径一致）。
+func recordingIDFromRecord(record *Record) int64 {
+	if record == nil || record.SourceReferences == nil {
+		return 0
+	}
+	switch value := record.SourceReferences["recording_id"].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return parsed
+		}
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // SetResultBinder connects Worker results to the realtime workbench using the

@@ -393,6 +393,24 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 		_ = s.store.failAIVisibilityRun(ctx, tenantID, runID)
 		return
 	}
+	// 交付判定：至少一家 AI 返回了回答/分析才构成一次有效诊断。
+	// 全部引擎失败（超时/配置错误）属于空交付，不扣 prompt。
+	if !aiVisibilityDeliveryComplete(resultsAny) {
+		slog.Warn("ai visibility run produced no usable engine result; empty delivery is not charged",
+			"tenant_id", tenantID, "run_id", runID, "engines", len(engines))
+		return
+	}
 	// 诊断完成并落库后扣 prompt 1 题次；扣量失败只告警，不回滚诊断结果。
 	s.chargeAIVisibility(ctx, tenantID, runID)
+}
+
+// aiVisibilityDeliveryComplete 判断一次 AI 可见性诊断是否构成有效交付：
+// 至少一家引擎返回了非空回答、分析结果或检索证据，才算拿到了可用的对照结果。
+func aiVisibilityDeliveryComplete(results []aiEngineAnswer) bool {
+	for _, item := range results {
+		if strings.TrimSpace(item.Answer) != "" || len(item.Analysis) > 0 || item.SearchCount > 0 {
+			return true
+		}
+	}
+	return false
 }

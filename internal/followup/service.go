@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -458,6 +459,16 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 			failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if errors.Is(err, ErrFollowupQuotaExhausted) {
 				_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, followupQuotaExhaustedCode, err, false)
+				failureCancel()
+				return
+			}
+			if errors.Is(err, billing.ErrSubscriptionPaused) {
+				_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, followupSubscriptionPausedCode, err, false)
+				failureCancel()
+				return
+			}
+			if errors.Is(err, billing.ErrSubscriptionExpired) {
+				_ = s.markRunFailure(failureCtx, run, prompt.Version, cfg.ModelCode, nil, nil, followupSubscriptionExpiredCode, err, false)
 				failureCancel()
 				return
 			}

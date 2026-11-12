@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -152,7 +153,7 @@ func (h *Handler) GenerateActionAuthenticated(w http.ResponseWriter, r *http.Req
 	}
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, customerID, req)
 	if err != nil {
-		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeQuotaExhausted(w, err)
 			return
 		}
@@ -181,7 +182,7 @@ func (h *Handler) GenerateScreenshotActionAuthenticated(w http.ResponseWriter, r
 	req.SourceID = FlexibleInt64(sourceID)
 	result, err := h.service.GenerateAction(r.Context(), *claims.TenantID, claims.UserID, 0, req)
 	if err != nil {
-		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeQuotaExhausted(w, err)
 			return
 		}
@@ -640,7 +641,7 @@ func (h *Handler) Analyze(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) analyze(w http.ResponseWriter, r *http.Request, req ScreenshotAnalyzeRequest) {
 	resp, err := h.service.AnalyzeScreenshot(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, ErrPatientOpsQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeQuotaExhausted(w, err)
 			return
 		}

@@ -34,7 +34,8 @@ const (
 )
 
 // ErrDealExpertQuotaExhausted 表示预检发现赢客专家额度不足，异步分析据此终止本次 run。
-var ErrDealExpertQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+// 文案与错误码统一由 billing.GateRejection 提供（客户口径）。
+var ErrDealExpertQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
 
 // dealExpertQuotaExhaustedError 是软闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrDealExpertQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -45,7 +46,7 @@ type dealExpertQuotaExhaustedError struct {
 
 func (e *dealExpertQuotaExhaustedError) Error() string {
 	if e == nil || e.insufficient == nil {
-		return ErrDealExpertQuotaExhausted.Error()
+		return fmt.Errorf("%w: %w", ErrDealExpertQuotaExhausted, billing.ErrInsufficientEntitlement).Error()
 	}
 	return fmt.Sprintf("%s（%s 额度不足：当前 %.2f，本次需要 %.2f）",
 		ErrDealExpertQuotaExhausted.Error(), e.insufficient.Unit, e.insufficient.Current, e.insufficient.Required)
@@ -156,16 +157,21 @@ func (g *ConsultationAnalysisGenerator) ensureAnalysisQuota(ctx context.Context,
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		// 计费自身故障仍 fail-open，不能因计费故障拖垮分析。
 		slog.Warn("deal expert quota precheck failed, allowing analysis",
 			"tenant_id", tenantID, "recording_id", recordingID, "error", err)
 		return nil
 	}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(err, &insufficient) {
-		return &dealExpertQuotaExhaustedError{insufficient: insufficient}
+	if gate.Insufficient == nil {
+		if gate.Code == billing.CodeInsufficientEntitlement {
+			return fmt.Errorf("%w: %w", ErrDealExpertQuotaExhausted, billing.ErrInsufficientEntitlement)
+		}
+		// 服务暂停/到期：不能 fail-open，按统一客户口径阻断本次分析。
+		return err
 	}
-	return ErrDealExpertQuotaExhausted
+	return &dealExpertQuotaExhaustedError{insufficient: gate.Insufficient}
 }
 
 // callLLMWithQuotaGate 在调用模型之前先过额度软闸门：额度不足时直接返回错误，

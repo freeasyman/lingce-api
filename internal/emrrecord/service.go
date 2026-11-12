@@ -270,6 +270,11 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		reusedReport = true
 	}
 	if s.quality != nil && !reusedReport {
+		// 本轮会真实调用大模型做完成级质控：先过额度预检，额度不足直接拒绝提交，
+		// 避免“先烧模型、后扣量失败”造成欠扣。
+		if err := s.ensureQualityRoundQuota(ctx, tenantID); err != nil {
+			return nil, err
+		}
 		report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
 			RecordID: current.ID, Content: content, PatientSnapshot: patient,
 		}))

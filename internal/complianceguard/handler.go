@@ -3,7 +3,6 @@ package complianceguard
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/compliancepermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
@@ -628,7 +628,7 @@ func (h *Handler) CommunicationCheck(w http.ResponseWriter, r *http.Request) {
 	resp, runtime, err := h.service.AcceptCommunicationCheck(r.Context(), req)
 	processRuntime = runtime
 	if err != nil {
-		if errors.Is(err, ErrComplianceQuotaExhausted) {
+		if billing.IsGateRejection(err) {
 			writeComplianceQuotaExhausted(loggedWriter, err)
 		} else if unsupported, ok := err.(*UnsupportedRoleError); ok {
 			httputil.WriteError(loggedWriter, http.StatusUnprocessableEntity, "UNSUPPORTED_ROLE", unsupported.Error(), nil)

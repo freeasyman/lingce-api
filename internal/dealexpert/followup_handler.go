@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -396,6 +397,9 @@ func (h *Handler) AnalyzeRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	analysis, err := h.consultation.Generate(r.Context(), scope.TenantID, recordingID)
 	if err != nil {
+		if writeDealGateError(w, err) {
+			return
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "ANALYSIS_GENERATE_FAILED", err.Error(), nil)
 		return
 	}
@@ -914,4 +918,24 @@ func (h *Handler) GetRecordingOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"outcome": item})
+}
+
+// writeDealGateError 把交付闸门拒绝（到期/暂停/额度不足）写成统一的客户口径；
+// 不是闸门错误时返回 false，由调用方走原有错误处理。
+func writeDealGateError(w http.ResponseWriter, err error) bool {
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		return false
+	}
+	var details map[string]any
+	if gate.Insufficient != nil {
+		details = map[string]any{
+			"unit":      gate.Insufficient.Unit,
+			"current":   gate.Insufficient.Current,
+			"required":  gate.Insufficient.Required,
+			"shortfall": gate.Insufficient.Shortfall,
+		}
+	}
+	httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
+	return true
 }

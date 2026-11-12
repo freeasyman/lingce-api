@@ -320,29 +320,35 @@ func (h *Handler) InternalCheckQuota(w http.ResponseWriter, r *http.Request) {
 // writeInternalBillingError 是内部扣量接口的错误映射：
 // 扣量/预检的约定与运营端不同（INVALID_REQUEST / ALREADY_DEDUCTED / INSUFFICIENT_ENTITLEMENT），
 // 其余错误继续走 writeBillingError 的通用映射。
+//
+// 三种交付拒绝（到期/暂停/额度不足）统一走 GateRejection 的客户口径：
+// 这条链路虽然叫 internal，但调用方是六产品交付端，错误文案会直接透传给客户。
 func writeInternalBillingError(w http.ResponseWriter, err error) {
 	var validation *ValidationError
 	if errors.As(err, &validation) {
 		httputil.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", validation.Message, nil)
 		return
 	}
-	var insufficient *InsufficientEntitlementError
-	if errors.As(err, &insufficient) {
-		httputil.WriteError(w, http.StatusConflict, "INSUFFICIENT_ENTITLEMENT", "额度不足", map[string]any{
-			"unit":      insufficient.Unit,
-			"current":   insufficient.Current,
-			"required":  insufficient.Required,
-			"shortfall": insufficient.Shortfall,
-		})
+	if gate, ok := GateRejection(err); ok {
+		// 内部扣量接口保持既有契约：额度不足是 409（产品侧 HTTP 入口才是 402），
+		// 但错误码与客户文案统一。
+		if gate.Code == CodeInsufficientEntitlement {
+			gate.Status = http.StatusConflict
+		}
+		var details map[string]any
+		if gate.Insufficient != nil {
+			details = map[string]any{
+				"unit":      gate.Insufficient.Unit,
+				"current":   gate.Insufficient.Current,
+				"required":  gate.Insufficient.Required,
+				"shortfall": gate.Insufficient.Shortfall,
+			}
+		}
+		httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 		return
 	}
 	if errors.Is(err, ErrAlreadyDeducted) {
 		httputil.WriteError(w, http.StatusConflict, "ALREADY_DEDUCTED", "该幂等键已扣量，请勿重复提交", nil)
-		return
-	}
-	if errors.Is(err, ErrSubscriptionPaused) {
-		// 客户侧文案：扣量/预检的调用方是产品端，不能出现「联系运营」这种内部口径。
-		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "服务已暂停，请联系您的专属顾问", nil)
 		return
 	}
 	writeBillingError(w, err)

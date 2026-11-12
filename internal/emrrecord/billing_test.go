@@ -157,10 +157,10 @@ func TestDraftGenerationEntryRejectsWhenQuotaInsufficient(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Code != "EMR_QUOTA_EXHAUSTED" {
+	if payload.Code != billing.CodeInsufficientEntitlement {
 		t.Fatalf("code = %q", payload.Code)
 	}
-	if payload.Message != "额度已用完，请及时联系客服，加购增量包" {
+	if payload.Message != billing.MessageInsufficientEntitlement {
 		t.Fatalf("message = %q", payload.Message)
 	}
 	if payload.Details.Unit != "record" || payload.Details.Shortfall != 1 {

@@ -21,12 +21,7 @@ func (s *Service) GenerateCardImage(ctx context.Context, tenantID int64, prompt,
 	if strings.TrimSpace(prompt) == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
-	if n <= 0 {
-		n = 3
-	}
-	if n > 4 {
-		n = 4
-	}
+	n = normalizeCardImageCount(n)
 
 	selectedModel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"image_generation"})
 	if err != nil {

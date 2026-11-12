@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -161,6 +162,13 @@ func (s *Store) fetchRecordingTranscript(ctx context.Context, tenantID, recordin
 	return transcript, nil
 }
 
+// errInsightEmptyDelivery 表示模型调用成功但未返回任何有效洞察。
+// 按交付口径，空结果不扣 hour，也不覆盖已有洞察。
+var errInsightEmptyDelivery = errors.New("模型未提取到任何有效洞察（空交付），本次不扣额度")
+
+// insightDeliveryComplete 判断一次洞察提取是否构成有效交付。
+func insightDeliveryComplete(insights []Insight) bool { return len(insights) > 0 }
+
 // ExtractInsights 从录音转写提取洞察（28 字段），落库 content_insights。
 func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int64) ([]Insight, error) {
 	if s.llmClient == nil {
@@ -205,6 +213,11 @@ func (s *Service) ExtractInsights(ctx context.Context, tenantID, recordingID int
 	insights, err := parseInsights(llmResp.Content)
 	if err != nil {
 		return nil, fmt.Errorf("parse insights: %w", err)
+	}
+	// 交付判定：模型返回 0 条有效洞察属于空交付，不能扣 hour，也不能清掉
+	// 该录音已有的洞察（重跑空结果不应破坏上一次的有效数据）。
+	if !insightDeliveryComplete(insights) {
+		return nil, errInsightEmptyDelivery
 	}
 
 	stored, err := s.store.replaceInsights(ctx, tenantID, recordingID, insights)

@@ -32,12 +32,11 @@ const (
 	complianceBillingUnitHour = "hour"
 	// complianceBillingReason 是写进额度流水的原因，便于运营对账。
 	complianceBillingReason = "合规卫士-沟通合规检查"
-	// complianceQuotaExhaustedCode 是交付前闸门拒绝时返回给调用方的错误码。
-	complianceQuotaExhaustedCode = "COMPLIANCE_QUOTA_EXHAUSTED"
 )
 
 // ErrComplianceQuotaExhausted 表示预检发现合规卫士额度不足，检查入口据此拒绝开始检查。
-var ErrComplianceQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+// 文案与错误码统一由 billing.GateRejection 提供（客户口径）。
+var ErrComplianceQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
 
 // complianceQuotaExhaustedError 是闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrComplianceQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -48,7 +47,7 @@ type complianceQuotaExhaustedError struct {
 
 func (e *complianceQuotaExhaustedError) Error() string {
 	if e == nil || e.insufficient == nil {
-		return ErrComplianceQuotaExhausted.Error()
+		return fmt.Errorf("%w: %w", ErrComplianceQuotaExhausted, billing.ErrInsufficientEntitlement).Error()
 	}
 	return fmt.Sprintf("%s（%s 额度不足：当前 %.2f，本次需要 %.2f）",
 		ErrComplianceQuotaExhausted.Error(), e.insufficient.Unit, e.insufficient.Current, e.insufficient.Required)
@@ -167,16 +166,22 @@ func (s *Service) ensureCommunicationQuota(ctx context.Context, tenantID, record
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		// 计费自身故障仍 fail-open，不能因计费故障拖垮合规检查。
 		slog.Warn("compliance quota precheck failed, allowing check",
 			"tenant_id", tenantID, "recording_id", recordingID, "error", err)
 		return nil
 	}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(err, &insufficient) {
-		return &complianceQuotaExhaustedError{insufficient: insufficient}
+	if gate.Insufficient == nil {
+		if gate.Code == billing.CodeInsufficientEntitlement {
+			// 裸 ErrInsufficientEntitlement（无缺口明细）也要映射成本产品的拒绝错误。
+			return fmt.Errorf("%w: %w", ErrComplianceQuotaExhausted, billing.ErrInsufficientEntitlement)
+		}
+		// 服务暂停/到期：不能 fail-open，按统一客户口径阻断本次检查。
+		return err
 	}
-	return ErrComplianceQuotaExhausted
+	return &complianceQuotaExhaustedError{insufficient: gate.Insufficient}
 }
 
 // releaseCommunicationRunClaim 在预检拒绝时撤销刚抢占的 processing 记录，
@@ -234,13 +239,20 @@ func deductOrWarn(ctx context.Context, svc billingService, input billing.DeductI
 // 402 Payment Required + COMPLIANCE_QUOTA_EXHAUSTED，details 带产品与缺口明细。
 func writeComplianceQuotaExhausted(w http.ResponseWriter, cause error) {
 	details := map[string]any{"product_code": complianceBillingProductCode}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(cause, &insufficient) {
-		details["unit"] = insufficient.Unit
-		details["current"] = insufficient.Current
-		details["required"] = insufficient.Required
-		details["shortfall"] = insufficient.Shortfall
+	gate, ok := billing.GateRejection(cause)
+	if !ok {
+		gate = &billing.CustomerGate{
+			Status:  http.StatusPaymentRequired,
+			Code:    billing.CodeInsufficientEntitlement,
+			Message: billing.MessageInsufficientEntitlement,
+		}
 	}
-	slog.Warn("compliance check rejected: quota exhausted", "error", cause)
-	httputil.WriteError(w, http.StatusPaymentRequired, complianceQuotaExhaustedCode, ErrComplianceQuotaExhausted.Error(), details)
+	if gate.Insufficient != nil {
+		details["unit"] = gate.Insufficient.Unit
+		details["current"] = gate.Insufficient.Current
+		details["required"] = gate.Insufficient.Required
+		details["shortfall"] = gate.Insufficient.Shortfall
+	}
+	slog.Warn("compliance check rejected: quota gate", "code", gate.Code, "error", cause)
+	httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 }

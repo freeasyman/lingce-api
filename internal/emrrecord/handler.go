@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
@@ -519,6 +520,16 @@ func writeActionError(w http.ResponseWriter, item *WriteOutcome, actionErr error
 	}
 	if errors.Is(actionErr, ErrQualityConfirmationRequired) {
 		httputil.WriteError(w, http.StatusConflict, "EMR_QUALITY_CONFIRMATION_REQUIRED", actionErr.Error(), details)
+		return
+	}
+	if gate, ok := billing.GateRejection(actionErr); ok {
+		if gate.Insufficient != nil {
+			details["unit"] = gate.Insufficient.Unit
+			details["current"] = gate.Insufficient.Current
+			details["required"] = gate.Insufficient.Required
+			details["shortfall"] = gate.Insufficient.Shortfall
+		}
+		httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 		return
 	}
 	httputil.WriteError(w, http.StatusBadRequest, "EMR_ACTION_FAILED", actionErr.Error(), details)

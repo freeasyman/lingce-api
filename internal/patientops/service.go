@@ -78,6 +78,10 @@ func validPatientTaskType(value string) bool {
 
 var ErrRecordingAnalysisInvalidReference = errors.New("invalid recording analysis references")
 
+// ErrEmptyAnalysisDelivery 表示模型调用成功但没有产出可交付的分析内容。
+// 空交付不落 source/record、不扣 hour/shot，由调用方按失败处理。
+var ErrEmptyAnalysisDelivery = errors.New("分析结果为空（空交付），本次不扣额度")
+
 func (s *Service) AcceptRecordingAnalysis(ctx context.Context, req RecordingAnalyzeRequest) (*RecordingAnalyzeResponse, error) {
 	if s.pool == nil {
 		return nil, fmt.Errorf("database pool is not configured")
@@ -240,6 +244,10 @@ func (s *Service) generateRecordingAnalysis(ctx context.Context, tenantID, recor
 		return nil, fmt.Errorf("parse patient recording analysis: %w", err)
 	}
 	analysis.Normalize()
+	// 空交付判定：模型返回 {} 或只有平台/昵称等身份字段时，不应落库也不应扣 hour。
+	if !analysis.hasDeliverableContent() {
+		return nil, ErrEmptyAnalysisDelivery
+	}
 	return &analysis, nil
 }
 
@@ -1008,16 +1016,22 @@ func (s *Service) loadActionPrompt(ctx context.Context, action string) (*patient
 	return &p, nil
 }
 
+// screenshotAnalysisReusable 判断本次请求是否可以直接复用已成功的截图分析。
+// 复用不调用模型，因此不应经过额度预检（避免把纯读取误伤成额度拦截）。
+func screenshotAnalysisReusable(status string, payload []byte) bool {
+	if status != "succeeded" || len(payload) == 0 {
+		return false
+	}
+	trimmed := strings.TrimSpace(string(payload))
+	return trimmed != "" && trimmed != "{}" && trimmed != "null" && trimmed != "[]"
+}
+
 func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRequest) (*ScreenshotAnalyzeResponse, error) {
 	if req.TenantID <= 0 || req.EmployeeID <= 0 || strings.TrimSpace(req.ImageData) == "" {
 		return nil, fmt.Errorf("tenant_id, employee_id and image_data are required")
 	}
 	if !strings.HasPrefix(req.ImageData, "data:image/") {
 		return nil, fmt.Errorf("image_data must be a data image URL")
-	}
-	// 截图解读入口的交付前预检：shot 1 张。额度不足拒绝解读，预检故障放行。
-	if err := s.ensureQuota(ctx, req.TenantID, billingUnitShot, 1); err != nil {
-		return nil, err
 	}
 	if s.pool == nil || s.llm == nil {
 		return nil, fmt.Errorf("patient operations dependencies are not configured")
@@ -1051,7 +1065,9 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			existingCustomerID = req.CustomerID
 			existing.MatchStatus = "confirmed"
 		}
-		if existingStatus == "succeeded" && len(existingPayload) > 0 && string(existingPayload) != "{}" {
+		// 已有成功结果直接复用：这是纯读取，不调用模型，因此不做额度预检
+		// （否则额度刚用完的客户连自己的历史截图都看不了）。
+		if screenshotAnalysisReusable(existingStatus, existingPayload) {
 			if err := json.Unmarshal(existingPayload, &existing.Analysis); err != nil {
 				return nil, fmt.Errorf("parse existing screenshot analysis: %w", err)
 			}
@@ -1073,6 +1089,10 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 			return nil, fmt.Errorf("screenshot analysis already in progress (source_id=%d)", existing.SourceID)
 		}
 		if existingStatus == "failed" {
+			// 失败重试会真正调用模型：交付前预检 shot 1 张。
+			if err := s.ensureQuota(ctx, req.TenantID, billingUnitShot, 1); err != nil {
+				return nil, err
+			}
 			if _, err := s.pool.Exec(ctx, `UPDATE patient_conversation_sources SET original_name=$1,media_data=$2,created_by=$3,customer_id=COALESCE($4,customer_id),recognition_payload='{}'::jsonb,analysis_status='processing',analysis_error='',analysis_started_at=NOW(),analysis_completed_at=NULL,updated_at=NOW() WHERE tenant_id=$5 AND id=$6`, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, req.TenantID, existing.SourceID); err != nil {
 				return nil, fmt.Errorf("restart failed screenshot analysis: %w", err)
 			}
@@ -1080,6 +1100,10 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("find duplicate screenshot source: %w", err)
+	}
+	// 首次解读会真正调用模型：交付前预检 shot 1 张。额度不足拒绝解读，预检故障放行。
+	if err := s.ensureQuota(ctx, req.TenantID, billingUnitShot, 1); err != nil {
+		return nil, err
 	}
 	var sourceID int64
 	err = s.pool.QueryRow(ctx, `INSERT INTO patient_conversation_sources(tenant_id,source_type,original_name,media_data,created_by,customer_id,content_hash,analysis_status,analysis_started_at) VALUES($1,'screenshot',$2,$3,$4,$5,$6,'processing',NOW()) RETURNING id`, req.TenantID, strings.TrimSpace(req.OriginalName), req.ImageData, req.EmployeeID, req.CustomerID, contentHash).Scan(&sourceID)
@@ -1092,7 +1116,7 @@ func (s *Service) AnalyzeScreenshot(ctx context.Context, req ScreenshotAnalyzeRe
 		var concurrentStatus string
 		if lookupErr := s.pool.QueryRow(ctx, `SELECT id,customer_id,match_status,analysis_status,recognition_payload FROM patient_conversation_sources WHERE tenant_id=$1 AND content_hash=$2`, req.TenantID, contentHash).Scan(&concurrent.SourceID, &concurrentCustomerID, &concurrent.MatchStatus, &concurrentStatus, &concurrentPayload); lookupErr == nil {
 			concurrent.CustomerID = concurrentCustomerID
-			if concurrentStatus == "succeeded" && len(concurrentPayload) > 0 && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
+			if screenshotAnalysisReusable(concurrentStatus, concurrentPayload) && json.Unmarshal(concurrentPayload, &concurrent.Analysis) == nil {
 				concurrent.Analysis.Normalize()
 				if req.CustomerID != nil {
 					if concurrentCustomerID != nil && *concurrentCustomerID != *req.CustomerID {
@@ -1207,6 +1231,10 @@ func (s *Service) analyzeScreenshotSource(ctx context.Context, req ScreenshotAna
 		return nil, markFailed(fmt.Errorf("decode normalized patient screenshot analysis: %w", err))
 	}
 	analysis.Normalize()
+	// 空交付判定：{}/[] 或只有身份字段的结果不落库、不扣 shot。
+	if !analysis.hasDeliverableContent() {
+		return nil, markFailed(ErrEmptyAnalysisDelivery)
+	}
 	payload, _ := json.Marshal(analysis)
 	if _, err := s.pool.Exec(analysisCtx, `UPDATE patient_conversation_sources SET recognition_payload=$1::jsonb,updated_at=NOW() WHERE id=$2 AND tenant_id=$3`, payload, sourceID, req.TenantID); err != nil {
 		slog.Error("patient screenshot analysis persistence failed", "source_id", sourceID, "error", err)

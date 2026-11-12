@@ -305,15 +305,15 @@ func (f *smokeFlow) run() {
 		{Unit: "record", Type: "usage", Amount: "-5", Source: "expired"},
 	})
 	if err := f.svc.CheckQuota(f.ctx, f.tenantID, f.product,
-		[]billing.DeductItem{{Unit: "hour", Amount: 1}}); !errors.Is(err, billing.ErrInsufficientEntitlement) {
-		t.Fatalf("到期清零后预检应返回额度不足，实际: %v", err)
+		[]billing.DeductItem{{Unit: "hour", Amount: 1}}); !errors.Is(err, billing.ErrSubscriptionExpired) {
+		t.Fatalf("到期清零后预检应返回服务已到期，实际: %v", err)
 	}
 	if _, err := f.svc.Deduct(f.ctx, billing.DeductInput{
 		TenantID: f.tenantID, ProductCode: f.product,
 		Items:          []billing.DeductItem{{Unit: "hour", Amount: 1}},
 		IdempotencyKey: fmt.Sprintf("emr:record:%d:expired", f.tenantID),
-	}); !errors.Is(err, billing.ErrInsufficientEntitlement) {
-		t.Fatalf("到期清零后扣量应返回额度不足，实际: %v", err)
+	}); !errors.Is(err, billing.ErrSubscriptionExpired) {
+		t.Fatalf("到期清零后扣量应返回服务已到期，实际: %v", err)
 	}
 	f.section("冒烟链路全部通过")
 }

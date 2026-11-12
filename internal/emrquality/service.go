@@ -219,7 +219,7 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 		return nil
 	}
 	if s.llm == nil {
-		report.FailureReason = "大模型质检服务未配置，请联系管理员后重试。"
+		report.FailureReason = "质检服务暂不可用，请联系您的专属顾问后重试。"
 		for _, rule := range semanticRules {
 			appendSemanticUnavailable(report, rule, "大模型质检服务未配置，当前规则未完成判断。")
 		}
@@ -232,7 +232,7 @@ func (s *Service) evaluateSemanticRules(ctx context.Context, input Context, rule
 	}
 	provider, model, err := s.store.modelConfig(ctx, input.TenantID)
 	if err != nil {
-		report.FailureReason = "未找到可用的大模型质检配置，请联系管理员。"
+		report.FailureReason = "未找到可用的质检配置，请联系您的专属顾问。"
 		for _, rule := range semanticRules {
 			appendSemanticUnavailable(report, rule, report.FailureReason)
 		}

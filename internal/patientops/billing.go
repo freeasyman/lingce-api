@@ -40,13 +40,11 @@ const (
 	billingReasonScreenshot = "客户总监-截图解读"
 	billingReasonAction     = "客户总监-截图建议动作"
 	billingReasonPlan       = "客户总监-经营方案内容"
-
-	// patientOpsQuotaExhaustedCode 是交付前闸门拒绝时返回给调用方的错误码。
-	patientOpsQuotaExhaustedCode = "PATIENT_OPS_QUOTA_EXHAUSTED"
 )
 
 // ErrPatientOpsQuotaExhausted 表示预检发现客户总监额度不足，生成入口据此拒绝开始生成。
-var ErrPatientOpsQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+// 文案与错误码统一由 billing.GateRejection 提供（客户口径）。
+var ErrPatientOpsQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
 
 // quotaExhaustedError 是闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrPatientOpsQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -57,7 +55,7 @@ type quotaExhaustedError struct {
 
 func (e *quotaExhaustedError) Error() string {
 	if e == nil || e.insufficient == nil {
-		return ErrPatientOpsQuotaExhausted.Error()
+		return fmt.Errorf("%w: %w", ErrPatientOpsQuotaExhausted, billing.ErrInsufficientEntitlement).Error()
 	}
 	return fmt.Sprintf("%s（%s 额度不足：当前 %.2f，本次需要 %.2f）",
 		ErrPatientOpsQuotaExhausted.Error(), e.insufficient.Unit, e.insufficient.Current, e.insufficient.Required)
@@ -112,16 +110,22 @@ func (s *Service) ensureQuota(ctx context.Context, tenantID int64, unit string, 
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		// 计费自身故障仍 fail-open，不能因计费故障拖垮业务。
 		slog.Warn("patient ops quota precheck failed, allowing delivery",
 			"tenant_id", tenantID, "product_code", billingProductCode, "unit", unit, "error", err)
 		return nil
 	}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(err, &insufficient) {
-		return &quotaExhaustedError{insufficient: insufficient}
+	if gate.Insufficient == nil {
+		if gate.Code == billing.CodeInsufficientEntitlement {
+			// 裸 ErrInsufficientEntitlement（无缺口明细）也要映射成本产品的拒绝错误。
+			return fmt.Errorf("%w: %w", ErrPatientOpsQuotaExhausted, billing.ErrInsufficientEntitlement)
+		}
+		// 服务暂停/到期：不能 fail-open，按统一客户口径阻断本次交付。
+		return err
 	}
-	return ErrPatientOpsQuotaExhausted
+	return &quotaExhaustedError{insufficient: gate.Insufficient}
 }
 
 // ensurePlanContentQuota 是经营方案内容生成的交付前闸门：person 1 人。
@@ -133,15 +137,22 @@ func (s *Service) ensurePlanContentQuota(ctx context.Context, tenantID int64) er
 // 402 Payment Required + PATIENT_OPS_QUOTA_EXHAUSTED，details 带产品与缺口明细。
 func writeQuotaExhausted(w http.ResponseWriter, cause error) {
 	details := map[string]any{"product_code": billingProductCode}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(cause, &insufficient) {
-		details["unit"] = insufficient.Unit
-		details["current"] = insufficient.Current
-		details["required"] = insufficient.Required
-		details["shortfall"] = insufficient.Shortfall
+	gate, ok := billing.GateRejection(cause)
+	if !ok {
+		gate = &billing.CustomerGate{
+			Status:  http.StatusPaymentRequired,
+			Code:    billing.CodeInsufficientEntitlement,
+			Message: billing.MessageInsufficientEntitlement,
+		}
 	}
-	slog.Warn("patient ops generation rejected: quota exhausted", "error", cause)
-	httputil.WriteError(w, http.StatusPaymentRequired, patientOpsQuotaExhaustedCode, ErrPatientOpsQuotaExhausted.Error(), details)
+	if gate.Insufficient != nil {
+		details["unit"] = gate.Insufficient.Unit
+		details["current"] = gate.Insufficient.Current
+		details["required"] = gate.Insufficient.Required
+		details["shortfall"] = gate.Insufficient.Shortfall
+	}
+	slog.Warn("patient ops generation rejected: quota gate", "code", gate.Code, "error", cause)
+	httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 }
 
 // recordingHours 把秒换算成小时，四舍五入到 2 位小数（0.01 小时 ≈ 0.6 分钟，即分钟精度）。

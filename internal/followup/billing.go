@@ -36,10 +36,24 @@ const (
 	followupBillingReason = "随访顾问-随访分析"
 	// followupQuotaExhaustedCode 是软闸门拒绝时写进 run 的失败码。
 	followupQuotaExhaustedCode = "QUOTA_EXHAUSTED"
+	// followupSubscriptionPausedCode / followupSubscriptionExpiredCode 是服务闸门
+	// 拒绝时写进 run 的失败码，与客户侧错误码保持一致。
+	followupSubscriptionPausedCode  = billing.CodeSubscriptionPaused
+	followupSubscriptionExpiredCode = billing.CodeSubscriptionExpired
 )
 
 // ErrFollowupQuotaExhausted 表示预检发现随访顾问额度不足，异步 run 据此终止。
-var ErrFollowupQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+var ErrFollowupQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
+
+// followupGateError 让服务暂停/到期的客户文案原样写进 run，同时保留对计费层
+// 错误链的 errors.Is/As 能力，便于调用方区分具体拒绝原因。
+type followupGateError struct {
+	message string
+	cause   error
+}
+
+func (e *followupGateError) Error() string { return e.message }
+func (e *followupGateError) Unwrap() error { return e.cause }
 
 // followupQuotaExhaustedError 是软闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrFollowupQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -168,10 +182,17 @@ func (s *Service) ensureFollowupQuota(ctx context.Context, tenantID, recordingID
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+	if _, ok := billing.GateRejection(err); !ok {
+		// 计费自身故障仍 fail-open，不能因计费故障拖垮随访生成。
 		slog.Warn("followup quota precheck failed, allowing generation",
 			"tenant_id", tenantID, "recording_id", recordingID, "error", err)
 		return nil
+	}
+	switch {
+	case errors.Is(err, billing.ErrSubscriptionPaused):
+		return &followupGateError{message: billing.MessageSubscriptionPaused, cause: err}
+	case errors.Is(err, billing.ErrSubscriptionExpired):
+		return &followupGateError{message: billing.MessageSubscriptionExpired, cause: err}
 	}
 	var insufficient *billing.InsufficientEntitlementError
 	if errors.As(err, &insufficient) {

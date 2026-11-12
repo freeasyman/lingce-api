@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -40,13 +41,11 @@ const (
 	contentBillingReasonAIVisibility = "获客先锋-AI回答诊断"
 	contentBillingReasonArticle      = "获客先锋-文稿交付"
 	contentBillingReasonImage        = "获客先锋-图片交付"
-
-	// contentQuotaExhaustedCode 是交付前闸门拒绝时返回给调用方的错误码。
-	contentQuotaExhaustedCode = "CONTENT_QUOTA_EXHAUSTED"
 )
 
 // ErrContentQuotaExhausted 表示预检发现获客先锋额度不足，生成入口据此拒绝开始生成。
-var ErrContentQuotaExhausted = errors.New("额度已用完，请及时联系客服，加购增量包")
+// 文案与错误码统一由 billing.GateRejection 提供（客户口径）。
+var ErrContentQuotaExhausted = errors.New(billing.MessageInsufficientEntitlement)
 
 // contentQuotaExhaustedError 是闸门拒绝的具体错误，携带缺口明细；同时满足
 // errors.Is(err, ErrContentQuotaExhausted) 与 errors.As(err, *billing.InsufficientEntitlementError)，
@@ -135,16 +134,22 @@ func (s *Service) ensureContentQuota(ctx context.Context, tenantID int64, unit s
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, billing.ErrInsufficientEntitlement) {
+	gate, ok := billing.GateRejection(err)
+	if !ok {
+		// 计费自身故障仍 fail-open，不能因计费故障拖垮业务。
 		slog.Warn("content quota precheck failed, allowing delivery",
 			"tenant_id", tenantID, "product_code", contentBillingProductCode, "unit", unit, "error", err)
 		return nil
 	}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(err, &insufficient) {
-		return &contentQuotaExhaustedError{insufficient: insufficient}
+	if gate.Insufficient == nil {
+		if gate.Code == billing.CodeInsufficientEntitlement {
+			// 裸 ErrInsufficientEntitlement（无缺口明细）也要映射成本产品的拒绝错误。
+			return fmt.Errorf("%w: %w", ErrContentQuotaExhausted, billing.ErrInsufficientEntitlement)
+		}
+		// 服务暂停/到期：不能 fail-open，按统一客户口径阻断本次交付。
+		return err
 	}
-	return ErrContentQuotaExhausted
+	return &contentQuotaExhaustedError{insufficient: gate.Insufficient}
 }
 
 // insightDeductionInput 组装需求洞察的扣量请求：hour = 录音时长（保留 2 位），
@@ -261,6 +266,47 @@ func (s *Service) chargeArticle(ctx context.Context, tenantID, articleID int64) 
 	deductOrWarn(ctx, s.billing, input)
 }
 
+// normalizeCardImageCount 把同步生图接口的 n 收敛到 1~4，未传时默认 3 张。
+// 预检与实际调用必须用同一口径，避免按 0 预检却真实生成 3 张。
+func normalizeCardImageCount(n int) int {
+	if n <= 0 {
+		return 3
+	}
+	if n > 4 {
+		return 4
+	}
+	return n
+}
+
+// cardImageDeductionInput 组装同步生图接口的扣量请求：按实际交付张数扣 shot。
+// key 由调用方生成（优先 Idempotency-Key 请求头），用于系统重试去重。
+func cardImageDeductionInput(tenantID int64, count int, key string) (billing.DeductInput, bool) {
+	key = strings.TrimSpace(key)
+	if count <= 0 || key == "" {
+		return billing.DeductInput{}, false
+	}
+	return billing.DeductInput{
+		TenantID:       tenantID,
+		ProductCode:    contentBillingProductCode,
+		Items:          []billing.DeductItem{{Unit: contentBillingUnitShot, Amount: float64(count)}},
+		IdempotencyKey: key,
+		Reason:         contentBillingReasonImage,
+	}, true
+}
+
+// chargeCardImages 在同步生图接口成功返回图片后按实际张数扣 shot。
+// 只对真正返回的图片计费（空交付不扣）；扣量失败只告警，不影响已生成的图片。
+func (s *Service) chargeCardImages(ctx context.Context, tenantID int64, count int, key string) {
+	if s == nil || s.billing == nil {
+		return
+	}
+	input, ok := cardImageDeductionInput(tenantID, count, key)
+	if !ok {
+		return
+	}
+	deductOrWarn(ctx, s.billing, input)
+}
+
 // chargeSingleImage 在单图生成并写入内容成功后扣 shot 1。
 func (s *Service) chargeSingleImage(ctx context.Context, tenantID, contentID int64) {
 	if s == nil || s.billing == nil {
@@ -303,13 +349,20 @@ func deductOrWarn(ctx context.Context, svc billingService, input billing.DeductI
 // CONTENT_QUOTA_EXHAUSTED，details 带产品与缺口明细。
 func writeContentQuotaExhausted(w http.ResponseWriter, cause error) {
 	details := map[string]any{"product_code": contentBillingProductCode}
-	var insufficient *billing.InsufficientEntitlementError
-	if errors.As(cause, &insufficient) {
-		details["unit"] = insufficient.Unit
-		details["current"] = insufficient.Current
-		details["required"] = insufficient.Required
-		details["shortfall"] = insufficient.Shortfall
+	gate, ok := billing.GateRejection(cause)
+	if !ok {
+		gate = &billing.CustomerGate{
+			Status:  http.StatusPaymentRequired,
+			Code:    billing.CodeInsufficientEntitlement,
+			Message: billing.MessageInsufficientEntitlement,
+		}
 	}
-	slog.Warn("content generation rejected: quota exhausted", "error", cause)
-	httputil.WriteError(w, http.StatusPaymentRequired, contentQuotaExhaustedCode, ErrContentQuotaExhausted.Error(), details)
+	if gate.Insufficient != nil {
+		details["unit"] = gate.Insufficient.Unit
+		details["current"] = gate.Insufficient.Current
+		details["required"] = gate.Insufficient.Required
+		details["shortfall"] = gate.Insufficient.Shortfall
+	}
+	slog.Warn("content generation rejected: quota gate", "code", gate.Code, "error", cause)
+	httputil.WriteError(w, gate.Status, gate.Code, gate.Message, details)
 }

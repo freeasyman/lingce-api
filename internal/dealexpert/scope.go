@@ -70,7 +70,7 @@ func EvaluateDealScope(roles []string) ScopeRule {
 	if len(roles) > 0 {
 		return ScopeRule{Allowed: false, Code: "denied", Reason: "当前账号没有赢客专家权限，请联系机构管理员分配角色"}
 	}
-	return ScopeRule{Allowed: false, Code: "unassigned", Reason: "账号尚未分配机构角色，请联系管理员开通赢客专家"}
+	return ScopeRule{Allowed: false, Code: "unassigned", Reason: "账号尚未分配机构角色，请联系机构管理员开通赢客专家"}
 }
 
 func (s *dealScope) allowsAllEmployees() bool { return s.EmployeeIDs == nil }

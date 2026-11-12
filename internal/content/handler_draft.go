@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
+	"github.com/google/uuid"
 )
 
 // GenerateGraphicNoteDraft 生成图文笔记文稿。
@@ -27,6 +29,17 @@ func (h *Handler) GenerateGraphicNoteDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httputil.WriteSuccess(w, draft)
+}
+
+// cardImageIdempotencyKey 把请求头规范成计费层可接受的 <module>:<object>:<action> 格式。
+// 请求头缺失/非法/过长时退回唯一键：宁可每次主动生成都计费，也不能让键非法导致漏扣。
+func cardImageIdempotencyKey(header string) string {
+	header = strings.TrimSpace(header)
+	candidate := "content:card-image:" + header
+	if header == "" || len(candidate) > 128 || strings.ContainsAny(candidate, " \t\r\n") || strings.Contains(candidate, "::") || strings.HasSuffix(candidate, ":") {
+		return "content:card-image:" + uuid.NewString()
+	}
+	return candidate
 }
 
 // SaveContentV2 保存内容。
@@ -79,12 +92,23 @@ func (h *Handler) GenerateCardImage(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	urls, err := h.service.GenerateCardImage(r.Context(), tenantID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, req.N, req.Size)
-	if err != nil {
-		slog.Error("generate card image failed", "error", err, "tenant_id", tenantID, "n", req.N, "prompt_len", len(req.Prompt))
+	count := normalizeCardImageCount(req.N)
+	// 同步生图是会真实调用图片模型的交付接口：生成前按张数预检 shot，
+	// 额度不足直接拒绝，不能像历史上那样绕过计费白调模型。
+	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, float64(count)); err != nil {
 		writeContentError(w, err)
 		return
 	}
+	urls, err := h.service.GenerateCardImage(r.Context(), tenantID, req.Prompt, req.ReferenceImage, req.LogoURL, req.QRURL, count, req.Size)
+	if err != nil {
+		slog.Error("generate card image failed", "error", err, "tenant_id", tenantID, "n", count, "prompt_len", len(req.Prompt))
+		writeContentError(w, err)
+		return
+	}
+	// 只按实际返回的图片张数扣 shot（空交付不扣）；Idempotency-Key 用于系统重试去重，
+	// 未提供时每次交付生成唯一键，避免同一 prompt 的多次主动生成被误判为重复。
+	idempotencyKey := cardImageIdempotencyKey(r.Header.Get("Idempotency-Key"))
+	h.service.chargeCardImages(r.Context(), tenantID, len(urls), idempotencyKey)
 	httputil.WriteSuccess(w, map[string][]string{"urls": urls})
 }
 

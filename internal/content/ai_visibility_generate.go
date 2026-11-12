@@ -3,6 +3,7 @@ package content
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -30,6 +31,12 @@ func (s *Service) ListAIVisibilityRuns(ctx context.Context, tenantID int64, limi
 	}
 	return s.store.listAIVisibilityRuns(ctx, tenantID, limit, offset, deleted)
 }
+
+// errAIVisibilityArticleEmpty 表示模型返回了空正文，不能作为文稿交付。
+var errAIVisibilityArticleEmpty = errors.New("模型未生成有效文稿正文（空交付），本次不扣额度")
+
+// aiVisibilityArticleDeliverable 判断生成的文稿是否有可发布的正文。
+func aiVisibilityArticleDeliverable(body string) bool { return strings.TrimSpace(body) != "" }
 
 // GenerateFromAIVisibility 基于缺口诊断生成内容（公众号深度文 / 官网栏目页）。
 func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID int64, target string, overwrite bool) (map[string]any, error) {
@@ -82,6 +89,11 @@ func (s *Service) GenerateFromAIVisibility(ctx context.Context, tenantID, runID 
 	body := unwrapJSONBody(strings.TrimSpace(fmt.Sprint(obj["body"])))
 	if title == "" || title == "<nil>" {
 		title = targetLabel + "：" + run.Question
+	}
+	// 交付判定：正文为空说明模型没有产出可发布文稿，属于空交付：
+	// 不写 content_items、不扣 record，避免客户为空文章付费。
+	if !aiVisibilityArticleDeliverable(body) {
+		return nil, errAIVisibilityArticleEmpty
 	}
 	// 该选题已有文章且用户选择覆盖 → 直接更新那一篇（保留图片/发布包，只换标题正文）
 	if overwrite && run.TopicID > 0 {

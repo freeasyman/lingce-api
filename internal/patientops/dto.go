@@ -132,6 +132,24 @@ func (a *ScreenshotAnalysis) Normalize() {
 	a.SuggestedActions = cleanStringList(a.SuggestedActions)
 }
 
+// hasDeliverableContent 判断一次截图/录音分析是否产出了可交付的内容。
+//
+// 只有平台/昵称等身份字段不算交付：至少要有沟通概括、患者问题、顾虑、
+// 下一步动作、建议回复/破冰、建议动作、员工承诺或证据之一。
+func (a ScreenshotAnalysis) hasDeliverableContent() bool {
+	for _, value := range []string{
+		a.ConversationSummary, a.PatientQuestion, a.Concern,
+		a.NextAction, a.SuggestedReply, a.SuggestedIcebreaker,
+	} {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return len(a.SuggestedActions) > 0 || len(a.EmployeeCommitments) > 0 ||
+		len(a.Evidence) > 0 || len(a.ProductInterest) > 0 ||
+		len(a.RelationshipClues) > 0 || len(a.PatientUtterances) > 0
+}
+
 func cleanScreenshotIdentityValue(value string) string {
 	value = strings.TrimSpace(value)
 	switch strings.ToLower(value) {
