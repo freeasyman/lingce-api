@@ -25,7 +25,7 @@ func Validate(templateCode string, content map[string]any, complete bool) error 
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(templateCode) == "tcm" {
+	if isTCMTemplate(templateCode) {
 		// 中医病历以中医诊断为主；西医诊断仅作鼓励项，在质检中提醒，不阻断完成。
 		if complete && name(tcm) == "" {
 			return fmt.Errorf("请填写中医诊断")
@@ -39,6 +39,12 @@ func Validate(templateCode string, content map[string]any, complete bool) error 
 		}
 	}
 	return nil
+}
+
+// isTCMTemplate 中医模板：历史模板 code 为 tcm，专科模板为 tcm_first / tcm_follow。
+func isTCMTemplate(templateCode string) bool {
+	code := strings.TrimSpace(templateCode)
+	return code == "tcm" || strings.HasPrefix(code, "tcm_")
 }
 
 func object(content map[string]any, key string, tcm bool) (map[string]any, error) {

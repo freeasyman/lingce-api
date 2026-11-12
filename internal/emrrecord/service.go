@@ -247,7 +247,7 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	}
 	// 标准：复诊已明确诊断但未书写诊断，扣 10 分（DX-005），不以阻断代替扣分。
 	// 因此非中医复诊允许先完成，由质检扣分；中医模板仍要求中医诊断。
-	if current.VisitType != "复诊" || strings.TrimSpace(current.TemplateCode) == "tcm" {
+	if current.VisitType != "复诊" || isTCMTemplateCode(current.TemplateCode) {
 		if err := validateDiagnosisContract(current.TemplateCode, content, true); err != nil {
 			return nil, err
 		}
@@ -749,3 +749,9 @@ func snapshotPtr(snapshot *Snapshot) *string {
 	return &snapshot.ID
 }
 func stringPtr(value string) *string { return &value }
+
+// isTCMTemplateCode 中医模板：tcm / tcm_first / tcm_follow。
+func isTCMTemplateCode(code string) bool {
+	code = strings.TrimSpace(code)
+	return code == "tcm" || strings.HasPrefix(code, "tcm_")
+}
