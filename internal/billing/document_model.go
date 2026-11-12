@@ -33,8 +33,8 @@ const (
 
 	// DefaultDocumentCompany 是通知函落款/页脚的公司全称，需要换主体时改这一处。
 	DefaultDocumentCompany = "天津灵策科技有限公司"
-	// documentFooterNote 是页脚右侧的固定说明。
-	documentFooterNote = "本通知函由系统自动生成"
+	// documentFooterNote 是页脚右侧的免责声明：说明只是开通告知，不构成合同、不具法律效力。
+	documentFooterNote = "本函由系统自动生成，仅作服务开通告知之用，不构成合同，亦不具法律效力。"
 )
 
 var (

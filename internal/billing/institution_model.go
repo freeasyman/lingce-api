@@ -1049,6 +1049,28 @@ func scaleQuotaAmount(base Decimal, num, den int64) (Decimal, error) {
 	return formatQuotaFloat(scaled), nil
 }
 
+// scaleQuotaWhole 按 num/den 折算额度并四舍五入取整，最少 1。
+//
+// 只用于「按天折算」的试用额度：标准档 × 试用天数 ÷ 365。
+// 取整发生在发放时（存储、页面、PDF 三处一致），避免库里有 95.89 份而页面显示 96 份。
+func scaleQuotaWhole(base Decimal, num, den int64) (Decimal, error) {
+	value, err := parseDecimalFloat(base)
+	if err != nil {
+		return "", err
+	}
+	if den <= 0 {
+		return "", fmt.Errorf("denominator must be positive")
+	}
+	if num < 0 {
+		return "", fmt.Errorf("numerator must not be negative")
+	}
+	granted := math.Round(value * float64(num) / float64(den))
+	if granted < 1 {
+		granted = 1
+	}
+	return Decimal(strconv.FormatInt(int64(granted), 10)), nil
+}
+
 // multiplyQuotaAmount 按包数放大额度：base × packs。
 func multiplyQuotaAmount(base Decimal, packs int64) (Decimal, error) {
 	value, err := parseDecimalFloat(base)

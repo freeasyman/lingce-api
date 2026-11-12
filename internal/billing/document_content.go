@@ -207,11 +207,12 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 
 	feeText, feeBold := documentFeeText(institution, trial)
 
+	// 抬头：客户全称 + 联系人 + 职务，用全角空格分隔（职务为空时不额外留空格，也不加括号）。
 	salutation := "尊敬的　" + documentCustomerName(institution) + "　"
 	if contact := strings.TrimSpace(institution.Contact); contact != "" {
 		salutation += contact
 		if title := strings.TrimSpace(institution.Title); title != "" {
-			salutation += "（" + title + "）"
+			salutation += "　" + title
 		}
 	}
 	salutation += "："
@@ -270,6 +271,7 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 		TipSection:     "温馨提示",
 		TipItems:       tips,
 		Advisor:        billingpdf.Advisor{Name: advisorName, Phone: formatDocumentPhone(input.SalesPhone, "-")},
+		AdvisorSection: "您的专属顾问",
 		Company:        company,
 		SignDate:       formatDocumentDate(dateText),
 		FooterLeft:     company,

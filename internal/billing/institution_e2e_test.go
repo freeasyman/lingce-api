@@ -608,9 +608,9 @@ INSERT INTO ops_organizations (name, type, status) VALUES ($1, 'agency', 'active
 	if trial.End != expectedEnd {
 		t.Fatalf("试用到期日应为 %s，实际 %s", expectedEnd, trial.End)
 	}
-	// tingxie record 标准 2500 × 14 / 365 = 95.89
-	if got := string(trial.Products["tingxie"]["record"].Granted); got != "95.89" {
-		t.Fatalf("试用额度应为 95.89，实际 %s", got)
+	// tingxie record 标准 2500 × 14 / 365 = 95.89 → 发放时取整为 96（最少 1）
+	if got := string(trial.Products["tingxie"]["record"].Granted); got != "96.00" {
+		t.Fatalf("试用额度应为 96，实际 %s", got)
 	}
 	var orderCount int
 	if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM billing_orders WHERE tenant_id = $1`, institution.ID).Scan(&orderCount); err != nil {
@@ -629,8 +629,9 @@ INSERT INTO ops_organizations (name, type, status) VALUES ($1, 'agency', 'active
 	if extended.End != expectedExtendedEnd {
 		t.Fatalf("延长后到期日应为 %s，实际 %s", expectedExtendedEnd, extended.End)
 	}
-	if got := string(extended.Products["tingxie"]["record"].Granted); got == string(trial.Products["tingxie"]["record"].Granted) {
-		t.Fatalf("延长试用后额度应增加")
+	// 延长后按总天数重算：2500 × 21 / 365 = 143.8 → 144，不是 96 + round(2500×7/365)=48 的简单叠加
+	if got := string(extended.Products["tingxie"]["record"].Granted); got != "144.00" {
+		t.Fatalf("延长试用后额度应为 144，实际 %s", got)
 	}
 
 	// 试用机构不能加量

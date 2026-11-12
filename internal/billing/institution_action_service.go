@@ -464,7 +464,8 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	for _, product := range products {
 		quotas := make([]quotaPair, 0, len(product.Quotas))
 		for _, quota := range product.Quotas {
-			amount, err := scaleQuotaAmount(quota.Amount, days, 365)
+			// 试用额度按天折算后取整（最少 1），保证存储/页面/PDF 三处一致。
+			amount, err := scaleQuotaWhole(quota.Amount, days, 365)
 			if err != nil {
 				return nil, fmt.Errorf("trial quota %s/%s: %w", product.Code, quota.Unit, err)
 			}
@@ -1183,6 +1184,18 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 		}
 	}
 	newEnd := addDaysDate(currentEnd, req.Days)
+	periodStart := today
+	if base.StartedOn != nil {
+		if parsed, err := parseDateOnly(*base.StartedOn); err == nil {
+			periodStart = parsed
+		}
+	}
+	// 延长试用按「从试用开始到新到期日」的总天数重算整额，再补差额：
+	// 不用新增天数单独折算后叠加，避免两次取整累积误差。
+	totalDays := int64(newEnd.Sub(periodStart).Hours() / 24)
+	if totalDays < 0 {
+		totalDays = 0
+	}
 	operator := s.service.resolveOperator(ctx, adminID)
 
 	tx, err := s.store.pool.Begin(ctx)
@@ -1206,21 +1219,34 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 		if !ok {
 			continue
 		}
-		var added Decimal
+		var target Decimal
 		for _, quota := range product.Quotas {
 			if normalizeEnum(quota.Unit) != normalizeEnum(row.Unit) {
 				continue
 			}
-			amount, err := scaleQuotaAmount(quota.Amount, int64(req.Days), 365)
+			amount, err := scaleQuotaWhole(quota.Amount, totalDays, 365)
 			if err != nil {
 				return nil, err
 			}
-			added = amount
+			target = amount
 			break
 		}
-		if added == "" {
+		if target == "" {
 			continue
 		}
+		// 目标额 - 已发额 = 本次补发额（按整数分算，保证结果为整数）。
+		targetCents, err := parseAmountCents(target)
+		if err != nil {
+			return nil, err
+		}
+		grantedCents, err := parseAmountCents(row.Granted)
+		if err != nil {
+			return nil, err
+		}
+		if targetCents <= grantedCents {
+			continue
+		}
+		added := centsToDecimal(targetCents - grantedCents)
 		if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteAdd, tenantID,
 			row.ProductCode, row.Unit, row.Edition, QuotaTypeTrial, added, formatDateOnly(newEnd)); err != nil {
 			return nil, err
@@ -1228,12 +1254,6 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 		if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, row.ProductCode, row.Unit,
 			added, LedgerSourceTrial, reason, nil, operator); err != nil {
 			return nil, err
-		}
-	}
-	periodStart := today
-	if base.StartedOn != nil {
-		if parsed, err := parseDateOnly(*base.StartedOn); err == nil {
-			periodStart = parsed
 		}
 	}
 	extended, err := s.store.ExtendActivePeriodTx(ctx, tx, tenantID, newEnd)

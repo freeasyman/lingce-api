@@ -117,8 +117,11 @@ func TestBuildDocumentLetterTrial(t *testing.T) {
 	if letter.InfoSection != "试用信息" || letter.ProductSection != "试用内容" || letter.QuotaHeader != "试用额度" {
 		t.Fatalf("试用小标题不对: %+v", letter)
 	}
-	if !strings.Contains(letter.Salutation, "李院长眼科门诊部有限公司") || !strings.Contains(letter.Salutation, "李强（院长）") {
+	if !strings.Contains(letter.Salutation, "李院长眼科门诊部有限公司") || !strings.Contains(letter.Salutation, "李强　院长") {
 		t.Fatalf("抬头 = %q", letter.Salutation)
+	}
+	if strings.Contains(letter.Salutation, "（") || strings.Contains(letter.Salutation, "）") {
+		t.Fatalf("抬头职务不应加括号: %q", letter.Salutation)
 	}
 	if !strings.Contains(letter.Intro, "试用期间不收取任何费用") {
 		t.Fatalf("试用引言应强调不收费: %q", letter.Intro)
@@ -145,8 +148,11 @@ func TestBuildDocumentLetterTrial(t *testing.T) {
 	if letter.Advisor.Name != "胡晓敏" || letter.Advisor.Phone != "135-1111-0002" {
 		t.Fatalf("顾问卡 = %+v", letter.Advisor)
 	}
-	if letter.FooterRight != "本通知函由系统自动生成" {
-		t.Fatalf("页脚 = %q", letter.FooterRight)
+	if letter.AdvisorSection != "您的专属顾问" {
+		t.Fatalf("顾问卡小标题 = %q, want 您的专属顾问", letter.AdvisorSection)
+	}
+	if letter.FooterRight != "本函由系统自动生成，仅作服务开通告知之用，不构成合同，亦不具法律效力。" {
+		t.Fatalf("页脚免责声明 = %q", letter.FooterRight)
 	}
 	if strings.Contains(letter.FooterLeft, "渠道") || strings.Contains(letter.Advisor.Name, "渠道") {
 		t.Fatalf("顾问卡不应出现渠道/组织")

@@ -79,6 +79,33 @@ func TestScaleQuotaAmount(t *testing.T) {
 	}
 }
 
+func TestScaleQuotaWhole(t *testing.T) {
+	cases := []struct {
+		base Decimal
+		num  int64
+		want string
+	}{
+		{"400", 14, "15"},   // 15.34 → 15
+		{"2500", 14, "96"},  // 95.89 → 96
+		{"5000", 14, "192"}, // 191.78 → 192
+		{"80", 7, "2"},      // 1.53 → 2
+		{"1", 1, "1"},       // 最少 1
+		{"2500", 21, "144"}, // 143.8 → 144
+	}
+	for _, item := range cases {
+		got, err := scaleQuotaWhole(item.base, item.num, 365)
+		if err != nil {
+			t.Fatalf("scaleQuotaWhole(%s, %d) error: %v", item.base, item.num, err)
+		}
+		if string(got) != item.want {
+			t.Fatalf("scaleQuotaWhole(%s, %d) = %s, want %s", item.base, item.num, got, item.want)
+		}
+	}
+	if _, err := scaleQuotaWhole("100", 1, 0); err == nil {
+		t.Fatalf("分母为 0 应报错")
+	}
+}
+
 func TestMultiplyQuotaAmount(t *testing.T) {
 	got, err := multiplyQuotaAmount("80", 3)
 	if err != nil {

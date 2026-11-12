@@ -226,12 +226,26 @@ func (c *canvas) paragraph(text string, size, lineFactor float64) {
 	c.y += c.scale(3.0)
 }
 
+// sectionTitleLineHeight 是小标题（10.8pt）的行高。
+func (c *canvas) sectionTitleLineHeight() float64 {
+	return ptToMM(10.8) * c.k * 1.45
+}
+
+// sectionTitleBlockHeight 是小标题占用的总高度：上间距 + 行高 + 下间距。
+func (c *canvas) sectionTitleBlockHeight() float64 {
+	return c.scale(4.8) + c.sectionTitleLineHeight() + c.scale(2.4)
+}
+
+// drawSectionTitleAt 在 top 处画小标题（top 是上间距的起点），不推进游标。
+func (c *canvas) drawSectionTitleAt(top float64, text string) {
+	lineHeight := c.sectionTitleLineHeight()
+	c.text(marginLeft, baseline(top+c.scale(4.8), lineHeight, 10.8*c.k), text, true, 10.8, colorHeading)
+}
+
 // sectionTitle 画小标题：比正文大一号、加粗、无竖线装饰。
 func (c *canvas) sectionTitle(text string) {
-	c.y += c.scale(4.8)
-	lineHeight := ptToMM(10.8) * c.k * 1.45
-	c.text(marginLeft, baseline(c.y, lineHeight, 10.8*c.k), text, true, 10.8, colorHeading)
-	c.y += lineHeight + c.scale(2.4)
+	c.drawSectionTitleAt(c.y, text)
+	c.y += c.sectionTitleBlockHeight()
 }
 
 // infoBox 画信息盒（圆角描边 + 两行「标签 / 值」+ 内部分隔线）。
@@ -325,23 +339,28 @@ func (c *canvas) numberedList(items []string) {
 
 // bottomBlock 画页脚上方的顾问卡 + 落款 + 电子章，锚定在正文区底部。
 func (c *canvas) bottomBlock(letter Letter) {
+	headingHeight := c.sectionTitleBlockHeight()
 	cardHeight := c.scale(16)
 	cardWidth := c.scale(101)
+	blockHeight := headingHeight + cardHeight
 	blockTop := c.y + c.scale(8)
-	if anchor := contentBottom - cardHeight; blockTop < anchor {
+	if anchor := contentBottom - blockHeight; blockTop < anchor {
 		blockTop = anchor
 	}
+	// 顾问区的小标题与「开始使用 / 温馨提示」同级，卡片贴着正文区底部。
+	c.drawSectionTitleAt(blockTop, letter.advisorSectionTitle())
+	cardTop := blockTop + headingHeight
 
 	// 顾问卡：只写姓名 + 电话。
 	if !c.dry {
 		c.f.SetFillColor(0xfa, 0xf8, 0xff)
 		c.f.SetDrawColor(colorBorder.r, colorBorder.g, colorBorder.b)
 		c.f.SetLineWidth(c.scale(0.28))
-		c.f.RoundedRect(marginLeft, blockTop, cardWidth, cardHeight, c.scale(2.2), "1234", "DF")
+		c.f.RoundedRect(marginLeft, cardTop, cardWidth, cardHeight, c.scale(2.2), "1234", "DF")
 
 		avatarRadius := c.scale(4.6)
 		avatarX := marginLeft + c.scale(6.6)
-		avatarY := blockTop + cardHeight/2
+		avatarY := cardTop + cardHeight/2
 		c.f.SetFillColor(colorPrimary.r, colorPrimary.g, colorPrimary.b)
 		c.f.Circle(avatarX, avatarY, avatarRadius, "F")
 	}
@@ -352,12 +371,12 @@ func (c *canvas) bottomBlock(letter Letter) {
 	}
 	initialWidth := c.textWidth(initial, true, 10)
 	avatarCenterX := marginLeft + c.scale(6.6)
-	c.text(avatarCenterX-initialWidth/2, blockTop+cardHeight/2+ptToMM(10)*c.k*0.36, initial, true, 10, colorWhite)
-	c.text(marginLeft+c.scale(14.6), blockTop+c.scale(6.8), letter.Advisor.Name, true, 10.5, colorTitle)
-	c.text(marginLeft+c.scale(14.6), blockTop+c.scale(12.0), letter.Advisor.Phone, false, 9, colorMuted)
+	c.text(avatarCenterX-initialWidth/2, cardTop+cardHeight/2+ptToMM(10)*c.k*0.36, initial, true, 10, colorWhite)
+	c.text(marginLeft+c.scale(14.6), cardTop+c.scale(6.8), letter.Advisor.Name, true, 10.5, colorTitle)
+	c.text(marginLeft+c.scale(14.6), cardTop+c.scale(12.0), letter.Advisor.Phone, false, 9, colorMuted)
 
 	// 落款：公司名 + 日期，右对齐。
-	companyBaseline := blockTop + c.scale(8.2)
+	companyBaseline := cardTop + c.scale(8.2)
 	companyWidth := c.textWidth(letter.Company, true, 11)
 	c.text(contentRight-companyWidth, companyBaseline, letter.Company, true, 11, colorTitle)
 	dateBaseline := companyBaseline + c.scale(4.9)
@@ -367,7 +386,7 @@ func (c *canvas) bottomBlock(letter Letter) {
 	// 电子章：红色圆形、半透明，压在公司名上。
 	c.seal(contentRight-c.scale(5.5), companyBaseline-c.scale(5.8), c.scale(10), letter.sealLines())
 
-	c.y = blockTop + cardHeight
+	c.y = blockTop + blockHeight
 }
 
 // seal 画电子章：圆环 + 两行字，整体逆时针旋转 12°、半透明。

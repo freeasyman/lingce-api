@@ -48,7 +48,7 @@ func trialLetter() Letter {
 		Company:     "天津灵策科技有限公司",
 		SignDate:    "2026 年 11 月 12 日",
 		FooterLeft:  "天津灵策科技有限公司",
-		FooterRight: "本通知函由系统自动生成",
+		FooterRight: "本函由系统自动生成，仅作服务开通告知之用，不构成合同，亦不具法律效力。",
 	}
 }
 
@@ -89,7 +89,7 @@ func formalLetter() Letter {
 		Company:     "天津灵策科技有限公司",
 		SignDate:    "2026 年 11 月 12 日",
 		FooterLeft:  "天津灵策科技有限公司",
-		FooterRight: "本通知函由系统自动生成",
+		FooterRight: "本函由系统自动生成，仅作服务开通告知之用，不构成合同，亦不具法律效力。",
 	}
 }
 

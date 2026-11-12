@@ -57,6 +57,8 @@ type Letter struct {
 
 	// Advisor 是页脚左侧的顾问卡，只显示姓名与电话。
 	Advisor Advisor
+	// AdvisorSection 是顾问卡上方的小标题（默认「您的专属顾问」），样式与其它小标题一致。
+	AdvisorSection string
 
 	// Company 是落款公司全称；SignDate 是落款日期（如 2026 年 11 月 12 日）。
 	Company  string
@@ -106,6 +108,14 @@ func (l Letter) validate() error {
 		return ErrEmptyLetter
 	}
 	return nil
+}
+
+// advisorSectionTitle 返回顾问卡小标题（未配置时用「您的专属顾问」）。
+func (l Letter) advisorSectionTitle() string {
+	if title := strings.TrimSpace(l.AdvisorSection); title != "" {
+		return title
+	}
+	return "您的专属顾问"
 }
 
 // sealLines 返回电子章文字行（未配置时用默认值）。
