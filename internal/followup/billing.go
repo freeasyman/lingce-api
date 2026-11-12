@@ -3,8 +3,10 @@ package followup
 // 随访顾问（产品编码 suifang）的计费接入。
 //
 // 唯一交付点：processRun 中随访任务成功持久化（saveGeneratedTasks 写入
-// recording_tasks）之后，按录音时长扣 hour（recordings.duration 秒 / 3600，
-// 保留 2 位小数）；时长未知或为 0 时跳过整笔。
+// recording_tasks）且至少生成 1 条任务之后，按录音时长扣 hour
+// （recordings.duration 秒 / 3600，保留 2 位小数）；时长未知或为 0 时跳过整笔。
+// 模型返回空任务列表属于空交付，不扣量，并由 settleGeneratedTasks 把 run
+// 收敛为 failed（EMPTY_DELIVERY）。
 //
 // 该产品由 worker 异步触发、没有用户点击入口，因此在调用模型之前做一次只读
 // CheckQuota 软闸门：额度不足时不调模型、不扣量，把本次 run 标记为 failed
@@ -199,7 +201,9 @@ func (s *Service) callLLMWithQuotaGate(
 
 // chargeFollowupAnalysis 在随访任务成功持久化后扣 hour。
 //
-// 时长未知时跳过扣量（无法计量小时数）；扣量失败只告警，不回滚已经落库的任务。
+// 调用方必须先确认本次至少生成 1 条任务（见 settleGeneratedTasks）：空交付
+// 不应进入本函数。时长未知时跳过扣量（无法计量小时数）；扣量失败只告警，
+// 不回滚已经落库的任务。
 func (s *Service) chargeFollowupAnalysis(ctx context.Context, tenantID, recordingID int64) {
 	if s == nil || s.billing == nil {
 		return

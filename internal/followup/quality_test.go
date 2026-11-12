@@ -1,6 +1,7 @@
 package followup
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,25 @@ func TestGeneratedTaskQuality(t *testing.T) {
 				t.Fatal("phone compatibility script is empty")
 			}
 		})
+	}
+}
+
+func TestParseOptionalRecordedAtRequiresTimezone(t *testing.T) {
+	valid := []string{"2026-11-12T18:00:00+08:00", "2026-11-12T10:00:00Z"}
+	for _, value := range valid {
+		if _, err := parseOptionalRecordedAt(value); err != nil {
+			t.Fatalf("%s should be accepted: %v", value, err)
+		}
+	}
+	if value, err := parseOptionalRecordedAt("  "); value != nil || err != nil {
+		t.Fatalf("empty recorded_at should be optional, got %v/%v", value, err)
+	}
+	// 不带时区的时间会随时区漂移，必须按参数错误处理（Handler 映射为 400），
+	// 不能被当成合法时间继续处理。
+	for _, value := range []string{"2026-11-12T18:00:00", "2026-11-12 18:00:00", "2026-11-12", "not-a-time"} {
+		if _, err := parseOptionalRecordedAt(value); !errors.Is(err, ErrInvalidRecordedAt) {
+			t.Fatalf("%s should be rejected with ErrInvalidRecordedAt, got %v", value, err)
+		}
 	}
 }
 

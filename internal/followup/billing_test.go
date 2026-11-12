@@ -149,6 +149,47 @@ func TestChargeFollowupAnalysisDeductsHourOnce(t *testing.T) {
 	}
 }
 
+func TestSettleGeneratedTasksChargesOnlyNonEmptyDelivery(t *testing.T) {
+	fake := newFakeFollowupBilling()
+	service := newFollowupTestService(fake, 5400, nil)
+	ctx := context.Background()
+	run := &followupGenerationRun{
+		ID:           1,
+		Request:      GenerateRequest{TenantID: 7, RecordingID: 42},
+		AttemptCount: 0,
+		MaxAttempts:  3,
+	}
+	response := &llmgateway.TextInferenceResponse{RequestID: "req-1"}
+
+	// 空结果：合法 JSON 但 0 条任务，不构成产品交付，不得扣量。
+	service.settleGeneratedTasks(ctx, run, "v1", "test-model", response, []byte(`{"tasks":[]}`), 0)
+	if got := fake.deductCount(); got != 0 {
+		t.Fatalf("empty delivery deduct calls = %d, want 0", got)
+	}
+
+	// 非空结果：至少 1 条任务落库，结算时扣一次 hour。
+	service.settleGeneratedTasks(ctx, run, "v1", "test-model", response, []byte(`{"tasks":[{"title":"复查提醒"}]}`), 1)
+	if got := fake.deductCount(); got != 1 {
+		t.Fatalf("non-empty delivery deduct calls = %d, want 1", got)
+	}
+	if got := fake.chargedCount("followup:recording:42:analysis"); got != 1 {
+		t.Fatalf("effective deductions = %d, want 1", got)
+	}
+	last := fake.lastDeduct(t)
+	if last.IdempotencyKey != "followup:recording:42:analysis" || len(last.Items) != 1 || last.Items[0].Amount != 1.5 {
+		t.Fatalf("unexpected deduct input: %+v", last)
+	}
+
+	// 同一录音再次结算（补偿/重投）：命中幂等键，不产生第二次有效扣量。
+	service.settleGeneratedTasks(ctx, run, "v1", "test-model", response, []byte(`{"tasks":[{"title":"复查提醒"}]}`), 1)
+	if got := fake.chargedCount("followup:recording:42:analysis"); got != 1 {
+		t.Fatalf("effective deductions after repeat = %d, want 1", got)
+	}
+	if got := fake.deductCount(); got != 2 {
+		t.Fatalf("deduct calls after repeat = %d, want 2 (second is idempotent)", got)
+	}
+}
+
 func TestChargeFollowupAnalysisSkipsUnknownDuration(t *testing.T) {
 	t.Run("zero duration", func(t *testing.T) {
 		fake := newFakeFollowupBilling()

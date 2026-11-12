@@ -153,30 +153,84 @@ func (s *Service) EmployeesExist(ctx context.Context, tenantID int64, employeeID
 	return count == len(employeeIDs), nil
 }
 
-// EmployeeRole 返回员工在机构里的角色（employees.role）。
-func (s *Service) EmployeeRole(ctx context.Context, tenantID, employeeID int64) (string, error) {
-	var role string
+// employeeIdentity 是权限判定统一使用的机构身份快照。
+//
+// 管理员判定同时认两个来源：
+//  1. employees.role = 'admin'（历史租户管理员/存量数据）；
+//  2. institution_employee_roles.role_code = 'admin'（机构 RBAC 的正式角色）。
+//
+// 两者任一命中即为管理员；只做精确匹配，doctor / consultant / director
+// 等其它角色不会被误判为管理员。
+type employeeIdentity struct {
+	Role  string
+	Admin bool
+}
+
+// loadEmployeeIdentity 读取员工的机构角色，并统一管理员判定口径。
+// 返回 nil 表示员工不存在、已删除或不属于该租户（与 EmployeeRole 的空角色语义一致）。
+func (s *Service) loadEmployeeIdentity(ctx context.Context, tenantID, employeeID int64) (*employeeIdentity, error) {
+	if s == nil || s.pool == nil {
+		return nil, fmt.Errorf("database pool is not configured")
+	}
+	var identity employeeIdentity
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(lower(trim(e.role)), '')
-		FROM employees e WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
-	`, employeeID, tenantID).Scan(&role)
+		SELECT COALESCE(lower(trim(e.role)), ''),
+		       COALESCE(lower(trim(e.role)), '') = 'admin'
+		         OR EXISTS (
+		             SELECT 1
+		             FROM institution_employee_roles ier
+		             WHERE ier.employee_id = e.id
+		               AND ier.tenant_id = e.tenant_id
+		               AND lower(trim(COALESCE(ier.role_code, ''))) = 'admin'
+		         )
+		FROM employees e
+		WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
+	`, employeeID, tenantID).Scan(&identity.Role, &identity.Admin)
 	if err == pgx.ErrNoRows {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load employee role: %w", err)
+		return nil, fmt.Errorf("load employee identity: %w", err)
 	}
-	return role, nil
+	return &identity, nil
+}
+
+// IsInstitutionAdmin 判断员工是否为机构管理员：employees.role 或机构角色表
+// 里任一来源命中 admin 即为管理员。所有权限入口统一复用它。
+func (s *Service) IsInstitutionAdmin(ctx context.Context, tenantID, employeeID int64) (bool, error) {
+	identity, err := s.loadEmployeeIdentity(ctx, tenantID, employeeID)
+	if err != nil {
+		return false, err
+	}
+	return identity != nil && identity.Admin, nil
+}
+
+// EmployeeRole 返回员工在机构里的角色（employees.role）。
+// 管理员判定不要直接比较该返回值，请使用 IsInstitutionAdmin。
+func (s *Service) EmployeeRole(ctx context.Context, tenantID, employeeID int64) (string, error) {
+	identity, err := s.loadEmployeeIdentity(ctx, tenantID, employeeID)
+	if err != nil {
+		return "", err
+	}
+	if identity == nil {
+		return "", nil
+	}
+	return identity.Role, nil
 }
 
 // VisibilityFor 解析某个员工当前生效的数据可见范围。
-// 管理员固定全机构；未配置权限时按机构角色给默认（负责人 custom、其余 self）。
+// 管理员（两个来源任一为 admin）固定全机构；未配置权限时按机构角色给默认
+// （负责人 custom、其余 self）。
 func (s *Service) VisibilityFor(ctx context.Context, tenantID, employeeID int64) (*Visibility, error) {
-	employeeRole, err := s.EmployeeRole(ctx, tenantID, employeeID)
+	identity, err := s.loadEmployeeIdentity(ctx, tenantID, employeeID)
 	if err != nil {
 		return nil, err
 	}
-	if employeeRole == "admin" {
+	employeeRole := ""
+	if identity != nil {
+		employeeRole = identity.Role
+	}
+	if identity != nil && identity.Admin {
 		return ResolveVisibility(DataScopeTenant, nil, employeeID, true), nil
 	}
 	assignment, err := s.Get(ctx, tenantID, employeeID)
@@ -224,11 +278,15 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 	if !exists {
 		return nil, fmt.Errorf("employee not found")
 	}
-	targetRole, err := s.EmployeeRole(ctx, tenantID, employeeID)
+	targetIdentity, err := s.loadEmployeeIdentity(ctx, tenantID, employeeID)
 	if err != nil {
 		return nil, err
 	}
-	isAdmin := targetRole == "admin"
+	employeeRole := ""
+	if targetIdentity != nil {
+		employeeRole = targetIdentity.Role
+	}
+	isAdmin := targetIdentity != nil && targetIdentity.Admin
 
 	existing, err := s.Get(ctx, tenantID, employeeID)
 	if err != nil {
@@ -245,7 +303,7 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 		dataScope = NormalizeDataScope(existing.DataScope)
 		visibleEmployeeIDs = NormalizeVisibleEmployeeIDs(existing.VisibleEmployeeIDs)
 	} else {
-		dataScope = DefaultDataScopeForRole(targetRole)
+		dataScope = DefaultDataScopeForRole(employeeRole)
 		visibleEmployeeIDs = NormalizeVisibleEmployeeIDs(req.VisibleEmployeeIDs)
 	}
 
@@ -309,8 +367,9 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 	return &item, nil
 }
 
-// AccessFor 返回当前员工的生效权限：租户管理员（employees.role=admin）永远全能力，避免锁死；
-// 未配置权限的员工按机构角色给默认（负责人全开，其余 deal_staff 默认包）。
+// AccessFor 返回当前员工的生效权限：机构管理员（employees.role 或机构角色表
+// 任一来源为 admin）永远全能力，避免锁死；未配置权限的员工按机构角色给默认
+// （负责人全开，其余 deal_staff 默认包）。
 func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID int64) (*Access, error) {
 	if claims == nil {
 		return nil, fmt.Errorf("invalid token")
@@ -322,11 +381,15 @@ func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID i
 	if claims.TenantID == nil || *claims.TenantID != tenantID {
 		return nil, fmt.Errorf("access denied")
 	}
-	employeeRole, err := s.EmployeeRole(ctx, tenantID, claims.UserID)
+	identity, err := s.loadEmployeeIdentity(ctx, tenantID, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
-	if employeeRole == "admin" {
+	employeeRole := ""
+	if identity != nil {
+		employeeRole = identity.Role
+	}
+	if identity != nil && identity.Admin {
 		return &Access{UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true, RoleCode: RoleAdmin,
 			Abilities: abilitySet(AllAbilities), DataScope: DataScopeTenant, VisibleEmployeeIDs: []int64{}}, nil
 	}

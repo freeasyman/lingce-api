@@ -44,7 +44,19 @@ const (
 	followupRunStatusFailed     = "failed"
 
 	followupRunMaxAttempts = 3
+
+	// followupEmptyDeliveryCode 表示模型调用成功，但没有生成任何随访任务。
+	// 按产品交付口径，空结果不算交付：不扣 hour，run 直接收敛为 failed。
+	followupEmptyDeliveryCode = "EMPTY_DELIVERY"
 )
+
+// errFollowupEmptyDelivery 说明空交付的具体原因，写入 run.last_error_message，
+// 让运营和排查人员能直接看出“模型没有生成任务”，而不是看到 succeeded=0 条。
+var errFollowupEmptyDelivery = errors.New("模型未生成任何随访任务（空交付），本次不扣额度")
+
+// ErrInvalidRecordedAt 表示 recorded_at 不是带时区的 RFC3339 时间。
+// Handler 将它映射为 400，避免格式问题被吞成 500。
+var ErrInvalidRecordedAt = errors.New("recorded_at 必须是带时区的 RFC3339 时间，例如 2026-11-12T18:00:00+08:00")
 
 // InvalidReferenceError 表示请求中的 ID 不存在，或多个 ID 不属于同一条业务链路。
 // 该错误由 Handler 转换为 422 INVALID_REFERENCE，区别于 JSON/字段格式错误。
@@ -473,10 +485,46 @@ func (s *Service) processRun(parent context.Context, runID int64) {
 		_ = s.writeLLMLog(req, prompt.SystemPrompt, userPrompt, cfg, resp, err)
 		return
 	}
-	// 随访任务已经成功持久化，按录音时长扣 hour；扣量失败只告警，不回滚任务。
-	s.chargeFollowupAnalysis(ctx, req.TenantID, req.RecordingID)
-	s.markRunSucceeded(ctx, run.ID, prompt.Version, cfg.ModelCode, resp, generatedPayload, taskCount)
+	// 交付判定统一收敛到 settleGeneratedTasks：至少 1 条任务才扣 hour，
+	// 空结果按失败处理且不扣量。
+	s.settleGeneratedTasks(ctx, run, prompt.Version, cfg.ModelCode, resp, generatedPayload, taskCount)
 	completed = true
+}
+
+// settleGeneratedTasks 按产品交付口径收敛一次随访分析结果。
+//
+// 交付判定：模型必须至少生成 1 条通过字段校验的随访任务（以解析后的
+// taskCount 为准）。只有非空交付才扣 hour 并把 run 标记 succeeded；空结果
+// 属于空交付，不扣量，run 收敛为 failed（last_error_code=EMPTY_DELIVERY），
+// 并写明“模型未生成任何随访任务”，避免出现持久化 0 条却静默成功的记录。
+//
+// 空交付不做自动重试：模型对同一份转写再次生成空结果的概率高，重试只会
+// 增加模型成本；运营可换新的 analysis_run_id 主动重跑。
+//
+// 署名：Codex
+// 时间：2026-11-12
+func (s *Service) settleGeneratedTasks(ctx context.Context, run *followupGenerationRun, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, taskCount int) {
+	if run == nil {
+		return
+	}
+	if taskCount <= 0 {
+		failureCtx, failureCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer failureCancel()
+		if err := s.markRunFailure(failureCtx, run, promptVersion, modelCode, response, generatedPayload, followupEmptyDeliveryCode, errFollowupEmptyDelivery, false); err != nil {
+			slog.Error("failed to mark empty followup delivery", "run_id", run.ID, "error", err)
+		}
+		slog.Warn("followup analysis generated no tasks; empty delivery is not charged",
+			"tenant_id", run.Request.TenantID,
+			"recording_id", run.Request.RecordingID,
+			"run_id", run.ID,
+			"task_count", taskCount,
+			"error_code", followupEmptyDeliveryCode,
+			"error", errFollowupEmptyDelivery)
+		return
+	}
+	// 随访任务已经成功持久化，按录音时长扣 hour；扣量失败只告警，不回滚任务。
+	s.chargeFollowupAnalysis(ctx, run.Request.TenantID, run.Request.RecordingID)
+	s.markRunSucceeded(ctx, run.ID, promptVersion, modelCode, response, generatedPayload, taskCount)
 }
 
 // preparePrompt 读取全局提示词和租户覆盖，并渲染本次请求的用户提示词。
@@ -571,6 +619,9 @@ func (s *Service) saveRunLLMResponse(ctx context.Context, runID int64, promptVer
 // 署名：Codex
 // 时间：2026-09-10
 func (s *Service) markRunSucceeded(ctx context.Context, runID int64, promptVersion, modelCode string, response *llmgateway.TextInferenceResponse, generatedPayload []byte, taskCount int) {
+	if s == nil || s.pool == nil {
+		return
+	}
 	var responsePayload []byte
 	responseRequestID := ""
 	if response != nil {
@@ -656,12 +707,13 @@ func parseOptionalRecordedAt(value string) (any, error) {
 	if value == "" {
 		return nil, nil
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed, nil
-		}
+	// 只接受带时区的 RFC3339：不带时区的时间会随服务器/数据库时区漂移，
+	// 计算“三天后”等相对随访时间时产生错误，必须按参数错误拒绝。
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, fmt.Errorf("%w（收到 %q）", ErrInvalidRecordedAt, value)
 	}
-	return nil, fmt.Errorf("invalid recorded_at %q", value)
+	return parsed, nil
 }
 
 func classifyFollowupErrorCode(err error) string {

@@ -89,6 +89,10 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusUnprocessableEntity, "INVALID_REFERENCE", invalidRefErr.Error(), nil)
 			return
 		}
+		if errors.Is(err, ErrInvalidRecordedAt) {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
