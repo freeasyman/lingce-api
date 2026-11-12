@@ -46,6 +46,9 @@ var ErrSignatureMismatch = errors.New("signature mismatch")
 // ErrForbiddenRole 表示员工没有执行该操作的角色权限。
 var ErrForbiddenRole = errors.New("forbidden role")
 
+// ErrPurchaseAlreadyReceived 表示采购单已经收货入库，不能重复收货。
+var ErrPurchaseAlreadyReceived = errors.New("purchase order already received")
+
 // Service 是 HIS 域的业务层。
 type Service struct {
 	store *Store

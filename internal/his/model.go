@@ -591,6 +591,48 @@ type InboundStockRequest struct {
 	Location   string  `json:"location"`
 }
 
+// PurchaseOrderItem 采购单明细。
+type PurchaseOrderItem struct {
+	ID            int64   `json:"id"`
+	OrderID       int64   `json:"order_id"`
+	DrugID        int64   `json:"drug_id"`
+	DrugName      string  `json:"drug_name"`
+	Quantity      float64 `json:"quantity"`
+	PurchasePrice float64 `json:"purchase_price"`
+	BatchNo       string  `json:"batch_no"`
+	ExpiryDate    *string `json:"expiry_date"`
+	Amount        float64 `json:"amount"`
+}
+
+// PurchaseOrder 采购单（列表直接带明细，便于前端“查看明细”）。
+type PurchaseOrder struct {
+	ID          int64               `json:"id"`
+	OrderNo     string              `json:"order_no"`
+	Supplier    string              `json:"supplier"`
+	Status      string              `json:"status"` // draft/ordered/received/cancelled
+	TotalAmount float64             `json:"total_amount"`
+	CreatedBy   *int64              `json:"created_by"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
+	ItemCount   int                 `json:"item_count"`
+	Items       []PurchaseOrderItem `json:"items"`
+}
+
+// CreatePurchaseOrderItem 新建采购单的明细行。
+type CreatePurchaseOrderItem struct {
+	DrugID        int64   `json:"drug_id"`
+	Quantity      float64 `json:"quantity"`
+	PurchasePrice float64 `json:"purchase_price"`
+	BatchNo       string  `json:"batch_no"`
+	ExpiryDate    *string `json:"expiry_date"`
+}
+
+// CreatePurchaseOrderRequest 新建采购单（草稿）。
+type CreatePurchaseOrderRequest struct {
+	Supplier string                    `json:"supplier"`
+	Items    []CreatePurchaseOrderItem `json:"items"`
+}
+
 // PharmacyPrescription 药房处方（含患者信息）。
 type PharmacyPrescription struct {
 	Prescription

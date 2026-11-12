@@ -148,6 +148,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "库存不足，无法发药")
 	case ErrSignatureMismatch:
 		httputil.WriteBadRequest(w, "文书内容与签名不一致，可能存在改动，禁止归档/打印")
+	case ErrPurchaseAlreadyReceived:
+		httputil.WriteError(w, http.StatusConflict, "purchase_already_received", "该采购单已入库，不能重复收货", nil)
 	case ErrForbiddenRole:
 		httputil.WriteForbidden(w, "当前角色无权执行该操作")
 	default:
@@ -247,6 +249,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/pharmacy/prescriptions/{id}/dispense", Handler: h.DispensePrescription, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/pharmacy/stock", Handler: h.ListStock, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/pharmacy/stock/inbound", Handler: h.InboundStock, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
+		// 采购
+		{Method: "GET", Path: "/api/v1/his/purchase/orders", Handler: h.ListPurchaseOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/purchase/orders", Handler: h.CreatePurchaseOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/purchase/orders/{id}/receive", Handler: h.ReceivePurchaseOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/purchase/orders/{id}/cancel", Handler: h.CancelPurchaseOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 医疗文书
 		{Method: "POST", Path: "/api/v1/his/documents/generate", Handler: h.GenerateDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

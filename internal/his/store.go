@@ -622,10 +622,15 @@ func extraDataWithAddress(address, allergy string) string {
 	return `{` + strings.Join(fields, ",") + `}`
 }
 
-// NextNumber 原子递增租户内编号流水（scope: mrn/rx/order），返回序列值。
+// NextNumber 原子递增租户内编号流水（scope: mrn/rx/order/po），返回序列值。
 func (s *Store) NextNumber(ctx context.Context, tenantID int64, scope string) (int64, error) {
+	return nextNumber(ctx, s.pool, tenantID, scope)
+}
+
+// nextNumber 在指定连接/事务内递增编号流水，保证采购单号与建单同一事务提交。
+func nextNumber(ctx context.Context, q querier, tenantID int64, scope string) (int64, error) {
 	var seq int64
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO his_number_counters (tenant_id, scope, last_seq, updated_at)
 		VALUES ($1, $2, 1, NOW())
 		ON CONFLICT (tenant_id, scope) DO UPDATE
@@ -2507,8 +2512,22 @@ func (s *Store) InboundStock(ctx context.Context, tenantID, operatorID int64, re
 	}
 	defer tx.Rollback(ctx)
 
+	if err := inboundStockTx(ctx, tx, tenantID, operatorID, req, "inbound", nil); err != nil {
+		return StockItem{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return StockItem{}, err
+	}
+	return s.stockItemByDrug(ctx, tenantID, req.DrugID)
+}
+
+// inboundStockTx 在既有事务内叠加库存并写流水，供普通入库与采购收货共用。
+func inboundStockTx(ctx context.Context, tx pgx.Tx, tenantID, operatorID int64, req InboundStockRequest, refType string, refID *int64) error {
+	if refType == "" {
+		refType = "inbound"
+	}
 	var stockID int64
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		SELECT id FROM his_stock
 		WHERE tenant_id = $1 AND drug_id = $2 AND batch_no = $3 LIMIT 1`,
 		tenantID, req.DrugID, req.BatchNo).Scan(&stockID)
@@ -2518,28 +2537,25 @@ func (s *Store) InboundStock(ctx context.Context, tenantID, operatorID int64, re
 			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 			tenantID, req.DrugID, req.BatchNo, req.Quantity, req.ExpiryDate, req.Location).Scan(&stockID)
 		if err != nil {
-			return StockItem{}, err
+			return err
 		}
 	} else if err != nil {
-		return StockItem{}, err
+		return err
 	} else {
 		if _, err := tx.Exec(ctx, `
 			UPDATE his_stock SET quantity = quantity + $3, expiry_date = COALESCE($4, expiry_date),
 				location = COALESCE($5, location), updated_at = NOW()
 			WHERE id = $1 AND tenant_id = $2`, stockID, tenantID, req.Quantity, req.ExpiryDate, req.Location); err != nil {
-			return StockItem{}, err
+			return err
 		}
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO his_stock_movements (tenant_id, drug_id, move_type, quantity, batch_no, ref_type, created_by)
-		VALUES ($1, $2, 'inbound', $3, $4, 'inbound', $5)`,
-		tenantID, req.DrugID, req.Quantity, req.BatchNo, operatorID); err != nil {
-		return StockItem{}, err
+		INSERT INTO his_stock_movements (tenant_id, drug_id, move_type, quantity, batch_no, ref_type, ref_id, created_by)
+		VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7)`,
+		tenantID, req.DrugID, req.Quantity, req.BatchNo, refType, refID, operatorID); err != nil {
+		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return StockItem{}, err
-	}
-	return s.stockItemByDrug(ctx, tenantID, req.DrugID)
+	return nil
 }
 
 func (s *Store) stockItemByDrug(ctx context.Context, tenantID, drugID int64) (StockItem, error) {
