@@ -154,7 +154,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "purchase_already_received", "该采购单已入库，不能重复收货", nil)
 	case ErrForbiddenRole:
 		httputil.WriteForbidden(w, "当前角色无权执行该操作")
-	case ErrInvalidDateRange:
+	case ErrInvalidDateRange, ErrInvalidWorkbenchDate:
 		httputil.WriteBadRequest(w, err.Error())
 	default:
 		httputil.WriteInternalError(w, err.Error())
@@ -164,8 +164,9 @@ func writeServiceError(w http.ResponseWriter, err error) {
 // RegisterRoutes 注册 HIS 路由。
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
 	router.Register(mux, []router.Route{
-		// 门户指标
+		// 门户指标与首页工作台
 		{Method: "GET", Path: "/api/v1/his/dashboard/metrics", Handler: h.DashboardMetrics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/dashboard/workbench", Handler: h.DashboardWorkbench, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 主数据：医生
 		{Method: "GET", Path: "/api/v1/his/master/doctors", Handler: h.ListDoctors, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -337,6 +338,20 @@ func (h *Handler) DashboardMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, metrics)
+}
+
+// DashboardWorkbench 返回首页工作台聚合（卡片 / 待办 / 医生汇总）。
+func (h *Handler) DashboardWorkbench(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	workbench, err := h.service.Workbench(r.Context(), tenantID, r.URL.Query().Get("date"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, workbench)
 }
 
 // ListDoctors 返回医生列表。
