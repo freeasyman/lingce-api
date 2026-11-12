@@ -147,11 +147,11 @@ func fillRevenueByDay(from, to time.Time, values map[string]float64) []StatsDail
 }
 
 // statsAvgTicket 客单价 = 实收 / 收费笔数（无收费时为 0）。
-func statsAvgTicket(revenue float64, chargeCount int64) float64 {
-	if chargeCount <= 0 {
+func statsAvgTicket(revenue float64, visits int64) float64 {
+	if visits <= 0 {
 		return 0
 	}
-	return roundMoney(revenue / float64(chargeCount))
+	return roundMoney(revenue / float64(visits))
 }
 
 func roundMoney(value float64) float64 {
@@ -218,7 +218,7 @@ func (s *Store) StatsOverview(ctx context.Context, tenantID int64, from, to time
 		SELECT
 		  (SELECT COUNT(*) FROM his_registrations
 		   WHERE tenant_id = $1 AND visit_date BETWEEN $2::date AND $3::date
-		     AND status IN ('registered','visited','cancelled','refunded','no_show')),
+		     AND status IN ('registered','visited')),
 		  (SELECT COUNT(DISTINCT p.order_id) FROM his_payments p
 		   JOIN his_orders o ON o.id = p.order_id AND o.tenant_id = p.tenant_id
 		   WHERE p.tenant_id = $1 AND p.status = 'paid' AND p.paid_at::date BETWEEN $2::date AND $3::date),
@@ -234,10 +234,11 @@ func (s *Store) StatsOverview(ctx context.Context, tenantID int64, from, to time
 		Scan(&kpis.Visits, &kpis.ChargeCount, &kpis.Revenue, &kpis.RefundAmount, &kpis.Outstanding); err != nil {
 		return result, err
 	}
-	kpis.Revenue = roundMoney(kpis.Revenue)
+	// 实收口径：支付流水 − 退费（净额）；客单价按门诊人次（门诊量）计算。
+	kpis.Revenue = roundMoney(kpis.Revenue - kpis.RefundAmount)
 	kpis.RefundAmount = roundMoney(kpis.RefundAmount)
 	kpis.Outstanding = roundMoney(kpis.Outstanding)
-	kpis.AvgTicket = statsAvgTicket(kpis.Revenue, kpis.ChargeCount)
+	kpis.AvgTicket = statsAvgTicket(kpis.Revenue, kpis.Visits)
 	result.Kpis = kpis
 
 	revenueRows, err := s.pool.Query(ctx, `
