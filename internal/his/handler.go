@@ -236,6 +236,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/orders", Handler: h.ListOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/orders/{id}", Handler: h.GetOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders", Handler: h.CreateOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/orders/from-encounter", Handler: h.CreateOrderFromEncounter, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/orders/{id}", Handler: h.UpdateOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/payments", Handler: h.AddPayment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/refund", Handler: h.RefundOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1311,6 +1312,27 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	order, err := h.service.CreateOrder(r.Context(), tenantID, claims.UserID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusCreated, order)
+}
+
+// CreateOrderFromEncounter 按就诊一键生成收费单（挂号费 + 处方明细）。
+func (h *Handler) CreateOrderFromEncounter(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "cashier") {
+		return
+	}
+	var req CreateOrderFromEncounterRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	order, err := h.service.CreateOrderFromEncounter(r.Context(), tenantID, claims.UserID, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return
