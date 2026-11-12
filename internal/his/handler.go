@@ -154,6 +154,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "purchase_already_received", "该采购单已入库，不能重复收货", nil)
 	case ErrForbiddenRole:
 		httputil.WriteForbidden(w, "当前角色无权执行该操作")
+	case ErrInvalidDateRange:
+		httputil.WriteBadRequest(w, err.Error())
 	default:
 		httputil.WriteInternalError(w, err.Error())
 	}
@@ -291,6 +293,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 基础报表
 		{Method: "GET", Path: "/api/v1/his/reports/summary", Handler: h.ReportSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
+		// 统计概览（KPI / 日营收 / 支付方式 / Top 项目 / 挂号状态）
+		{Method: "GET", Path: "/api/v1/his/stats/overview", Handler: h.StatsOverview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 诊断检索（ICD-10 目录）
 		{Method: "GET", Path: "/api/v1/his/icd10", Handler: h.SearchDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1959,6 +1964,21 @@ func (h *Handler) ReportSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, summary)
+}
+
+// StatsOverview 统计概览（?date_from=&date_to=，默认最近 7 天）。
+func (h *Handler) StatsOverview(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	overview, err := h.service.StatsOverview(r.Context(), tenantID,
+		r.URL.Query().Get("date_from"), r.URL.Query().Get("date_to"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, overview)
 }
 
 // ListOpenClients 开放客户端列表。
