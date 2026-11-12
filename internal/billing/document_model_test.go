@@ -139,7 +139,7 @@ func TestBuildDocumentLetterTrial(t *testing.T) {
 	if letter.Products[0].Name != "随访顾问" || letter.Products[2].Name != "合规卫士" {
 		t.Fatalf("产品顺序不对: %+v", letter.Products)
 	}
-	if got := letter.Products[1].Quota; got != "48 份病历　/　96 轮质控　/　8 小时录音" {
+	if got := letter.Products[1].Quota; got != "48 份病历　/　96 轮质控　/　8 小时接诊录音" {
 		t.Fatalf("听写病历额度 = %q", got)
 	}
 	if !strings.Contains(strings.Join(letter.StartItems, "|"), "139 0000 2002") {

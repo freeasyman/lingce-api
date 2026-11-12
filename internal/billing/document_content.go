@@ -3,8 +3,11 @@ package billing
 // 从机构档案数据组装通知函内容（纯函数，不查库）。
 //
 // 文案与 06-原型/运营端计费Demo.html 的 openLetter() 保持一致，额度单位按产品说人话：
-// 份病历 / 轮质控 / 小时录音 / 小时录音分析 / 小时随访生成 / 小时录音判别 /
+// 小时接诊录音 / 小时沟通录音 / 小时接待录音 / 份病历 / 轮质控 /
 // 张截图 / 次对话 / 人次 / 道题 / 份脚本 / 张图文。
+//
+// 小时类单位必须写清「这些小时是什么录音」：客户看不懂「小时随访生成」，
+// 但看得懂「400 小时接诊录音」。单位仍是 hour，只改展示文案。
 
 import (
 	"sort"
@@ -29,13 +32,17 @@ var documentUnitOrder = map[string][]string{
 }
 
 // documentUnitLabels 是「产品 + 单位」对应的中文单位文案。
+//
+// 这是后端通知函的唯一单位文案表；前端对应表在
+// packages/product-ui/src/quota-product-units.ts，两边的 hour 文案由
+// document_unit_copy_test.go / quota-product-units.test.ts 锁定为同一组值。
 var documentUnitLabels = map[string]map[string]string{
-	"yingke":  {"hour": "小时录音分析"},
-	"kehu":    {"hour": "小时录音分析", "shot": "张截图", "record": "次对话", "person": "人次"},
-	"suifang": {"hour": "小时随访生成"},
-	"tingxie": {"record": "份病历", "round": "轮质控", "hour": "小时录音"},
-	"hegui":   {"hour": "小时录音判别"},
-	"huoke":   {"hour": "小时录音分析", "prompt": "道题", "record": "份脚本", "shot": "张图文"},
+	"yingke":  {"hour": "小时接待录音"},
+	"kehu":    {"hour": "小时接诊录音", "shot": "张截图", "record": "次对话", "person": "人次"},
+	"suifang": {"hour": "小时接诊录音"},
+	"tingxie": {"record": "份病历", "round": "轮质控", "hour": "小时接诊录音"},
+	"hegui":   {"hour": "小时沟通录音"},
+	"huoke":   {"hour": "小时沟通录音", "prompt": "道题", "record": "份脚本", "shot": "张图文"},
 }
 
 // documentUnitFallback 是产品不在上表时的兜底单位文案。

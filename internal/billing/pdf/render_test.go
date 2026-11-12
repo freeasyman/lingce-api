@@ -30,9 +30,9 @@ func trialLetter() Letter {
 		ProductSection: "试用内容",
 		QuotaHeader:    "试用额度",
 		Products: []ProductRow{
-			{Name: "听写病历", Quota: "48 份病历　/　96 轮质控　/　8 小时录音"},
-			{Name: "合规卫士", Quota: "8 小时录音判别"},
-			{Name: "随访顾问", Quota: "8 小时随访生成"},
+			{Name: "听写病历", Quota: "48 份病历　/　96 轮质控　/　8 小时接诊录音"},
+			{Name: "合规卫士", Quota: "8 小时沟通录音"},
+			{Name: "随访顾问", Quota: "8 小时接诊录音"},
 		},
 		StartSection: "开始使用",
 		StartItems: []string{
@@ -68,12 +68,12 @@ func formalLetter() Letter {
 		ProductSection: "服务内容",
 		QuotaHeader:    "服务额度",
 		Products: []ProductRow{
-			{Name: "赢客专家", Quota: "400 小时录音分析"},
-			{Name: "客户总监", Quota: "400 小时录音分析　/　5,000 张截图　/　10,000 次对话　/　10,000 人次"},
-			{Name: "随访顾问", Quota: "400 小时随访生成"},
-			{Name: "听写病历", Quota: "2,500 份病历　/　5,000 轮质控　/　400 小时录音"},
-			{Name: "合规卫士", Quota: "400 小时录音判别"},
-			{Name: "获客先锋", Quota: "400 小时录音分析　/　240 道题　/　600 份脚本　/　1,200 张图文"},
+			{Name: "赢客专家", Quota: "400 小时接待录音"},
+			{Name: "客户总监", Quota: "400 小时接诊录音　/　5,000 张截图　/　10,000 次对话　/　10,000 人次"},
+			{Name: "随访顾问", Quota: "400 小时接诊录音"},
+			{Name: "听写病历", Quota: "2,500 份病历　/　5,000 轮质控　/　400 小时接诊录音"},
+			{Name: "合规卫士", Quota: "400 小时沟通录音"},
+			{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 道题　/　600 份脚本　/　1,200 张图文"},
 		},
 		StartSection: "开始使用",
 		StartItems: []string{
@@ -143,8 +143,8 @@ func TestRenderShrinksInsteadOfOverflowing(t *testing.T) {
 	letter := trialLetter()
 	letter.Salutation = "尊敬的　" + "超长机构名称测试" + "　欧阳娜娜（院长）："
 	letter.Products = append(letter.Products,
-		ProductRow{Name: "客户总监", Quota: "400 小时录音分析　/　5,000 张截图　/　10,000 次对话　/　10,000 人次"},
-		ProductRow{Name: "获客先锋", Quota: "400 小时录音分析　/　240 道题　/　600 份脚本　/　1,200 张图文"},
+		ProductRow{Name: "客户总监", Quota: "400 小时接诊录音　/　5,000 张截图　/　10,000 次对话　/　10,000 人次"},
+		ProductRow{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 道题　/　600 份脚本　/　1,200 张图文"},
 	)
 	letter.TipItems = append(letter.TipItems,
 		"服务到期前我们会提前提醒您续期，服务期内产生的数据均可随时查看。",
