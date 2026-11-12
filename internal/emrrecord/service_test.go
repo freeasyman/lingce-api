@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrquality"
 )
@@ -19,6 +20,36 @@ func TestActionResponseIncludesQualityReport(t *testing.T) {
 	}
 	if response["quality"] == nil {
 		t.Fatalf("quality report is not available under the frontend contract: %s", raw)
+	}
+}
+
+// 质检被降级时，响应必须在 quality 字段里给出 status/message，供前端明示；
+// 同时不能因为自定义序列化丢掉 Record 等既有字段。
+func TestActionResponseIncludesQualityDegradation(t *testing.T) {
+	raw, err := json.Marshal(&WriteOutcome{
+		Record: &Record{ID: "rec-1", Status: "已完成"},
+		QualityStatus: &QualityDegradation{
+			Status:  QualityStatusSkippedNoQuota,
+			Message: QualitySkipNoQuotaMessage,
+			At:      time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["Record"] == nil {
+		t.Fatalf("record is lost from the action response: %s", raw)
+	}
+	quality, ok := response["quality"].(map[string]any)
+	if !ok {
+		t.Fatalf("quality degradation missing: %s", raw)
+	}
+	if quality["status"] != QualityStatusSkippedNoQuota || quality["message"] != QualitySkipNoQuotaMessage {
+		t.Fatalf("unexpected quality payload: %#v", quality)
 	}
 }
 

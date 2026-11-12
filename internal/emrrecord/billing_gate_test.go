@@ -105,28 +105,35 @@ func TestIncrementalDraftUsesSameDraftIdempotencyKey(t *testing.T) {
 	}
 }
 
-// 提交时实际新跑质控也必须先预检 round 1；暂停/到期不能 fail-open。
-func TestQualityRoundQuotaGate(t *testing.T) {
+// 提交时质检额度不足/暂停/到期：不再阻断保存，而是返回降级状态并跳过质检。
+// 计费自身故障仍然 fail-open（照常质检），不能因为计费不可用阻断医生提交。
+func TestQualityRoundQuotaDegradesInsteadOfBlocking(t *testing.T) {
 	cases := []struct {
-		name string
-		err  error
-		want error
+		name   string
+		err    error
+		status string
 	}{
-		{name: "paused", err: billing.ErrSubscriptionPaused, want: billing.ErrSubscriptionPaused},
-		{name: "expired", err: billing.ErrSubscriptionExpired, want: billing.ErrSubscriptionExpired},
+		{name: "paused", err: billing.ErrSubscriptionPaused, status: QualityStatusSkippedPaused},
+		{name: "expired", err: billing.ErrSubscriptionExpired, status: QualityStatusSkippedExpired},
 		{
-			name: "insufficient",
-			err:  &billing.InsufficientEntitlementError{Unit: "round", Current: 0, Required: 1, Shortfall: 1},
-			want: ErrEMRQuotaExhausted,
+			name:   "insufficient",
+			err:    &billing.InsufficientEntitlementError{Unit: "round", Current: 0, Required: 1, Shortfall: 1},
+			status: QualityStatusSkippedNoQuota,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeBilling{quotaErr: tc.err}
 			svc := &Service{billing: fake}
-			err := svc.ensureQualityRoundQuota(context.Background(), 7)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("ensureQualityRoundQuota = %v, want %v", err, tc.want)
+			degraded := svc.qualityRoundSkip(context.Background(), 7)
+			if degraded == nil || degraded.Status != tc.status {
+				t.Fatalf("qualityRoundSkip = %#v, want status %q", degraded, tc.status)
+			}
+			if degraded.Message == "" || degraded.At.IsZero() {
+				t.Fatalf("degradation must carry message and time: %#v", degraded)
+			}
+			if tc.status == QualityStatusSkippedNoQuota && degraded.Message != QualitySkipNoQuotaMessage {
+				t.Fatalf("message = %q, want %q", degraded.Message, QualitySkipNoQuotaMessage)
 			}
 			if len(fake.quotaItems) != 1 || fake.quotaItems[0].Unit != "round" || fake.quotaItems[0].Amount != 1 {
 				t.Fatalf("quota items = %#v, want round:1", fake.quotaItems)
@@ -137,9 +144,15 @@ func TestQualityRoundQuotaGate(t *testing.T) {
 		})
 	}
 
+	// 计费自身故障不是额度不足：照常质检（返回 nil），不能扩大阻断范围。
 	fake := &fakeBilling{quotaErr: errors.New("billing db down")}
 	svc := &Service{billing: fake}
-	if err := svc.ensureQualityRoundQuota(context.Background(), 7); err != nil {
-		t.Fatalf("billing failure must fail open, got %v", err)
+	if degraded := svc.qualityRoundSkip(context.Background(), 7); degraded != nil {
+		t.Fatalf("billing failure must fail open, got %#v", degraded)
+	}
+
+	// 未接入计费（旧部署/单测）：不预检、不降级。
+	if degraded := (&Service{}).qualityRoundSkip(context.Background(), 7); degraded != nil {
+		t.Fatalf("billing not configured must not degrade, got %#v", degraded)
 	}
 }

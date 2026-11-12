@@ -262,6 +262,9 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		DoctorID: current.DoctorID, CreatedBy: current.CreatedBy}
 	var report *emrquality.Report
 	reusedReport := false
+	// qualityDegraded 非空表示本次质检被降级跳过（额度不足 / 服务暂停 / 到期）。
+	// 核心操作（保存 + 提交病历）必须继续，降级结果要落库并返回给前端明示。
+	var qualityDegraded *QualityDegradation
 	if req.AllowNonBlocking && strings.TrimSpace(req.QualityRunID) != "" && s.quality != nil {
 		report, err = s.quality.ReusableReport(ctx, tenantID, current.ID, req.QualityRunID, emrquality.InputDigest(qualityInput))
 		if err != nil || report == nil {
@@ -270,46 +273,47 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		reusedReport = true
 	}
 	if s.quality != nil && !reusedReport {
-		// 本轮会真实调用大模型做完成级质控：先过额度预检，额度不足直接拒绝提交，
-		// 避免“先烧模型、后扣量失败”造成欠扣。
+		// 质检是 AI 增强：先做只读额度判断，额度不足 / 服务暂停 / 到期时本次跳过质检，
+		// 病历照常保存并提交，降级状态写入 emr_records 并随响应返回。
+		// 计费自身故障仍 fail-open（照常质检），不能因为计费不可用阻断医生。
 		// ProgramOnly（HIS 标准版，纯代码质检）不消耗质检轮次额度。
 		if !req.ProgramOnly {
-			if err := s.ensureQualityRoundQuota(ctx, tenantID); err != nil {
+			qualityDegraded = s.qualityRoundSkip(ctx, tenantID)
+		}
+		if qualityDegraded == nil {
+			report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
+				RecordID: current.ID, Content: content, PatientSnapshot: patient,
+			}, req.ProgramOnly))
+			if err != nil {
 				return nil, err
 			}
-		}
-		report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
-			RecordID: current.ID, Content: content, PatientSnapshot: patient,
-		}, req.ProgramOnly))
-		if err != nil {
-			return nil, err
-		}
-		// 本轮完整质控是真实新跑的（复用报告的分支不会走到这里）：按轮次扣 round 1。
-		// 放在 defer 里保证无论这次提交最终成功、被阻断还是需要医生确认，都只扣这一轮，
-		// 且扣量发生在业务结果落库之后；扣量失败只告警，不影响病历业务。
-		roundToken := newQualityRoundToken(current.ID)
-		if !req.ProgramOnly {
-			defer func() {
-				s.chargeQualityRound(ctx, tenantID, current.ID, report, roundToken, reusedReport)
-			}()
-		}
-		if strings.TrimSpace(report.FailureReason) != "" {
-			if persistErr := s.quality.Persist(ctx, report); persistErr != nil {
-				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("%s；质量检查记录保存失败：%w", report.FailureReason, persistErr)
+			// 本轮完整质控是真实新跑的（复用报告的分支不会走到这里）：按轮次扣 round 1。
+			// 放在 defer 里保证无论这次提交最终成功、被阻断还是需要医生确认，都只扣这一轮，
+			// 且扣量发生在业务结果落库之后；扣量失败只告警，不影响病历业务。
+			roundToken := newQualityRoundToken(current.ID)
+			if !req.ProgramOnly {
+				defer func() {
+					s.chargeQualityRound(ctx, tenantID, current.ID, report, roundToken, reusedReport)
+				}()
 			}
-			return &WriteOutcome{Record: current, QualityReport: report}, errors.New(report.FailureReason)
-		}
-		if report.HasBlocking() {
-			if err := s.quality.Persist(ctx, report); err != nil {
-				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过，检查记录保存失败：%w", err)
+			if strings.TrimSpace(report.FailureReason) != "" {
+				if persistErr := s.quality.Persist(ctx, report); persistErr != nil {
+					return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("%s；质量检查记录保存失败：%w", report.FailureReason, persistErr)
+				}
+				return &WriteOutcome{Record: current, QualityReport: report}, errors.New(report.FailureReason)
 			}
-			return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过")
-		}
-		if report.HasNonBlockingProblems() && !req.AllowNonBlocking {
-			if err := s.quality.Persist(ctx, report); err != nil {
-				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历存在提示项，检查记录保存失败：%w", err)
+			if report.HasBlocking() {
+				if err := s.quality.Persist(ctx, report); err != nil {
+					return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过，检查记录保存失败：%w", err)
+				}
+				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历质量检查未通过")
 			}
-			return &WriteOutcome{Record: current, QualityReport: report}, ErrQualityConfirmationRequired
+			if report.HasNonBlockingProblems() && !req.AllowNonBlocking {
+				if err := s.quality.Persist(ctx, report); err != nil {
+					return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("病历存在提示项，检查记录保存失败：%w", err)
+				}
+				return &WriteOutcome{Record: current, QualityReport: report}, ErrQualityConfirmationRequired
+			}
 		}
 	}
 	var outcome *WriteOutcome
@@ -321,6 +325,13 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 			return err
 		}
 		snapshotID := outcome.Snapshot.ID
+		// 质检被降级：保存照常成功，但要在同一事务里留下「没质检 + 原因 + 时间」。
+		if qualityDegraded != nil {
+			if err := markQualitySkippedTx(ctx, tx, tenantID, id, qualityDegraded); err != nil {
+				return err
+			}
+			outcome.QualityStatus = qualityDegraded
+		}
 		if report != nil {
 			if reusedReport {
 				if err := s.quality.BindRunTx(ctx, tx, report, outcome.Snapshot.ID); err != nil {
@@ -660,12 +671,26 @@ func (s *Service) appendProcessResultTx(ctx context.Context, tx pgx.Tx, tenantID
 	})
 }
 
+// processOutputInfo 组装过程留痕的 output_info：失败原因 + 质检降级状态。
+// 降级状态写在这里，管理端按留痕查「这份病历为什么没质检」时不用额外关联。
+func processOutputInfo(outcome *WriteOutcome, failure string) map[string]any {
+	output := map[string]any{"failure": failure}
+	if outcome != nil && outcome.QualityStatus != nil {
+		output["quality_status"] = outcome.QualityStatus.Status
+		output["quality_message"] = outcome.QualityStatus.Message
+		if outcome.QualityStatus.Reason != "" {
+			output["quality_reason"] = outcome.QualityStatus.Reason
+		}
+	}
+	return output
+}
+
 func (s *Service) appendProcessResultWithAppender(ctx context.Context, tenantID int64, id string, actorID int64, action string, outcome *WriteOutcome, note string, result, failure string, appendRecord func(emrprocess.AppendRequest) error) error {
 	changes := append(diffTopLevel(outcome.BeforeContent, outcome.Record.WorkingContent), diffTopLevelPrefixed("patient", outcome.BeforePatient, outcome.Record.PatientSnapshot)...)
 	if err := validateAuditTrail(actorID, note, outcome, changes); err != nil {
 		return err
 	}
-	return appendRecord(emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: map[string]any{"failure": failure}})
+	return appendRecord(emrprocess.AppendRequest{TenantID: tenantID, RecordID: &id, ActionType: action, ActionResult: result, ActorType: "人工", ActorID: &actorID, Source: "外部接口", BeforeStatus: stringPtr(outcome.BeforeStatus), AfterStatus: stringPtr(outcome.AfterStatus), ActionSnapshotID: snapshotPtr(outcome.Snapshot), BeforeSnapshotID: outcome.BeforeSnapshot, AfterSnapshotID: snapshotPtr(outcome.Snapshot), FailureReason: failure, ActionNote: note, ContentChanges: changes, OutputInfo: processOutputInfo(outcome, failure)})
 }
 
 func diffTopLevel(before, after map[string]any) []any {

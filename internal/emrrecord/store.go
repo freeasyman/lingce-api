@@ -36,7 +36,8 @@ const recordColumns = `
 	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
 	COALESCE(r.updated_at, r.created_at), r.updated_at,
-	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id`
+	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id,
+	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at`
 
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
@@ -49,6 +50,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 		&item.ConfirmedBy, &item.ConfirmedAt, &item.ConfirmedSnapshotID, &item.ArchivedSnapshotID,
 		&item.SubmittedAt, &item.ArchivedAt, &item.VoidedAt, &item.CreatedBy, &item.CreatedAt,
 		&item.LastSavedAt, &item.UpdatedAt, &item.CurrentScoreStatus, &item.CurrentTotalScore, &item.CurrentGrade, &item.CurrentScoreVersion, &item.CurrentQualityRunID,
+		&item.QualityStatus, &item.QualityStatusReason, &item.QualityStatusAt,
 	)
 	if err != nil {
 		return nil, err
@@ -771,10 +773,29 @@ func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID i
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE emr_records
-		SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7
+		SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7,
+		    quality_status=$8,quality_status_reason='',quality_status_at=NOW()
 		WHERE id=$1 AND tenant_id=$2
-	`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+	`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID), QualityStatusChecked); err != nil {
 		return fmt.Errorf("update record score projection: %w", err)
+	}
+	return nil
+}
+
+// markQualitySkippedTx 在提交事务内记录「本次保存跳过了质检」。
+//
+// 只在质检被降级（额度不足/服务暂停/到期）时调用：核心操作照常落库，但必须把
+// 原因和时间写到业务表上，医生、质控和运营事后都能查到这份病历为什么没质检。
+func markQualitySkippedTx(ctx context.Context, tx pgx.Tx, tenantID int64, recordID string, degradation *QualityDegradation) error {
+	if degradation == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_records
+		SET quality_status=$3,quality_status_reason=$4,quality_status_at=NOW()
+		WHERE id=$1 AND tenant_id=$2
+	`, recordID, tenantID, degradation.Status, degradation.Message); err != nil {
+		return fmt.Errorf("mark emr quality skipped: %w", err)
 	}
 	return nil
 }

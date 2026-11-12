@@ -447,7 +447,7 @@ func (h *Handler) ManualSave(w http.ResponseWriter, r *http.Request) {
 		writeActionError(w, item, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"data": item})
+	writeActionSuccess(w, item)
 }
 func (h *Handler) Submit(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "record.submit", h.service.Submit)
@@ -507,7 +507,15 @@ func (h *Handler) actionWithRequest(w http.ResponseWriter, r *http.Request, tena
 		writeActionError(w, item, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"data": item})
+	writeActionSuccess(w, item)
+}
+
+// writeActionSuccess 输出保存/提交结果。
+//
+// 响应统一带 ok=true；质检被降级时 item.QualityStatus 会通过 WriteOutcome.MarshalJSON
+// 输出到 quality 字段（status/message），前端据此明示「本次保存未执行质检」。
+func writeActionSuccess(w http.ResponseWriter, item *WriteOutcome) {
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "data": item})
 }
 
 func writeActionError(w http.ResponseWriter, item *WriteOutcome, actionErr error) {

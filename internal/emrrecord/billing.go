@@ -319,34 +319,10 @@ func qualityRoundDeductionInput(tenantID int64, recordID string, report *emrqual
 	}
 }
 
-// ensureQualityRoundQuota 是提交病历（完成级质控）的交付前预检：round 1 轮。
-//
-// 只有真正要新跑一轮质控时才调用（复用 QualityRunID 的提交不调用）。额度不足 /
-// 服务暂停 / 服务到期都在这里阻断，避免额度已经耗尽还先调大模型再扣量失败。
-func (s *Service) ensureQualityRoundQuota(ctx context.Context, tenantID int64) error {
-	if s == nil || s.billing == nil {
-		return nil
-	}
-	err := s.billing.CheckQuota(ctx, tenantID, billingProductCode,
-		[]billing.DeductItem{{Unit: billingUnitRound, Amount: 1}})
-	if err == nil {
-		return nil
-	}
-	gate, ok := billing.GateRejection(err)
-	if !ok {
-		// 计费自身故障 fail-open，不能因为计费不可用阻断医生提交病历。
-		slog.Warn("emr quality quota check failed, allowing submit",
-			"tenant_id", tenantID, "error", err)
-		return nil
-	}
-	if gate.Insufficient != nil {
-		return &quotaExhaustedError{insufficient: gate.Insufficient}
-	}
-	if gate.Code == billing.CodeInsufficientEntitlement {
-		return fmt.Errorf("%w: %w", ErrEMRQuotaExhausted, billing.ErrInsufficientEntitlement)
-	}
-	return err
-}
+// 提交病历的质检额度判断见 quality_degradation.go 的 qualityRoundSkip：
+// 额度不足 / 服务暂停 / 到期时**不阻断保存**，只跳过质检并留下降级状态。
+// 历史实现里的 ensureQualityRoundQuota 会直接拒绝提交，已按「核心操作永远可用」
+// 原则移除。
 
 // chargeQualityRound 在提交病历实际新跑一轮完整质控后扣 round 1 轮。
 //

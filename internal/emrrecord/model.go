@@ -44,6 +44,11 @@ type Record struct {
 	CurrentGrade        string         `json:"current_grade,omitempty"`
 	CurrentScoreVersion string         `json:"current_score_version,omitempty"`
 	CurrentQualityRunID *string        `json:"current_quality_run_id,omitempty"`
+	// QualityStatus 是最近一次提交/归档级质检的状态：checked 或 skipped_*。
+	// 与 CurrentScoreStatus 分开维护：评分投影描述分数，质检状态描述「有没有质检」。
+	QualityStatus       string     `json:"quality_status,omitempty"`
+	QualityStatusReason string     `json:"quality_status_reason,omitempty"`
+	QualityStatusAt     *time.Time `json:"quality_status_at,omitempty"`
 }
 
 type Snapshot struct {
@@ -114,7 +119,10 @@ type WriteOutcome struct {
 	AfterStatus    string
 	BeforeSnapshot *string
 	BeforePatient  map[string]any
-	QualityReport  *emrquality.Report `json:"quality,omitempty"`
+	QualityReport  *emrquality.Report `json:"-"`
+	// QualityStatus 是质检被降级（额度不足/暂停/到期）时的状态；与 QualityReport 互斥，
+	// 二者都通过自定义 MarshalJSON 输出到响应的 quality 字段。
+	QualityStatus *QualityDegradation `json:"-"`
 }
 
 type GeneratedWorkingDraftRequest struct {
