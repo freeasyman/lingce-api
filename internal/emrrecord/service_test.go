@@ -25,7 +25,7 @@ func TestActionResponseIncludesQualityReport(t *testing.T) {
 func TestQualityContextBeforeFormalSnapshot(t *testing.T) {
 	record := &Record{ID: "record", WorkingContent: map[string]any{"chief_complaint": "旧内容"}}
 	snapshot := &Snapshot{Content: map[string]any{"chief_complaint": "腰疼伴右腿放射痛1周"}}
-	input := qualityContext(1, emrquality.ActionComplete, record, snapshot)
+	input := qualityContext(1, emrquality.ActionComplete, record, snapshot, false)
 	if input.SnapshotID != nil {
 		t.Fatalf("unsaved snapshot must not supply an empty UUID: %+v", input.SnapshotID)
 	}

@@ -1032,3 +1032,26 @@ type PatientSearchRow struct {
 	Age    int    `json:"age"`
 	MRN    string `json:"mrn"`
 }
+
+// QualityFindingItem 质检结果中的单条规则结果（供 HIS 展示阻断/提示原因）。
+type QualityFindingItem struct {
+	RuleCode     string `json:"rule_code"`
+	SectionCode  string `json:"section_code"`
+	Result       string `json:"result"`
+	Message      string `json:"message"`
+	Blocking     bool   `json:"blocking"`
+	ManualReview bool   `json:"manual_review"`
+}
+
+// QualityReportLatest 记录最近一次质检报告。
+type QualityReportLatest struct {
+	RunID          string               `json:"run_id"`
+	RuleSetVersion string               `json:"rule_set_version"`
+	OverallResult  string               `json:"overall_result"`
+	TotalScore     int                  `json:"total_score"`
+	Grade          string               `json:"grade"`
+	BlockingCount  int                  `json:"blocking_count"`
+	PendingCount   int                  `json:"pending_count"`
+	StartedAt      *time.Time           `json:"started_at,omitempty"`
+	Findings       []QualityFindingItem `json:"findings"`
+}

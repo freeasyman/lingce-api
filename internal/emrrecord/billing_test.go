@@ -24,6 +24,10 @@ type fakeBilling struct {
 	quotaCalls   int
 	quotaErr     error
 	deductErr    error
+
+	deductedKeys    map[string]struct{}
+	isDeductedErr   error
+	isDeductedCalls int
 }
 
 func (f *fakeBilling) Deduct(_ context.Context, input billing.DeductInput) (*billing.DeductResult, error) {
@@ -40,6 +44,15 @@ func (f *fakeBilling) CheckQuota(_ context.Context, tenantID int64, productCode 
 	f.quotaProduct = productCode
 	f.quotaItems = append([]billing.DeductItem(nil), items...)
 	return f.quotaErr
+}
+
+func (f *fakeBilling) IsDeducted(_ context.Context, _ int64, idempotencyKey string) (bool, error) {
+	f.isDeductedCalls++
+	if f.isDeductedErr != nil {
+		return false, f.isDeductedErr
+	}
+	_, exists := f.deductedKeys[idempotencyKey]
+	return exists, nil
 }
 
 func newDraftTestHandler(fake *fakeBilling, seconds int64, durationErr error) *InternalHandler {

@@ -253,6 +253,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/emr/ensure", Handler: h.EnsureEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/save", Handler: h.SaveEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/complete", Handler: h.CompleteEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/emr/records/{id}/quality/latest", Handler: h.LatestEMRQuality, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/emr/templates/{id}/fields", Handler: h.TemplateFields, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 医生工作站：处方
@@ -2416,4 +2417,19 @@ func (h *Handler) SearchPatients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, rows)
+}
+
+// LatestEMRQuality 病历最近一次质检结果（阻断/提示原因）。
+func (h *Handler) LatestEMRQuality(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	recordID := r.PathValue("id")
+	report, err := h.service.LatestQualityReport(r.Context(), tenantID, recordID)
+	if err != nil {
+		httputil.WriteInternalError(w, "failed to load quality report")
+		return
+	}
+	httputil.WriteSuccess(w, report)
 }

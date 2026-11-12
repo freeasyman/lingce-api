@@ -103,6 +103,7 @@ type ActionRequest struct {
 	Note             string         `json:"note,omitempty"`
 	AllowNonBlocking bool           `json:"allow_non_blocking,omitempty"`
 	QualityRunID     string         `json:"quality_run_id,omitempty"`
+	ProgramOnly      bool           `json:"program_only,omitempty"`
 }
 
 type WriteOutcome struct {

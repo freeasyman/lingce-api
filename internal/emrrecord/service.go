@@ -209,7 +209,7 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 		return nil, err
 	}
 	if s.quality != nil && !(req.AllowNonBlocking && req.QualityRunID != "") {
-		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionSave, outcome.Record, outcome.Snapshot))
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionSave, outcome.Record, outcome.Snapshot, req.ProgramOnly))
 		if qualityErr != nil {
 			return outcome, qualityErr
 		}
@@ -272,12 +272,15 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 	if s.quality != nil && !reusedReport {
 		// 本轮会真实调用大模型做完成级质控：先过额度预检，额度不足直接拒绝提交，
 		// 避免“先烧模型、后扣量失败”造成欠扣。
-		if err := s.ensureQualityRoundQuota(ctx, tenantID); err != nil {
-			return nil, err
+		// ProgramOnly（HIS 标准版，纯代码质检）不消耗质检轮次额度。
+		if !req.ProgramOnly {
+			if err := s.ensureQualityRoundQuota(ctx, tenantID); err != nil {
+				return nil, err
+			}
 		}
 		report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
 			RecordID: current.ID, Content: content, PatientSnapshot: patient,
-		}))
+		}, req.ProgramOnly))
 		if err != nil {
 			return nil, err
 		}
@@ -285,9 +288,11 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		// 放在 defer 里保证无论这次提交最终成功、被阻断还是需要医生确认，都只扣这一轮，
 		// 且扣量发生在业务结果落库之后；扣量失败只告警，不影响病历业务。
 		roundToken := newQualityRoundToken(current.ID)
-		defer func() {
-			s.chargeQualityRound(ctx, tenantID, current.ID, report, roundToken, reusedReport)
-		}()
+		if !req.ProgramOnly {
+			defer func() {
+				s.chargeQualityRound(ctx, tenantID, current.ID, report, roundToken, reusedReport)
+			}()
+		}
 		if strings.TrimSpace(report.FailureReason) != "" {
 			if persistErr := s.quality.Persist(ctx, report); persistErr != nil {
 				return &WriteOutcome{Record: current, QualityReport: report}, fmt.Errorf("%s；质量检查记录保存失败：%w", report.FailureReason, persistErr)
@@ -391,7 +396,7 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 		if snapshotErr != nil || snapshot == nil {
 			return nil, fmt.Errorf("找不到归档版本")
 		}
-		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionArchive, current, snapshot))
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionArchive, current, snapshot, req.ProgramOnly))
 		if qualityErr != nil {
 			return nil, qualityErr
 		}
@@ -448,7 +453,7 @@ func (s *Service) Return(ctx context.Context, tenantID, actorID int64, id string
 	return outcome, nil
 }
 
-func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot) emrquality.Context {
+func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot, programOnly bool) emrquality.Context {
 	content := record.WorkingContent
 	patient := record.PatientSnapshot
 	if snapshot != nil {
@@ -458,7 +463,7 @@ func qualityContext(tenantID int64, action emrquality.Action, record *Record, sn
 	return emrquality.Context{TenantID: tenantID, RecordID: record.ID, SnapshotID: snapshotIDPtr(snapshot), Action: action,
 		DocumentType: record.DocumentType, VisitType: record.VisitType, TemplateCode: record.TemplateCode, Patient: patient, Content: content,
 		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt,
-		DoctorID: record.DoctorID, CreatedBy: record.CreatedBy}
+		DoctorID: record.DoctorID, CreatedBy: record.CreatedBy, ProgramOnly: programOnly}
 }
 
 func validateDiagnosisContract(templateCode string, content map[string]any, requireComplete bool) error {

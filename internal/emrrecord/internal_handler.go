@@ -86,9 +86,11 @@ func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID
 	if err != nil || record == nil || record.EncounterID != input.EncounterID {
 		return nil, fmt.Errorf("实验病案不存在或接诊不匹配")
 	}
-	// 增量草稿同样是一份病历草稿的生成入口：调模型前先过额度预检。
+	// 增量草稿同样是一份病历草稿的生成入口。它与正式草稿共用
+	// emr:record:<id>:draft 幂等键：已扣过的病历本次不会再扣量，跳过预检直接生成；
+	// 未扣过的仍按录音时长做额度预检。
 	recordingID := recordingIDFromRecord(record)
-	if err := h.ensureDraftQuota(ctx, tenantID, recordingID); err != nil {
+	if err := h.ensureDraftQuotaForRecord(ctx, tenantID, recordingID, record.ID); err != nil {
 		return nil, err
 	}
 	prepared, err := h.preparePrompt(ctx, EmrWorkerRequest{
@@ -260,8 +262,10 @@ func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerR
 	if err := payload.validateBasic(); err != nil {
 		return nil, err
 	}
-	// 交付前闸门：额度不足时不开始生成。
-	if err := h.ensureDraftQuota(ctx, payload.TenantID, payload.RecordingID); err != nil {
+	// 交付前闸门：同一接诊已有病历且草稿已扣过时，本次生成不会重复扣量，跳过预检；
+	// 其余情况额度不足时不开始生成。
+	existingRecordID := h.existingDraftRecordID(ctx, payload.TenantID, payload.EncounterID)
+	if err := h.ensureDraftQuotaForRecord(ctx, payload.TenantID, payload.RecordingID, existingRecordID); err != nil {
 		return nil, err
 	}
 	requestID := fmt.Sprintf("emr-realtime-%d", time.Now().UnixNano())
@@ -368,8 +372,10 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		h.writeFailure(w, payload, err)
 		return
 	}
-	// 交付前闸门：额度不足时不开始生成，按模块既有错误格式返回 402。
-	if err := h.ensureDraftQuota(r.Context(), payload.TenantID, payload.RecordingID); err != nil {
+	// 交付前闸门：同一接诊已有病历且草稿已扣过时，本次生成不会重复扣量，跳过预检；
+	// 其余情况额度不足时不开始生成，按模块既有错误格式返回 402。
+	existingRecordID := h.existingDraftRecordID(r.Context(), payload.TenantID, payload.EncounterID)
+	if err := h.ensureDraftQuotaForRecord(r.Context(), payload.TenantID, payload.RecordingID, existingRecordID); err != nil {
 		h.writeQuotaExhausted(w, payload, err)
 		return
 	}

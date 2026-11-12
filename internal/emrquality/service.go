@@ -128,8 +128,11 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		}
 	}
 	if input.Action == ActionComplete || input.Action == ActionArchive {
-		if err := s.evaluateSemanticRules(ctx, input, rules, report); err != nil {
-			return nil, err
+		// ProgramOnly：只跑纯代码规则，跳过 LLM 语义规则（HIS 标准版零 AI 成本）。
+		if !input.ProgramOnly {
+			if err := s.evaluateSemanticRules(ctx, input, rules, report); err != nil {
+				return nil, err
+			}
 		}
 	}
 	calculateReport(report)

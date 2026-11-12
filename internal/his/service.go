@@ -532,10 +532,12 @@ func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, re
 	if s.emr == nil {
 		return nil, ErrNotFound
 	}
+	// HIS 标准版：只跑纯代码质检规则，不调用 LLM（免费钩子产品零 AI 成本）。
 	outcome, err := s.emr.ManualSave(ctx, tenantID, actorID, recordID, emrrecord.ActionRequest{
 		Content:         req.Content,
 		PatientSnapshot: req.PatientSnapshot,
 		Note:            req.Note,
+		ProgramOnly:     true,
 	})
 	if err != nil {
 		return nil, err
@@ -559,6 +561,7 @@ func (s *Service) CompleteEMRRecord(ctx context.Context, tenantID, actorID int64
 		Note:             req.Note,
 		AllowNonBlocking: req.AllowNonBlocking,
 		QualityRunID:     req.QualityRunID,
+		ProgramOnly:      true,
 	})
 	needConfirm := errors.Is(err, emrrecord.ErrQualityConfirmationRequired)
 	if err != nil && !needConfirm {
@@ -1257,4 +1260,12 @@ func (s *Service) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([
 // SearchPatients 挂号查重。
 func (s *Service) SearchPatients(ctx context.Context, tenantID int64, keyword string) ([]PatientSearchRow, error) {
 	return s.store.SearchPatients(ctx, tenantID, keyword)
+}
+
+// LatestQualityReport 病历最近一次质检结果（HIS 标准版为纯代码规则结果）。
+func (s *Service) LatestQualityReport(ctx context.Context, tenantID int64, recordID string) (*QualityReportLatest, error) {
+	if strings.TrimSpace(recordID) == "" {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.LatestQualityReport(ctx, tenantID, recordID)
 }

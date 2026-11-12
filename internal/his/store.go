@@ -3817,3 +3817,41 @@ func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword stri
 	}
 	return out, rows.Err()
 }
+
+// LatestQualityReport 读取病历最近一次质检运行与逐条规则结果。
+func (s *Store) LatestQualityReport(ctx context.Context, tenantID int64, recordID string) (*QualityReportLatest, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, COALESCE(rule_set_version, ''), COALESCE(overall_result, ''), COALESCE(total_score, 0),
+		       COALESCE(grade, ''), COALESCE(blocking_count, 0), COALESCE(pending_count, 0), started_at
+		FROM emr_quality_runs
+		WHERE tenant_id = $1 AND record_id = $2
+		ORDER BY started_at DESC NULLS LAST, created_at DESC
+		LIMIT 1`, tenantID, recordID)
+	var report QualityReportLatest
+	if err := row.Scan(&report.RunID, &report.RuleSetVersion, &report.OverallResult, &report.TotalScore,
+		&report.Grade, &report.BlockingCount, &report.PendingCount, &report.StartedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(rule_code, ''), COALESCE(section_code, ''), COALESCE(result, ''),
+		       COALESCE(message, ''), COALESCE(blocking, false), COALESCE(manual_review, false)
+		FROM emr_quality_results
+		WHERE run_id = $1
+		ORDER BY blocking DESC, id`, report.RunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	report.Findings = make([]QualityFindingItem, 0)
+	for rows.Next() {
+		var item QualityFindingItem
+		if err := rows.Scan(&item.RuleCode, &item.SectionCode, &item.Result, &item.Message, &item.Blocking, &item.ManualReview); err != nil {
+			return nil, err
+		}
+		report.Findings = append(report.Findings, item)
+	}
+	return &report, rows.Err()
+}

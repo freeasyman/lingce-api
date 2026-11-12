@@ -26,6 +26,8 @@ type Context struct {
 	DoctorID     int64
 	CreatedBy    int64
 	History      []map[string]any `json:"history,omitempty"`
+	// ProgramOnly 仅执行纯代码规则（不调用 LLM），供 HIS 免费版等零 AI 成本场景使用。
+	ProgramOnly bool
 }
 
 type Evidence struct {

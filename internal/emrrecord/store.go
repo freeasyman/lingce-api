@@ -75,6 +75,32 @@ func (s *Store) GetRaw(ctx context.Context, tenantID int64, id string) (*Record,
 	return item, nil
 }
 
+// FindIDByEncounter 返回同一接诊已存在的病历 id（只读）。
+//
+// 正式草稿生成按 encounter_id 复用同一条病历：重复触发会更新同一条记录，
+// 草稿扣量幂等键也随之复用。调用方据此判断"这笔草稿是否已经扣过"。
+// 没有记录时返回空串与 nil error。
+func (s *Store) FindIDByEncounter(ctx context.Context, tenantID, encounterID int64) (string, error) {
+	if s == nil || s.pool == nil || tenantID <= 0 || encounterID <= 0 {
+		return "", nil
+	}
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM emr_records
+		WHERE tenant_id=$1 AND encounter_id=$2
+		ORDER BY created_at DESC NULLS LAST, id DESC
+		LIMIT 1
+	`, tenantID, encounterID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find emr record by encounter: %w", err)
+	}
+	return id, nil
+}
+
 func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {
 	item, err := s.GetRaw(ctx, tenantID, id)
 	if err != nil || item == nil {

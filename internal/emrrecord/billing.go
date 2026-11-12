@@ -65,6 +65,8 @@ func (e *quotaExhaustedError) Unwrap() []error {
 type billingService interface {
 	Deduct(ctx context.Context, input billing.DeductInput) (*billing.DeductResult, error)
 	CheckQuota(ctx context.Context, tenantID int64, productCode string, items []billing.DeductItem) error
+	// IsDeducted 只读查询某幂等键是否已经扣过：同一份病历重复生成时跳过预检。
+	IsDeducted(ctx context.Context, tenantID int64, idempotencyKey string) (bool, error)
 }
 
 // UseBilling 给完成病历（提交）接入计费扣量。
@@ -136,6 +138,12 @@ func draftBillingItems(seconds int64) []billing.DeductItem {
 	return items
 }
 
+// draftIdempotencyKey 是病历草稿生成的固定幂等键：同一份病历无论走正式生成
+// 还是实验增量，都只扣一次。
+func draftIdempotencyKey(recordID string) string {
+	return fmt.Sprintf("emr:record:%s:draft", strings.TrimSpace(recordID))
+}
+
 // draftDeductionInput 组装草稿生成的扣量请求，幂等键固定为
 // emr:record:<recordID>:draft（同一病历重复生成不会被扣两次）。
 func draftDeductionInput(tenantID int64, recordID string, seconds int64) billing.DeductInput {
@@ -143,7 +151,7 @@ func draftDeductionInput(tenantID int64, recordID string, seconds int64) billing
 		TenantID:       tenantID,
 		ProductCode:    billingProductCode,
 		Items:          draftBillingItems(seconds),
-		IdempotencyKey: fmt.Sprintf("emr:record:%s:draft", strings.TrimSpace(recordID)),
+		IdempotencyKey: draftIdempotencyKey(recordID),
 		Reason:         billingReasonDraft,
 	}
 }
@@ -183,6 +191,57 @@ func (h *InternalHandler) ensureDraftQuota(ctx context.Context, tenantID, record
 		return err
 	}
 	return nil
+}
+
+// draftAlreadyDeducted 只读查询该病历的草稿扣量幂等键是否已经落账。
+//
+// 查询失败时返回 false，交回原有预检流程（预检自身对计费故障 fail-open），
+// 不能因为只读查询故障直接放行或阻断病历生成。
+func (h *InternalHandler) draftAlreadyDeducted(ctx context.Context, tenantID int64, recordID string) bool {
+	if h == nil || h.billing == nil || strings.TrimSpace(recordID) == "" {
+		return false
+	}
+	key := draftIdempotencyKey(recordID)
+	deducted, err := h.billing.IsDeducted(ctx, tenantID, key)
+	if err != nil {
+		slog.Warn("emr draft idempotency lookup failed, falling back to quota precheck",
+			"tenant_id", tenantID, "record_id", recordID, "idempotency_key", key, "error", err)
+		return false
+	}
+	return deducted
+}
+
+// ensureDraftQuotaForRecord 是已知病历 id 时的草稿生成闸门：
+// 同一份病历的草稿扣量（emr:record:<id>:draft）已经落账时，本次生成不会再扣量，
+// 跳过预检直接放行；否则按录音时长走正常预检。
+//
+// 适用于"同一交付重复触发"：实验增量草稿（record 已存在）、正式草稿生成对同一接诊
+// 的重复触发（生成按 encounter_id 复用同一条病历），都不会再产生新的扣量。
+func (h *InternalHandler) ensureDraftQuotaForRecord(ctx context.Context, tenantID, recordingID int64, recordID string) error {
+	if h == nil || h.billing == nil {
+		return nil
+	}
+	if h.draftAlreadyDeducted(ctx, tenantID, recordID) {
+		slog.Info("emr draft already deducted, skipping quota precheck",
+			"tenant_id", tenantID, "recording_id", recordingID, "record_id", recordID)
+		return nil
+	}
+	return h.ensureDraftQuota(ctx, tenantID, recordingID)
+}
+
+// existingDraftRecordID 返回同一接诊已存在的病历 id：正式生成按 encounter_id
+// 复用同一条病历。查不到或存储未接入时返回空串，调用方仍走正常预检。
+func (h *InternalHandler) existingDraftRecordID(ctx context.Context, tenantID, encounterID int64) string {
+	if h == nil || h.billing == nil || h.recordStore == nil {
+		return ""
+	}
+	recordID, err := h.recordStore.FindIDByEncounter(ctx, tenantID, encounterID)
+	if err != nil {
+		slog.Warn("emr existing draft lookup failed, falling back to quota precheck",
+			"tenant_id", tenantID, "encounter_id", encounterID, "error", err)
+		return ""
+	}
+	return recordID
 }
 
 // writeQuotaExhausted 用本模块既有的错误响应格式返回额度不足：
