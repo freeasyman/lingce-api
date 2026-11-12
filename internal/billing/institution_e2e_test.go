@@ -188,6 +188,7 @@ func (e *billingTestEnv) cleanup() {
 		exec(`DELETE FROM billing_payment_allocations WHERE order_id IN (SELECT id FROM billing_orders WHERE tenant_id = $1)`, tenantID)
 		exec(`DELETE FROM entitlement_ledger WHERE tenant_id = $1`, tenantID)
 		exec(`DELETE FROM product_entitlements WHERE tenant_id = $1`, tenantID)
+		exec(`DELETE FROM tenant_documents WHERE tenant_id = $1`, tenantID)
 		exec(`DELETE FROM billing_orders WHERE tenant_id = $1`, tenantID)
 		exec(`DELETE FROM subscription_periods WHERE tenant_id = $1`, tenantID)
 		exec(`DELETE FROM tenant_departments WHERE tenant_id = $1`, tenantID)

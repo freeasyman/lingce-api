@@ -123,7 +123,16 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 		return nil, err
 	}
 
+	documents, err := s.store.ListDocumentsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
 	item := buildInstitution(base, departments[tenantID], groupEntitlementRows(entitlementRows)[tenantID])
+	item.Documents = make([]InstitutionDocument, 0, len(documents))
+	for _, doc := range documents {
+		item.Documents = append(item.Documents, institutionDocumentOf(doc))
+	}
 	item.Admins = admins
 	item.Receivables = receivables
 	item.PayLogs = payLogs

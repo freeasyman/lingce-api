@@ -20,7 +20,9 @@ func NewModule(pool *pgxpool.Pool) *Module {
 	store := NewStore(pool)
 	service := NewService(store)
 	handler := NewHandler(service)
-	handler.institutions = NewInstitutionService(service, store, tenant.NewStore(pool))
+	institutions := NewInstitutionService(service, store, tenant.NewStore(pool))
+	handler.institutions = institutions
+	handler.documents = NewDocumentService(institutions, store)
 	return &Module{handler: handler}
 }
 

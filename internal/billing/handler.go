@@ -30,6 +30,8 @@ const maxDeductBodyBytes = 1 << 20
 type Handler struct {
 	service      *Service
 	institutions *InstitutionService
+	// documents 是开通通知函/服务开通确认函的生成、列表与下载；未装配时不注册对应路由。
+	documents *DocumentService
 }
 
 // NewHandler 构造 HTTP handler。

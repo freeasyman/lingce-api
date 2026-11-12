@@ -25,6 +25,7 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 		{"code conflict", ErrInstitutionCodeConflict, http.StatusConflict, "INSTITUTION_CODE_USED"},
 		{"not found", ErrInstitutionNotFound, http.StatusNotFound, "INSTITUTION_NOT_FOUND"},
 		{"payment not found", ErrPaymentNotFound, http.StatusNotFound, "PAYMENT_NOT_FOUND"},
+		{"document not found", ErrDocumentNotFound, http.StatusNotFound, "DOCUMENT_NOT_FOUND"},
 		{"peer not found", ErrPeerNotFound, http.StatusNotFound, "NOT_FOUND"},
 		{"allocation conflict", ErrAllocationConflict, http.StatusConflict, "ALLOCATION_CONFLICT"},
 		{"order not allocatable", ErrOrderNotAllocatable, http.StatusConflict, "ORDER_NOT_ALLOCATABLE"},
@@ -64,8 +65,8 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 func TestInstitutionRouteRegistration(t *testing.T) {
 	h := &Handler{}
 	routes := h.institutionRoutes()
-	if len(routes) != 30 {
-		t.Fatalf("institutionRoutes 数量 = %d, want 30", len(routes))
+	if len(routes) != 33 {
+		t.Fatalf("institutionRoutes 数量 = %d, want 33", len(routes))
 	}
 	seen := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
@@ -100,6 +101,9 @@ func TestInstitutionRouteRegistration(t *testing.T) {
 		"POST /api/v1/ops/billing/institutions/{id}/ownerships",
 		"PUT /api/v1/ops/billing/institutions/{id}/ownerships/{ownership_id}",
 		"POST /api/v1/ops/billing/institutions/{id}/ownerships/{ownership_id}/close",
+		"POST /api/v1/ops/billing/institutions/{id}/documents",
+		"GET /api/v1/ops/billing/institutions/{id}/documents",
+		"GET /api/v1/ops/billing/documents/{docId}/file",
 		"GET /api/v1/ops/billing/institutions/{id}/periods",
 		"POST /api/v1/ops/billing/institutions/{id}/periods",
 		"PUT /api/v1/ops/billing/institutions/{id}/periods/{period_id}",

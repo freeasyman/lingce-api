@@ -49,6 +49,10 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/ownerships", h.CreateInstitutionOwnership),
 		ops("PUT", institution+"/{id}/ownerships/{ownership_id}", h.UpdateInstitutionOwnership),
 		ops("POST", institution+"/{id}/ownerships/{ownership_id}/close", h.CloseInstitutionOwnership),
+		// 通知函（文档留档 + PDF 下载）
+		ops("POST", institution+"/{id}/documents", h.GenerateInstitutionDocument),
+		ops("GET", institution+"/{id}/documents", h.ListInstitutionDocuments),
+		ops("GET", base+"/documents/{docId}/file", h.DownloadBillingDocument),
 		// 服务期
 		ops("GET", institution+"/{id}/periods", h.ListInstitutionPeriods),
 		ops("POST", institution+"/{id}/periods", h.CreateInstitutionPeriod),
@@ -724,6 +728,8 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusNotFound, "INSTITUTION_NOT_FOUND", "机构不存在", nil)
 	case errors.Is(err, ErrPaymentNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "收款单不存在", nil)
+	case errors.Is(err, ErrDocumentNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "DOCUMENT_NOT_FOUND", "文档不存在", nil)
 	case errors.Is(err, ErrPeerNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "记录不存在", nil)
 	case errors.Is(err, ErrInstitutionPhoneConflict):

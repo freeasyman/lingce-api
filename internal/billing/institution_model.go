@@ -204,12 +204,17 @@ type InstitutionLog struct {
 	What string `json:"what"`
 }
 
-// InstitutionDocument 是文档记录（本轮不做，接口保留空数组）。
+// InstitutionDocument 是机构档案「文档记录」里的一行（tenant_documents 的读模型）。
+// Kind 沿用前端契约的 trial / formal；DocType 是落库值 trial_notice / service_confirm。
 type InstitutionDocument struct {
-	No   string `json:"no"`
-	Kind string `json:"kind"`
-	At   string `json:"at"`
-	By   string `json:"by"`
+	ID          int64  `json:"id"`
+	No          string `json:"no"`
+	Kind        string `json:"kind"`
+	DocType     string `json:"docType"`
+	At          string `json:"at"`
+	GeneratedAt string `json:"generatedAt"`
+	By          string `json:"by"`
+	FileSize    int64  `json:"fileSize"`
 }
 
 // Institution 是机构档案，字段与 billingMock.ts 的 Institution 一致。

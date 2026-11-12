@@ -14,6 +14,8 @@
 name = "lingce-api"
 env = "test"
 secrets_file = "./secrets.billing-test.toml"
+# 仅本机测试：HTTP 验收脚本登录用的固定验证码（生产配置不要设置）。
+test_captcha_code = "8888"
 
 [server]
 port = "18099"
