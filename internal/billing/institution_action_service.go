@@ -335,6 +335,17 @@ func (s *InstitutionService) ActivateFormal(ctx context.Context, tenantID int64,
 		return nil, err
 	}
 
+	// 试用转正式：先作废这些产品的试用额度（界面与通知函都承诺"试用额度作废"）。
+	if req.FromTrial {
+		codes := make([]string, 0, len(products))
+		for _, product := range products {
+			codes = append(codes, product.Code)
+		}
+		if err := s.store.clearTrialEntitlementsTx(ctx, tx, tenantID, codes, operator); err != nil {
+			return nil, err
+		}
+	}
+
 	reason := s.activationReason(req) + "（订单 " + order.OrderNo + "）"
 	for _, product := range products {
 		grants := s.activationGrants(product, req.FromTrial && req.GiftNewcomer)

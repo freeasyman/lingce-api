@@ -220,6 +220,76 @@ WHERE tenant_id = $1
 // ---------------------------------------------------------------------------
 
 // lockActivePeriodTx 锁住当前 active 服务期；没有返回 (nil, nil)。
+// clearTrialEntitlementsTx 把指定产品的试用额度作废（granted/used/rollover/balance 归零，
+// 状态 cleared），并写一条 usage/trial_cleared 流水记录作废前的余额。
+//
+// 用于「试用转正式」：界面与通知函都承诺「试用额度作废、发放全新一年正式额度」，
+// 但如果只发正式额度、不关试用额度行，扣量会先吃试用（结转→试用→正式），
+// 客户实际拿到的额度多于承诺，且通知函上的数字对不上。
+func (s *Store) clearTrialEntitlementsTx(ctx context.Context, tx pgx.Tx, tenantID int64,
+	productCodes []string, operator string) error {
+	if len(productCodes) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+SELECT product_code, unit, balance
+FROM product_entitlements
+WHERE tenant_id = $1
+  AND quota_type = 'trial'
+  AND status = 'active'
+  AND product_code = ANY($2)
+FOR UPDATE`, tenantID, productCodes)
+	if err != nil {
+		return err
+	}
+	type trialRow struct {
+		productCode string
+		unit        string
+		balance     string
+	}
+	var cleared []trialRow
+	for rows.Next() {
+		var r trialRow
+		if err := rows.Scan(&r.productCode, &r.unit, &r.balance); err != nil {
+			rows.Close()
+			return err
+		}
+		cleared = append(cleared, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(cleared) == 0 {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+UPDATE product_entitlements
+SET granted = 0,
+    used = 0,
+    rollover_bal = 0,
+    balance = 0,
+    status = 'cleared',
+    updated_at = NOW()
+WHERE tenant_id = $1
+  AND quota_type = 'trial'
+  AND status = 'active'
+  AND product_code = ANY($2)`, tenantID, productCodes); err != nil {
+		return err
+	}
+
+	for _, r := range cleared {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO entitlement_ledger (tenant_id, product_code, unit, type, amount, source, reason, operator)
+VALUES ($1, $2, $3, 'usage', $4::numeric * -1, 'expired', '试用转正式：试用额度作废', $5)`,
+			tenantID, r.productCode, r.unit, r.balance, operator); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) LockActivePeriodTx(ctx context.Context, tx pgx.Tx, tenantID int64) (*periodRow, error) {
 	item, err := scanPeriod(tx.QueryRow(ctx, periodSelect+`
 WHERE tenant_id = $1 AND status = 'active'
