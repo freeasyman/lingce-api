@@ -1128,3 +1128,8 @@ func (s *Service) DefaultRoleModules(ctx context.Context, tenantID int64) (map[s
 func (s *Service) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]EmployeeWithRoles, error) {
 	return s.store.ListEmployeesWithRoles(ctx, tenantID)
 }
+
+// SearchPatients 挂号查重。
+func (s *Service) SearchPatients(ctx context.Context, tenantID int64, keyword string) ([]PatientSearchRow, error) {
+	return s.store.SearchPatients(ctx, tenantID, keyword)
+}

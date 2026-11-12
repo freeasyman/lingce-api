@@ -3541,3 +3541,29 @@ func (s *Store) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]E
 	}
 	return out, rows.Err()
 }
+
+// SearchPatients 挂号查重：手机号 / 姓名模糊匹配，返回客户与病案号。
+func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword string) ([]PatientSearchRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0),
+		       COALESCE(pi.value, '')
+		FROM customers c
+		LEFT JOIN patient_identifiers pi
+		  ON pi.tenant_id = c.tenant_id AND pi.customer_id = c.id AND pi.identifier_type = 'mrn'
+		WHERE c.tenant_id = $1 AND (c.phone ILIKE $2 OR c.name ILIKE $2)
+		ORDER BY c.id DESC
+		LIMIT 10`, tenantID, "%"+keyword+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PatientSearchRow, 0)
+	for rows.Next() {
+		var row PatientSearchRow
+		if err := rows.Scan(&row.ID, &row.Name, &row.Phone, &row.Gender, &row.Age, &row.MRN); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

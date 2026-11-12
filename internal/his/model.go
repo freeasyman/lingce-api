@@ -832,3 +832,13 @@ type EmployeeWithRoles struct {
 	Prescribe bool     `json:"is_prescribing"`
 	Doctor    string   `json:"doctor_status,omitempty"`
 }
+
+// PatientSearchRow 挂号查重结果（客户 + 病案号）。
+type PatientSearchRow struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Phone  string `json:"phone"`
+	Gender string `json:"gender"`
+	Age    int    `json:"age"`
+	MRN    string `json:"mrn"`
+}

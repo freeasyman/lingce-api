@@ -190,6 +190,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 患者建档与病案号
 		{Method: "POST", Path: "/api/v1/his/patients/register", Handler: h.RegisterPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/patients/search", Handler: h.SearchPatients, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/identifiers", Handler: h.ListPatientIdentifiers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 排班与号源
@@ -1909,6 +1910,26 @@ func (h *Handler) ListMasterEmployees(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("his: list master employees", "error", err)
 		httputil.WriteInternalError(w, "failed to load employees")
+		return
+	}
+	httputil.WriteSuccess(w, rows)
+}
+
+// SearchPatients 挂号查重（手机号/姓名）。
+func (h *Handler) SearchPatients(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	keyword := strings.TrimSpace(r.URL.Query().Get("keyword"))
+	if keyword == "" {
+		httputil.WriteSuccess(w, []PatientSearchRow{})
+		return
+	}
+	rows, err := h.service.SearchPatients(r.Context(), tenantID, keyword)
+	if err != nil {
+		slog.Error("his: search patients", "error", err)
+		httputil.WriteInternalError(w, "failed to search patients")
 		return
 	}
 	httputil.WriteSuccess(w, rows)
