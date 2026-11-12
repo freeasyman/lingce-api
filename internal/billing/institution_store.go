@@ -72,7 +72,11 @@ LEFT JOIN LATERAL (
     SELECT sp.id, sp.status, sp.started_on, sp.expired_on
     FROM subscription_periods sp
     WHERE sp.tenant_id = t.id
-    ORDER BY (sp.status = 'active') DESC, sp.expired_on DESC, sp.id DESC
+    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated。
+    -- 只按 expired_on 排序会把已终止的试用期排在正式期前面，
+    -- 导致到期后的机构被判成「未开通」、到期日也显示成试用期的日期。
+    ORDER BY (sp.status = 'active') DESC, (sp.status = 'expired') DESC,
+             sp.expired_on DESC, sp.id DESC
     LIMIT 1
 ) p ON TRUE
 LEFT JOIN tenant_ownerships ow ON ow.tenant_id = t.id AND ow.effective_to IS NULL
@@ -870,7 +874,8 @@ FROM subscription_periods
 func (s *Store) ListPeriodRows(ctx context.Context, tenantID int64) ([]periodRow, error) {
 	rows, err := s.pool.Query(ctx, periodSelect+`
 WHERE tenant_id = $1
-ORDER BY (status = 'active') DESC, started_on DESC, id DESC`, tenantID)
+ORDER BY (status = 'active') DESC, (status = 'expired') DESC,
+         expired_on DESC, id DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list subscription periods: %w", err)
 	}
