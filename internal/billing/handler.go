@@ -24,7 +24,13 @@ const maxCatalogBodyBytes = 1 << 20
 const maxDeductBodyBytes = 1 << 20
 
 // Handler 暴露计费查询接口与运营端订单接口（价目表新增版本、录单、回款、开通、退款是写入口）。
-type Handler struct{ service *Service }
+//
+// institutions 是运营端计费第 1 阶段新增的机构/收款/字典能力；为 nil 时（既有单测直接
+// NewHandler(service)）不注册这批路由，保持原有用例不受影响。
+type Handler struct {
+	service      *Service
+	institutions *InstitutionService
+}
 
 // NewHandler 构造 HTTP handler。
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
@@ -40,6 +46,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/ops/entitlement-ledger/export", Handler: h.ExportLedger, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	routes = append(routes, h.orderRoutes()...)
+	if h.institutions != nil {
+		routes = append(routes, h.institutionRoutes()...)
+	}
 	routes = append(routes, h.internalRoutes()...)
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret, InternalToken: strings.TrimSpace(internalToken)})
 }

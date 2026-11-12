@@ -1,0 +1,764 @@
+package billing
+
+// 运营端计费 HTTP 接口：机构档案、开通/加量/赠送/续期/加产品/延长试用、收款核销、
+// 价目与套餐、渠道与销售、行业与科室字典。
+//
+// 路径沿用仓库既有风格 /api/v1/ops/...；全部只允许运营账号（admin）。
+// 数据权限（只能看自己组织名下的租户）在 service 层按 JWT 里的运营账号 id 校验。
+// 响应沿用仓库既有封装：成功 {"data": ...}，失败 {"code","message","details"}；
+// 前端 billingService.ts 的 invalid/conflict/not_found 分别对应 HTTP 400/409/404。
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/pkg/httputil"
+)
+
+// maxInstitutionBodyBytes 限制机构相关请求体大小（一单最多几十行产品，1MB 足够）。
+const maxInstitutionBodyBytes = 1 << 20
+
+// institutionRoutes 是运营端计费第 1 阶段的全部路由。
+func (h *Handler) institutionRoutes() []router.Route {
+	ops := func(method, path string, handler http.HandlerFunc) router.Route {
+		return router.Route{Method: method, Path: path, Handler: handler, Auth: true, AllowedUserTypes: []string{"admin"}}
+	}
+	base := "/api/v1/ops/billing"
+	institution := base + "/institutions"
+	return []router.Route{
+		// 机构档案
+		ops("GET", institution, h.ListInstitutions),
+		ops("POST", institution, h.CreateInstitution),
+		ops("GET", institution+"/{id}", h.GetInstitution),
+		// 机构动作
+		ops("POST", institution+"/{id}/activate-formal", h.ActivateFormalInstitution),
+		ops("POST", institution+"/{id}/activate-trial", h.ActivateTrialInstitution),
+		ops("POST", institution+"/{id}/increments", h.AddInstitutionIncrement),
+		ops("POST", institution+"/{id}/gifts", h.GiftInstitutionIncrement),
+		ops("POST", institution+"/{id}/renew", h.RenewInstitution),
+		ops("POST", institution+"/{id}/products", h.AddInstitutionProduct),
+		ops("POST", institution+"/{id}/extend-trial", h.ExtendInstitutionTrial),
+		ops("POST", institution+"/{id}/payments", h.ReceiveInstitutionPayment),
+		// 归属
+		ops("GET", institution+"/{id}/ownerships", h.ListInstitutionOwnerships),
+		ops("POST", institution+"/{id}/ownerships", h.CreateInstitutionOwnership),
+		ops("PUT", institution+"/{id}/ownerships/{ownership_id}", h.UpdateInstitutionOwnership),
+		ops("POST", institution+"/{id}/ownerships/{ownership_id}/close", h.CloseInstitutionOwnership),
+		// 服务期
+		ops("GET", institution+"/{id}/periods", h.ListInstitutionPeriods),
+		ops("POST", institution+"/{id}/periods", h.CreateInstitutionPeriod),
+		ops("PUT", institution+"/{id}/periods/{period_id}", h.UpdateInstitutionPeriod),
+		// 价目 / 渠道 / 字典
+		ops("GET", base+"/pricing", h.GetBillingPricing),
+		ops("GET", base+"/channels", h.GetBillingChannels),
+		ops("POST", base+"/channels", h.SaveBillingChannel),
+		ops("POST", base+"/sales", h.SaveBillingSales),
+		ops("GET", base+"/dictionaries", h.GetBillingDictionaries),
+		ops("POST", base+"/dictionaries/{kind}/items", h.CreateBillingDictItem),
+		ops("PUT", base+"/dictionaries/{kind}/items/{id}", h.UpdateBillingDictItem),
+		ops("POST", base+"/dictionaries/{kind}/items/{id}/toggle", h.ToggleBillingDictItem),
+		// 财务：收款单 + 核销
+		ops("GET", base+"/payments", h.ListBillingPayments),
+		ops("POST", base+"/payments", h.CreateBillingPayment),
+		ops("POST", base+"/payments/{id}/allocations", h.AllocateBillingPayment),
+		// 开票记录本轮不做：入口保留，返回空列表，前端页面不至于报错。
+		ops("GET", base+"/invoices", h.ListBillingInvoices),
+	}
+}
+
+// ListInstitutions 机构列表：?filter=all|unopened|expiring|expired|unpaid|trial&keyword=。
+func (h *Handler) ListInstitutions(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	result, err := h.institutions.ListInstitutions(r.Context(), InstitutionQuery{
+		Filter:  query.Get("filter"),
+		Keyword: query.Get("keyword"),
+	}, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// GetInstitution 机构详情。
+func (h *Handler) GetInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.institutions.GetInstitutionForAdmin(r.Context(), tenantID, adminID)
+	if err != nil {
+		// 与 billingService.getInstitution 的契约一致：机构不存在时返回 {item: null}，不抛错。
+		if errors.Is(err, ErrInstitutionNotFound) {
+			httputil.WriteSuccess(w, InstitutionDetailResult{Item: nil, IsMock: false})
+			return
+		}
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionDetailResult{Item: item, IsMock: false})
+}
+
+// CreateInstitution 机构建档（只建档案 + 主管理员，不涉及产品与钱）。
+func (h *Handler) CreateInstitution(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CreateInstitutionRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CreateInstitution(r.Context(), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ActivateFormalInstitution 正式开通。
+func (h *Handler) ActivateFormalInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req FormalActivationRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.ActivateFormal(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ActivateTrialInstitution 试用开通。
+func (h *Handler) ActivateTrialInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req TrialActivationRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.ActivateTrial(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// AddInstitutionIncrement 加量。
+func (h *Handler) AddInstitutionIncrement(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req IncrementRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.AddIncrement(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// GiftInstitutionIncrement 赠送增量包。
+func (h *Handler) GiftInstitutionIncrement(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req GiftIncrementRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.GiftIncrement(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// RenewInstitution 续期。
+func (h *Handler) RenewInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req RenewRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.RenewInstitution(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// AddInstitutionProduct 加产品。
+func (h *Handler) AddInstitutionProduct(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req AddProductRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.AddProduct(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ExtendInstitutionTrial 延长试用。
+func (h *Handler) ExtendInstitutionTrial(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req ExtendTrialRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.ExtendTrial(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ReceiveInstitutionPayment 机构维度收款（自动核销最早应收）。
+func (h *Handler) ReceiveInstitutionPayment(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req ReceivePaymentRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.ReceiveInstitutionPayment(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ListInstitutionOwnerships 归属历史。
+func (h *Handler) ListInstitutionOwnerships(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListOwnerships(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// CreateInstitutionOwnership 新增归属。
+func (h *Handler) CreateInstitutionOwnership(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req OwnershipPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CreateOwnership(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// UpdateInstitutionOwnership 修改归属。
+func (h *Handler) UpdateInstitutionOwnership(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	ownershipID, ok := requirePathID(w, r, "ownership_id", "Invalid ownership ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req OwnershipPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.UpdateOwnership(r.Context(), tenantID, ownershipID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// CloseInstitutionOwnership 关闭归属。
+func (h *Handler) CloseInstitutionOwnership(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	ownershipID, ok := requirePathID(w, r, "ownership_id", "Invalid ownership ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req OwnershipClosePayload
+	if err := decodeInstitutionBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CloseOwnership(r.Context(), tenantID, ownershipID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ListInstitutionPeriods 服务期历史。
+func (h *Handler) ListInstitutionPeriods(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListSubscriptionPeriods(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// CreateInstitutionPeriod 手工补录服务期。
+func (h *Handler) CreateInstitutionPeriod(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req SubscriptionPeriodPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CreateSubscriptionPeriod(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// UpdateInstitutionPeriod 调整服务期。
+func (h *Handler) UpdateInstitutionPeriod(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	periodID, ok := requirePathID(w, r, "period_id", "Invalid period ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req SubscriptionPeriodPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.UpdateSubscriptionPeriod(r.Context(), tenantID, periodID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// GetBillingPricing 产品与价格。
+func (h *Handler) GetBillingPricing(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.institutions.GetPricing(r.Context())
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, payload)
+}
+
+// GetBillingChannels 渠道与销售目录。
+func (h *Handler) GetBillingChannels(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.institutions.GetChannelDirectory(r.Context())
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, payload)
+}
+
+// SaveBillingChannel 新增/修改渠道。
+func (h *Handler) SaveBillingChannel(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req ChannelPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.SaveChannel(r.Context(), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// SaveBillingSales 新增/修改销售。
+func (h *Handler) SaveBillingSales(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req SalesPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.SaveSales(r.Context(), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// GetBillingDictionaries 行业与科室字典。
+func (h *Handler) GetBillingDictionaries(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.institutions.GetDictionaries(r.Context())
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, payload)
+}
+
+// CreateBillingDictItem 新增字典项。
+func (h *Handler) CreateBillingDictItem(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req DictItemPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.ID = 0
+	item, err := h.institutions.SaveDictItem(r.Context(), r.PathValue("kind"), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// UpdateBillingDictItem 修改字典项。
+func (h *Handler) UpdateBillingDictItem(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	itemID, ok := requirePathID(w, r, "id", "Invalid dict item ID")
+	if !ok {
+		return
+	}
+	var req DictItemPayload
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.ID = itemID
+	item, err := h.institutions.SaveDictItem(r.Context(), r.PathValue("kind"), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ToggleBillingDictItem 启停字典项。
+func (h *Handler) ToggleBillingDictItem(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	itemID, ok := requirePathID(w, r, "id", "Invalid dict item ID")
+	if !ok {
+		return
+	}
+	item, err := h.institutions.ToggleDictItem(r.Context(), r.PathValue("kind"), itemID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ListBillingPayments 收款单列表。
+func (h *Handler) ListBillingPayments(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.institutions.ListPayments(r.Context(), adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// CreateBillingPayment 新建收款单（可同时核销多租户多订单）。
+func (h *Handler) CreateBillingPayment(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CreatePaymentRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	result, err := h.institutions.CreatePayment(r.Context(), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// AllocateBillingPayment 给已有收款单追加核销。
+func (h *Handler) AllocateBillingPayment(w http.ResponseWriter, r *http.Request) {
+	paymentID, ok := requirePathID(w, r, "id", "Invalid payment ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CreatePaymentRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	result, err := h.institutions.AllocatePayment(r.Context(), paymentID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// ListBillingInvoices 开票记录（本轮不做，返回空列表保持前端可用）。
+func (h *Handler) ListBillingInvoices(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteSuccess(w, map[string]any{
+		"items":   []any{},
+		"isMock":  false,
+		"pending": "开票记录将在后续阶段实现",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// 请求解析与错误映射
+// ---------------------------------------------------------------------------
+
+// decodeInstitutionBody 解析 JSON 请求体（限制大小）。
+func decodeInstitutionBody(r *http.Request, dst any) error {
+	if r.Body == nil {
+		return io.EOF
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxInstitutionBodyBytes))
+	return decoder.Decode(dst)
+}
+
+// requireInstitutionID 解析路径里的机构 id（复用 {id} 参数）。
+func requireInstitutionID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	return requirePathID(w, r, "id", "Invalid institution ID")
+}
+
+// requirePathID 解析路径参数为字符串形式的正整数 id。
+func requirePathID(w http.ResponseWriter, r *http.Request, name, message string) (int64, bool) {
+	value, err := strconv.ParseInt(strings.TrimSpace(r.PathValue(name)), 10, 64)
+	if err != nil || value <= 0 {
+		httputil.WriteBadRequest(w, message)
+		return 0, false
+	}
+	return value, true
+}
+
+// writeInstitutionError 把新接口的错误映射成 HTTP 状态码：
+// invalid=400 / conflict=409 / not_found=404，其余沿用既有计费错误映射。
+func writeInstitutionError(w http.ResponseWriter, err error) {
+	var permission *PermissionError
+	if errors.As(err, &permission) {
+		httputil.WriteError(w, http.StatusForbidden, "FORBIDDEN", permission.Message, nil)
+		return
+	}
+	var conflict *ConflictError
+	if errors.As(err, &conflict) {
+		httputil.WriteError(w, http.StatusConflict, conflictCode(conflict.Sentinel), conflict.Message, nil)
+		return
+	}
+
+	switch {
+	case errors.Is(err, ErrNoPermission):
+		httputil.WriteError(w, http.StatusForbidden, "FORBIDDEN", "没有该机构的数据权限", nil)
+	case errors.Is(err, ErrAdminScopeMissing):
+		httputil.WriteError(w, http.StatusForbidden, "ADMIN_SCOPE_MISSING", "当前账号未配置归属组织，无法查看机构", nil)
+	case errors.Is(err, ErrInstitutionNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "INSTITUTION_NOT_FOUND", "机构不存在", nil)
+	case errors.Is(err, ErrPaymentNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "收款单不存在", nil)
+	case errors.Is(err, ErrPeerNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "记录不存在", nil)
+	case errors.Is(err, ErrInstitutionPhoneConflict):
+		httputil.WriteError(w, http.StatusConflict, "INSTITUTION_PHONE_USED", "该手机号已被使用", nil)
+	case errors.Is(err, ErrInstitutionCodeConflict):
+		httputil.WriteError(w, http.StatusConflict, "INSTITUTION_CODE_USED", "机构代码已被使用", nil)
+	case errors.Is(err, ErrProductAlreadyActive):
+		httputil.WriteError(w, http.StatusConflict, "PRODUCT_ALREADY_ACTIVE", "该机构已有此产品，请用「加量」", nil)
+	case errors.Is(err, ErrProductNotActive):
+		httputil.WriteError(w, http.StatusConflict, "PRODUCT_NOT_ACTIVE", "该机构还没有此产品，请先开通或加产品", nil)
+	case errors.Is(err, ErrInstitutionNotOpened):
+		httputil.WriteError(w, http.StatusConflict, "INSTITUTION_NOT_OPENED", "机构尚未开通或已过期", nil)
+	case errors.Is(err, ErrPeerConflict):
+		httputil.WriteError(w, http.StatusConflict, "CONFLICT", "记录冲突，请刷新后重试", nil)
+	case errors.Is(err, ErrAllocationConflict):
+		httputil.WriteError(w, http.StatusConflict, "ALLOCATION_CONFLICT", "该收款单已核销过此订单（金额与本次不一致）", nil)
+	case errors.Is(err, ErrOrderNotAllocatable):
+		httputil.WriteError(w, http.StatusConflict, "ORDER_NOT_ALLOCATABLE", "订单当前状态不允许核销", nil)
+	case errors.Is(err, ErrPeriodWindowInvalid):
+		httputil.WriteError(w, http.StatusBadRequest, "PERIOD_WINDOW_INVALID", "服务期到期日不能早于开始日", nil)
+	case errors.Is(err, ErrBundleMismatch):
+		httputil.WriteError(w, http.StatusBadRequest, "BUNDLE_MISMATCH", "套餐与勾选的产品不一致", nil)
+	default:
+		writeBillingError(w, err)
+	}
+}
+
+// conflictCode 给带提示的冲突补一个稳定的错误码。
+func conflictCode(sentinel error) string {
+	switch {
+	case errors.Is(sentinel, ErrInstitutionPhoneConflict):
+		return "INSTITUTION_PHONE_USED"
+	case errors.Is(sentinel, ErrInstitutionCodeConflict):
+		return "INSTITUTION_CODE_USED"
+	default:
+		return "CONFLICT"
+	}
+}

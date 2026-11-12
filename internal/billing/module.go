@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/tenant"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -12,8 +13,15 @@ import (
 type Module struct{ handler *Handler }
 
 // NewModule 用连接池装配 store → service → handler。
+//
+// 运营端机构能力复用同一套计费 store；建档时通过 tenant.Store 走既有的
+// 「建租户 + 建主管理员 + 初始化角色/科室」路径，避免两套建档逻辑漂移。
 func NewModule(pool *pgxpool.Pool) *Module {
-	return &Module{handler: NewHandler(NewService(NewStore(pool)))}
+	store := NewStore(pool)
+	service := NewService(store)
+	handler := NewHandler(service)
+	handler.institutions = NewInstitutionService(service, store, tenant.NewStore(pool))
+	return &Module{handler: handler}
 }
 
 // RegisterRoutes 注册计费模块的全部 HTTP 路由。

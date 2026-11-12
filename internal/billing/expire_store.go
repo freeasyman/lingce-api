@@ -98,6 +98,17 @@ func (s *Store) ExpireTenant(ctx context.Context, tenantID int64, today string) 
 		return 0, nil
 	}
 
+	// 同步运营端计费的服务期表：到期任务把 active 服务期也关成 expired，
+	// 保证「机构列表的状态/到期筛选」与新表口径一致（tenant_subscriptions 仍是历史来源）。
+	if _, err := tx.Exec(ctx, `
+UPDATE subscription_periods
+SET status = 'expired', updated_at = NOW()
+WHERE tenant_id = $1
+  AND status = 'active'
+  AND expired_on < $2::date`, tenantID, today); err != nil {
+		return 0, fmt.Errorf("mark subscription period expired: %w", err)
+	}
+
 	rows, err := lockTenantEntitlements(ctx, tx, tenantID)
 	if err != nil {
 		return 0, err
