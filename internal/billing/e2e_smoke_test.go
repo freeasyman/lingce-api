@@ -153,14 +153,18 @@ func (f *smokeFlow) run() {
 	// ---------- 5. 幂等 ----------
 	f.section("幂等：同一 idempotency_key 重复扣只扣一次")
 	ledgerBefore := len(f.ledger())
-	if _, err := f.svc.Deduct(f.ctx, billing.DeductInput{
+	replay, err := f.svc.Deduct(f.ctx, billing.DeductInput{
 		TenantID:       f.tenantID,
 		ProductCode:    f.product,
 		Items:          []billing.DeductItem{{Unit: "record", Amount: 1}, {Unit: "hour", Amount: 2}},
 		IdempotencyKey: hookKey,
 		Reason:         "听写病历-病历草稿生成",
-	}); !errors.Is(err, billing.ErrAlreadyDeducted) {
-		t.Fatalf("重复扣应返回 ErrAlreadyDeducted，实际: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("重复扣应幂等成功（返回首次结果），实际: %v", err)
+	}
+	if !replay.Replayed {
+		t.Fatalf("重复扣应标记 Replayed=true，实际 %+v", replay)
 	}
 	if got := len(f.ledger()); got != ledgerBefore {
 		t.Fatalf("重复扣不应新增流水: before=%d after=%d", ledgerBefore, got)

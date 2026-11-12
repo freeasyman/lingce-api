@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -258,4 +259,74 @@ func scanEntitlementRow(scan func(dest ...any) error) (Entitlement, error) {
 	item.RolloverBal = Decimal(rolloverBal)
 	item.Balance = Decimal(balance)
 	return item, nil
+}
+
+// LoadReplay 读取某幂等键对应扣量的流水金额与当前余额（只读），用于幂等命中时回放结果。
+//
+// 三段的原始来源拆分没有单独落库，回放时统一归到 official，并用 Replayed 标记
+// 提示调用方「这是重放」。余额一律读当前真实值。
+func (s *Store) LoadReplay(ctx context.Context, tenantID int64, productCode, idempotencyKey string, units []string) (*DeductResult, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT unit, amount
+FROM entitlement_ledger
+WHERE tenant_id = $1
+  AND product_code = $2
+  AND idempotency_key = $3
+ORDER BY id`, tenantID, productCode, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var lines []DeductLine
+	for rows.Next() {
+		var unit string
+		var amount Decimal
+		if err := rows.Scan(&unit, &amount); err != nil {
+			return nil, err
+		}
+		value, err := strconv.ParseFloat(string(amount), 64)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, DeductLine{Unit: unit, Amount: -value, Official: 0})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 {
+		return nil, ErrAlreadyDeducted
+	}
+
+	balances, err := s.listBalances(ctx, tenantID, productCode, units)
+	if err != nil {
+		return nil, err
+	}
+	return &DeductResult{Lines: lines, Balances: balances}, nil
+}
+
+// listBalances 读当前额度行，供回放结果使用。
+func (s *Store) listBalances(ctx context.Context, tenantID int64, productCode string, units []string) ([]Entitlement, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT product_code, '' AS product_name, unit, edition, quota_type,
+       granted, used, rollover_bal, balance, period_end::text, status
+FROM product_entitlements
+WHERE tenant_id = $1 AND product_code = $2 AND unit = ANY($3)
+ORDER BY unit, edition`, tenantID, productCode, units)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []Entitlement
+	for rows.Next() {
+		var item Entitlement
+		if err := rows.Scan(&item.ProductCode, &item.ProductName, &item.Unit, &item.Edition,
+			&item.QuotaType, &item.Granted, &item.Used, &item.RolloverBal, &item.Balance,
+			&item.PeriodEnd, &item.Status); err != nil {
+			return nil, err
+		}
+		list = append(list, item)
+	}
+	return list, rows.Err()
 }

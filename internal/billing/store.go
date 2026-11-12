@@ -14,6 +14,8 @@ import (
 // Repository 是 service 层依赖的数据访问接口。
 // 用接口隔离后，service/handler 的单元测试不需要真实数据库。
 type Repository interface {
+	// LoadReplay 读某幂等键对应扣量的流水金额与当前余额，用于幂等命中时回放结果。
+	LoadReplay(ctx context.Context, tenantID int64, productCode, idempotencyKey string, units []string) (*DeductResult, error)
 	ListCatalog(ctx context.Context, filter CatalogFilter) ([]CatalogItem, error)
 	InsertCatalogVersion(ctx context.Context, input CatalogVersionInput) (CatalogItem, error)
 	ListEntitlements(ctx context.Context, tenantID int64, product string, includeZero bool) ([]Entitlement, error)

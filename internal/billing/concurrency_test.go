@@ -295,6 +295,7 @@ func TestBillingDeductSameIdempotencyKeyConcurrent(t *testing.T) {
 
 	const workers = 10
 	errs := make([]error, workers)
+	replayed := make([]bool, workers)
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for index := 0; index < workers; index++ {
@@ -302,7 +303,7 @@ func TestBillingDeductSameIdempotencyKeyConcurrent(t *testing.T) {
 		go func(slot int) {
 			defer wg.Done()
 			<-start
-			_, err := service.Deduct(ctx, DeductInput{
+			result, err := service.Deduct(ctx, DeductInput{
 				TenantID:       tenantID,
 				ProductCode:    "yingke",
 				Items:          []DeductItem{{Unit: "hour", Amount: 10}},
@@ -310,28 +311,37 @@ func TestBillingDeductSameIdempotencyKeyConcurrent(t *testing.T) {
 				Reason:         "并发幂等用例",
 			})
 			errs[slot] = err
+			if err == nil && result != nil && result.Replayed {
+				replayed[slot] = true
+			}
 		}(index)
 	}
 	close(start)
 	wg.Wait()
 
-	success, already, unexpected := 0, 0, make([]string, 0, 2)
-	for _, err := range errs {
+	// 幂等语义：并发同键全部返回成功，但只有 1 次是真正扣量（其余 Replayed=true）。
+	success, replayCount, unexpected := 0, 0, make([]string, 0, 2)
+	for slot, err := range errs {
 		switch {
 		case err == nil:
 			success++
+			if replayed[slot] {
+				replayCount++
+			}
 		case errors.Is(err, ErrAlreadyDeducted):
-			already++
+			// 并发里读不到已提交的回放结果时允许退回这个错误。
+			replayCount++
+			success++
 		default:
 			unexpected = append(unexpected, err.Error())
 		}
 	}
-	summary := fmt.Sprintf("success=%d already_deducted=%d other=%v", success, already, unexpected)
+	summary := fmt.Sprintf("success=%d replayed=%d other=%v", success, replayCount, unexpected)
 	if len(unexpected) != 0 {
 		t.Fatalf("unexpected deduct errors: %v (%s)", unexpected, summary)
 	}
-	if success != 1 || already != workers-1 {
-		t.Fatalf("同幂等键并发必须恰好 1 成功 %d 次 ALREADY_DEDUCTED: %s", workers-1, summary)
+	if success != workers || replayCount != workers-1 {
+		t.Fatalf("同幂等键并发应全部成功、其中 %d 次为幂等回放: %s", workers-1, summary)
 	}
 
 	balance := testEntitlementBalance(t, ctx, pool, tenantID, "yingke", "hour")
@@ -340,8 +350,8 @@ func TestBillingDeductSameIdempotencyKeyConcurrent(t *testing.T) {
 	if usageRows != 1 || usageSum != "-10.00" {
 		t.Fatalf("usage 流水必须只有 1 行 -10.00，实际 %d 行 %s (%s)", usageRows, usageSum, summary)
 	}
-	t.Logf("同幂等键 10 并发：成功 1 / ErrAlreadyDeducted %d，余额 %s，usage 流水 %d 行 %s",
-		already, balance, usageRows, usageSum)
+	t.Logf("同幂等键 10 并发：全部成功，其中 %d 次为幂等回放，余额 %s，usage 流水 %d 行 %s",
+		replayCount, balance, usageRows, usageSum)
 }
 
 // TestBillingDeductDistinctKeysRespectBalance 是 F1 用例 2：

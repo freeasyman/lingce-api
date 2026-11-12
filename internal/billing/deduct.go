@@ -108,6 +108,9 @@ type DeductResult struct {
 	Lines    []DeductLine  `json:"lines"`
 	Balances []Entitlement `json:"balances"`
 	Paused   bool          `json:"paused"`
+	// Replayed 为 true 表示这次请求命中了幂等键：没有重复扣量，
+	// 返回的是「这笔已经扣过」的结果，调用方可以当成功处理。
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 // CheckQuotaResponse 是 POST /api/v1/internal/billing/check-quota 成功时的响应体。
@@ -192,6 +195,22 @@ func (r deductRequest) units() []string {
 // paused，结果里 Paused=true，上层据此拒绝后续交付。但当一个单位已经没有任何可用额度
 // （可用额度 <= 0，通常因为上一次已扣成 0 或负数）时，扣量直接返回
 // ErrInsufficientEntitlement，不再继续超扣。
+// replayDeduct 处理幂等命中：不重复扣量，把当前账本状态回放成结果返回。
+//
+// 只读实现，不写任何流水。返回的 lines 是这笔扣量在账本里的原始金额
+// （三段来源无法从流水反推，统一记在 official 上并置 Replayed=true 提示调用方），
+// balances 是当前真实余额，调用方拿到的余额一定是准的。
+func (s *Service) replayDeduct(ctx context.Context, request deductRequest) (*DeductResult, error) {
+	result, err := s.repo.LoadReplay(ctx, request.tenantID, request.productCode,
+		request.idempotencyKey, request.units())
+	if err != nil {
+		// 读不到就退回原来的语义，让调用方知道重复了。
+		return nil, ErrAlreadyDeducted
+	}
+	result.Replayed = true
+	return result, nil
+}
+
 func (s *Service) Deduct(ctx context.Context, input DeductInput) (*DeductResult, error) {
 	request, err := normalizeDeductInput(input)
 	if err != nil {
@@ -218,7 +237,10 @@ func (s *Service) Deduct(ctx context.Context, input DeductInput) (*DeductResult,
 		return nil, fmt.Errorf("query idempotency key: %w", err)
 	}
 	if already {
-		return nil, ErrAlreadyDeducted
+		// 幂等命中：不重复扣量。重试的调用方最需要的是「成功 + 结果」，
+		// 所以这里把当前账本状态回放成结果返回（Replayed=true），
+		// 而不是抛错让上层误以为扣费失败。
+		return s.replayDeduct(ctx, request)
 	}
 
 	plan, err := planDeduction(request, rows)

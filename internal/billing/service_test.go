@@ -11,11 +11,21 @@ import (
 )
 
 // fakeRepository 是 Repository 的内存实现，让 service 的单测不依赖真实数据库。
+// LoadReplay 让 fakeRepository 满足 Repository：单测里默认没有可回放的流水，
+// 返回 ErrAlreadyDeducted，等价于「幂等命中但读不到首次结果」。
+func (f *fakeRepository) LoadReplay(ctx context.Context, tenantID int64, productCode, idempotencyKey string, units []string) (*DeductResult, error) {
+	if f.replayResult != nil {
+		return f.replayResult, nil
+	}
+	return nil, ErrAlreadyDeducted
+}
+
 type fakeRepository struct {
 	catalogFilter CatalogFilter
 	catalogItems  []CatalogItem
 	catalogCalls  int
 	catalogErr    error
+	replayResult  *DeductResult
 
 	insertInput CatalogVersionInput
 	insertItem  CatalogItem
