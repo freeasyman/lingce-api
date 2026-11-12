@@ -83,6 +83,7 @@ func main() {
 		{"收费单", `SELECT COUNT(*) FROM his_orders WHERE encounter_id IN ` + enc, `DELETE FROM his_orders WHERE encounter_id IN ` + enc},
 		{"候诊队列", `SELECT COUNT(*) FROM his_queue WHERE registration_id IN ` + reg, `DELETE FROM his_queue WHERE registration_id IN ` + reg},
 		{"挂号", `SELECT COUNT(*) FROM his_registrations WHERE id IN ` + reg, `DELETE FROM his_registrations WHERE id IN ` + reg},
+		{"号源回滚", `SELECT COUNT(*) FROM his_slots WHERE schedule_id IN ` + sched + ` AND registration_id IS NOT NULL`, `UPDATE his_slots SET status='free', registration_id=NULL WHERE schedule_id IN ` + sched + ` AND registration_id IS NOT NULL`},
 		{"质检结果", `SELECT COUNT(*) FROM emr_quality_results WHERE run_id IN (SELECT id FROM emr_quality_runs WHERE record_id IN ` + rec + `)`, `DELETE FROM emr_quality_results WHERE run_id IN (SELECT id FROM emr_quality_runs WHERE record_id IN ` + rec + `)`},
 		{"质检批次", `SELECT COUNT(*) FROM emr_quality_runs WHERE record_id IN ` + rec, `DELETE FROM emr_quality_runs WHERE record_id IN ` + rec},
 		{"病历评分", `SELECT COUNT(*) FROM emr_record_score_current WHERE record_id IN ` + rec, `DELETE FROM emr_record_score_current WHERE record_id IN ` + rec},
