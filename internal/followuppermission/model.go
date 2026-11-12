@@ -23,6 +23,23 @@ var AllAbilities = []string{
 	AbilityPermission,
 }
 
+// DefaultAdminAssignment 返回机构管理员的生效权限视图。
+// 它不是数据库行（ID=0），用于管理员尚未写入 followup_permission_assignments
+// 时让权限接口返回管理员权限，而不是 null。
+func DefaultAdminAssignment(tenantID, employeeID int64) *Assignment {
+	now := time.Now()
+	return &Assignment{
+		ID:         0,
+		TenantID:   tenantID,
+		EmployeeID: employeeID,
+		Enabled:    true,
+		RoleCode:   RoleAdmin,
+		Abilities:  append([]string{}, AllAbilities...),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+}
+
 type Assignment struct {
 	ID         int64     `json:"id"`
 	TenantID   int64     `json:"tenant_id"`

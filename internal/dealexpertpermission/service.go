@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -102,10 +103,34 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate deal expert permissions: %w", err)
 	}
+	// 机构管理员即使没有 deal_expert_permission_assignments 行，也按管理员口径展示。
+	adminIDs, err := permission.ListInstitutionAdminIDs(ctx, s.pool, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if _, ok := adminIDs[item.EmployeeID]; ok {
+			item.Permission = adminAssignmentView(tenantID, item.EmployeeID, item.Permission)
+		}
+	}
 	return items, nil
 }
 
 func (s *Service) Get(ctx context.Context, tenantID, employeeID int64) (*Assignment, error) {
+	// 机构管理员始终按管理员权限返回，不再要求单独写 deal_expert_permission_assignments。
+	if admin, err := s.IsInstitutionAdmin(ctx, tenantID, employeeID); err != nil {
+		return nil, err
+	} else if admin {
+		existing, err := s.getAssignmentRecord(ctx, tenantID, employeeID)
+		if err != nil {
+			return nil, err
+		}
+		return adminAssignmentView(tenantID, employeeID, existing), nil
+	}
+	return s.getAssignmentRecord(ctx, tenantID, employeeID)
+}
+
+func (s *Service) getAssignmentRecord(ctx context.Context, tenantID, employeeID int64) (*Assignment, error) {
 	var item Assignment
 	var raw []byte
 	var visibleEmployeeIDs []int64
@@ -130,6 +155,21 @@ func (s *Service) Get(ctx context.Context, tenantID, employeeID int64) (*Assignm
 	item.DataScope = NormalizeDataScope(item.DataScope)
 	item.VisibleEmployeeIDs = NormalizeVisibleEmployeeIDs(visibleEmployeeIDs)
 	return &item, nil
+}
+
+// adminAssignmentView 把机构管理员的生效权限收敛为「启用 + deal_admin + 全机构」。
+func adminAssignmentView(tenantID, employeeID int64, existing *Assignment) *Assignment {
+	if existing == nil {
+		return DefaultAdminAssignment(tenantID, employeeID)
+	}
+	existing.TenantID = tenantID
+	existing.EmployeeID = employeeID
+	existing.Enabled = true
+	existing.RoleCode = RoleAdmin
+	existing.Abilities = append([]string{}, AllAbilities...)
+	existing.DataScope = DataScopeTenant
+	existing.VisibleEmployeeIDs = []int64{}
+	return existing
 }
 
 func (s *Service) EmployeeExists(ctx context.Context, tenantID, employeeID int64) (bool, error) {
@@ -161,38 +201,17 @@ func (s *Service) EmployeesExist(ctx context.Context, tenantID int64, employeeID
 //
 // 两者任一命中即为管理员；只做精确匹配，doctor / consultant / director
 // 等其它角色不会被误判为管理员。
-type employeeIdentity struct {
-	Role  string
-	Admin bool
-}
+// employeeIdentity 是共享身份判定结果的别名，保留旧类型名方便包内使用。
+type employeeIdentity = permission.InstitutionIdentity
 
-// loadEmployeeIdentity 读取员工的机构角色，并统一管理员判定口径。
+// loadEmployeeIdentity 复用 internal/permission 的统一口径：
+// employees.role 或 institution_employee_roles.role_code 任一精确等于 admin。
 // 返回 nil 表示员工不存在、已删除或不属于该租户（与 EmployeeRole 的空角色语义一致）。
 func (s *Service) loadEmployeeIdentity(ctx context.Context, tenantID, employeeID int64) (*employeeIdentity, error) {
 	if s == nil || s.pool == nil {
 		return nil, fmt.Errorf("database pool is not configured")
 	}
-	var identity employeeIdentity
-	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(lower(trim(e.role)), ''),
-		       COALESCE(lower(trim(e.role)), '') = 'admin'
-		         OR EXISTS (
-		             SELECT 1
-		             FROM institution_employee_roles ier
-		             WHERE ier.employee_id = e.id
-		               AND ier.tenant_id = e.tenant_id
-		               AND lower(trim(COALESCE(ier.role_code, ''))) = 'admin'
-		         )
-		FROM employees e
-		WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
-	`, employeeID, tenantID).Scan(&identity.Role, &identity.Admin)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load employee identity: %w", err)
-	}
-	return &identity, nil
+	return permission.LoadInstitutionIdentity(ctx, s.pool, tenantID, employeeID)
 }
 
 // IsInstitutionAdmin 判断员工是否为机构管理员：employees.role 或机构角色表

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -324,43 +325,10 @@ SET role_id = EXCLUDED.role_id,
 		employeeID, input.RoleID, input.TenantID, input.RoleCode); err != nil {
 		return 0, fmt.Errorf("assign institution admin role: %w", err)
 	}
-	if err := s.ensureInstitutionAdminEMRPermissionTx(ctx, tx, input.TenantID, employeeID); err != nil {
-		return 0, err
+	if _, err := permission.EnsureInstitutionAdminGrants(ctx, tx, input.TenantID, employeeID, employeeID, false); err != nil {
+		return 0, fmt.Errorf("initialize institution admin product permissions: %w", err)
 	}
 	return employeeID, nil
-}
-
-// ensureInstitutionAdminEMRPermissionTx 给管理员开电子病历管理权限，口径与
-// tenant.createDefaultTenantAdminTx 一致；表不存在时跳过（不阻塞管理员创建）。
-func (s *Store) ensureInstitutionAdminEMRPermissionTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID int64) error {
-	var tableExists bool
-	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.emr_permission_assignments') IS NOT NULL`).Scan(&tableExists); err != nil {
-		return fmt.Errorf("check emr permission table: %w", err)
-	}
-	if !tableExists {
-		return nil
-	}
-	_, err := tx.Exec(ctx, `
-INSERT INTO emr_permission_assignments (
-    tenant_id, employee_id, enabled, emr_role_code, scope, abilities_json, created_by, updated_by, created_at, updated_at
-)
-VALUES (
-    $1, $2, TRUE, 'emr_admin', 'tenant',
-    '["record.read", "record.read_all", "record.create", "record.edit", "record.submit", "record.archive", "record.history.read", "record.export", "template.manage", "quality.manage"]'::jsonb,
-    $3, $3, NOW(), NOW()
-)
-ON CONFLICT (tenant_id, employee_id)
-DO UPDATE SET
-    enabled = TRUE,
-    emr_role_code = 'emr_admin',
-    scope = 'tenant',
-    abilities_json = EXCLUDED.abilities_json,
-    updated_by = EXCLUDED.updated_by,
-    updated_at = NOW()`, tenantID, employeeID, employeeID)
-	if err != nil {
-		return fmt.Errorf("initialize institution admin emr permission: %w", err)
-	}
-	return nil
 }
 
 // UpdateInstitutionAdminTx 修改管理员基本信息/启停。

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -84,10 +85,47 @@ func (s *Service) List(ctx context.Context, tenantID int64) ([]*EmployeePermissi
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate compliance permissions: %w", err)
 	}
+	// 机构管理员即使没有 compliance_permission_assignments 行，也按管理员口径展示。
+	adminIDs, err := permission.ListInstitutionAdminIDs(ctx, s.pool, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if _, ok := adminIDs[item.EmployeeID]; ok {
+			item.Permission = adminAssignmentView(tenantID, item.EmployeeID, item.Permission)
+		}
+	}
 	return items, nil
 }
 
 func (s *Service) Get(ctx context.Context, tenantID, employeeID int64) (*Assignment, error) {
+	// 机构管理员始终按管理员权限返回，不再要求单独写 compliance_permission_assignments。
+	if admin, err := permission.IsInstitutionAdmin(ctx, s.pool, tenantID, employeeID); err != nil {
+		return nil, err
+	} else if admin {
+		existing, err := s.getAssignmentRecord(ctx, tenantID, employeeID)
+		if err != nil {
+			return nil, err
+		}
+		return adminAssignmentView(tenantID, employeeID, existing), nil
+	}
+	return s.getAssignmentRecord(ctx, tenantID, employeeID)
+}
+
+// adminAssignmentView 把机构管理员的生效权限收敛为「启用 + compliance_admin + 全能力」。
+func adminAssignmentView(tenantID, employeeID int64, existing *Assignment) *Assignment {
+	if existing == nil {
+		return DefaultAdminAssignment(tenantID, employeeID)
+	}
+	existing.TenantID = tenantID
+	existing.EmployeeID = employeeID
+	existing.Enabled = true
+	existing.RoleCode = RoleAdmin
+	existing.Abilities = append([]string{}, AdminAbilities...)
+	return existing
+}
+
+func (s *Service) getAssignmentRecord(ctx context.Context, tenantID, employeeID int64) (*Assignment, error) {
 	var item Assignment
 	var raw []byte
 	err := s.pool.QueryRow(ctx, `
@@ -184,7 +222,20 @@ func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID i
 	if claims.TenantID == nil || *claims.TenantID != tenantID {
 		return nil, fmt.Errorf("access denied")
 	}
-	assignment, err := s.Get(ctx, tenantID, claims.UserID)
+	// 机构管理员（employees.role 或机构角色表的 admin）默认就是合规卫士管理员。
+	if admin, err := permission.IsInstitutionAdmin(ctx, s.pool, tenantID, claims.UserID); err != nil {
+		return nil, err
+	} else if admin {
+		abilities := make(map[string]struct{}, len(AllAbilities))
+		for _, value := range AllAbilities {
+			abilities[value] = struct{}{}
+		}
+		return &Access{
+			UserID: claims.UserID, TenantID: tenantID, Admin: true, Enabled: true,
+			RoleCode: RoleAdmin, Abilities: abilities,
+		}, nil
+	}
+	assignment, err := s.getAssignmentRecord(ctx, tenantID, claims.UserID)
 	if err != nil {
 		return nil, err
 	}

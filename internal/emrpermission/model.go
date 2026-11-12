@@ -2,6 +2,39 @@ package emrpermission
 
 import "time"
 
+// AllAbilities 是听写病历管理员默认拥有的完整能力包。
+// 与 emr_permission_assignments 里管理员保存的能力码保持一致。
+var AllAbilities = []string{
+	"record.read",
+	"record.read_all",
+	"record.create",
+	"record.edit",
+	"record.submit",
+	"record.archive",
+	"record.history.read",
+	"record.export",
+	"template.manage",
+	"quality.manage",
+}
+
+// DefaultAdminAssignment 返回机构管理员的生效权限视图。
+// 它不是数据库行（ID=0），用于管理员尚未写入 emr_permission_assignments 时
+// 让权限接口返回管理员权限，而不是 null。
+func DefaultAdminAssignment(tenantID, employeeID int64) *Assignment {
+	now := time.Now()
+	return &Assignment{
+		ID:          0,
+		TenantID:    tenantID,
+		EmployeeID:  employeeID,
+		Enabled:     true,
+		EmrRoleCode: "emr_admin",
+		Scope:       "tenant",
+		Abilities:   append([]string{}, AllAbilities...),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+}
+
 type Access struct {
 	UserID       int64
 	TenantID     int64

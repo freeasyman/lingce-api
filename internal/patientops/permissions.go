@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -19,10 +20,34 @@ const (
 	PatientOpsAbilityAssign       = "patient_ops.tasks.assign"
 )
 
+// AllPatientOpsAbilities 是客户总监管理员默认拥有的完整能力包。
+var AllPatientOpsAbilities = []string{
+	PatientOpsAbilityTasksReadAll,
+	PatientOpsAbilityPermission,
+	PatientOpsAbilityAssign,
+}
+
 var patientOpsAbilities = map[string]struct{}{
 	PatientOpsAbilityTasksReadAll: {},
 	PatientOpsAbilityPermission:   {},
 	PatientOpsAbilityAssign:       {},
+}
+
+// DefaultPatientOpsAdminPermission 返回机构管理员的生效权限视图。
+// 它不是数据库行（ID=0），用于管理员尚未写入 patient_ops_permission_assignments
+// 时让权限接口返回管理员权限，而不是 null。
+func DefaultPatientOpsAdminPermission(tenantID, employeeID int64) *PatientOpsPermissionAssignment {
+	now := time.Now()
+	return &PatientOpsPermissionAssignment{
+		ID:         0,
+		TenantID:   tenantID,
+		EmployeeID: employeeID,
+		Enabled:    true,
+		RoleCode:   PatientOpsRoleAdmin,
+		Abilities:  append([]string{}, AllPatientOpsAbilities...),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
 }
 
 type PatientOpsPermissionAssignment struct {
@@ -132,10 +157,37 @@ func (s *Service) ListPatientOpsPermissions(ctx context.Context, tenantID int64)
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 机构管理员即使没有 patient_ops_permission_assignments 行，也按管理员口径展示。
+	adminIDs, err := permission.ListInstitutionAdminIDs(ctx, s.pool, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if _, ok := adminIDs[items[index].EmployeeID]; ok {
+			items[index].Permission = patientOpsAdminPermissionView(tenantID, items[index].EmployeeID, items[index].Permission)
+		}
+	}
+	return items, nil
 }
 
 func (s *Service) GetPatientOpsPermission(ctx context.Context, tenantID, employeeID int64) (*PatientOpsPermissionAssignment, error) {
+	// 机构管理员始终按管理员权限返回，不再要求单独写 patient_ops_permission_assignments。
+	if admin, err := permission.IsInstitutionAdmin(ctx, s.pool, tenantID, employeeID); err != nil {
+		return nil, err
+	} else if admin {
+		existing, err := s.getPatientOpsPermissionRecord(ctx, tenantID, employeeID)
+		if err != nil {
+			return nil, err
+		}
+		return patientOpsAdminPermissionView(tenantID, employeeID, existing), nil
+	}
+	return s.getPatientOpsPermissionRecord(ctx, tenantID, employeeID)
+}
+
+func (s *Service) getPatientOpsPermissionRecord(ctx context.Context, tenantID, employeeID int64) (*PatientOpsPermissionAssignment, error) {
 	var item PatientOpsPermissionAssignment
 	var raw []byte
 	err := s.pool.QueryRow(ctx, `
@@ -158,6 +210,19 @@ func (s *Service) GetPatientOpsPermission(ctx context.Context, tenantID, employe
 	}
 	item.Abilities = normalizePatientOpsAbilities(item.Abilities)
 	return &item, nil
+}
+
+// patientOpsAdminPermissionView 把机构管理员的生效权限收敛为「启用 + patient_ops_admin + 全能力」。
+func patientOpsAdminPermissionView(tenantID, employeeID int64, existing *PatientOpsPermissionAssignment) *PatientOpsPermissionAssignment {
+	if existing == nil {
+		return DefaultPatientOpsAdminPermission(tenantID, employeeID)
+	}
+	existing.TenantID = tenantID
+	existing.EmployeeID = employeeID
+	existing.Enabled = true
+	existing.RoleCode = PatientOpsRoleAdmin
+	existing.Abilities = append([]string{}, AllPatientOpsAbilities...)
+	return existing
 }
 
 func (s *Service) UpsertPatientOpsPermission(ctx context.Context, tenantID, employeeID, actorID int64, req UpsertPatientOpsPermissionRequest) (*PatientOpsPermissionAssignment, error) {
@@ -210,6 +275,12 @@ func (s *Service) UpsertPatientOpsPermission(ctx context.Context, tenantID, empl
 }
 
 func (s *Service) HasPatientOpsPermission(ctx context.Context, tenantID, employeeID int64, ability string) (bool, error) {
+	// 机构管理员默认拥有客户总监的全部能力，不依赖单独权限行。
+	if admin, err := permission.IsInstitutionAdmin(ctx, s.pool, tenantID, employeeID); err != nil {
+		return false, err
+	} else if admin {
+		return true, nil
+	}
 	var allowed bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT COALESCE(enabled,false) AND COALESCE(abilities_json ? $3::text,false)

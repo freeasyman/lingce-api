@@ -80,6 +80,25 @@ type Assignment struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+// DefaultAdminAssignment 返回机构管理员的生效权限视图。
+// 它不是数据库行（ID=0），用于管理员尚未写入 deal_expert_permission_assignments
+// 时让权限接口返回管理员权限，而不是 null。
+func DefaultAdminAssignment(tenantID, employeeID int64) *Assignment {
+	now := time.Now()
+	return &Assignment{
+		ID:                 0,
+		TenantID:           tenantID,
+		EmployeeID:         employeeID,
+		Enabled:            true,
+		RoleCode:           RoleAdmin,
+		Abilities:          append([]string{}, AllAbilities...),
+		DataScope:          DataScopeTenant,
+		VisibleEmployeeIDs: []int64{},
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+}
+
 type EmployeePermissionRow struct {
 	EmployeeID   int64       `json:"employee_id"`
 	Username     string      `json:"username"`

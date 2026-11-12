@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,21 @@ func (s *Service) ListEmployeePermissions(ctx context.Context, tenantID int64) (
 	if err := tenancy.RequirePositiveID("tenant_id", tenantID); err != nil {
 		return nil, err
 	}
-	return s.store.ListEmployeePermissions(ctx, tenantID)
+	items, err := s.store.ListEmployeePermissions(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	// 机构管理员即使在 emr_permission_assignments 里没有行，也按管理员口径展示。
+	adminIDs, err := permission.ListInstitutionAdminIDs(ctx, s.store.pool, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if _, ok := adminIDs[item.EmployeeID]; ok {
+			item.EmrPermission = adminAssignmentView(tenantID, item.EmployeeID, item.EmrPermission)
+		}
+	}
+	return items, nil
 }
 
 func (s *Service) GetAssignment(ctx context.Context, tenantID, employeeID int64) (*AssignmentResponse, error) {
@@ -33,6 +48,19 @@ func (s *Service) GetAssignment(ctx context.Context, tenantID, employeeID int64)
 	if err := tenancy.RequirePositiveID("employee_id", employeeID); err != nil {
 		return nil, err
 	}
+	// 机构管理员始终按管理员权限返回，不再要求单独写 emr_permission_assignments。
+	// 已有行也以管理员身份为准，避免「运行时放行、页面显示无权限」。
+	if admin, err := permission.IsInstitutionAdmin(ctx, s.store.pool, tenantID, employeeID); err != nil {
+		return nil, err
+	} else if admin {
+		// 有现存行时保留 id/时间/操作人等元数据，只把生效值收敛为管理员；
+		// 没有行时返回虚拟管理员权限。
+		assignment, err := s.store.GetAssignmentByEmployeeID(ctx, tenantID, employeeID)
+		if err != nil {
+			return nil, err
+		}
+		return toAssignmentResponse(adminAssignmentView(tenantID, employeeID, assignment)), nil
+	}
 	assignment, err := s.store.GetAssignmentByEmployeeID(ctx, tenantID, employeeID)
 	if err != nil {
 		return nil, err
@@ -41,6 +69,21 @@ func (s *Service) GetAssignment(ctx context.Context, tenantID, employeeID int64)
 		return nil, nil
 	}
 	return toAssignmentResponse(assignment), nil
+}
+
+// adminAssignmentView 把机构管理员的生效权限收敛为「启用 + emr_admin + 全机构」。
+// 有现存行时复用其 id/created_by/created_at 等元数据，避免权限页显示成虚构行。
+func adminAssignmentView(tenantID, employeeID int64, existing *Assignment) *Assignment {
+	if existing == nil {
+		return DefaultAdminAssignment(tenantID, employeeID)
+	}
+	existing.TenantID = tenantID
+	existing.EmployeeID = employeeID
+	existing.Enabled = true
+	existing.EmrRoleCode = "emr_admin"
+	existing.Scope = "tenant"
+	existing.Abilities = append([]string{}, AllAbilities...)
+	return existing
 }
 
 func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID int64, ability string) (*Access, error) {
@@ -57,12 +100,24 @@ func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID i
 		return nil, fmt.Errorf("access denied")
 	}
 
+	// 机构管理员（employees.role 或机构角色表的 admin）默认就是听写病历管理员。
+	identity, err := permission.LoadInstitutionIdentity(ctx, s.store.pool, tenantID, claims.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("load emr access: %w", err)
+	}
+	if identity == nil {
+		return nil, fmt.Errorf("employee not found")
+	}
+	if identity.Admin {
+		return newAdminAccess(claims.UserID, tenantID), nil
+	}
+
 	var departmentID *int64
 	var enabled bool
 	var scope string
 	var role string
 	var abilitiesRaw []byte
-	err := s.store.pool.QueryRow(ctx, `
+	err = s.store.pool.QueryRow(ctx, `
 		SELECT e.department_id, COALESCE(ep.enabled, false), COALESCE(ep.scope, ''), COALESCE(ep.emr_role_code, ''), COALESCE(ep.abilities_json, '[]'::jsonb)
 		FROM employees e
 		LEFT JOIN emr_permission_assignments ep
@@ -95,6 +150,21 @@ func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID i
 		return nil, fmt.Errorf("emr permission denied")
 	}
 	return access, nil
+}
+
+func newAdminAccess(userID, tenantID int64) *Access {
+	abilities := make(map[string]struct{}, len(AllAbilities))
+	for _, ability := range AllAbilities {
+		abilities[ability] = struct{}{}
+	}
+	return &Access{
+		UserID:    userID,
+		TenantID:  tenantID,
+		Scope:     "tenant",
+		Role:      "emr_admin",
+		Admin:     true,
+		Abilities: abilities,
+	}
 }
 
 func (s *Service) CanAccessRecord(ctx context.Context, access *Access, recordID string) (bool, error) {
