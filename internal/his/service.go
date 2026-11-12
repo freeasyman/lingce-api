@@ -1105,3 +1105,21 @@ func (s *Service) RequireRole(ctx context.Context, tenantID, employeeID int64, r
 func (s *Service) SearchDiagnosis(ctx context.Context, tenantID int64, keyword string) ([]ICDDiagnosis, error) {
 	return s.store.SearchDiagnosisCatalog(ctx, keyword, 20)
 }
+
+// ModulesForEmployee 员工可见模块（角色并集，admin 全量）。
+func (s *Service) ModulesForEmployee(ctx context.Context, tenantID, employeeID int64) ([]string, error) {
+	return s.store.ModulesForEmployee(ctx, tenantID, employeeID)
+}
+
+// DefaultRoleModules 各角色默认模块（tenant 0 模板），供管理页展示与配置。
+func (s *Service) DefaultRoleModules(ctx context.Context, tenantID int64) (map[string][]string, error) {
+	rows, err := s.store.RoleModuleRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, row := range rows {
+		out[row.Role] = append(out[row.Role], row.Module)
+	}
+	return out, nil
+}

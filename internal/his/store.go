@@ -3436,3 +3436,78 @@ func parseFieldOptions(raw []byte) []string {
 	}
 	return nil
 }
+
+// RoleModules 返回某角色可见模块：优先租户自定义，缺省用 tenant_id=0 模板。
+func (s *Store) RoleModules(ctx context.Context, tenantID int64, role string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT module FROM his_role_modules
+		WHERE role = $1 AND tenant_id IN ($2, 0)
+		ORDER BY (tenant_id = $2) DESC`, role, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	modules := make([]string, 0)
+	for rows.Next() {
+		var module string
+		if err := rows.Scan(&module); err != nil {
+			return nil, err
+		}
+		modules = append(modules, module)
+	}
+	return modules, rows.Err()
+}
+
+// ModulesForEmployee 员工（角色并集）可见模块；admin 返回全部。
+func (s *Store) ModulesForEmployee(ctx context.Context, tenantID, employeeID int64) ([]string, error) {
+	has, err := s.HasAnyRole(ctx, tenantID, employeeID, "admin")
+	if err != nil {
+		return nil, err
+	}
+	if has {
+		return []string{"home", "register", "clinic", "billing", "pharmacy", "execute", "lab", "check", "inventory", "purchase", "patients", "stats", "admin"}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT rm.module
+		FROM his_staff_roles sr
+		JOIN his_role_modules rm ON rm.role = sr.role AND rm.tenant_id IN (sr.tenant_id, 0)
+		WHERE sr.tenant_id = $1 AND sr.employee_id = $2
+		ORDER BY rm.module`, tenantID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	modules := make([]string, 0)
+	for rows.Next() {
+		var module string
+		if err := rows.Scan(&module); err != nil {
+			return nil, err
+		}
+		modules = append(modules, module)
+	}
+	return modules, rows.Err()
+}
+
+// RoleModuleRow 角色模块行。
+type RoleModuleRow struct {
+	Role   string
+	Module string
+}
+
+// RoleModuleRows 读取租户 0 模板的全部角色模块行。
+func (s *Store) RoleModuleRows(ctx context.Context) ([]RoleModuleRow, error) {
+	rows, err := s.pool.Query(ctx, `SELECT role, module FROM his_role_modules WHERE tenant_id = 0 ORDER BY role, module`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RoleModuleRow, 0)
+	for rows.Next() {
+		var row RoleModuleRow
+		if err := rows.Scan(&row.Role, &row.Module); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

@@ -262,6 +262,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 员工角色（管理台配置 + 当前员工查询）
 		{Method: "GET", Path: "/api/v1/his/staff-roles", Handler: h.ListStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/role-modules", Handler: h.MyModules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/role-modules/defaults", Handler: h.DefaultRoleModules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/his/staff-roles/{employee_id}", Handler: h.UpdateStaffRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/my-roles", Handler: h.MyRoles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -1861,4 +1863,37 @@ func (h *Handler) SearchDiagnosis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, items)
+}
+
+// MyModules 当前员工可见模块（角色并集，admin 全量）。
+func (h *Handler) MyModules(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	modules, err := h.service.ModulesForEmployee(r.Context(), tenantID, claims.UserID)
+	if err != nil {
+		slog.Error("his: my modules", "error", err)
+		httputil.WriteInternalError(w, "failed to load role modules")
+		return
+	}
+	httputil.WriteSuccess(w, modules)
+}
+
+// DefaultRoleModules 各角色默认模块映射（管理页展示用）。
+func (h *Handler) DefaultRoleModules(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	modules, err := h.service.DefaultRoleModules(r.Context(), 0)
+	if err != nil {
+		slog.Error("his: default role modules", "error", err)
+		httputil.WriteInternalError(w, "failed to load default role modules")
+		return
+	}
+	httputil.WriteSuccess(w, modules)
 }
