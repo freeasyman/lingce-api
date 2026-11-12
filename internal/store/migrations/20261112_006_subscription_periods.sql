@@ -110,7 +110,10 @@ BEGIN
                COALESCE(s.updated_at, NOW())
         FROM tenant_subscriptions s
         JOIN tenants t ON t.id = s.tenant_id
-        WHERE %s IS NOT NULL
+        -- 系统租户（tenant_id=0）只承载平台内置数据，不属于任何机构，也不参与计费；
+        -- subscription_periods 约束 tenant_id > 0，因此回填时跳过非正数租户。
+        WHERE s.tenant_id > 0
+          AND %s IS NOT NULL
           AND %s IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM subscription_periods p WHERE p.tenant_id = s.tenant_id

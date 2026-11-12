@@ -431,10 +431,20 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.GetInstitutionBase(ctx, tenantID); err != nil {
+	base, err := s.store.GetInstitutionBase(ctx, tenantID)
+	if err != nil {
 		return nil, err
 	}
-	req, err := req.normalize()
+	// 试用只用于「已建档未开通」的机构。已开通（含试用中/正式/已过期）的机构
+	// 再走试用会把正式服务期直接关成 terminated 并切到 trial，属于不可逆的降级；
+	// 试用续期走 extend-trial，正式开通/重新开通走 activate-formal。
+	if base.PeriodID != nil {
+		return nil, &ConflictError{
+			Sentinel: ErrPeerConflict,
+			Message:  "该机构已开通，不能重复开通试用；试用续期请用「延长试用」",
+		}
+	}
+	req, err = req.normalize()
 	if err != nil {
 		return nil, err
 	}

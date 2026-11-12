@@ -84,6 +84,8 @@ LEFT JOIN operations_admins sales ON sales.id = ow.sales_admin_id AND sales.dele
 // $1 orgID（0 = 平台账号可看全部）$2 keyword（小写）$3 filter。
 const listInstitutionsSQL = institutionBaseSelect + `
 WHERE t.deleted_at IS NULL
+  -- 系统租户（tenant_id=0）是平台内置数据容器，不是可计费机构，运营端列表不展示。
+  AND t.id > 0
   AND ($1::bigint = 0
        OR ow.org_id = $1
        OR EXISTS (
@@ -106,6 +108,7 @@ WHERE t.deleted_at IS NULL
   AND ($3::text = 'all'
        OR ($3 = 'unopened' AND p.id IS NULL)
        OR ($3 = 'trial' AND p.id IS NOT NULL AND p.status <> 'terminated'
+           AND p.expired_on >= CURRENT_DATE
            AND COALESCE(NULLIF(lower(t.account_mode), ''), 'formal') = 'trial')
        OR ($3 = 'expiring' AND p.status = 'active'
            AND COALESCE(NULLIF(lower(t.account_mode), ''), 'formal') <> 'trial'
