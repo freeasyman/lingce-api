@@ -2,7 +2,6 @@ package billing_test
 
 // 第 2 批集成测试（真实 PostgreSQL）：
 //   · 暂停 → 扣量/预检被拒（SUBSCRIPTION_PAUSED）→ 恢复 → 扣量通过；
-//   · 取消 → 服务期 terminated、额度清零 + expired 流水、扣量被拒（SUBSCRIPTION_CANCELLED）；
 //   · 作废订单：只允许未收款未核销、幂等、写 system_action_logs；
 //   · 人工调额度：正向/负向、负数越界拒绝、审批人阈值、correction 流水与消耗明细。
 //
@@ -211,125 +210,6 @@ WHERE tenant_id = $1 AND action_code IN ('institution.suspend', 'institution.res
 	}
 	if logs < 2 {
 		t.Fatalf("暂停/恢复审计日志应各至少 1 条，实际 %d", logs)
-	}
-}
-
-// ---------------- 取消 ----------------
-
-func TestInstitutionCancelClearsEntitlementsAndBlocksDeduct(t *testing.T) {
-	env := newBillingTestEnv(t)
-	cleanupLifecycleArtifacts(t, env)
-	institution := activateLifecycleInstitution(t, env)
-	tenantID := institution.ID
-
-	// 先扣 10 小时，取消时按剩余 390 写流水。
-	if err := lifecycleDeduct(env, tenantID, "batch2:cancel:before", 10); err != nil {
-		t.Fatalf("取消前扣量应成功: %v", err)
-	}
-	_, _, balanceBefore, _ := entitlementSnapshot(t, env, tenantID, "yingke", "hour")
-	if balanceBefore != "390.00" {
-		t.Fatalf("扣量后余额应为 390，实际 %s", balanceBefore)
-	}
-	ledgerBefore := ledgerCount(t, env, tenantID)
-
-	// confirmed=false → 400；reason 空 → 400。
-	if _, err := env.svc.CancelInstitution(env.ctx, tenantID,
-		billing.CancelRequest{Reason: "客户终止", Confirmed: false}, env.adminID); err == nil {
-		t.Fatal("未确认的取消应被拒绝")
-	} else if _, ok := err.(*billing.ValidationError); !ok {
-		t.Fatalf("未确认的取消应返回 ValidationError，实际 %T %v", err, err)
-	}
-	if _, err := env.svc.CancelInstitution(env.ctx, tenantID,
-		billing.CancelRequest{Reason: "", Confirmed: true}, env.adminID); err == nil {
-		t.Fatal("取消原因为空应被拒绝")
-	}
-
-	cancelled, err := env.svc.CancelInstitution(env.ctx, tenantID,
-		billing.CancelRequest{Reason: "客户终止合作", Confirmed: true}, env.adminID)
-	if err != nil {
-		t.Fatalf("取消失败: %v", err)
-	}
-	if cancelled.Status != billing.InstitutionStatusCancelled || cancelled.Open {
-		t.Fatalf("取消后 status/open 不对: %s/%v", cancelled.Status, cancelled.Open)
-	}
-	if cancelled.CancelledReason != "客户终止合作" || cancelled.CancelledAt == "" {
-		t.Fatalf("取消原因/时间未返回: %+v", cancelled)
-	}
-
-	// 额度行全部归零并 cleared。
-	var nonzero int64
-	if err := env.pool.QueryRow(env.ctx, `
-SELECT count(*) FROM product_entitlements
-WHERE tenant_id = $1 AND (granted <> 0 OR used <> 0 OR rollover_bal <> 0 OR balance <> 0 OR status <> 'cleared')`,
-		tenantID).Scan(&nonzero); err != nil {
-		t.Fatalf("检查额度清零失败: %v", err)
-	}
-	if nonzero != 0 {
-		t.Fatalf("取消后仍有 %d 行额度未清零/未置 cleared", nonzero)
-	}
-
-	// 按清零前余额写 expired 流水（yingke hour 390）。
-	var expiredAmount, expiredReason string
-	if err := env.pool.QueryRow(env.ctx, `
-SELECT amount::text, reason FROM entitlement_ledger
-WHERE tenant_id = $1 AND source = 'expired'
-ORDER BY id DESC LIMIT 1`, tenantID).Scan(&expiredAmount, &expiredReason); err != nil {
-		t.Fatalf("读取取消清零流水失败: %v", err)
-	}
-	if expiredAmount != "-390.00" || expiredReason != "取消服务" {
-		t.Fatalf("清零流水不对: amount=%s reason=%q", expiredAmount, expiredReason)
-	}
-	if after := ledgerCount(t, env, tenantID); after != ledgerBefore+1 {
-		t.Fatalf("取消应只新增 1 条清零流水：%d -> %d", ledgerBefore, after)
-	}
-
-	// 服务期 terminated，tenant_subscriptions 同步 terminated。
-	var periodStatus string
-	if err := env.pool.QueryRow(env.ctx, `
-SELECT status FROM subscription_periods WHERE tenant_id = $1 ORDER BY id DESC LIMIT 1`,
-		tenantID).Scan(&periodStatus); err != nil {
-		t.Fatalf("读取服务期失败: %v", err)
-	}
-	if periodStatus != "terminated" {
-		t.Fatalf("取消后服务期应为 terminated，实际 %s", periodStatus)
-	}
-	var subscriptionStatus string
-	if err := env.pool.QueryRow(env.ctx, `
-SELECT status FROM tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionStatus); err != nil {
-		t.Fatalf("读取 tenant_subscriptions 失败: %v", err)
-	}
-	if subscriptionStatus != "terminated" {
-		t.Fatalf("tenant_subscriptions 应同步 terminated，实际 %s", subscriptionStatus)
-	}
-
-	// 取消后扣量与预检拒绝。
-	if err := lifecycleDeduct(env, tenantID, "batch2:cancel:blocked", 1); !errors.Is(err, billing.ErrSubscriptionCancelled) {
-		t.Fatalf("取消后扣量应返回 ErrSubscriptionCancelled，实际 %v", err)
-	}
-	if err := lifecycleDeductService(env).CheckQuota(env.ctx, tenantID, "yingke",
-		[]billing.DeductItem{{Unit: "hour", Amount: 1}}); !errors.Is(err, billing.ErrSubscriptionCancelled) {
-		t.Fatalf("取消后预检应返回 ErrSubscriptionCancelled，实际 %v", err)
-	}
-
-	// 重复取消幂等：不再清零、不再写流水。
-	ledgerAfterCancel := ledgerCount(t, env, tenantID)
-	second, err := env.svc.CancelInstitution(env.ctx, tenantID,
-		billing.CancelRequest{Reason: "重复提交", Confirmed: true}, env.adminID)
-	if err != nil {
-		t.Fatalf("重复取消应幂等成功: %v", err)
-	}
-	if second.Status != billing.InstitutionStatusCancelled {
-		t.Fatalf("重复取消后状态不对: %s", second.Status)
-	}
-	if after := ledgerCount(t, env, tenantID); after != ledgerAfterCancel {
-		t.Fatalf("重复取消不应新增流水：%d -> %d", ledgerAfterCancel, after)
-	}
-
-	// 取消后调额度也应拒绝。
-	if _, err := env.svc.CorrectEntitlement(env.ctx, tenantID, billing.EntitlementCorrectionRequest{
-		ProductCode: "yingke", Unit: "hour", Amount: "10", Reason: "补录",
-	}, env.adminID); !errors.Is(err, billing.ErrInstitutionCancelled) {
-		t.Fatalf("取消后调额度应被拒绝，实际 %v", err)
 	}
 }
 

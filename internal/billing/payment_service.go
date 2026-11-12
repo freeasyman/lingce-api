@@ -566,3 +566,18 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// ListAllocatableOrders 列出机构可核销订单（运营端新建收款单/追加核销选择器）。
+func (s *InstitutionService) ListAllocatableOrders(ctx context.Context, tenantID, adminID int64) ([]Order, error) {
+	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
+		return nil, err
+	}
+	items, err := s.store.ListAllocatableOrders(ctx, tenantID, 200)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []Order{}
+	}
+	return items, nil
+}

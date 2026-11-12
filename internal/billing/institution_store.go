@@ -37,12 +37,10 @@ type institutionBaseRow struct {
 	StartedOn    *string
 	ExpiredOn    *string
 
-	// 服务生命周期标记（migration 20261112_012）：暂停/取消只改这两组列，
-	// 不改服务期、不改额度；取消时由事务额外把服务期与额度一起收尾。
-	PausedAt        *time.Time
-	PausedReason    string
-	CancelledAt     *time.Time
-	CancelledReason string
+	// 服务生命周期标记（migration 20261112_012）：暂停只改这两列，
+	// 不改服务期、不改额度。
+	PausedAt     *time.Time
+	PausedReason string
 
 	OrgID        *int64
 	OrgName      string
@@ -72,8 +70,6 @@ SELECT t.id,
        to_char(p.expired_on, 'YYYY-MM-DD'),
        t.paused_at,
        COALESCE(t.paused_reason, ''),
-       t.cancelled_at,
-       COALESCE(t.cancelled_reason, ''),
        ow.org_id,
        COALESCE(org.name, ''),
        ow.sales_admin_id,
@@ -83,9 +79,9 @@ LEFT JOIN LATERAL (
     SELECT sp.id, sp.status, sp.started_on, sp.expired_on
     FROM subscription_periods sp
     WHERE sp.tenant_id = t.id
-    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated、取消后 terminated。
+    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated。
     -- 先 active、再 expired，同级按 id 倒序（最近插入/调整的一条才是当前服务期）。
-    -- 不能按 expired_on 倒序：取消服务把正式期 terminated 后，旧的试用期可能因
+    -- 不能按 expired_on 倒序：服务期被置 terminated 后，旧的试用期可能因
     -- 到期日更晚而胜出，导致档案显示错误的服务期。
     ORDER BY (sp.status = 'active') DESC, (sp.status = 'expired') DESC,
              sp.id DESC
@@ -205,8 +201,6 @@ func scanInstitutionBase(scan func(dest ...any) error) (institutionBaseRow, erro
 		&item.ExpiredOn,
 		&item.PausedAt,
 		&item.PausedReason,
-		&item.CancelledAt,
-		&item.CancelledReason,
 		&item.OrgID,
 		&item.OrgName,
 		&item.SalesAdminID,
@@ -336,13 +330,20 @@ ORDER BY created_at ASC, id ASC`, tenantID)
 }
 
 // ListInstitutionPayLogs 取机构维度的收款记录：同一张收款单按机构拆出核销额。
-// 开票模块本轮未做，invoice 固定为「未开票」。
+// 开票状态按该收款核销到的订单是否有非作废发票推导，机构档案不再显示写死的「未开票」。
 func (s *Store) ListInstitutionPayLogs(ctx context.Context, tenantID int64) ([]InstitutionPayLog, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT p.payment_no,
        SUM(a.amount)::text,
        to_char(p.received_on, 'YYYY-MM-DD'),
-       p.method
+       p.method,
+       CASE WHEN EXISTS (
+           SELECT 1
+           FROM billing_payment_allocations a2
+           JOIN billing_orders o2 ON o2.id = a2.order_id AND o2.tenant_id = $1
+           JOIN billing_invoices i ON i.order_id = a2.order_id AND i.status <> 'voided'
+           WHERE a2.payment_id = p.id
+       ) THEN '已开票' ELSE '未开票' END
 FROM billing_payment_allocations a
 JOIN billing_payments p ON p.id = a.payment_id
 JOIN billing_orders o ON o.id = a.order_id
@@ -360,11 +361,10 @@ ORDER BY p.received_on DESC, p.id DESC`, tenantID)
 			item   InstitutionPayLog
 			amount string
 		)
-		if err := rows.Scan(&item.No, &amount, &item.Date, &item.Method); err != nil {
+		if err := rows.Scan(&item.No, &amount, &item.Date, &item.Method, &item.Invoice); err != nil {
 			return nil, fmt.Errorf("scan institution pay log: %w", err)
 		}
 		item.Amount = Decimal(amount)
-		item.Invoice = "未开票"
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -36,7 +36,7 @@ func (s *InstitutionService) loadCatalogProducts(ctx context.Context) (map[strin
 	}
 	products := make(map[string]catalogProduct, 8)
 	priceVersion := ""
-	for _, item := range latestCatalogVersions(items) {
+	for _, item := range effectiveCatalogVersions(items, s.today()) {
 		if normalizeEnum(item.Edition) != EditionStandard {
 			continue
 		}

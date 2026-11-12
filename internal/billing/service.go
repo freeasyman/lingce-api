@@ -46,7 +46,14 @@ func (s *Service) ListCatalog(ctx context.Context, filter CatalogFilter) ([]Cata
 	if err != nil {
 		return nil, fmt.Errorf("list catalog: %w", err)
 	}
-	latest := latestCatalogVersions(items)
+	// 未指定版本时返回「当前生效」的最新版本：未来生效的版本先不参与价目与算价，
+	// 保证改价从 effectiveFrom 当天起才影响新订单，历史订单金额不受影响。
+	var latest []CatalogItem
+	if filter.PriceVersion != "" {
+		latest = latestCatalogVersions(items)
+	} else {
+		latest = effectiveCatalogVersions(items, dateOnly(s.now()))
+	}
 	if latest == nil {
 		latest = []CatalogItem{}
 	}
@@ -156,6 +163,36 @@ func latestCatalogVersions(items []CatalogItem) []CatalogItem {
 	selected := make(map[string]CatalogItem, len(items))
 	order := make([]string, 0, len(items))
 	for _, item := range items {
+		key := item.ProductCode + "\x00" + item.Edition
+		current, exists := selected[key]
+		if !exists {
+			order = append(order, key)
+			selected[key] = item
+			continue
+		}
+		if comparePriceVersion(item.PriceVersion, current.PriceVersion) > 0 {
+			selected[key] = item
+		}
+	}
+	result := make([]CatalogItem, 0, len(selected))
+	for _, key := range order {
+		result = append(result, selected[key])
+	}
+	return result
+}
+
+// effectiveCatalogVersions 在每个 product+edition 内只保留「截至 today 已生效」的最新版本。
+// effective_from 为空的历史版本视为长期有效；未来生效的版本跳过。
+func effectiveCatalogVersions(items []CatalogItem, today time.Time) []CatalogItem {
+	if len(items) == 0 {
+		return nil
+	}
+	selected := make(map[string]CatalogItem, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		if effectiveFrom, err := time.Parse("2006-01-02", strings.TrimSpace(item.EffectiveFrom)); err == nil && effectiveFrom.After(today) {
+			continue
+		}
 		key := item.ProductCode + "\x00" + item.Edition
 		current, exists := selected[key]
 		if !exists {

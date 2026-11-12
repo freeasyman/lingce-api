@@ -24,7 +24,7 @@ func (s *InstitutionService) GetPricing(ctx context.Context) (*PricingPayload, e
 	if err != nil {
 		return nil, fmt.Errorf("load product catalog: %w", err)
 	}
-	latest := latestCatalogVersions(items)
+	latest := effectiveCatalogVersions(items, s.today())
 	products := make(map[string]ProductDefinition, len(latest))
 	for _, item := range latest {
 		if normalizeEnum(item.Edition) != EditionStandard {

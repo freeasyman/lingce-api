@@ -68,8 +68,8 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 func TestInstitutionRouteRegistration(t *testing.T) {
 	h := &Handler{}
 	routes := h.institutionRoutes()
-	if len(routes) != 45 {
-		t.Fatalf("institutionRoutes 数量 = %d, want 45", len(routes))
+	if len(routes) != 52 {
+		t.Fatalf("institutionRoutes 数量 = %d, want 52", len(routes))
 	}
 	seen := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
@@ -128,6 +128,14 @@ func TestInstitutionRouteRegistration(t *testing.T) {
 		"POST /api/v1/ops/billing/payments",
 		"POST /api/v1/ops/billing/payments/{id}/allocations",
 		"GET /api/v1/ops/billing/invoices",
+		"POST /api/v1/ops/billing/invoices",
+		"POST /api/v1/ops/billing/invoices/{id}/issue",
+		"POST /api/v1/ops/billing/invoices/{id}/void",
+		"GET /api/v1/ops/billing/institutions/{id}/invoiceable-orders",
+		"GET /api/v1/ops/billing/export/{kind}",
+		"POST /api/v1/ops/billing/catalog/versions",
+		"GET /api/v1/ops/billing/institutions/{id}/action-logs",
+		"GET /api/v1/ops/billing/institutions/{id}/allocatable-orders",
 	}
 	for _, key := range expected {
 		if _, ok := seen[key]; !ok {

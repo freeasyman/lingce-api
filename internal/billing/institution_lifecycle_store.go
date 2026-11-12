@@ -2,8 +2,6 @@ package billing
 
 // 服务生命周期与更正动作的数据访问层：
 //   · 暂停/恢复：只写 tenants.paused_at / paused_reason；
-//   · 取消：一个事务里写 cancelled_at、终止当前服务期、同步 tenant_subscriptions、
-//     清零额度并按清零前余额写 expired 流水；
 //   · 作废订单：billing_orders.status='void'；
 //   · 调额度：锁额度行后改 granted/balance 并写 correction 流水。
 //
@@ -13,11 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
 
-// PauseTenantTx 写入暂停标记；已取消的机构返回 ErrInstitutionCancelled。
+// PauseTenantTx 写入暂停标记。
 //
 // 幂等由 service 层先判 paused_at 保证；这里再用条件更新兜住并发：
 // 两个并发暂停请求只有一个能写成功，另一个 RowsAffected=0（调用方按已暂停处理即可）。
@@ -28,7 +27,6 @@ SET paused_at = NOW(),
     paused_reason = $2,
     updated_at = NOW()
 WHERE id = $1
-  AND cancelled_at IS NULL
   AND paused_at IS NULL`, tenantID, reason)
 	if err != nil {
 		return false, fmt.Errorf("pause tenant: %w", err)
@@ -36,20 +34,14 @@ WHERE id = $1
 	if tag.RowsAffected() > 0 {
 		return true, nil
 	}
-	// 区分「已经暂停（幂等）」与「已取消（冲突）」。
-	var paused, cancelled bool
-	if err := tx.QueryRow(ctx, `
-SELECT paused_at IS NOT NULL, cancelled_at IS NOT NULL
-FROM tenants WHERE id = $1`, tenantID).Scan(&paused, &cancelled); err != nil {
+	// 已经暂停或行锁竞争导致没写：都按幂等成功处理（不重复写）。
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT true FROM tenants WHERE id = $1`, tenantID).Scan(&exists); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrInstitutionNotFound
 		}
 		return false, fmt.Errorf("classify pause conflict: %w", err)
 	}
-	if cancelled {
-		return false, ErrInstitutionCancelled
-	}
-	// paused 或行锁竞争导致没写：都算幂等成功（不重复写）。
 	return false, nil
 }
 
@@ -61,88 +53,11 @@ SET paused_at = NULL,
     paused_reason = '',
     updated_at = NOW()
 WHERE id = $1
-  AND cancelled_at IS NULL
   AND paused_at IS NOT NULL`, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("resume tenant: %w", err)
 	}
-	if tag.RowsAffected() > 0 {
-		return true, nil
-	}
-	var cancelled bool
-	if err := tx.QueryRow(ctx, `SELECT cancelled_at IS NOT NULL FROM tenants WHERE id = $1`, tenantID).Scan(&cancelled); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, ErrInstitutionNotFound
-		}
-		return false, fmt.Errorf("classify resume conflict: %w", err)
-	}
-	if cancelled {
-		return false, ErrInstitutionCancelled
-	}
-	return false, nil
-}
-
-// MarkTenantCancelledTx 写入取消标记；已经取消返回 RowsAffected=0（service 幂等返回）。
-func (s *Store) MarkTenantCancelledTx(ctx context.Context, tx pgx.Tx, tenantID int64, reason string) (bool, error) {
-	tag, err := tx.Exec(ctx, `
-UPDATE tenants
-SET cancelled_at = NOW(),
-    cancelled_reason = $2,
-    paused_at = NULL,
-    paused_reason = '',
-    updated_at = NOW()
-WHERE id = $1
-  AND cancelled_at IS NULL`, tenantID, reason)
-	if err != nil {
-		return false, fmt.Errorf("cancel tenant: %w", err)
-	}
 	return tag.RowsAffected() > 0, nil
-}
-
-// TerminatePeriodTx 把指定的当前服务期置 terminated（不按 status 过滤：
-// 已到期但尚未被任务关单的服务期也要结束，取消后不能再被到期任务复活）。
-func (s *Store) TerminatePeriodTx(ctx context.Context, tx pgx.Tx, tenantID, periodID int64) error {
-	if periodID <= 0 {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE subscription_periods
-SET status = 'terminated', updated_at = NOW()
-WHERE tenant_id = $1 AND id = $2`, tenantID, periodID); err != nil {
-		return fmt.Errorf("terminate subscription period: %w", err)
-	}
-	return nil
-}
-
-// TerminateTenantSubscriptionTx 同步存量 tenant_subscriptions（客户侧登录仍读这张表）。
-func (s *Store) TerminateTenantSubscriptionTx(ctx context.Context, tx pgx.Tx, tenantID int64) error {
-	if _, err := tx.Exec(ctx, `
-UPDATE tenant_subscriptions
-SET status = 'terminated',
-    paused_at = NULL,
-    updated_at = NOW()
-WHERE tenant_id = $1`, tenantID); err != nil {
-		return fmt.Errorf("terminate tenant subscription: %w", err)
-	}
-	return nil
-}
-
-// ClearEntitlementsTx 把机构全部额度行归零并置 cleared，返回被清零的行数。
-// 清零前的余额由 service 先读出来写 usage/expired 流水，保证账实一致。
-func (s *Store) ClearEntitlementsTx(ctx context.Context, tx pgx.Tx, tenantID int64) (int64, error) {
-	tag, err := tx.Exec(ctx, `
-UPDATE product_entitlements
-SET granted = 0,
-    used = 0,
-    rollover_bal = 0,
-    balance = 0,
-    status = 'cleared',
-    updated_at = NOW()
-WHERE tenant_id = $1`, tenantID)
-	if err != nil {
-		return 0, fmt.Errorf("clear entitlements: %w", err)
-	}
-	return tag.RowsAffected(), nil
 }
 
 // ListVoidableOrders 列出可作废订单：未收款、未核销且状态为 created。
@@ -240,17 +155,37 @@ WHERE tenant_id = $1
 // InsertCorrectionLedgerTx 写一条 source=correction 的流水：
 // 正向记 grant，负向记 usage（amount 带符号，与扣量流水的负数口径一致）。
 func (s *Store) InsertCorrectionLedgerTx(ctx context.Context, tx pgx.Tx, tenantID int64, productCode, unit string,
-	amountCents int64, reason, operator string) error {
+	amountCents int64, reason, operator, idempotencyKey string) error {
 	ledgerType := LedgerTypeGrant
 	amount := centsToDecimal(amountCents)
 	if amountCents < 0 {
 		ledgerType = LedgerTypeUsage
 	}
+	var key any
+	if keyText := strings.TrimSpace(idempotencyKey); keyText != "" {
+		key = keyText
+	}
 	if _, err := tx.Exec(ctx, `
-INSERT INTO entitlement_ledger (tenant_id, product_code, unit, type, amount, source, reason, operator)
-VALUES ($1, $2, $3, $4, $5::numeric, 'correction', $6, $7)`,
-		tenantID, productCode, unit, ledgerType, amount.String(), reason, operator); err != nil {
+INSERT INTO entitlement_ledger (tenant_id, product_code, unit, type, amount, source, reason, operator, idempotency_key)
+VALUES ($1, $2, $3, $4, $5::numeric, 'correction', $6, $7, $8)`,
+		tenantID, productCode, unit, ledgerType, amount.String(), reason, operator, key); err != nil {
 		return fmt.Errorf("insert correction ledger: %w", err)
 	}
 	return nil
+}
+
+// HasCorrectionLedgerTx 判断同一租户的幂等键是否已用于一笔调额度流水。
+func (s *Store) HasCorrectionLedgerTx(ctx context.Context, tx pgx.Tx, tenantID int64, idempotencyKey string) (bool, error) {
+	if tenantID <= 0 || strings.TrimSpace(idempotencyKey) == "" {
+		return false, nil
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM entitlement_ledger
+    WHERE tenant_id = $1 AND idempotency_key = $2
+)`, tenantID, strings.TrimSpace(idempotencyKey)).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check correction idempotency: %w", err)
+	}
+	return exists, nil
 }

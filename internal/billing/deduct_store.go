@@ -24,15 +24,14 @@ func (s *Store) BeginDeduct(ctx context.Context) (DeductTx, error) {
 	return &deductTx{tx: tx}, nil
 }
 
-// GetSubscriptionState 返回机构的服务闸门状态：暂停/取消优先，其余返回空串。
+// GetSubscriptionState 返回机构的服务闸门状态：暂停优先，其余返回空串。
 //
-// 与机构详情的 status 口径保持一致：取消 > 暂停。找不到租户时返回空串，
+// 与机构详情的 status 口径保持一致。找不到租户时返回空串，
 // 让后续额度查询按「没有额度」走（避免把不存在租户误报成服务暂停）。
 func (s *Store) GetSubscriptionState(ctx context.Context, tenantID int64) (string, error) {
 	var state string
 	err := s.pool.QueryRow(ctx, `
 SELECT CASE
-           WHEN cancelled_at IS NOT NULL THEN 'cancelled'
            WHEN paused_at IS NOT NULL THEN 'paused'
            ELSE ''
        END
@@ -50,14 +49,10 @@ WHERE id = $1
 
 // subscriptionGuard 把服务闸门状态映射成扣量/预检的错误；正常状态返回 nil。
 func subscriptionGuard(state string) error {
-	switch state {
-	case InstitutionStatusPaused:
+	if state == InstitutionStatusPaused {
 		return ErrSubscriptionPaused
-	case InstitutionStatusCancelled:
-		return ErrSubscriptionCancelled
-	default:
-		return nil
 	}
+	return nil
 }
 
 const lockEntitlementsSQL = `

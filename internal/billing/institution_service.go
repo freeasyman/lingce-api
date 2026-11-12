@@ -214,9 +214,8 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 		Start:   start,
 		End:     end,
 		Mode:    mode,
-		// 暂停仍然算「已开通」：服务期未结束，只是扣量闸门被临时关上；
-		// 取消后 open=false，前端不再展示开通/续期类动作。
-		Open:         status != InstitutionStatusUnopened && status != InstitutionStatusCancelled,
+		// 暂停仍然算「已开通」：服务期未结束，只是扣量与登录闸门被临时关上。
+		Open:         status != InstitutionStatusUnopened,
 		Status:       status,
 		Products:     buildInstitutionProducts(entitlements, mode),
 		Admins:       []InstitutionAdmin{},
@@ -232,10 +231,6 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 	if base.PausedAt != nil {
 		item.PausedReason = base.PausedReason
 	}
-	if base.CancelledAt != nil {
-		item.CancelledAt = base.CancelledAt.Format("2006-01-02 15:04")
-		item.CancelledReason = base.CancelledReason
-	}
 	if item.Departments == nil {
 		item.Departments = []string{}
 	}
@@ -243,14 +238,11 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 }
 
 // institutionStatus 推导机构服务状态，优先级：
-// 已取消 > 已暂停 > 未开通 > 已到期 > 试用中 > 正常。
+// 已暂停 > 未开通 > 已到期 > 试用中 > 正常。
 //
 // 「已到期」同时认服务期 status=expired 与 expired_on < 今天：到期任务每天跑一次，
 // 白天到期但任务还没跑时，接口也不能继续显示「正常」。
 func institutionStatus(base institutionBaseRow, mode string, today time.Time) string {
-	if base.CancelledAt != nil {
-		return InstitutionStatusCancelled
-	}
 	// 暂停优先于到期：暂停期间即使跨过到期日，状态徽标仍显示「已暂停」，
 	// 扣量闸门返回 SUBSCRIPTION_PAUSED；恢复后自然落到「已到期」。
 	if base.PausedAt != nil {
@@ -966,4 +958,19 @@ func sortedProductCodes(codes []string) []string {
 	result := append([]string(nil), codes...)
 	sort.Strings(result)
 	return result
+}
+
+// ListActionLogs 返回机构变更记录（system_action_logs，按数据权限校验）。
+func (s *InstitutionService) ListActionLogs(ctx context.Context, tenantID, adminID int64) ([]InstitutionActionLog, error) {
+	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
+		return nil, err
+	}
+	items, err := s.store.ListSystemActionLogs(ctx, tenantID, 200)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []InstitutionActionLog{}
+	}
+	return items, nil
 }

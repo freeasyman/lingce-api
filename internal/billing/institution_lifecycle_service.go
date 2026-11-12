@@ -1,12 +1,11 @@
 package billing
 
-// 计费运营端第 2 批：暂停服务 / 恢复服务 / 取消服务 / 作废订单 / 人工调额度。
+// 计费运营端第 2 批：暂停服务 / 恢复服务 / 作废订单 / 人工调额度。
 //
 // 业务口径（MVP）：
-//   · 暂停 = 临时停用，服务期不延长、额度不变；扣量/预检返回 SUBSCRIPTION_PAUSED。
+//   · 暂停 = 临时停用，服务期不延长、额度不变；客户仍可登录查看数据，
+//     但扣量/预检返回 SUBSCRIPTION_PAUSED（生成与消耗被拒绝）。
 //   · 恢复 = 清除暂停标记，其余字段不动（到期日不会因暂停顺延）。
-//   · 取消 = 立即终止，不可逆：当前服务期 terminated、额度全清并写 expired 流水、
-//     tenant_subscriptions 同步 terminated；扣量返回 SUBSCRIPTION_CANCELLED。
 //   · 作废订单 = 只允许作废未收款且未核销的订单；已作废再作废幂等返回 200。
 //   · 人工调额度 = granted/balance 同步加减（used 不动），负向不能把余额减成负数；
 //     写 source=correction 流水，审批人口径与赠送一致（1 个增量包起需要审批人）。
@@ -20,7 +19,7 @@ import (
 	"strings"
 )
 
-// SuspendInstitution 暂停服务。重复暂停幂等返回当前档案；已取消返回 409。
+// SuspendInstitution 暂停服务。重复暂停幂等返回当前档案。
 func (s *InstitutionService) SuspendInstitution(ctx context.Context, tenantID int64, req SuspendRequest, adminID int64) (*Institution, error) {
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
 		return nil, err
@@ -32,9 +31,6 @@ func (s *InstitutionService) SuspendInstitution(ctx context.Context, tenantID in
 	req, err = req.normalize()
 	if err != nil {
 		return nil, err
-	}
-	if base.CancelledAt != nil {
-		return nil, &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能暂停"}
 	}
 	if base.PeriodID == nil {
 		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "机构尚未开通，不能暂停"}
@@ -54,9 +50,6 @@ func (s *InstitutionService) SuspendInstitution(ctx context.Context, tenantID in
 	}
 	paused, err := s.store.PauseTenantTx(ctx, tx, tenantID, req.Reason)
 	if err != nil {
-		if errors.Is(err, ErrInstitutionCancelled) {
-			return nil, &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能暂停"}
-		}
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -79,7 +72,7 @@ func (s *InstitutionService) SuspendInstitution(ctx context.Context, tenantID in
 	return item, nil
 }
 
-// ResumeInstitution 恢复服务。重复恢复幂等返回当前档案；已取消返回 409。
+// ResumeInstitution 恢复服务。重复恢复幂等返回当前档案。
 func (s *InstitutionService) ResumeInstitution(ctx context.Context, tenantID int64, adminID int64) (*Institution, error) {
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
 		return nil, err
@@ -87,9 +80,6 @@ func (s *InstitutionService) ResumeInstitution(ctx context.Context, tenantID int
 	base, err := s.store.GetInstitutionBase(ctx, tenantID)
 	if err != nil {
 		return nil, err
-	}
-	if base.CancelledAt != nil {
-		return nil, &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能恢复"}
 	}
 	if base.PausedAt == nil {
 		// 重复恢复：不报错、不改数据。
@@ -107,9 +97,6 @@ func (s *InstitutionService) ResumeInstitution(ctx context.Context, tenantID int
 	}
 	resumed, err := s.store.ResumeTenantTx(ctx, tx, tenantID)
 	if err != nil {
-		if errors.Is(err, ErrInstitutionCancelled) {
-			return nil, &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能恢复"}
-		}
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -129,102 +116,6 @@ func (s *InstitutionService) ResumeInstitution(ctx context.Context, tenantID int
 			After:  map[string]any{"status": item.Status},
 		})
 	}
-	return item, nil
-}
-
-// CancelInstitution 取消服务（不可逆）。重复取消幂等返回当前档案，不会重复清零/写流水。
-func (s *InstitutionService) CancelInstitution(ctx context.Context, tenantID int64, req CancelRequest, adminID int64) (*Institution, error) {
-	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
-		return nil, err
-	}
-	base, err := s.store.GetInstitutionBase(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	req, err = req.normalize()
-	if err != nil {
-		return nil, err
-	}
-	if base.CancelledAt != nil {
-		// 取消是幂等操作：重复调用返回当前档案，不再写流水。
-		return s.GetInstitution(ctx, tenantID)
-	}
-	if base.PeriodID == nil {
-		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "机构尚未开通，不能取消"}
-	}
-
-	operator := s.service.resolveOperator(ctx, adminID)
-	tx, err := s.store.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin cancel transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
-		return nil, err
-	}
-
-	marked, err := s.store.MarkTenantCancelledTx(ctx, tx, tenantID, req.Reason)
-	if err != nil {
-		return nil, err
-	}
-	if !marked {
-		// 并发下已经被另一个请求取消：不重复清零，提交空事务后返回。
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("commit idempotent cancel transaction: %w", err)
-		}
-		return s.GetInstitution(ctx, tenantID)
-	}
-
-	if err := s.store.TerminatePeriodTx(ctx, tx, tenantID, *base.PeriodID); err != nil {
-		return nil, err
-	}
-	if err := s.store.TerminateTenantSubscriptionTx(ctx, tx, tenantID); err != nil {
-		return nil, err
-	}
-
-	// 先锁额度行并记下清零前余额，再统一归零：流水金额必须与清零前的 balance 对得上。
-	rows, err := s.store.LoadEntitlementRowsForUpdateTx(ctx, tx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	ledgerRows := 0
-	for _, row := range rows {
-		balanceCents, err := parseEntitlementCents("balance", row.Balance)
-		if err != nil {
-			return nil, fmt.Errorf("cancel institution %s/%s: %w", row.ProductCode, row.Unit, err)
-		}
-		if balanceCents == 0 {
-			continue
-		}
-		// 余额清零 = 一笔 usage（amount 为清零前余额的相反数）；source=expired 与到期清零一致。
-		if err := s.store.InsertUsageLedgerTx(ctx, tx, tenantID, row.ProductCode, row.Unit,
-			Decimal(centsToDecimal(-balanceCents)), ledgerSourceExpired, "取消服务", operator); err != nil {
-			return nil, err
-		}
-		ledgerRows++
-	}
-	clearedRows, err := s.store.ClearEntitlementsTx(ctx, tx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit cancel transaction: %w", err)
-	}
-
-	item, err := s.GetInstitution(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	s.recordLifecycleLog(ctx, institutionLifecycleLogInput{
-		TenantID: tenantID, TenantName: item.Name, ActorID: adminID,
-		ActionCode: "institution.cancel", ActionName: "取消服务",
-		ObjectType: "institution", ObjectID: strconv.FormatInt(tenantID, 10), ObjectName: item.Name,
-		Before: map[string]any{"status": institutionStatus(base, base.AccountMode, s.today()), "end": valueOrEmpty(base.ExpiredOn)},
-		After: map[string]any{
-			"status": InstitutionStatusCancelled, "reason": req.Reason,
-			"clearedRows": clearedRows, "ledgerRows": ledgerRows,
-		},
-	})
 	return item, nil
 }
 
@@ -332,7 +223,6 @@ func voidableOrderGuard(order Order) error {
 // 口径说明：
 //   - 以 product_entitlements.balance 作为可调余额，减少后不能为负；
 //   - 正向记 type=grant、负向记 type=usage，source 统一 correction；
-//   - 机构已取消时拒绝（已终止的服务不再接受额度调整）；
 //   - 调整绝对值达到 1 个增量包时 approver 必填，审批人姓名写进流水 reason。
 func (s *InstitutionService) CorrectEntitlement(ctx context.Context, tenantID int64, req EntitlementCorrectionRequest, adminID int64) (*Institution, error) {
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
@@ -345,9 +235,6 @@ func (s *InstitutionService) CorrectEntitlement(ctx context.Context, tenantID in
 	req, err = req.normalize()
 	if err != nil {
 		return nil, err
-	}
-	if base.CancelledAt != nil {
-		return nil, &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能再调额度"}
 	}
 	index, _, err := s.loadCatalogProducts(ctx)
 	if err != nil {
@@ -376,6 +263,13 @@ func (s *InstitutionService) CorrectEntitlement(ctx context.Context, tenantID in
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
 		return nil, err
+	}
+	// 幂等键命中时直接返回当前机构，不再改额度、不重复写流水与日志。
+	// 同租户的调额度都先锁 tenants 行，因此这里的检查与后续写入不会被并发穿透。
+	if duplicated, err := s.store.HasCorrectionLedgerTx(ctx, tx, tenantID, req.IdempotencyKey); err != nil {
+		return nil, err
+	} else if duplicated {
+		return s.GetInstitution(ctx, tenantID)
 	}
 	rows, err := s.store.LoadEntitlementRowsForUpdateTx(ctx, tx, tenantID)
 	if err != nil {
@@ -408,7 +302,7 @@ func (s *InstitutionService) CorrectEntitlement(ctx context.Context, tenantID in
 		return nil, err
 	}
 	if err := s.store.InsertCorrectionLedgerTx(ctx, tx, tenantID, row.ProductCode, row.Unit,
-		amountCents, reason, operator); err != nil {
+		amountCents, reason, operator, req.IdempotencyKey); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -471,7 +365,7 @@ func pickCorrectionEntitlement(rows []Entitlement, productCode, unit, accountMod
 	return candidates[0], nil
 }
 
-// institutionLifecycleLogInput 是暂停/恢复/取消/作废/调额度的审计日志入参。
+// institutionLifecycleLogInput 是暂停/恢复/作废/调额度的审计日志入参。
 type institutionLifecycleLogInput struct {
 	TenantID   int64
 	TenantName string

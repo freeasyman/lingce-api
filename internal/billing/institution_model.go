@@ -54,16 +54,14 @@ const (
 
 // 机构服务状态（GET /ops/billing/institutions/{id} 的 status）。
 //
-// 判定优先级见 institutionStatus：
-// cancelled > paused > unopened > expired > trial > active。
-// 前端「已暂停 / 已取消」徽标直接读这个字段，不再自己按日期猜。
+// 判定优先级见 institutionStatus：paused > unopened > expired > trial > active。
+// 前端「已暂停」徽标直接读这个字段，不再自己按日期猜。
 const (
-	InstitutionStatusUnopened  = "unopened"
-	InstitutionStatusTrial     = "trial"
-	InstitutionStatusActive    = "active"
-	InstitutionStatusPaused    = "paused"
-	InstitutionStatusExpired   = "expired"
-	InstitutionStatusCancelled = "cancelled"
+	InstitutionStatusUnopened = "unopened"
+	InstitutionStatusTrial    = "trial"
+	InstitutionStatusActive   = "active"
+	InstitutionStatusPaused   = "paused"
+	InstitutionStatusExpired  = "expired"
 )
 
 // 字典类型。
@@ -151,12 +149,18 @@ var (
 	ErrBundleMismatch = errors.New("billing: bundle does not match selected products")
 	// ErrSubscriptionPaused 表示机构服务已被暂停，扣量/预检拒绝执行（409）。
 	ErrSubscriptionPaused = errors.New("billing: subscription is paused")
-	// ErrSubscriptionCancelled 表示机构服务已取消，扣量/预检拒绝执行（409）。
-	ErrSubscriptionCancelled = errors.New("billing: subscription is cancelled")
-	// ErrInstitutionCancelled 表示机构已取消服务，不能再做暂停/调额度等运营动作（409）。
-	ErrInstitutionCancelled = errors.New("billing: institution service is cancelled")
 	// ErrOrderNotVoidable 表示订单已收款/已核销/状态不允许作废（409）。
 	ErrOrderNotVoidable = errors.New("billing: order is not voidable")
+	// ErrInvoiceNotFound 表示开票记录不存在（404）。
+	ErrInvoiceNotFound = errors.New("billing: invoice not found")
+	// ErrInvoiceNoExists 表示发票号已被其它发票占用（409）。
+	ErrInvoiceNoExists = errors.New("billing: invoice number already exists")
+	// ErrInvoiceStatusInvalid 表示发票当前状态不允许该操作（409）。
+	ErrInvoiceStatusInvalid = errors.New("billing: invoice status does not allow the operation")
+	// ErrOrderNotInvoiceable 表示订单已作废/取消/退款，不能开票（409）。
+	ErrOrderNotInvoiceable = errors.New("billing: order is not invoiceable")
+	// ErrInvoiceExceedsOrder 表示订单累计开票金额超过应收（400）。
+	ErrInvoiceExceedsOrder = errors.New("billing: invoice amount exceeds order payable")
 )
 
 // ConflictError 是带业务提示的 409 冲突；Unwrap 保留 sentinel，handler 既能按类型给友好文案，
@@ -258,35 +262,33 @@ type InstitutionDocument struct {
 // Institution 是机构档案，字段与 billingMock.ts 的 Institution 一致。
 // products 是 产品代码 -> 单位 -> {granted, used, balance} 的两层对象。
 type Institution struct {
-	ID              int64                                  `json:"id"`
-	Name            string                                 `json:"name"`
-	Legal           string                                 `json:"legal"`
-	Code            string                                 `json:"code"`
-	Industry        string                                 `json:"industry"`
-	Departments     []string                               `json:"departments"`
-	Region          InstitutionRegion                      `json:"region"`
-	Contact         string                                 `json:"contact"`
-	Title           string                                 `json:"title"`
-	Phone           string                                 `json:"phone"`
-	Email           string                                 `json:"email"`
-	Channel         string                                 `json:"channel"`
-	Sales           string                                 `json:"sales"`
-	Start           string                                 `json:"start"`
-	End             string                                 `json:"end"`
-	Mode            string                                 `json:"mode"`
-	Open            bool                                   `json:"open"`
-	Status          string                                 `json:"status"`
-	PausedAt        string                                 `json:"pausedAt,omitempty"`
-	PausedReason    string                                 `json:"pausedReason,omitempty"`
-	CancelledAt     string                                 `json:"cancelledAt,omitempty"`
-	CancelledReason string                                 `json:"cancelledReason,omitempty"`
-	Products        map[string]map[string]InstitutionQuota `json:"products"`
-	Admins          []InstitutionAdmin                     `json:"admins"`
-	Receivables     []InstitutionReceivable                `json:"receivables"`
-	PayLogs         []InstitutionPayLog                    `json:"payLogs"`
-	Consumptions    []InstitutionConsumption               `json:"consumptions"`
-	Logs            []InstitutionLog                       `json:"logs"`
-	Documents       []InstitutionDocument                  `json:"documents"`
+	ID           int64                                  `json:"id"`
+	Name         string                                 `json:"name"`
+	Legal        string                                 `json:"legal"`
+	Code         string                                 `json:"code"`
+	Industry     string                                 `json:"industry"`
+	Departments  []string                               `json:"departments"`
+	Region       InstitutionRegion                      `json:"region"`
+	Contact      string                                 `json:"contact"`
+	Title        string                                 `json:"title"`
+	Phone        string                                 `json:"phone"`
+	Email        string                                 `json:"email"`
+	Channel      string                                 `json:"channel"`
+	Sales        string                                 `json:"sales"`
+	Start        string                                 `json:"start"`
+	End          string                                 `json:"end"`
+	Mode         string                                 `json:"mode"`
+	Open         bool                                   `json:"open"`
+	Status       string                                 `json:"status"`
+	PausedAt     string                                 `json:"pausedAt,omitempty"`
+	PausedReason string                                 `json:"pausedReason,omitempty"`
+	Products     map[string]map[string]InstitutionQuota `json:"products"`
+	Admins       []InstitutionAdmin                     `json:"admins"`
+	Receivables  []InstitutionReceivable                `json:"receivables"`
+	PayLogs      []InstitutionPayLog                    `json:"payLogs"`
+	Consumptions []InstitutionConsumption               `json:"consumptions"`
+	Logs         []InstitutionLog                       `json:"logs"`
+	Documents    []InstitutionDocument                  `json:"documents"`
 }
 
 // InstitutionListResult 是 GET /ops/billing/institutions 的 data。
@@ -861,6 +863,8 @@ type PaymentRecord struct {
 	Status          string  `json:"status"`
 	Note            string  `json:"note"`
 	VoucherNo       string  `json:"voucher_no"`
+	// Allocations 是核销明细；收款单列表直接带出，前端展开行即可查看，无需二次请求。
+	Allocations []PaymentAllocationRecord `json:"allocations,omitempty"`
 }
 
 // PaymentListResult 是 GET /ops/billing/payments 的 data。

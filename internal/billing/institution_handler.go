@@ -51,10 +51,9 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/products", h.AddInstitutionProduct),
 		ops("POST", institution+"/{id}/extend-trial", h.ExtendInstitutionTrial),
 		ops("POST", institution+"/{id}/payments", h.ReceiveInstitutionPayment),
-		// 服务生命周期（第 2 批）：暂停 / 恢复 / 取消
+		// 服务生命周期（第 2 批）：暂停 / 恢复
 		ops("POST", institution+"/{id}/suspend", h.SuspendInstitution),
 		ops("POST", institution+"/{id}/resume", h.ResumeInstitution),
-		ops("POST", institution+"/{id}/cancel", h.CancelInstitution),
 		// 更正：作废订单 / 人工调额度
 		ops("GET", institution+"/{id}/voidable-orders", h.ListVoidableInstitutionOrders),
 		ops("POST", institution+"/{id}/entitlement-corrections", h.CorrectInstitutionEntitlement),
@@ -85,8 +84,20 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("GET", base+"/payments", h.ListBillingPayments),
 		ops("POST", base+"/payments", h.CreateBillingPayment),
 		ops("POST", base+"/payments/{id}/allocations", h.AllocateBillingPayment),
-		// 开票记录本轮不做：入口保留，返回空列表，前端页面不至于报错。
+		// 财务：开票记录（第 3 批）
 		ops("GET", base+"/invoices", h.ListBillingInvoices),
+		ops("POST", base+"/invoices", h.CreateBillingInvoice),
+		ops("POST", base+"/invoices/{id}/issue", h.IssueBillingInvoice),
+		ops("POST", base+"/invoices/{id}/void", h.VoidBillingInvoice),
+		ops("GET", institution+"/{id}/invoiceable-orders", h.ListInstitutionInvoiceableOrders),
+		// 财务：应收 / 收款 / 开票 CSV 导出
+		ops("GET", base+"/export/{kind}", h.ExportBillingFinance),
+		// 改价：新增价目版本（审批人 + 原因必填，写 system_action_logs）
+		ops("POST", base+"/catalog/versions", h.CreateBillingCatalogVersion),
+		// 机构变更记录（system_action_logs）
+		ops("GET", institution+"/{id}/action-logs", h.ListInstitutionActionLogs),
+		// 可核销订单（新建跨机构收款单的订单选择器）
+		ops("GET", institution+"/{id}/allocatable-orders", h.ListInstitutionAllocatableOrders),
 	}
 }
 
@@ -511,29 +522,6 @@ func (h *Handler) ResumeInstitution(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, item)
 }
 
-// CancelInstitution 取消服务（原因必填 + confirmed=true；重复取消幂等）。
-func (h *Handler) CancelInstitution(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireInstitutionID(w, r)
-	if !ok {
-		return
-	}
-	adminID, ok := requireAdminActor(w, r)
-	if !ok {
-		return
-	}
-	var req CancelRequest
-	if err := decodeInstitutionBody(r, &req); err != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	item, err := h.institutions.CancelInstitution(r.Context(), tenantID, req, adminID)
-	if err != nil {
-		writeInstitutionError(w, err)
-		return
-	}
-	httputil.WriteSuccess(w, item)
-}
-
 // ListVoidableInstitutionOrders 列出该机构可作废的订单（未收款 + 未核销）。
 func (h *Handler) ListVoidableInstitutionOrders(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := requireInstitutionID(w, r)
@@ -947,13 +935,160 @@ func (h *Handler) AllocateBillingPayment(w http.ResponseWriter, r *http.Request)
 	httputil.WriteSuccess(w, result)
 }
 
-// ListBillingInvoices 开票记录（本轮不做，返回空列表保持前端可用）。
+// ListBillingInvoices 开票记录列表：?tenantId=&status=（同时兼容 tenant_id）。
 func (h *Handler) ListBillingInvoices(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteSuccess(w, map[string]any{
-		"items":   []any{},
-		"isMock":  false,
-		"pending": "开票记录将在后续阶段实现",
-	})
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	tenantID := int64(0)
+	if raw := firstQueryValue(query.Get("tenantId"), query.Get("tenant_id")); raw != "" {
+		parsed, err := parseTenantIDQuery(raw)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+		tenantID = parsed
+	}
+	result, err := h.institutions.ListInvoices(r.Context(), InvoiceFilter{
+		TenantID: tenantID,
+		Status:   query.Get("status"),
+	}, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// CreateBillingInvoice 新建开票记录。
+func (h *Handler) CreateBillingInvoice(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CreateInvoiceRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	invoice, err := h.institutions.CreateInvoice(r.Context(), req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, invoice)
+}
+
+// IssueBillingInvoice 标记发票已开。
+func (h *Handler) IssueBillingInvoice(w http.ResponseWriter, r *http.Request) {
+	invoiceID, ok := requirePathID(w, r, "id", "Invalid invoice ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req IssueInvoiceRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	invoice, err := h.institutions.IssueInvoice(r.Context(), invoiceID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, invoice)
+}
+
+// VoidBillingInvoice 作废发票。
+func (h *Handler) VoidBillingInvoice(w http.ResponseWriter, r *http.Request) {
+	invoiceID, ok := requirePathID(w, r, "id", "Invalid invoice ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req VoidInvoiceRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	invoice, err := h.institutions.VoidInvoice(r.Context(), invoiceID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, invoice)
+}
+
+// ListInstitutionInvoiceableOrders 机构可开票订单（关联订单开票时选单用）。
+func (h *Handler) ListInstitutionInvoiceableOrders(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListInvoiceableOrders(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// ListInstitutionActionLogs 机构变更记录（system_action_logs）。
+func (h *Handler) ListInstitutionActionLogs(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListActionLogs(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
+}
+
+// ListInstitutionAllocatableOrders 机构可核销订单（新建收款单/追加核销时的订单选择器）。
+func (h *Handler) ListInstitutionAllocatableOrders(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListAllocatableOrders(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// firstQueryValue 返回第一个非空 query 值（兼容 camelCase 与 snake_case）。
+func firstQueryValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,6 +1144,16 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusNotFound, "ADMIN_NOT_FOUND", "管理员不存在", nil)
 	case errors.Is(err, ErrPaymentNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "收款单不存在", nil)
+	case errors.Is(err, ErrInvoiceNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "INVOICE_NOT_FOUND", "开票记录不存在", nil)
+	case errors.Is(err, ErrInvoiceNoExists):
+		httputil.WriteError(w, http.StatusConflict, "INVOICE_NO_EXISTS", "发票号已存在，请核对后重试", nil)
+	case errors.Is(err, ErrInvoiceStatusInvalid):
+		httputil.WriteError(w, http.StatusConflict, "INVOICE_STATUS_INVALID", "发票当前状态不允许该操作", nil)
+	case errors.Is(err, ErrOrderNotInvoiceable):
+		httputil.WriteError(w, http.StatusConflict, "ORDER_NOT_INVOICEABLE", "订单已作废/取消/退款，不能开票", nil)
+	case errors.Is(err, ErrInvoiceExceedsOrder):
+		httputil.WriteError(w, http.StatusBadRequest, "INVOICE_EXCEEDS_ORDER", "开票金额超过订单应收", nil)
 	case errors.Is(err, ErrDocumentNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "DOCUMENT_NOT_FOUND", "文档不存在", nil)
 	case errors.Is(err, ErrPeerNotFound):
@@ -1035,8 +1180,6 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusBadRequest, "PERIOD_WINDOW_INVALID", "服务期到期日不能早于开始日", nil)
 	case errors.Is(err, ErrBundleMismatch):
 		httputil.WriteError(w, http.StatusBadRequest, "BUNDLE_MISMATCH", "套餐与勾选的产品不一致", nil)
-	case errors.Is(err, ErrInstitutionCancelled), errors.Is(err, ErrSubscriptionCancelled):
-		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_CANCELLED", "该机构服务已取消", nil)
 	case errors.Is(err, ErrSubscriptionPaused):
 		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "该机构服务已暂停，请联系运营恢复", nil)
 	case errors.Is(err, ErrOrderNotVoidable):
@@ -1055,12 +1198,14 @@ func conflictCode(sentinel error) string {
 		return "ADMIN_PHONE_USED"
 	case errors.Is(sentinel, ErrInstitutionCodeConflict):
 		return "INSTITUTION_CODE_USED"
-	case errors.Is(sentinel, ErrInstitutionCancelled), errors.Is(sentinel, ErrSubscriptionCancelled):
-		return "SUBSCRIPTION_CANCELLED"
 	case errors.Is(sentinel, ErrSubscriptionPaused):
 		return "SUBSCRIPTION_PAUSED"
 	case errors.Is(sentinel, ErrOrderNotVoidable):
 		return "ORDER_NOT_VOIDABLE"
+	case errors.Is(sentinel, ErrInvoiceStatusInvalid):
+		return "INVOICE_STATUS_INVALID"
+	case errors.Is(sentinel, ErrOrderNotInvoiceable):
+		return "ORDER_NOT_INVOICEABLE"
 	default:
 		return "CONFLICT"
 	}

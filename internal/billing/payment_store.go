@@ -292,6 +292,59 @@ ORDER BY p.received_on DESC, p.id DESC`, orgID, adminID)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate payments: %w", err)
 	}
+	if len(items) > 0 {
+		paymentIDs := make([]int64, 0, len(items))
+		byPayment := make(map[int64][]PaymentAllocationRecord, len(items))
+		for _, item := range items {
+			paymentIDs = append(paymentIDs, item.ID)
+		}
+		allocations, err := s.listAllocationsForPayments(ctx, paymentIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, allocation := range allocations {
+			byPayment[allocation.PaymentID] = append(byPayment[allocation.PaymentID], allocation)
+		}
+		for index := range items {
+			items[index].Allocations = byPayment[items[index].ID]
+			if items[index].Allocations == nil {
+				items[index].Allocations = []PaymentAllocationRecord{}
+			}
+		}
+	}
+	return items, nil
+}
+
+// listAllocationsForPayments 批量取多张收款单的核销明细（带订单号与机构名）。
+func (s *Store) listAllocationsForPayments(ctx context.Context, paymentIDs []int64) ([]PaymentAllocationRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT a.id, a.payment_id, a.order_id, o.order_no, o.tenant_id, COALESCE(t.name, ''), a.amount::text
+FROM billing_payment_allocations a
+JOIN billing_orders o ON o.id = a.order_id
+LEFT JOIN tenants t ON t.id = o.tenant_id
+WHERE a.payment_id = ANY($1)
+ORDER BY a.payment_id, a.id`, paymentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list payment allocations for payments: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]PaymentAllocationRecord, 0, len(paymentIDs)*2)
+	for rows.Next() {
+		var (
+			item   PaymentAllocationRecord
+			amount string
+		)
+		if err := rows.Scan(&item.ID, &item.PaymentID, &item.OrderID, &item.OrderNo,
+			&item.TenantID, &item.TenantName, &amount); err != nil {
+			return nil, fmt.Errorf("scan payment allocation: %w", err)
+		}
+		item.Amount = Decimal(amount)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate payment allocations: %w", err)
+	}
 	return items, nil
 }
 
@@ -440,4 +493,38 @@ func derivePaymentStatus(settled, amount Decimal) string {
 	default:
 		return PaymentStatusPartial
 	}
+}
+
+// ListAllocatableOrders 列出机构可核销订单：已收 < 应收，且订单未作废/取消/退款。
+// 新建跨机构收款单的订单选择器用它带出订单号与剩余应收。
+func (s *Store) ListAllocatableOrders(ctx context.Context, tenantID int64, limit int) ([]Order, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT `+orderColumns+`
+FROM billing_orders
+WHERE tenant_id = $1
+  AND order_type NOT IN ('gift', 'trial')
+  AND status NOT IN ('cancelled', 'refunded', 'void')
+  AND payable_amount > paid_amount
+ORDER BY created_at ASC, id ASC
+LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list allocatable orders: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]Order, 0, 16)
+	for rows.Next() {
+		order, err := scanOrder(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan allocatable order: %w", err)
+		}
+		items = append(items, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate allocatable orders: %w", err)
+	}
+	return items, nil
 }

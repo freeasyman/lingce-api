@@ -38,9 +38,7 @@ CREATE TABLE tenants (
     name TEXT,
     deleted_at TIMESTAMP,
     paused_at TIMESTAMPTZ,
-    paused_reason TEXT NOT NULL DEFAULT '',
-    cancelled_at TIMESTAMPTZ,
-    cancelled_reason TEXT NOT NULL DEFAULT ''
+    paused_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE tenant_subscription_plans (

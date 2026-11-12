@@ -21,13 +21,6 @@ func TestNormalizeLifecycleRequests(t *testing.T) {
 		t.Fatalf("合法暂停原因被拒：%v", err)
 	}
 
-	if _, err := (CancelRequest{Reason: "客户要求终止"}).normalize(); err == nil {
-		t.Fatal("未勾选确认的取消应报错")
-	}
-	if _, err := (CancelRequest{Reason: "客户要求终止", Confirmed: true}).normalize(); err != nil {
-		t.Fatalf("合法取消请求被拒：%v", err)
-	}
-
 	if _, err := (VoidOrderRequest{}).normalize(); err == nil {
 		t.Fatal("作废原因为空应报错")
 	}
@@ -101,7 +94,6 @@ func TestInstitutionStatusPriority(t *testing.T) {
 	yesterday := today.AddDate(0, 0, -1)
 	tomorrow := today.AddDate(0, 0, 1)
 	pausedAt := today.Add(-time.Hour)
-	cancelledAt := today.Add(-time.Minute)
 	periodID := int64(7)
 	active := PeriodStatusActive
 	expired := PeriodStatusExpired
@@ -115,12 +107,6 @@ func TestInstitutionStatusPriority(t *testing.T) {
 		mode string
 		want string
 	}{
-		{
-			name: "cancelled wins over everything",
-			base: institutionBaseRow{CancelledAt: &cancelledAt, PausedAt: &pausedAt, PeriodID: &periodID,
-				PeriodStatus: active, ExpiredOn: &endFuture},
-			mode: AccountModeFormal, want: InstitutionStatusCancelled,
-		},
 		{
 			name: "paused wins over expired",
 			base: institutionBaseRow{PausedAt: &pausedAt, PeriodID: &periodID,
@@ -183,7 +169,7 @@ func TestVoidableOrderGuard(t *testing.T) {
 	}
 }
 
-func TestDeductRejectedWhenPausedOrCancelled(t *testing.T) {
+func TestDeductRejectedWhenPaused(t *testing.T) {
 	t.Run("paused", func(t *testing.T) {
 		service, repo := newDeductTestService(9, officialRow("hour", "400", "0", "0", "400"))
 		repo.subscriptionState = InstitutionStatusPaused
@@ -198,19 +184,6 @@ func TestDeductRejectedWhenPausedOrCancelled(t *testing.T) {
 		}
 		if err := service.CheckQuota(context.Background(), 9, "yingke", []DeductItem{{Unit: "hour", Amount: 1}}); !errors.Is(err, ErrSubscriptionPaused) {
 			t.Fatalf("暂停机构预检应返回 ErrSubscriptionPaused，实际 %v", err)
-		}
-	})
-
-	t.Run("cancelled", func(t *testing.T) {
-		service, repo := newDeductTestService(9, officialRow("hour", "400", "0", "0", "400"))
-		repo.subscriptionState = InstitutionStatusCancelled
-		_, err := service.Deduct(context.Background(), deductInput(9, "emr:record:2:draft",
-			DeductItem{Unit: "hour", Amount: 1}))
-		if !errors.Is(err, ErrSubscriptionCancelled) {
-			t.Fatalf("取消机构扣量应返回 ErrSubscriptionCancelled，实际 %v", err)
-		}
-		if err := service.CheckQuota(context.Background(), 9, "yingke", []DeductItem{{Unit: "hour", Amount: 1}}); !errors.Is(err, ErrSubscriptionCancelled) {
-			t.Fatalf("取消机构预检应返回 ErrSubscriptionCancelled，实际 %v", err)
 		}
 	})
 
@@ -231,9 +204,6 @@ func TestLifecycleHTTPErrorMapping(t *testing.T) {
 		code   string
 	}{
 		{"paused", ErrSubscriptionPaused, http.StatusConflict, "SUBSCRIPTION_PAUSED"},
-		{"cancelled sentinel", ErrSubscriptionCancelled, http.StatusConflict, "SUBSCRIPTION_CANCELLED"},
-		{"cancelled conflict", &ConflictError{Sentinel: ErrInstitutionCancelled, Message: "该机构服务已取消，不能暂停"},
-			http.StatusConflict, "SUBSCRIPTION_CANCELLED"},
 		{"order not voidable", &ConflictError{Sentinel: ErrOrderNotVoidable, Message: "订单已收款，不能作废；请先完成退款流程"},
 			http.StatusConflict, "ORDER_NOT_VOIDABLE"},
 	}
@@ -257,21 +227,24 @@ func TestLifecycleHTTPErrorMapping(t *testing.T) {
 		})
 	}
 
-	// 内部扣量接口：暂停/取消必须是 409 + 固定错误码。
+	// 内部扣量接口：暂停必须是 409 + 固定错误码，且文案是客户口径（不能出现「联系运营」）。
 	for _, item := range []struct {
 		err  error
 		code string
 	}{
 		{ErrSubscriptionPaused, "SUBSCRIPTION_PAUSED"},
-		{ErrSubscriptionCancelled, "SUBSCRIPTION_CANCELLED"},
 	} {
 		recorder := httptest.NewRecorder()
 		writeInternalBillingError(recorder, item.err)
 		if recorder.Code != http.StatusConflict {
 			t.Fatalf("internal status = %d, want 409", recorder.Code)
 		}
-		if !strings.Contains(recorder.Body.String(), item.code) {
-			t.Fatalf("internal body = %s, want code %s", recorder.Body.String(), item.code)
+		body := recorder.Body.String()
+		if !strings.Contains(body, item.code) {
+			t.Fatalf("internal body = %s, want code %s", body, item.code)
+		}
+		if !strings.Contains(body, "专属顾问") || strings.Contains(body, "运营") {
+			t.Fatalf("内部扣量暂停文案应为客户口径，实际 %s", body)
 		}
 	}
 }

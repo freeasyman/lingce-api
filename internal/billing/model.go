@@ -153,6 +153,10 @@ type CatalogItem struct {
 	IncrementPrice Decimal    `json:"increment_price"`
 	Increments     Quantities `json:"increments"`
 	IsActive       bool       `json:"is_active"`
+	// EffectiveFrom 是价目版本生效日；空串表示历史版本（立即生效）。
+	EffectiveFrom string `json:"effective_from,omitempty"`
+	Approver      string `json:"approver,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 }
 
 // CatalogFilter 是价目表查询条件。三个字段都为空时，每个 product+edition 只返回最新 price_version。
@@ -177,6 +181,10 @@ type CatalogVersionInput struct {
 	Quotas         Quantities
 	IncrementPrice Decimal
 	Increments     Quantities
+	// EffectiveFrom 为空表示历史版本（立即生效）；改价接口传入审批后的生效日。
+	EffectiveFrom *time.Time
+	Approver      string
+	Reason        string
 }
 
 // QuantityInputs 是"单位 → 数量"的入参映射，值可以是数字或数字字符串。

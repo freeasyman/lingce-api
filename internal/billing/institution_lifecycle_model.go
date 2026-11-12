@@ -1,6 +1,6 @@
 package billing
 
-// 计费运营端第 2 批的数据契约：暂停 / 恢复 / 取消服务、作废订单、人工调额度。
+// 计费运营端第 2 批的数据契约：暂停 / 恢复服务、作废订单、人工调额度。
 //
 // 这几个接口都挂在 /api/v1/ops/billing 下，请求体字段沿用前端习惯的 camelCase，
 // 同时接受 snake_case 兼容脚本调用；校验失败统一返回 *ValidationError（handler → 400）。
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// maxLifecycleReasonLength 是暂停/取消/作废/调额度原因的长度上限（与赠送保持一致）。
+// maxLifecycleReasonLength 是暂停/作废/调额度原因的长度上限（与赠送保持一致）。
 const maxLifecycleReasonLength = 500
 
 // SuspendRequest 是 POST /institutions/{id}/suspend 的请求体。
@@ -26,28 +26,6 @@ func (r SuspendRequest) normalize() (SuspendRequest, error) {
 	}
 	if len([]rune(r.Reason)) > maxLifecycleReasonLength {
 		return SuspendRequest{}, invalidf("暂停原因过长")
-	}
-	return r, nil
-}
-
-// CancelRequest 是 POST /institutions/{id}/cancel 的请求体。
-// confirmed 必须显式为 true，避免误触不可逆操作。
-type CancelRequest struct {
-	Reason    string `json:"reason"`
-	Confirmed bool   `json:"confirmed"`
-}
-
-// normalize 校验取消原因与二次确认。
-func (r CancelRequest) normalize() (CancelRequest, error) {
-	r.Reason = strings.TrimSpace(r.Reason)
-	if r.Reason == "" {
-		return CancelRequest{}, invalidf("请填取消原因")
-	}
-	if len([]rune(r.Reason)) > maxLifecycleReasonLength {
-		return CancelRequest{}, invalidf("取消原因过长")
-	}
-	if !r.Confirmed {
-		return CancelRequest{}, invalidf("取消服务需要二次确认（confirmed=true）")
 	}
 	return r, nil
 }
@@ -78,8 +56,11 @@ type EntitlementCorrectionRequest struct {
 	Amount      Decimal `json:"amount"`
 	Reason      string  `json:"reason"`
 	Approver    string  `json:"approver"`
+	// IdempotencyKey 由前端每次提交生成；重试同一笔调整时复用，避免重复加减额度。
+	IdempotencyKey string `json:"idempotencyKey"`
 
-	SnakeProductCode string `json:"product_code"`
+	SnakeProductCode    string `json:"product_code"`
+	SnakeIdempotencyKey string `json:"idempotency_key"`
 }
 
 // normalize 合并产品代码别名并做基础校验（产品/单位/金额/原因）。
@@ -88,6 +69,10 @@ func (r EntitlementCorrectionRequest) normalize() (EntitlementCorrectionRequest,
 	if r.ProductCode == "" {
 		r.ProductCode = r.SnakeProductCode
 	}
+	if r.IdempotencyKey == "" {
+		r.IdempotencyKey = r.SnakeIdempotencyKey
+	}
+	r.IdempotencyKey = strings.TrimSpace(r.IdempotencyKey)
 	r.ProductCode = normalizeEnum(r.ProductCode)
 	r.Unit = normalizeEnum(r.Unit)
 	r.Reason = strings.TrimSpace(r.Reason)
@@ -116,6 +101,9 @@ func (r EntitlementCorrectionRequest) normalize() (EntitlementCorrectionRequest,
 	r.Amount = Decimal(centsToDecimal(amount))
 	if r.Reason == "" {
 		return EntitlementCorrectionRequest{}, invalidf("请填调整原因")
+	}
+	if len(r.IdempotencyKey) > 128 {
+		return EntitlementCorrectionRequest{}, invalidf("幂等键过长")
 	}
 	if len([]rune(r.Reason)) > maxLifecycleReasonLength {
 		return EntitlementCorrectionRequest{}, invalidf("调整原因过长")

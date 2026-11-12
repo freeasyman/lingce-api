@@ -91,7 +91,7 @@ type fakeRepository struct {
 	// 阶段 D：扣量。deductRows/deductKeys 模拟 product_entitlements 与
 	// entitlement_ledger 的部分唯一索引；usageLedger 保存已提交的 usage 流水，
 	// 让"同键第二次不重复扣"能在内存里断言。
-	subscriptionState string // "" / paused / cancelled：扣量服务闸门
+	subscriptionState string // "" / paused：扣量服务闸门
 	deductTenantID    int64
 	deductRows        []Entitlement
 	deductKeys        map[string]struct{}

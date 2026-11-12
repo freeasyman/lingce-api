@@ -341,11 +341,8 @@ func writeInternalBillingError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, ErrSubscriptionPaused) {
-		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "该机构服务已暂停，请联系运营恢复", nil)
-		return
-	}
-	if errors.Is(err, ErrSubscriptionCancelled) {
-		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_CANCELLED", "该机构服务已取消，无法扣量", nil)
+		// 客户侧文案：扣量/预检的调用方是产品端，不能出现「联系运营」这种内部口径。
+		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "服务已暂停，请联系您的专属顾问", nil)
 		return
 	}
 	writeBillingError(w, err)
