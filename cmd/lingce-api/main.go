@@ -289,6 +289,8 @@ func main() {
 	compliancePermissionModule := compliancepermission.NewModule(pool)
 	compliancePermissionModule.RegisterRoutes(mux, cfg.JWT.Secret)
 	complianceGuardModule.SetPermissionService(compliancePermissionModule.Service())
+	// 调试分析接口只校验 JWT、不校验租户与权限：生产环境不注册（404）。
+	complianceGuardModule.SetAppEnv(cfg.App.Env)
 	complianceGuardModule.RegisterRoutes(mux, cfg.JWT.Secret, cfg.External.InternalWorkerToken)
 	var ossClient *oss.Client
 	if cfg.Aliyun.OSSEndpoint != "" && cfg.Aliyun.OSSBucket != "" {

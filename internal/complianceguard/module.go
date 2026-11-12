@@ -36,3 +36,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken str
 func (m *Module) SetPermissionService(service *compliancepermission.Service) {
 	m.handler.SetPermissionService(service)
 }
+
+// SetAppEnv 注入 app.env：生产环境下 RegisterRoutes 不注册调试分析接口。
+func (m *Module) SetAppEnv(env string) {
+	if m == nil {
+		return
+	}
+	m.handler.SetAppEnv(env)
+}

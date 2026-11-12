@@ -36,6 +36,9 @@ type Repository interface {
 
 	// 阶段 D：扣量。BeginDeduct 开启一个事务，后续锁行/流水/更新/读回都在同事务内完成。
 	BeginDeduct(ctx context.Context) (DeductTx, error)
+	// IsDeducted 只读查询某幂等键是否已经扣过（流水已落账），不开启事务、不加锁。
+	// 供交付入口在预检前判断"这笔交付已经付过费"，避免余额为 0 时误拦重复触发。
+	IsDeducted(ctx context.Context, tenantID int64, idempotencyKey string) (bool, error)
 	// GetSubscriptionState 返回机构的服务闸门状态："" / "paused"。
 	// 扣量与预检在进入额度计算前先过这道闸门（暂停的机构一律拒绝）。
 	GetSubscriptionState(ctx context.Context, tenantID int64) (string, error)

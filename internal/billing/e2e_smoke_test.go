@@ -152,6 +152,29 @@ func (f *smokeFlow) run() {
 
 	// ---------- 5. 幂等 ----------
 	f.section("幂等：同一 idempotency_key 重复扣只扣一次")
+	// 只读幂等查询：已扣过的键返回 true，未扣过/其它租户返回 false。
+	deducted, err := f.svc.IsDeducted(f.ctx, f.tenantID, hookKey)
+	if err != nil {
+		t.Fatalf("查询已扣幂等键失败: %v", err)
+	}
+	if !deducted {
+		t.Fatalf("已落账的幂等键 %s 应返回已扣", hookKey)
+	}
+	deducted, err = f.svc.IsDeducted(f.ctx, f.tenantID, fmt.Sprintf("emr:record:%d:unknown", f.tenantID))
+	if err != nil {
+		t.Fatalf("查询未扣幂等键失败: %v", err)
+	}
+	if deducted {
+		t.Fatal("未落账的幂等键不应返回已扣")
+	}
+	deducted, err = f.svc.IsDeducted(f.ctx, f.tenantID+1, hookKey)
+	if err != nil {
+		t.Fatalf("按租户查询幂等键失败: %v", err)
+	}
+	if deducted {
+		t.Fatal("其它租户的同一幂等键不应返回已扣")
+	}
+
 	ledgerBefore := len(f.ledger())
 	replay, err := f.svc.Deduct(f.ctx, billing.DeductInput{
 		TenantID:       f.tenantID,

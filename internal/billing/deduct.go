@@ -349,6 +349,25 @@ func (s *Service) CheckQuota(ctx context.Context, tenantID int64, productCode st
 	return nil
 }
 
+// IsDeducted 只读查询某幂等键是否已经扣过（对应 usage 流水已落账）。
+//
+// 交付入口用它判断"同一笔交付是否已付费"：已经扣过的重复触发（例如同一份病历的
+// 正式草稿已扣过、再做实验增量草稿）不应再跑额度预检，否则余额为 0 时会被误拦。
+// 该方法不开启事务、不加锁；并发下最终防重仍由扣量事务内的唯一索引保证。
+func (s *Service) IsDeducted(ctx context.Context, tenantID int64, idempotencyKey string) (bool, error) {
+	if s == nil || s.repo == nil {
+		return false, invalidf("billing repository is not configured")
+	}
+	if tenantID <= 0 {
+		return false, invalidf("tenant_id is required")
+	}
+	key, err := normalizeIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return false, err
+	}
+	return s.repo.IsDeducted(ctx, tenantID, key)
+}
+
 // normalizeDeductInput 校验扣量入参并归一化枚举、幂等键、原因与金额。
 func normalizeDeductInput(input DeductInput) (deductRequest, error) {
 	productCode, items, err := normalizeDemand(input.TenantID, input.ProductCode, input.Items)

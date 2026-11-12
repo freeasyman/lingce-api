@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/freeasyman/lingce-api/pkg/httputil"
@@ -41,74 +42,144 @@ func storyboardShotPromptGo(shotNo, sceneNo int, shot map[string]any) string {
 	)
 }
 
-// generateStoryboardImagesAsync 后台按顺序生成分镜缺失的线稿图，逐张写回 content.images。
-// images 是"稀疏数组"（无人物镜头不占位、缺图的镜头是空串），所以能按 index 精确定位缺哪张。
-func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, contentID, regenerateIndex int64) {
+// storyboardImageJob 是一个需要出图的分镜镜头及其稳定图位下标。
+// 无人物镜头不占图位，因此图位下标与 shots 的下标不是一回事。
+type storyboardImageJob struct {
+	ImageIndex int
+	ShotNo     int
+	SceneNo    int
+	Shot       map[string]any
+}
+
+// storyboardImageJobs 解析正文里的分镜镜头，并按"无人物不占位"的规则分配图位下标。
+// 预检与后台生成共用这一份口径，保证"要生成几张"与"实际生成几张"一致。
+func storyboardImageJobs(body string) ([]storyboardImageJob, error) {
+	var parsed struct {
+		Chapters []struct {
+			Shots []map[string]any `json:"shots"`
+		} `json:"chapters"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, err
+	}
+	jobs := make([]storyboardImageJob, 0)
+	imageIndex, shotNo := 0, 0
+	for chapterIndex := range parsed.Chapters {
+		for _, shot := range parsed.Chapters[chapterIndex].Shots {
+			shotNo++
+			if fmt.Sprintf("%v", shot["cast"]) == "无人物" {
+				continue
+			}
+			jobs = append(jobs, storyboardImageJob{
+				ImageIndex: imageIndex,
+				ShotNo:     shotNo,
+				SceneNo:    chapterIndex + 1,
+				Shot:       shot,
+			})
+			imageIndex++
+		}
+	}
+	return jobs, nil
+}
+
+// storyboardPendingImageSlots 返回本次实际要生成的分镜图位：
+//   - regenerateIndex >= 0：只重生成指定图位（没有对应镜头时返回空）；
+//   - regenerateIndex < 0：所有还没有图的缺失图位。
+//
+// 预检与后台生成必须共用这个结果，避免低余额时按 1 张放行、实际生成 N 张。
+func storyboardPendingImageSlots(jobs []storyboardImageJob, images []string, regenerateIndex int64) []int {
+	slots := make([]int, 0, len(jobs))
+	for _, job := range jobs {
+		if regenerateIndex >= 0 {
+			if int64(job.ImageIndex) == regenerateIndex {
+				slots = append(slots, job.ImageIndex)
+			}
+			continue
+		}
+		if job.ImageIndex < len(images) && strings.TrimSpace(images[job.ImageIndex]) != "" {
+			continue // 已有图，跳过
+		}
+		slots = append(slots, job.ImageIndex)
+	}
+	return slots
+}
+
+// pendingStoryboardImageSlots 读取内容并计算本次要生成的分镜图位。
+// 生成入口据此按实际图位数做额度预检；返回空切片表示没有图需要生成。
+func (s *Service) pendingStoryboardImageSlots(ctx context.Context, tenantID, contentID, regenerateIndex int64) ([]int, error) {
+	if s == nil || s.store == nil {
+		return nil, NewBizError("CONTENT_STORE_NOT_CONFIGURED", "内容存储未配置")
+	}
+	rec, err := s.store.getContentItemV2(ctx, tenantID, contentID)
+	if err != nil {
+		return nil, fmt.Errorf("加载内容失败: %w", err)
+	}
+	if rec == nil {
+		return nil, &BizError{Code: "CONTENT_NOT_FOUND", Message: "内容不存在或已被删除", Status: http.StatusNotFound}
+	}
+	jobs, err := storyboardImageJobs(rec.Body)
+	if err != nil {
+		return nil, NewBizError("INVALID_STORYBOARD_BODY", "分镜正文解析失败，无法生成图片")
+	}
+	var images []string
+	if err := json.Unmarshal(rec.Images, &images); err != nil {
+		images = nil
+	}
+	return storyboardPendingImageSlots(jobs, images, regenerateIndex), nil
+}
+
+// generateStoryboardImagesAsync 后台按顺序生成指定图位的分镜线稿，逐张写回 content.images。
+// slots 由入口在预检前算好并传入，保证预检张数 = 实际生成张数；逐图位扣 shot 1。
+func (s *Service) generateStoryboardImagesAsync(ctx context.Context, tenantID, contentID int64, slots []int, regenerateIndex int64) {
 	rec, err := s.store.getContentItemV2(ctx, tenantID, contentID)
 	if err != nil {
 		slog.Error("async storyboard images: load content", "error", err, "content_id", contentID)
 		return
 	}
-	var body struct {
-		Chapters []struct {
-			Shots []map[string]any `json:"shots"`
-		} `json:"chapters"`
+	if rec == nil {
+		slog.Error("async storyboard images: content not found", "content_id", contentID)
+		return
 	}
-	if err := json.Unmarshal([]byte(rec.Body), &body); err != nil {
+	jobs, err := storyboardImageJobs(rec.Body)
+	if err != nil {
 		slog.Error("async storyboard images: parse body", "error", err, "content_id", contentID)
 		return
+	}
+	jobBySlot := make(map[int]storyboardImageJob, len(jobs))
+	for _, job := range jobs {
+		jobBySlot[job.ImageIndex] = job
 	}
 	var imgs []string
 	if err := json.Unmarshal(rec.Images, &imgs); err != nil {
 		imgs = []string{}
 	}
 
-	type job struct {
-		imgIdx, shotNo, sceneNo int
-		shot                    map[string]any
-	}
-	var jobs []job
-	imgIdx, shotNo := 0, 0
-	for ci := range body.Chapters {
-		for _, sh := range body.Chapters[ci].Shots {
-			shotNo++
-			if fmt.Sprintf("%v", sh["cast"]) == "无人物" {
-				continue
-			}
-			jobs = append(jobs, job{imgIdx: imgIdx, shotNo: shotNo, sceneNo: ci + 1, shot: sh})
-			imgIdx++
-		}
-	}
-
 	_ = s.store.setContentGenerationStatus(ctx, tenantID, contentID, "running", int(regenerateIndex))
 	defer func() { _ = s.store.setContentGenerationStatus(ctx, tenantID, contentID, "", -1) }()
 
-	for _, j := range jobs {
-		if regenerateIndex >= 0 {
-			if int64(j.imgIdx) != regenerateIndex {
-				continue // 只重生成指定那一镜
-			}
-		} else if j.imgIdx < len(imgs) && imgs[j.imgIdx] != "" {
-			continue // 已有图，跳过
+	for _, slot := range slots {
+		job, ok := jobBySlot[slot]
+		if !ok {
+			continue
 		}
-		urls, err := s.GenerateCardImage(ctx, tenantID, storyboardShotPromptGo(j.shotNo, j.sceneNo, j.shot), "", "", "", 1, "")
+		urls, err := s.GenerateCardImage(ctx, tenantID, storyboardShotPromptGo(job.ShotNo, job.SceneNo, job.Shot), "", "", "", 1, "")
 		if err != nil {
-			slog.Error("async storyboard images: generate", "error", err, "shot_no", j.shotNo)
+			slog.Error("async storyboard images: generate", "error", err, "shot_no", job.ShotNo)
 			continue // 失败不中断整体，继续下一张
 		}
-		// 拉长到 imgIdx 长度，保持稀疏对齐
-		for len(imgs) <= j.imgIdx {
+		// 拉长到图位下标长度，保持稀疏对齐
+		for len(imgs) <= slot {
 			imgs = append(imgs, "")
 		}
 		if len(urls) > 0 {
-			imgs[j.imgIdx] = urls[0]
+			imgs[slot] = urls[0]
 		}
 		newImgs, _ := json.Marshal(imgs)
 		if err := s.store.updateContentItemV2(ctx, tenantID, contentID, "", rec.Title, rec.Body, rec.PublishPackage, newImgs); err != nil {
-			slog.Error("async storyboard images: save", "error", err, "shot_no", j.shotNo)
+			slog.Error("async storyboard images: save", "error", err, "shot_no", job.ShotNo)
 		} else if len(urls) > 0 {
 			// 该镜图片生成并写入内容成功：扣 shot 1 张（同一图位重生成不重复扣）。
-			s.chargeImageSlot(ctx, tenantID, contentID, j.imgIdx)
+			s.chargeImageSlot(ctx, tenantID, contentID, slot)
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -133,15 +204,22 @@ func (h *Handler) GenerateStoryboardImagesAsync(w http.ResponseWriter, r *http.R
 	if req.ShotIndex != nil {
 		regenerateIndex = *req.ShotIndex
 	}
-	// 图片生成入口的交付前预检：shot 1 张。额度不足拒绝开始生成。
-	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, 1); err != nil {
+	// 交付前预检：先算出本次实际要生成的分镜图位（缺失图位 or 指定重生成 1 张），
+	// 按图位数检查 shot 额度；余额不足整单拒绝，避免只生成一部分图。
+	slots, err := h.service.pendingStoryboardImageSlots(r.Context(), tenantID, req.ContentID, regenerateIndex)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	if err := h.service.ensureAsyncImageQuota(r.Context(), tenantID, len(slots)); err != nil {
 		writeContentError(w, err)
 		return
 	}
 	// 用独立 context，脱离请求生命周期，浏览器关掉也能继续跑
 	go func() {
-		slog.Info("async storyboard images started", "tenant_id", tenantID, "content_id", req.ContentID, "shot_index", regenerateIndex)
-		h.service.generateStoryboardImagesAsync(context.Background(), tenantID, req.ContentID, regenerateIndex)
+		slog.Info("async storyboard images started", "tenant_id", tenantID, "content_id", req.ContentID,
+			"shot_index", regenerateIndex, "images", len(slots))
+		h.service.generateStoryboardImagesAsync(context.Background(), tenantID, req.ContentID, slots, regenerateIndex)
 	}()
-	httputil.WriteSuccess(w, map[string]any{"started": true})
+	httputil.WriteSuccess(w, map[string]any{"started": true, "images": len(slots)})
 }

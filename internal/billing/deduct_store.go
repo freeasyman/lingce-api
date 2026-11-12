@@ -146,6 +146,19 @@ const insertUsageLedgerSQL = `
 INSERT INTO entitlement_ledger (tenant_id, product_code, unit, type, amount, source, reason, idempotency_key, operator)
 VALUES ($1, $2, $3, 'usage', $4::numeric, $5, $6, $7, $8)`
 
+// IsDeducted 只读查询某幂等键是否已经落过流水。
+//
+// 与扣量事务内的 IdempotencyKeyExists 共用同一条 SQL 与
+// entitlement_ledger_idempotency_uq (tenant_id, idempotency_key) 索引，但走连接池、
+// 不开启事务也不加锁：调用方只想知道"这笔交付是否已经扣过"。
+func (s *Store) IsDeducted(ctx context.Context, tenantID int64, idempotencyKey string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, idempotencyKeyExistsSQL, tenantID, idempotencyKey).Scan(&exists); err != nil {
+		return false, fmt.Errorf("query entitlement ledger idempotency key: %w", err)
+	}
+	return exists, nil
+}
+
 // InsertUsageLedger 写入一条 usage 流水。
 //
 // 幂等键只出现在本次扣量的第一条流水上，其余为 NULL；部分唯一索引

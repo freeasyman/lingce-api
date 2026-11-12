@@ -152,6 +152,19 @@ func (s *Service) ensureContentQuota(ctx context.Context, tenantID int64, unit s
 	return &contentQuotaExhaustedError{insufficient: gate.Insufficient}
 }
 
+// ensureAsyncImageQuota 是"一次请求生成 N 张图"的异步生图入口的交付前预检：
+// 按本次实际要生成的图位数（prompts 数量 / 缺失图位数量）检查 shot 额度，
+// 不再固定按 1 张放行。N<=0 表示没有图要生成，不做预检。
+//
+// 与扣量口径保持一致：预检按 N 张拦截，后台生成成功后仍按"每个成功图位扣 1 张"
+// 逐张扣量，生成失败/空交付的图位不扣。余额不足整单拒绝（402），避免只生成一半。
+func (s *Service) ensureAsyncImageQuota(ctx context.Context, tenantID int64, imageCount int) error {
+	if imageCount <= 0 {
+		return nil
+	}
+	return s.ensureContentQuota(ctx, tenantID, contentBillingUnitShot, float64(imageCount))
+}
+
 // insightDeductionInput 组装需求洞察的扣量请求：hour = 录音时长（保留 2 位），
 // 幂等键固定为 content:insight:<recordingID>:analysis。
 // 时长未知（<= 0）或四舍五入后为 0 时返回 ok=false，调用方跳过整笔扣量。

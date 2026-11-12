@@ -62,8 +62,8 @@ func (h *Handler) GenerateImageAsync(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "content_id and prompt are required")
 		return
 	}
-	// 图片生成入口的交付前预检：shot 1 张。额度不足拒绝开始生成。
-	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, 1); err != nil {
+	// 图片生成入口的交付前预检：单图 shot 1 张。额度不足拒绝开始生成。
+	if err := h.service.ensureAsyncImageQuota(r.Context(), tenantID, 1); err != nil {
 		writeContentError(w, err)
 		return
 	}
@@ -93,6 +93,10 @@ func (s *Service) generateImagesAsync(ctx context.Context, tenantID, contentID i
 		imgs = append(imgs, "")
 	}
 	for i, prompt := range prompts {
+		// 空白 prompt 不会产出图片，也从未计入预检；跳过它保持图位下标不变。
+		if strings.TrimSpace(prompt) == "" {
+			continue
+		}
 		urls, err := s.GenerateCardImage(ctx, tenantID, prompt, referenceImage, logoURL, qrURL, 1, size)
 		if err != nil {
 			slog.Error("async images: generate", "error", err, "index", i)
@@ -110,6 +114,19 @@ func (s *Service) generateImagesAsync(ctx context.Context, tenantID, contentID i
 		}
 		time.Sleep(3 * time.Second)
 	}
+}
+
+// asyncImagePromptCount 返回一次多图异步请求实际要生成的图位数。
+// 空白 prompt 不会产出图片，也不计入预检；生成循环使用同一口径跳过。
+// 预检与生成必须共用这个函数，避免按 1 张预检却真实生成 N 张（低余额欠扣）。
+func asyncImagePromptCount(prompts []string) int {
+	count := 0
+	for _, prompt := range prompts {
+		if strings.TrimSpace(prompt) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // GenerateImagesAsync 触发后台生成多张图，立即返回，不阻塞请求。
@@ -131,14 +148,20 @@ func (h *Handler) GenerateImagesAsync(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "content_id and prompts are required")
 		return
 	}
-	// 图片生成入口的交付前预检：shot 1 张。额度不足拒绝开始生成。
-	if err := h.service.ensureContentQuota(r.Context(), tenantID, contentBillingUnitShot, 1); err != nil {
+	imageCount := asyncImagePromptCount(req.Prompts)
+	if imageCount == 0 {
+		httputil.WriteBadRequest(w, "content_id and prompts are required")
+		return
+	}
+	// 图片生成入口的交付前预检：按本次实际要生成的图位数（prompts 数量）检查 shot。
+	// 余额不足整单拒绝，避免只生成一部分图、留下半成品内容。
+	if err := h.service.ensureAsyncImageQuota(r.Context(), tenantID, imageCount); err != nil {
 		writeContentError(w, err)
 		return
 	}
 	go func() {
-		slog.Info("async images started", "tenant_id", tenantID, "content_id", req.ContentID, "count", len(req.Prompts))
+		slog.Info("async images started", "tenant_id", tenantID, "content_id", req.ContentID, "count", imageCount)
 		h.service.generateImagesAsync(context.Background(), tenantID, req.ContentID, req.Prompts, req.ReferenceImage, req.LogoURL, req.QRURL, req.Size)
 	}()
-	httputil.WriteSuccess(w, map[string]any{"started": true})
+	httputil.WriteSuccess(w, map[string]any{"started": true, "images": imageCount})
 }

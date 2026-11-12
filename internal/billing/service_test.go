@@ -20,6 +20,18 @@ func (f *fakeRepository) LoadReplay(ctx context.Context, tenantID int64, product
 	return nil, ErrAlreadyDeducted
 }
 
+// IsDeducted 让 fakeRepository 满足 Repository：与真实 Store 一致，按
+// entitlement_ledger 的幂等键集合判断是否已扣过。
+func (f *fakeRepository) IsDeducted(_ context.Context, _ int64, idempotencyKey string) (bool, error) {
+	if f.isDeductedErr != nil {
+		return false, f.isDeductedErr
+	}
+	if _, exists := f.deductKeys[idempotencyKey]; exists {
+		return true, nil
+	}
+	return false, nil
+}
+
 type fakeRepository struct {
 	catalogFilter CatalogFilter
 	catalogItems  []CatalogItem
@@ -95,6 +107,7 @@ type fakeRepository struct {
 	deductTenantID    int64
 	deductRows        []Entitlement
 	deductKeys        map[string]struct{}
+	isDeductedErr     error
 	usageLedger       []DeductLedgerEntry
 	beginDeductCalls  int
 	applyCalls        int

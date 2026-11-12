@@ -28,6 +28,9 @@ type Handler struct {
 	permissions *compliancepermission.Service
 	logMu       sync.Mutex
 	logPath     string
+	// appEnv 是 app.env 配置值（dev/test/prod/production）。
+	// 生产环境不注册调试用的 /compliance/debug/analyze-text 路由。
+	appEnv string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -39,6 +42,32 @@ func NewHandler(service *Service) *Handler {
 		service: service,
 		logPath: logPath,
 	}
+}
+
+// SetAppEnv 注入 app.env。main 在注册路由前调用；未注入时按开发环境处理。
+func (h *Handler) SetAppEnv(env string) {
+	if h == nil {
+		return
+	}
+	h.appEnv = strings.TrimSpace(env)
+}
+
+// isProductionEnv 判断 app.env 是否生产环境。
+//
+// 仓库同时存在 env = "production" 与 env = "prod" 两种写法（configs/prod.toml），
+// 这里都按生产处理；开发/测试/空值保留调试接口。
+func isProductionEnv(env string) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "production", "prod", "prd":
+		return true
+	default:
+		return false
+	}
+}
+
+// debugRoutesEnabled 判断当前环境是否允许注册调试路由。
+func (h *Handler) debugRoutesEnabled() bool {
+	return h == nil || !isProductionEnv(h.appEnv)
 }
 
 func (h *Handler) SetPermissionService(service *compliancepermission.Service) {
@@ -68,30 +97,39 @@ func (h *Handler) requireAbility(w http.ResponseWriter, r *http.Request, ability
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
-	router.Register(mux, []router.Route{
-		{Method: "POST", Path: "/api/v1/compliance/debug/analyze-text", Handler: h.AnalyzeText, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/findings", Handler: h.ListFindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/check-items", Handler: h.ListCheckItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/check-items/{id}", Handler: h.GetCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/start", Handler: h.StartCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/process", Handler: h.ProcessCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/findings/{id}", Handler: h.GetFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/findings/{id}/review", Handler: h.ReviewFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/rules", Handler: h.ListRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/compliance/rules/{id}", Handler: h.GetRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/rules", Handler: h.CreateRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "PATCH", Path: "/api/v1/compliance/rules/{id}", Handler: h.UpdateRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/rules/{id}/enable", Handler: h.EnableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/compliance/rules/{id}/disable", Handler: h.DisableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "DELETE", Path: "/api/v1/compliance/rules/{id}", Handler: h.DeleteRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{
+	routes := make([]router.Route, 0, 17)
+	// 调试接口只校验 JWT、不校验租户与权限，生产环境直接不注册（未匹配返回 404）。
+	// 开发/测试环境保留，便于联调提示词与规则集。
+	if h.debugRoutesEnabled() {
+		routes = append(routes, router.Route{
+			Method: "POST", Path: "/api/v1/compliance/debug/analyze-text", Handler: h.AnalyzeText,
+			Auth: true, AllowedUserTypes: []string{"admin", "employee"},
+		})
+	}
+	routes = append(routes,
+		router.Route{Method: "GET", Path: "/api/v1/compliance/findings", Handler: h.ListFindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/check-items", Handler: h.ListCheckItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/check-items/{id}", Handler: h.GetCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/start", Handler: h.StartCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/process", Handler: h.ProcessCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/findings/{id}", Handler: h.GetFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/findings/{id}/review", Handler: h.ReviewFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/rules", Handler: h.ListRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "GET", Path: "/api/v1/compliance/rules/{id}", Handler: h.GetRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/rules", Handler: h.CreateRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "PATCH", Path: "/api/v1/compliance/rules/{id}", Handler: h.UpdateRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/rules/{id}/enable", Handler: h.EnableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/rules/{id}/disable", Handler: h.DisableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "DELETE", Path: "/api/v1/compliance/rules/{id}", Handler: h.DeleteRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{
 			Method:   "POST",
 			Path:     "/api/v1/internal/compliance/communication-check",
 			Handler:  h.CommunicationCheck,
 			AuthMode: "internal",
 		},
-	}, router.RouteDeps{
+	)
+	router.Register(mux, routes, router.RouteDeps{
 		JWTSecret:     jwtSecret,
 		InternalToken: strings.TrimSpace(internalToken),
 	})
@@ -763,6 +801,12 @@ func validateCommunicationCheckRequest(req CommunicationCheckRequest) error {
 }
 
 func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
+	// 双保险：生产环境即使有别的注册路径，调试分析接口也拒绝执行。
+	// 正常注册流程在生产环境不会注册该路由（404）。
+	if !h.debugRoutesEnabled() {
+		httputil.WriteForbidden(w, "调试接口仅开发环境可用")
+		return
+	}
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
