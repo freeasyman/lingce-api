@@ -104,6 +104,18 @@ WHERE table_schema = 'public'
 		t.Fatalf("字典/套餐种子不足：行业 %d（期望 ≥17）、科室 %d（期望 ≥19）、套餐 %d（期望 ≥4）",
 			industries, departments, bundles)
 	}
+	// 管理员管理依赖 20261112_011 的 employees.is_primary。
+	var hasPrimary bool
+	if err := pool.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'employees' AND column_name = 'is_primary'
+)`).Scan(&hasPrimary); err != nil {
+		t.Fatalf("检查 employees.is_primary 失败: %v", err)
+	}
+	if !hasPrimary {
+		t.Fatalf("employees.is_primary 未建列，请先执行 20261112_011_institution_admin_primary 迁移")
+	}
 }
 
 // seedOpsContext 建一个平台运营组织 + 平台运营账号（可看全部机构）。

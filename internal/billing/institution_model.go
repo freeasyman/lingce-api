@@ -107,6 +107,10 @@ var (
 	ErrInstitutionPhoneConflict = errors.New("billing: institution contact phone already used")
 	// ErrInstitutionCodeConflict 表示机构代码（忽略大小写）已存在且无法自动续号（409）。
 	ErrInstitutionCodeConflict = errors.New("billing: institution code already used")
+	// ErrInstitutionAdminNotFound 表示管理员不存在或不属于该机构（404）。
+	ErrInstitutionAdminNotFound = errors.New("billing: institution admin not found")
+	// ErrInstitutionAdminPhoneConflict 表示管理员手机号已被其它账号占用（409）。
+	ErrInstitutionAdminPhoneConflict = errors.New("billing: institution admin phone already used")
 	// ErrProductAlreadyActive 表示该机构已有该产品（409）。
 	ErrProductAlreadyActive = errors.New("billing: product already active for institution")
 	// ErrProductNotActive 表示该机构还没有该产品，不能加量/赠送（409）。

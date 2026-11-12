@@ -106,7 +106,7 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 	if err != nil {
 		return nil, err
 	}
-	admins, err := s.store.ListInstitutionAdmins(ctx, tenantID, base.Phone)
+	admins, err := s.store.ListInstitutionAdminRows(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 	for _, doc := range documents {
 		item.Documents = append(item.Documents, institutionDocumentOf(doc))
 	}
-	item.Admins = admins
+	item.Admins = institutionAdminsFromRows(s.ensureInstitutionPrimaryAdmin(ctx, tenantID, admins))
 	item.Receivables = receivables
 	item.PayLogs = payLogs
 	item.Consumptions = consumptions
@@ -403,6 +403,11 @@ func (s *InstitutionService) CreateInstitution(ctx context.Context, req CreateIn
 		return nil, err
 	}
 	if err := s.store.ReplaceTenantDepartmentsTx(ctx, tx, created.ID, departmentIDs); err != nil {
+		return nil, err
+	}
+	// 建档时默认主管理员：tenant.Store.CreateTenant 已经在 employees 建了管理员，
+	// 这里把它标成 is_primary，保证「每个机构至少一个启用主管理员」从第一天起成立。
+	if err := s.store.EnsurePrimaryInstitutionAdminTx(ctx, tx, created.ID); err != nil {
 		return nil, err
 	}
 	if _, err := s.store.InsertOwnershipTx(ctx, tx, created.ID, channel.ID, sales.ID, adminID, "manual", s.today()); err != nil {

@@ -282,49 +282,6 @@ ORDER BY td.tenant_id, d.sort_order, d.id`, tenantIDs)
 	return result, nil
 }
 
-// ListInstitutionAdmins 取机构的管理员账号：employees 中拥有 admin 角色的员工。
-func (s *Store) ListInstitutionAdmins(ctx context.Context, tenantID int64, contactPhone string) ([]InstitutionAdmin, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT e.id,
-       COALESCE(e.name, ''),
-       COALESCE(e.phone, ''),
-       CASE
-           WHEN $2 <> '' AND COALESCE(e.phone, '') = $2 THEN '主管理员'
-           ELSE '管理员'
-       END,
-       CASE WHEN lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN TRUE ELSE FALSE END
-FROM employees e
-WHERE e.tenant_id = $1
-  AND e.deleted_at IS NULL
-  AND EXISTS (
-      SELECT 1
-      FROM institution_employee_roles ier
-      LEFT JOIN institution_roles r ON r.id = ier.role_id
-      WHERE ier.employee_id = e.id
-        AND ier.tenant_id = e.tenant_id
-        AND lower(COALESCE(NULLIF(ier.role_code, ''), r.code, '')) = 'admin'
-  )
-ORDER BY e.id`, tenantID, strings.TrimSpace(contactPhone))
-	if err != nil {
-		return nil, fmt.Errorf("list institution admins: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]InstitutionAdmin, 0, 4)
-	for rows.Next() {
-		var item InstitutionAdmin
-		if err := rows.Scan(&item.ID, &item.Name, &item.Phone, &item.Role, &item.Active); err != nil {
-			return nil, fmt.Errorf("scan institution admin: %w", err)
-		}
-		item.LastLogin = "—"
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate institution admins: %w", err)
-	}
-	return items, nil
-}
-
 // ListInstitutionReceivables 取机构的应收单（应收 = 订单应付，已收 = 订单已核销）。
 func (s *Store) ListInstitutionReceivables(ctx context.Context, tenantID int64) ([]InstitutionReceivable, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -621,6 +578,77 @@ WHERE id = $1`, tenantID, req.Legal, req.Title, req.Region.Province, req.Region.
 		return fmt.Errorf("update institution profile: %w", err)
 	}
 	return nil
+}
+
+// UpdateInstitutionProfileFieldsTx 编辑机构档案时按需更新计费档案列。
+// 未传（nil）的列保持原值；billing_mode / code 不在可写范围内。
+func (s *Store) UpdateInstitutionProfileFieldsTx(ctx context.Context, tx pgx.Tx, tenantID int64, req UpdateInstitutionRequest) error {
+	_, err := tx.Exec(ctx, `
+UPDATE tenants
+SET legal_name = COALESCE($2, legal_name),
+    contact_title = COALESCE($3, contact_title),
+    province_code = COALESCE($4, province_code),
+    city_code = COALESCE($5, city_code),
+    district_code = COALESCE($6, district_code),
+    customer_type = COALESCE($7, customer_type),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL`,
+		tenantID, req.LegalName, req.ContactTitle,
+		req.ProvinceCode, req.CityCode, req.DistrictCode, req.CustomerType)
+	if err != nil {
+		return fmt.Errorf("update institution profile fields: %w", err)
+	}
+	return nil
+}
+
+// GetExistingDepartmentIDs 返回给定科室 id 中真实存在的集合（编辑档案时校验用）。
+func (s *Store) GetExistingDepartmentIDs(ctx context.Context, ids []int64) (map[int64]struct{}, error) {
+	result := make(map[int64]struct{}, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM billing_department_dict WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("check department ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan department id: %w", err)
+		}
+		result[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate department ids: %w", err)
+	}
+	return result, nil
+}
+
+// ListTenantDepartmentIDs 返回机构当前绑定科室的 id（写变更日志用）。
+func (s *Store) ListTenantDepartmentIDs(ctx context.Context, tenantID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT department_id
+FROM tenant_departments
+WHERE tenant_id = $1
+ORDER BY department_id`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant department ids: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, 8)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan tenant department id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant department ids: %w", err)
+	}
+	return ids, nil
 }
 
 // ReplaceTenantDepartmentsTx 覆盖机构的涉及科室。

@@ -24,6 +24,9 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 			http.StatusConflict, "INSTITUTION_PHONE_USED"},
 		{"code conflict", ErrInstitutionCodeConflict, http.StatusConflict, "INSTITUTION_CODE_USED"},
 		{"not found", ErrInstitutionNotFound, http.StatusNotFound, "INSTITUTION_NOT_FOUND"},
+		{"admin not found", ErrInstitutionAdminNotFound, http.StatusNotFound, "ADMIN_NOT_FOUND"},
+		{"admin phone conflict", &ConflictError{Sentinel: ErrInstitutionAdminPhoneConflict, Message: "该手机号已被「B」使用"},
+			http.StatusConflict, "ADMIN_PHONE_USED"},
 		{"payment not found", ErrPaymentNotFound, http.StatusNotFound, "PAYMENT_NOT_FOUND"},
 		{"document not found", ErrDocumentNotFound, http.StatusNotFound, "DOCUMENT_NOT_FOUND"},
 		{"peer not found", ErrPeerNotFound, http.StatusNotFound, "NOT_FOUND"},
@@ -65,8 +68,8 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 func TestInstitutionRouteRegistration(t *testing.T) {
 	h := &Handler{}
 	routes := h.institutionRoutes()
-	if len(routes) != 33 {
-		t.Fatalf("institutionRoutes 数量 = %d, want 33", len(routes))
+	if len(routes) != 39 {
+		t.Fatalf("institutionRoutes 数量 = %d, want 39", len(routes))
 	}
 	seen := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
@@ -89,6 +92,12 @@ func TestInstitutionRouteRegistration(t *testing.T) {
 		"GET /api/v1/ops/billing/institutions",
 		"POST /api/v1/ops/billing/institutions",
 		"GET /api/v1/ops/billing/institutions/{id}",
+		"PUT /api/v1/ops/billing/institutions/{id}",
+		"GET /api/v1/ops/billing/institutions/{id}/admins",
+		"POST /api/v1/ops/billing/institutions/{id}/admins",
+		"PUT /api/v1/ops/billing/institutions/{id}/admins/{admin_id}",
+		"POST /api/v1/ops/billing/institutions/{id}/admins/{admin_id}/reset-password",
+		"POST /api/v1/ops/billing/institutions/{id}/admins/{admin_id}/set-primary",
 		"POST /api/v1/ops/billing/institutions/{id}/activate-formal",
 		"POST /api/v1/ops/billing/institutions/{id}/activate-trial",
 		"POST /api/v1/ops/billing/institutions/{id}/increments",

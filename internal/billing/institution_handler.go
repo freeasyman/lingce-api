@@ -35,6 +35,13 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("GET", institution, h.ListInstitutions),
 		ops("POST", institution, h.CreateInstitution),
 		ops("GET", institution+"/{id}", h.GetInstitution),
+		ops("PUT", institution+"/{id}", h.UpdateInstitution),
+		// 机构管理员
+		ops("GET", institution+"/{id}/admins", h.ListInstitutionAdmins),
+		ops("POST", institution+"/{id}/admins", h.CreateInstitutionAdmin),
+		ops("PUT", institution+"/{id}/admins/{admin_id}", h.UpdateInstitutionAdmin),
+		ops("POST", institution+"/{id}/admins/{admin_id}/reset-password", h.ResetInstitutionAdminPassword),
+		ops("POST", institution+"/{id}/admins/{admin_id}/set-primary", h.SetInstitutionAdminPrimary),
 		// 机构动作
 		ops("POST", institution+"/{id}/activate-formal", h.ActivateFormalInstitution),
 		ops("POST", institution+"/{id}/activate-trial", h.ActivateTrialInstitution),
@@ -133,6 +140,142 @@ func (h *Handler) CreateInstitution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// UpdateInstitution 编辑机构档案。
+// 只更新请求体里出现的字段；code（机构代码）与 billing_mode（内部字段）不可改。
+func (h *Handler) UpdateInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req UpdateInstitutionRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.UpdateInstitution(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionDetailResult{Item: item, IsMock: false})
+}
+
+// ListInstitutionAdmins 机构管理员列表。
+func (h *Handler) ListInstitutionAdmins(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.institutions.ListInstitutionAdmins(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// CreateInstitutionAdmin 新增机构管理员（初始密码不回传）。
+func (h *Handler) CreateInstitutionAdmin(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CreateInstitutionAdminRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CreateInstitutionAdmin(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionAdminItemResult{Item: *item})
+}
+
+// UpdateInstitutionAdmin 修改管理员基本信息/启停。
+func (h *Handler) UpdateInstitutionAdmin(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminAccountID, ok := requirePathID(w, r, "admin_id", "Invalid admin ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req UpdateInstitutionAdminRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.UpdateInstitutionAdmin(r.Context(), tenantID, adminAccountID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionAdminItemResult{Item: *item})
+}
+
+// ResetInstitutionAdminPassword 重置管理员密码（默认口令 + session_version bump，响应不含明文）。
+func (h *Handler) ResetInstitutionAdminPassword(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminAccountID, ok := requirePathID(w, r, "admin_id", "Invalid admin ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.institutions.ResetInstitutionAdminPassword(r.Context(), tenantID, adminAccountID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionAdminItemResult{Item: *item})
+}
+
+// SetInstitutionAdminPrimary 把管理员设为主管理员（同一机构只能有一个）。
+func (h *Handler) SetInstitutionAdminPrimary(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminAccountID, ok := requirePathID(w, r, "admin_id", "Invalid admin ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.institutions.SetInstitutionAdminPrimary(r.Context(), tenantID, adminAccountID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, InstitutionAdminItemResult{Item: *item})
 }
 
 // ActivateFormalInstitution 正式开通。
@@ -726,6 +869,8 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusForbidden, "ADMIN_SCOPE_MISSING", "当前账号未配置归属组织，无法查看机构", nil)
 	case errors.Is(err, ErrInstitutionNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "INSTITUTION_NOT_FOUND", "机构不存在", nil)
+	case errors.Is(err, ErrInstitutionAdminNotFound):
+		httputil.WriteError(w, http.StatusNotFound, "ADMIN_NOT_FOUND", "管理员不存在", nil)
 	case errors.Is(err, ErrPaymentNotFound):
 		httputil.WriteError(w, http.StatusNotFound, "PAYMENT_NOT_FOUND", "收款单不存在", nil)
 	case errors.Is(err, ErrDocumentNotFound):
@@ -734,6 +879,8 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "记录不存在", nil)
 	case errors.Is(err, ErrInstitutionPhoneConflict):
 		httputil.WriteError(w, http.StatusConflict, "INSTITUTION_PHONE_USED", "该手机号已被使用", nil)
+	case errors.Is(err, ErrInstitutionAdminPhoneConflict):
+		httputil.WriteError(w, http.StatusConflict, "ADMIN_PHONE_USED", "该手机号已被使用", nil)
 	case errors.Is(err, ErrInstitutionCodeConflict):
 		httputil.WriteError(w, http.StatusConflict, "INSTITUTION_CODE_USED", "机构代码已被使用", nil)
 	case errors.Is(err, ErrProductAlreadyActive):
@@ -762,6 +909,8 @@ func conflictCode(sentinel error) string {
 	switch {
 	case errors.Is(sentinel, ErrInstitutionPhoneConflict):
 		return "INSTITUTION_PHONE_USED"
+	case errors.Is(sentinel, ErrInstitutionAdminPhoneConflict):
+		return "ADMIN_PHONE_USED"
 	case errors.Is(sentinel, ErrInstitutionCodeConflict):
 		return "INSTITUTION_CODE_USED"
 	default:
