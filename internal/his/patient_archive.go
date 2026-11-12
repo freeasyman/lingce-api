@@ -517,10 +517,18 @@ func (s *Store) loadPatientOverviewPrescriptions(ctx context.Context, tenantID, 
 }
 
 func (s *Store) loadPatientOverviewServiceRequests(ctx context.Context, tenantID, customerID int64, overview *PatientOverview) error {
+	// 检查检验已按新模型拆表：合并 旧申请 + 检验申请 + 检查申请，供患者档案九类记录展示。
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, encounter_id, customer_id, request_type, item_name, specimen_type, purpose, status, created_at
-		FROM his_service_requests
-		WHERE tenant_id = $1 AND customer_id = $2
+		SELECT id, encounter_id, customer_id, request_type, item_name, specimen_type, purpose, status, created_at FROM (
+			SELECT id, encounter_id, customer_id, request_type, item_name, specimen_type, purpose, status, created_at
+			FROM his_service_requests WHERE tenant_id = $1 AND customer_id = $2
+			UNION ALL
+			SELECT id, encounter_id, customer_id, 'lab' AS request_type, item_name, specimen_type, purpose, status, created_at
+			FROM his_lab_requests WHERE tenant_id = $1 AND customer_id = $2
+			UNION ALL
+			SELECT id, encounter_id, customer_id, 'exam' AS request_type, item_name, body_part AS specimen_type, purpose, status, created_at
+			FROM his_exam_requests WHERE tenant_id = $1 AND customer_id = $2
+		) req
 		ORDER BY created_at DESC, id DESC
 		LIMIT 50`, tenantID, customerID)
 	if err != nil {
