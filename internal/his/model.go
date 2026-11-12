@@ -817,3 +817,18 @@ type CompleteEMRResponse struct {
 	Quality     *QualityResult    `json:"quality,omitempty"`
 	NeedConfirm bool              `json:"need_confirm,omitempty"`
 }
+
+// EmployeeWithRoles 员工（共享 employees）+ HIS 角色 + 医生档案聚合，供管理页员工列表使用。
+type EmployeeWithRoles struct {
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+	Phone     string   `json:"phone"`
+	Email     string   `json:"email"`
+	IsActive  bool     `json:"is_active"`
+	Roles     []string `json:"roles"`
+	DoctorID  *int64   `json:"doctor_id,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	LicenseNo string   `json:"license_no,omitempty"`
+	Prescribe bool     `json:"is_prescribing"`
+	Doctor    string   `json:"doctor_status,omitempty"`
+}

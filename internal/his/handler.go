@@ -163,6 +163,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 主数据：医生
 		{Method: "GET", Path: "/api/v1/his/master/doctors", Handler: h.ListDoctors, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/master/employees", Handler: h.ListMasterEmployees, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/master/doctors", Handler: h.CreateDoctor, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/master/doctors/{id}", Handler: h.UpdateDoctor, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -1896,4 +1897,19 @@ func (h *Handler) DefaultRoleModules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, modules)
+}
+
+// ListMasterEmployees 员工 + HIS 角色 + 医生档案（管理页员工列表）。
+func (h *Handler) ListMasterEmployees(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	rows, err := h.service.ListEmployeesWithRoles(r.Context(), tenantID)
+	if err != nil {
+		slog.Error("his: list master employees", "error", err)
+		httputil.WriteInternalError(w, "failed to load employees")
+		return
+	}
+	httputil.WriteSuccess(w, rows)
 }

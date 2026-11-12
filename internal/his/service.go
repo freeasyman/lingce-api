@@ -1123,3 +1123,8 @@ func (s *Service) DefaultRoleModules(ctx context.Context, tenantID int64) (map[s
 	}
 	return out, nil
 }
+
+// ListEmployeesWithRoles 管理页员工列表（员工 + 角色 + 医生档案）。
+func (s *Service) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]EmployeeWithRoles, error) {
+	return s.store.ListEmployeesWithRoles(ctx, tenantID)
+}

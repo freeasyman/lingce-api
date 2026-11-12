@@ -3511,3 +3511,33 @@ func (s *Store) RoleModuleRows(ctx context.Context) ([]RoleModuleRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// ListEmployeesWithRoles 员工 + 角色 + 医生档案（仅本租户、未删除）。
+func (s *Store) ListEmployeesWithRoles(ctx context.Context, tenantID int64) ([]EmployeeWithRoles, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT e.id,
+		       COALESCE(NULLIF(e.full_name, ''), e.name, ''),
+		       COALESCE(e.phone, ''), COALESCE(e.email, ''), COALESCE(e.is_active, 1) = 1,
+		       COALESCE(array_agg(DISTINCT sr.role) FILTER (WHERE sr.role IS NOT NULL), '{}') AS roles,
+		       d.id, COALESCE(d.title, ''), COALESCE(d.license_no, ''), COALESCE(d.is_prescribing, false), COALESCE(d.status, '')
+		FROM employees e
+		LEFT JOIN his_staff_roles sr ON sr.tenant_id = e.tenant_id AND sr.employee_id = e.id
+		LEFT JOIN his_doctors d ON d.tenant_id = e.tenant_id AND d.employee_id = e.id
+		WHERE e.tenant_id = $1 AND e.deleted_at IS NULL
+		GROUP BY e.id, e.full_name, e.name, e.phone, e.email, e.is_active, d.id, d.title, d.license_no, d.is_prescribing, d.status
+		ORDER BY e.id`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]EmployeeWithRoles, 0)
+	for rows.Next() {
+		var row EmployeeWithRoles
+		if err := rows.Scan(&row.ID, &row.Name, &row.Phone, &row.Email, &row.IsActive, &row.Roles,
+			&row.DoctorID, &row.Title, &row.LicenseNo, &row.Prescribe, &row.Doctor); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
