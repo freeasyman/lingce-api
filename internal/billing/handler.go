@@ -340,5 +340,13 @@ func writeInternalBillingError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "ALREADY_DEDUCTED", "该幂等键已扣量，请勿重复提交", nil)
 		return
 	}
+	if errors.Is(err, ErrSubscriptionPaused) {
+		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "该机构服务已暂停，请联系运营恢复", nil)
+		return
+	}
+	if errors.Is(err, ErrSubscriptionCancelled) {
+		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_CANCELLED", "该机构服务已取消，无法扣量", nil)
+		return
+	}
 	writeBillingError(w, err)
 }

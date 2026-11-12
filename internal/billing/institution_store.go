@@ -37,6 +37,13 @@ type institutionBaseRow struct {
 	StartedOn    *string
 	ExpiredOn    *string
 
+	// 服务生命周期标记（migration 20261112_012）：暂停/取消只改这两组列，
+	// 不改服务期、不改额度；取消时由事务额外把服务期与额度一起收尾。
+	PausedAt        *time.Time
+	PausedReason    string
+	CancelledAt     *time.Time
+	CancelledReason string
+
 	OrgID        *int64
 	OrgName      string
 	SalesAdminID *int64
@@ -63,6 +70,10 @@ SELECT t.id,
        COALESCE(p.status, ''),
        to_char(p.started_on, 'YYYY-MM-DD'),
        to_char(p.expired_on, 'YYYY-MM-DD'),
+       t.paused_at,
+       COALESCE(t.paused_reason, ''),
+       t.cancelled_at,
+       COALESCE(t.cancelled_reason, ''),
        ow.org_id,
        COALESCE(org.name, ''),
        ow.sales_admin_id,
@@ -72,11 +83,12 @@ LEFT JOIN LATERAL (
     SELECT sp.id, sp.status, sp.started_on, sp.expired_on
     FROM subscription_periods sp
     WHERE sp.tenant_id = t.id
-    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated。
-    -- 只按 expired_on 排序会把已终止的试用期排在正式期前面，
-    -- 导致到期后的机构被判成「未开通」、到期日也显示成试用期的日期。
+    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated、取消后 terminated。
+    -- 先 active、再 expired，同级按 id 倒序（最近插入/调整的一条才是当前服务期）。
+    -- 不能按 expired_on 倒序：取消服务把正式期 terminated 后，旧的试用期可能因
+    -- 到期日更晚而胜出，导致档案显示错误的服务期。
     ORDER BY (sp.status = 'active') DESC, (sp.status = 'expired') DESC,
-             sp.expired_on DESC, sp.id DESC
+             sp.id DESC
     LIMIT 1
 ) p ON TRUE
 LEFT JOIN tenant_ownerships ow ON ow.tenant_id = t.id AND ow.effective_to IS NULL
@@ -121,7 +133,7 @@ WHERE t.deleted_at IS NULL
        OR ($3 = 'unpaid' AND EXISTS (
            SELECT 1 FROM billing_orders bo
            WHERE bo.tenant_id = t.id
-             AND bo.status NOT IN ('cancelled', 'refunded')
+             AND bo.status NOT IN ('cancelled', 'refunded', 'void')
              AND bo.payable_amount > bo.paid_amount
        )))
 ORDER BY t.created_at DESC NULLS LAST, t.id DESC
@@ -191,6 +203,10 @@ func scanInstitutionBase(scan func(dest ...any) error) (institutionBaseRow, erro
 		&item.PeriodStatus,
 		&item.StartedOn,
 		&item.ExpiredOn,
+		&item.PausedAt,
+		&item.PausedReason,
+		&item.CancelledAt,
+		&item.CancelledReason,
 		&item.OrgID,
 		&item.OrgName,
 		&item.SalesAdminID,
@@ -293,7 +309,7 @@ SELECT order_no, payable_amount::text, paid_amount::text
 FROM billing_orders
 WHERE tenant_id = $1
   AND order_type NOT IN ('gift', 'trial')
-  AND status NOT IN ('cancelled', 'refunded')
+  AND status NOT IN ('cancelled', 'refunded', 'void')
 ORDER BY created_at ASC, id ASC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list institution receivables: %w", err)
@@ -357,8 +373,14 @@ ORDER BY p.received_on DESC, p.id DESC`, tenantID)
 	return items, nil
 }
 
-// ListInstitutionConsumptions 取机构最近的扣量明细（entitlement_ledger 的 usage 流水）。
-// amount 取绝对值：流水里扣减是负数，前端展示的是「扣了多少」。
+// ListInstitutionConsumptions 取机构最近的额度变动明细。
+//
+// 口径：
+//   - 交付扣量：entitlement_ledger.type='usage'，amount 为负；
+//   - 人工调额度更正：source='correction'（正向 type=grant、负向 type=usage），
+//     amount 保留带符号原值，前端据此显示「+10 / -5」。
+//
+// 对扣量，deliverable 是产品名；对更正，固定显示「人工调额度」，原因在 reason 里。
 func (s *Store) ListInstitutionConsumptions(ctx context.Context, tenantID int64, limit int) ([]InstitutionConsumption, error) {
 	if limit <= 0 {
 		limit = 100
@@ -366,10 +388,14 @@ func (s *Store) ListInstitutionConsumptions(ctx context.Context, tenantID int64,
 	rows, err := s.pool.Query(ctx, `
 SELECT to_char(l.created_at, 'YYYY-MM-DD HH24:MI'),
        l.product_code,
-       COALESCE(NULLIF(pc.product_name, ''), l.product_code),
+       CASE WHEN l.source = 'correction' THEN '人工调额度'
+            ELSE COALESCE(NULLIF(pc.product_name, ''), l.product_code) END,
        l.unit,
-       abs(l.amount)::text,
-       COALESCE(o.order_no, '')
+       l.amount::text,
+       COALESCE(o.order_no, ''),
+       l.type,
+       l.source,
+       l.reason
 FROM entitlement_ledger l
 LEFT JOIN billing_orders o ON o.id = l.linked_order_id
 LEFT JOIN LATERAL (
@@ -381,7 +407,8 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) pc ON TRUE
 WHERE l.tenant_id = $1
-  AND l.type = 'usage'
+  AND l.amount <> 0
+  AND (l.type = 'usage' OR l.source = 'correction')
 ORDER BY l.created_at DESC, l.id DESC
 LIMIT $2`, tenantID, limit)
 	if err != nil {
@@ -395,7 +422,8 @@ LIMIT $2`, tenantID, limit)
 			item   InstitutionConsumption
 			amount string
 		)
-		if err := rows.Scan(&item.At, &item.ProductCode, &item.Deliverable, &item.Unit, &amount, &item.OrderNo); err != nil {
+		if err := rows.Scan(&item.At, &item.ProductCode, &item.Deliverable, &item.Unit, &amount,
+			&item.OrderNo, &item.Type, &item.Source, &item.Reason); err != nil {
 			return nil, fmt.Errorf("scan institution consumption: %w", err)
 		}
 		item.Amount = Decimal(amount)
@@ -874,8 +902,7 @@ FROM subscription_periods
 func (s *Store) ListPeriodRows(ctx context.Context, tenantID int64) ([]periodRow, error) {
 	rows, err := s.pool.Query(ctx, periodSelect+`
 WHERE tenant_id = $1
-ORDER BY (status = 'active') DESC, (status = 'expired') DESC,
-         expired_on DESC, id DESC`, tenantID)
+ORDER BY (status = 'active') DESC, (status = 'expired') DESC, id DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list subscription periods: %w", err)
 	}

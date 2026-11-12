@@ -105,7 +105,7 @@ SELECT `+orderColumns+`
 FROM billing_orders
 WHERE tenant_id = $1
   AND order_type NOT IN ('gift', 'trial')
-  AND status NOT IN ('cancelled', 'refunded')
+  AND status NOT IN ('cancelled', 'refunded', 'void')
   AND payable_amount > paid_amount
 ORDER BY created_at ASC, id ASC
 FOR UPDATE`, tenantID)

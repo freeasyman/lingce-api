@@ -91,15 +91,16 @@ type fakeRepository struct {
 	// 阶段 D：扣量。deductRows/deductKeys 模拟 product_entitlements 与
 	// entitlement_ledger 的部分唯一索引；usageLedger 保存已提交的 usage 流水，
 	// 让"同键第二次不重复扣"能在内存里断言。
-	deductTenantID   int64
-	deductRows       []Entitlement
-	deductKeys       map[string]struct{}
-	usageLedger      []DeductLedgerEntry
-	beginDeductCalls int
-	applyCalls       int
-	recomputeCalls   int
-	commitCalls      int
-	rollbackCalls    int
+	subscriptionState string // "" / paused / cancelled：扣量服务闸门
+	deductTenantID    int64
+	deductRows        []Entitlement
+	deductKeys        map[string]struct{}
+	usageLedger       []DeductLedgerEntry
+	beginDeductCalls  int
+	applyCalls        int
+	recomputeCalls    int
+	commitCalls       int
+	rollbackCalls     int
 
 	// 阶段 E：续费结转与到期处理。subscriptions 模拟 tenant_subscriptions，
 	// entitlementsByTenant 模拟按租户分组的 product_entitlements；
@@ -114,6 +115,11 @@ type fakeRepository struct {
 	expireCalls          []int64
 	expireErr            error
 	expireLedger         []fakeLedgerWrite
+}
+
+// GetSubscriptionState 模拟服务闸门；单测默认正常（空串）。
+func (f *fakeRepository) GetSubscriptionState(_ context.Context, _ int64) (string, error) {
+	return f.subscriptionState, nil
 }
 
 func (f *fakeRepository) ListCatalog(_ context.Context, filter CatalogFilter) ([]CatalogItem, error) {

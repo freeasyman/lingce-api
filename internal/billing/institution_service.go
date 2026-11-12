@@ -84,10 +84,11 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 		return nil, err
 	}
 	entitlementsByTenant := groupEntitlementRows(entitlementRows)
+	today := s.today()
 
 	items := make([]Institution, 0, len(bases))
 	for _, base := range bases {
-		items = append(items, buildInstitution(base, departments[base.ID], entitlementsByTenant[base.ID]))
+		items = append(items, buildInstitution(base, departments[base.ID], entitlementsByTenant[base.ID], today))
 	}
 	return &InstitutionListResult{Items: items, Total: int64(len(items)), IsMock: false}, nil
 }
@@ -128,7 +129,7 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 		return nil, err
 	}
 
-	item := buildInstitution(base, departments[tenantID], groupEntitlementRows(entitlementRows)[tenantID])
+	item := buildInstitution(base, departments[tenantID], groupEntitlementRows(entitlementRows)[tenantID], s.today())
 	item.Documents = make([]InstitutionDocument, 0, len(documents))
 	for _, doc := range documents {
 		item.Documents = append(item.Documents, institutionDocumentOf(doc))
@@ -175,14 +176,13 @@ func (s *InstitutionService) requireTenantAccess(ctx context.Context, tenantID, 
 }
 
 // buildInstitution 把基础行 + 科室 + 额度组装成前端契约的 Institution。
-func buildInstitution(base institutionBaseRow, departments []string, entitlements []entitlementRow) Institution {
+func buildInstitution(base institutionBaseRow, departments []string, entitlements []entitlementRow, today time.Time) Institution {
 	mode := AccountModeFormal
 	if normalizeEnum(base.AccountMode) == AccountModeTrial {
 		mode = AccountModeTrial
 	}
 
 	start, end := "", ""
-	open := false
 	if base.PeriodID != nil {
 		if base.StartedOn != nil {
 			start = *base.StartedOn
@@ -190,11 +190,8 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 		if base.ExpiredOn != nil {
 			end = *base.ExpiredOn
 		}
-		switch base.PeriodStatus {
-		case PeriodStatusActive, PeriodStatusExpired:
-			open = true
-		}
 	}
+	status := institutionStatus(base, mode, today)
 
 	item := Institution{
 		ID:          base.ID,
@@ -208,16 +205,19 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 			City:     base.City,
 			District: base.District,
 		},
-		Contact:      base.Contact,
-		Title:        base.Title,
-		Phone:        base.Phone,
-		Email:        base.Email,
-		Channel:      base.OrgName,
-		Sales:        base.SalesName,
-		Start:        start,
-		End:          end,
-		Mode:         mode,
-		Open:         open,
+		Contact: base.Contact,
+		Title:   base.Title,
+		Phone:   base.Phone,
+		Email:   base.Email,
+		Channel: base.OrgName,
+		Sales:   base.SalesName,
+		Start:   start,
+		End:     end,
+		Mode:    mode,
+		// 暂停仍然算「已开通」：服务期未结束，只是扣量闸门被临时关上；
+		// 取消后 open=false，前端不再展示开通/续期类动作。
+		Open:         status != InstitutionStatusUnopened && status != InstitutionStatusCancelled,
+		Status:       status,
 		Products:     buildInstitutionProducts(entitlements, mode),
 		Admins:       []InstitutionAdmin{},
 		Receivables:  []InstitutionReceivable{},
@@ -226,10 +226,55 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 		Logs:         []InstitutionLog{},
 		Documents:    []InstitutionDocument{},
 	}
+	if base.PausedAt != nil {
+		item.PausedAt = base.PausedAt.Format("2006-01-02 15:04")
+	}
+	if base.PausedAt != nil {
+		item.PausedReason = base.PausedReason
+	}
+	if base.CancelledAt != nil {
+		item.CancelledAt = base.CancelledAt.Format("2006-01-02 15:04")
+		item.CancelledReason = base.CancelledReason
+	}
 	if item.Departments == nil {
 		item.Departments = []string{}
 	}
 	return item
+}
+
+// institutionStatus 推导机构服务状态，优先级：
+// 已取消 > 已暂停 > 未开通 > 已到期 > 试用中 > 正常。
+//
+// 「已到期」同时认服务期 status=expired 与 expired_on < 今天：到期任务每天跑一次，
+// 白天到期但任务还没跑时，接口也不能继续显示「正常」。
+func institutionStatus(base institutionBaseRow, mode string, today time.Time) string {
+	if base.CancelledAt != nil {
+		return InstitutionStatusCancelled
+	}
+	// 暂停优先于到期：暂停期间即使跨过到期日，状态徽标仍显示「已暂停」，
+	// 扣量闸门返回 SUBSCRIPTION_PAUSED；恢复后自然落到「已到期」。
+	if base.PausedAt != nil {
+		return InstitutionStatusPaused
+	}
+	if base.PeriodID == nil {
+		return InstitutionStatusUnopened
+	}
+	switch normalizeEnum(base.PeriodStatus) {
+	case PeriodStatusExpired:
+		return InstitutionStatusExpired
+	case PeriodStatusActive:
+	default:
+		return InstitutionStatusUnopened
+	}
+	if base.ExpiredOn != nil {
+		if end, err := parseDateOnly(*base.ExpiredOn); err == nil && end.Before(today) {
+			return InstitutionStatusExpired
+		}
+	}
+	if normalizeEnum(mode) == AccountModeTrial {
+		return InstitutionStatusTrial
+	}
+	return InstitutionStatusActive
 }
 
 // groupEntitlementRows 按租户分组额度行。
@@ -266,11 +311,13 @@ func buildInstitutionProducts(rows []entitlementRow, mode string) map[string]map
 			}
 			granted := row.Granted
 			used := row.Used
+			balance := row.Balance
 			if existing, ok := products[productCode][unit]; ok {
 				granted = sumDecimal(existing.Granted, granted)
 				used = sumDecimal(existing.Used, used)
+				balance = sumDecimal(existing.Balance, balance)
 			}
-			products[productCode][unit] = InstitutionQuota{Granted: granted, Used: used}
+			products[productCode][unit] = InstitutionQuota{Granted: granted, Used: used, Balance: balance}
 		}
 	}
 	add(preferred)

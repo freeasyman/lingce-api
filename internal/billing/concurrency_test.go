@@ -36,7 +36,11 @@ const billingTestDDL = `
 CREATE TABLE tenants (
     id BIGINT PRIMARY KEY,
     name TEXT,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP,
+    paused_at TIMESTAMPTZ,
+    paused_reason TEXT NOT NULL DEFAULT '',
+    cancelled_at TIMESTAMPTZ,
+    cancelled_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE tenant_subscription_plans (
@@ -148,7 +152,7 @@ CREATE TABLE billing_orders (
     CONSTRAINT billing_orders_tenant_check CHECK (tenant_id > 0),
     CONSTRAINT billing_orders_type_check CHECK (order_type IN ('single','bundle','increment','hardware','gift','trial')),
     CONSTRAINT billing_orders_source_check CHECK (source IN ('direct','channel')),
-    CONSTRAINT billing_orders_status_check CHECK (status IN ('created','paid','settled','refunded','cancelled'))
+    CONSTRAINT billing_orders_status_check CHECK (status IN ('created','paid','settled','refunded','cancelled','void'))
 );
 CREATE UNIQUE INDEX billing_orders_no_uq ON billing_orders (order_no);
 `

@@ -216,6 +216,15 @@ func (s *Service) Deduct(ctx context.Context, input DeductInput) (*DeductResult,
 	if err != nil {
 		return nil, err
 	}
+	// 服务闸门优先于额度与幂等：暂停/取消的机构一律拒绝。
+	// 放在开启事务之前，保证被拒绝的请求不留下任何行锁与流水。
+	state, err := s.repo.GetSubscriptionState(ctx, request.tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query subscription state: %w", err)
+	}
+	if err := subscriptionGuard(state); err != nil {
+		return nil, err
+	}
 
 	tx, err := s.repo.BeginDeduct(ctx)
 	if err != nil {
@@ -310,6 +319,13 @@ func (s *Service) Deduct(ctx context.Context, input DeductInput) (*DeductResult,
 func (s *Service) CheckQuota(ctx context.Context, tenantID int64, productCode string, units []DeductItem) error {
 	productCode, items, err := normalizeDemand(tenantID, productCode, units)
 	if err != nil {
+		return err
+	}
+	state, err := s.repo.GetSubscriptionState(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("query subscription state: %w", err)
+	}
+	if err := subscriptionGuard(state); err != nil {
 		return err
 	}
 	rows, err := s.repo.ListEntitlements(ctx, tenantID, productCode, true)

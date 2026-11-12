@@ -161,7 +161,8 @@ func (s *InstitutionService) allocateOrderTx(ctx context.Context, tx pgx.Tx, pay
 	if amountCents <= 0 {
 		return 0, invalidf("核销金额要大于 0")
 	}
-	if normalizeEnum(order.Status) == OrderStatusCancelled || normalizeEnum(order.Status) == OrderStatusRefunded {
+	switch normalizeEnum(order.Status) {
+	case OrderStatusCancelled, OrderStatusRefunded, OrderStatusVoid:
 		return 0, ErrOrderNotAllocatable
 	}
 	payableCents, err := parseAmountCents(order.PayableAmount)

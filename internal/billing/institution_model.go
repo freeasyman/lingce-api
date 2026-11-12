@@ -52,6 +52,20 @@ const (
 	PeriodSourceManual     = "manual"
 )
 
+// 机构服务状态（GET /ops/billing/institutions/{id} 的 status）。
+//
+// 判定优先级见 institutionStatus：
+// cancelled > paused > unopened > expired > trial > active。
+// 前端「已暂停 / 已取消」徽标直接读这个字段，不再自己按日期猜。
+const (
+	InstitutionStatusUnopened  = "unopened"
+	InstitutionStatusTrial     = "trial"
+	InstitutionStatusActive    = "active"
+	InstitutionStatusPaused    = "paused"
+	InstitutionStatusExpired   = "expired"
+	InstitutionStatusCancelled = "cancelled"
+)
+
 // 字典类型。
 const (
 	DictKindIndustry   = "industry"
@@ -135,6 +149,14 @@ var (
 	ErrPeriodWindowInvalid = errors.New("billing: subscription period window is invalid")
 	// ErrBundleMismatch 表示套餐与勾选产品不一致（400）。
 	ErrBundleMismatch = errors.New("billing: bundle does not match selected products")
+	// ErrSubscriptionPaused 表示机构服务已被暂停，扣量/预检拒绝执行（409）。
+	ErrSubscriptionPaused = errors.New("billing: subscription is paused")
+	// ErrSubscriptionCancelled 表示机构服务已取消，扣量/预检拒绝执行（409）。
+	ErrSubscriptionCancelled = errors.New("billing: subscription is cancelled")
+	// ErrInstitutionCancelled 表示机构已取消服务，不能再做暂停/调额度等运营动作（409）。
+	ErrInstitutionCancelled = errors.New("billing: institution service is cancelled")
+	// ErrOrderNotVoidable 表示订单已收款/已核销/状态不允许作废（409）。
+	ErrOrderNotVoidable = errors.New("billing: order is not voidable")
 )
 
 // ConflictError 是带业务提示的 409 冲突；Unwrap 保留 sentinel，handler 既能按类型给友好文案，
@@ -159,10 +181,13 @@ type InstitutionRegion struct {
 	District string `json:"district"`
 }
 
-// InstitutionQuota 是某产品某单位的额度 { granted, used }。
+// InstitutionQuota 是某产品某单位的额度 { granted, used, balance }。
+// balance 与 product_entitlements.balance 一致（rollover + granted - used），
+// 前端「调额度」抽屉用它展示真实可调余额，负向调整时由后端再次兜底校验。
 type InstitutionQuota struct {
 	Granted Decimal `json:"granted"`
 	Used    Decimal `json:"used"`
+	Balance Decimal `json:"balance"`
 }
 
 // InstitutionAdmin 是机构管理员账号（来自 employees + institution_employee_roles）。
@@ -191,7 +216,13 @@ type InstitutionPayLog struct {
 	Invoice string  `json:"invoice"`
 }
 
-// InstitutionConsumption 是一条消耗明细（来自 entitlement_ledger 的 usage 流水）。
+// InstitutionConsumption 是一条消耗明细（来自 entitlement_ledger）。
+//
+// Type / Source 用来区分「交付扣量」与「人工调额度更正」：
+//   - 扣量：type=usage、source=purchase/trial/...，amount 为负；
+//   - 更正：source=correction，正向 type=grant、负向 type=usage，amount 带符号。
+//
+// Deliverable 对扣量是产品名，对更正是「人工调额度」。
 type InstitutionConsumption struct {
 	At          string  `json:"at"`
 	ProductCode string  `json:"productCode"`
@@ -199,6 +230,9 @@ type InstitutionConsumption struct {
 	Unit        string  `json:"unit"`
 	Amount      Decimal `json:"amount"`
 	OrderNo     string  `json:"orderNo"`
+	Type        string  `json:"type"`
+	Source      string  `json:"source"`
+	Reason      string  `json:"reason"`
 }
 
 // InstitutionLog 是变更记录（本轮不做完整审计留痕，接口保留空数组）。
@@ -222,32 +256,37 @@ type InstitutionDocument struct {
 }
 
 // Institution 是机构档案，字段与 billingMock.ts 的 Institution 一致。
-// products 是 产品代码 -> 单位 -> {granted, used} 的两层对象。
+// products 是 产品代码 -> 单位 -> {granted, used, balance} 的两层对象。
 type Institution struct {
-	ID           int64                                  `json:"id"`
-	Name         string                                 `json:"name"`
-	Legal        string                                 `json:"legal"`
-	Code         string                                 `json:"code"`
-	Industry     string                                 `json:"industry"`
-	Departments  []string                               `json:"departments"`
-	Region       InstitutionRegion                      `json:"region"`
-	Contact      string                                 `json:"contact"`
-	Title        string                                 `json:"title"`
-	Phone        string                                 `json:"phone"`
-	Email        string                                 `json:"email"`
-	Channel      string                                 `json:"channel"`
-	Sales        string                                 `json:"sales"`
-	Start        string                                 `json:"start"`
-	End          string                                 `json:"end"`
-	Mode         string                                 `json:"mode"`
-	Open         bool                                   `json:"open"`
-	Products     map[string]map[string]InstitutionQuota `json:"products"`
-	Admins       []InstitutionAdmin                     `json:"admins"`
-	Receivables  []InstitutionReceivable                `json:"receivables"`
-	PayLogs      []InstitutionPayLog                    `json:"payLogs"`
-	Consumptions []InstitutionConsumption               `json:"consumptions"`
-	Logs         []InstitutionLog                       `json:"logs"`
-	Documents    []InstitutionDocument                  `json:"documents"`
+	ID              int64                                  `json:"id"`
+	Name            string                                 `json:"name"`
+	Legal           string                                 `json:"legal"`
+	Code            string                                 `json:"code"`
+	Industry        string                                 `json:"industry"`
+	Departments     []string                               `json:"departments"`
+	Region          InstitutionRegion                      `json:"region"`
+	Contact         string                                 `json:"contact"`
+	Title           string                                 `json:"title"`
+	Phone           string                                 `json:"phone"`
+	Email           string                                 `json:"email"`
+	Channel         string                                 `json:"channel"`
+	Sales           string                                 `json:"sales"`
+	Start           string                                 `json:"start"`
+	End             string                                 `json:"end"`
+	Mode            string                                 `json:"mode"`
+	Open            bool                                   `json:"open"`
+	Status          string                                 `json:"status"`
+	PausedAt        string                                 `json:"pausedAt,omitempty"`
+	PausedReason    string                                 `json:"pausedReason,omitempty"`
+	CancelledAt     string                                 `json:"cancelledAt,omitempty"`
+	CancelledReason string                                 `json:"cancelledReason,omitempty"`
+	Products        map[string]map[string]InstitutionQuota `json:"products"`
+	Admins          []InstitutionAdmin                     `json:"admins"`
+	Receivables     []InstitutionReceivable                `json:"receivables"`
+	PayLogs         []InstitutionPayLog                    `json:"payLogs"`
+	Consumptions    []InstitutionConsumption               `json:"consumptions"`
+	Logs            []InstitutionLog                       `json:"logs"`
+	Documents       []InstitutionDocument                  `json:"documents"`
 }
 
 // InstitutionListResult 是 GET /ops/billing/institutions 的 data。

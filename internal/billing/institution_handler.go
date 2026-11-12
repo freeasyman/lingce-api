@@ -51,6 +51,14 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/products", h.AddInstitutionProduct),
 		ops("POST", institution+"/{id}/extend-trial", h.ExtendInstitutionTrial),
 		ops("POST", institution+"/{id}/payments", h.ReceiveInstitutionPayment),
+		// 服务生命周期（第 2 批）：暂停 / 恢复 / 取消
+		ops("POST", institution+"/{id}/suspend", h.SuspendInstitution),
+		ops("POST", institution+"/{id}/resume", h.ResumeInstitution),
+		ops("POST", institution+"/{id}/cancel", h.CancelInstitution),
+		// 更正：作废订单 / 人工调额度
+		ops("GET", institution+"/{id}/voidable-orders", h.ListVoidableInstitutionOrders),
+		ops("POST", institution+"/{id}/entitlement-corrections", h.CorrectInstitutionEntitlement),
+		ops("POST", base+"/orders/{orderId}/void", h.VoidBillingOrder),
 		// 归属
 		ops("GET", institution+"/{id}/ownerships", h.ListInstitutionOwnerships),
 		ops("POST", institution+"/{id}/ownerships", h.CreateInstitutionOwnership),
@@ -455,6 +463,134 @@ func (h *Handler) ReceiveInstitutionPayment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	item, err := h.institutions.ReceiveInstitutionPayment(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// SuspendInstitution 暂停服务（原因必填；重复暂停幂等）。
+func (h *Handler) SuspendInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req SuspendRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.SuspendInstitution(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ResumeInstitution 恢复服务（无请求体；重复恢复幂等）。
+func (h *Handler) ResumeInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.institutions.ResumeInstitution(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// CancelInstitution 取消服务（原因必填 + confirmed=true；重复取消幂等）。
+func (h *Handler) CancelInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req CancelRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CancelInstitution(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// ListVoidableInstitutionOrders 列出该机构可作废的订单（未收款 + 未核销）。
+func (h *Handler) ListVoidableInstitutionOrders(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.institutions.ListVoidableOrders(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// VoidBillingOrder 作废订单（只允许未收款且未核销；已作废再作废幂等 200）。
+func (h *Handler) VoidBillingOrder(w http.ResponseWriter, r *http.Request) {
+	orderID, ok := requirePathID(w, r, "orderId", "Invalid order ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req VoidOrderRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	order, err := h.institutions.VoidOrder(r.Context(), orderID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, order)
+}
+
+// CorrectInstitutionEntitlement 人工调额度（正数加、负数减；写 correction 流水）。
+func (h *Handler) CorrectInstitutionEntitlement(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req EntitlementCorrectionRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.CorrectEntitlement(r.Context(), tenantID, req, adminID)
 	if err != nil {
 		writeInstitutionError(w, err)
 		return
@@ -899,6 +1035,12 @@ func writeInstitutionError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusBadRequest, "PERIOD_WINDOW_INVALID", "服务期到期日不能早于开始日", nil)
 	case errors.Is(err, ErrBundleMismatch):
 		httputil.WriteError(w, http.StatusBadRequest, "BUNDLE_MISMATCH", "套餐与勾选的产品不一致", nil)
+	case errors.Is(err, ErrInstitutionCancelled), errors.Is(err, ErrSubscriptionCancelled):
+		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_CANCELLED", "该机构服务已取消", nil)
+	case errors.Is(err, ErrSubscriptionPaused):
+		httputil.WriteError(w, http.StatusConflict, "SUBSCRIPTION_PAUSED", "该机构服务已暂停，请联系运营恢复", nil)
+	case errors.Is(err, ErrOrderNotVoidable):
+		httputil.WriteError(w, http.StatusConflict, "ORDER_NOT_VOIDABLE", "订单当前状态不允许作废", nil)
 	default:
 		writeBillingError(w, err)
 	}
@@ -913,6 +1055,12 @@ func conflictCode(sentinel error) string {
 		return "ADMIN_PHONE_USED"
 	case errors.Is(sentinel, ErrInstitutionCodeConflict):
 		return "INSTITUTION_CODE_USED"
+	case errors.Is(sentinel, ErrInstitutionCancelled), errors.Is(sentinel, ErrSubscriptionCancelled):
+		return "SUBSCRIPTION_CANCELLED"
+	case errors.Is(sentinel, ErrSubscriptionPaused):
+		return "SUBSCRIPTION_PAUSED"
+	case errors.Is(sentinel, ErrOrderNotVoidable):
+		return "ORDER_NOT_VOIDABLE"
 	default:
 		return "CONFLICT"
 	}

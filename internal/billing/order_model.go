@@ -28,6 +28,7 @@ const (
 	OrderStatusSettled   = "settled"
 	OrderStatusRefunded  = "refunded"
 	OrderStatusCancelled = "cancelled"
+	OrderStatusVoid      = "void"
 
 	// 订单开通时写入 entitlement_ledger.source 的取值。
 	LedgerSourcePurchase = "purchase"
@@ -48,13 +49,14 @@ var OrderTypes = []string{
 // OrderSources 是订单来源枚举。
 var OrderSources = []string{OrderSourceDirect, OrderSourceChannel}
 
-// OrderStatuses 是订单状态枚举（含 paid/cancelled，用于列表筛选校验）。
+// OrderStatuses 是订单状态枚举（含 paid/cancelled/void，用于列表筛选校验）。
 var OrderStatuses = []string{
 	OrderStatusCreated,
 	OrderStatusPaid,
 	OrderStatusSettled,
 	OrderStatusRefunded,
 	OrderStatusCancelled,
+	OrderStatusVoid,
 }
 
 // 订单列表分页默认值与上限（与流水分页保持同一约定：默认 50，上限 200）。
