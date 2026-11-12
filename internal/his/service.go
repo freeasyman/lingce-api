@@ -154,6 +154,11 @@ func (s *Service) ListChargeItems(ctx context.Context, tenantID int64) ([]Charge
 	return s.store.ListChargeItems(ctx, tenantID)
 }
 
+// SearchChargeItems 收费项目分页搜索（管理页/开单下拉）。
+func (s *Service) SearchChargeItems(ctx context.Context, tenantID int64, keyword, category string, page, pageSize int) (ChargeItemPage, error) {
+	return s.store.ListChargeItemsPaged(ctx, tenantID, keyword, category, page, pageSize)
+}
+
 func (s *Service) CreateChargeItem(ctx context.Context, tenantID int64, req CreateChargeItemRequest) (ChargeItem, error) {
 	if err := normalizeCreateChargeItem(&req); err != nil {
 		return ChargeItem{}, err

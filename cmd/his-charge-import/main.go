@@ -20,6 +20,7 @@ func main() {
 	tenantID := flag.Int64("tenant-id", 1, "租户 ID")
 	dbURL := flag.String("db-url", os.Getenv("LINGCE_DEV_DB_URL"), "PostgreSQL DSN")
 	dryRun := flag.Bool("dry-run", false, "只统计不写入")
+	excludeRaw := flag.String("exclude", "手术,麻醉,输血,床位,中草药", "不导入的分类（逗号分隔；中草药按药品管理）")
 	flag.Parse()
 	if *csvPath == "" || *dbURL == "" {
 		fmt.Fprintln(os.Stderr, "需要 -csv 与 -db-url（或 LINGCE_DEV_DB_URL）")
@@ -58,12 +59,23 @@ func main() {
 		code, name, category, unit, insurance string
 		price                                 float64
 	}
+	exclude := map[string]bool{}
+	for _, name := range strings.Split(*excludeRaw, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			exclude[name] = true
+		}
+	}
 	items := make([]item, 0, len(records)-1)
 	skipped := 0
 	for _, row := range records[1:] {
 		code := strings.TrimSpace(row[col["code"]])
 		name := strings.TrimSpace(row[col["name"]])
 		if code == "" || name == "" {
+			skipped++
+			continue
+		}
+		category := strings.TrimSpace(row[col["category"]])
+		if exclude[category] {
 			skipped++
 			continue
 		}

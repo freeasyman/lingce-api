@@ -211,6 +211,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 主数据：原子收费项目
 		{Method: "GET", Path: "/api/v1/his/master/charge-items", Handler: h.ListChargeItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/master/charge-items/search", Handler: h.SearchChargeItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/master/charge-items", Handler: h.CreateChargeItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/master/charge-items/{id}", Handler: h.UpdateChargeItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -561,6 +562,23 @@ func (h *Handler) UpdateDrug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, drug)
+}
+
+// SearchChargeItems 收费项目分页搜索（?keyword=&category=&page=&page_size=）。
+func (h *Handler) SearchChargeItems(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	result, err := h.service.SearchChargeItems(r.Context(), tenantID,
+		r.URL.Query().Get("keyword"), r.URL.Query().Get("category"), page, pageSize)
+	if err != nil {
+		httputil.WriteInternalError(w, "failed to load charge items")
+		return
+	}
+	httputil.WriteSuccess(w, result)
 }
 
 // ListChargeItems 返回原子收费项目列表。

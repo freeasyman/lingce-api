@@ -345,6 +345,42 @@ func (s *Store) ListChargeItems(ctx context.Context, tenantID int64) ([]ChargeIt
 	return items, rows.Err()
 }
 
+// ListChargeItemsPaged 收费项目分页查询：keyword 匹配名称/编码，category 精确过滤。
+func (s *Store) ListChargeItemsPaged(ctx context.Context, tenantID int64, keyword, category string, page, pageSize int) (ChargeItemPage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 500 {
+		pageSize = 50
+	}
+	args := []any{tenantID, "%" + strings.TrimSpace(keyword) + "%", strings.TrimSpace(category)}
+	where := ` WHERE tenant_id = $1
+		AND ($2 = '%%' OR name ILIKE $2 OR code ILIKE $2)
+		AND ($3 = '' OR category = $3)`
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM his_charge_items`+where, args...).Scan(&total); err != nil {
+		return ChargeItemPage{}, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+chargeItemColumns+` FROM his_charge_items`+where+
+		` ORDER BY id LIMIT $4 OFFSET $5`, append(args, pageSize, (page-1)*pageSize)...)
+	if err != nil {
+		return ChargeItemPage{}, err
+	}
+	defer rows.Close()
+	items := make([]ChargeItem, 0, pageSize)
+	for rows.Next() {
+		c, err := scanChargeItem(rows)
+		if err != nil {
+			return ChargeItemPage{}, err
+		}
+		items = append(items, c)
+	}
+	if err := rows.Err(); err != nil {
+		return ChargeItemPage{}, err
+	}
+	return ChargeItemPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
 // CreateChargeItem 新增原子收费项目。
 func (s *Store) CreateChargeItem(ctx context.Context, tenantID int64, req CreateChargeItemRequest) (ChargeItem, error) {
 	category := strings.TrimSpace(req.Category)

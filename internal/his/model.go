@@ -1067,3 +1067,11 @@ type QualityReportLatest struct {
 	StartedAt      *time.Time           `json:"started_at,omitempty"`
 	Findings       []QualityFindingItem `json:"findings"`
 }
+
+// ChargeItemPage 收费项目分页结果（管理页搜索/分页）。
+type ChargeItemPage struct {
+	Items    []ChargeItem `json:"items"`
+	Total    int          `json:"total"`
+	Page     int          `json:"page"`
+	PageSize int          `json:"page_size"`
+}
