@@ -121,6 +121,66 @@ type PatientOverview struct {
 	Registrations    []Registration           `json:"registrations"`
 }
 
+// PatientVisitSummary 是客户总监聚合使用的“就诊元数据”白名单。
+// 不包含诊断、主诉、处方、检验检查、收费/订单/金额等敏感内容。
+type PatientVisitSummary struct {
+	EncounterID int64  `json:"encounter_id"`
+	VisitDate   string `json:"visit_date"`
+	VisitType   string `json:"visit_type"`
+	Status      string `json:"status"`
+	StartedAt   string `json:"started_at"`
+}
+
+// PatientVisits 返回客户维度的就诊元数据，供客户总监聚合。
+// 只查 encounters + his_registrations 的时间/类型/状态，绝不返回诊断或收费。
+func (s *Service) PatientVisits(ctx context.Context, tenantID, customerID int64) ([]PatientVisitSummary, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT e.id,
+		       COALESCE(to_char(r.visit_date, 'YYYY-MM-DD'), to_char(e.started_at, 'YYYY-MM-DD'), ''),
+		       COALESCE(e.visit_type, ''), COALESCE(e.status, ''), e.started_at
+		FROM encounters e
+		LEFT JOIN his_registrations r
+		  ON r.tenant_id = e.tenant_id AND r.id = e.source_id
+		WHERE e.tenant_id = $1 AND e.source_type = 'his' AND e.patient_id = $2
+		ORDER BY e.started_at DESC NULLS LAST, e.id DESC
+		LIMIT 100`, tenantID, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PatientVisitSummary, 0)
+	for rows.Next() {
+		var item PatientVisitSummary
+		var startedAt time.Time
+		if err := rows.Scan(&item.EncounterID, &item.VisitDate, &item.VisitType, &item.Status, &startedAt); err != nil {
+			return nil, err
+		}
+		item.StartedAt = startedAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// PatientVisits 患者就诊元数据（客户总监聚合用，不含诊断/收费）。
+func (h *Handler) PatientVisits(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	customerID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("customer_id")), 10, 64)
+	if err != nil || customerID <= 0 {
+		httputil.WriteBadRequest(w, "invalid customer id")
+		return
+	}
+	items, err := h.service.PatientVisits(r.Context(), tenantID, customerID)
+	if err != nil {
+		slog.Error("his: patient visits", "error", err)
+		httputil.WriteInternalError(w, "failed to list patient visits")
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
 // normalizePatientLimit 解析患者列表 limit：缺省 20，非法/非正数报错，超过 100 截断。
 func normalizePatientLimit(raw string) (int, error) {
 	raw = strings.TrimSpace(raw)

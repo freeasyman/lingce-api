@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/freeasyman/lingce-api/internal/emrdiagnosis"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
@@ -84,6 +85,41 @@ func (s *Service) ListByPatient(ctx context.Context, tenantID, patientID int64, 
 
 func (s *Service) ListByPatientScoped(ctx context.Context, tenantID, patientID int64, page, pageSize int, access *emrpermission.Access) ([]*Record, int, error) {
 	return s.store.ListByPatientScoped(ctx, tenantID, patientID, page, pageSize, access)
+}
+
+// PatientRecordStatus 是客户总监聚合使用的病历状态白名单。
+// 不包含诊断、主诉、病历正文、医嘱、处方或质控内容。
+type PatientRecordStatus struct {
+	ID          string `json:"id"`
+	EncounterID int64  `json:"encounter_id"`
+	VisitType   string `json:"visit_type"`
+	Status      string `json:"status"`
+	StartedAt   string `json:"started_at"`
+}
+
+// ListRecordStatusByPatient 只返回病历是否存在/状态，不返回病历内容。
+func (s *Service) ListRecordStatusByPatient(ctx context.Context, tenantID, customerID int64) ([]PatientRecordStatus, error) {
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT id::text, encounter_id, COALESCE(visit_type,''), COALESCE(status,''), started_at
+		FROM emr_records
+		WHERE tenant_id=$1 AND customer_id=$2
+		ORDER BY started_at DESC, updated_at DESC
+		LIMIT 100`, tenantID, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PatientRecordStatus, 0)
+	for rows.Next() {
+		var item PatientRecordStatus
+		var startedAt time.Time
+		if err := rows.Scan(&item.ID, &item.EncounterID, &item.VisitType, &item.Status, &startedAt); err != nil {
+			return nil, err
+		}
+		item.StartedAt = startedAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Service) Get(ctx context.Context, tenantID int64, id string) (*Record, error) {

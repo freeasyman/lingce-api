@@ -34,6 +34,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/records", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/customers/{id}/emr-records", Handler: h.ListByPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/customers/{id}/emr-record-status", Handler: h.ListRecordStatusByPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/import-from-recording", Handler: h.ImportFromRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -169,6 +170,26 @@ func (h *Handler) ListByPatient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WritePaginated(w, items, int64(total), page, pageSize)
+}
+
+// ListRecordStatusByPatient 返回病历状态白名单，不返回病历正文。
+func (h *Handler) ListRecordStatusByPatient(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, err := h.authorize(r, "record.read")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	customerID, err := parsePositiveID(recordID(r), "patient_id")
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	items, err := h.service.ListRecordStatusByPatient(r.Context(), tenantID, customerID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 
 func parsePositiveID(raw, name string) (int64, error) {

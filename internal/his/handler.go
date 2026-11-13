@@ -224,6 +224,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 患者档案
 		{Method: "GET", Path: "/api/v1/his/patients", Handler: h.ListPatients, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/overview", Handler: h.PatientOverview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/visits", Handler: h.PatientVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 患者建档与病案号
 		{Method: "POST", Path: "/api/v1/his/patients/register", Handler: h.RegisterPatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
