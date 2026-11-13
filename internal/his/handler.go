@@ -51,13 +51,14 @@ func (l *rateLimiter) allow(clientID int64, perMinute int) bool {
 
 // Handler 是 HIS 域的 HTTP 入口。
 type Handler struct {
-	service *Service
-	limiter *rateLimiter
+	service     *Service
+	limiter     *rateLimiter
+	importCache *importFileCache
 }
 
 // NewHandler 创建 Handler。
 func NewHandler(service *Service) *Handler {
-	return &Handler{service: service, limiter: newRateLimiter()}
+	return &Handler{service: service, limiter: newRateLimiter(), importCache: newImportFileCache()}
 }
 
 // requireOpenClient 开放 API 鉴权：X-API-Key 哈希匹配 + 限流，返回租户。
@@ -182,6 +183,18 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "purchase_already_received", "该采购单已入库，不能重复收货", nil)
 	case ErrChargeItemCodeExists:
 		httputil.WriteError(w, http.StatusConflict, "charge_item_code_exists", "收费项目编码已存在，请换一个编码", nil)
+	case ErrDrugDiscountLocked:
+		httputil.WriteBadRequest(w, "药品折扣率锁定为 1.00，不能低于 1")
+	case ErrInvalidDiscountRate:
+		httputil.WriteBadRequest(w, "折扣率需满足 0 < rate ≤ 1")
+	case ErrInvalidPriceIdentity:
+		httputil.WriteBadRequest(w, "价格身份不合法")
+	case ErrNegotiationForbidden:
+		httputil.WriteForbidden(w, "议价权限不足：仅管理员/店长可议价，收费员需在上限内")
+	case ErrNegotiationReasonRequired:
+		httputil.WriteBadRequest(w, "议价必须填写原因")
+	case ErrNegotiationExceedsPayable:
+		httputil.WriteBadRequest(w, "议价金额不能超过可折行应收")
 	case ErrInvalidRole:
 		httputil.WriteBadRequest(w, "角色不存在")
 	case ErrInvalidModule:
@@ -231,14 +244,25 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/master/charge-items/{id}/links", Handler: h.GetChargeItemLinks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/his/master/charge-items/{id}/links", Handler: h.UpdateChargeItemLinks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 灵活 Excel/CSV 导入（预览 → 列映射 → 提交）
+		{Method: "POST", Path: "/api/v1/his/imports/preview", Handler: h.PreviewImport, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/imports/commit", Handler: h.CommitImport, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/imports/template", Handler: h.ImportTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 主数据：打包产品
 		{Method: "GET", Path: "/api/v1/his/master/bundles", Handler: h.ListBundles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/master/bundles/{id}", Handler: h.GetBundle, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/master/bundles", Handler: h.CreateBundle, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/master/bundles/{id}", Handler: h.UpdateBundle, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
+		// 会员/身份折扣
+		{Method: "GET", Path: "/api/v1/his/discount-rules", Handler: h.GetDiscountRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/his/discount-rules/settings", Handler: h.UpdateDiscountSettings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/his/discount-rules/{identity}", Handler: h.UpdateDiscountRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
 		// 患者档案
 		{Method: "GET", Path: "/api/v1/his/patients", Handler: h.ListPatients, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/his/patients/{customer_id}/identity", Handler: h.UpdatePatientIdentity, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/overview", Handler: h.PatientOverview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/visits", Handler: h.PatientVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -1772,6 +1796,106 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, order)
 }
 
+// GetDiscountRules 身份 × 大类折扣矩阵。
+func (h *Handler) GetDiscountRules(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	matrix, err := h.service.DiscountMatrix(r.Context(), tenantID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, matrix)
+}
+
+// UpdateDiscountRules 覆盖写某身份的大类折率。
+func (h *Handler) UpdateDiscountRules(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	identity := strings.TrimSpace(r.PathValue("identity"))
+	var req struct {
+		Rates map[string]float64 `json:"rates"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.service.UpdateDiscountRules(r.Context(), tenantID, identity, req.Rates); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	matrix, err := h.service.DiscountMatrix(r.Context(), tenantID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, matrix)
+}
+
+// UpdateDiscountSettings 设置收费员议价上限。
+func (h *Handler) UpdateDiscountSettings(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	var req struct {
+		CashierMaxNegotiationRate float64 `json:"cashier_max_negotiation_rate"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.service.UpdateCashierMaxNegotiationRate(r.Context(), tenantID, req.CashierMaxNegotiationRate); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	matrix, err := h.service.DiscountMatrix(r.Context(), tenantID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, matrix)
+}
+
+// UpdatePatientIdentity 设置患者价格身份（留痕）。
+func (h *Handler) UpdatePatientIdentity(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "patients") {
+		return
+	}
+	customerID, ok := parseIDParam(w, r, "customer_id")
+	if !ok {
+		return
+	}
+	var req struct {
+		PriceIdentity string `json:"price_identity"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.service.SetPatientPriceIdentity(r.Context(), tenantID, customerID, claims.UserID, strings.TrimSpace(req.PriceIdentity)); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	overview, err := h.service.PatientOverview(r.Context(), tenantID, customerID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, overview)
+}
+
 // CreateOrder 划价。
 func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
@@ -1810,7 +1934,7 @@ func (h *Handler) UpdateOrder(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	order, err := h.service.UpdateOrder(r.Context(), tenantID, id, req)
+	order, err := h.service.UpdateOrder(r.Context(), tenantID, id, claims.UserID, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return

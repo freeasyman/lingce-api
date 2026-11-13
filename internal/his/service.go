@@ -63,6 +63,9 @@ var ErrPurchaseAlreadyReceived = errors.New("purchase order already received")
 // ErrChargeItemCodeExists 表示同租户收费项目编码已存在。
 var ErrChargeItemCodeExists = errors.New("charge item code exists")
 
+// ErrDrugCodeExists 表示同租户药品编码已存在。
+var ErrDrugCodeExists = errors.New("drug code exists")
+
 // Service 是 HIS 域的业务层。
 type Service struct {
 	store *Store
@@ -747,6 +750,11 @@ func (s *Service) CreateOrder(ctx context.Context, tenantID, createdBy int64, re
 	if req.DiscountTotal < 0 {
 		return Order{}, ErrInvalidRequest
 	}
+	if req.Negotiation != nil {
+		if _, err := normalizeNegotiation(req.Negotiation, 0, createdBy); err != nil {
+			return Order{}, err
+		}
+	}
 	// 行类型与数量在此校验；价格一律由 store 按行类型解析。
 	if err := validateOrderLineInputs(req.Items); err != nil {
 		return Order{}, err
@@ -754,8 +762,13 @@ func (s *Service) CreateOrder(ctx context.Context, tenantID, createdBy int64, re
 	return s.store.CreateOrder(ctx, tenantID, createdBy, req)
 }
 
-func (s *Service) UpdateOrder(ctx context.Context, tenantID, id int64, req UpdateOrderRequest) (Order, error) {
-	return s.store.UpdateOrder(ctx, tenantID, id, req)
+func (s *Service) UpdateOrder(ctx context.Context, tenantID, id, employeeID int64, req UpdateOrderRequest) (Order, error) {
+	if req.Negotiation != nil {
+		if _, err := normalizeNegotiation(req.Negotiation, 0, employeeID); err != nil {
+			return Order{}, err
+		}
+	}
+	return s.store.UpdateOrder(ctx, tenantID, id, employeeID, req)
 }
 
 func (s *Service) AddPayment(ctx context.Context, tenantID, operatorID, orderID int64, req CreatePaymentRequest) (Order, error) {
@@ -796,6 +809,45 @@ func (s *Service) RefundOrderItems(ctx context.Context, tenantID, operatorID, or
 
 func (s *Service) VoidOrder(ctx context.Context, tenantID, orderID int64) (Order, error) {
 	return s.store.VoidOrder(ctx, tenantID, orderID)
+}
+
+// ---------------------------------------------------------------------------
+// 会员/身份折扣
+
+// DiscountMatrix 身份 × 大类折扣矩阵（含收费员议价上限）。
+func (s *Service) DiscountMatrix(ctx context.Context, tenantID int64) (DiscountRuleMatrix, error) {
+	rules, err := s.store.DiscountMatrix(ctx, tenantID)
+	if err != nil {
+		return DiscountRuleMatrix{}, err
+	}
+	maxRate, err := s.store.CashierMaxNegotiationRate(ctx, tenantID)
+	if err != nil {
+		return DiscountRuleMatrix{}, err
+	}
+	return DiscountRuleMatrix{
+		Identities:                discountIdentities(),
+		Categories:                discountCategories(),
+		Rules:                     rules,
+		CashierMaxNegotiationRate: maxRate,
+	}, nil
+}
+
+// UpdateDiscountRules 覆盖写某身份的大类折率（药品锁定 1.0）。
+func (s *Service) UpdateDiscountRules(ctx context.Context, tenantID int64, identity string, rates map[string]float64) error {
+	return s.store.ReplaceDiscountRules(ctx, tenantID, identity, rates)
+}
+
+// UpdateCashierMaxNegotiationRate 设置收费员议价上限。
+func (s *Service) UpdateCashierMaxNegotiationRate(ctx context.Context, tenantID int64, rate float64) error {
+	return s.store.UpdateCashierMaxNegotiationRate(ctx, tenantID, rate)
+}
+
+// SetPatientPriceIdentity 设置患者价格身份并留痕。
+func (s *Service) SetPatientPriceIdentity(ctx context.Context, tenantID, customerID, operatorID int64, identity string) error {
+	if customerID <= 0 || operatorID <= 0 {
+		return ErrInvalidRequest
+	}
+	return s.store.SetCustomerPriceIdentity(ctx, tenantID, customerID, operatorID, identity)
 }
 
 // ---------------------------------------------------------------------------
