@@ -50,9 +50,11 @@ type AutoEnsureEMRResponse struct {
 	TemplateID   string            `json:"template_id"`
 	TemplateCode string            `json:"template_code"`
 	TemplateName string            `json:"template_name"`
-	Matched      bool              `json:"matched"`
-	Message      string            `json:"message"`
-	Created      bool              `json:"created"` // false 表示复用已有病历
+	Matched      bool              `json:"matched"`  // 模板与本次就诊类型精确匹配
+	Fallback     bool              `json:"fallback"` // 发生降级（复诊→初诊 / 科室→标准模板）
+	Notice       string            `json:"notice"`   // 降级提示（正常匹配为空）
+	Message      string            `json:"message"`  // 兼容旧前端：与 Notice 同口径
+	Created      bool              `json:"created"`  // false 表示复用已有病历
 }
 
 // OutpatientItem 门诊页「已开项目」：检查/检验/治疗/收费项目统一视图（全部来自数据库）。

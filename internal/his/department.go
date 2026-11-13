@@ -34,8 +34,29 @@ const (
 type templateResolution struct {
 	Department *DepartmentBrief
 	Template   *EMRTemplate
-	Matched    bool
-	Reason     string
+	Matched    bool   // 模板与就诊类型精确匹配
+	Fallback   bool   // 发生了降级（复诊→初诊 / 科室→标准模板）
+	Notice     string // 降级提示（正常匹配为空）
+	// EffectiveVisitType 写入 emr_records.visit_type 的值：复诊降级初诊模板时必须跟随模板，
+	// 否则 emrrecord.Create 会因模板 visit_type 不匹配而报「共享接诊或已发布病历模板不存在」。
+	EffectiveVisitType string
+	Reason             string
+}
+
+// templateSupportsVisitType 模板 visit_type 为「通用」或与本次就诊类型一致才可直接使用。
+func templateSupportsVisitType(template *EMRTemplate, visitType string) bool {
+	if template == nil {
+		return false
+	}
+	return template.VisitType == "通用" || template.VisitType == visitType
+}
+
+// templateVisitFallbackNotice 就诊类型无对应模板时的提示，例如「复诊模板缺失，已使用妇科初诊病历」。
+func templateVisitFallbackNotice(visitType string, template *EMRTemplate) string {
+	if template == nil {
+		return ""
+	}
+	return visitType + "模板缺失，已使用" + template.Name
 }
 
 // ListClinicalDepartments 管理台/排班可选临床科室：departments.type='clinical'，带可用的模板名。
@@ -121,8 +142,9 @@ func (s *Store) departmentBrief(ctx context.Context, q querier, tenantID int64, 
 
 // ResolveEncounterTemplate 解析本次就诊的科室与模板：
 //   - encounter.department_id 缺失时回退到挂号单 department_id（历史数据兼容）；
+//   - 按科室 template_code 找模板；复诊无对应模板时降级到该科室初诊模板（带提示）；
 //   - 科室没有 template_code 或模板未发布 → 标准门急诊病历 + 原因；
-//   - 找不到任何模板 → Template 为 nil（调用方返回错误，不静默写空病历）。
+//   - 找不到任何模板 → Template 为 nil（调用方返回 400，不静默写空病历）。
 func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounterID int64) (*templateResolution, error) {
 	if encounterID <= 0 {
 		return nil, ErrInvalidRequest
@@ -142,7 +164,12 @@ func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounte
 		return nil, err
 	}
 
-	resolution := &templateResolution{}
+	visitType, err := s.encounterVisitType(ctx, tenantID, encounterID)
+	if err != nil {
+		return nil, err
+	}
+
+	resolution := &templateResolution{EffectiveVisitType: visitType}
 	brief, err := s.departmentBrief(ctx, s.pool, tenantID, departmentID)
 	if err != nil {
 		return nil, err
@@ -164,10 +191,20 @@ func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounte
 			return nil, err
 		}
 		if template != nil {
-			resolution.Template = template
-			resolution.Matched = true
 			brief.TemplateID = template.ID
 			brief.TemplateName = template.Name
+			if templateSupportsVisitType(template, visitType) {
+				resolution.Template = template
+				resolution.Matched = true
+				brief.Matched = true
+				return resolution, nil
+			}
+			// 复诊（或初诊）无对应模板：降级到该科室已配置的模板（通常是初诊模板）。
+			// 记录 visit_type 跟随模板，避免共享病历域按 visit_type 拒建。
+			resolution.Template = template
+			resolution.Fallback = true
+			resolution.Notice = templateVisitFallbackNotice(visitType, template)
+			resolution.EffectiveVisitType = template.VisitType
 			brief.Matched = true
 			return resolution, nil
 		}
@@ -184,6 +221,7 @@ func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounte
 		return resolution, nil
 	}
 	resolution.Template = fallback
+	resolution.Fallback = true
 	if brief != nil {
 		brief.TemplateID = fallback.ID
 		brief.TemplateName = fallback.Name
