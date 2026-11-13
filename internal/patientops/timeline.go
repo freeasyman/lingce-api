@@ -134,16 +134,27 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			occurred := firstNonEmpty(asString(item["recorded_at"]), asString(item["created_at"]))
+			isDoctor := strings.EqualFold(asString(item["business_scope"]), "doctor")
 			scene := "咨询"
-			if strings.EqualFold(asString(item["business_scope"]), "doctor") {
+			title := "咨询接待"
+			actorLabel := "咨询师"
+			if isDoctor {
 				scene = "就诊"
+				title = "医生沟通"
+				actorLabel = "接诊"
 			}
-			summary := nestedSummary(item)
+			// 只展示就诊过程元信息：谁接待、是否完成、录音是否归档。
+			// 不展示转写、诊断、主诉等医疗内容。
+			actor := firstNonEmpty(asString(item["employee_name"]), "待补充")
+			summary := fmt.Sprintf("%s：%s · 录音已归档", actorLabel, actor)
+			if strings.EqualFold(asString(item["status"]), "completed") {
+				summary += " · 已完成"
+			}
 			recordingEventIDs[recordingID] = true
 			appendEvent(CustomerTimelineEvent{
-				ID: fmt.Sprintf("recording-%s", recordingID), EventType: "consultation.recording",
-				Scene: scene, OccurredAt: occurred, Title: scene + "录音",
-				Summary: summary, Source: "录音", Sensitivity: "L4", Actor: asString(item["employee_name"]),
+				ID: fmt.Sprintf("recording-%s", recordingID), EventType: "recording.visit",
+				Scene: scene, OccurredAt: occurred, Title: title,
+				Summary: summary, Source: "录音归档", Sensitivity: "L2", Actor: actor,
 			})
 		}
 	}
@@ -155,8 +166,11 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 		} else {
 			for _, item := range items {
 				occurred := firstNonEmpty(asString(item["started_at"]), asString(item["created_at"]))
-				title := firstNonEmpty(asString(item["visit_type"]), "就诊记录")
-				summary := firstNonEmpty(asString(item["working_digest"]), encounterSummary(item))
+				title := visitTypeLabel(asString(item["visit_type"]))
+				summary := "病历已归档"
+				if status := strings.ToLower(strings.TrimSpace(asString(item["status"]))); status != "" && status != "archived" {
+					summary = "病历状态：已记录"
+				}
 				appendEvent(CustomerTimelineEvent{
 					ID: fmt.Sprintf("emr-%s", asString(item["id"])), EventType: "encounter.emr",
 					Scene: "就诊", OccurredAt: occurred, Title: title, Summary: summary,
@@ -268,6 +282,19 @@ func fetchTimelineItems(ctx context.Context, url, token string) ([]map[string]an
 		return payload.Items, nil
 	}
 	return payload.Data.Items, nil
+}
+
+func visitTypeLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "first_visit", "initial":
+		return "初诊"
+	case "return_visit", "revisit":
+		return "复诊"
+	case "follow_up", "followup":
+		return "随访"
+	default:
+		return "诊疗"
+	}
 }
 
 func nestedSummary(item map[string]any) string {
