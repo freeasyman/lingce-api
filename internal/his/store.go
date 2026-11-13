@@ -3878,6 +3878,9 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 		if err := rows.Scan(&item.Code, &item.Name, &item.Category); err != nil {
 			return nil, err
 		}
+		if strings.TrimSpace(item.Category) == "" {
+			item.Category = icd10Category(item.Code)
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
