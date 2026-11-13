@@ -291,9 +291,9 @@ func (s *Service) loadEncounterStats(ctx context.Context, tenantID int64, overvi
 	}
 
 	if err := s.pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT i.source_id)
-		FROM compliance_check_items i
-		WHERE i.tenant_id = $1
+		SELECT COUNT(*)
+		FROM compliance_analyzed_encounters
+		WHERE tenant_id = $1
 	`, tenantID).Scan(&overview.AnalyzedEncounters); err != nil {
 		return fmt.Errorf("count analyzed encounters: %w", err)
 	}
