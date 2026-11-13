@@ -64,6 +64,10 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 			username text, phone text, deleted_at timestamp,
 			email text, is_active integer DEFAULT 1, updated_at timestamp
 		);
+		CREATE TABLE departments (
+			id bigserial PRIMARY KEY, tenant_id bigint, name text,
+			deleted_at timestamp, is_active boolean DEFAULT true
+		);
 		CREATE TABLE encounters (
 			id bigserial PRIMARY KEY,
 			tenant_id bigint NOT NULL,
@@ -134,6 +138,9 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		"20261113_006_lab_exam_charge.sql",
 		"20261113_010_billing_refund_links.sql",
 		"20261113_011_his_discount_rules.sql",
+		"20261113_007_his_charge_insurance.sql",
+		"20261113_009_his_pinyin.sql",
+		"20261113_013_his_pinyin_repricing.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {

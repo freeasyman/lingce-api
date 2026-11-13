@@ -11,11 +11,13 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/lib/pq v1.12.3
+	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/xuri/excelize/v2 v2.9.1
 	golang.org/x/crypto v0.49.0
 	golang.org/x/image v0.38.0
+	golang.org/x/text v0.35.0
 )
 
 require (
@@ -31,6 +33,5 @@ require (
 	github.com/xuri/nfp v0.0.1 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )

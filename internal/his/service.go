@@ -742,6 +742,18 @@ func (s *Service) GetOrder(ctx context.Context, tenantID, id int64) (Order, erro
 	return order, nil
 }
 
+// PreviewOrderReprice 收费弹窗预览：按患者当前身份重算 pending 单（不落库）。
+func (s *Service) PreviewOrderReprice(ctx context.Context, tenantID, orderID int64) (OrderRepricePreview, error) {
+	preview, err := s.store.PreviewOrderReprice(ctx, tenantID, orderID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return OrderRepricePreview{}, ErrNotFound
+		}
+		return OrderRepricePreview{}, err
+	}
+	return preview, nil
+}
+
 func (s *Service) CreateOrder(ctx context.Context, tenantID, createdBy int64, req CreateOrderRequest) (Order, error) {
 	if req.EncounterID <= 0 {
 		return Order{}, ErrInvalidRequest

@@ -682,6 +682,10 @@ type Order struct {
 	NegotiationAmount     float64 `json:"negotiation_amount"`
 	NegotiationReason     string  `json:"negotiation_reason"`
 	NegotiationBy         *int64  `json:"negotiation_by"`
+	// 结账重算结果：仅收款/合并下单响应返回；其他查询 repriced=false 且不带 previous_payable。
+	Repriced         bool     `json:"repriced"`
+	PreviousPayable  *float64 `json:"previous_payable,omitempty"`
+	PreviousIdentity string   `json:"previous_identity,omitempty"`
 }
 
 // NegotiationInput 整单议价（例外）：percent 为减免百分比（10=让 10%），amount 为减免金额。

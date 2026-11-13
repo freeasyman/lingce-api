@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/his"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -74,11 +75,15 @@ func main() {
 		{"H012", "连翘", "统装", "g", "chinese_herb", 0.7, 0.45},
 	}
 	for _, d := range drugs {
+		pinyin, initials := his.PinyinOf(d.name)
 		_, err := pool.Exec(ctx, `
-			INSERT INTO his_drugs (tenant_id, code, name, spec, unit, manufacturer, drug_type, retail_price, purchase_price, is_rx)
-			VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, true)
-			ON CONFLICT (tenant_id, code) DO NOTHING`,
-			*tenantID, d.code, d.name, d.spec, d.unit, d.drugType, d.retail, d.purchase)
+			INSERT INTO his_drugs (tenant_id, code, name, spec, unit, manufacturer, drug_type,
+			                       retail_price, purchase_price, is_rx, pinyin, initials)
+			VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, true, $9, $10)
+			ON CONFLICT (tenant_id, code) DO UPDATE
+			SET pinyin = EXCLUDED.pinyin, initials = EXCLUDED.initials
+			WHERE his_drugs.pinyin = '' OR his_drugs.initials = ''`,
+			*tenantID, d.code, d.name, d.spec, d.unit, d.drugType, d.retail, d.purchase, pinyin, initials)
 		if err != nil {
 			log.Fatalf("药品 %s: %v", d.code, err)
 		}
@@ -103,11 +108,14 @@ func main() {
 		{"C011", "中药代煎", "其他", "剂", 3},
 	}
 	for _, item := range items {
+		pinyin, initials := his.PinyinOf(item.name)
 		_, err := pool.Exec(ctx, `
-			INSERT INTO his_charge_items (tenant_id, code, name, category, unit, price)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (tenant_id, code) DO NOTHING`,
-			*tenantID, item.code, item.name, item.category, item.unit, item.price)
+			INSERT INTO his_charge_items (tenant_id, code, name, category, unit, price, pinyin, initials)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (tenant_id, code) DO UPDATE
+			SET pinyin = EXCLUDED.pinyin, initials = EXCLUDED.initials
+			WHERE his_charge_items.pinyin = '' OR his_charge_items.initials = ''`,
+			*tenantID, item.code, item.name, item.category, item.unit, item.price, pinyin, initials)
 		if err != nil {
 			log.Fatalf("收费项目 %s: %v", item.code, err)
 		}
@@ -128,7 +136,7 @@ func main() {
 		err := pool.QueryRow(ctx, `
 			INSERT INTO his_bundles (tenant_id, code, name, price, description)
 			VALUES ($1, $2, $3, $4, '')
-			ON CONFLICT (tenant_id, code) DO UPDATE SET price = EXCLUDED.price
+			ON CONFLICT (tenant_id, code) DO UPDATE SET price = his_bundles.price
 			RETURNING id`, *tenantID, b.code, b.name, b.price).Scan(&bundleID)
 		if err != nil {
 			log.Fatalf("打包产品 %s: %v", b.code, err)

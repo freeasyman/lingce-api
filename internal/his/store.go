@@ -265,17 +265,24 @@ func (s *Store) CreateDrug(ctx context.Context, tenantID int64, req CreateDrugRe
 	if drugType == "" {
 		drugType = "western"
 	}
+	pinyin, initials := PinyinOf(req.Name)
 	return scanDrug(s.pool.QueryRow(ctx, `
 		INSERT INTO his_drugs (tenant_id, code, name, spec, unit, manufacturer, drug_type,
-		                       retail_price, purchase_price, is_rx)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                       retail_price, purchase_price, is_rx, pinyin, initials)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+drugColumns,
 		tenantID, req.Code, req.Name, req.Spec, req.Unit, req.Manufacturer, drugType,
-		req.RetailPrice, req.PurchasePrice, isRx))
+		req.RetailPrice, req.PurchasePrice, isRx, pinyin, initials))
 }
 
 // UpdateDrug 部分更新药品。
 func (s *Store) UpdateDrug(ctx context.Context, tenantID, id int64, req UpdateDrugRequest) (Drug, error) {
+	var name string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT name FROM his_drugs WHERE tenant_id = $1 AND id = $2`, tenantID, id).Scan(&name); err != nil {
+		return Drug{}, err
+	}
+	pinyin, initials := PinyinOf(name)
 	sets := []string{}
 	args := []any{tenantID, id}
 	add := func(column string, value any) {
@@ -306,9 +313,9 @@ func (s *Store) UpdateDrug(ctx context.Context, tenantID, id int64, req UpdateDr
 	if req.Status != nil {
 		add("status", req.Status)
 	}
-	if len(sets) == 0 {
-		return Drug{}, pgx.ErrNoRows
-	}
+	// 名称不可编辑，但任何编辑都顺带补齐/刷新拼音，修复历史空拼音数据。
+	add("pinyin", pinyin)
+	add("initials", initials)
 	return scanDrug(s.pool.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE his_drugs SET %s, updated_at = NOW()
 		WHERE tenant_id = $1 AND id = $2
@@ -391,10 +398,11 @@ func (s *Store) CreateChargeItem(ctx context.Context, tenantID int64, req Create
 	if unit == "" {
 		unit = "次"
 	}
+	pinyin, initials := PinyinOf(req.Name)
 	item, err := scanChargeItem(s.pool.QueryRow(ctx, `
-		INSERT INTO his_charge_items (tenant_id, code, name, category, unit, price)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING `+chargeItemColumns, tenantID, req.Code, req.Name, category, unit, req.Price))
+		INSERT INTO his_charge_items (tenant_id, code, name, category, unit, price, pinyin, initials)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING `+chargeItemColumns, tenantID, req.Code, req.Name, category, unit, req.Price, pinyin, initials))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -407,6 +415,16 @@ func (s *Store) CreateChargeItem(ctx context.Context, tenantID int64, req Create
 
 // UpdateChargeItem 部分更新原子收费项目。
 func (s *Store) UpdateChargeItem(ctx context.Context, tenantID, id int64, req UpdateChargeItemRequest) (ChargeItem, error) {
+	var currentName string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT name FROM his_charge_items WHERE tenant_id = $1 AND id = $2`, tenantID, id).Scan(&currentName); err != nil {
+		return ChargeItem{}, err
+	}
+	name := currentName
+	if req.Name != nil {
+		name = *req.Name
+	}
+	pinyin, initials := PinyinOf(name)
 	sets := []string{}
 	args := []any{tenantID, id}
 	add := func(column string, value any) {
@@ -428,9 +446,8 @@ func (s *Store) UpdateChargeItem(ctx context.Context, tenantID, id int64, req Up
 	if req.Status != nil {
 		add("status", req.Status)
 	}
-	if len(sets) == 0 {
-		return ChargeItem{}, pgx.ErrNoRows
-	}
+	add("pinyin", pinyin)
+	add("initials", initials)
 	return scanChargeItem(s.pool.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE his_charge_items SET %s, updated_at = NOW()
 		WHERE tenant_id = $1 AND id = $2
@@ -2627,7 +2644,19 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 	if openID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, req.EncounterID); err != nil {
 		return Order{}, err
 	} else if found {
-		plan, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, negotiation, rates)
+		var openStatus, openIdentity string
+		var previousPayable float64
+		if err := tx.QueryRow(ctx, `
+			SELECT status, COALESCE(NULLIF(price_identity, ''), 'standard'), payable_total
+			FROM his_orders WHERE id = $1`, openID).Scan(&openStatus, &openIdentity, &previousPayable); err != nil {
+			return Order{}, err
+		}
+		if err := checkOrderIdentityChangeAllowed(openStatus, openIdentity, identity); err != nil {
+			return Order{}, err
+		}
+		// pending 单合并时按当前身份重算已有行；partial 单不重算（身份已校验未变）。
+		repriceExisting := shouldRepriceOrder(openStatus)
+		plan, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, negotiation, rates, repriceExisting)
 		if err != nil {
 			return Order{}, err
 		}
@@ -2636,13 +2665,44 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 				return Order{}, err
 			}
 		}
+		// 合并即按当前身份重算，订单身份快照同步为当前身份，避免收款时重复判定/留痕。
+		if _, err := tx.Exec(ctx, `
+			UPDATE his_orders SET price_identity = $2 WHERE id = $1`, openID, identity); err != nil {
+			return Order{}, err
+		}
 		if err := s.recalcOrderPricingTx(ctx, tx, openID); err != nil {
 			return Order{}, err
+		}
+		var newPayable float64
+		if err := tx.QueryRow(ctx, `
+			SELECT payable_total FROM his_orders WHERE id = $1`, openID).Scan(&newPayable); err != nil {
+			return Order{}, err
+		}
+		repriced := repriceExisting && (openIdentity != identity || discountMoney(previousPayable) != newPayable)
+		if repriced {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO his_order_repricing_logs
+					(tenant_id, order_id, customer_id, previous_identity, new_identity,
+					 previous_payable, payable_total, operator_id)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				tenantID, openID, customerID, openIdentity, identity,
+				previousPayable, newPayable, createdBy); err != nil {
+				return Order{}, err
+			}
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return Order{}, err
 		}
-		return s.loadOrder(ctx, s.pool, tenantID, openID)
+		order, err := s.loadOrder(ctx, s.pool, tenantID, openID)
+		if err != nil {
+			return Order{}, err
+		}
+		order.Repriced = repriced
+		order.PreviousPayable = &previousPayable
+		if repriced {
+			order.PreviousIdentity = openIdentity
+		}
+		return order, nil
 	}
 
 	seq, err := s.NextNumber(ctx, tenantID, "order")
@@ -2763,20 +2823,17 @@ func (s *Store) AddPayment(ctx context.Context, tenantID, operatorID, orderID in
 	}
 	defer tx.Rollback(ctx)
 
-	var status string
-	var payable, paid float64
-	err = tx.QueryRow(ctx, `
-		SELECT status, payable_total, paid_total FROM his_orders
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, orderID).Scan(&status, &payable, &paid)
+	state, err := s.repriceOrderTx(ctx, tx, tenantID, orderID, operatorID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Order{}, ErrNotFound
 		}
 		return Order{}, err
 	}
-	if status != "pending" && status != "partial" {
+	if state.Status != "pending" && state.Status != "partial" {
 		return Order{}, ErrInvalidState
 	}
+	payable, paid := state.PayableTotal, state.PaidTotal
 	if req.Amount <= 0 || req.Amount > payable-paid {
 		return Order{}, ErrInvalidRequest
 	}
@@ -2813,7 +2870,17 @@ func (s *Store) AddPayment(ctx context.Context, tenantID, operatorID, orderID in
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, err
 	}
-	return s.loadOrder(ctx, s.pool, tenantID, orderID)
+	order, err := s.loadOrder(ctx, s.pool, tenantID, orderID)
+	if err != nil {
+		return Order{}, err
+	}
+	order.Repriced = state.Repriced
+	previousPayable := state.PreviousPayable
+	order.PreviousPayable = &previousPayable
+	if state.Repriced {
+		order.PreviousIdentity = state.PreviousIdentity
+	}
+	return order, nil
 }
 
 // VoidOrder 作废收费单（仅 pending）。

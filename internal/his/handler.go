@@ -159,6 +159,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteError(w, http.StatusConflict, "treatment_completed", "该治疗已完成计划次数，不能重复执行", nil)
 	case ErrInvalidState:
 		httputil.WriteBadRequest(w, "当前状态不允许该操作")
+	case ErrOrderPartiallyPaid:
+		httputil.WriteBadRequest(w, "该单已部分收款，请先结清或退费后再调整身份")
 	case ErrDispensedCannotRefund:
 		httputil.WriteBadRequest(w, "处方已发药，请先退药再退费")
 	case ErrRefundOnlyPaid:
@@ -334,6 +336,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 打包收费
 		{Method: "GET", Path: "/api/v1/his/orders", Handler: h.ListOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/orders/{id}", Handler: h.GetOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/orders/{id}/reprice-preview", Handler: h.PreviewOrderReprice, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders", Handler: h.CreateOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/orders/{id}", Handler: h.UpdateOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/payments", Handler: h.AddPayment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1794,6 +1797,27 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, order)
+}
+
+// PreviewOrderReprice 收费前预览按当前身份重算结果（不落库）。
+func (h *Handler) PreviewOrderReprice(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	preview, err := h.service.PreviewOrderReprice(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, preview)
 }
 
 // GetDiscountRules 身份 × 大类折扣矩阵。

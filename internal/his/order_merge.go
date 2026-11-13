@@ -100,6 +100,13 @@ func planOrderMergeWithNegotiation(existing, incoming []orderItemRow, mode strin
 			rows[index].IdentityRate = 1
 		}
 	}
+	// 合并/重算时金额议价可能超过新的可折金额，收口到可折金额（与 recalcOrderPricingTx 一致）。
+	if mode == negotiationModeAmount && value > 0 {
+		base := negotiableBase(rows)
+		if value > base {
+			value = base
+		}
+	}
 	negotiationTotal, err := applyNegotiation(rows, mode, value)
 	if err != nil {
 		return orderMergePlan{}, err
@@ -289,7 +296,8 @@ func setOrderNegotiationTx(ctx context.Context, tx pgx.Tx, orderID int64, negoti
 	return err
 }
 
-// mergeOpenOrderItemsTx 把本次表单行合并进未结清单：已有行保留，新行去重后追加。
+// mergeOpenOrderItemsTx 把本次表单行合并进未结清单：新行去重后追加。
+// repriceExisting 为 true 时（pending 单），已有行也按当前身份矩阵重算。
 func (s *Store) mergeOpenOrderItemsTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -297,10 +305,14 @@ func (s *Store) mergeOpenOrderItemsTx(
 	inputs []OrderLineInput,
 	negotiation orderNegotiation,
 	rates map[string]float64,
+	repriceExisting bool,
 ) (orderMergePlan, error) {
 	existing, err := s.loadOrderItemRowsTx(ctx, tx, orderID)
 	if err != nil {
 		return orderMergePlan{}, err
+	}
+	if repriceExisting {
+		applyIdentityPricingToRows(existing, rates)
 	}
 	incoming, err := buildOrderItemRows(inputs, func(input OrderLineInput) (resolvedLine, error) {
 		return s.resolveOrderLine(ctx, tx, tenantID, encounterID, input)

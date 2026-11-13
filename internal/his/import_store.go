@@ -57,11 +57,13 @@ func (s *Store) ImportExistingDrugCodes(ctx context.Context, tenantID int64, cod
 
 // InsertImportChargeItem 写入一行收费项目/材料（导入专用，支持状态与医保类别）。
 func (s *Store) InsertImportChargeItem(ctx context.Context, tenantID int64, item importChargeItemValues) error {
+	pinyin, initials := PinyinOf(item.Name)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO his_charge_items
-			(tenant_id, code, name, category, unit, price, status, insurance_category)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		tenantID, item.Code, item.Name, item.Category, item.Unit, item.Price, item.Status, item.InsuranceCategory)
+			(tenant_id, code, name, category, unit, price, status, insurance_category, pinyin, initials)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		tenantID, item.Code, item.Name, item.Category, item.Unit, item.Price, item.Status,
+		item.InsuranceCategory, pinyin, initials)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
