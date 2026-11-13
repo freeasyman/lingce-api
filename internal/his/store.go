@@ -2339,44 +2339,66 @@ func orderCustomer(ctx context.Context, q querier, tenantID, encounterID int64) 
 	return customerID, nil
 }
 
-// resolveOrderLine 解析收费行（价格与名称来自字典/打包价，禁止前端传价）。
+// resolveOrderLine 解析收费行（价格与名称来自字典/打包价/处方快照，禁止前端传价）。
 type resolvedLine struct {
 	Name           string
 	UnitPrice      float64
 	PrescriptionID *int64
 }
 
+// invalidIfNoRows 定价查不到引用的字典/处方时统一按入参无效（400）处理，不暴露存在性也不报 500。
+func invalidIfNoRows(err error) error {
+	if err == pgx.ErrNoRows {
+		return ErrInvalidRequest
+	}
+	return err
+}
+
 func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encounterID int64, input OrderLineInput) (resolvedLine, error) {
 	switch input.ItemType {
-	case "charge_item":
+	case orderItemChargeItem:
 		var line resolvedLine
 		err := q.QueryRow(ctx, `
 			SELECT name, price FROM his_charge_items
 			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, input.RefID).
 			Scan(&line.Name, &line.UnitPrice)
 		if err != nil {
-			return line, err
+			return line, invalidIfNoRows(err)
 		}
 		return line, nil
-	case "bundle":
+	case orderItemBundle:
 		var line resolvedLine
 		err := q.QueryRow(ctx, `
 			SELECT name, price FROM his_bundles
 			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, input.RefID).
 			Scan(&line.Name, &line.UnitPrice)
 		if err != nil {
-			return line, err
+			return line, invalidIfNoRows(err)
 		}
 		return line, nil
-	case "drug":
+	case orderItemRegistrationFee:
+		// 挂号费只认该就诊挂号记录的 fee：不查收费项目字典，也不接受前端 ref_id。
+		var fee float64
+		err := q.QueryRow(ctx, `
+			SELECT r.fee FROM encounters e
+			JOIN his_registrations r ON r.tenant_id = e.tenant_id AND r.id = e.source_id
+			WHERE e.tenant_id = $1 AND e.id = $2 AND e.source_type = 'his'`,
+			tenantID, encounterID).Scan(&fee)
+		if err != nil {
+			// 就诊不存在、不属于本租户或没有挂号记录：一律按入参无效处理（400）。
+			return resolvedLine{}, invalidIfNoRows(err)
+		}
+		return registrationFeeLine(fee)
+	case orderItemDrug:
 		var line resolvedLine
 		err := q.QueryRow(ctx, `
 			SELECT name, retail_price FROM his_drugs
 			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, input.RefID).
 			Scan(&line.Name, &line.UnitPrice)
 		if err != nil {
-			return line, err
+			return line, invalidIfNoRows(err)
 		}
+		var snapshot *resolvedLine
 		if input.PrescriptionID != nil {
 			var status, errEnc int64
 			var rxStatus string
@@ -2385,39 +2407,52 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 				WHERE tenant_id = $1 AND id = $2 AND status IN ('draft', 'issued')`,
 				tenantID, *input.PrescriptionID).Scan(&status, &errEnc, &rxStatus)
 			if err != nil {
-				return line, err
+				return line, invalidIfNoRows(err)
 			}
 			if errEnc != encounterID {
 				return line, ErrInvalidRequest
 			}
 			line.PrescriptionID = input.PrescriptionID
+			// 处方明细快照价优先；处方里没有该药时回退字典价（历史/外部数据）。
+			var itemName string
+			var itemPrice float64
+			err = q.QueryRow(ctx, `
+				SELECT name, price FROM his_prescription_items
+				WHERE prescription_id = $1 AND drug_id = $2 ORDER BY id LIMIT 1`,
+				*input.PrescriptionID, input.RefID).Scan(&itemName, &itemPrice)
+			switch {
+			case err == nil:
+				snapshot = &resolvedLine{Name: itemName, UnitPrice: itemPrice}
+			case err == pgx.ErrNoRows:
+				// 回退字典价
+			default:
+				return line, err
+			}
 		}
-		return line, nil
+		return drugLinePrice(line, snapshot)
 	default:
 		return resolvedLine{}, ErrInvalidRequest
 	}
 }
 
-// replaceOrderItemsTx 全量替换收费行（事务内）。
+// replaceOrderItemsTx 全量替换收费行（事务内）：逐行定价后落库。
 func (s *Store) replaceOrderItemsTx(ctx context.Context, tx pgx.Tx, tenantID, encounterID, orderID int64, inputs []OrderLineInput) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM his_order_items WHERE order_id = $1`, orderID); err != nil {
 		return err
 	}
-	for _, input := range inputs {
-		line, err := s.resolveOrderLine(ctx, tx, tenantID, encounterID, input)
-		if err != nil {
-			return err
-		}
-		lineTotal := line.UnitPrice*input.Quantity - input.DiscountAmount
-		if lineTotal < 0 {
-			return ErrInvalidRequest
-		}
+	rows, err := buildOrderItemRows(inputs, func(input OrderLineInput) (resolvedLine, error) {
+		return s.resolveOrderLine(ctx, tx, tenantID, encounterID, input)
+	})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO his_order_items (order_id, item_type, ref_id, prescription_id, name, unit_price,
 				quantity, line_total, discount_amount, payable)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $8)`,
-			orderID, input.ItemType, input.RefID, line.PrescriptionID, line.Name, line.UnitPrice,
-			input.Quantity, lineTotal, input.DiscountAmount); err != nil {
+			orderID, row.ItemType, row.RefID, row.PrescriptionID, row.Name, row.UnitPrice,
+			row.Quantity, row.LineTotal, row.DiscountAmount); err != nil {
 			return err
 		}
 	}
@@ -2431,11 +2466,11 @@ func recomputeOrderTotals(ctx context.Context, tx pgx.Tx, orderID int64, discoun
 		SELECT COALESCE(SUM(line_total), 0) FROM his_order_items WHERE order_id = $1`, orderID).Scan(&itemsTotal); err != nil {
 		return err
 	}
-	payable := itemsTotal - discountTotal
-	if payable < 0 {
-		return ErrInvalidRequest
+	payable, err := orderPayable(itemsTotal, discountTotal)
+	if err != nil {
+		return err
 	}
-	_, err := tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE his_orders SET items_total = $2, discount_total = $3, payable_total = $4, updated_at = NOW()
 		WHERE id = $1`, orderID, itemsTotal, discountTotal, payable)
 	return err

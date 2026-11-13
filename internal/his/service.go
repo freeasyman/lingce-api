@@ -705,18 +705,12 @@ func (s *Service) GetOrder(ctx context.Context, tenantID, id int64) (Order, erro
 }
 
 func (s *Service) CreateOrder(ctx context.Context, tenantID, createdBy int64, req CreateOrderRequest) (Order, error) {
-	if req.EncounterID <= 0 || len(req.Items) == 0 {
+	if req.EncounterID <= 0 {
 		return Order{}, ErrInvalidRequest
 	}
-	for _, item := range req.Items {
-		if item.Quantity <= 0 {
-			return Order{}, ErrInvalidRequest
-		}
-		switch item.ItemType {
-		case "charge_item", "bundle", "drug":
-		default:
-			return Order{}, ErrInvalidRequest
-		}
+	// 行类型与数量在此校验；价格一律由 store 按行类型解析。
+	if err := validateOrderLineInputs(req.Items); err != nil {
+		return Order{}, err
 	}
 	return s.store.CreateOrder(ctx, tenantID, createdBy, req)
 }

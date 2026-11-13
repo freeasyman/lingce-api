@@ -623,9 +623,10 @@ type WorkbenchContext struct {
 	TreatmentOrders []TreatmentOrder  `json:"treatment_orders"`
 }
 
-// OrderLineInput 收费行输入。
+// OrderLineInput 收费行输入（前端表单逐行提交，价格由服务端解析）：
+// charge_item/bundle/drug 按 ref_id 定价；drug 可带 prescription_id；registration_fee 按就诊挂号记录定价。
 type OrderLineInput struct {
-	ItemType       string  `json:"item_type"` // charge_item/bundle/drug
+	ItemType       string  `json:"item_type"` // charge_item/bundle/drug/registration_fee
 	RefID          int64   `json:"ref_id"`
 	Quantity       float64 `json:"quantity"`
 	DiscountAmount float64 `json:"discount_amount,omitempty"`
@@ -674,16 +675,6 @@ type CreateOrderRequest struct {
 type UpdateOrderRequest struct {
 	DiscountTotal *float64         `json:"discount_total,omitempty"`
 	Items         []OrderLineInput `json:"items,omitempty"`
-}
-
-// CreateOrderFromEncounterRequest 按就诊一键组装收费单。
-// 服务端负责取挂号费与所选处方的药品明细，避免前端拆分价格来源。
-type CreateOrderFromEncounterRequest struct {
-	EncounterID            int64            `json:"encounter_id"`
-	IncludeRegistrationFee bool             `json:"include_registration_fee"`
-	PrescriptionIDs        []int64          `json:"prescription_ids,omitempty"`
-	DiscountTotal          float64          `json:"discount_total,omitempty"`
-	Items                  []OrderLineInput `json:"items,omitempty"` // 可选：drug 行按收银台改量后的数量生成
 }
 
 // Payment 收款记录。
