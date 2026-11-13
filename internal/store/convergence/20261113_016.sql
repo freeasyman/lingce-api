@@ -1,7 +1,7 @@
 -- 生产收敛基线 20261113_016
 -- 170 个版本化迁移 + deal_cards_v2 prelude + dev 当前平台 seed 快照。
--- prompt_templates/promotion_prompts 按原 ID upsert，保留 demand/prompt_variable_usages 外键引用。
--- 生产模型密钥不复制；apply 时从生产原值恢复。
+-- prompt_templates/promotion_prompts 按原 ID upsert，保留外键。
+-- 模型密钥不进入 seed；按 function_type+model_code 从生产原值恢复。
 -- 20261109_002 依赖 dev 历史表 deal_cards_v2；生产 schema 没有该表。
 -- 补一个与 dev 改名后 consultation_analyses 等价的旧表，迁移会改名为 consultation_analyses。
 CREATE TABLE IF NOT EXISTS deal_cards_v2 (
@@ -8422,7 +8422,7 @@ ON CONFLICT (tenant_id, role, module) DO NOTHING;
 -- recording prompts/task: exact platform replacement; no FK references.
 CREATE TEMP TABLE _seed_model_secrets AS
 SELECT function_type, model_code, model_name, provider,
-       row_number() OVER (PARTITION BY function_type, model_code, model_name, provider ORDER BY id) AS rn,
+       row_number() OVER (PARTITION BY function_type, model_code, provider ORDER BY id) AS rn,
        api_key, api_key_encrypted
 FROM llm_model_configs
 WHERE tenant_id=0 AND ((api_key IS NOT NULL AND api_key<>'') OR (api_key_encrypted IS NOT NULL AND api_key_encrypted<>''));
@@ -8490,13 +8490,13 @@ INSERT INTO llm_model_configs (tenant_id, model_code, model_name, provider, func
 INSERT INTO llm_model_configs (tenant_id, model_code, model_name, provider, function_type, is_default, api_base_url, extra_params, input_token_price, output_token_price, daily_limit, monthly_limit, is_active, created_at, updated_at, api_endpoint, model_params, description, created_by, deleted_at, cached_input_token_price) VALUES (0, 'qwen3.8-max', '通义千问 3.8 Max', 'dashscope', 'content_topic', TRUE, NULL, '{}'::jsonb, 0.012, 0.036, NULL, NULL, TRUE, '2026-02-19T00:52:03.963509', '2026-11-01T21:50:59.554395', NULL, '{"timeout_seconds":90}'::jsonb, NULL, 0, NULL, 0.0015);
 WITH new AS (
   SELECT id, function_type, model_code, model_name, provider,
-         row_number() OVER (PARTITION BY function_type, model_code, model_name, provider ORDER BY id) AS rn
+         row_number() OVER (PARTITION BY function_type, model_code, provider ORDER BY id) AS rn
   FROM llm_model_configs WHERE tenant_id=0
 )
 UPDATE llm_model_configs t
 SET api_key=s.api_key, api_key_encrypted=s.api_key_encrypted
 FROM new n JOIN _seed_model_secrets s
-  ON n.function_type=s.function_type AND n.model_code=s.model_code AND n.model_name=s.model_name AND n.provider=s.provider AND n.rn=s.rn
+  ON n.function_type=s.function_type AND n.model_code=s.model_code AND n.provider=s.provider AND n.rn=s.rn
 WHERE t.id=n.id;
 DROP TABLE _seed_model_secrets;
 DELETE FROM recording_analysis_prompts;
