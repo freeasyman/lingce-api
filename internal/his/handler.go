@@ -160,6 +160,20 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "当前状态不允许该操作")
 	case ErrDispensedCannotRefund:
 		httputil.WriteBadRequest(w, "处方已发药，请先退药再退费")
+	case ErrRefundOnlyPaid:
+		httputil.WriteBadRequest(w, "仅已收费订单可退费；未收费请走作废，欠费不支持退费")
+	case ErrRefundQuantityExceeded:
+		httputil.WriteBadRequest(w, "退费数量超过可退数量")
+	case ErrLabSampledCannotRefund:
+		httputil.WriteBadRequest(w, "检验已采样，不能退费")
+	case ErrExamStartedCannotRefund:
+		httputil.WriteBadRequest(w, "检查已执行，不能退费")
+	case ErrTreatmentExecutedCannotRefund:
+		httputil.WriteBadRequest(w, "治疗已执行，不能退费")
+	case ErrTreatmentUnpaid:
+		httputil.WriteBadRequest(w, "请先完成缴费")
+	case ErrTreatmentExecuted:
+		httputil.WriteBadRequest(w, "治疗已执行，不能取消")
 	case ErrInsufficientStock:
 		httputil.WriteBadRequest(w, "库存不足，无法发药")
 	case ErrSignatureMismatch:
@@ -214,6 +228,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/master/charge-items/search", Handler: h.SearchChargeItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/master/charge-items", Handler: h.CreateChargeItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/master/charge-items/{id}", Handler: h.UpdateChargeItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/master/charge-items/{id}/links", Handler: h.GetChargeItemLinks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/his/master/charge-items/{id}/links", Handler: h.UpdateChargeItemLinks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 主数据：打包产品
 		{Method: "GET", Path: "/api/v1/his/master/bundles", Handler: h.ListBundles, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -271,6 +287,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/treatment-orders", Handler: h.ListTreatmentOrders, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/treatment-orders", Handler: h.CreateTreatmentOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/execute", Handler: h.ExecuteTreatment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/cancel", Handler: h.CancelTreatmentOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ExecuteTreatment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/treatment-orders/{id}/executions", Handler: h.ListTreatmentExecutions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
@@ -297,6 +314,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "PATCH", Path: "/api/v1/his/orders/{id}", Handler: h.UpdateOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/payments", Handler: h.AddPayment, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/refund", Handler: h.RefundOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/orders/{id}/refunds", Handler: h.RefundOrderItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/void", Handler: h.VoidOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 药房
@@ -639,6 +657,49 @@ func (h *Handler) UpdateChargeItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// GetChargeItemLinks 收费项目「随项目带出」绑定列表。
+func (h *Handler) GetChargeItemLinks(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	links, err := h.service.GetChargeItemLinks(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, links)
+}
+
+// UpdateChargeItemLinks 整体覆盖写收费项目绑定（管理页编辑弹窗保存）。
+func (h *Handler) UpdateChargeItemLinks(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req UpdateChargeItemLinksRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	links, err := h.service.UpdateChargeItemLinks(r.Context(), tenantID, id, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, links)
 }
 
 // ListBundles 返回打包产品列表。
@@ -1356,12 +1417,33 @@ func (h *Handler) CreateTreatmentOrder(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := h.service.CreateTreatmentOrder(r.Context(), tenantID, req)
+	item, err := h.service.CreateTreatmentOrder(r.Context(), tenantID, claims.UserID, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusCreated, item)
+}
+
+// CancelTreatmentOrder 取消未执行的治疗医嘱（联动删除对应收费行）。
+func (h *Handler) CancelTreatmentOrder(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireHisRole(w, r, tenantID, claims.UserID, "doctor", "nurse") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.CancelTreatmentOrder(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
 }
 
 // ExecuteTreatment 治疗执行登记。
@@ -1779,6 +1861,31 @@ func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	order, err := h.service.RefundOrder(r.Context(), tenantID, claims.UserID, id, req.Reason)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, order)
+}
+
+// RefundOrderItems 按项退费（items 为空 = 整单全退）。
+func (h *Handler) RefundOrderItems(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "billing") {
+		return
+	}
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req RefundOrderRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	order, err := h.service.RefundOrderItems(r.Context(), tenantID, claims.UserID, id, req)
 	if err != nil {
 		writeServiceError(w, err)
 		return

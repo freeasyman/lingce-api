@@ -436,6 +436,7 @@ type TreatmentOrder struct {
 	CustomerID       int64      `json:"customer_id"`
 	ChargeItemID     *int64     `json:"charge_item_id"`
 	ChargeItemName   string     `json:"charge_item_name"`
+	OrderID          *int64     `json:"order_id"`
 	PlanTotalTimes   int        `json:"plan_total_times"`
 	CompletedTimes   int        `json:"completed_times"`
 	Status           string     `json:"status"`
@@ -646,9 +647,13 @@ type OrderItem struct {
 	LineTotal      float64 `json:"line_total"`
 	DiscountAmount float64 `json:"discount_amount"`
 	Payable        float64 `json:"payable"`
+	// RefundedQuantity 已退数量（可退数量 = quantity - refunded_quantity）。
+	RefundedQuantity float64 `json:"refunded_quantity"`
 }
 
 // Order 收费单。
+// 金额口径：items_total 为行合计，discount_total 为整单优惠，payable_total 为应收，
+// paid_total 为历史实收（不因退款回写），refunded_total 为累计退款；净实收 = paid_total - refunded_total。
 type Order struct {
 	ID            int64       `json:"id"`
 	OrderNo       string      `json:"order_no"`
@@ -659,8 +664,10 @@ type Order struct {
 	DiscountTotal float64     `json:"discount_total"`
 	PayableTotal  float64     `json:"payable_total"`
 	PaidTotal     float64     `json:"paid_total"`
+	RefundedTotal float64     `json:"refunded_total"`
 	Status        string      `json:"status"`
 	Items         []OrderItem `json:"items"`
+	Payments      []Payment   `json:"payments"`
 	CreatedAt     time.Time   `json:"created_at"`
 }
 
@@ -679,13 +686,14 @@ type UpdateOrderRequest struct {
 
 // Payment 收款记录。
 type Payment struct {
-	ID         int64     `json:"id"`
-	OrderID    int64     `json:"order_id"`
-	Method     string    `json:"method"`
-	Amount     float64   `json:"amount"`
-	Status     string    `json:"status"`
-	PaidAt     time.Time `json:"paid_at"`
-	OperatorID *int64    `json:"operator_id"`
+	ID           int64     `json:"id"`
+	OrderID      int64     `json:"order_id"`
+	Method       string    `json:"method"`
+	Amount       float64   `json:"amount"`
+	Status       string    `json:"status"`
+	PaidAt       time.Time `json:"paid_at"`
+	OperatorID   *int64    `json:"operator_id"`
+	OperatorName string    `json:"operator_name,omitempty"`
 }
 
 // CreatePaymentRequest 收款。
@@ -695,8 +703,39 @@ type CreatePaymentRequest struct {
 }
 
 // RefundOrderRequest 退费。
+// items 为空表示整单全退（兼容旧接口）；items 非空时按项退，quantity 为本次退费数量。
 type RefundOrderRequest struct {
-	Reason string `json:"reason"`
+	Reason string            `json:"reason"`
+	Items  []RefundItemInput `json:"items,omitempty"`
+}
+
+// RefundItemInput 按项退费入参。
+type RefundItemInput struct {
+	OrderItemID int64   `json:"order_item_id"`
+	Quantity    float64 `json:"quantity"`
+}
+
+// ChargeItemLink 收费项目绑定：开父项目（如治疗/处置）时按 quantity 带出子项目（耗材/材料）。
+type ChargeItemLink struct {
+	ID                 int64   `json:"id"`
+	ParentChargeItemID int64   `json:"parent_charge_item_id"`
+	ChildChargeItemID  int64   `json:"child_charge_item_id"`
+	ChildName          string  `json:"child_name"`
+	ChildCategory      string  `json:"child_category"`
+	ChildUnit          string  `json:"child_unit"`
+	ChildPrice         float64 `json:"child_price"`
+	Quantity           float64 `json:"quantity"`
+}
+
+// ChargeItemLinkInput 绑定写入项。
+type ChargeItemLinkInput struct {
+	ChildChargeItemID int64   `json:"child_charge_item_id"`
+	Quantity          float64 `json:"quantity"`
+}
+
+// UpdateChargeItemLinksRequest 整体覆盖写父项目的绑定子项目。
+type UpdateChargeItemLinksRequest struct {
+	Links []ChargeItemLinkInput `json:"links"`
 }
 
 // StockItem 库存条目。

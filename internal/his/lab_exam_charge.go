@@ -2,9 +2,7 @@ package his
 
 import (
 	"context"
-	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -165,35 +163,21 @@ func (s *Store) activeChargeItemByIDTx(ctx context.Context, q querier, tenantID,
 }
 
 // createPendingChargeOrderTx 生成单行 pending 收费单（挂单），返回收费单 id。
+// 保留给单行挂单调用；多行（治疗 + 绑定材料）走 appendOrCreatePendingChargeOrderLinesTx。
 func (s *Store) createPendingChargeOrderTx(ctx context.Context, tx pgx.Tx, tenantID, createdBy, customerID, encounterID int64, item chargeItemSnapshot) (int64, error) {
 	line, err := newPendingChargeLine(item)
 	if err != nil {
 		return 0, err
 	}
-	seq, err := nextNumber(ctx, tx, tenantID, "order")
-	if err != nil {
-		return 0, err
-	}
-	orderNo := fmt.Sprintf("O%s%04d", time.Now().Format("20060102"), seq)
-	var orderID int64
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by)
-		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id`,
-		tenantID, customerID, encounterID, orderNo, createdBy).Scan(&orderID); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO his_order_items (order_id, item_type, ref_id, prescription_id, name, unit_price,
-			quantity, line_total, discount_amount, payable)
-		VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 0, $8)`,
-		orderID, line.ItemType, line.RefID, line.Name, line.UnitPrice, line.Quantity,
-		line.LineTotal, line.Payable); err != nil {
-		return 0, err
-	}
-	if err := recomputeOrderTotals(ctx, tx, orderID, 0); err != nil {
-		return 0, err
-	}
-	return orderID, nil
+	return s.appendOrCreatePendingChargeOrderLinesTx(ctx, tx, tenantID, createdBy, customerID, encounterID,
+		[]orderItemRow{{
+			ItemType:  line.ItemType,
+			RefID:     &line.RefID,
+			Name:      line.Name,
+			UnitPrice: line.UnitPrice,
+			Quantity:  line.Quantity,
+			LineTotal: line.LineTotal,
+		}})
 }
 
 // appendOrCreatePendingChargeOrderTx 检验/检查挂单：该 encounter 已有未结清单则追加行并重算，
@@ -204,34 +188,15 @@ func (s *Store) appendOrCreatePendingChargeOrderTx(ctx context.Context, tx pgx.T
 	if err != nil {
 		return 0, err
 	}
-	orderID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, encounterID)
-	if err != nil {
-		return 0, err
-	}
-	if !found {
-		return s.createPendingChargeOrderTx(ctx, tx, tenantID, createdBy, customerID, encounterID, item)
-	}
-
-	var discountTotal float64
-	if err := tx.QueryRow(ctx, `
-		SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
-		tenantID, orderID).Scan(&discountTotal); err != nil {
-		return 0, err
-	}
-	if err := insertOrderItemRowsTx(ctx, tx, orderID, []orderItemRow{{
-		ItemType:  line.ItemType,
-		RefID:     &line.RefID,
-		Name:      line.Name,
-		UnitPrice: line.UnitPrice,
-		Quantity:  line.Quantity,
-		LineTotal: line.LineTotal,
-	}}); err != nil {
-		return 0, err
-	}
-	if err := recomputeOrderTotals(ctx, tx, orderID, discountTotal); err != nil {
-		return 0, err
-	}
-	return orderID, nil
+	return s.appendOrCreatePendingChargeOrderLinesTx(ctx, tx, tenantID, createdBy, customerID, encounterID,
+		[]orderItemRow{{
+			ItemType:  line.ItemType,
+			RefID:     &line.RefID,
+			Name:      line.Name,
+			UnitPrice: line.UnitPrice,
+			Quantity:  line.Quantity,
+			LineTotal: line.LineTotal,
+		}})
 }
 
 // attachChargeToLabExamRequestTx 解析收费项目并在同一事务内挂单，返回回写申请单的关联字段。

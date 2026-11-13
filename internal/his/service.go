@@ -37,6 +37,17 @@ var ErrInvalidState = errors.New("invalid state")
 // ErrDispensedCannotRefund 表示处方已发药，不允许退费。
 var ErrDispensedCannotRefund = errors.New("dispensed prescription cannot be refunded")
 
+// 退费/执行门禁的业务错误（handler 统一映射为 400，文案明确到具体规则）。
+var (
+	ErrRefundOnlyPaid                = errors.New("only paid order can be refunded")
+	ErrRefundQuantityExceeded        = errors.New("refund quantity exceeds refundable")
+	ErrLabSampledCannotRefund        = errors.New("sampled lab request cannot be refunded")
+	ErrExamStartedCannotRefund       = errors.New("started exam request cannot be refunded")
+	ErrTreatmentExecutedCannotRefund = errors.New("executed treatment cannot be refunded")
+	ErrTreatmentUnpaid               = errors.New("treatment order unpaid")
+	ErrTreatmentExecuted             = errors.New("treatment order executed")
+)
+
 // ErrInsufficientStock 表示库存不足。
 var ErrInsufficientStock = errors.New("insufficient stock")
 
@@ -178,6 +189,22 @@ func (s *Service) UpdateChargeItem(ctx context.Context, tenantID, id int64, req 
 		return ChargeItem{}, err
 	}
 	return item, nil
+}
+
+// GetChargeItemLinks 读取收费项目的「随项目带出」绑定。
+func (s *Service) GetChargeItemLinks(ctx context.Context, tenantID, parentID int64) ([]ChargeItemLink, error) {
+	if parentID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.GetChargeItemLinks(ctx, tenantID, parentID)
+}
+
+// UpdateChargeItemLinks 整体覆盖写收费项目绑定（父子均本租户 active、非自身、数量 > 0）。
+func (s *Service) UpdateChargeItemLinks(ctx context.Context, tenantID, parentID int64, req UpdateChargeItemLinksRequest) ([]ChargeItemLink, error) {
+	if _, err := normalizeChargeItemLinkInputs(parentID, req.Links); err != nil {
+		return nil, err
+	}
+	return s.store.ReplaceChargeItemLinks(ctx, tenantID, parentID, req.Links)
 }
 
 // ---------------------------------------------------------------------------
@@ -642,12 +669,20 @@ func (s *Service) ListServiceRequests(ctx context.Context, tenantID, encounterID
 	return s.store.ListServiceRequests(ctx, tenantID, encounterID)
 }
 
-func (s *Service) CreateTreatmentOrder(ctx context.Context, tenantID int64, req CreateTreatmentOrderRequest) (TreatmentOrder, error) {
+func (s *Service) CreateTreatmentOrder(ctx context.Context, tenantID, createdBy int64, req CreateTreatmentOrderRequest) (TreatmentOrder, error) {
 	normalized, err := normalizeCreateTreatmentOrder(req)
 	if err != nil {
 		return TreatmentOrder{}, err
 	}
-	return s.store.CreateTreatmentOrder(ctx, tenantID, normalized)
+	return s.store.CreateTreatmentOrder(ctx, tenantID, createdBy, normalized)
+}
+
+// CancelTreatmentOrder 取消未执行的治疗医嘱，并释放它占用的收费行。
+func (s *Service) CancelTreatmentOrder(ctx context.Context, tenantID, orderID int64) (TreatmentOrder, error) {
+	if orderID <= 0 {
+		return TreatmentOrder{}, ErrInvalidRequest
+	}
+	return s.store.CancelTreatmentOrder(ctx, tenantID, orderID)
 }
 
 func (s *Service) ListTreatmentOrders(ctx context.Context, tenantID, encounterID int64) ([]TreatmentOrder, error) {
@@ -708,6 +743,10 @@ func (s *Service) CreateOrder(ctx context.Context, tenantID, createdBy int64, re
 	if req.EncounterID <= 0 {
 		return Order{}, ErrInvalidRequest
 	}
+	// 整单优惠覆盖写且不允许为负（防止合并/重复提交把优惠叠加或压成负数）。
+	if req.DiscountTotal < 0 {
+		return Order{}, ErrInvalidRequest
+	}
 	// 行类型与数量在此校验；价格一律由 store 按行类型解析。
 	if err := validateOrderLineInputs(req.Items); err != nil {
 		return Order{}, err
@@ -733,6 +772,26 @@ func (s *Service) AddPayment(ctx context.Context, tenantID, operatorID, orderID 
 
 func (s *Service) RefundOrder(ctx context.Context, tenantID, operatorID, orderID int64, reason string) (Order, error) {
 	return s.store.RefundOrder(ctx, tenantID, operatorID, orderID, reason)
+}
+
+// RefundOrderItems 按项退费；items 为空 = 整单剩余全退。
+func (s *Service) RefundOrderItems(ctx context.Context, tenantID, operatorID, orderID int64, req RefundOrderRequest) (Order, error) {
+	if orderID <= 0 {
+		return Order{}, ErrInvalidRequest
+	}
+	if len(req.Items) > 0 {
+		seen := make(map[int64]struct{}, len(req.Items))
+		for _, item := range req.Items {
+			if item.OrderItemID <= 0 || item.Quantity <= 0 {
+				return Order{}, ErrInvalidRequest
+			}
+			if _, duplicate := seen[item.OrderItemID]; duplicate {
+				return Order{}, ErrInvalidRequest
+			}
+			seen[item.OrderItemID] = struct{}{}
+		}
+	}
+	return s.store.RefundOrderItems(ctx, tenantID, operatorID, orderID, req.Reason, req.Items)
 }
 
 func (s *Service) VoidOrder(ctx context.Context, tenantID, orderID int64) (Order, error) {

@@ -1973,9 +1973,17 @@ func (s *Store) ListServiceRequests(ctx context.Context, tenantID, encounterID i
 	return items, rows.Err()
 }
 
-func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID int64, req CreateTreatmentOrderRequest) (TreatmentOrder, error) {
+// CreateTreatmentOrder 开治疗医嘱：按 charge_item 定价，并把治疗项目 + 绑定材料并入该就诊未结单。
+// 收费单 id 回写到治疗医嘱（order_id），取消治疗/退费时按此定位收费行。
+func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID, createdBy int64, req CreateTreatmentOrderRequest) (TreatmentOrder, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	defer tx.Rollback(ctx)
+
 	var customerID int64
-	if err := s.pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT r.customer_id FROM his_registrations r
 		JOIN encounters e ON e.tenant_id = r.tenant_id AND e.source_type = 'his' AND e.source_id = r.id
 		WHERE r.tenant_id = $1 AND e.id = $2`, tenantID, req.EncounterID).Scan(&customerID); err != nil {
@@ -1986,46 +1994,119 @@ func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID int64, req Cr
 	}
 
 	// 收费项目：优先按 id，其次按租户内启用的项目名称精确匹配（兼容只传 charge_item_name 的调用方）。
-	var chargeItemID int64
-	var name string
-	var err error
+	var item chargeItemSnapshot
 	if req.ChargeItemID > 0 {
-		err = s.pool.QueryRow(ctx, `
-			SELECT id, name FROM his_charge_items
-			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, req.ChargeItemID).
-			Scan(&chargeItemID, &name)
+		item, err = s.activeChargeItemByIDTx(ctx, tx, tenantID, req.ChargeItemID)
 	} else {
-		err = s.pool.QueryRow(ctx, `
-			SELECT id, name FROM his_charge_items
+		err = tx.QueryRow(ctx, `
+			SELECT id, name, price, category FROM his_charge_items
 			WHERE tenant_id = $1 AND LOWER(btrim(name)) = LOWER($2) AND status = 'active'
 			ORDER BY id LIMIT 1`, tenantID, req.ChargeItemName).
-			Scan(&chargeItemID, &name)
-	}
-	if err != nil {
+			Scan(&item.ID, &item.Name, &item.Price, &item.Category)
 		if err == pgx.ErrNoRows {
 			return TreatmentOrder{}, ErrNotFound
 		}
-		return TreatmentOrder{}, err
 	}
-
-	var item TreatmentOrder
-	err = s.pool.QueryRow(ctx, `
-		INSERT INTO his_treatment_orders (tenant_id, encounter_id, customer_id, charge_item_id, plan_total_times)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, encounter_id, customer_id, charge_item_id, plan_total_times, completed_times, status, created_at`,
-		tenantID, req.EncounterID, customerID, chargeItemID, req.PlanTotalTimes).
-		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.PlanTotalTimes,
-			&item.CompletedTimes, &item.Status, &item.CreatedAt)
 	if err != nil {
 		return TreatmentOrder{}, err
 	}
-	item.ChargeItemName = name
-	return item, nil
+	if item.Price < 0 {
+		return TreatmentOrder{}, ErrInvalidRequest
+	}
+
+	// 治疗项目 + 绑定材料：同一事务内并入未结单（无未结单则新建 pending 单）。
+	lineTotal, err := orderLineAmount(item.Price, 1, 0)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	parentRef := item.ID
+	lines := []orderItemRow{{
+		ItemType:  orderItemChargeItem,
+		RefID:     &parentRef,
+		Name:      item.Name,
+		UnitPrice: item.Price,
+		Quantity:  1,
+		LineTotal: lineTotal,
+	}}
+	childLines, err := s.linkedChargeLinesTx(ctx, tx, tenantID, item.ID)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	lines = append(lines, childLines...)
+	orderID, err := s.appendOrCreatePendingChargeOrderLinesTx(ctx, tx, tenantID, createdBy, customerID,
+		req.EncounterID, lines)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+
+	var created TreatmentOrder
+	err = tx.QueryRow(ctx, `
+		INSERT INTO his_treatment_orders (
+			tenant_id, encounter_id, customer_id, charge_item_id, order_id, plan_total_times
+		) VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, encounter_id, customer_id, charge_item_id, order_id,
+		          plan_total_times, completed_times, status, created_at`,
+		tenantID, req.EncounterID, customerID, item.ID, orderID, req.PlanTotalTimes).
+		Scan(&created.ID, &created.EncounterID, &created.CustomerID, &created.ChargeItemID, &created.OrderID,
+			&created.PlanTotalTimes, &created.CompletedTimes, &created.Status, &created.CreatedAt)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TreatmentOrder{}, err
+	}
+	created.ChargeItemName = item.Name
+	return created, nil
+}
+
+// CancelTreatmentOrder 取消治疗医嘱（仅未执行）：删除它占用的收费行，
+// 参照检验/检查 release 逻辑——只删本治疗对应的一行，单内其它行保留；
+// 已收款（partial/paid）时拒绝，需先走按项退费。
+func (s *Store) CancelTreatmentOrder(ctx context.Context, tenantID, orderID int64) (TreatmentOrder, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	var completed int
+	var chargeItemID, chargeOrderID *int64
+	err = tx.QueryRow(ctx, `
+		SELECT status, completed_times, charge_item_id, order_id
+		FROM his_treatment_orders WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+		tenantID, orderID).Scan(&status, &completed, &chargeItemID, &chargeOrderID)
+	if err == pgx.ErrNoRows {
+		return TreatmentOrder{}, ErrNotFound
+	}
+	if err != nil {
+		return TreatmentOrder{}, err
+	}
+	if status == "cancelled" {
+		return s.loadTreatmentOrder(ctx, tenantID, orderID)
+	}
+	if completed > 0 {
+		return TreatmentOrder{}, ErrTreatmentExecuted
+	}
+	if chargeOrderID != nil && chargeItemID != nil {
+		if err := s.releaseLabExamChargeTx(ctx, tx, tenantID, *chargeOrderID, *chargeItemID); err != nil {
+			return TreatmentOrder{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE his_treatment_orders SET status = 'cancelled', updated_at = NOW()
+		WHERE tenant_id = $1 AND id = $2`, tenantID, orderID); err != nil {
+		return TreatmentOrder{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TreatmentOrder{}, err
+	}
+	return s.loadTreatmentOrder(ctx, tenantID, orderID)
 }
 
 func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID int64) ([]TreatmentOrder, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
+		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
 		       t.plan_total_times, t.completed_times, t.status, t.created_at
 		FROM his_treatment_orders t
 		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
@@ -2039,7 +2120,7 @@ func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID i
 	for rows.Next() {
 		var item TreatmentOrder
 		if err := rows.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt); err != nil {
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -2054,7 +2135,7 @@ func (s *Store) ListTreatmentStationOrders(ctx context.Context, tenantID int64, 
 		statuses = []string{}
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
+		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
 		       t.plan_total_times, t.completed_times, t.status, t.created_at,
 		       COALESCE(c.name, ''), COALESCE(pi.value, ''),
 		       last.executed_at, COALESCE(last.executor_name, '')
@@ -2094,7 +2175,7 @@ func (s *Store) ListTreatmentStationOrders(ctx context.Context, tenantID int64, 
 	for rows.Next() {
 		var item TreatmentOrder
 		if err := rows.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt,
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt,
 			&item.CustomerName, &item.MRN, &item.LastExecutedAt, &item.LastExecutorName); err != nil {
 			return nil, err
 		}
@@ -2113,15 +2194,28 @@ func (s *Store) AddTreatmentExecution(ctx context.Context, tenantID, orderID, ex
 
 	var status string
 	var planTotal, completed int
+	var encounterID int64
 	err = tx.QueryRow(ctx, `
-		SELECT status, plan_total_times, completed_times FROM his_treatment_orders
+		SELECT status, plan_total_times, completed_times, encounter_id FROM his_treatment_orders
 		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, orderID).
-		Scan(&status, &planTotal, &completed)
+		Scan(&status, &planTotal, &completed, &encounterID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return TreatmentOrder{}, ErrNotFound
 		}
 		return TreatmentOrder{}, err
+	}
+	// 未结清禁止执行：该就诊仍有 pending/partial 单时必须先完成缴费。
+	var unpaid bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM his_orders
+			WHERE tenant_id = $1 AND encounter_id = $2 AND status IN ('pending', 'partial')
+		)`, tenantID, encounterID).Scan(&unpaid); err != nil {
+		return TreatmentOrder{}, err
+	}
+	if unpaid {
+		return TreatmentOrder{}, ErrTreatmentUnpaid
 	}
 	if status == "completed" {
 		return TreatmentOrder{}, ErrTreatmentCompleted
@@ -2188,13 +2282,13 @@ func (s *Store) ListTreatmentExecutions(ctx context.Context, tenantID, orderID i
 func (s *Store) loadTreatmentOrder(ctx context.Context, tenantID, orderID int64) (TreatmentOrder, error) {
 	var item TreatmentOrder
 	err := s.pool.QueryRow(ctx, `
-		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''),
+		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
 		       t.plan_total_times, t.completed_times, t.status, t.created_at
 		FROM his_treatment_orders t
 		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
 		WHERE t.tenant_id = $1 AND t.id = $2`, tenantID, orderID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt)
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt)
 	return item, err
 }
 
@@ -2253,7 +2347,7 @@ func (s *Store) WorkbenchContext(ctx context.Context, tenantID, encounterID int6
 // 打包收费
 
 const orderColumns = `o.id, o.order_no, o.customer_id, COALESCE(c.name, ''), o.encounter_id,
-	o.items_total, o.discount_total, o.payable_total, o.paid_total, o.status, o.created_at`
+	o.items_total, o.discount_total, o.payable_total, o.paid_total, o.refunded_total, o.status, o.created_at`
 
 func (s *Store) loadOrder(ctx context.Context, q querier, tenantID, id int64) (Order, error) {
 	var o Order
@@ -2262,17 +2356,18 @@ func (s *Store) loadOrder(ctx context.Context, q querier, tenantID, id int64) (O
 		FROM his_orders o JOIN customers c ON c.id = o.customer_id
 		WHERE o.tenant_id = $1 AND o.id = $2`, tenantID, id).
 		Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
-			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.Status, &o.CreatedAt)
+			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt)
 	if err != nil {
 		return o, err
 	}
-	return s.orderWithItems(ctx, q, o)
+	return s.orderWithItems(ctx, q, o, true)
 }
 
-func (s *Store) orderWithItems(ctx context.Context, q querier, o Order) (Order, error) {
+// orderWithItems 读取收费行；withPayments 仅详情/收款后需要（列表不逐单查支付记录，避免 N+1 放大）。
+func (s *Store) orderWithItems(ctx context.Context, q querier, o Order, withPayments bool) (Order, error) {
 	rows, err := q.Query(ctx, `
 		SELECT id, order_id, item_type, ref_id, prescription_id, name, unit_price, quantity,
-		       line_total, discount_amount, payable
+		       line_total, discount_amount, payable, refunded_quantity
 		FROM his_order_items WHERE order_id = $1 ORDER BY id`, o.ID)
 	if err != nil {
 		return o, err
@@ -2283,13 +2378,51 @@ func (s *Store) orderWithItems(ctx context.Context, q querier, o Order) (Order, 
 	for rows.Next() {
 		var item OrderItem
 		if err := rows.Scan(&item.ID, &item.OrderID, &item.ItemType, &item.RefID, &item.PrescriptionID,
-			&item.Name, &item.UnitPrice, &item.Quantity, &item.LineTotal, &item.DiscountAmount, &item.Payable); err != nil {
+			&item.Name, &item.UnitPrice, &item.Quantity, &item.LineTotal, &item.DiscountAmount, &item.Payable,
+			&item.RefundedQuantity); err != nil {
 			return o, err
 		}
 		items = append(items, item)
 	}
+	if err := rows.Err(); err != nil {
+		return o, err
+	}
 	o.Items = items
-	return o, rows.Err()
+	if withPayments {
+		payments, err := loadOrderPayments(ctx, q, o.ID)
+		if err != nil {
+			return o, err
+		}
+		o.Payments = payments
+	} else {
+		o.Payments = []Payment{}
+	}
+	return o, nil
+}
+
+// loadOrderPayments 收费单的逐笔收款（小票展示支付方式/收款人/时间）。
+func loadOrderPayments(ctx context.Context, q querier, orderID int64) ([]Payment, error) {
+	rows, err := q.Query(ctx, `
+		SELECT p.id, p.order_id, p.method, p.amount, p.status, p.paid_at, p.operator_id,
+		       COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '')
+		FROM his_payments p
+		LEFT JOIN employees e ON e.tenant_id = p.tenant_id AND e.id = p.operator_id
+		WHERE p.order_id = $1 ORDER BY p.id`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	payments := make([]Payment, 0)
+	for rows.Next() {
+		var p Payment
+		if err := rows.Scan(&p.ID, &p.OrderID, &p.Method, &p.Amount, &p.Status, &p.PaidAt,
+			&p.OperatorID, &p.OperatorName); err != nil {
+			return nil, err
+		}
+		payments = append(payments, p)
+	}
+	return payments, rows.Err()
 }
 
 // ListOrders 收费台列表（?status=&encounter_id=&customer_id=）。
@@ -2311,10 +2444,10 @@ func (s *Store) ListOrders(ctx context.Context, tenantID int64, status string, e
 	for rows.Next() {
 		var o Order
 		if err := rows.Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
-			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.Status, &o.CreatedAt); err != nil {
+			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt); err != nil {
 			return nil, err
 		}
-		o, err = s.orderWithItems(ctx, s.pool, o)
+		o, err = s.orderWithItems(ctx, s.pool, o, false)
 		if err != nil {
 			return nil, err
 		}
@@ -2478,7 +2611,7 @@ func recomputeOrderTotals(ctx context.Context, tx pgx.Tx, orderID int64, discoun
 
 // CreateOrder 划价：该 encounter 已有未结清单（pending/partial）则合并本次行并重算，否则新建。
 // 合并保留单内已有行（检验/检查/挂号费/处方），按 item_type+ref_id+prescription_id 去重；
-// 折扣采用「单内已有折扣 + 本次优惠」累加，避免挂单时的优惠在结账时丢失。
+// 折扣采用「本次值覆盖」：同一张未结单反复提交（如合并结账、重复点击）不会把优惠叠加。
 func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req CreateOrderRequest) (Order, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2494,13 +2627,11 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 	if openID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, req.EncounterID); err != nil {
 		return Order{}, err
 	} else if found {
-		var existingDiscount float64
-		if err := tx.QueryRow(ctx, `
-			SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
-			tenantID, openID).Scan(&existingDiscount); err != nil {
-			return Order{}, err
+		// 覆盖而不是累加：合并/重复提交时 discount_total 以本次入参为准，且不允许为负。
+		discountTotal := req.DiscountTotal
+		if discountTotal < 0 {
+			return Order{}, ErrInvalidRequest
 		}
-		discountTotal := existingDiscount + req.DiscountTotal
 		if _, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, discountTotal); err != nil {
 			return Order{}, err
 		}
@@ -2632,63 +2763,6 @@ func (s *Store) AddPayment(ctx context.Context, tenantID, operatorID, orderID in
 			) AND status IN ('draft', 'issued')`, orderID); err != nil {
 			return Order{}, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Order{}, err
-	}
-	return s.loadOrder(ctx, s.pool, tenantID, orderID)
-}
-
-// RefundOrder 退费（全额）：已发药处方不允许退费；处方 charged → issued 回冲。
-func (s *Store) RefundOrder(ctx context.Context, tenantID, operatorID, orderID int64, reason string) (Order, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Order{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	var status string
-	var paid float64
-	err = tx.QueryRow(ctx, `
-		SELECT status, paid_total FROM his_orders
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, orderID).Scan(&status, &paid)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return Order{}, ErrNotFound
-		}
-		return Order{}, err
-	}
-	if status != "paid" && status != "partial" {
-		return Order{}, ErrInvalidState
-	}
-	var dispensed bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM his_order_items oi
-			JOIN his_prescriptions p ON p.id = oi.prescription_id
-			WHERE oi.order_id = $1 AND p.status = 'dispensed'
-		)`, orderID).Scan(&dispensed); err != nil {
-		return Order{}, err
-	}
-	if dispensed {
-		return Order{}, ErrDispensedCannotRefund
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO his_refunds (tenant_id, order_id, amount, reason, operator_id)
-		VALUES ($1, $2, $3, $4, $5)`, tenantID, orderID, paid, reason, operatorID); err != nil {
-		return Order{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE his_orders SET status = 'refunded', updated_at = NOW() WHERE id = $1`, orderID); err != nil {
-		return Order{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE his_prescriptions SET status = 'issued', updated_at = NOW()
-		WHERE id IN (
-			SELECT prescription_id FROM his_order_items
-			WHERE order_id = $1 AND prescription_id IS NOT NULL
-		) AND status = 'charged'`, orderID); err != nil {
-		return Order{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, err

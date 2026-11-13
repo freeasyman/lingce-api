@@ -2,6 +2,8 @@ package his
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -175,4 +177,56 @@ func (s *Store) mergeOpenOrderItemsTx(
 		return orderMergePlan{}, err
 	}
 	return plan, nil
+}
+
+// appendOrCreatePendingChargeOrderLinesTx 把若干已定价的挂单行并入该 encounter 的未结清单；
+// 没有未结清单时新建 pending 单。治疗项目 + 绑定材料需要一次性并入，故支持多行。
+func (s *Store) appendOrCreatePendingChargeOrderLinesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, createdBy, customerID, encounterID int64,
+	lines []orderItemRow,
+) (int64, error) {
+	if len(lines) == 0 {
+		return 0, ErrInvalidRequest
+	}
+
+	orderID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, encounterID)
+	if err != nil {
+		return 0, err
+	}
+	if found {
+		if err := insertOrderItemRowsTx(ctx, tx, orderID, lines); err != nil {
+			return 0, err
+		}
+		var discountTotal float64
+		if err := tx.QueryRow(ctx, `
+			SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
+			tenantID, orderID).Scan(&discountTotal); err != nil {
+			return 0, err
+		}
+		if err := recomputeOrderTotals(ctx, tx, orderID, discountTotal); err != nil {
+			return 0, err
+		}
+		return orderID, nil
+	}
+
+	seq, err := nextNumber(ctx, tx, tenantID, "order")
+	if err != nil {
+		return 0, err
+	}
+	orderNo := fmt.Sprintf("O%s%04d", time.Now().Format("20060102"), seq)
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by)
+		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id`,
+		tenantID, customerID, encounterID, orderNo, createdBy).Scan(&orderID); err != nil {
+		return 0, err
+	}
+	if err := insertOrderItemRowsTx(ctx, tx, orderID, lines); err != nil {
+		return 0, err
+	}
+	if err := recomputeOrderTotals(ctx, tx, orderID, 0); err != nil {
+		return 0, err
+	}
+	return orderID, nil
 }

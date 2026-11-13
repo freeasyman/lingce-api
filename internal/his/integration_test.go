@@ -121,12 +121,16 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		t.Fatalf("apply his migration: %v", err)
 	}
 	// 082 扩展 encounters source_type；084 员工角色表；085 角色模块与 9 角色；
-	// 002 治疗执行序号（作用在 shim 上，同时校验 SQL 可执行性）。
+	// 002 治疗执行序号；003/004 检验检查表；006 检验检查收费联动；010 绑定/按项退费。
 	for _, migration := range []string{
 		"20261107_082_encounter_source_his.sql",
 		"20261107_084_his_staff_roles.sql",
 		"20261112_085_his_roles_modules.sql",
 		"20261113_002_his_treatment_execution_seq.sql",
+		"20261113_003_his_lab.sql",
+		"20261113_004_his_exam.sql",
+		"20261113_006_lab_exam_charge.sql",
+		"20261113_010_billing_refund_links.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {
@@ -517,11 +521,25 @@ func TestServiceRequestAndTreatmentFlow(t *testing.T) {
 		t.Fatalf("service request: %v %+v", err, req)
 	}
 
-	order, err := svc.CreateTreatmentOrder(ctx, 1, CreateTreatmentOrderRequest{
+	order, err := svc.CreateTreatmentOrder(ctx, 1, 10, CreateTreatmentOrderRequest{
 		EncounterID: encounterID, ChargeItemID: item.ID, PlanTotalTimes: 2,
 	})
 	if err != nil || order.ChargeItemName != "红光治疗" {
 		t.Fatalf("treatment order: %v %+v", err, order)
+	}
+	if order.OrderID == nil {
+		t.Fatal("treatment order should record generated charge order")
+	}
+	// 未结清禁止执行。
+	if _, err := svc.ExecuteTreatment(ctx, 1, order.ID, 10, "未缴费"); !errors.Is(err, ErrTreatmentUnpaid) {
+		t.Fatalf("unpaid execute err = %v, want ErrTreatmentUnpaid", err)
+	}
+	chargeOrder, err := svc.GetOrder(ctx, 1, *order.OrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddPayment(ctx, 1, 10, chargeOrder.ID, CreatePaymentRequest{Method: "cash", Amount: chargeOrder.PayableTotal}); err != nil {
+		t.Fatal(err)
 	}
 
 	exec1, err := svc.ExecuteTreatment(ctx, 1, order.ID, 10, "第一次")
@@ -768,8 +786,15 @@ func TestVoidOrderAndInsufficientStock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.AddPayment(ctx, 1, 10, order2.ID, CreatePaymentRequest{Method: "cash", Amount: order2.PayableTotal}); err != nil {
-		t.Fatal(err)
+	// order2 会并入同一张未结单（同 encounter），只需补齐剩余应收，付清后处方 charged。
+	if order2.Status != "pending" && order2.Status != "partial" {
+		t.Fatalf("order2 status = %s", order2.Status)
+	}
+	remaining := order2.PayableTotal - order2.PaidTotal
+	if remaining > 0 {
+		if _, err := svc.AddPayment(ctx, 1, 10, order2.ID, CreatePaymentRequest{Method: "cash", Amount: remaining}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := svc.InboundStock(ctx, 1, 10, InboundStockRequest{DrugID: drug.ID, Quantity: 2}); err != nil {
 		t.Fatal(err)
@@ -1044,8 +1069,8 @@ func TestStaffRoles(t *testing.T) {
 		t.Fatalf("require role before config should pass: %v", err)
 	}
 
-	// 分配角色：员工 10 = cashier + pharmacist（可叠加）
-	if err := svc.UpdateStaffRoles(ctx, 1, 10, []string{"cashier", "pharmacist"}); err != nil {
+	// 分配角色：员工 10 = nurse + labtech（可叠加；9 角色体系见迁移 085）
+	if err := svc.UpdateStaffRoles(ctx, 1, 10, []string{"nurse", "labtech"}); err != nil {
 		t.Fatalf("update roles: %v", err)
 	}
 	list, err := svc.ListStaffRoles(ctx, 1)
@@ -1056,7 +1081,7 @@ func TestStaffRoles(t *testing.T) {
 	for _, item := range list {
 		if item.EmployeeID == 10 {
 			found = true
-			if len(item.Roles) != 2 || item.Roles[0] != "cashier" || item.Roles[1] != "pharmacist" {
+			if len(item.Roles) != 2 || item.Roles[0] != "labtech" || item.Roles[1] != "nurse" {
 				t.Fatalf("roles for 10: %v", item.Roles)
 			}
 		}
@@ -1071,8 +1096,8 @@ func TestStaffRoles(t *testing.T) {
 	}
 
 	// 权限校验
-	if err := svc.RequireRole(ctx, 1, 10, "cashier"); err != nil {
-		t.Fatalf("cashier should pass: %v", err)
+	if err := svc.RequireRole(ctx, 1, 10, "nurse"); err != nil {
+		t.Fatalf("nurse should pass: %v", err)
 	}
 	if err := svc.RequireRole(ctx, 1, 10, "doctor"); !errors.Is(err, ErrForbiddenRole) {
 		t.Fatalf("doctor should be forbidden: %v", err)

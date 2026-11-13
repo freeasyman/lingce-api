@@ -81,6 +81,7 @@ func main() {
 		{"检验申请", `SELECT COUNT(*) FROM his_lab_requests WHERE encounter_id IN ` + enc, `DELETE FROM his_lab_requests WHERE encounter_id IN ` + enc},
 		{"处方明细", `SELECT COUNT(*) FROM his_prescription_items WHERE prescription_id IN ` + rx, `DELETE FROM his_prescription_items WHERE prescription_id IN ` + rx},
 		{"处方", `SELECT COUNT(*) FROM his_prescriptions WHERE encounter_id IN ` + enc, `DELETE FROM his_prescriptions WHERE encounter_id IN ` + enc},
+		{"退费明细", `SELECT COUNT(*) FROM his_refund_items WHERE refund_id IN (SELECT id FROM his_refunds WHERE order_id IN ` + ord + `)`, `DELETE FROM his_refund_items WHERE refund_id IN (SELECT id FROM his_refunds WHERE order_id IN ` + ord + `)`},
 		{"退费", `SELECT COUNT(*) FROM his_refunds WHERE order_id IN ` + ord, `DELETE FROM his_refunds WHERE order_id IN ` + ord},
 		{"支付", `SELECT COUNT(*) FROM his_payments WHERE order_id IN ` + ord, `DELETE FROM his_payments WHERE order_id IN ` + ord},
 		{"订单明细", `SELECT COUNT(*) FROM his_order_items WHERE order_id IN ` + ord, `DELETE FROM his_order_items WHERE order_id IN ` + ord},
