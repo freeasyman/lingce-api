@@ -22,18 +22,19 @@ const (
 
 // PatientListItem 患者档案列表行。数据全部来自 customers，不另建患者主档。
 type PatientListItem struct {
-	ID          int64      `json:"id"`
-	Name        string     `json:"name"`
-	Phone       string     `json:"phone"`
-	Gender      string     `json:"gender"`
-	Age         int        `json:"age"`
-	MRN         string     `json:"mrn"`
-	Source      string     `json:"source"`
-	Tags        []string   `json:"tags"`
-	VisitCount  int64      `json:"visit_count"`
-	TotalSpent  float64    `json:"total_spent"`
-	LastVisitAt *time.Time `json:"last_visit_at"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID            int64      `json:"id"`
+	Name          string     `json:"name"`
+	Phone         string     `json:"phone"`
+	Gender        string     `json:"gender"`
+	Age           int        `json:"age"`
+	MRN           string     `json:"mrn"`
+	Source        string     `json:"source"`
+	Tags          []string   `json:"tags"`
+	VisitCount    int64      `json:"visit_count"`
+	TotalSpent    float64    `json:"total_spent"`
+	LastVisitAt   *time.Time `json:"last_visit_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	PriceIdentity string     `json:"price_identity"`
 }
 
 // PatientListResult 患者列表响应（带命中总数，便于列表页展示）。
@@ -46,19 +47,20 @@ type PatientListResult struct {
 
 // PatientProfile 患者信息卡。
 type PatientProfile struct {
-	CustomerID  int64      `json:"customer_id"`
-	Name        string     `json:"name"`
-	Phone       string     `json:"phone"`
-	Gender      string     `json:"gender"`
-	Age         int        `json:"age"`
-	MRN         string     `json:"mrn"`
-	Allergy     string     `json:"allergy"`
-	Source      string     `json:"source"`
-	Tags        []string   `json:"tags"`
-	VisitCount  int64      `json:"visit_count"`
-	TotalSpent  float64    `json:"total_spent"`
-	LastVisitAt *time.Time `json:"last_visit_at"`
-	CreatedAt   time.Time  `json:"created_at"`
+	CustomerID    int64      `json:"customer_id"`
+	Name          string     `json:"name"`
+	Phone         string     `json:"phone"`
+	Gender        string     `json:"gender"`
+	Age           int        `json:"age"`
+	MRN           string     `json:"mrn"`
+	Allergy       string     `json:"allergy"`
+	Source        string     `json:"source"`
+	Tags          []string   `json:"tags"`
+	VisitCount    int64      `json:"visit_count"`
+	TotalSpent    float64    `json:"total_spent"`
+	LastVisitAt   *time.Time `json:"last_visit_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	PriceIdentity string     `json:"price_identity"`
 }
 
 // PatientEncounter 患者最近就诊摘要（诊断优先取病历 content_json，其次取处方诊断）。
@@ -119,6 +121,7 @@ type PatientOverview struct {
 	TreatmentOrders  []TreatmentOrder         `json:"treatment_orders"`
 	Documents        []PatientDocumentSummary `json:"documents"`
 	Registrations    []Registration           `json:"registrations"`
+	IdentityLogs     []CustomerIdentityLog    `json:"identity_logs"`
 }
 
 // PatientVisitSummary 是客户总监聚合使用的“就诊元数据”白名单。
@@ -263,7 +266,12 @@ func (h *Handler) ListPatients(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "keyword is too long")
 		return
 	}
-	result, err := h.service.ListPatients(r.Context(), tenantID, keyword, limit)
+	identity := strings.TrimSpace(r.URL.Query().Get("price_identity"))
+	if identity != "" && !isValidPriceIdentity(identity) {
+		httputil.WriteBadRequest(w, "invalid price_identity")
+		return
+	}
+	result, err := h.service.ListPatients(r.Context(), tenantID, keyword, identity, limit)
 	if err != nil {
 		slog.Error("his: list patients", "error", err)
 		httputil.WriteInternalError(w, "failed to list patients")
@@ -291,7 +299,7 @@ func (h *Handler) PatientOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListPatients 查询患者列表。
-func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword string, limit int) (PatientListResult, error) {
+func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword, priceIdentity string, limit int) (PatientListResult, error) {
 	result := PatientListResult{
 		Items:   make([]PatientListItem, 0),
 		Limit:   limit,
@@ -306,8 +314,9 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword string
 		           WHERE pi.tenant_id = c.tenant_id AND pi.customer_id = c.id
 		             AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		             AND pi.value ILIKE $3
-		       ))`
-	args := []any{tenantID, keyword, match}
+		       ))
+		  AND ($4 = '' OR COALESCE(NULLIF(c.price_identity, ''), 'standard') = $4)`
+	args := []any{tenantID, keyword, match, priceIdentity}
 
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM customers c`+where, args...).Scan(&result.Total); err != nil {
 		return result, err
@@ -336,13 +345,14 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword string
 		           WHERE pi.tenant_id = c.tenant_id AND pi.customer_id = c.id
 		             AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		           ORDER BY pi.issued_at DESC, pi.id DESC LIMIT 1
-		       ), '')
+		       ), ''),
+		       COALESCE(NULLIF(c.price_identity, ''), 'standard')
 		FROM customers c
 		LEFT JOIN visit_stats vs ON vs.patient_id = c.id
 		LEFT JOIN spend_stats ss ON ss.customer_id = c.id
 		`+where+`
 		ORDER BY COALESCE(vs.last_visit_at, c.created_at) DESC, c.id DESC
-		LIMIT $4`, args...)
+		LIMIT $5`, args...)
 	if err != nil {
 		return result, err
 	}
@@ -353,7 +363,7 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword string
 		var tagsRaw string
 		if err := rows.Scan(&item.ID, &item.Name, &item.Phone, &item.Gender, &item.Age,
 			&item.Source, &tagsRaw, &item.CreatedAt, &item.VisitCount, &item.LastVisitAt,
-			&item.TotalSpent, &item.MRN); err != nil {
+			&item.TotalSpent, &item.MRN, &item.PriceIdentity); err != nil {
 			return result, err
 		}
 		item.Tags = decodePatientTags(tagsRaw)
@@ -373,6 +383,7 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 		TreatmentOrders:  make([]TreatmentOrder, 0),
 		Documents:        make([]PatientDocumentSummary, 0),
 		Registrations:    make([]Registration, 0),
+		IdentityLogs:     make([]CustomerIdentityLog, 0),
 	}
 
 	var extraData []byte
@@ -380,7 +391,7 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
 		       COALESCE(c.age, 0), COALESCE(c.source, ''), COALESCE(c.tags::text, '[]'),
-		       c.extra_data, c.created_at,
+		       c.extra_data, c.created_at, COALESCE(NULLIF(c.price_identity, ''), 'standard'),
 		       COALESCE((
 		           SELECT pi.value FROM patient_identifiers pi
 		           WHERE pi.tenant_id = c.tenant_id AND pi.customer_id = c.id
@@ -405,7 +416,7 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 		tenantID, customerID).
 		Scan(&overview.Patient.CustomerID, &overview.Patient.Name, &overview.Patient.Phone,
 			&overview.Patient.Gender, &overview.Patient.Age, &overview.Patient.Source, &tagsRaw,
-			&extraData, &overview.Patient.CreatedAt, &overview.Patient.MRN,
+			&extraData, &overview.Patient.CreatedAt, &overview.Patient.PriceIdentity, &overview.Patient.MRN,
 			&overview.Patient.VisitCount, &overview.Patient.LastVisitAt, &overview.Patient.TotalSpent)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -440,6 +451,11 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 	if err := s.loadPatientOverviewDocuments(ctx, tenantID, customerID, &overview); err != nil {
 		return overview, err
 	}
+	logs, err := s.ListCustomerIdentityLogs(ctx, tenantID, customerID, 10)
+	if err != nil {
+		return overview, err
+	}
+	overview.IdentityLogs = logs
 	return overview, nil
 }
 
@@ -669,8 +685,8 @@ func allergyFromExtraData(raw []byte) string {
 }
 
 // ListPatients 查询患者列表。
-func (s *Service) ListPatients(ctx context.Context, tenantID int64, keyword string, limit int) (PatientListResult, error) {
-	return s.store.ListPatients(ctx, tenantID, keyword, limit)
+func (s *Service) ListPatients(ctx context.Context, tenantID int64, keyword, priceIdentity string, limit int) (PatientListResult, error) {
+	return s.store.ListPatients(ctx, tenantID, keyword, priceIdentity, limit)
 }
 
 // PatientOverview 查询患者档案概览。

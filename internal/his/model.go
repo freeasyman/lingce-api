@@ -595,13 +595,14 @@ type ExamReport struct {
 
 // CustomerSummary 接诊患者摘要。
 type CustomerSummary struct {
-	CustomerID int64  `json:"customer_id"`
-	Name       string `json:"name"`
-	Phone      string `json:"phone"`
-	Gender     string `json:"gender"`
-	Age        int    `json:"age"`
-	MRN        string `json:"mrn"`
-	Allergy    string `json:"allergy"` // 过敏史，未填写时为"无"
+	CustomerID    int64  `json:"customer_id"`
+	Name          string `json:"name"`
+	Phone         string `json:"phone"`
+	Gender        string `json:"gender"`
+	Age           int    `json:"age"`
+	MRN           string `json:"mrn"`
+	Allergy       string `json:"allergy"`        // 过敏史，未填写时为"无"
+	PriceIdentity string `json:"price_identity"` // standard/member/staff/family/agreement
 }
 
 // EMRHistoryItem 既往就诊摘要。
@@ -645,8 +646,12 @@ type OrderItem struct {
 	UnitPrice      float64 `json:"unit_price"`
 	Quantity       float64 `json:"quantity"`
 	LineTotal      float64 `json:"line_total"`
-	DiscountAmount float64 `json:"discount_amount"`
-	Payable        float64 `json:"payable"`
+	DiscountAmount float64 `json:"discount_amount"` // 身份折扣额
+	Payable        float64 `json:"payable"`         // 折后应收
+	// 会员/身份折扣与议价明细。
+	Category          string  `json:"category"`
+	IdentityRate      float64 `json:"identity_rate"`
+	NegotiationAmount float64 `json:"negotiation_amount"`
 	// RefundedQuantity 已退数量（可退数量 = quantity - refunded_quantity）。
 	RefundedQuantity float64 `json:"refunded_quantity"`
 }
@@ -660,8 +665,8 @@ type Order struct {
 	CustomerID    int64       `json:"customer_id"`
 	CustomerName  string      `json:"customer_name"`
 	EncounterID   *int64      `json:"encounter_id"`
-	ItemsTotal    float64     `json:"items_total"`
-	DiscountTotal float64     `json:"discount_total"`
+	ItemsTotal    float64     `json:"items_total"`    // 原价合计
+	DiscountTotal float64     `json:"discount_total"` // 身份折扣 + 议价
 	PayableTotal  float64     `json:"payable_total"`
 	PaidTotal     float64     `json:"paid_total"`
 	RefundedTotal float64     `json:"refunded_total"`
@@ -669,19 +674,36 @@ type Order struct {
 	Items         []OrderItem `json:"items"`
 	Payments      []Payment   `json:"payments"`
 	CreatedAt     time.Time   `json:"created_at"`
+	// 身份/议价快照。
+	PriceIdentity         string  `json:"price_identity"`
+	IdentityDiscountTotal float64 `json:"identity_discount_total"`
+	NegotiationMode       string  `json:"negotiation_mode"`
+	NegotiationValue      float64 `json:"negotiation_value"`
+	NegotiationAmount     float64 `json:"negotiation_amount"`
+	NegotiationReason     string  `json:"negotiation_reason"`
+	NegotiationBy         *int64  `json:"negotiation_by"`
 }
 
-// CreateOrderRequest 划价。
+// NegotiationInput 整单议价（例外）：percent 为减免百分比（10=让 10%），amount 为减免金额。
+type NegotiationInput struct {
+	Mode   string  `json:"mode"`
+	Value  float64 `json:"value"`
+	Reason string  `json:"reason"`
+}
+
+// CreateOrderRequest 划价。DiscountTotal 为旧版整单优惠（等价于 amount 模式议价）。
 type CreateOrderRequest struct {
-	EncounterID   int64            `json:"encounter_id"`
-	DiscountTotal float64          `json:"discount_total,omitempty"`
-	Items         []OrderLineInput `json:"items"`
+	EncounterID   int64             `json:"encounter_id"`
+	DiscountTotal float64           `json:"discount_total,omitempty"`
+	Negotiation   *NegotiationInput `json:"negotiation,omitempty"`
+	Items         []OrderLineInput  `json:"items"`
 }
 
 // UpdateOrderRequest 调整收费单（未收费前可改）。
 type UpdateOrderRequest struct {
-	DiscountTotal *float64         `json:"discount_total,omitempty"`
-	Items         []OrderLineInput `json:"items,omitempty"`
+	DiscountTotal *float64          `json:"discount_total,omitempty"`
+	Negotiation   *NegotiationInput `json:"negotiation,omitempty"`
+	Items         []OrderLineInput  `json:"items,omitempty"`
 }
 
 // Payment 收款记录。

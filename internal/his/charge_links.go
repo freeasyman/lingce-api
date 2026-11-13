@@ -156,7 +156,7 @@ func (s *Store) ReplaceChargeItemLinks(ctx context.Context, tenantID, parentID i
 // 价格同样只取收费字典价，不接受前端传价；数量取绑定配置数量。
 func (s *Store) linkedChargeLinesTx(ctx context.Context, q querier, tenantID, parentID int64) ([]orderItemRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT ci.id, ci.name, ci.price, l.quantity
+		SELECT ci.id, ci.name, ci.price, ci.category, l.quantity
 		FROM his_charge_item_links l
 		JOIN his_charge_items ci ON ci.tenant_id = l.tenant_id AND ci.id = l.child_charge_item_id
 		WHERE l.tenant_id = $1 AND l.parent_charge_item_id = $2 AND ci.status = 'active'
@@ -169,9 +169,9 @@ func (s *Store) linkedChargeLinesTx(ctx context.Context, q querier, tenantID, pa
 	lines := make([]orderItemRow, 0)
 	for rows.Next() {
 		var childID int64
-		var name string
+		var name, category string
 		var price, quantity float64
-		if err := rows.Scan(&childID, &name, &price, &quantity); err != nil {
+		if err := rows.Scan(&childID, &name, &price, &category, &quantity); err != nil {
 			return nil, err
 		}
 		lineTotal, err := orderLineAmount(price, quantity, 0)
@@ -183,6 +183,7 @@ func (s *Store) linkedChargeLinesTx(ctx context.Context, q querier, tenantID, pa
 			ItemType:  orderItemChargeItem,
 			RefID:     &refID,
 			Name:      name,
+			Category:  category,
 			UnitPrice: price,
 			Quantity:  quantity,
 			LineTotal: lineTotal,

@@ -101,7 +101,7 @@ func TestPlanOrderMergeWithOpenOrderDedupesAndRecalculates(t *testing.T) {
 }
 
 func TestPlanOrderMergeUsesStoredLineTotal(t *testing.T) {
-	// 金额重算以已落库的 line_total（行优惠后）为准，不用单价×数量重算历史行。
+	// 金额口径：items_total 为原价（25×2=50），行折扣 + 议价进入 discount_total。
 	existing := []orderItemRow{
 		testOrderRow(orderItemChargeItem, rowRef(9), nil, 25, 2, 5, 45),
 	}
@@ -109,11 +109,14 @@ func TestPlanOrderMergeUsesStoredLineTotal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	if plan.ItemsTotal != 45 {
-		t.Fatalf("items total = %v, want 45", plan.ItemsTotal)
+	if plan.ItemsTotal != 50 {
+		t.Fatalf("items total = %v, want 50", plan.ItemsTotal)
 	}
 	if plan.PayableTotal != 40 {
-		t.Fatalf("payable = %v, want 40 (45 - 5 order discount)", plan.PayableTotal)
+		t.Fatalf("payable = %v, want 40 (50 - 5 line discount - 5 negotiation)", plan.PayableTotal)
+	}
+	if plan.IdentityDiscount != 5 || plan.NegotiationTotal != 5 {
+		t.Fatalf("discounts = identity %v negotiation %v, want 5/5", plan.IdentityDiscount, plan.NegotiationTotal)
 	}
 }
 

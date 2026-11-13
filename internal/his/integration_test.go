@@ -56,7 +56,8 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		CREATE TABLE customers (
 			id bigserial PRIMARY KEY, tenant_id bigint, name text, phone text, gender text,
 			age int, source text, lifecycle_stage text, status text, momentum int,
-			extra_data jsonb, created_by bigint, created_at timestamptz, updated_at timestamptz
+			tags jsonb DEFAULT '[]'::jsonb, extra_data jsonb, created_by bigint,
+			created_at timestamptz, updated_at timestamptz, deleted_at timestamptz
 		);
 		CREATE TABLE employees (
 			id bigint PRIMARY KEY, tenant_id bigint, name text, full_name text,
@@ -121,7 +122,8 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		t.Fatalf("apply his migration: %v", err)
 	}
 	// 082 扩展 encounters source_type；084 员工角色表；085 角色模块与 9 角色；
-	// 002 治疗执行序号；003/004 检验检查表；006 检验检查收费联动；010 绑定/按项退费。
+	// 002 治疗执行序号；003/004 检验检查表；006 检验检查收费联动；010 绑定/按项退费；
+	// 011 会员/身份折扣矩阵与订单折扣列。
 	for _, migration := range []string{
 		"20261107_082_encounter_source_his.sql",
 		"20261107_084_his_staff_roles.sql",
@@ -131,6 +133,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		"20261113_004_his_exam.sql",
 		"20261113_006_lab_exam_charge.sql",
 		"20261113_010_billing_refund_links.sql",
+		"20261113_011_his_discount_rules.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {
@@ -634,7 +637,7 @@ func TestBundleOrderPricing(t *testing.T) {
 	}
 
 	// 已收费不可调整
-	if _, err := svc.UpdateOrder(ctx, 1, order.ID, UpdateOrderRequest{DiscountTotal: floatPtr(10)}); !errors.Is(err, ErrInvalidState) {
+	if _, err := svc.UpdateOrder(ctx, 1, order.ID, 10, UpdateOrderRequest{DiscountTotal: floatPtr(10)}); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("update paid order err = %v", err)
 	}
 

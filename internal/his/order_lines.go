@@ -62,15 +62,22 @@ func drugLinePrice(dict resolvedLine, snapshot *resolvedLine) (resolvedLine, err
 }
 
 // orderItemRow 已定价的收费行（价格全部来自服务端解析结果）。
+// 金额口径：OriginalTotal 为原价；DiscountAmount 为身份折扣；NegotiationAmount 为议价分摊；
+// LineTotal/Payable 为折后应收。LineTotal 保留旧字段名，兼容既有插入/合并逻辑。
 type orderItemRow struct {
-	ItemType       string
-	RefID          *int64
-	PrescriptionID *int64
-	Name           string
-	UnitPrice      float64
-	Quantity       float64
-	DiscountAmount float64
-	LineTotal      float64
+	ID                int64
+	ItemType          string
+	RefID             *int64
+	PrescriptionID    *int64
+	Name              string
+	Category          string
+	UnitPrice         float64
+	Quantity          float64
+	OriginalTotal     float64
+	IdentityRate      float64
+	DiscountAmount    float64
+	NegotiationAmount float64
+	LineTotal         float64
 }
 
 // orderLineAmount 行小计 = 单价 × 数量 − 行优惠。
@@ -99,9 +106,14 @@ func orderPayable(itemsTotal, discountTotal float64) (float64, error) {
 
 // buildOrderItemRows 逐行定价并生成待落库的收费行。
 // resolve 由 Store 提供（字典价 / 打包价 / 药品价 / 挂号记录挂号费），本条链路不接受前端传价。
-func buildOrderItemRows(inputs []OrderLineInput, resolve func(OrderLineInput) (resolvedLine, error)) ([]orderItemRow, error) {
+// rates 为「大类→折率」；不传时按全 1.0（纯逻辑测试/历史调用）。
+func buildOrderItemRows(inputs []OrderLineInput, resolve func(OrderLineInput) (resolvedLine, error), rates ...map[string]float64) ([]orderItemRow, error) {
 	if err := validateOrderLineInputs(inputs); err != nil {
 		return nil, err
+	}
+	rateMap := defaultDiscountRates()
+	if len(rates) > 0 && rates[0] != nil {
+		rateMap = rates[0]
 	}
 	rows := make([]orderItemRow, 0, len(inputs))
 	for _, input := range inputs {
@@ -112,17 +124,32 @@ func buildOrderItemRows(inputs []OrderLineInput, resolve func(OrderLineInput) (r
 		if line.UnitPrice < 0 {
 			return nil, ErrInvalidRequest
 		}
-		lineTotal, err := orderLineAmount(line.UnitPrice, input.Quantity, input.DiscountAmount)
-		if err != nil {
+		if _, err := orderLineAmount(line.UnitPrice, input.Quantity, input.DiscountAmount); err != nil {
 			return nil, err
 		}
+		category := line.Category
+		if category == "" {
+			category = discountCategoryForLine(input.ItemType, "")
+		}
 		row := orderItemRow{
-			ItemType:       input.ItemType,
-			Name:           line.Name,
-			UnitPrice:      line.UnitPrice,
-			Quantity:       input.Quantity,
-			DiscountAmount: input.DiscountAmount,
-			LineTotal:      lineTotal,
+			ItemType:  input.ItemType,
+			Name:      line.Name,
+			Category:  category,
+			UnitPrice: line.UnitPrice,
+			Quantity:  input.Quantity,
+		}
+		// 旧版行优惠（不参与议价）：在身份折扣后单独扣减，保留字段兼容。
+		extraDiscount := discountMoney(input.DiscountAmount)
+		row.OriginalTotal = discountMoney(line.UnitPrice * input.Quantity)
+		row.IdentityRate = rateFor(rateMap, category)
+		row.DiscountAmount = discountMoney(row.OriginalTotal * (1 - row.IdentityRate))
+		row.LineTotal = discountMoney(row.OriginalTotal - row.DiscountAmount)
+		if extraDiscount > 0 {
+			if extraDiscount > row.LineTotal {
+				extraDiscount = row.LineTotal
+			}
+			row.DiscountAmount = discountMoney(row.DiscountAmount + extraDiscount)
+			row.LineTotal = discountMoney(row.LineTotal - extraDiscount)
 		}
 		if input.ItemType == orderItemRegistrationFee {
 			// 挂号费不挂字典项目/处方，ref_id 与 prescription_id 一律丢弃。

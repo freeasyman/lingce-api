@@ -39,6 +39,7 @@ type pendingChargeLine struct {
 	ItemType  string
 	RefID     int64
 	Name      string
+	Category  string
 	UnitPrice float64
 	Quantity  float64
 	LineTotal float64
@@ -117,6 +118,7 @@ func newPendingChargeLine(item chargeItemSnapshot) (pendingChargeLine, error) {
 		ItemType:  chargeItemType,
 		RefID:     item.ID,
 		Name:      item.Name,
+		Category:  item.Category,
 		UnitPrice: item.Price,
 		Quantity:  1,
 		LineTotal: item.Price,
@@ -174,6 +176,7 @@ func (s *Store) createPendingChargeOrderTx(ctx context.Context, tx pgx.Tx, tenan
 			ItemType:  line.ItemType,
 			RefID:     &line.RefID,
 			Name:      line.Name,
+			Category:  line.Category,
 			UnitPrice: line.UnitPrice,
 			Quantity:  line.Quantity,
 			LineTotal: line.LineTotal,
@@ -193,6 +196,7 @@ func (s *Store) appendOrCreatePendingChargeOrderTx(ctx context.Context, tx pgx.T
 			ItemType:  line.ItemType,
 			RefID:     &line.RefID,
 			Name:      line.Name,
+			Category:  line.Category,
 			UnitPrice: line.UnitPrice,
 			Quantity:  line.Quantity,
 			LineTotal: line.LineTotal,
@@ -281,17 +285,10 @@ func (s *Store) releaseLabExamChargeTx(ctx context.Context, tx pgx.Tx, tenantID,
 			return err
 		}
 		if remaining == 0 {
-			if err := recomputeOrderTotals(ctx, tx, orderID, 0); err != nil {
-				return err
-			}
 			_, err := tx.Exec(ctx, `UPDATE his_orders SET status = 'void', updated_at = NOW() WHERE tenant_id = $1 AND id = $2`, tenantID, orderID)
 			return err
 		}
-		var discountTotal float64
-		if err := tx.QueryRow(ctx, `SELECT discount_total FROM his_orders WHERE id = $1`, orderID).Scan(&discountTotal); err != nil {
-			return err
-		}
-		return recomputeOrderTotals(ctx, tx, orderID, discountTotal)
+		return s.recalcOrderPricingTx(ctx, tx, orderID)
 	case "void", "refunded":
 		return nil
 	default:

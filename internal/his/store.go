@@ -1628,13 +1628,14 @@ func (s *Store) CustomerSummary(ctx context.Context, tenantID, customerID int64)
 	var extraData []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
-		       COALESCE(c.age, 0), COALESCE(pi.value, ''), c.extra_data
+		       COALESCE(c.age, 0), COALESCE(pi.value, ''), c.extra_data,
+		       COALESCE(NULLIF(c.price_identity, ''), 'standard')
 		FROM customers c
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = c.id
 			AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, customerID).
 		Scan(&summary.CustomerID, &summary.Name, &summary.Phone, &summary.Gender,
-			&summary.Age, &summary.MRN, &extraData)
+			&summary.Age, &summary.MRN, &extraData, &summary.PriceIdentity)
 	if err != nil {
 		return summary, err
 	}
@@ -2024,6 +2025,7 @@ func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID, createdBy in
 		ItemType:  orderItemChargeItem,
 		RefID:     &parentRef,
 		Name:      item.Name,
+		Category:  item.Category,
 		UnitPrice: item.Price,
 		Quantity:  1,
 		LineTotal: lineTotal,
@@ -2347,16 +2349,24 @@ func (s *Store) WorkbenchContext(ctx context.Context, tenantID, encounterID int6
 // 打包收费
 
 const orderColumns = `o.id, o.order_no, o.customer_id, COALESCE(c.name, ''), o.encounter_id,
-	o.items_total, o.discount_total, o.payable_total, o.paid_total, o.refunded_total, o.status, o.created_at`
+	o.items_total, o.discount_total, o.payable_total, o.paid_total, o.refunded_total, o.status, o.created_at,
+	o.price_identity, o.identity_discount_total, o.negotiation_mode, o.negotiation_value,
+	o.negotiation_amount, o.negotiation_reason, o.negotiation_by`
+
+func scanOrderRow(row pgx.Row) (Order, error) {
+	var o Order
+	err := row.Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
+		&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt,
+		&o.PriceIdentity, &o.IdentityDiscountTotal, &o.NegotiationMode, &o.NegotiationValue,
+		&o.NegotiationAmount, &o.NegotiationReason, &o.NegotiationBy)
+	return o, err
+}
 
 func (s *Store) loadOrder(ctx context.Context, q querier, tenantID, id int64) (Order, error) {
-	var o Order
-	err := q.QueryRow(ctx, `
+	o, err := scanOrderRow(q.QueryRow(ctx, `
 		SELECT `+orderColumns+`
 		FROM his_orders o JOIN customers c ON c.id = o.customer_id
-		WHERE o.tenant_id = $1 AND o.id = $2`, tenantID, id).
-		Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
-			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt)
+		WHERE o.tenant_id = $1 AND o.id = $2`, tenantID, id))
 	if err != nil {
 		return o, err
 	}
@@ -2366,8 +2376,9 @@ func (s *Store) loadOrder(ctx context.Context, q querier, tenantID, id int64) (O
 // orderWithItems 读取收费行；withPayments 仅详情/收款后需要（列表不逐单查支付记录，避免 N+1 放大）。
 func (s *Store) orderWithItems(ctx context.Context, q querier, o Order, withPayments bool) (Order, error) {
 	rows, err := q.Query(ctx, `
-		SELECT id, order_id, item_type, ref_id, prescription_id, name, unit_price, quantity,
-		       line_total, discount_amount, payable, refunded_quantity
+		SELECT id, order_id, item_type, ref_id, prescription_id, name, category,
+		       unit_price, quantity, identity_rate, line_total, discount_amount,
+		       negotiation_amount, payable, refunded_quantity
 		FROM his_order_items WHERE order_id = $1 ORDER BY id`, o.ID)
 	if err != nil {
 		return o, err
@@ -2378,7 +2389,8 @@ func (s *Store) orderWithItems(ctx context.Context, q querier, o Order, withPaym
 	for rows.Next() {
 		var item OrderItem
 		if err := rows.Scan(&item.ID, &item.OrderID, &item.ItemType, &item.RefID, &item.PrescriptionID,
-			&item.Name, &item.UnitPrice, &item.Quantity, &item.LineTotal, &item.DiscountAmount, &item.Payable,
+			&item.Name, &item.Category, &item.UnitPrice, &item.Quantity, &item.IdentityRate,
+			&item.LineTotal, &item.DiscountAmount, &item.NegotiationAmount, &item.Payable,
 			&item.RefundedQuantity); err != nil {
 			return o, err
 		}
@@ -2442,9 +2454,8 @@ func (s *Store) ListOrders(ctx context.Context, tenantID int64, status string, e
 
 	items := make([]Order, 0)
 	for rows.Next() {
-		var o Order
-		if err := rows.Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
-			&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt); err != nil {
+		o, err := scanOrderRow(rows)
+		if err != nil {
 			return nil, err
 		}
 		o, err = s.orderWithItems(ctx, s.pool, o, false)
@@ -2477,6 +2488,7 @@ type resolvedLine struct {
 	Name           string
 	UnitPrice      float64
 	PrescriptionID *int64
+	Category       string
 }
 
 // invalidIfNoRows 定价查不到引用的字典/处方时统一按入参无效（400）处理，不暴露存在性也不报 500。
@@ -2491,13 +2503,15 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 	switch input.ItemType {
 	case orderItemChargeItem:
 		var line resolvedLine
+		var category string
 		err := q.QueryRow(ctx, `
-			SELECT name, price FROM his_charge_items
+			SELECT name, price, category FROM his_charge_items
 			WHERE tenant_id = $1 AND id = $2 AND status = 'active'`, tenantID, input.RefID).
-			Scan(&line.Name, &line.UnitPrice)
+			Scan(&line.Name, &line.UnitPrice, &category)
 		if err != nil {
 			return line, invalidIfNoRows(err)
 		}
+		line.Category = normalizeChargeItemCategory(category)
 		return line, nil
 	case orderItemBundle:
 		var line resolvedLine
@@ -2508,6 +2522,8 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 		if err != nil {
 			return line, invalidIfNoRows(err)
 		}
+		// 打包价是独立定价，无法按内容拆分大类；统一归「其他」。
+		line.Category = discountCategoryOther
 		return line, nil
 	case orderItemRegistrationFee:
 		// 挂号费只认该就诊挂号记录的 fee：不查收费项目字典，也不接受前端 ref_id。
@@ -2521,7 +2537,9 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 			// 就诊不存在、不属于本租户或没有挂号记录：一律按入参无效处理（400）。
 			return resolvedLine{}, invalidIfNoRows(err)
 		}
-		return registrationFeeLine(fee)
+		feeLine, err := registrationFeeLine(fee)
+		feeLine.Category = discountCategoryRegister
+		return feeLine, err
 	case orderItemDrug:
 		var line resolvedLine
 		err := q.QueryRow(ctx, `
@@ -2531,6 +2549,7 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 		if err != nil {
 			return line, invalidIfNoRows(err)
 		}
+		line.Category = discountCategoryDrug
 		var snapshot *resolvedLine
 		if input.PrescriptionID != nil {
 			var status, errEnc int64
@@ -2568,50 +2587,23 @@ func (s *Store) resolveOrderLine(ctx context.Context, q querier, tenantID, encou
 	}
 }
 
-// replaceOrderItemsTx 全量替换收费行（事务内）：逐行定价后落库。
-func (s *Store) replaceOrderItemsTx(ctx context.Context, tx pgx.Tx, tenantID, encounterID, orderID int64, inputs []OrderLineInput) error {
+// replaceOrderItemsTx 全量替换收费行（事务内）：逐行定价（含身份折扣）后落库。
+func (s *Store) replaceOrderItemsTx(ctx context.Context, tx pgx.Tx, tenantID, encounterID, orderID int64, inputs []OrderLineInput, rates map[string]float64) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM his_order_items WHERE order_id = $1`, orderID); err != nil {
 		return err
 	}
 	rows, err := buildOrderItemRows(inputs, func(input OrderLineInput) (resolvedLine, error) {
 		return s.resolveOrderLine(ctx, tx, tenantID, encounterID, input)
-	})
+	}, rates)
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO his_order_items (order_id, item_type, ref_id, prescription_id, name, unit_price,
-				quantity, line_total, discount_amount, payable)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $8)`,
-			orderID, row.ItemType, row.RefID, row.PrescriptionID, row.Name, row.UnitPrice,
-			row.Quantity, row.LineTotal, row.DiscountAmount); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// recomputeOrderTotals 重算合计（事务内）。
-func recomputeOrderTotals(ctx context.Context, tx pgx.Tx, orderID int64, discountTotal float64) error {
-	var itemsTotal float64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(line_total), 0) FROM his_order_items WHERE order_id = $1`, orderID).Scan(&itemsTotal); err != nil {
-		return err
-	}
-	payable, err := orderPayable(itemsTotal, discountTotal)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-		UPDATE his_orders SET items_total = $2, discount_total = $3, payable_total = $4, updated_at = NOW()
-		WHERE id = $1`, orderID, itemsTotal, discountTotal, payable)
-	return err
+	return insertOrderItemRowsTx(ctx, tx, orderID, rows)
 }
 
 // CreateOrder 划价：该 encounter 已有未结清单（pending/partial）则合并本次行并重算，否则新建。
 // 合并保留单内已有行（检验/检查/挂号费/处方），按 item_type+ref_id+prescription_id 去重；
-// 折扣采用「本次值覆盖」：同一张未结单反复提交（如合并结账、重复点击）不会把优惠叠加。
+// 议价采用「本次值覆盖」：同一张未结单反复提交（如合并结账、重复点击）不会把优惠叠加。
 func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req CreateOrderRequest) (Order, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2623,19 +2615,28 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 	if err != nil {
 		return Order{}, err
 	}
+	identity, rates, err := s.discountContextTx(ctx, tx, tenantID, customerID)
+	if err != nil {
+		return Order{}, err
+	}
+	negotiation, err := normalizeNegotiation(req.Negotiation, req.DiscountTotal, createdBy)
+	if err != nil {
+		return Order{}, err
+	}
 
 	if openID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, req.EncounterID); err != nil {
 		return Order{}, err
 	} else if found {
-		// 覆盖而不是累加：合并/重复提交时 discount_total 以本次入参为准，且不允许为负。
-		discountTotal := req.DiscountTotal
-		if discountTotal < 0 {
-			return Order{}, ErrInvalidRequest
-		}
-		if _, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, discountTotal); err != nil {
+		plan, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, negotiation, rates)
+		if err != nil {
 			return Order{}, err
 		}
-		if err := recomputeOrderTotals(ctx, tx, openID, discountTotal); err != nil {
+		if plan.NegotiationTotal > 0 {
+			if err := s.checkNegotiationPermissionTx(ctx, tx, tenantID, createdBy, plan.ItemsTotal, plan.NegotiationTotal); err != nil {
+				return Order{}, err
+			}
+		}
+		if err := s.recalcOrderPricingTx(ctx, tx, openID); err != nil {
 			return Order{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -2651,16 +2652,29 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 	orderNo := fmt.Sprintf("O%s%04d", time.Now().Format("20060102"), seq)
 	var id int64
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by)
-		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id`,
-		tenantID, customerID, req.EncounterID, orderNo, createdBy).Scan(&id); err != nil {
+		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by,
+			price_identity, negotiation_mode, negotiation_value, negotiation_reason, negotiation_by)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10) RETURNING id`,
+		tenantID, customerID, req.EncounterID, orderNo, createdBy, identity,
+		negotiation.Mode, negotiation.Value, negotiation.Reason, negotiation.By).Scan(&id); err != nil {
 		return Order{}, err
 	}
-	if err := s.replaceOrderItemsTx(ctx, tx, tenantID, req.EncounterID, id, req.Items); err != nil {
+	if err := s.replaceOrderItemsTx(ctx, tx, tenantID, req.EncounterID, id, req.Items, rates); err != nil {
 		return Order{}, err
 	}
-	if err := recomputeOrderTotals(ctx, tx, id, req.DiscountTotal); err != nil {
+	if err := s.recalcOrderPricingTx(ctx, tx, id); err != nil {
 		return Order{}, err
+	}
+	if negotiation.Value > 0 {
+		var itemsTotal, negotiationTotal float64
+		if err := tx.QueryRow(ctx, `
+			SELECT items_total, negotiation_amount FROM his_orders WHERE id = $1`, id).
+			Scan(&itemsTotal, &negotiationTotal); err != nil {
+			return Order{}, err
+		}
+		if err := s.checkNegotiationPermissionTx(ctx, tx, tenantID, createdBy, itemsTotal, negotiationTotal); err != nil {
+			return Order{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, err
@@ -2669,7 +2683,7 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 }
 
 // UpdateOrder 调整收费单（仅 pending）。
-func (s *Store) UpdateOrder(ctx context.Context, tenantID, id int64, req UpdateOrderRequest) (Order, error) {
+func (s *Store) UpdateOrder(ctx context.Context, tenantID, id, employeeID int64, req UpdateOrderRequest) (Order, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Order{}, err
@@ -2677,10 +2691,10 @@ func (s *Store) UpdateOrder(ctx context.Context, tenantID, id int64, req UpdateO
 	defer tx.Rollback(ctx)
 
 	var status string
-	var encounterID int64
+	var encounterID, customerID int64
 	err = tx.QueryRow(ctx, `
-		SELECT status, encounter_id FROM his_orders WHERE tenant_id = $1 AND id = $2
-		FOR UPDATE`, tenantID, id).Scan(&status, &encounterID)
+		SELECT status, encounter_id, customer_id FROM his_orders WHERE tenant_id = $1 AND id = $2
+		FOR UPDATE`, tenantID, id).Scan(&status, &encounterID, &customerID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Order{}, ErrNotFound
@@ -2690,18 +2704,50 @@ func (s *Store) UpdateOrder(ctx context.Context, tenantID, id int64, req UpdateO
 	if status != "pending" {
 		return Order{}, ErrInvalidState
 	}
-	if req.Items != nil {
-		if err := s.replaceOrderItemsTx(ctx, tx, tenantID, encounterID, id, req.Items); err != nil {
+	existingNegotiation, err := loadOrderNegotiationTx(ctx, tx, id)
+	if err != nil {
+		return Order{}, err
+	}
+	negotiation := existingNegotiation
+	if req.Negotiation != nil || req.DiscountTotal != nil {
+		legacy := 0.0
+		if req.DiscountTotal != nil {
+			legacy = *req.DiscountTotal
+		}
+		negotiation, err = normalizeNegotiation(req.Negotiation, legacy, employeeID)
+		if err != nil {
 			return Order{}, err
 		}
 	}
-	var discountTotal float64
-	_ = tx.QueryRow(ctx, `SELECT discount_total FROM his_orders WHERE id = $1`, id).Scan(&discountTotal)
-	if req.DiscountTotal != nil {
-		discountTotal = *req.DiscountTotal
-	}
-	if err := recomputeOrderTotals(ctx, tx, id, discountTotal); err != nil {
+	identity, rates, err := s.discountContextTx(ctx, tx, tenantID, customerID)
+	if err != nil {
 		return Order{}, err
+	}
+	if req.Items != nil {
+		if err := s.replaceOrderItemsTx(ctx, tx, tenantID, encounterID, id, req.Items, rates); err != nil {
+			return Order{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE his_orders SET price_identity = $2 WHERE id = $1`, id, identity); err != nil {
+			return Order{}, err
+		}
+	}
+	if err := setOrderNegotiationTx(ctx, tx, id, negotiation); err != nil {
+		return Order{}, err
+	}
+	if err := s.recalcOrderPricingTx(ctx, tx, id); err != nil {
+		return Order{}, err
+	}
+	var itemsTotal, negotiationTotal float64
+	if err := tx.QueryRow(ctx, `
+		SELECT items_total, negotiation_amount FROM his_orders WHERE id = $1`, id).
+		Scan(&itemsTotal, &negotiationTotal); err != nil {
+		return Order{}, err
+	}
+	if negotiationTotal > 0 {
+		if err := s.checkNegotiationPermissionTx(ctx, tx, tenantID, employeeID, itemsTotal, negotiationTotal); err != nil {
+			return Order{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, err

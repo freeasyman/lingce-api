@@ -13,7 +13,8 @@ import (
 // 规则：
 //   - 开检验/检查：有未结清单则追加收费行（保留原行），否则新建；
 //   - 收费台划价：有未结清单则把本次表单行合并进来后重算应收，否则新建；
-//   - 合并按 item_type + ref_id + prescription_id 去重，已有行保留下单时的价格快照。
+//   - 合并按 item_type + ref_id + prescription_id 去重，已有行保留下单时的价格/身份折率快照；
+//   - 议价为整单覆盖值，每次合并/调整都按整单可折行重新分摊。
 
 // orderItemKey 收费行去重键。挂号费没有 ref_id/prescription_id，天然按单行去重。
 type orderItemKey struct {
@@ -35,7 +36,7 @@ func orderItemRowKey(row orderItemRow) orderItemKey {
 }
 
 // mergeOrderItemRows 返回本次需要新增的行：跳过已在单内的行，也跳过本次入参内部的重复行。
-// 已有行的价格/数量快照不覆盖（避免字典改价后重算历史行）。
+// 已有行的价格/数量/身份折率快照不覆盖（避免字典改价后重算历史行）。
 func mergeOrderItemRows(existing, incoming []orderItemRow) []orderItemRow {
 	seen := make(map[orderItemKey]struct{}, len(existing)+len(incoming))
 	for _, row := range existing {
@@ -53,36 +54,73 @@ func mergeOrderItemRows(existing, incoming []orderItemRow) []orderItemRow {
 	return insertRows
 }
 
-// orderRowsTotal 行合计（his_order_items.line_total 已是扣除行优惠后的金额）。
+// orderItemRowOriginal 原价：优先用已落库快照，其次单价×数量，最后回退折后+折扣。
+func orderItemRowOriginal(row orderItemRow) float64 {
+	if row.OriginalTotal > 0 {
+		return row.OriginalTotal
+	}
+	if row.UnitPrice > 0 && row.Quantity > 0 {
+		return discountMoney(row.UnitPrice * row.Quantity)
+	}
+	return discountMoney(row.LineTotal + row.DiscountAmount)
+}
+
+// orderRowsTotal 行合计（原价合计，折扣未扣）。
 func orderRowsTotal(rows []orderItemRow) float64 {
 	total := 0.0
-	for _, row := range rows {
-		total += row.LineTotal
+	for index := range rows {
+		total += orderItemRowOriginal(rows[index])
 	}
-	return total
+	return discountMoney(total)
 }
 
-// orderMergePlan 合并结果：需要新增的行 + 合并后的项目合计/应收。
+// orderMergePlan 合并结果：需要新增的行 + 全部行（含议价重算结果）+ 合并后金额。
 type orderMergePlan struct {
-	InsertRows   []orderItemRow
-	ItemsTotal   float64
-	PayableTotal float64
+	InsertRows       []orderItemRow
+	Rows             []orderItemRow
+	ItemsTotal       float64
+	IdentityDiscount float64
+	NegotiationTotal float64
+	PayableTotal     float64
 }
 
-// planOrderMerge 合并已有行与本次行并重算金额（纯逻辑，便于单测）。
+// planOrderMergeWithNegotiation 合并已有行与本次行并按整单重新分摊议价。
 // existing 为空即「无未结清单」路径：全部入参行都新增。
-func planOrderMerge(existing, incoming []orderItemRow, discountTotal float64) (orderMergePlan, error) {
+func planOrderMergeWithNegotiation(existing, incoming []orderItemRow, mode string, value float64) (orderMergePlan, error) {
+	if value < 0 {
+		return orderMergePlan{}, ErrInvalidRequest
+	}
 	insertRows := mergeOrderItemRows(existing, incoming)
-	itemsTotal := orderRowsTotal(existing) + orderRowsTotal(insertRows)
-	payable, err := orderPayable(itemsTotal, discountTotal)
+	rows := make([]orderItemRow, 0, len(existing)+len(insertRows))
+	rows = append(rows, existing...)
+	rows = append(rows, insertRows...)
+	for index := range rows {
+		rows[index].OriginalTotal = orderItemRowOriginal(rows[index])
+		if rows[index].IdentityRate <= 0 {
+			rows[index].IdentityRate = 1
+		}
+	}
+	negotiationTotal, err := applyNegotiation(rows, mode, value)
 	if err != nil {
 		return orderMergePlan{}, err
 	}
 	return orderMergePlan{
-		InsertRows:   insertRows,
-		ItemsTotal:   itemsTotal,
-		PayableTotal: payable,
+		InsertRows:       rows[len(existing):],
+		Rows:             rows,
+		ItemsTotal:       orderRowsTotal(rows),
+		IdentityDiscount: orderRowsIdentityDiscount(rows),
+		NegotiationTotal: negotiationTotal,
+		PayableTotal:     orderRowsPayable(rows),
 	}, nil
+}
+
+// planOrderMerge 兼容旧签名：第三个参数视为 amount 模式议价金额。
+func planOrderMerge(existing, incoming []orderItemRow, discountTotal float64) (orderMergePlan, error) {
+	mode := ""
+	if discountTotal > 0 {
+		mode = negotiationModeAmount
+	}
+	return planOrderMergeWithNegotiation(existing, incoming, mode, discountTotal)
 }
 
 // findOpenOrderTx 读取该 encounter 最近的未结清单并锁行（pending/partial）。
@@ -114,10 +152,11 @@ func (s *Store) findOpenOrderTx(ctx context.Context, q querier, tenantID, encoun
 	return orderID, true, nil
 }
 
-// loadOrderItemRowsTx 读取已落库的收费行（保留原始价格快照）。
+// loadOrderItemRowsTx 读取已落库的收费行（保留原始价格与身份折率快照）。
 func (s *Store) loadOrderItemRowsTx(ctx context.Context, q querier, orderID int64) ([]orderItemRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT item_type, ref_id, prescription_id, name, unit_price, quantity, discount_amount, line_total
+		SELECT id, item_type, ref_id, prescription_id, name, category,
+		       unit_price, quantity, identity_rate, discount_amount, negotiation_amount, line_total
 		FROM his_order_items WHERE order_id = $1 ORDER BY id`, orderID)
 	if err != nil {
 		return nil, err
@@ -127,28 +166,127 @@ func (s *Store) loadOrderItemRowsTx(ctx context.Context, q querier, orderID int6
 	items := make([]orderItemRow, 0)
 	for rows.Next() {
 		var row orderItemRow
-		if err := rows.Scan(&row.ItemType, &row.RefID, &row.PrescriptionID, &row.Name, &row.UnitPrice,
-			&row.Quantity, &row.DiscountAmount, &row.LineTotal); err != nil {
+		if err := rows.Scan(&row.ID, &row.ItemType, &row.RefID, &row.PrescriptionID, &row.Name, &row.Category,
+			&row.UnitPrice, &row.Quantity, &row.IdentityRate, &row.DiscountAmount, &row.NegotiationAmount,
+			&row.LineTotal); err != nil {
 			return nil, err
 		}
+		row.OriginalTotal = discountMoney(row.UnitPrice * row.Quantity)
 		items = append(items, row)
 	}
 	return items, rows.Err()
 }
 
-// insertOrderItemRowsTx 落库新增收费行（line_total 与 payable 均为行优惠后金额，与划价一致）。
+// insertOrderItemRowsTx 落库新增收费行（payable/line_total 为折后金额）。
 func insertOrderItemRowsTx(ctx context.Context, tx pgx.Tx, orderID int64, rows []orderItemRow) error {
 	for _, row := range rows {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO his_order_items (order_id, item_type, ref_id, prescription_id, name, unit_price,
-				quantity, line_total, discount_amount, payable)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $8)`,
-			orderID, row.ItemType, row.RefID, row.PrescriptionID, row.Name, row.UnitPrice,
-			row.Quantity, row.LineTotal, row.DiscountAmount); err != nil {
+			INSERT INTO his_order_items (order_id, item_type, ref_id, prescription_id, name, category,
+				unit_price, quantity, identity_rate, line_total, discount_amount, negotiation_amount, payable)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10)`,
+			orderID, row.ItemType, row.RefID, row.PrescriptionID, row.Name, row.Category,
+			row.UnitPrice, row.Quantity, row.IdentityRate, row.LineTotal, row.DiscountAmount,
+			row.NegotiationAmount); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// updateOrderItemAmountsTx 更新已落库行的身份折扣/议价/应收（价格与数量快照不变）。
+func updateOrderItemAmountsTx(ctx context.Context, tx pgx.Tx, rows []orderItemRow) error {
+	for _, row := range rows {
+		if row.ID <= 0 {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE his_order_items
+			SET category = $2, identity_rate = $3, discount_amount = $4,
+			    negotiation_amount = $5, line_total = $6, payable = $6
+			WHERE id = $1`,
+			row.ID, row.Category, row.IdentityRate, row.DiscountAmount,
+			row.NegotiationAmount, row.LineTotal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// orderNegotiation 收费单上的议价快照。
+type orderNegotiation struct {
+	Mode   string
+	Value  float64
+	Reason string
+	By     *int64
+}
+
+// loadOrderNegotiationTx 读取收费单议价快照。
+func loadOrderNegotiationTx(ctx context.Context, q querier, orderID int64) (orderNegotiation, error) {
+	var negotiation orderNegotiation
+	err := q.QueryRow(ctx, `
+		SELECT negotiation_mode, negotiation_value, negotiation_reason, negotiation_by
+		FROM his_orders WHERE id = $1`, orderID).
+		Scan(&negotiation.Mode, &negotiation.Value, &negotiation.Reason, &negotiation.By)
+	return negotiation, err
+}
+
+// recalcOrderPricingTx 重新分摊议价并回写行/单金额（事务内）。
+// 行身份折率为下单快照，不随身份变更回溯。
+func (s *Store) recalcOrderPricingTx(ctx context.Context, tx pgx.Tx, orderID int64) error {
+	negotiation, err := loadOrderNegotiationTx(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	rows, err := s.loadOrderItemRowsTx(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	for index := range rows {
+		rows[index].OriginalTotal = orderItemRowOriginal(rows[index])
+		if rows[index].IdentityRate <= 0 {
+			rows[index].IdentityRate = 1
+		}
+	}
+	// 释放/合并导致可折行减少时，按剩余可折行收口金额议价，避免历史议价卡死后续操作。
+	if negotiation.Mode == negotiationModeAmount && negotiation.Value > 0 {
+		base := 0.0
+		for _, row := range rows {
+			if isNegotiableCategory(row.Category) {
+				base += discountMoney(row.OriginalTotal - row.DiscountAmount)
+			}
+		}
+		if negotiation.Value > base {
+			negotiation.Value = discountMoney(base)
+			if err := setOrderNegotiationTx(ctx, tx, orderID, negotiation); err != nil {
+				return err
+			}
+		}
+	}
+	negotiationTotal, err := applyNegotiation(rows, negotiation.Mode, negotiation.Value)
+	if err != nil {
+		return err
+	}
+	if err := updateOrderItemAmountsTx(ctx, tx, rows); err != nil {
+		return err
+	}
+	itemsTotal := orderRowsTotal(rows)
+	identityDiscount := orderRowsIdentityDiscount(rows)
+	discountTotal := discountMoney(identityDiscount + negotiationTotal)
+	payable := orderRowsPayable(rows)
+	_, err = tx.Exec(ctx, `
+		UPDATE his_orders SET items_total = $2, identity_discount_total = $3,
+			negotiation_amount = $4, discount_total = $5, payable_total = $6, updated_at = NOW()
+		WHERE id = $1`, orderID, itemsTotal, identityDiscount, negotiationTotal, discountTotal, payable)
+	return err
+}
+
+// setOrderNegotiationTx 覆盖写收费单议价快照。
+func setOrderNegotiationTx(ctx context.Context, tx pgx.Tx, orderID int64, negotiation orderNegotiation) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE his_orders SET negotiation_mode = $2, negotiation_value = $3,
+			negotiation_reason = $4, negotiation_by = $5, updated_at = NOW()
+		WHERE id = $1`, orderID, negotiation.Mode, negotiation.Value, negotiation.Reason, negotiation.By)
+	return err
 }
 
 // mergeOpenOrderItemsTx 把本次表单行合并进未结清单：已有行保留，新行去重后追加。
@@ -157,7 +295,8 @@ func (s *Store) mergeOpenOrderItemsTx(
 	tx pgx.Tx,
 	tenantID, encounterID, orderID int64,
 	inputs []OrderLineInput,
-	discountTotal float64,
+	negotiation orderNegotiation,
+	rates map[string]float64,
 ) (orderMergePlan, error) {
 	existing, err := s.loadOrderItemRowsTx(ctx, tx, orderID)
 	if err != nil {
@@ -165,15 +304,22 @@ func (s *Store) mergeOpenOrderItemsTx(
 	}
 	incoming, err := buildOrderItemRows(inputs, func(input OrderLineInput) (resolvedLine, error) {
 		return s.resolveOrderLine(ctx, tx, tenantID, encounterID, input)
-	})
+	}, rates)
 	if err != nil {
 		return orderMergePlan{}, err
 	}
-	plan, err := planOrderMerge(existing, incoming, discountTotal)
+	plan, err := planOrderMergeWithNegotiation(existing, incoming, negotiation.Mode, negotiation.Value)
 	if err != nil {
 		return orderMergePlan{}, err
 	}
 	if err := insertOrderItemRowsTx(ctx, tx, orderID, plan.InsertRows); err != nil {
+		return orderMergePlan{}, err
+	}
+	// 已有行的议价分摊/应收可能因合并而变化，回写非插入行。
+	if err := updateOrderItemAmountsTx(ctx, tx, plan.Rows[:len(existing)]); err != nil {
+		return orderMergePlan{}, err
+	}
+	if err := setOrderNegotiationTx(ctx, tx, orderID, negotiation); err != nil {
 		return orderMergePlan{}, err
 	}
 	return plan, nil
@@ -191,6 +337,15 @@ func (s *Store) appendOrCreatePendingChargeOrderLinesTx(
 		return 0, ErrInvalidRequest
 	}
 
+	identity, rates, err := s.discountContextTx(ctx, tx, tenantID, customerID)
+	if err != nil {
+		return 0, err
+	}
+	for index := range lines {
+		lines[index].Category = discountCategoryForLine(lines[index].ItemType, lines[index].Category)
+	}
+	applyIdentityPricingToRows(lines, rates)
+
 	orderID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, encounterID)
 	if err != nil {
 		return 0, err
@@ -199,16 +354,7 @@ func (s *Store) appendOrCreatePendingChargeOrderLinesTx(
 		if err := insertOrderItemRowsTx(ctx, tx, orderID, lines); err != nil {
 			return 0, err
 		}
-		var discountTotal float64
-		if err := tx.QueryRow(ctx, `
-			SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
-			tenantID, orderID).Scan(&discountTotal); err != nil {
-			return 0, err
-		}
-		if err := recomputeOrderTotals(ctx, tx, orderID, discountTotal); err != nil {
-			return 0, err
-		}
-		return orderID, nil
+		return orderID, s.recalcOrderPricingTx(ctx, tx, orderID)
 	}
 
 	seq, err := nextNumber(ctx, tx, tenantID, "order")
@@ -217,15 +363,15 @@ func (s *Store) appendOrCreatePendingChargeOrderLinesTx(
 	}
 	orderNo := fmt.Sprintf("O%s%04d", time.Now().Format("20060102"), seq)
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by)
-		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id`,
-		tenantID, customerID, encounterID, orderNo, createdBy).Scan(&orderID); err != nil {
+		INSERT INTO his_orders (tenant_id, customer_id, encounter_id, order_no, status, created_by, price_identity)
+		VALUES ($1, $2, $3, $4, 'pending', $5, $6) RETURNING id`,
+		tenantID, customerID, encounterID, orderNo, createdBy, identity).Scan(&orderID); err != nil {
 		return 0, err
 	}
 	if err := insertOrderItemRowsTx(ctx, tx, orderID, lines); err != nil {
 		return 0, err
 	}
-	if err := recomputeOrderTotals(ctx, tx, orderID, 0); err != nil {
+	if err := s.recalcOrderPricingTx(ctx, tx, orderID); err != nil {
 		return 0, err
 	}
 	return orderID, nil
