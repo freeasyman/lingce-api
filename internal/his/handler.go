@@ -113,6 +113,19 @@ func (h *Handler) requireModule(w http.ResponseWriter, r *http.Request, tenantID
 	return true
 }
 
+// requireDictionary 字典维护权限（收费项目/药品/材料写操作与导入提交）。
+func (h *Handler) requireDictionary(w http.ResponseWriter, r *http.Request, tenantID, employeeID int64) bool {
+	if err := h.service.RequireDictionary(r.Context(), tenantID, employeeID); err != nil {
+		if errors.Is(err, ErrDictionaryForbidden) {
+			httputil.WriteForbidden(w, "无字典维护权限")
+			return false
+		}
+		httputil.WriteInternalError(w, "failed to check dictionary permission")
+		return false
+	}
+	return true
+}
+
 func (h *Handler) requireHisRole(w http.ResponseWriter, r *http.Request, tenantID, employeeID int64, roles ...string) bool {
 	if err := h.service.RequireRole(r.Context(), tenantID, employeeID, roles...); err != nil {
 		if err == ErrForbiddenRole {
@@ -221,6 +234,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		httputil.WriteBadRequest(w, "管理员固定拥有全部模块，不可修改")
 	case ErrForbiddenRole:
 		httputil.WriteForbidden(w, "当前角色无权执行该操作")
+	case ErrDictionaryForbidden:
+		httputil.WriteForbidden(w, "无字典维护权限")
 	case ErrInvalidDateRange, ErrInvalidWorkbenchDate:
 		httputil.WriteBadRequest(w, err.Error())
 	default:
@@ -592,7 +607,7 @@ func (h *Handler) CreateDrug(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
 		return
 	}
 	var req CreateDrugRequest
@@ -613,7 +628,7 @@ func (h *Handler) UpdateDrug(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -669,7 +684,7 @@ func (h *Handler) CreateChargeItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
 		return
 	}
 	var req CreateChargeItemRequest
@@ -690,7 +705,7 @@ func (h *Handler) UpdateChargeItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")
@@ -733,7 +748,7 @@ func (h *Handler) UpdateChargeItemLinks(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if !h.requireHisRole(w, r, tenantID, claims.UserID, "admin") {
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id")

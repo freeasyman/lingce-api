@@ -1137,10 +1137,11 @@ type UpdateEmployeeStatusRequest struct {
 	IsActive *bool `json:"is_active"`
 }
 
-// ICDDiagnosis ICD-10 诊断目录条目（工作站诊断检索）。
+// ICDDiagnosis ICD-10 诊断目录条目（工作站诊断检索 / 字典中心只读视图）。
 type ICDDiagnosis struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
 }
 
 // TemplateField 模板字段（复用 emr_fields / emr_template_fields，HIS 只读）。

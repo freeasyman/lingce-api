@@ -60,6 +60,9 @@ var ErrSignatureMismatch = errors.New("signature mismatch")
 // ErrForbiddenRole 表示员工没有执行该操作的角色权限。
 var ErrForbiddenRole = errors.New("forbidden role")
 
+// ErrDictionaryForbidden 表示员工没有字典维护权限（role_modules 中的 dictionary 权限点）。
+var ErrDictionaryForbidden = errors.New("forbidden dictionary maintenance")
+
 // ErrPurchaseAlreadyReceived 表示采购单已经收货入库，不能重复收货。
 var ErrPurchaseAlreadyReceived = errors.New("purchase order already received")
 
@@ -1543,6 +1546,29 @@ func (s *Service) RequireModule(ctx context.Context, tenantID, employeeID int64,
 		}
 	}
 	return ErrForbiddenRole
+}
+
+// RequireDictionary 字典维护权限校验（收费项目/药品/材料写操作与导入提交）。
+// 口径比 RequireModule 更严格：管理员直通；其他角色必须在 role_modules 中显式拥有
+// dictionary（默认模板不给其他角色），租户未配置角色时不享受首用放行。
+func (s *Service) RequireDictionary(ctx context.Context, tenantID, employeeID int64) error {
+	has, err := s.store.HasAnyRole(ctx, tenantID, employeeID, "admin")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	modules, err := s.store.ModulesForEmployee(ctx, tenantID, employeeID)
+	if err != nil {
+		return err
+	}
+	for _, item := range modules {
+		if item == "dictionary" {
+			return nil
+		}
+	}
+	return ErrDictionaryForbidden
 }
 
 // ModulesForEmployee 员工可见模块（角色并集，admin 全量）。

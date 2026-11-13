@@ -27,8 +27,8 @@ func TestHISRoleAndModuleCatalogs(t *testing.T) {
 	}
 
 	modules := HISModules()
-	if len(modules) != 13 {
-		t.Fatalf("modules len = %d, want 13: %v", len(modules), modules)
+	if len(modules) != 14 {
+		t.Fatalf("modules len = %d, want 14 (13 nav + dictionary): %v", len(modules), modules)
 	}
 	seenModules := map[string]bool{}
 	for _, module := range modules {
@@ -42,6 +42,9 @@ func TestHISRoleAndModuleCatalogs(t *testing.T) {
 	}
 	if !seenModules["pharmacy"] || !seenModules["admin"] {
 		t.Fatalf("module catalog must use HIS nav ids, got %v", modules)
+	}
+	if !seenModules["dictionary"] {
+		t.Fatalf("module catalog must include dictionary permission point, got %v", modules)
 	}
 }
 
@@ -58,6 +61,14 @@ func TestNormalizeRoleModules(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("modules = %v, want %v（按模块目录排序并去重）", got, want)
 		}
+	}
+
+	withDictionary, err := normalizeRoleModules("doctor", []string{"dictionary", "home"})
+	if err != nil {
+		t.Fatalf("dictionary should be assignable: %v", err)
+	}
+	if len(withDictionary) != 2 || withDictionary[0] != "home" || withDictionary[1] != "dictionary" {
+		t.Fatalf("modules = %v, want [home dictionary]", withDictionary)
 	}
 
 	cases := []struct {
@@ -103,8 +114,8 @@ func TestBuildRoleModuleConfig(t *testing.T) {
 	if got := config["other"]; len(got) != 1 || got[0] != "stats" {
 		t.Fatalf("other = %v, want [stats]（未知模块被丢弃）", got)
 	}
-	if got := config["admin"]; len(got) != 13 {
-		t.Fatalf("admin modules = %v, want all 13", got)
+	if got := config["admin"]; len(got) != 14 {
+		t.Fatalf("admin modules = %v, want all 14 (13 nav + dictionary)", got)
 	}
 	if _, ok := config["chief"]; !ok {
 		t.Fatalf("config must include all 9 roles, missing chief")

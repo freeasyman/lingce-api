@@ -65,8 +65,8 @@ func TestIntegrationRoleModuleTenantOverride(t *testing.T) {
 	if got := config["nurse"]; !containsString(got, "execute") {
 		t.Fatalf("config nurse = %v, want default template", got)
 	}
-	if got := config["admin"]; len(got) != 13 {
-		t.Fatalf("config admin = %v, want all 13 modules", got)
+	if got := config["admin"]; len(got) != 14 {
+		t.Fatalf("config admin = %v, want all 14 modules (13 nav + dictionary)", got)
 	}
 
 	if _, err := svc.UpdateRoleModules(ctx, tenantID, "admin", []string{"home"}); !errors.Is(err, ErrAdminRoleLocked) {
@@ -80,6 +80,34 @@ func TestIntegrationRoleModuleTenantOverride(t *testing.T) {
 	}
 	if _, err := svc.UpdateRoleModules(ctx, tenantID, "doctor", nil); !errors.Is(err, ErrEmptyRoleModules) {
 		t.Fatalf("empty modules err = %v, want ErrEmptyRoleModules", err)
+	}
+}
+
+// dictionary 是独立权限点：默认只有管理员有，租户可在角色模块里显式授予其他角色。
+func TestIntegrationDictionaryPermission(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	const tenantID, employeeID = int64(1), int64(10)
+
+	if err := svc.UpdateStaffRoles(ctx, tenantID, employeeID, []string{"doctor"}); err != nil {
+		t.Fatalf("assign doctor role: %v", err)
+	}
+	if err := svc.RequireDictionary(ctx, tenantID, employeeID); !errors.Is(err, ErrDictionaryForbidden) {
+		t.Fatalf("doctor without dictionary err = %v, want ErrDictionaryForbidden", err)
+	}
+
+	if _, err := svc.UpdateRoleModules(ctx, tenantID, "doctor", []string{"home", "dictionary"}); err != nil {
+		t.Fatalf("grant dictionary: %v", err)
+	}
+	if err := svc.RequireDictionary(ctx, tenantID, employeeID); err != nil {
+		t.Fatalf("doctor with dictionary should pass: %v", err)
+	}
+
+	if err := svc.UpdateStaffRoles(ctx, tenantID, employeeID, []string{"admin"}); err != nil {
+		t.Fatalf("assign admin role: %v", err)
+	}
+	if err := svc.RequireDictionary(ctx, tenantID, employeeID); err != nil {
+		t.Fatalf("admin should always pass: %v", err)
 	}
 }
 

@@ -12,9 +12,11 @@ var hisRoleOrder = []string{
 	"labtech", "checktech", "chief", "other",
 }
 
+// dictionary 是权限点而不是导航模块：占 role_modules 一行（可在角色与模块里分配），
+// 但不进入 HIS 前端导航（apps/his/src/nav.ts 仍只有 13 个导航模块）。
 var hisModuleOrder = []string{
 	"home", "register", "clinic", "billing", "pharmacy", "execute", "lab",
-	"check", "inventory", "purchase", "patients", "stats", "admin",
+	"check", "inventory", "purchase", "patients", "stats", "admin", "dictionary",
 }
 
 var hisRoleSet = func() map[string]bool {
@@ -49,7 +51,7 @@ func HISRoles() []string {
 	return out
 }
 
-// HISModules 返回 13 个模块的副本（管理页展示用）。
+// HISModules 返回全部 14 个模块/权限点副本（13 导航模块 + dictionary 权限点）。
 func HISModules() []string {
 	out := make([]string, len(hisModuleOrder))
 	copy(out, hisModuleOrder)
@@ -57,7 +59,7 @@ func HISModules() []string {
 }
 
 // normalizeRoleModules 校验并规范化「角色 → 模块」覆盖配置。
-// 角色必须是 9 角色之一；module 必须是 13 模块之一；去重后按模块目录顺序返回。
+// 角色必须是 9 角色之一；module 必须是 14 个模块/权限点之一；去重后按模块目录顺序返回。
 // admin 是超级角色，固定拥有全部模块，不允许通过配置修改。
 // 空集合无法用当前表结构表达“显式无权限”（删除租户行会回退默认模板），因此拒绝。
 func normalizeRoleModules(role string, modules []string) ([]string, error) {

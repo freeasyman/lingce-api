@@ -154,6 +154,9 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireDictionary(w, r, tenantID, claims.UserID) {
+		return
+	}
 	var req ImportCommitRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "导入参数格式不正确")

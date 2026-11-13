@@ -3851,7 +3851,8 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 		return []ICDDiagnosis{}, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT c.diagnosis_code, c.diagnosis_name
+		SELECT c.diagnosis_code, c.diagnosis_name,
+		       COALESCE(NULLIF(c.category_name, ''), NULLIF(c.chapter_name, ''), '')
 		FROM emr_icd10_diagnosis_catalog c
 		LEFT JOIN his_icd10_pinyin py ON py.catalog_id = c.id
 		WHERE c.is_active
@@ -3874,7 +3875,7 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 	items := make([]ICDDiagnosis, 0, limit)
 	for rows.Next() {
 		var item ICDDiagnosis
-		if err := rows.Scan(&item.Code, &item.Name); err != nil {
+		if err := rows.Scan(&item.Code, &item.Name, &item.Category); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
