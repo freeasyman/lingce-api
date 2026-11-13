@@ -146,6 +146,20 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 			// 只展示就诊过程元信息：谁接待、是否完成、录音是否归档。
 			// 不展示转写、诊断、主诉等医疗内容。
 			actor := firstNonEmpty(asString(item["employee_name"]), "待补充")
+			department := strings.TrimSpace(asString(item["department_name"]))
+			if department != "" {
+				summary := fmt.Sprintf("%s：%s（%s） · 录音已归档", actorLabel, actor, department)
+				if strings.EqualFold(asString(item["status"]), "completed") {
+					summary += " · 已完成"
+				}
+				appendEvent(CustomerTimelineEvent{
+					ID: fmt.Sprintf("recording-%s", recordingID), EventType: "recording.visit",
+					Scene: scene, OccurredAt: occurred, Title: title,
+					Summary: summary, Source: "录音归档", Sensitivity: "L2", Actor: actor,
+				})
+				recordingEventIDs[recordingID] = true
+				continue
+			}
 			summary := fmt.Sprintf("%s：%s · 录音已归档", actorLabel, actor)
 			if strings.EqualFold(asString(item["status"]), "completed") {
 				summary += " · 已完成"
