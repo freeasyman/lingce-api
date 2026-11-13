@@ -1,6 +1,9 @@
 package his
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -71,5 +74,26 @@ func TestTemplateUnavailableErrorMessage(t *testing.T) {
 	var nilErr *TemplateUnavailableError
 	if nilErr.Error() == "" {
 		t.Fatal("nil TemplateUnavailableError 也应返回可读文案")
+	}
+}
+
+// 模板不可用必须是 400 + 明确 message（不能落成 500）。
+func TestWriteServiceErrorTemplateUnavailable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeServiceError(rec, &TemplateUnavailableError{
+		Message: "未找到可用病历模板（科室模板与标准门急诊病历均不可用），请联系管理员检查模板发布状态",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Code != "BAD_REQUEST" || body.Message == "" || !strings.Contains(body.Message, "未找到可用病历模板") {
+		t.Fatalf("body = %+v", body)
 	}
 }
