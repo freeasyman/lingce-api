@@ -41,14 +41,16 @@ func formatComplianceRate(value float64) string {
 
 // ReportInput 导出接口入参。
 type ReportInput struct {
-	TenantID int64       `json:"tenant_id"`
-	Tenant   string      `json:"tenant"`
-	Period   string      `json:"period"`
-	Range    string      `json:"period_range"`
-	DocNo    string      `json:"doc_no"`
-	Org      string      `json:"org"`
-	DateLine string      `json:"date_line"`
-	Stats    ReportStats `json:"stats"`
+	TenantID int64  `json:"tenant_id"`
+	Tenant   string `json:"tenant"`
+	Period   string `json:"period"`
+	Range    string `json:"period_range"`
+	DocNo    string `json:"doc_no"`
+	Org      string `json:"org"`
+	DateLine string `json:"date_line"`
+	// Masked 为 true 时输出脱敏示例报告：数值一律 X，人名/科室/日期按示例口径渲染。
+	Masked bool        `json:"masked"`
+	Stats  ReportStats `json:"stats"`
 }
 
 // ReportTable 表格。
@@ -73,7 +75,54 @@ type llmReport struct {
 
 const reportPromptCode = "compliance_monthly_report_v1"
 
+var reportDigitPattern = regexp.MustCompile(`\d+(?:\.\d+)?`)
+
+func maskReportDigits(value string) string {
+	return reportDigitPattern.ReplaceAllString(value, "X")
+}
+
+func maskReportDepartment(value string) string {
+	if strings.HasSuffix(strings.TrimSpace(value), "部") {
+		return "某某部"
+	}
+	return "某某科"
+}
+
+// deterministicMaskedSections 是脱敏示例报告的固定模板：不读真实数值，也不交给生成式模型。
+func deterministicMaskedSections(in ReportInput) []ReportSection {
+	s := in.Stats
+	ruleRows := make([][]string, 0, len(s.RuleRows))
+	for _, r := range s.RuleRows {
+		ruleRows = append(ruleRows, []string{maskReportDigits(fmt.Sprint(r[0])), "X"})
+	}
+	deptRows := make([][]string, 0, len(s.DeptRows))
+	for _, r := range s.DeptRows {
+		deptRows = append(deptRows, []string{maskReportDepartment(fmt.Sprint(r[0])), "X"})
+	}
+	fatalRows := make([][]string, 0, len(s.FatalRows))
+	for _, r := range s.FatalRows {
+		status := maskReportDigits(strings.TrimSpace(fmt.Sprint(r[3])))
+		if status == "" {
+			status = "待核查"
+		}
+		fatalRows = append(fatalRows, []string{"某某某", maskReportDepartment(fmt.Sprint(r[1])), maskReportDigits(fmt.Sprint(r[2])), status})
+	}
+	return []ReportSection{
+		{Heading: "一、总体情况", Paragraphs: []string{"本月共核查接诊 X 次，发现合规问题 X 项，其中重大风险 X 项、一般风险 X 项、培训建议 X 项；存在问题的接诊 X 次，重点行为合规率 X%。总体看，问题以话术类为主，重大风险数量不多但性质更敏感，需要优先处理。"},
+			Table: &ReportTable{Columns: []string{"指标", "数值"}, Rows: [][]string{{"核查接诊", "X 次"}, {"发现合规问题", "X 项"}, {"其中重大风险", "X 项"}, {"重点行为合规率", "X%"}}}},
+		{Heading: "二、主要问题", Paragraphs: []string{"问题结构呈“一头集中、长尾分散”的形态：无法核验的数据引用与绝对化表述构成主要风险，多发生在咨询与术后说明环节，实质是缺少可核验依据的疗效背书。"}, Table: &ReportTable{Columns: []string{"规则", "条数"}, Rows: ruleRows}},
+		{Heading: "三、科室分布", Paragraphs: []string{"问题集中在某某科与某某部：科室承担咨询与成交环节，话术密度最高；术后说明与效果表述类问题性质以“说得过满”为主。"}, Table: &ReportTable{Columns: []string{"科室", "条数"}, Rows: deptRows}},
+		{Heading: "四、重大风险处置", Paragraphs: []string{"本月重大风险 X 项，均已生成核查事项并逐条核实；处理结果将在下月报告中体现。"}, Table: &ReportTable{Columns: []string{"人员", "科室", "问题", "状态"}, Rows: fatalRows}},
+		{Heading: "五、原因分析", Paragraphs: []string{"一是话术口径不统一，缺少统一表述模板；二是引用本院数据时缺少出处与口径意识；三是一线对隐私边界缺少明确规则。"}},
+		{Heading: "六、整改建议", Paragraphs: []string{"统一话术口径、以典型原话做专项培训、明确隐私边界并纳入日常检查。"}},
+		{Heading: "七、下一步工作", Paragraphs: []string{"完成本月重大风险事项的核实与处理，开展专项话术培训，持续完善资质台账。"}},
+	}
+}
+
 func deterministicSections(in ReportInput) []ReportSection {
+	if in.Masked {
+		return deterministicMaskedSections(in)
+	}
 	s := in.Stats
 	ruleRows := make([][]string, 0, len(s.RuleRows))
 	for _, r := range s.RuleRows {
@@ -268,6 +317,11 @@ func (s *Service) generateWithPrompt(ctx context.Context, in ReportInput) (*llmR
 
 // ExportMonthlyReportDocx 优先生成式撰写，失败回退模板式。
 func (s *Service) ExportMonthlyReportDocx(ctx context.Context, in ReportInput) ([]byte, string, string, error) {
+	// 脱敏示例报告固定走模板渲染：生成式模型可能把真实数值/人名写回来，不能用于脱敏口径。
+	if in.Masked {
+		b, err := BuildReportDocx(in)
+		return b, "", "masked", err
+	}
 	if r, version, err := s.generateWithPrompt(ctx, in); err == nil {
 		title := r.Title
 		if strings.TrimSpace(title) == "" {
