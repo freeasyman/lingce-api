@@ -24,6 +24,10 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 		args = append(args, "%"+keyword+"%")
 		conditions += fmt.Sprintf(` AND (COALESCE(c.name, '') ILIKE $%d OR COALESCE(e.full_name, e.name, '') ILIKE $%d OR r.analysis_result::text ILIKE $%d)`, len(args), len(args), len(args))
 	}
+	if params.CustomerID != nil && *params.CustomerID > 0 {
+		args = append(args, *params.CustomerID)
+		conditions += fmt.Sprintf(" AND r.customer_id = $%d", len(args))
+	}
 	if params.DateFrom != nil {
 		args = append(args, *params.DateFrom)
 		conditions += fmt.Sprintf(" AND r.recorded_at >= $%d", len(args))

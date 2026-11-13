@@ -35,6 +35,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/patient-operations/screenshots/{id}/actions/generate", Handler: h.GenerateScreenshotActionAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/sources", Handler: h.ListCustomerSources, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/encounters", Handler: h.ListCustomerEncounters, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/timeline", Handler: h.CustomerTimeline, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/records", Handler: h.ListOperationRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/tasks", Handler: h.ListCustomerTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/task-summary", Handler: h.ListCustomerTaskSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},

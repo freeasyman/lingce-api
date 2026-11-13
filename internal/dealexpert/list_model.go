@@ -30,12 +30,13 @@ type EncounterListItem struct {
 }
 
 type EncounterListParams struct {
-	Page     int
-	PageSize int
-	Status   string
-	Keyword  string
-	DateFrom *time.Time
-	DateTo   *time.Time
+	Page       int
+	PageSize   int
+	Status     string
+	Keyword    string
+	CustomerID *int64
+	DateFrom   *time.Time
+	DateTo     *time.Time
 	// CustomerLinked: nil 不筛选；true 只看已关联客户；false 只看未关联客户。
 	CustomerLinked *bool
 	// SalesTaskState: "" 不筛选；none / active / completed / paused。

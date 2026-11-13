@@ -342,6 +342,15 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	var customerID *int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("customer_id")); raw != "" {
+		value, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || value <= 0 {
+			httputil.WriteBadRequest(w, "customer_id must be a positive integer")
+			return
+		}
+		customerID = &value
+	}
 	var customerLinked *bool
 	if raw := strings.TrimSpace(r.URL.Query().Get("customer_linked")); raw != "" {
 		value, parseErr := strconv.ParseBool(raw)
@@ -356,6 +365,7 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		PageSize:       pageSize,
 		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
 		Keyword:        strings.TrimSpace(r.URL.Query().Get("keyword")),
+		CustomerID:     customerID,
 		DateFrom:       dateFrom,
 		DateTo:         dateTo,
 		CustomerLinked: customerLinked,

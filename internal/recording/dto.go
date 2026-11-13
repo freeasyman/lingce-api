@@ -263,6 +263,7 @@ type RecordingListRequest struct {
 	TenantID            int64            `json:"tenant_id"`
 	TenantIDs           []int64          `json:"tenant_ids,omitempty"`
 	RecordingID         *int64           `json:"recording_id,omitempty"`
+	CustomerID          *int64           `json:"customer_id,omitempty"`
 	Scope               *RecordingScope  `json:"recording_scope,omitempty"`
 	EmployeeID          *int64           `json:"employee_id,omitempty"`
 	BusinessScope       *string          `json:"business_scope,omitempty"`
@@ -1104,6 +1105,7 @@ type TaskListRequest struct {
 	// 时间：2026-09-11
 	ViewerEmployeeID *int64      `json:"viewer_employee_id,omitempty"`
 	RecordingID      *int64      `json:"recording_id,omitempty"`
+	CustomerID       *int64      `json:"customer_id,omitempty"`
 	AssignedTo       *int64      `json:"assigned_to,omitempty"`
 	AssignmentStatus *string     `json:"assignment_status,omitempty"`
 	ExecutionStatus  *string     `json:"execution_status,omitempty"`

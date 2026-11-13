@@ -589,6 +589,12 @@ func (s *Store) ListRecordings(ctx context.Context, req RecordingListRequest) ([
 		argIndex++
 	}
 
+	if req.CustomerID != nil && *req.CustomerID > 0 {
+		conditions = append(conditions, fmt.Sprintf("r.customer_id = $%d", argIndex))
+		args = append(args, *req.CustomerID)
+		argIndex++
+	}
+
 	if req.RecordingID != nil && *req.RecordingID > 0 {
 		conditions = append(conditions, fmt.Sprintf("r.id = $%d", argIndex))
 		args = append(args, *req.RecordingID)
@@ -2367,6 +2373,12 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 			)
 		)`, argIndex, argIndex))
 		args = append(args, *req.ViewerEmployeeID)
+		argIndex++
+	}
+
+	if req.CustomerID != nil && *req.CustomerID > 0 {
+		conditions = append(conditions, fmt.Sprintf("rt.customer_id = $%d", argIndex))
+		args = append(args, *req.CustomerID)
 		argIndex++
 	}
 

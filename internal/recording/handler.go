@@ -400,6 +400,14 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 		req.EmployeeID = &empID
 	}
 
+	if customerIDStr := strings.TrimSpace(r.URL.Query().Get("customer_id")); customerIDStr != "" {
+		customerID, err := strconv.ParseInt(customerIDStr, 10, 64)
+		if err != nil || customerID <= 0 {
+			httputil.WriteBadRequest(w, "customer_id must be a positive integer")
+			return
+		}
+		req.CustomerID = &customerID
+	}
 	if patientName := r.URL.Query().Get("patient_name"); patientName != "" {
 		req.PatientName = &patientName
 	}
@@ -980,6 +988,14 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 	if recordingIDStr := r.URL.Query().Get("recording_id"); recordingIDStr != "" {
 		recordingID, _ := strconv.ParseInt(recordingIDStr, 10, 64)
 		req.RecordingID = &recordingID
+	}
+	if customerIDStr := strings.TrimSpace(r.URL.Query().Get("customer_id")); customerIDStr != "" {
+		customerID, err := strconv.ParseInt(customerIDStr, 10, 64)
+		if err != nil || customerID <= 0 {
+			httputil.WriteBadRequest(w, "customer_id must be a positive integer")
+			return
+		}
+		req.CustomerID = &customerID
 	}
 
 	if assignedToStr := r.URL.Query().Get("assigned_to"); assignedToStr != "" {
