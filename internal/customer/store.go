@@ -127,7 +127,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	// 先取当前页客户 ID，再让录音/互动/成交子查询只扫这一页客户。
 	// 否则 1500+ 客户的租户会为 20 条列表扫描全部录音和 JSON，接口达到数秒。
 	pageArgs := append(append([]any{}, args...), req.PageSize, offset)
-	pageRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id FROM customers WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, whereClause, len(args)+1, len(args)+2), pageArgs...)
+	pageRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id FROM customers WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`, whereClause, len(args)+1, len(args)+2), pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query customer page ids: %w", err)
 	}
@@ -231,13 +231,13 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			ORDER BY r.customer_id, COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
 		) lr ON lr.customer_id = customers.id
 		WHERE %s AND customers.id = ANY($__PAGE_IDS__)
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $%d
+	`, whereClause, argIndex)
 
 	query = strings.ReplaceAll(query, "__TENANT_FILTER__", tenantFilter)
-	query = strings.ReplaceAll(query, "__PAGE_IDS__", fmt.Sprintf("%d", argIndex+2))
-	args = append(args, req.PageSize, offset, pageIDs)
+	query = strings.ReplaceAll(query, "__PAGE_IDS__", fmt.Sprintf("%d", argIndex+1))
+	args = append(args, req.PageSize, pageIDs)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query customers: %w", err)
