@@ -108,6 +108,12 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	}
 
 	whereClause := strings.Join(conditions, " AND ")
+	tenantFilter := "TRUE"
+	if len(req.TenantIDs) > 0 {
+		tenantFilter = "r.tenant_id = ANY($1)"
+	} else if req.TenantID != nil {
+		tenantFilter = "r.tenant_id = $1"
+	}
 
 	// Count total
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM customers WHERE %s", whereClause)
@@ -149,7 +155,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			       ) AS last_interaction_at
 			FROM recordings r
 			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
-			WHERE r.customer_id IS NOT NULL
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
 			GROUP BY r.customer_id
 		) it ON it.customer_id = customers.id
 		LEFT JOIN (
@@ -171,7 +177,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			           END
 			       ), 0)::float8 AS total_converted_amount
 			FROM recordings r
-			WHERE r.customer_id IS NOT NULL
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
 			GROUP BY r.customer_id
 		) ds ON ds.customer_id = customers.id
 		LEFT JOIN (
@@ -195,7 +201,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			           ''
 			       )), '') AS last_deal_result
 			FROM recordings r
-			WHERE r.customer_id IS NOT NULL
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
 			ORDER BY r.customer_id, COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
 		) lr ON lr.customer_id = customers.id
 		WHERE %s
@@ -203,6 +209,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 
+	query = strings.ReplaceAll(query, "__TENANT_FILTER__", tenantFilter)
 	args = append(args, req.PageSize, offset)
 
 	rows, err := s.pool.Query(ctx, query, args...)
