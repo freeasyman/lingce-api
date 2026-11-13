@@ -72,10 +72,15 @@ type OutpatientItem struct {
 }
 
 // OutpatientItems 门诊页已开项目聚合（含就诊科室，便于提示补科室）。
+//
+// Total/Refunded 与辅助诊疗 fee.total / fee.refunded 同口径：本次就诊全部非作废
+// 收费行（挂号费 + 处方 + 检验 + 检查 + 治疗 + 耗材）按未退数量折算后的净额与已退金额。
+// Items 中的 Amount 仍为开单原额，便于逐行核对。
 type OutpatientItems struct {
 	Department *DepartmentBrief `json:"department"`
 	Items      []OutpatientItem `json:"items"`
 	Total      float64          `json:"total"`
+	Refunded   float64          `json:"refunded"`
 }
 
 // SwitchEMRTemplateRequest 病历模板更换（仅未书写内容的草稿允许）。
@@ -368,6 +373,8 @@ type Registration struct {
 	ID               int64     `json:"id"`
 	CustomerID       int64     `json:"customer_id"`
 	CustomerName     string    `json:"customer_name"`
+	CustomerPinyin   string    `json:"customer_pinyin"`   // 姓名全拼（收费台队列拼音检索）
+	CustomerInitials string    `json:"customer_initials"` // 姓名首字母
 	Phone            string    `json:"phone"`
 	MRN              string    `json:"mrn"`
 	DepartmentID     *int64    `json:"department_id"`
@@ -783,20 +790,22 @@ type OrderItem struct {
 // 金额口径：items_total 为行合计，discount_total 为整单优惠，payable_total 为应收，
 // paid_total 为历史实收（不因退款回写），refunded_total 为累计退款；净实收 = paid_total - refunded_total。
 type Order struct {
-	ID            int64       `json:"id"`
-	OrderNo       string      `json:"order_no"`
-	CustomerID    int64       `json:"customer_id"`
-	CustomerName  string      `json:"customer_name"`
-	EncounterID   *int64      `json:"encounter_id"`
-	ItemsTotal    float64     `json:"items_total"`    // 原价合计
-	DiscountTotal float64     `json:"discount_total"` // 身份折扣 + 议价
-	PayableTotal  float64     `json:"payable_total"`
-	PaidTotal     float64     `json:"paid_total"`
-	RefundedTotal float64     `json:"refunded_total"`
-	Status        string      `json:"status"`
-	Items         []OrderItem `json:"items"`
-	Payments      []Payment   `json:"payments"`
-	CreatedAt     time.Time   `json:"created_at"`
+	ID               int64       `json:"id"`
+	OrderNo          string      `json:"order_no"`
+	CustomerID       int64       `json:"customer_id"`
+	CustomerName     string      `json:"customer_name"`
+	CustomerPinyin   string      `json:"customer_pinyin"`   // 姓名全拼（收费台队列拼音检索）
+	CustomerInitials string      `json:"customer_initials"` // 姓名首字母
+	EncounterID      *int64      `json:"encounter_id"`
+	ItemsTotal       float64     `json:"items_total"`    // 原价合计
+	DiscountTotal    float64     `json:"discount_total"` // 身份折扣 + 议价
+	PayableTotal     float64     `json:"payable_total"`
+	PaidTotal        float64     `json:"paid_total"`
+	RefundedTotal    float64     `json:"refunded_total"`
+	Status           string      `json:"status"`
+	Items            []OrderItem `json:"items"`
+	Payments         []Payment   `json:"payments"`
+	CreatedAt        time.Time   `json:"created_at"`
 	// 身份/议价快照。
 	PriceIdentity         string  `json:"price_identity"`
 	IdentityDiscountTotal float64 `json:"identity_discount_total"`

@@ -677,13 +677,15 @@ func (s *Store) CreateCustomer(ctx context.Context, tenantID, createdBy int64, r
 	if err != nil {
 		return 0, err
 	}
+	// 患者拼音检索字段：建档即写入，后续姓名变更在 UpdateCustomer 中重算。
+	pinyin, initials := PinyinOf(req.Name)
 	var id int64
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO customers (tenant_id, name, phone, gender, age, birth_date, source, lifecycle_stage, status, momentum, extra_data, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'his', 'patient', 'converted', 50, $7::jsonb, $8, NOW(), NOW())
+		INSERT INTO customers (tenant_id, name, phone, gender, age, birth_date, source, lifecycle_stage, status, momentum, extra_data, created_by, pinyin, initials, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'his', 'patient', 'converted', 50, $7::jsonb, $8, $9, $10, NOW(), NOW())
 		RETURNING id`,
 		tenantID, req.Name, req.Phone, nullIfEmpty(req.Gender), req.Age, birthDate,
-		extra, createdBy).Scan(&id)
+		extra, createdBy, pinyin, initials).Scan(&id)
 	return id, err
 }
 
@@ -1117,7 +1119,7 @@ func (s *Store) DeleteSchedule(ctx context.Context, tenantID, id int64) error {
 // ---------------------------------------------------------------------------
 // 挂号与分诊队列
 
-const registrationColumns = `r.id, r.customer_id, COALESCE(c.name, ''), COALESCE(c.phone, ''),
+const registrationColumns = `r.id, r.customer_id, COALESCE(c.name, ''), COALESCE(c.pinyin, ''), COALESCE(c.initials, ''), COALESCE(c.phone, ''),
 	COALESCE(pi.value, ''), r.department_id, COALESCE(dep.name, ''), r.doctor_id, COALESCE(e.full_name, e.name, e.username, ''),
 	d.employee_id, r.schedule_id, r.slot_id,
 	COALESCE(to_char(sl.time_start, 'HH24:MI'), ''), COALESCE(to_char(sl.time_end, 'HH24:MI'), ''),
@@ -1137,7 +1139,7 @@ const registrationFromClause = `FROM his_registrations r
 
 func scanRegistration(row pgx.Row) (Registration, error) {
 	var reg Registration
-	err := row.Scan(&reg.ID, &reg.CustomerID, &reg.CustomerName, &reg.Phone, &reg.MRN,
+	err := row.Scan(&reg.ID, &reg.CustomerID, &reg.CustomerName, &reg.CustomerPinyin, &reg.CustomerInitials, &reg.Phone, &reg.MRN,
 		&reg.DepartmentID, &reg.DepartmentName, &reg.DoctorID, &reg.DoctorName, &reg.DoctorEmployeeID, &reg.ScheduleID, &reg.SlotID,
 		&reg.SlotTimeStart, &reg.SlotTimeEnd, &reg.RegType, &reg.Source, &reg.VisitDate,
 		&reg.Fee, &reg.Status, &reg.EncounterID, &reg.CreatedBy, &reg.CreatedAt)
@@ -2412,14 +2414,14 @@ func (s *Store) WorkbenchContext(ctx context.Context, tenantID, encounterID int6
 // ---------------------------------------------------------------------------
 // 打包收费
 
-const orderColumns = `o.id, o.order_no, o.customer_id, COALESCE(c.name, ''), o.encounter_id,
+const orderColumns = `o.id, o.order_no, o.customer_id, COALESCE(c.name, ''), COALESCE(c.pinyin, ''), COALESCE(c.initials, ''), o.encounter_id,
 	o.items_total, o.discount_total, o.payable_total, o.paid_total, o.refunded_total, o.status, o.created_at,
 	o.price_identity, o.identity_discount_total, o.negotiation_mode, o.negotiation_value,
 	o.negotiation_amount, o.negotiation_reason, o.negotiation_by`
 
 func scanOrderRow(row pgx.Row) (Order, error) {
 	var o Order
-	err := row.Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.EncounterID,
+	err := row.Scan(&o.ID, &o.OrderNo, &o.CustomerID, &o.CustomerName, &o.CustomerPinyin, &o.CustomerInitials, &o.EncounterID,
 		&o.ItemsTotal, &o.DiscountTotal, &o.PayableTotal, &o.PaidTotal, &o.RefundedTotal, &o.Status, &o.CreatedAt,
 		&o.PriceIdentity, &o.IdentityDiscountTotal, &o.NegotiationMode, &o.NegotiationValue,
 		&o.NegotiationAmount, &o.NegotiationReason, &o.NegotiationBy)
@@ -4158,7 +4160,7 @@ func (s *Store) SetEmployeeActive(ctx context.Context, tenantID, employeeID int6
 	return result, nil
 }
 
-// SearchPatients 挂号查重：手机号 / 姓名模糊匹配，返回客户与病案号。
+// SearchPatients 挂号查重：手机号 / 姓名 / 拼音模糊匹配，返回客户与病案号。
 func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword string) ([]PatientSearchRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0),
@@ -4166,7 +4168,8 @@ func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword stri
 		FROM customers c
 		LEFT JOIN patient_identifiers pi
 		  ON pi.tenant_id = c.tenant_id AND pi.customer_id = c.id AND pi.identifier_type = 'mrn'
-		WHERE c.tenant_id = $1 AND (c.phone ILIKE $2 OR c.name ILIKE $2)
+		WHERE c.tenant_id = $1
+		  AND (c.phone ILIKE $2 OR c.name ILIKE $2 OR c.pinyin ILIKE $2 OR c.initials ILIKE $2)
 		ORDER BY c.id DESC
 		LIMIT 10`, tenantID, "%"+keyword+"%")
 	if err != nil {

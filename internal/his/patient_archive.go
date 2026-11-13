@@ -313,6 +313,7 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword, price
 	where := `
 		WHERE c.tenant_id = $1 AND c.deleted_at IS NULL
 		  AND ($2 = '' OR c.name ILIKE $3 OR c.phone ILIKE $3
+		       OR c.pinyin ILIKE $3 OR c.initials ILIKE $3
 		       OR EXISTS (
 		           SELECT 1 FROM patient_identifiers pi
 		           WHERE pi.tenant_id = c.tenant_id AND pi.customer_id = c.id

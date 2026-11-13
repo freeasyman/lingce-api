@@ -221,12 +221,14 @@ func (s *Store) UpdateCustomer(ctx context.Context, tenantID, customerID int64, 
 	if name == "" || phone == "" {
 		return "", ErrInvalidRequest
 	}
+	// 拼音检索字段随姓名同步重算（姓名未变时等价于幂等回填）。
+	pinyin, initials := PinyinOf(name)
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE customers
 		SET name = $3, phone = $4, gender = $5, age = $6, birth_date = $7,
-		    extra_data = $8::jsonb, updated_at = NOW()
+		    extra_data = $8::jsonb, pinyin = $9, initials = $10, updated_at = NOW()
 		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`,
-		tenantID, customerID, name, phone, nullIfEmpty(gender), age, birthDate, string(extraJSON))
+		tenantID, customerID, name, phone, nullIfEmpty(gender), age, birthDate, string(extraJSON), pinyin, initials)
 	if err != nil {
 		return "", err
 	}

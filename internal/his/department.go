@@ -308,10 +308,8 @@ func (s *Store) ListOutpatientItems(ctx context.Context, tenantID, encounterID i
 	}
 
 	items := make([]OutpatientItem, 0)
-	total := 0.0
 	appendRow := func(item OutpatientItem) {
 		items = append(items, item)
-		total += item.Amount
 	}
 
 	// 检验
@@ -458,10 +456,18 @@ func (s *Store) ListOutpatientItems(ctx context.Context, tenantID, encounterID i
 		return nil, err
 	}
 
+	// 合计与辅助诊疗/费用预览同口径：按收费行未退数量折算净额，并单独返回已退金额。
+	orders, err := s.ListOrders(ctx, tenantID, "", encounterID, 0)
+	if err != nil {
+		return nil, err
+	}
+	fee := summarizeAssistFee(orders)
+
 	return &OutpatientItems{
 		Department: resolution.Department,
 		Items:      items,
-		Total:      total,
+		Total:      fee.Total,
+		Refunded:   fee.Refunded,
 	}, nil
 }
 

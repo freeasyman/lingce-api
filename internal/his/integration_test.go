@@ -58,6 +58,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 			id bigserial PRIMARY KEY, tenant_id bigint, name text, phone text, gender text,
 			age int, birth_date timestamp, source text, lifecycle_stage text, status text, momentum int,
 			tags jsonb DEFAULT '[]'::jsonb, extra_data jsonb, created_by bigint,
+			pinyin text NOT NULL DEFAULT '', initials text NOT NULL DEFAULT '',
 			created_at timestamptz, updated_at timestamptz, deleted_at timestamptz
 		);
 		CREATE TABLE employees (

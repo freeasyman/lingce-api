@@ -13,6 +13,10 @@ func TestPinyinOfChineseNames(t *testing.T) {
 		{"测试拼音项目", "ceshipinyinxiangmu", "cspyxm"},
 		{"阿奇霉素片", "aqimeisupian", "aqmsp"},
 		{"妇科检查", "fukejiancha", "fkjc"},
+		// 患者姓名的前缀（演示-）与数字后缀：搜索是 ILIKE '%kw%'，
+		// hejun / hj / fuzhenyanzheng / fzyz 都必须能在全拼/首字母串中命中。
+		{"演示-何军", "yanshihejun", "yshj"},
+		{"复诊验证202100", "fuzhenyanzheng202100", "fzyz2"},
 	}
 	for _, testCase := range cases {
 		full, initials := PinyinOf(testCase.name)
