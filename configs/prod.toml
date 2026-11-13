@@ -45,3 +45,8 @@ api_base_url = "https://qyapi.weixin.qq.com"
 
 [log]
 level = "info"
+
+[schema]
+mode = "baseline"
+baseline_version = "20261113_016"
+convergence_file = "20261113_016.sql"
