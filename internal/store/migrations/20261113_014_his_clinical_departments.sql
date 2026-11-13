@@ -64,7 +64,11 @@ FROM (VALUES
     (5001, '皮肤科', 'dermatology', 'dermatology'),
     (5001, '外科',   'surgery',     'surgery')
 ) AS v(tenant_id, name, code, template_code)
-WHERE NOT EXISTS (
+WHERE EXISTS (
+    SELECT 1 FROM tenants t
+    WHERE t.id = v.tenant_id
+)
+AND NOT EXISTS (
     SELECT 1 FROM departments d
     WHERE d.tenant_id = v.tenant_id AND d.code = v.code AND d.deleted_at IS NULL
 );
