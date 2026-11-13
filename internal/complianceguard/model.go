@@ -290,6 +290,7 @@ type ComplianceOverview struct {
 	// 接诊口径统计
 	EncountersTotal        int64              `json:"encounters_total"`
 	EncountersWithFindings int64              `json:"encounters_with_findings"`
+	AnalyzedEncounters     int64              `json:"analyzed_encounters"`
 	ComplianceRate         float64            `json:"compliance_rate"`
 	MonthlyTrend           []MonthlyTrendPoint `json:"monthly_trend"`
 	DoctorsCount           int64              `json:"doctors_count"`

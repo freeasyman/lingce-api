@@ -291,6 +291,14 @@ func (s *Service) loadEncounterStats(ctx context.Context, tenantID int64, overvi
 	}
 
 	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT i.source_id)
+		FROM compliance_check_items i
+		WHERE i.tenant_id = $1
+	`, tenantID).Scan(&overview.AnalyzedEncounters); err != nil {
+		return fmt.Errorf("count analyzed encounters: %w", err)
+	}
+
+	if err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT r.id)
 		FROM compliance_check_items i
 		JOIN recordings r
@@ -300,12 +308,12 @@ func (s *Service) loadEncounterStats(ctx context.Context, tenantID int64, overvi
 		return fmt.Errorf("count compliance encounters with findings: %w", err)
 	}
 
-	if overview.EncountersTotal > 0 {
-		clean := overview.EncountersTotal - overview.EncountersWithFindings
+	if overview.AnalyzedEncounters > 0 {
+		clean := overview.AnalyzedEncounters - overview.EncountersWithFindings
 		if clean < 0 {
 			clean = 0
 		}
-		rate := float64(clean) / float64(overview.EncountersTotal) * 100
+		rate := float64(clean) / float64(overview.AnalyzedEncounters) * 100
 		overview.ComplianceRate = math.Round(rate*100) / 100
 	}
 	return nil
