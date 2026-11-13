@@ -125,7 +125,7 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 
 	recordingEventIDs := map[string]bool{}
 	// 录音：客户维度的咨询/就诊录音。
-	if items, err := fetchTimelineItems(ctx, base+"/api/v1/recordings?customer_id="+fmt.Sprint(customerID)+"&page_size=100", token); err != nil {
+	if items, err := fetchTimelineItems(ctx, base+"/api/v1/recordings?customer_id="+fmt.Sprint(customerID)+"&include_short=1&page_size=100", token); err != nil {
 		addWarning("录音", err)
 	} else {
 		for _, item := range items {
@@ -134,6 +134,21 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			occurred := firstNonEmpty(asString(item["recorded_at"]), asString(item["created_at"]))
+			duration := asInt(item["duration"])
+			if duration == 0 {
+				duration = asInt(item["recording_duration"])
+			}
+			// 录音过短也要出现在历程中：至少说明为什么这条录音没有形成有效沟通。
+			if duration > 0 && duration < 60 {
+				appendEvent(CustomerTimelineEvent{
+					ID: fmt.Sprintf("recording-%s", recordingID), EventType: "recording.visit",
+					Scene: "咨询", OccurredAt: occurred, Title: "记录过短",
+					Summary: fmt.Sprintf("本次沟通仅 %d 秒，信息不足，未形成有效咨询", duration),
+					Source:  "录音归档", Sensitivity: "L2", Actor: firstNonEmpty(asString(item["employee_name"]), "待补充"),
+				})
+				recordingEventIDs[recordingID] = true
+				continue
+			}
 			isDoctor := strings.EqualFold(asString(item["business_scope"]), "doctor")
 			scene := "咨询"
 			title := "咨询接待"
@@ -330,6 +345,24 @@ func encounterSummary(item map[string]any) string {
 		return ""
 	}
 	return firstNonEmpty(asString(ctx["chief_complaint"]), asString(ctx["diagnosis"]))
+}
+
+func asInt(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case json.Number:
+		n, _ := typed.Int64()
+		return int(n)
+	case string:
+		var n int
+		_, _ = fmt.Sscan(typed, &n)
+		return n
+	default:
+		return 0
+	}
 }
 
 func asString(value any) string {
