@@ -115,6 +115,63 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 	base := requestBaseURL(r)
 	role := h.employeeRole(ctx, *claims.TenantID, claims.UserID)
 
+	// 就诊事件合并：HIS encounter 是主事件，EMR 只补“病历状态”。
+	// 挂号、排队、订单、处方、检验检查、收费金额都不进入客户历程。
+	visitEvents := map[string]CustomerTimelineEvent{}
+	if overview, err := fetchTimelineObject(ctx, base+"/api/v1/his/patients/"+fmt.Sprint(customerID)+"/overview", token); err == nil {
+		if rawItems, ok := overview["recent_encounters"].([]any); ok {
+			for _, rawItem := range rawItems {
+				item, ok := rawItem.(map[string]any)
+				if !ok {
+					continue
+				}
+				encounterID := asString(item["encounter_id"])
+				if encounterID == "" || encounterID == "0" {
+					continue
+				}
+				occurred := firstNonEmpty(asString(item["started_at"]), asString(item["visit_date"]))
+				summary := visitStatusLabel(asString(item["status"]))
+				if summary == "" {
+					summary = "已记录一次就诊"
+				}
+				visitEvents[encounterID] = CustomerTimelineEvent{
+					ID: fmt.Sprintf("visit-his-%s", encounterID), EventType: "visit",
+					Scene: "就诊", OccurredAt: occurred,
+					Title: visitTypeLabel(asString(item["visit_type"])), Summary: summary,
+					Source: "就诊记录", Sensitivity: "L2",
+				}
+			}
+		}
+	}
+
+	// 电子病历只补充病历状态，不展示诊断、主诉、医嘱或正文。
+	if canViewMedical(role) {
+		if items, err := fetchTimelineItems(ctx, base+"/api/v1/customers/"+fmt.Sprint(customerID)+"/emr-records?page_size=100", token); err == nil {
+			for _, item := range items {
+				encounterID := asString(item["encounter_id"])
+				if encounterID == "" || encounterID == "0" {
+					encounterID = "emr-" + asString(item["id"])
+				}
+				statusText := emrStatusLabel(asString(item["status"]))
+				if existing, ok := visitEvents[encounterID]; ok {
+					existing.Summary = strings.TrimSpace(existing.Summary + " · " + statusText)
+					visitEvents[encounterID] = existing
+					continue
+				}
+				occurred := firstNonEmpty(asString(item["started_at"]), asString(item["created_at"]))
+				visitEvents[encounterID] = CustomerTimelineEvent{
+					ID: fmt.Sprintf("visit-emr-%s", asString(item["id"])), EventType: "visit",
+					Scene: "就诊", OccurredAt: occurred,
+					Title: visitTypeLabel(asString(item["visit_type"])), Summary: statusText,
+					Source: "病历记录", Sensitivity: "L2",
+				}
+			}
+		}
+	}
+	for _, event := range visitEvents {
+		appendEvent(event)
+	}
+
 	// 已有客户来源里如果已经存在同一条录音，不再重复展示录音业务事件。
 	sourceRecordingIDs := map[string]bool{}
 	for _, source := range result.Items {
@@ -150,6 +207,10 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			isDoctor := strings.EqualFold(asString(item["business_scope"]), "doctor")
+			if isDoctor && len(visitEvents) > 0 {
+				// 已经有 HIS/EMR 就诊事件时，医生录音只作为就诊证据，不再单独生成一条就诊。
+				continue
+			}
 			scene := "咨询"
 			title := "咨询接待"
 			actorLabel := "咨询师"
@@ -185,27 +246,6 @@ func (h *Handler) CustomerTimeline(w http.ResponseWriter, r *http.Request) {
 				Scene: scene, OccurredAt: occurred, Title: title,
 				Summary: summary, Source: "录音归档", Sensitivity: "L2", Actor: actor,
 			})
-		}
-	}
-
-	// 电子病历：L2；默认只允许医生/主管/管理员/合规查看。
-	if canViewMedical(role) {
-		if items, err := fetchTimelineItems(ctx, base+"/api/v1/customers/"+fmt.Sprint(customerID)+"/emr-records?page_size=100", token); err != nil {
-			addWarning("电子病历", err)
-		} else {
-			for _, item := range items {
-				occurred := firstNonEmpty(asString(item["started_at"]), asString(item["created_at"]))
-				title := visitTypeLabel(asString(item["visit_type"]))
-				summary := "病历已归档"
-				if status := strings.ToLower(strings.TrimSpace(asString(item["status"]))); status != "" && status != "archived" {
-					summary = "病历状态：已记录"
-				}
-				appendEvent(CustomerTimelineEvent{
-					ID: fmt.Sprintf("emr-%s", asString(item["id"])), EventType: "encounter.emr",
-					Scene: "就诊", OccurredAt: occurred, Title: title, Summary: summary,
-					Source: "电子病历", Sensitivity: "L2",
-				})
-			}
 		}
 	}
 
@@ -275,6 +315,63 @@ func canViewMedical(role string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func fetchTimelineObject(ctx context.Context, url, token string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 6 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("upstream status %d", resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func visitStatusLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "completed", "visited", "finished", "done":
+		return "已完成"
+	case "in_progress", "processing":
+		return "进行中"
+	case "new", "registered", "pending", "scheduled":
+		return "待就诊"
+	case "cancelled", "canceled":
+		return "已取消"
+	case "no_show", "noshow":
+		return "未到诊"
+	default:
+		return ""
+	}
+}
+
+func emrStatusLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "archived", "已归档":
+		return "病历已归档"
+	case "draft", "草稿":
+		return "病历草稿"
+	case "confirmed", "已确认":
+		return "病历已确认"
+	default:
+		return "病历已记录"
 	}
 }
 
