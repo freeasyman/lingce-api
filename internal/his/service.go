@@ -22,6 +22,19 @@ var ErrInvalidRequest = errors.New("invalid request")
 // ErrNotFound 表示目标记录不存在。
 var ErrNotFound = errors.New("not found")
 
+// TemplateUnavailableError 表示科室模板与标准门急诊病历均不可用。
+// handler 统一映射为 400，避免把可预期的配置缺失吞成 500。
+type TemplateUnavailableError struct {
+	Message string
+}
+
+func (e *TemplateUnavailableError) Error() string {
+	if e == nil || e.Message == "" {
+		return "no available emr template"
+	}
+	return e.Message
+}
+
 // ErrDepartmentRequired 表示排班/挂号缺少可用的临床科室（P0-4 科室链路门禁）。
 var ErrDepartmentRequired = errors.New("clinical department required")
 
@@ -698,7 +711,14 @@ func (s *Service) EnsureEMRRecordAuto(ctx context.Context, tenantID, actorID, en
 		return nil, err
 	}
 	if resolution.Template == nil {
-		return nil, ErrNotFound
+		// 科室模板与标准门急诊病历都不可用：明确告知管理员，返回 400 而不是 500／404。
+		return nil, &TemplateUnavailableError{
+			Message: "未找到可用病历模板（科室模板与标准门急诊病历均不可用），请联系管理员检查模板发布状态",
+		}
+	}
+	notice := resolution.Notice
+	if notice == "" && !resolution.Matched {
+		notice = templateFallbackMessage(resolution)
 	}
 	response := &AutoEnsureEMRResponse{
 		Department:   resolution.Department,
@@ -706,7 +726,9 @@ func (s *Service) EnsureEMRRecordAuto(ctx context.Context, tenantID, actorID, en
 		TemplateCode: resolution.Template.Code,
 		TemplateName: resolution.Template.Name,
 		Matched:      resolution.Matched,
-		Message:      templateFallbackMessage(resolution),
+		Fallback:     resolution.Fallback,
+		Notice:       notice,
+		Message:      notice,
 	}
 
 	existing, err := s.store.FindEMRRecordByEncounter(ctx, tenantID, encounterID)
@@ -731,10 +753,14 @@ func (s *Service) EnsureEMRRecordAuto(ctx context.Context, tenantID, actorID, en
 	if err != nil {
 		return nil, err
 	}
+	effectiveVisitType := resolution.EffectiveVisitType
+	if effectiveVisitType == "" {
+		effectiveVisitType = visitType
+	}
 	record, err := s.EnsureEMRRecord(ctx, tenantID, actorID, EnsureEMRRequest{
 		EncounterID: encounterID,
 		TemplateID:  resolution.Template.ID,
-		VisitType:   visitType,
+		VisitType:   effectiveVisitType,
 	})
 	if err != nil {
 		return nil, err

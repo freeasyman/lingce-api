@@ -167,6 +167,14 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
+	var templateErr *TemplateUnavailableError
+	if errors.As(err, &templateErr) {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]any{
+			"code":    "BAD_REQUEST",
+			"message": templateErr.Error(),
+		})
+		return
+	}
 	switch err {
 	case ErrInvalidRequest:
 		httputil.WriteBadRequest(w, "invalid request")
