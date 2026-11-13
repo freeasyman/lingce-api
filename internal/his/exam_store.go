@@ -95,7 +95,8 @@ const examRequestSelectSQL = `
 	SELECT e.id, e.encounter_id, e.customer_id, e.request_no, e.item_name, e.body_part,
 	       e.purpose, e.status, e.started_at, e.reported_at, e.created_by, e.created_at, e.updated_at,
 	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0),
-	       e.charge_item_id, e.charge_amount, e.order_id
+	       e.charge_item_id, e.charge_amount, e.order_id,
+	       COALESCE(dx.diagnosis, ''), COALESCE(NULLIF(emp.name, ''), NULLIF(enc.provider_name, ''), '')
 	FROM his_exam_requests e
 	LEFT JOIN customers c ON c.tenant_id = e.tenant_id AND c.id = e.customer_id
 	LEFT JOIN LATERAL (
@@ -106,14 +107,23 @@ const examRequestSelectSQL = `
 	) pi ON TRUE
 	LEFT JOIN LATERAL (
 		SELECT COUNT(*) AS cnt FROM his_exam_reports r WHERE r.request_id = e.id
-	) rc ON TRUE`
+	) rc ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT COALESCE(NULLIF(er.content_json->'diagnosis'->>'diagnosis_name', ''),
+		                NULLIF(er.content_json->'tcm_diagnosis'->>'diagnosis_name', ''), '') AS diagnosis
+		FROM emr_records er
+		WHERE er.tenant_id = e.tenant_id AND er.encounter_id = e.encounter_id
+		ORDER BY er.updated_at DESC, er.created_at DESC LIMIT 1
+	) dx ON TRUE
+	LEFT JOIN encounters enc ON enc.tenant_id = e.tenant_id AND enc.id = e.encounter_id
+	LEFT JOIN employees emp ON emp.tenant_id = e.tenant_id AND emp.id = enc.provider_id`
 
 func scanExamRequest(row pgx.Row) (ExamRequest, error) {
 	var item ExamRequest
 	err := row.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 		&item.BodyPart, &item.Purpose, &item.Status, &item.StartedAt, &item.ReportedAt,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CustomerName, &item.MRN,
-		&item.ReportCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
+		&item.ReportCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID, &item.Diagnosis, &item.DoctorName)
 	return item, err
 }
 

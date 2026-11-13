@@ -144,6 +144,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		"20261113_009_his_pinyin.sql",
 		"20261113_013_his_pinyin_repricing.sql",
 		"20261113_015_his_dictionary_permission.sql",
+		"20261113_016_his_documents_center.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {

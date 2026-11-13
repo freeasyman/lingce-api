@@ -3225,17 +3225,28 @@ func (s *Store) CreateDocument(ctx context.Context, tenantID int64, docType stri
 // LoadDocument 文书详情（含签名）。
 func (s *Store) LoadDocument(ctx context.Context, tenantID, id int64) (*Document, error) {
 	var doc Document
-	var snapshot []byte
+	var snapshot, dataRaw []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, doc_type, ref_id, encounter_id, customer_id, content_snapshot, status, printed_at, created_at
-		FROM his_documents WHERE tenant_id = $1 AND id = $2`, tenantID, id).
+		SELECT d.id, d.doc_type, d.ref_id, d.encounter_id, d.customer_id, d.content_snapshot,
+		       d.status, d.printed_at, d.created_at,
+		       COALESCE(d.template_code, ''), COALESCE(d.title, ''), COALESCE(d.content_html, ''),
+		       COALESCE(d.data_json, '{}'::jsonb), d.created_by, COALESCE(e.name, '')
+		FROM his_documents d
+		LEFT JOIN employees e ON e.tenant_id = d.tenant_id AND e.id = d.created_by
+		WHERE d.tenant_id = $1 AND d.id = $2`, tenantID, id).
 		Scan(&doc.ID, &doc.DocType, &doc.RefID, &doc.EncounterID, &doc.CustomerID,
-			&snapshot, &doc.Status, &doc.PrintedAt, &doc.CreatedAt)
+			&snapshot, &doc.Status, &doc.PrintedAt, &doc.CreatedAt,
+			&doc.TemplateCode, &doc.Title, &doc.ContentHTML, &dataRaw, &doc.CreatedBy, &doc.CreatedByName)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(snapshot, &doc.ContentSnapshot); err != nil {
 		return nil, err
+	}
+	if len(dataRaw) > 0 {
+		if err := json.Unmarshal(dataRaw, &doc.DataJSON); err != nil {
+			return nil, err
+		}
 	}
 	signatures, err := s.ListSignatures(ctx, tenantID, id)
 	if err != nil {
@@ -3245,17 +3256,21 @@ func (s *Store) LoadDocument(ctx context.Context, tenantID, id int64) (*Document
 	return &doc, nil
 }
 
-// ListDocuments 文书列表（?customer_id=&encounter_id=&doc_type=&status=）。
+// ListDocuments 文书列表（?customer_id=&encounter_id=&doc_type=&status=&template_code=）。
 func (s *Store) ListDocuments(ctx context.Context, tenantID, customerID, encounterID int64, docType, status string) ([]Document, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, doc_type, ref_id, encounter_id, customer_id, content_snapshot, status, printed_at, created_at
-		FROM his_documents
-		WHERE tenant_id = $1
-		  AND ($2 = 0 OR customer_id = $2)
-		  AND ($3 = 0 OR encounter_id = $3)
-		  AND ($4 = '' OR doc_type = $4)
-		  AND ($5 = '' OR status = $5)
-		ORDER BY id DESC LIMIT 200`, tenantID, customerID, encounterID, docType, status)
+		SELECT d.id, d.doc_type, d.ref_id, d.encounter_id, d.customer_id, d.content_snapshot,
+		       d.status, d.printed_at, d.created_at,
+		       COALESCE(d.template_code, ''), COALESCE(d.title, ''), COALESCE(d.content_html, ''),
+		       COALESCE(d.data_json, '{}'::jsonb), d.created_by, COALESCE(e.name, '')
+		FROM his_documents d
+		LEFT JOIN employees e ON e.tenant_id = d.tenant_id AND e.id = d.created_by
+		WHERE d.tenant_id = $1
+		  AND ($2 = 0 OR d.customer_id = $2)
+		  AND ($3 = 0 OR d.encounter_id = $3)
+		  AND ($4 = '' OR d.doc_type = $4)
+		  AND ($5 = '' OR d.status = $5)
+		ORDER BY d.id DESC LIMIT 200`, tenantID, customerID, encounterID, docType, status)
 	if err != nil {
 		return nil, err
 	}
@@ -3264,13 +3279,19 @@ func (s *Store) ListDocuments(ctx context.Context, tenantID, customerID, encount
 	docs := make([]Document, 0)
 	for rows.Next() {
 		var doc Document
-		var snapshot []byte
+		var snapshot, dataRaw []byte
 		if err := rows.Scan(&doc.ID, &doc.DocType, &doc.RefID, &doc.EncounterID, &doc.CustomerID,
-			&snapshot, &doc.Status, &doc.PrintedAt, &doc.CreatedAt); err != nil {
+			&snapshot, &doc.Status, &doc.PrintedAt, &doc.CreatedAt,
+			&doc.TemplateCode, &doc.Title, &doc.ContentHTML, &dataRaw, &doc.CreatedBy, &doc.CreatedByName); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(snapshot, &doc.ContentSnapshot); err != nil {
 			return nil, err
+		}
+		if len(dataRaw) > 0 {
+			if err := json.Unmarshal(dataRaw, &doc.DataJSON); err != nil {
+				return nil, err
+			}
 		}
 		docs = append(docs, doc)
 	}

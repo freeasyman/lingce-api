@@ -609,6 +609,9 @@ type LabRequest struct {
 	ChargeItemID *int64  `json:"charge_item_id"`
 	ChargeAmount float64 `json:"charge_amount"`
 	OrderID      *int64  `json:"order_id"`
+	// 申请单打印：本次就诊诊断 + 申请医生（取自 EMR / 就诊医生）。
+	Diagnosis  string `json:"diagnosis,omitempty"`
+	DoctorName string `json:"doctor_name,omitempty"`
 }
 
 // CreateLabRequestRequest 开检验申请。
@@ -672,6 +675,9 @@ type ExamRequest struct {
 	ChargeItemID *int64  `json:"charge_item_id"`
 	ChargeAmount float64 `json:"charge_amount"`
 	OrderID      *int64  `json:"order_id"`
+	// 申请单打印：本次就诊诊断 + 申请医生（取自 EMR / 就诊医生）。
+	Diagnosis  string `json:"diagnosis,omitempty"`
+	DoctorName string `json:"doctor_name,omitempty"`
 }
 
 // CreateExamRequestRequest 开检查申请。
@@ -964,6 +970,13 @@ type Document struct {
 	PrintedAt       *time.Time     `json:"printed_at"`
 	CreatedAt       time.Time      `json:"created_at"`
 	Signatures      []Signature    `json:"signatures"`
+	// 文书中心扩展：模板、标题、渲染后的正文与生成数据（补打从 content_html 取，保证与签发时一致）。
+	TemplateCode  string         `json:"template_code,omitempty"`
+	Title         string         `json:"title,omitempty"`
+	ContentHTML   string         `json:"content_html,omitempty"`
+	DataJSON      map[string]any `json:"data_json,omitempty"`
+	CreatedBy     *int64         `json:"created_by,omitempty"`
+	CreatedByName string         `json:"created_by_name,omitempty"`
 }
 
 // GenerateDocumentRequest 生成文书（幂等：同 doc_type+ref_id 已存在则返回现有）。

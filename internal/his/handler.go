@@ -403,6 +403,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/purchase/orders/{id}/cancel", Handler: h.CancelPurchaseOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 医疗文书
+		{Method: "GET", Path: "/api/v1/his/document-templates", Handler: h.ListDocumentTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/documents/prefill", Handler: h.GetDocumentPrefill, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/documents", Handler: h.CreateEncounterDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "DELETE", Path: "/api/v1/his/documents/{id}", Handler: h.DeleteEncounterDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/documents/generate", Handler: h.GenerateDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/documents", Handler: h.ListDocuments, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/documents/{id}", Handler: h.GetDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
