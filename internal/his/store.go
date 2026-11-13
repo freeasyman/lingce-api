@@ -3145,11 +3145,13 @@ func (s *Store) DispensePrescription(ctx context.Context, tenantID, operatorID, 
 	}
 
 	for _, item := range items {
+		// 效期优先扣减：只从「数量足够」的批次里选最早效期，避免零库存批次挡住后续批次。
 		tag, err := tx.Exec(ctx, `
 			UPDATE his_stock SET quantity = quantity - $3, updated_at = NOW()
 			WHERE tenant_id = $1 AND drug_id = $2 AND quantity >= $3
 			  AND id = (SELECT id FROM his_stock WHERE tenant_id = $1 AND drug_id = $2
-			            ORDER BY expiry_date NULLS LAST LIMIT 1)`,
+			            AND quantity >= $3
+			            ORDER BY expiry_date NULLS LAST, id LIMIT 1)`,
 			tenantID, item.drugID, item.quantity)
 		if err != nil {
 			return PharmacyPrescription{}, err

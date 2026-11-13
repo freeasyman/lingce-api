@@ -580,6 +580,14 @@ func (s *Service) WorkbenchContext(ctx context.Context, tenantID, encounterID in
 	return s.store.WorkbenchContext(ctx, tenantID, encounterID)
 }
 
+// WorkbenchAssist 门诊辅助诊疗：纯程序化拼装患者要点/高频诊断/病历摘要/费用。
+func (s *Service) WorkbenchAssist(ctx context.Context, tenantID, encounterID int64) (*WorkbenchAssist, error) {
+	if encounterID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return s.store.WorkbenchAssist(ctx, tenantID, encounterID)
+}
+
 // EnsureEMRRecord 确保就诊病历存在：已有则返回，否则经 emrrecord 服务创建草稿。
 func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, req EnsureEMRRequest) (*EMRRecordSummary, error) {
 	if req.EncounterID <= 0 || strings.TrimSpace(req.TemplateID) == "" {

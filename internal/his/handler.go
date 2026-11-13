@@ -333,6 +333,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/his/workbench/templates", Handler: h.ListTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/workbench/context", Handler: h.WorkbenchContext, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/workbench/items", Handler: h.WorkbenchItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/workbench/assist", Handler: h.WorkbenchAssist, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/ensure", Handler: h.EnsureEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/ensure-auto", Handler: h.EnsureEMRRecordAuto, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/save", Handler: h.SaveEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1233,6 +1234,25 @@ func (h *Handler) WorkbenchItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, items)
+}
+
+// WorkbenchAssist 门诊辅助诊疗（纯程序化，不接 AI；?encounter_id=）。
+func (h *Handler) WorkbenchAssist(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	encounterID, err := strconv.ParseInt(r.URL.Query().Get("encounter_id"), 10, 64)
+	if err != nil || encounterID <= 0 {
+		httputil.WriteBadRequest(w, "encounter_id is required")
+		return
+	}
+	assist, err := h.service.WorkbenchAssist(r.Context(), tenantID, encounterID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, assist)
 }
 
 // ListClinicalDepartments 临床科室字典（含 EMR 模板映射）。
