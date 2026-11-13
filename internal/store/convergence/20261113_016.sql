@@ -1,6 +1,6 @@
 -- 生产收敛基线 20261113_016
 -- 170 个版本化迁移 + deal_cards_v2 prelude + dev 当前平台 seed 快照。
--- seed: llm_model_configs(tenant0)/recording_analysis_prompts/prompt_templates/task_builder_prompts/promotion_prompts。
+-- prompt_templates/promotion_prompts 按原 ID upsert，保留 demand/prompt_variable_usages 外键引用。
 -- 生产模型密钥不复制；apply 时从生产原值恢复。
 -- 20261109_002 依赖 dev 历史表 deal_cards_v2；生产 schema 没有该表。
 -- 补一个与 dev 改名后 consultation_analyses 等价的旧表，迁移会改名为 consultation_analyses。
@@ -8418,7 +8418,8 @@ ON CONFLICT (tenant_id, role, module) DO NOTHING;
 
 -- 20261113_016 current platform seed snapshot (from lingce_dev, tenant0/global only)
 -- Model configs: exact dev tenant0 rows; production api_key/api_key_encrypted preserved by key+ordinal.
--- Prompt/task/promotion seeds: exact current dev platform rows.
+-- prompt_templates/promotion_prompts: ID-preserving upsert (demand/prompt_variable_usages FKs).
+-- recording prompts/task: exact platform replacement; no FK references.
 CREATE TEMP TABLE _seed_model_secrets AS
 SELECT function_type, model_code, model_name, provider,
        row_number() OVER (PARTITION BY function_type, model_code, model_name, provider ORDER BY id) AS rn,
@@ -14095,8 +14096,7 @@ copy：发布文案，直接能贴到平台描述框里——2~3 句、口语，
      不加前缀符号、不写结构标记，像真人发帖那样。
 tags：话题标签，每个以 # 开头，3~5 个。
 pinned_comment：置顶评论，一句补充说明或引导互动的话。', '{"type":"object","required":["type","title","cover","segments","bgm","brand","publish_package"],"properties":{"bgm":{"type":"string"},"type":{"enum":["价值型","观点型","案例型"],"type":"string"},"brand":{"type":"string"},"cover":{"type":"object","required":["title","visual"],"properties":{"title":{"type":"string"},"visual":{"type":"string"}},"additionalProperties":false},"title":{"type":"string"},"segments":{"type":"array","items":{"type":"object","required":["phase","words","action","tone","subtitle","kinetic_text","transition","evidence"],"properties":{"tone":{"type":"string"},"phase":{"enum":["钩","破","立","据","界","收"],"type":"string"},"words":{"type":"string"},"action":{"type":"string"},"evidence":{"type":"string"},"subtitle":{"type":"string"},"transition":{"type":"string"},"kinetic_text":{"type":"string"}},"additionalProperties":false}},"publish_package":{"type":"object","required":["copy","tags","pinned_comment"],"properties":{"copy":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"pinned_comment":{"type":"string"}},"additionalProperties":false}},"additionalProperties":false}'::jsonb, '1.0', TRUE, 0, NULL, NULL, NULL, '2026-10-24T03:40:02.080762', '2026-10-25T23:03:29.265452');
-DELETE FROM prompt_templates WHERE tenant_id IS NULL OR tenant_id=0;
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, '主诉文本分析', 'text_analysis_complaints', 'text_analysis', '从患者主诉中提取关键词和需求', '你是一位医疗数据分析专家。请分析以下患者主诉数据，提取关键信息：
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (2, NULL, '主诉文本分析', 'text_analysis_complaints', 'text_analysis', '从患者主诉中提取关键词和需求', '你是一位医疗数据分析专家。请分析以下患者主诉数据，提取关键信息：
 
 【主诉数据】
 {complaints_text}
@@ -14113,8 +14113,8 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
     ],
     "pain_points": ["长期慢性病管理困难"],
     "opportunities": ["慢性病管理套餐"]
-}}', '["complaints_text"]'::jsonb, '1.0', TRUE, TRUE, 0, NULL, '2026-02-18T12:31:43.543089', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'draft', NULL);
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, '视频脚本生成', 'content_content_script', 'content_generation', NULL, '你是一位资深的短视频脚本策划师，擅长创作医疗健康类短视频脚本。
+}}', '["complaints_text"]'::jsonb, '1.0', TRUE, TRUE, 0, NULL, '2026-02-18T12:31:43.543089', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (6, NULL, '视频脚本生成', 'content_content_script', 'content_generation', NULL, '你是一位资深的短视频脚本策划师，擅长创作医疗健康类短视频脚本。
 
 {{topic_info}}
 {{knowledge_section}}
@@ -14146,8 +14146,8 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
 }
 ```
 
-只返回JSON，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_script', NULL, NULL, NULL, NULL, 'draft', NULL);
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, 'AI产品洞察生成', 'ai_product_insights', 'ai_insight', '基于多维度数据生成医疗产品开发建议', '你是一位资深的医疗产品经理。请基于以下数据，提出3-5个医疗产品开发建议。
+只返回JSON，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_script', NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (1, NULL, 'AI产品洞察生成', 'ai_product_insights', 'ai_insight', '基于多维度数据生成医疗产品开发建议', '你是一位资深的医疗产品经理。请基于以下数据，提出3-5个医疗产品开发建议。
 
 【疾病分布数据】
 {disease_data}
@@ -14197,8 +14197,8 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
     ],
     "overall_insights": "整体市场趋势分析...",
     "risk_warnings": ["注意事项1", "注意事项2"]
-}}', '["disease_data","segment_data","text_data"]'::jsonb, '1.0', TRUE, TRUE, 4, '2026-02-18T15:56:35.964325', '2026-02-18T12:31:43.543084', '2026-02-18T15:56:35.965343', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'draft', NULL);
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, '选题生成', 'content_content_topic', 'content_generation', NULL, '你是一位资深的医疗健康内容策划专家，擅长将热点话题与医院特色结合，创作有吸引力的内容选题。
+}}', '["disease_data","segment_data","text_data"]'::jsonb, '1.0', TRUE, TRUE, 4, '2026-02-18T15:56:35.964325', '2026-02-18T12:31:43.543084', '2026-02-18T15:56:35.965343', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (4, NULL, '选题生成', 'content_content_topic', 'content_generation', NULL, '你是一位资深的医疗健康内容策划专家，擅长将热点话题与医院特色结合，创作有吸引力的内容选题。
 
 ## 当前热点话题
 {{hot_topics}}
@@ -14238,8 +14238,8 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
 ]
 ```
 
-只返回JSON数组，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_topic', NULL, NULL, NULL, NULL, 'draft', NULL);
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, '公众号文章生成', 'content_content_article', 'content_generation', NULL, '你是一位资深的医疗健康内容创作者，擅长撰写专业且易读的科普文章。
+只返回JSON数组，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_topic', NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (5, NULL, '公众号文章生成', 'content_content_article', 'content_generation', NULL, '你是一位资深的医疗健康内容创作者，擅长撰写专业且易读的科普文章。
 
 {{topic_info}}
 {{knowledge_section}}
@@ -14259,8 +14259,8 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
 5. 语言要通俗易懂，避免过多专业术语
 6. 使用Markdown格式
 
-请直接输出文章内容，不要其他说明。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_article', NULL, NULL, NULL, NULL, 'draft', NULL);
-INSERT INTO prompt_templates (tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (NULL, '小红书笔记生成', 'content_content_graphic_note', 'content_generation', NULL, '你是一位资深的小红书/图文笔记内容创作者，擅长创作医疗健康类图文笔记。
+请直接输出文章内容，不要其他说明。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_article', NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
+INSERT INTO prompt_templates (id, tenant_id, name, code, category, description, prompt_template, variables, version, is_active, is_system, usage_count, last_used_at, created_at, updated_at, created_by, module, function_type, llm_params, parent_id, version_tag, change_log, status, published_at) VALUES (7, NULL, '小红书笔记生成', 'content_content_graphic_note', 'content_generation', NULL, '你是一位资深的小红书/图文笔记内容创作者，擅长创作医疗健康类图文笔记。
 
 {{topic_info}}
 {{knowledge_section}}
@@ -14300,7 +14300,7 @@ INSERT INTO prompt_templates (tenant_id, name, code, category, description, prom
 4. 话题标签要热门且相关
 5. 内容要有干货，避免空洞
 
-只返回JSON，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_graphic_note', NULL, NULL, NULL, NULL, 'draft', NULL);
+只返回JSON，不要其他内容。', NULL, '1.0', TRUE, TRUE, NULL, NULL, '2026-02-19T03:00:10.209003', NULL, NULL, NULL, 'content_graphic_note', NULL, NULL, NULL, NULL, 'draft', NULL) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, code=EXCLUDED.code, category=EXCLUDED.category, description=EXCLUDED.description, prompt_template=EXCLUDED.prompt_template, variables=EXCLUDED.variables, version=EXCLUDED.version, is_active=EXCLUDED.is_active, is_system=EXCLUDED.is_system, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at, created_by=EXCLUDED.created_by, module=EXCLUDED.module, function_type=EXCLUDED.function_type, llm_params=EXCLUDED.llm_params, parent_id=EXCLUDED.parent_id, version_tag=EXCLUDED.version_tag, change_log=EXCLUDED.change_log, status=EXCLUDED.status, published_at=EXCLUDED.published_at;
 DELETE FROM task_builder_prompts;
 INSERT INTO task_builder_prompts (data_source_id, tone, prompt_text, created_at, updated_at) VALUES ('doctor_summary', 'professional', '你是一位医疗机构的运营助手。请根据医生的接诊数据，生成一条专业规范的绩效反馈消息。要求：1）称呼医生姓名；2）客观分析工作数据；3）提出量化改进建议；4）说明支持措施。语气专业正式，控制在100字以内。', '2026-02-17T01:45:04.974806', '2026-02-17T01:45:04.974806');
 INSERT INTO task_builder_prompts (data_source_id, tone, prompt_text, created_at, updated_at) VALUES ('doctor_summary', 'warm', '你是一位医疗机构的运营助手。请根据医生的接诊数据，生成一条激励或提醒消息。要求：1）称呼医生姓名；2）肯定医生的工作成果；3）提出改进建议或目标；4）表达支持和鼓励。语气专业友好，控制在100字以内。', '2026-02-17T01:45:04.974807', '2026-02-17T01:45:04.974807');
@@ -14371,8 +14371,7 @@ INSERT INTO task_builder_prompts (data_source_id, tone, prompt_text, created_at,
 3. 如果没有提供任何患者信息，生成通用的健康关怀消息
 
 要求：语气简洁直接，控制在80字以内。', '2026-02-17T01:45:04.974805', '2026-02-17T01:45:04.974805');
-DELETE FROM promotion_prompts WHERE tenant_id=0;
-INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (0, '朋友圈文案生成', '为推广活动生成朋友圈文案（A/B/C/通用）', 'moments_post_generation', TRUE, TRUE, '你是一名消费医疗咨询师，需要为朋友圈创作推广文案。
+INSERT INTO promotion_prompts (id, tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (8, 0, '朋友圈文案生成', '为推广活动生成朋友圈文案（A/B/C/通用）', 'moments_post_generation', TRUE, TRUE, '你是一名消费医疗咨询师，需要为朋友圈创作推广文案。
 
 【背景说明】
 消费医疗包括：医美、口腔、眼科、视光、体检、妇儿、高端私立医疗等领域。
@@ -14452,8 +14451,8 @@ INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_sys
       "tone": "案例分享，建立信任"
     }
   ]
-}', NULL, '["product_info","campaign_strategy","customer_segmentation","generation_notes"]'::jsonb, '{"product_info":"产品信息（名称、核心价值、适用人群）","generation_notes":"运营人员补充说明（可选）","campaign_strategy":"活动策略（目标、卖点）","customer_segmentation":"客户分层信息（A/B/C类的描述）"}'::jsonb, 0, NULL, '2026-02-25T13:17:17.577193', '2026-02-25T13:17:17.577193');
-INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (0, '推广活动话术生成', '为推广活动生成个性化客户话术（增强版，支持规则约束）', 'task_script_generation', TRUE, TRUE, '你是一名消费医疗咨询师，正在向客户推广产品。
+}', NULL, '["product_info","campaign_strategy","customer_segmentation","generation_notes"]'::jsonb, '{"product_info":"产品信息（名称、核心价值、适用人群）","generation_notes":"运营人员补充说明（可选）","campaign_strategy":"活动策略（目标、卖点）","customer_segmentation":"客户分层信息（A/B/C类的描述）"}'::jsonb, 0, NULL, '2026-02-25T13:17:17.577193', '2026-02-25T13:17:17.577193') ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, description=EXCLUDED.description, prompt_type=EXCLUDED.prompt_type, is_system=EXCLUDED.is_system, is_active=EXCLUDED.is_active, prompt_text=EXCLUDED.prompt_text, examples=EXCLUDED.examples, variables=EXCLUDED.variables, variable_description=EXCLUDED.variable_description, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at;
+INSERT INTO promotion_prompts (id, tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (2, 0, '推广活动话术生成', '为推广活动生成个性化客户话术（增强版，支持规则约束）', 'task_script_generation', TRUE, TRUE, '你是一名消费医疗咨询师，正在向客户推广产品。
 
   【背景说明】
   消费医疗包括：医美、口腔、眼科、视光、体检、妇儿、高端私立医疗等领域。
@@ -14521,8 +14520,8 @@ INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_sys
   - 严格按照【针对XX客户的特殊指令】调整话术风格
   - 只输出话术内容，不要输出任何解释性文字
   - 不要在话术末尾添加免责声明或补充说明（系统会自动添加）
-', NULL, '["product_knowledge","campaign_strategy","customer_name","customer_age","customer_gender","customer_segment","total_paid_amount","visit_count","last_visit_date","customer_tags","purchase_history","tone","segment_instruction","must_include_keywords","must_avoid_keywords"]'::jsonb, '{"tone":"语气风格","visit_count":"就诊次数","customer_age":"客户年龄","customer_name":"客户姓名","customer_tags":"客户标签","customer_gender":"客户性别","last_visit_date":"最近就诊日期","customer_segment":"客户分层（A类/B类/C类）","purchase_history":"消费历史","campaign_strategy":"活动策略描述","product_knowledge":"产品知识图谱","total_paid_amount":"累计消费金额","must_avoid_keywords":"禁用词列表","segment_instruction":"分层指令","must_include_keywords":"必须包含的关键词列表"}'::jsonb, 1, '2026-02-25T16:43:01.585443', '2026-02-22T23:50:28.782647', '2026-02-25T16:43:01.582392');
-INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (0, '客户筛选条件生成', '根据产品特性和策略生成SQL筛选条件', 'customer_filter_generation', TRUE, TRUE, '你是一位消费医疗数据分析专家,需要根据产品特性生成精准的客户筛选条件,并将客户分为A/B/C三层。
+', NULL, '["product_knowledge","campaign_strategy","customer_name","customer_age","customer_gender","customer_segment","total_paid_amount","visit_count","last_visit_date","customer_tags","purchase_history","tone","segment_instruction","must_include_keywords","must_avoid_keywords"]'::jsonb, '{"tone":"语气风格","visit_count":"就诊次数","customer_age":"客户年龄","customer_name":"客户姓名","customer_tags":"客户标签","customer_gender":"客户性别","last_visit_date":"最近就诊日期","customer_segment":"客户分层（A类/B类/C类）","purchase_history":"消费历史","campaign_strategy":"活动策略描述","product_knowledge":"产品知识图谱","total_paid_amount":"累计消费金额","must_avoid_keywords":"禁用词列表","segment_instruction":"分层指令","must_include_keywords":"必须包含的关键词列表"}'::jsonb, 1, '2026-02-25T16:43:01.585443', '2026-02-22T23:50:28.782647', '2026-02-25T16:43:01.582392') ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, description=EXCLUDED.description, prompt_type=EXCLUDED.prompt_type, is_system=EXCLUDED.is_system, is_active=EXCLUDED.is_active, prompt_text=EXCLUDED.prompt_text, examples=EXCLUDED.examples, variables=EXCLUDED.variables, variable_description=EXCLUDED.variable_description, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at;
+INSERT INTO promotion_prompts (id, tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (7, 0, '客户筛选条件生成', '根据产品特性和策略生成SQL筛选条件', 'customer_filter_generation', TRUE, TRUE, '你是一位消费医疗数据分析专家,需要根据产品特性生成精准的客户筛选条件,并将客户分为A/B/C三层。
 
   【产品知识】
   {{ product_knowledge }}
@@ -14611,8 +14610,8 @@ INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_sys
   变量说明：
   - product_knowledge (必需)
   - notes (可选)
-  - existing_tags (可选，强烈建议提供)', NULL, '["product_knowledge","notes","existing_tags"]'::jsonb, '{"notes":"运营人员补充说明(可选)","existing_tags":"数据库中真实存在的标签列表(可选,强烈建议提供)","product_knowledge":"产品知识图谱"}'::jsonb, 28, '2026-02-27T16:40:12.259755', '2026-02-22T23:50:28.782647', '2026-02-27T16:40:12.258622');
-INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (0, '推广活动内容选题生成', '为推广活动生成内容选题（文章、短视频、图文）', 'content_topic_generation', TRUE, TRUE, '你是一名消费医疗内容策划师，需要为推广活动生成内容选题。
+  - existing_tags (可选，强烈建议提供)', NULL, '["product_knowledge","notes","existing_tags"]'::jsonb, '{"notes":"运营人员补充说明(可选)","existing_tags":"数据库中真实存在的标签列表(可选,强烈建议提供)","product_knowledge":"产品知识图谱"}'::jsonb, 28, '2026-02-27T16:40:12.259755', '2026-02-22T23:50:28.782647', '2026-02-27T16:40:12.258622') ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, description=EXCLUDED.description, prompt_type=EXCLUDED.prompt_type, is_system=EXCLUDED.is_system, is_active=EXCLUDED.is_active, prompt_text=EXCLUDED.prompt_text, examples=EXCLUDED.examples, variables=EXCLUDED.variables, variable_description=EXCLUDED.variable_description, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at;
+INSERT INTO promotion_prompts (id, tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (3, 0, '推广活动内容选题生成', '为推广活动生成内容选题（文章、短视频、图文）', 'content_topic_generation', TRUE, TRUE, '你是一名消费医疗内容策划师，需要为推广活动生成内容选题。
 
   【背景说明】
   消费医疗包括：医美、口腔、眼科、视光、体检、妇儿、高端私立医疗等领域。
@@ -14659,8 +14658,8 @@ INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_sys
         "cta": "评论区留言获取详细清单"
       }
     ]
-  }', NULL, '["product_info","campaign_strategy","topic_count","generation_notes"]'::jsonb, '{"topic_count":"生成选题数量","product_info":"产品信息（名称、品类、核心价值、适用人群）","generation_notes":"运营人员补充说明（可选）","campaign_strategy":"活动策略（目标、卖点）"}'::jsonb, 10, '2026-02-27T16:40:48.325216', '2026-02-22T23:50:28.782647', '2026-02-27T16:40:48.32404');
-INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (0, '产品知识提取提示词（V1 - 最终生产版）', '解析上传的产品文件，提取产品知识图谱', 'product_knowledge_extraction', TRUE, TRUE, '你是一名消费医疗产品分析专家，需要从产品资料中提取结构化信息并进行营销分析。
+  }', NULL, '["product_info","campaign_strategy","topic_count","generation_notes"]'::jsonb, '{"topic_count":"生成选题数量","product_info":"产品信息（名称、品类、核心价值、适用人群）","generation_notes":"运营人员补充说明（可选）","campaign_strategy":"活动策略（目标、卖点）"}'::jsonb, 10, '2026-02-27T16:40:48.325216', '2026-02-22T23:50:28.782647', '2026-02-27T16:40:48.32404') ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, description=EXCLUDED.description, prompt_type=EXCLUDED.prompt_type, is_system=EXCLUDED.is_system, is_active=EXCLUDED.is_active, prompt_text=EXCLUDED.prompt_text, examples=EXCLUDED.examples, variables=EXCLUDED.variables, variable_description=EXCLUDED.variable_description, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at;
+INSERT INTO promotion_prompts (id, tenant_id, name, description, prompt_type, is_system, is_active, prompt_text, examples, variables, variable_description, usage_count, last_used_at, created_at, updated_at) VALUES (4, 0, '产品知识提取提示词（V1 - 最终生产版）', '解析上传的产品文件，提取产品知识图谱', 'product_knowledge_extraction', TRUE, TRUE, '你是一名消费医疗产品分析专家，需要从产品资料中提取结构化信息并进行营销分析。
 
   【背景说明】
   消费医疗包括：医美、口腔、眼科、视光、体检、妇儿、高端私立医疗等领域。
@@ -14914,4 +14913,4 @@ INSERT INTO promotion_prompts (tenant_id, name, description, prompt_type, is_sys
   - 核心卖点要聚焦差异化，禁止使用通用词
   - 如果资料是图片，请仔细识别图片中的所有文字信息
   - 营销推断必须与客观事实逻辑自恰，不得自相矛盾
-  - 场景案例不得包含未在资料中出现的具体量化效果', NULL, '["product_content","medical_domain"]'::jsonb, '{"medical_domain":"医疗领域（可选，未提供时由模型判断）","product_content":"产品资料内容（可以是文本、表格或其他格式）"}'::jsonb, 93, '2026-02-27T15:59:05.107112', '2026-02-22T23:50:28.782647', '2026-02-27T15:59:05.102302');
+  - 场景案例不得包含未在资料中出现的具体量化效果', NULL, '["product_content","medical_domain"]'::jsonb, '{"medical_domain":"医疗领域（可选，未提供时由模型判断）","product_content":"产品资料内容（可以是文本、表格或其他格式）"}'::jsonb, 93, '2026-02-27T15:59:05.107112', '2026-02-22T23:50:28.782647', '2026-02-27T15:59:05.102302') ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, name=EXCLUDED.name, description=EXCLUDED.description, prompt_type=EXCLUDED.prompt_type, is_system=EXCLUDED.is_system, is_active=EXCLUDED.is_active, prompt_text=EXCLUDED.prompt_text, examples=EXCLUDED.examples, variables=EXCLUDED.variables, variable_description=EXCLUDED.variable_description, usage_count=EXCLUDED.usage_count, last_used_at=EXCLUDED.last_used_at, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at;
