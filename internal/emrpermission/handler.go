@@ -156,7 +156,7 @@ func (h *Handler) ListPermissions(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("permission management role required")
 		}
 		h.recordLog(r, tenantID, claims.UserID, 0, "failure", err, nil, nil, nil)
-		httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系管理员。")
+		httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系机构管理员。")
 		return
 	}
 	items, err := h.service.ListEmployeePermissions(r.Context(), tenantID)
@@ -191,7 +191,7 @@ func (h *Handler) GetPermission(w http.ResponseWriter, r *http.Request) {
 				accessErr = fmt.Errorf("permission management role required")
 			}
 			h.recordLog(r, tenantID, claims.UserID, employeeID, "failure", accessErr, nil, nil, nil)
-			httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系管理员。")
+			httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系机构管理员。")
 			return
 		}
 	}
@@ -221,7 +221,7 @@ func (h *Handler) UpsertPermission(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("permission management role required")
 		}
 		h.recordLog(r, tenantID, claims.UserID, 0, "failure", err, nil, nil, nil)
-		httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系管理员。")
+		httputil.WriteForbidden(w, "你没有配置人员权限的权限，请联系机构管理员。")
 		return
 	}
 	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
@@ -248,7 +248,7 @@ func (h *Handler) UpsertPermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.recordLog(r, tenantID, claims.UserID, employeeID, "success", nil, before, after, req); err != nil {
-		httputil.WriteInternalError(w, "权限已保存，但操作日志未能记录，请联系管理员。")
+		httputil.WriteInternalError(w, "权限已保存，但操作日志未能记录，请联系机构管理员。")
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
