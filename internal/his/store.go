@@ -237,7 +237,7 @@ func (s *Store) ListDrugs(ctx context.Context, tenantID int64, keyword string) (
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+drugColumns+` FROM his_drugs
 		WHERE tenant_id = $1
-		  AND ($2 = '%%' OR name ILIKE $2 OR code ILIKE $2)
+		  AND ($2 = '%%' OR name ILIKE $2 OR code ILIKE $2 OR pinyin ILIKE $2 OR initials ILIKE $2)
 		ORDER BY id`, tenantID, kw)
 	if err != nil {
 		return nil, err
@@ -355,7 +355,7 @@ func (s *Store) ListChargeItemsPaged(ctx context.Context, tenantID int64, keywor
 	}
 	args := []any{tenantID, "%" + strings.TrimSpace(keyword) + "%", strings.TrimSpace(category)}
 	where := ` WHERE tenant_id = $1
-		AND ($2 = '%%' OR name ILIKE $2 OR code ILIKE $2)
+		AND ($2 = '%%' OR name ILIKE $2 OR code ILIKE $2 OR pinyin ILIKE $2 OR initials ILIKE $2)
 		AND ($3 = '' OR category = $3)`
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM his_charge_items`+where, args...).Scan(&total); err != nil {
@@ -3557,12 +3557,21 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 		return []ICDDiagnosis{}, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT diagnosis_code, diagnosis_name
-		FROM emr_icd10_diagnosis_catalog
-		WHERE is_active
-		  AND (diagnosis_name ILIKE $1 OR normalized_name ILIKE $1 OR diagnosis_code ILIKE $2)
-		ORDER BY CASE WHEN diagnosis_code ILIKE $2 THEN 0 ELSE 1 END, diagnosis_code
-		LIMIT $3`, "%"+kw+"%", kw+"%", limit)
+		SELECT c.diagnosis_code, c.diagnosis_name
+		FROM emr_icd10_diagnosis_catalog c
+		LEFT JOIN his_icd10_pinyin py ON py.catalog_id = c.id
+		WHERE c.is_active
+		  AND (c.diagnosis_name ILIKE $1 OR c.normalized_name ILIKE $1
+		       OR c.diagnosis_code ILIKE $2 OR py.pinyin ILIKE $1 OR py.initials ILIKE $1)
+		ORDER BY CASE
+		           WHEN c.diagnosis_code ILIKE $2 THEN 0
+		           WHEN py.initials = $4 THEN 1
+		           WHEN py.initials LIKE $4 || '%' THEN 2
+		           WHEN c.diagnosis_name ILIKE $2 THEN 3
+		           WHEN py.pinyin LIKE $4 || '%' THEN 4
+		           ELSE 5 END,
+		         length(c.diagnosis_name), c.diagnosis_code
+		LIMIT $3`, "%"+kw+"%", kw+"%", limit, strings.ToLower(kw))
 	if err != nil {
 		return nil, err
 	}
