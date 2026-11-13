@@ -478,7 +478,7 @@ func isComplianceRuleConflict(err error) bool {
 // 署名：Codex，合规卫士开发 Agent
 // 时间：2026-09-14
 func (s *Service) ListCheckItems(ctx context.Context, tenantID int64, status string) ([]CheckItemListItem, error) {
-	query := `SELECT id::text,tenant_id,source_type,source_id,source_version,scene_code,role_code,employee_id,theme_key,question,risk_hypothesis,primary_risk_type,related_risk_types,evidence,check_basis,suggested_actions,priority,status,COALESCE(conclusion,''),COALESCE(process_reason,''),process_actions,COALESCE(process_note,''),created_at,updated_at FROM compliance_check_items WHERE tenant_id=$1`
+	query := `SELECT ` + checkItemSelectColumns + ` FROM compliance_check_items WHERE tenant_id=$1`
 	args := []any{tenantID}
 	if strings.TrimSpace(status) != "" {
 		query += " AND status=$2"
@@ -493,7 +493,7 @@ func (s *Service) ListCheckItems(ctx context.Context, tenantID int64, status str
 	items := []CheckItemListItem{}
 	for rows.Next() {
 		var i CheckItemListItem
-		if err := rows.Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt); err != nil {
+		if err := scanCheckItem(rows, &i); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -502,7 +502,7 @@ func (s *Service) ListCheckItems(ctx context.Context, tenantID int64, status str
 }
 func (s *Service) GetCheckItem(ctx context.Context, tenantID int64, id string) (*CheckItemListItem, error) {
 	var i CheckItemListItem
-	err := s.pool.QueryRow(ctx, `SELECT id::text,tenant_id,source_type,source_id,source_version,scene_code,role_code,employee_id,theme_key,question,risk_hypothesis,primary_risk_type,related_risk_types,evidence,check_basis,suggested_actions,priority,status,COALESCE(conclusion,''),COALESCE(process_reason,''),process_actions,COALESCE(process_note,''),created_at,updated_at FROM compliance_check_items WHERE tenant_id=$1 AND id::text=$2`, tenantID, id).Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt)
+	err := scanCheckItem(s.pool.QueryRow(ctx, `SELECT `+checkItemSelectColumns+` FROM compliance_check_items WHERE tenant_id=$1 AND id::text=$2`, tenantID, id), &i)
 	if err != nil {
 		return nil, err
 	}
@@ -575,6 +575,7 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 	}
 
 	overview := &ComplianceOverview{
+		MonthlyTrend:    make([]MonthlyTrendPoint, 0, 4),
 		ByScene:         make([]OverviewBucket, 0),
 		ByDepartment:    make([]OverviewBucket, 0),
 		ByEmployee:      make([]OverviewBucket, 0),
@@ -587,7 +588,7 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 		SELECT
 		  COUNT(*) FILTER (WHERE f.status IN ('pending','in_progress')),
 		  COUNT(*) FILTER (WHERE f.status = 'processed'),
-		  COUNT(*) FILTER (WHERE f.status = 'processed' AND f.conclusion IN ('management_risk_confirmed','medical_basis_needed'))
+		  COUNT(*) FILTER (WHERE f.status = 'processed' AND f.conclusion IN ('management_risk_confirmed','medical_basis_needed','confirmed'))
 		FROM compliance_check_items f
 		WHERE f.tenant_id = $1
 	`, tenantID).Scan(
@@ -598,7 +599,16 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 		return nil, fmt.Errorf("count compliance overview: %w", err)
 	}
 
+	// 接诊口径：接诊总量 / 有问题接诊数 / 合规率 / 覆盖医生与科室。
+	if err := s.loadEncounterStats(ctx, tenantID, overview); err != nil {
+		return nil, err
+	}
 	var err error
+	overview.MonthlyTrend, err = s.monthlyTrend(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance monthly trend: %w", err)
+	}
+
 	overview.ByScene, err = s.loadOverviewBuckets(ctx, `
 		SELECT f.scene_code, f.scene_code, COUNT(*)
 		FROM compliance_check_items f
@@ -812,7 +822,7 @@ func (s *Service) loadRecentFindings(ctx context.Context, tenantID int64, confir
 
 func (s *Service) loadRecentCheckItems(ctx context.Context, tenantID int64, status string) ([]CheckItemListItem, error) {
 	condition, args := recentCheckItemsCondition(tenantID, status)
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT i.id::text,i.tenant_id,i.source_type,i.source_id,i.source_version,i.scene_code,i.role_code,i.employee_id,i.theme_key,i.question,i.risk_hypothesis,i.primary_risk_type,i.related_risk_types,i.evidence,i.check_basis,i.suggested_actions,i.priority,i.status,COALESCE(i.conclusion,''),COALESCE(i.process_reason,''),i.process_actions,COALESCE(i.process_note,''),i.created_at,i.updated_at FROM compliance_check_items i WHERE i.tenant_id=$1 AND %s ORDER BY i.updated_at DESC,i.id DESC LIMIT 5`, condition), args...)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT %s FROM compliance_check_items i WHERE i.tenant_id=$1 AND %s ORDER BY i.updated_at DESC,i.id DESC LIMIT 5`, checkItemSelectColumnsAliased, condition), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +830,7 @@ func (s *Service) loadRecentCheckItems(ctx context.Context, tenantID int64, stat
 	items := make([]CheckItemListItem, 0, 5)
 	for rows.Next() {
 		var i CheckItemListItem
-		if err := rows.Scan(&i.ID, &i.TenantID, &i.SourceType, &i.SourceID, &i.SourceVersion, &i.SceneCode, &i.RoleCode, &i.EmployeeID, &i.ThemeKey, &i.Question, &i.RiskHypothesis, &i.PrimaryRiskType, &i.RelatedRiskTypes, &i.Evidence, &i.CheckBasis, &i.SuggestedActions, &i.Priority, &i.Status, &i.Conclusion, &i.ProcessReason, &i.ProcessActions, &i.ProcessNote, &i.CreatedAt, &i.UpdatedAt); err != nil {
+		if err := scanCheckItem(rows, &i); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -830,7 +840,7 @@ func (s *Service) loadRecentCheckItems(ctx context.Context, tenantID int64, stat
 
 func recentCheckItemsCondition(tenantID int64, status string) (string, []any) {
 	if status == "confirmed" {
-		return "i.status = 'processed' AND i.conclusion = 'management_risk_confirmed'", []any{tenantID}
+		return "i.status = 'processed' AND i.conclusion IN ('management_risk_confirmed','medical_basis_needed','confirmed')", []any{tenantID}
 	}
 	return "i.status = $2", []any{tenantID, status}
 }
@@ -2167,16 +2177,21 @@ func mustMarshalIndent(value any) string {
 }
 
 func defaultCommunicationRuleSetCode(businessScope, roleCode string) string {
-	switch strings.ToLower(strings.TrimSpace(businessScope)) {
-	case "consultant":
+	if isConsultantComplianceValue(businessScope) || isConsultantComplianceValue(roleCode) {
 		return "communication.consultant.consultation"
+	}
+	return "communication.doctor.outpatient"
+}
+
+// isConsultantComplianceValue 识别咨询师分析流水线产出的角色编码。
+// consultant_conversion 是咨询成交转化分析使用的角色，同样属于咨询师沟通，
+// 不能因为编码不是字面量 consultant 而回落到医生规则集。
+func isConsultantComplianceValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "consultant", "consultant_conversion":
+		return true
 	default:
-		switch strings.ToLower(strings.TrimSpace(roleCode)) {
-		case "consultant":
-			return "communication.consultant.consultation"
-		default:
-			return "communication.doctor.outpatient"
-		}
+		return false
 	}
 }
 

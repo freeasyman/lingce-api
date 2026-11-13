@@ -201,10 +201,44 @@ type CheckItemListItem struct {
 	ProcessReason    string                   `json:"process_reason,omitempty"`
 	ProcessActions   json.RawMessage          `json:"process_actions,omitempty"`
 	ProcessNote      string                   `json:"process_note,omitempty"`
+	// 处理决定 / 签收 / 复查 / 关闭：页面三分法的正式落库字段。
+	DecisionAction   string                   `json:"decision_action,omitempty"`
+	DecisionReason   string                   `json:"decision_reason,omitempty"`
+	DecisionBy       *int64                   `json:"decision_by,omitempty"`
+	DecisionAt       *time.Time               `json:"decision_at,omitempty"`
+	SignMethod       string                   `json:"sign_method,omitempty"`
+	SignedAt         *time.Time               `json:"signed_at,omitempty"`
+	ReviewDate       *time.Time               `json:"review_date,omitempty"`
+	ReviewMethod     string                   `json:"review_method,omitempty"`
+	ReviewConclusion string                   `json:"review_conclusion,omitempty"`
+	ClosedAt         *time.Time               `json:"closed_at,omitempty"`
 	CreatedAt        time.Time                `json:"created_at"`
 	UpdatedAt        time.Time                `json:"updated_at"`
 	ProcessRecords   []CheckItemProcessRecord `json:"process_records,omitempty"`
 }
+
+// CheckItemDecisionRequest 是页面对一条核查事项提交处理决定的入参。
+//
+// action 取页面三分法 close / letter / rectify：
+//   - close   → conclusion=not_confirmed（关闭，误报）
+//   - letter  → conclusion=confirmed（发改进意见书）
+//   - rectify → conclusion=confirmed（立项整改）
+//
+// 签收、复查、关闭是同一处理链路上的后续动作，可以再次调用本接口补写；
+// 此时 action 可省略，服务端沿用已落库的 decision_action。
+// 写入使用 COALESCE 语义：本次没传的字段不会被清空。
+type CheckItemDecisionRequest struct {
+	Action           string `json:"action"`
+	Reason           string `json:"reason"`
+	SignMethod       string `json:"sign_method"`
+	SignedAt         string `json:"signed_at"`
+	ReviewDate       string `json:"review_date"`
+	ReviewMethod     string `json:"review_method"`
+	ReviewConclusion string `json:"review_conclusion"`
+	ClosedAt         string `json:"closed_at"`
+	IdempotencyKey   string `json:"idempotency_key"`
+}
+
 type CheckItemProcessRequest struct {
 	Conclusion     string   `json:"conclusion"`
 	Reason         string   `json:"reason"`
@@ -235,24 +269,38 @@ type OverviewBucket struct {
 	Count int64  `json:"count"`
 }
 
-// ComplianceOverview 是全院情况页面使用的最小统计模型。
+// MonthlyTrendPoint 是近几个月核查事项数量的一个点。
 //
-// 不提供“合规率”、评分或趋势等没有确定口径的指标，避免 MVP 阶段
-// 把全院情况扩展成复杂报表。
+// Month 使用 YYYY-MM，方便前端按月份展示；统计口径是核查事项创建时间。
+type MonthlyTrendPoint struct {
+	Month string `json:"month"`
+	Count int64  `json:"count"`
+}
+
+// ComplianceOverview 是全院情况页面使用的统计模型。
 //
-// 署名：Codex，合规卫士开发 Agent
-// 时间：2026-09-14
+// 除核查事项的维度统计外，还返回接诊总量、有问题接诊数、重点行为合规率、
+// 近 4 个月趋势和覆盖的医生/科室数，页面不再拿试点数据兜底。
+// encounters_total 等三项来自 recordings（排除已删除），按租户隔离；
+// monthly_trend 来自 compliance_check_items 的创建时间。
 type ComplianceOverview struct {
-	PendingCount    int64               `json:"pending_count"`
-	ReviewedCount   int64               `json:"reviewed_count"`
-	ConfirmedCount  int64               `json:"confirmed_count"`
-	ByScene         []OverviewBucket    `json:"by_scene"`
-	ByDepartment    []OverviewBucket    `json:"by_department"`
-	ByEmployee      []OverviewBucket    `json:"by_employee"`
-	ByRule          []OverviewBucket    `json:"by_rule"`
-	RecentPending   []CheckItemListItem `json:"recent_pending"`
-	RecentReviewed  []CheckItemListItem `json:"recent_reviewed"`
-	RecentConfirmed []CheckItemListItem `json:"recent_confirmed"`
+	PendingCount   int64               `json:"pending_count"`
+	ReviewedCount  int64               `json:"reviewed_count"`
+	ConfirmedCount int64               `json:"confirmed_count"`
+	// 接诊口径统计
+	EncountersTotal        int64              `json:"encounters_total"`
+	EncountersWithFindings int64              `json:"encounters_with_findings"`
+	ComplianceRate         float64            `json:"compliance_rate"`
+	MonthlyTrend           []MonthlyTrendPoint `json:"monthly_trend"`
+	DoctorsCount           int64              `json:"doctors_count"`
+	DepartmentsCount       int64              `json:"departments_count"`
+	ByScene                []OverviewBucket    `json:"by_scene"`
+	ByDepartment           []OverviewBucket    `json:"by_department"`
+	ByEmployee             []OverviewBucket    `json:"by_employee"`
+	ByRule                 []OverviewBucket    `json:"by_rule"`
+	RecentPending          []CheckItemListItem `json:"recent_pending"`
+	RecentReviewed         []CheckItemListItem `json:"recent_reviewed"`
+	RecentConfirmed        []CheckItemListItem `json:"recent_confirmed"`
 }
 
 // ComplianceRule 是检查标准页面使用的规则定义。

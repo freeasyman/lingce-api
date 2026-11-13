@@ -97,14 +97,33 @@ func (h *Handler) requireAbility(w http.ResponseWriter, r *http.Request, ability
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken string) {
-	routes := make([]router.Route, 0, 17)
+	routes := make([]router.Route, 0, 25)
 	// 调试接口只校验 JWT、不校验租户与权限，生产环境直接不注册（未匹配返回 404）。
 	// 开发/测试环境保留，便于联调提示词与规则集。
 	if h.debugRoutesEnabled() {
-		routes = append(routes, router.Route{
-			Method: "POST", Path: "/api/v1/compliance/debug/analyze-text", Handler: h.AnalyzeText,
-			Auth: true, AllowedUserTypes: []string{"admin", "employee"},
-		})
+		routes = append(routes,
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/analyze-text", Handler: h.AnalyzeText,
+				Auth: true, AllowedUserTypes: []string{"admin", "employee"},
+			},
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/reports/monthly/export", Handler: h.ExportMonthlyReport,
+			},
+			// 改进意见书 / 闭环清单 / 迎检资质清单的免鉴权别名，供 Demo 预览页直连。
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/check-items/{id}/letter/export", Handler: h.ExportCheckItemLetter,
+			},
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/reports/loop/export", Handler: h.ExportLoopList,
+			},
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/qualifications/checklist/export", Handler: h.ExportQualificationChecklist,
+			},
+			// 处理决定的免鉴权别名：租户从 ?tenant_id= 读取，仅开发/测试环境可用。
+			router.Route{
+				Method: "POST", Path: "/api/v1/compliance/debug/check-items/{id}/decision", Handler: h.DecideCheckItemDebug,
+			},
+		)
 	}
 	routes = append(routes,
 		router.Route{Method: "GET", Path: "/api/v1/compliance/findings", Handler: h.ListFindings, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -112,6 +131,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		router.Route{Method: "GET", Path: "/api/v1/compliance/check-items/{id}", Handler: h.GetCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/start", Handler: h.StartCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/process", Handler: h.ProcessCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/decision", Handler: h.DecideCheckItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "GET", Path: "/api/v1/compliance/findings/{id}", Handler: h.GetFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "POST", Path: "/api/v1/compliance/findings/{id}/review", Handler: h.ReviewFinding, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "GET", Path: "/api/v1/compliance/overview", Handler: h.Overview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -122,6 +142,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		router.Route{Method: "POST", Path: "/api/v1/compliance/rules/{id}/enable", Handler: h.EnableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "POST", Path: "/api/v1/compliance/rules/{id}/disable", Handler: h.DisableRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{Method: "DELETE", Path: "/api/v1/compliance/rules/{id}", Handler: h.DeleteRule, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/reports/monthly/export", Handler: h.ExportMonthlyReport, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/check-items/{id}/letter/export", Handler: h.ExportCheckItemLetter, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/reports/loop/export", Handler: h.ExportLoopList, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		router.Route{Method: "POST", Path: "/api/v1/compliance/qualifications/checklist/export", Handler: h.ExportQualificationChecklist, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		router.Route{
 			Method:   "POST",
 			Path:     "/api/v1/internal/compliance/communication-check",
