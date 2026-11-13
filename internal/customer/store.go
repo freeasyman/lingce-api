@@ -124,6 +124,31 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 
 	// Query customers
 	offset := (req.Page - 1) * req.PageSize
+	// 先取当前页客户 ID，再让录音/互动/成交子查询只扫这一页客户。
+	// 否则 1500+ 客户的租户会为 20 条列表扫描全部录音和 JSON，接口达到数秒。
+	pageArgs := append(append([]any{}, args...), req.PageSize, offset)
+	pageRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id FROM customers WHERE %s ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, whereClause, len(args)+1, len(args)+2), pageArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query customer page ids: %w", err)
+	}
+	pageIDs := make([]int64, 0, req.PageSize)
+	for pageRows.Next() {
+		var id int64
+		if err := pageRows.Scan(&id); err != nil {
+			pageRows.Close()
+			return nil, 0, fmt.Errorf("failed to scan customer page id: %w", err)
+		}
+		pageIDs = append(pageIDs, id)
+	}
+	if err := pageRows.Err(); err != nil {
+		pageRows.Close()
+		return nil, 0, fmt.Errorf("failed to read customer page ids: %w", err)
+	}
+	pageRows.Close()
+	if len(pageIDs) == 0 {
+		return []*Customer{}, total, nil
+	}
+
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, name, phone, email, gender, age, source, status, momentum,
 		       assigned_to, assigned_at, converted_at, last_contacted_at, next_follow_up_at,
@@ -144,6 +169,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			       MIN(COALESCE(NULLIF(channel_type, ''), 'unknown')) AS first_channel,
 			       COUNT(*)::int AS identity_count
 			FROM customer_identities
+			WHERE customer_id = ANY($__PAGE_IDS__)
 			GROUP BY customer_id
 		) ci ON ci.customer_id = customers.id
 		LEFT JOIN (
@@ -155,7 +181,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			       ) AS last_interaction_at
 			FROM recordings r
 			LEFT JOIN customer_interactions i ON i.customer_id = r.customer_id
-			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__ AND r.customer_id = ANY($__PAGE_IDS__)
 			GROUP BY r.customer_id
 		) it ON it.customer_id = customers.id
 		LEFT JOIN (
@@ -177,7 +203,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			           END
 			       ), 0)::float8 AS total_converted_amount
 			FROM recordings r
-			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__ AND r.customer_id = ANY($__PAGE_IDS__)
 			GROUP BY r.customer_id
 		) ds ON ds.customer_id = customers.id
 		LEFT JOIN (
@@ -201,17 +227,17 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			           ''
 			       )), '') AS last_deal_result
 			FROM recordings r
-			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__
+			WHERE r.customer_id IS NOT NULL AND __TENANT_FILTER__ AND r.customer_id = ANY($__PAGE_IDS__)
 			ORDER BY r.customer_id, COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
 		) lr ON lr.customer_id = customers.id
-		WHERE %s
+		WHERE %s AND customers.id = ANY($__PAGE_IDS__)
 		ORDER BY created_at DESC
 		LIMIT $%d OFFSET $%d
 	`, whereClause, argIndex, argIndex+1)
 
 	query = strings.ReplaceAll(query, "__TENANT_FILTER__", tenantFilter)
-	args = append(args, req.PageSize, offset)
-
+	query = strings.ReplaceAll(query, "__PAGE_IDS__", fmt.Sprintf("%d", argIndex+2))
+	args = append(args, req.PageSize, offset, pageIDs)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query customers: %w", err)
