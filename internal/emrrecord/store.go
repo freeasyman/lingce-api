@@ -141,8 +141,9 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, er
 	if customerID > 0 {
 		var name, phone, gender string
 		var age *int
+		var birthDate *time.Time
 		var extra []byte
-		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(name,''), COALESCE(phone,''), COALESCE(gender,''), age, COALESCE(extra_data,'{}'::jsonb) FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, customerID, tenantID).Scan(&name, &phone, &gender, &age, &extra); err == nil {
+		if err := s.pool.QueryRow(ctx, `SELECT COALESCE(name,''), COALESCE(phone,''), COALESCE(gender,''), age, birth_date, COALESCE(extra_data,'{}'::jsonb) FROM customers WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`, customerID, tenantID).Scan(&name, &phone, &gender, &age, &birthDate, &extra); err == nil {
 			for key, value := range decodeObject(extra) {
 				if _, exists := item.PatientSnapshot[key]; !exists {
 					item.PatientSnapshot[key] = value
@@ -159,6 +160,12 @@ func (s *Store) Get(ctx context.Context, tenantID int64, id string) (*Record, er
 			}
 			if item.PatientSnapshot["age"] == nil && age != nil {
 				item.PatientSnapshot["age"] = *age
+			}
+			// 老病历快照没有出生日期：从患者主档回填（患者补录后无需重建病历即可完成接诊）。
+			if item.PatientSnapshot["birth_date"] == nil || strings.TrimSpace(fmt.Sprint(item.PatientSnapshot["birth_date"])) == "" {
+				if birthDate != nil && !birthDate.IsZero() {
+					item.PatientSnapshot["birth_date"] = birthDate.Format("2006-01-02")
+				}
 			}
 		}
 	}

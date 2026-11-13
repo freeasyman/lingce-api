@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -55,7 +56,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		CREATE TABLE tenants (id bigint PRIMARY KEY, name text, code text, deleted_at timestamp);
 		CREATE TABLE customers (
 			id bigserial PRIMARY KEY, tenant_id bigint, name text, phone text, gender text,
-			age int, source text, lifecycle_stage text, status text, momentum int,
+			age int, birth_date timestamp, source text, lifecycle_stage text, status text, momentum int,
 			tags jsonb DEFAULT '[]'::jsonb, extra_data jsonb, created_by bigint,
 			created_at timestamptz, updated_at timestamptz, deleted_at timestamptz
 		);
@@ -65,7 +66,8 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 			email text, is_active integer DEFAULT 1, updated_at timestamp
 		);
 		CREATE TABLE departments (
-			id bigserial PRIMARY KEY, tenant_id bigint, name text,
+			id bigserial PRIMARY KEY, tenant_id bigint, name text, code text,
+			type text, template_code text,
 			deleted_at timestamp, is_active boolean DEFAULT true
 		);
 		CREATE TABLE encounters (
@@ -155,7 +157,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 
 func registerTestPatient(t *testing.T, svc *Service, tenantID int64, name, phone string) RegisterPatientResponse {
 	t.Helper()
-	resp, err := svc.RegisterPatient(context.Background(), tenantID, 10, RegisterPatientRequest{Name: name, Phone: phone})
+	resp, err := svc.RegisterPatient(context.Background(), tenantID, 10, RegisterPatientRequest{Name: name, Phone: phone, BirthDate: "1990-01-01"})
 	if err != nil {
 		t.Fatalf("register patient %s: %v", phone, err)
 	}
@@ -164,12 +166,27 @@ func registerTestPatient(t *testing.T, svc *Service, tenantID int64, name, phone
 
 func createTestSchedule(t *testing.T, svc *Service, tenantID int64, slotsTime string) Schedule {
 	t.Helper()
-	doctor, err := svc.CreateDoctor(context.Background(), tenantID, CreateDoctorRequest{EmployeeID: 10, Title: "主治医师"})
+	ctx := context.Background()
+	// P0-4：排班必须关联临床科室，测试 shim 里按需造一个“内科”。
+	var deptID int64
+	err := svc.store.pool.QueryRow(ctx, `
+		SELECT id FROM departments WHERE tenant_id = $1 AND code = 'internal' LIMIT 1`, tenantID).Scan(&deptID)
+	if err == pgx.ErrNoRows {
+		if err := svc.store.pool.QueryRow(ctx, `
+			INSERT INTO departments (tenant_id, name, code, type, template_code, is_active)
+			VALUES ($1, '内科', 'internal', 'clinical', 'internal_medicine', TRUE)
+			RETURNING id`, tenantID).Scan(&deptID); err != nil {
+			t.Fatalf("create test department: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("load test department: %v", err)
+	}
+	doctor, err := svc.CreateDoctor(ctx, tenantID, CreateDoctorRequest{EmployeeID: 10, DepartmentID: &deptID, Title: "主治医师"})
 	if err != nil {
 		t.Fatalf("create doctor: %v", err)
 	}
-	sched, err := svc.CreateSchedule(context.Background(), tenantID, CreateScheduleRequest{
-		DoctorID: doctor.ID, WorkDate: "2026-11-20", Period: "morning",
+	sched, err := svc.CreateSchedule(ctx, tenantID, CreateScheduleRequest{
+		DoctorID: doctor.ID, DepartmentID: &deptID, WorkDate: "2026-11-20", Period: "morning",
 		StartTime: "09:00", EndTime: slotsTime, SlotIntervalMinutes: 15,
 	})
 	if err != nil {
@@ -1182,5 +1199,66 @@ func TestPharmacyQueueQuery(t *testing.T) {
 	}
 	if len(queue) != 1 || queue[0].CustomerName == "" || queue[0].MRN == "" || len(queue[0].Items) != 1 {
 		t.Fatalf("queue item incomplete: %+v", queue)
+	}
+}
+
+func TestRegisterPatientRequiresBirthDate(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	_, err := svc.RegisterPatient(ctx, 1, 10, RegisterPatientRequest{Name: "缺出生日期", Phone: "13800000001"})
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("register without birth_date error = %v, want ValidationError", err)
+	}
+	if validation.Message != "请填写出生日期" {
+		t.Fatalf("validation message = %q, want 请填写出生日期", validation.Message)
+	}
+	if len(validation.Missing) != 1 || validation.Missing[0].Field != "birth_date" || validation.Missing[0].Label != "出生日期" {
+		t.Fatalf("missing_fields = %+v, want birth_date/出生日期", validation.Missing)
+	}
+
+	// 只有身份证、没有显式 birth_date 也拒绝：身份证推算只做前端辅助，不替代必填校验。
+	if _, err := svc.RegisterPatient(ctx, 1, 10, RegisterPatientRequest{Name: "只有身份证", Phone: "13800000002", IDCard: "110101199603155678"}); !errors.As(err, &validation) {
+		t.Fatalf("register with id_card only error = %v, want ValidationError", err)
+	}
+
+	resp, err := svc.RegisterPatient(ctx, 1, 10, RegisterPatientRequest{Name: "有出生日期", Phone: "13800000003", BirthDate: "1996-03-15"})
+	if err != nil {
+		t.Fatalf("register with birth_date: %v", err)
+	}
+	if resp.BirthDate != "1996-03-15" {
+		t.Fatalf("response birth_date = %q, want 1996-03-15", resp.BirthDate)
+	}
+}
+
+func TestRegisterPatientBirthDatePersistsAndUpdates(t *testing.T) {
+	svc, pool := newTestService(t)
+	ctx := context.Background()
+
+	resp, err := svc.RegisterPatient(ctx, 1, 10, RegisterPatientRequest{
+		Name: "出生日期患者", Phone: "13800000001", Gender: "female", BirthDate: "1996-03-15",
+	})
+	if err != nil {
+		t.Fatalf("register with birth_date: %v", err)
+	}
+	if resp.BirthDate != "1996-03-15" {
+		t.Fatalf("response birth_date = %q, want 1996-03-15", resp.BirthDate)
+	}
+	var birth *time.Time
+	if err := pool.QueryRow(ctx, `SELECT birth_date FROM customers WHERE tenant_id=1 AND id=$1`, resp.CustomerID).Scan(&birth); err != nil {
+		t.Fatal(err)
+	}
+	if birth == nil || birth.Format("2006-01-02") != "1996-03-15" {
+		t.Fatalf("customers.birth_date = %v, want 1996-03-15", birth)
+	}
+
+	// 同一手机号再次建档：复用档案并允许补录/修正出生日期。
+	updated, err := svc.RegisterPatient(ctx, 1, 10, RegisterPatientRequest{Name: "出生日期患者", Phone: "13800000001", BirthDate: "1980-01-02"})
+	if err != nil {
+		t.Fatalf("re-register with birth_date: %v", err)
+	}
+	if !updated.IsExisting || updated.BirthDate != "1980-01-02" {
+		t.Fatalf("updated = %+v, want existing with 1980-01-02", updated)
 	}
 }

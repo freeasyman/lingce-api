@@ -27,6 +27,7 @@ type PatientListItem struct {
 	Phone         string     `json:"phone"`
 	Gender        string     `json:"gender"`
 	Age           int        `json:"age"`
+	BirthDate     string     `json:"birth_date"`
 	MRN           string     `json:"mrn"`
 	Source        string     `json:"source"`
 	Tags          []string   `json:"tags"`
@@ -52,6 +53,9 @@ type PatientProfile struct {
 	Phone         string     `json:"phone"`
 	Gender        string     `json:"gender"`
 	Age           int        `json:"age"`
+	BirthDate     string     `json:"birth_date"`
+	IDCard        string     `json:"id_card"`
+	Address       string     `json:"address"`
 	MRN           string     `json:"mrn"`
 	Allergy       string     `json:"allergy"`
 	Source        string     `json:"source"`
@@ -338,7 +342,8 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword, price
 			GROUP BY o.customer_id
 		)
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
-		       COALESCE(c.age, 0), COALESCE(c.source, ''), COALESCE(c.tags::text, '[]'), c.created_at,
+		       COALESCE(c.age, 0), COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''),
+		       COALESCE(c.source, ''), COALESCE(c.tags::text, '[]'), c.created_at,
 		       COALESCE(vs.visit_count, 0), vs.last_visit_at, COALESCE(ss.total_spent, 0),
 		       COALESCE((
 		           SELECT pi.value FROM patient_identifiers pi
@@ -362,7 +367,7 @@ func (s *Store) ListPatients(ctx context.Context, tenantID int64, keyword, price
 		var item PatientListItem
 		var tagsRaw string
 		if err := rows.Scan(&item.ID, &item.Name, &item.Phone, &item.Gender, &item.Age,
-			&item.Source, &tagsRaw, &item.CreatedAt, &item.VisitCount, &item.LastVisitAt,
+			&item.BirthDate, &item.Source, &tagsRaw, &item.CreatedAt, &item.VisitCount, &item.LastVisitAt,
 			&item.TotalSpent, &item.MRN, &item.PriceIdentity); err != nil {
 			return result, err
 		}
@@ -390,7 +395,8 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 	var tagsRaw string
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
-		       COALESCE(c.age, 0), COALESCE(c.source, ''), COALESCE(c.tags::text, '[]'),
+		       COALESCE(c.age, 0), COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''),
+		       COALESCE(c.source, ''), COALESCE(c.tags::text, '[]'),
 		       c.extra_data, c.created_at, COALESCE(NULLIF(c.price_identity, ''), 'standard'),
 		       COALESCE((
 		           SELECT pi.value FROM patient_identifiers pi
@@ -415,7 +421,8 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 		WHERE c.tenant_id = $1 AND c.id = $2 AND c.deleted_at IS NULL`,
 		tenantID, customerID).
 		Scan(&overview.Patient.CustomerID, &overview.Patient.Name, &overview.Patient.Phone,
-			&overview.Patient.Gender, &overview.Patient.Age, &overview.Patient.Source, &tagsRaw,
+			&overview.Patient.Gender, &overview.Patient.Age, &overview.Patient.BirthDate,
+			&overview.Patient.Source, &tagsRaw,
 			&extraData, &overview.Patient.CreatedAt, &overview.Patient.PriceIdentity, &overview.Patient.MRN,
 			&overview.Patient.VisitCount, &overview.Patient.LastVisitAt, &overview.Patient.TotalSpent)
 	if err != nil {
@@ -426,6 +433,8 @@ func (s *Store) PatientOverview(ctx context.Context, tenantID, customerID int64)
 	}
 	overview.Patient.Tags = decodePatientTags(tagsRaw)
 	overview.Patient.Allergy = allergyFromExtraData(extraData)
+	overview.Patient.IDCard = extraString(extraData, "id_card")
+	overview.Patient.Address = extraString(extraData, "address")
 
 	if err := s.loadPatientOverviewRegistrations(ctx, tenantID, customerID, &overview); err != nil {
 		return overview, err
@@ -669,19 +678,27 @@ func (s *Store) loadPatientOverviewDocuments(ctx context.Context, tenantID, cust
 
 // allergyFromExtraData 从 customers.extra_data 读取过敏史（与接诊信息卡保持一致）。
 func allergyFromExtraData(raw []byte) string {
-	allergy := ""
-	if len(raw) > 0 {
-		var extra map[string]any
-		if err := json.Unmarshal(raw, &extra); err == nil {
-			if value, ok := extra["allergy"].(string); ok {
-				allergy = strings.TrimSpace(value)
-			}
-		}
-	}
+	allergy := extraString(raw, "allergy")
 	if allergy == "" {
 		return "无"
 	}
 	return allergy
+}
+
+// extraString 读取 customers.extra_data 中的字符串字段（缺失/非字符串返回空）。
+func extraString(raw []byte, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var extra map[string]any
+	if err := json.Unmarshal(raw, &extra); err != nil {
+		return ""
+	}
+	value, ok := extra[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 // ListPatients 查询患者列表。

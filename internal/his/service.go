@@ -22,6 +22,9 @@ var ErrInvalidRequest = errors.New("invalid request")
 // ErrNotFound 表示目标记录不存在。
 var ErrNotFound = errors.New("not found")
 
+// ErrDepartmentRequired 表示排班/挂号缺少可用的临床科室（P0-4 科室链路门禁）。
+var ErrDepartmentRequired = errors.New("clinical department required")
+
 // ErrScheduleHasBookings 表示排班已有已约/已挂号号源，禁止修改时间或间隔。
 var ErrScheduleHasBookings = errors.New("schedule has bookings")
 
@@ -97,10 +100,31 @@ func (s *Service) CreateDoctor(ctx context.Context, tenantID int64, req CreateDo
 	if req.EmployeeID <= 0 {
 		return Doctor{}, ErrInvalidRequest
 	}
+	// 医生科室必须是本租户启用中的临床科室（P0-4：排班默认科室来源）。
+	if req.DepartmentID != nil {
+		if *req.DepartmentID <= 0 {
+			return Doctor{}, ErrDepartmentRequired
+		}
+		if ok, err := s.store.IsClinicalDepartment(ctx, tenantID, *req.DepartmentID); err != nil {
+			return Doctor{}, err
+		} else if !ok {
+			return Doctor{}, ErrDepartmentRequired
+		}
+	}
 	return s.store.CreateDoctor(ctx, tenantID, req)
 }
 
 func (s *Service) UpdateDoctor(ctx context.Context, tenantID, id int64, req UpdateDoctorRequest) (Doctor, error) {
+	if req.DepartmentID != nil {
+		if *req.DepartmentID <= 0 {
+			return Doctor{}, ErrDepartmentRequired
+		}
+		if ok, err := s.store.IsClinicalDepartment(ctx, tenantID, *req.DepartmentID); err != nil {
+			return Doctor{}, err
+		} else if !ok {
+			return Doctor{}, ErrDepartmentRequired
+		}
+	}
 	doctor, err := s.store.UpdateDoctor(ctx, tenantID, id, req)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -258,10 +282,19 @@ func (s *Service) UpdateBundle(ctx context.Context, tenantID, id int64, req Upda
 // 患者建档与病案号
 
 // RegisterPatient 建档：手机号精确查重 → 已存在则复用并补发病案号，否则建档 + 首诊发放病案号。
+// 出生日期为必填：建档/首次挂号（含未来 H5、小程序）统一在此校验；命中老档案时也会补录。
 func (s *Service) RegisterPatient(ctx context.Context, tenantID, createdBy int64, req RegisterPatientRequest) (RegisterPatientResponse, error) {
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Phone) == "" {
 		return RegisterPatientResponse{}, ErrInvalidRequest
 	}
+	if strings.TrimSpace(req.BirthDate) == "" {
+		return RegisterPatientResponse{}, birthDateRequiredError()
+	}
+	birthDate, err := normalizeBirthDate(req.BirthDate)
+	if err != nil {
+		return RegisterPatientResponse{}, invalidBirthDateError()
+	}
+	req.BirthDate = birthDate
 	phone := strings.TrimSpace(req.Phone)
 
 	customerID, err := s.store.FindCustomerByPhone(ctx, tenantID, phone)
@@ -269,6 +302,13 @@ func (s *Service) RegisterPatient(ctx context.Context, tenantID, createdBy int64
 	if err == pgx.ErrNoRows {
 		customerID, err = s.store.CreateCustomer(ctx, tenantID, createdBy, req)
 		isExisting = false
+	} else if err == nil {
+		patch := UpdatePatientRequest{BirthDate: &req.BirthDate}
+		if strings.TrimSpace(req.IDCard) != "" {
+			idCard := strings.TrimSpace(req.IDCard)
+			patch.IDCard = &idCard
+		}
+		_, err = s.store.UpdateCustomer(ctx, tenantID, customerID, patch)
 	}
 	if err != nil {
 		return RegisterPatientResponse{}, err
@@ -282,12 +322,57 @@ func (s *Service) RegisterPatient(ctx context.Context, tenantID, createdBy int64
 	if err != nil {
 		return RegisterPatientResponse{}, err
 	}
+	savedBirthDate, savedIDCard, err := s.store.PatientBirthAndIDCard(ctx, tenantID, customerID)
+	if err != nil {
+		return RegisterPatientResponse{}, err
+	}
 	return RegisterPatientResponse{
 		CustomerID:  customerID,
 		MRN:         mrn,
 		IsExisting:  isExisting,
+		BirthDate:   savedBirthDate,
+		IDCard:      savedIDCard,
 		Identifiers: identifiers,
 	}, nil
+}
+
+// UpdatePatient 患者档案编辑（出生日期/身份证/基础信息）。
+func (s *Service) UpdatePatient(ctx context.Context, tenantID, customerID int64, req UpdatePatientRequest) (PatientProfile, error) {
+	if customerID <= 0 {
+		return PatientProfile{}, ErrInvalidRequest
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		return PatientProfile{}, ErrInvalidRequest
+	}
+	if req.Phone != nil && strings.TrimSpace(*req.Phone) == "" {
+		return PatientProfile{}, ErrInvalidRequest
+	}
+	// 编辑档案同样不允许把出生日期清空；填写身份证时允许由身份证推算。
+	if req.BirthDate != nil {
+		normalized, err := normalizeBirthDate(*req.BirthDate)
+		if err != nil {
+			return PatientProfile{}, invalidBirthDateError()
+		}
+		if normalized == "" {
+			if req.IDCard == nil || strings.TrimSpace(*req.IDCard) == "" {
+				return PatientProfile{}, birthDateRequiredError()
+			}
+			derived := birthDateFromIDCard(*req.IDCard)
+			if derived == "" {
+				return PatientProfile{}, invalidBirthDateError()
+			}
+			normalized = derived
+		}
+		req.BirthDate = &normalized
+	}
+	if _, err := s.store.UpdateCustomer(ctx, tenantID, customerID, req); err != nil {
+		return PatientProfile{}, err
+	}
+	overview, err := s.store.PatientOverview(ctx, tenantID, customerID)
+	if err != nil {
+		return PatientProfile{}, err
+	}
+	return overview.Patient, nil
 }
 
 func (s *Service) ListPatientIdentifiers(ctx context.Context, tenantID, customerID int64) ([]PatientIdentifier, error) {
@@ -351,6 +436,21 @@ func (s *Service) CreateSchedule(ctx context.Context, tenantID int64, req Create
 	if !isValidSchedulePeriod(req.Period) {
 		return Schedule{}, ErrInvalidRequest
 	}
+	// P0-4：排班必须落到临床科室——不传则取医生默认科室，仍然没有则拒绝保存。
+	if req.DepartmentID == nil || *req.DepartmentID <= 0 {
+		req.DepartmentID, err = s.store.DefaultDoctorDepartment(ctx, tenantID, req.DoctorID)
+		if err != nil {
+			return Schedule{}, err
+		}
+	}
+	if req.DepartmentID == nil || *req.DepartmentID <= 0 {
+		return Schedule{}, ErrDepartmentRequired
+	}
+	if ok, err := s.store.IsClinicalDepartment(ctx, tenantID, *req.DepartmentID); err != nil {
+		return Schedule{}, err
+	} else if !ok {
+		return Schedule{}, ErrDepartmentRequired
+	}
 	return s.store.CreateSchedule(ctx, tenantID, req)
 }
 
@@ -370,6 +470,17 @@ func (s *Service) UpdateSchedule(ctx context.Context, tenantID, id int64, req Up
 	}
 	if req.Status != nil && *req.Status != "open" && *req.Status != "suspended" {
 		return Schedule{}, ErrInvalidRequest
+	}
+	// 编辑排班时允许补/改科室（历史无科室排班可就地补齐），但必须仍是临床科室。
+	if req.DepartmentID != nil {
+		if *req.DepartmentID <= 0 {
+			return Schedule{}, ErrDepartmentRequired
+		}
+		if ok, err := s.store.IsClinicalDepartment(ctx, tenantID, *req.DepartmentID); err != nil {
+			return Schedule{}, err
+		} else if !ok {
+			return Schedule{}, ErrDepartmentRequired
+		}
 	}
 	sched, err := s.store.UpdateSchedule(ctx, tenantID, id, req)
 	if err != nil {
@@ -474,12 +585,14 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 
 	// 从 HIS 挂号/就诊解析患者与医生信息，构造病历创建请求。
 	var customerID, doctorEmployeeID int64
-	var patientName, patientPhone, patientGender, patientAllergy string
+	var patientName, patientPhone, patientGender, patientAllergy, patientBirthDate, patientIDCard string
 	var patientAge int
 	var departmentID *int64
 	err = s.store.pool.QueryRow(ctx, `
 		SELECT r.customer_id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
 		       COALESCE(c.age, 0), COALESCE(c.extra_data->>'allergy', ''),
+		       COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''),
+		       COALESCE(c.extra_data->>'id_card', ''),
 		       COALESCE(d.employee_id, 0), r.department_id
 		FROM his_registrations r
 		JOIN customers c ON c.id = r.customer_id
@@ -489,7 +602,7 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 			WHERE e.tenant_id = $1 AND e.source_type = 'his' AND e.id = $2
 		)`, tenantID, req.EncounterID).
 		Scan(&customerID, &patientName, &patientPhone, &patientGender, &patientAge,
-			&patientAllergy, &doctorEmployeeID, &departmentID)
+			&patientAllergy, &patientBirthDate, &patientIDCard, &doctorEmployeeID, &departmentID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
@@ -499,6 +612,10 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 	if patientAllergy == "" {
 		patientAllergy = "无"
 	}
+	// 老患者没有出生日期时，按身份证号解析；解析不到就留空，不伪造。
+	if strings.TrimSpace(patientBirthDate) == "" {
+		patientBirthDate = birthDateFromIDCard(patientIDCard)
+	}
 
 	patientSnapshot := map[string]any{
 		"customer_id": customerID,
@@ -507,6 +624,12 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 		"gender":      patientGender,
 		"age":         patientAge,
 		"allergy":     patientAllergy,
+	}
+	if patientBirthDate != "" {
+		patientSnapshot["birth_date"] = patientBirthDate
+	}
+	if patientIDCard != "" {
+		patientSnapshot["id_number"] = patientIDCard
 	}
 	startedAt := time.Now()
 	record, err := s.emr.Create(ctx, tenantID, actorID, emrrecord.CreateRequest{
@@ -532,6 +655,105 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 // TemplateFields 读取模板字段（复用 EMR 模板字段配置）。
 func (s *Service) TemplateFields(ctx context.Context, tenantID int64, templateID string) ([]TemplateField, error) {
 	return s.store.TemplateFields(ctx, tenantID, templateID)
+}
+
+// ListClinicalDepartments 管理台/排班可选临床科室（departments.type='clinical'）。
+func (s *Service) ListClinicalDepartments(ctx context.Context, tenantID int64) ([]ClinicalDepartment, error) {
+	return s.store.ListClinicalDepartments(ctx, tenantID)
+}
+
+// templateFallbackMessage 科室未匹配模板时给医生看的提示（为空表示正常匹配）。
+func templateFallbackMessage(resolution *templateResolution) string {
+	if resolution == nil || resolution.Matched {
+		return ""
+	}
+	switch resolution.Reason {
+	case templateReasonNoDepartment:
+		return "本次就诊未关联科室，已使用标准门急诊病历；请补科室（排班/挂号）"
+	case templateReasonNoTemplateCode:
+		return "科室未匹配模板（未配置 template_code），已使用标准门急诊病历"
+	case templateReasonTemplateNotPublished:
+		return "科室未匹配模板（对应模板未发布），已使用标准门急诊病历"
+	case templateReasonNoFallback:
+		return "未找到可用病历模板，请联系管理员"
+	default:
+		return "科室未匹配模板，已使用标准门急诊病历"
+	}
+}
+
+// EnsureEMRRecordAuto 门诊打开病历时按就诊科室自动创建/复用病历，医生不再先手选模板。
+// 返回实际使用的模板与匹配情况；科室无映射时降级 standard_outpatient 并带提示。
+func (s *Service) EnsureEMRRecordAuto(ctx context.Context, tenantID, actorID, encounterID int64) (*AutoEnsureEMRResponse, error) {
+	if encounterID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	if s.emr == nil {
+		return nil, ErrNotFound
+	}
+	resolution, err := s.store.ResolveEncounterTemplate(ctx, tenantID, encounterID)
+	if err != nil {
+		return nil, err
+	}
+	if resolution.Template == nil {
+		return nil, ErrNotFound
+	}
+	response := &AutoEnsureEMRResponse{
+		Department:   resolution.Department,
+		TemplateID:   resolution.Template.ID,
+		TemplateCode: resolution.Template.Code,
+		TemplateName: resolution.Template.Name,
+		Matched:      resolution.Matched,
+		Message:      templateFallbackMessage(resolution),
+	}
+
+	existing, err := s.store.FindEMRRecordByEncounter(ctx, tenantID, encounterID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		record, err := s.store.GetEMRRecordSummary(ctx, tenantID, *existing)
+		if err != nil {
+			return nil, err
+		}
+		response.Record = record
+		response.Created = false
+		if record.TemplateID != "" {
+			response.TemplateID = record.TemplateID
+			response.TemplateName = record.TemplateName
+		}
+		return response, nil
+	}
+
+	visitType, err := s.store.encounterVisitType(ctx, tenantID, encounterID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := s.EnsureEMRRecord(ctx, tenantID, actorID, EnsureEMRRequest{
+		EncounterID: encounterID,
+		TemplateID:  resolution.Template.ID,
+		VisitType:   visitType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	response.Record = record
+	response.Created = true
+	return response, nil
+}
+
+// SwitchEMRTemplate 更换病历模板（仅空草稿）。
+func (s *Service) SwitchEMRTemplate(ctx context.Context, tenantID int64, recordID string, req SwitchEMRTemplateRequest) (*EMRRecordSummary, error) {
+	return s.store.SwitchEMRTemplate(ctx, tenantID, recordID, req.TemplateID)
+}
+
+// ListOutpatientItems 门诊已开项目（检查/检验/治疗/收费项目）。
+func (s *Service) ListOutpatientItems(ctx context.Context, tenantID, encounterID int64) (*OutpatientItems, error) {
+	return s.store.ListOutpatientItems(ctx, tenantID, encounterID)
+}
+
+// CancelOutpatientChargeItem 取消门诊收费项目行。
+func (s *Service) CancelOutpatientChargeItem(ctx context.Context, tenantID, orderID, itemID int64) (Order, error) {
+	return s.store.CancelOutpatientChargeItem(ctx, tenantID, orderID, itemID)
 }
 
 // toQualityResult 透传质控报告（只读映射，不重实现质检）。
@@ -600,6 +822,17 @@ func (s *Service) CompleteEMRRecord(ctx context.Context, tenantID, actorID int64
 	})
 	needConfirm := errors.Is(err, emrrecord.ErrQualityConfirmationRequired)
 	if err != nil && !needConfirm {
+		// 质控阻断时保留最新 run 与缺项，前端据此逐项展示「缺少出生日期」并能定位。
+		if report := outcomeQuality(outcome); report != nil && report.HasBlocking() {
+			missing := missingFieldsFromReport(report)
+			return nil, &QualityBlockedError{
+				Message:  qualityBlockedMessage(missing),
+				Missing:  missing,
+				RunID:    report.RunID,
+				Quality:  toQualityResult(report),
+				RecordID: recordID,
+			}
+		}
 		return nil, err
 	}
 	var record *EMRRecordSummary

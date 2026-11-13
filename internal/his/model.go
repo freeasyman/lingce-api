@@ -11,13 +11,74 @@ type DashboardMetrics struct {
 
 // Doctor 医生执业信息。
 type Doctor struct {
-	ID            int64  `json:"id"`
-	EmployeeID    int64  `json:"employee_id"`
-	DepartmentID  *int64 `json:"department_id"`
-	Title         string `json:"title"`
-	LicenseNo     string `json:"license_no"`
-	IsPrescribing bool   `json:"is_prescribing"`
-	Status        string `json:"status"`
+	ID             int64  `json:"id"`
+	EmployeeID     int64  `json:"employee_id"`
+	DepartmentID   *int64 `json:"department_id"`
+	DepartmentName string `json:"department_name"`
+	Title          string `json:"title"`
+	LicenseNo      string `json:"license_no"`
+	IsPrescribing  bool   `json:"is_prescribing"`
+	Status         string `json:"status"`
+}
+
+// ClinicalDepartment 临床科室（departments.type='clinical'）及其 EMR 模板映射。
+// 只暴露给 HIS 排班/挂号/管理台使用，不改共享 department 产品的接口。
+type ClinicalDepartment struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Code         string `json:"code"`
+	TemplateCode string `json:"template_code"`
+	TemplateName string `json:"template_name"` // 当前租户实际可用的模板名；未配置/未发布时为空
+}
+
+// DepartmentBrief 一次就诊的科室 + 自动匹配到的 EMR 模板。
+// Matched=false 表示科室没有 template_code 或该模板未发布，已降级到标准门急诊病历。
+type DepartmentBrief struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Code         string `json:"code"`
+	TemplateCode string `json:"template_code"`
+	TemplateID   string `json:"template_id"`
+	TemplateName string `json:"template_name"`
+	Matched      bool   `json:"matched"`
+}
+
+// AutoEnsureEMRResponse 按科室自动建病历的结果（门诊打开病历时调用）。
+type AutoEnsureEMRResponse struct {
+	Record       *EMRRecordSummary `json:"record"`
+	Department   *DepartmentBrief  `json:"department"`
+	TemplateID   string            `json:"template_id"`
+	TemplateCode string            `json:"template_code"`
+	TemplateName string            `json:"template_name"`
+	Matched      bool              `json:"matched"`
+	Message      string            `json:"message"`
+	Created      bool              `json:"created"` // false 表示复用已有病历
+}
+
+// OutpatientItem 门诊页「已开项目」：检查/检验/治疗/收费项目统一视图（全部来自数据库）。
+type OutpatientItem struct {
+	Source       string    `json:"source"` // lab/exam/treatment/charge
+	RefID        int64     `json:"ref_id"`
+	OrderID      *int64    `json:"order_id"`
+	OrderItemID  *int64    `json:"order_item_id"` // 仅 source=charge：可取消的收费行
+	ChargeItemID *int64    `json:"charge_item_id"`
+	Name         string    `json:"name"`
+	Amount       float64   `json:"amount"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	Cancellable  bool      `json:"cancellable"`
+}
+
+// OutpatientItems 门诊页已开项目聚合（含就诊科室，便于提示补科室）。
+type OutpatientItems struct {
+	Department *DepartmentBrief `json:"department"`
+	Items      []OutpatientItem `json:"items"`
+	Total      float64          `json:"total"`
+}
+
+// SwitchEMRTemplateRequest 病历模板更换（仅未书写内容的草稿允许）。
+type SwitchEMRTemplateRequest struct {
+	TemplateID string `json:"template_id"`
 }
 
 // CreateDoctorRequest 新增医生。
@@ -182,13 +243,29 @@ type PatientIdentifier struct {
 }
 
 // RegisterPatientRequest 建档挂号患者（P1：手机号必填，用于查重）。
+// BirthDate / IDCard 用于满足 EMR 质控 GEN-001；填了身份证而没填出生日期时，
+// 后端按 GB 11643 解析出生日期，避免伪造。
 type RegisterPatientRequest struct {
-	Name    string `json:"name"`
-	Phone   string `json:"phone"`
-	Gender  string `json:"gender"` // male/female/other
-	Age     *int   `json:"age"`
-	Address string `json:"address"`
-	Allergy string `json:"allergy"` // 过敏史，无则填"无"（文书体系★必填）
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	Gender    string `json:"gender"` // male/female/other
+	Age       *int   `json:"age"`
+	BirthDate string `json:"birth_date"` // YYYY-MM-DD
+	IDCard    string `json:"id_card"`    // 18/15 位身份证号（选填）
+	Address   string `json:"address"`
+	Allergy   string `json:"allergy"` // 过敏史，无则填"无"（文书体系★必填）
+}
+
+// UpdatePatientRequest 患者档案编辑（PATCH，仅更新显式传入的字段）。
+type UpdatePatientRequest struct {
+	Name      *string `json:"name"`
+	Phone     *string `json:"phone"`
+	Gender    *string `json:"gender"`
+	Age       *int    `json:"age"`
+	BirthDate *string `json:"birth_date"`
+	IDCard    *string `json:"id_card"`
+	Address   *string `json:"address"`
+	Allergy   *string `json:"allergy"`
 }
 
 // RegisterPatientResponse 建档结果。
@@ -196,8 +273,38 @@ type RegisterPatientResponse struct {
 	CustomerID  int64               `json:"customer_id"`
 	MRN         string              `json:"mrn"`
 	IsExisting  bool                `json:"is_existing"`
+	BirthDate   string              `json:"birth_date"`
+	IDCard      string              `json:"id_card,omitempty"`
 	Identifiers []PatientIdentifier `json:"identifiers"`
 }
+
+// MissingField 完成接诊被质控阻断时的结构化缺项。
+type MissingField struct {
+	Field    string `json:"field"`
+	Label    string `json:"label"`
+	RuleCode string `json:"rule_code,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// QualityBlockedError 完成接诊被质控阻断：保留最新 run 与缺项，供前端逐项定位。
+type QualityBlockedError struct {
+	Message  string         `json:"message"`
+	Missing  []MissingField `json:"missing_fields"`
+	RunID    string         `json:"run_id"`
+	Quality  *QualityResult `json:"quality,omitempty"`
+	RecordID string         `json:"record_id,omitempty"`
+}
+
+func (e *QualityBlockedError) Error() string { return e.Message }
+
+// ValidationError 业务校验失败（如注册/创建患者缺少出生日期）。
+// 与 QualityBlockedError 一样携带 missing_fields，前端可直接定位到字段。
+type ValidationError struct {
+	Message string         `json:"message"`
+	Missing []MissingField `json:"missing_fields"`
+}
+
+func (e *ValidationError) Error() string { return e.Message }
 
 // Schedule 医生排班（P1 逐日排班，不做周期模板）。
 type Schedule struct {
@@ -205,6 +312,7 @@ type Schedule struct {
 	DoctorID            int64  `json:"doctor_id"`
 	DoctorName          string `json:"doctor_name"`
 	DepartmentID        *int64 `json:"department_id"`
+	DepartmentName      string `json:"department_name"`
 	RoomID              *int64 `json:"room_id"`
 	WorkDate            string `json:"work_date"`  // YYYY-MM-DD
 	Period              string `json:"period"`     // morning/afternoon/evening/early_night/late_night/full_day
@@ -234,6 +342,7 @@ type CreateScheduleRequest struct {
 
 // UpdateScheduleRequest 更新排班（部分更新）。改时间/间隔时若已存在已约/已挂号号源则拒绝。
 type UpdateScheduleRequest struct {
+	DepartmentID        *int64  `json:"department_id"`
 	StartTime           *string `json:"start_time"`
 	EndTime             *string `json:"end_time"`
 	SlotIntervalMinutes *int    `json:"slot_interval_minutes"`
@@ -260,6 +369,7 @@ type Registration struct {
 	Phone            string    `json:"phone"`
 	MRN              string    `json:"mrn"`
 	DepartmentID     *int64    `json:"department_id"`
+	DepartmentName   string    `json:"department_name"`
 	DoctorID         *int64    `json:"doctor_id"`
 	DoctorName       string    `json:"doctor_name"`
 	DoctorEmployeeID *int64    `json:"doctor_employee_id"`
@@ -600,6 +710,9 @@ type CustomerSummary struct {
 	Phone         string `json:"phone"`
 	Gender        string `json:"gender"`
 	Age           int    `json:"age"`
+	BirthDate     string `json:"birth_date"`
+	IDCard        string `json:"id_card"`
+	Address       string `json:"address"`
 	MRN           string `json:"mrn"`
 	Allergy       string `json:"allergy"`        // 过敏史，未填写时为"无"
 	PriceIdentity string `json:"price_identity"` // standard/member/staff/family/agreement
@@ -616,13 +729,15 @@ type EMRHistoryItem struct {
 
 // WorkbenchContext 接诊上下文。
 type WorkbenchContext struct {
-	Registration    *Registration     `json:"registration"`
-	Customer        CustomerSummary   `json:"customer"`
-	Record          *EMRRecordSummary `json:"record"`
-	History         []EMRHistoryItem  `json:"history"`
-	Prescriptions   []Prescription    `json:"prescriptions"`
-	ServiceRequests []ServiceRequest  `json:"service_requests"`
-	TreatmentOrders []TreatmentOrder  `json:"treatment_orders"`
+	Registration *Registration     `json:"registration"`
+	Customer     CustomerSummary   `json:"customer"`
+	Record       *EMRRecordSummary `json:"record"`
+	// Department 本次就诊科室 + 自动匹配模板；无科室时为空（门诊提示补科室）。
+	Department      *DepartmentBrief `json:"department"`
+	History         []EMRHistoryItem `json:"history"`
+	Prescriptions   []Prescription   `json:"prescriptions"`
+	ServiceRequests []ServiceRequest `json:"service_requests"`
+	TreatmentOrders []TreatmentOrder `json:"treatment_orders"`
 }
 
 // OrderLineInput 收费行输入（前端表单逐行提交，价格由服务端解析）：
@@ -1093,12 +1208,13 @@ type EmployeeWithRoles struct {
 
 // PatientSearchRow 挂号查重结果（客户 + 病案号）。
 type PatientSearchRow struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Phone  string `json:"phone"`
-	Gender string `json:"gender"`
-	Age    int    `json:"age"`
-	MRN    string `json:"mrn"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	Gender    string `json:"gender"`
+	Age       int    `json:"age"`
+	BirthDate string `json:"birth_date"`
+	MRN       string `json:"mrn"`
 }
 
 // QualityFindingItem 质检结果中的单条规则结果（供 HIS 展示阻断/提示原因）。

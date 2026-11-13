@@ -2,6 +2,7 @@ package his
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -142,11 +143,24 @@ func parseIDParam(w http.ResponseWriter, r *http.Request, name string) (int64, b
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {
+	var validation *ValidationError
+	if errors.As(err, &validation) {
+		details := map[string]any{"missing_fields": validation.Missing}
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]any{
+			"code":           "BAD_REQUEST",
+			"message":        validation.Message,
+			"missing_fields": validation.Missing,
+			"details":        details,
+		})
+		return
+	}
 	switch err {
 	case ErrInvalidRequest:
 		httputil.WriteBadRequest(w, "invalid request")
 	case ErrNotFound:
 		httputil.WriteNotFound(w, "not found")
+	case ErrDepartmentRequired:
+		httputil.WriteBadRequest(w, "请先选择临床科室（排班必须关联科室，医生可在管理台设置科室）")
 	case ErrScheduleHasBookings:
 		httputil.WriteBadRequest(w, "排班已有已约/已挂号号源，不能修改时间或间隔；请先处理号源或停诊")
 	case ErrScheduleOccupied:
@@ -264,6 +278,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 
 		// 患者档案
 		{Method: "GET", Path: "/api/v1/his/patients", Handler: h.ListPatients, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/his/patients/{customer_id}", Handler: h.UpdatePatient, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/his/patients/{customer_id}/identity", Handler: h.UpdatePatientIdentity, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/overview", Handler: h.PatientOverview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/patients/{customer_id}/visits", Handler: h.PatientVisits, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -294,11 +309,17 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		// 医生工作站：病历（复用 emr 域）
 		{Method: "GET", Path: "/api/v1/his/workbench/templates", Handler: h.ListTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/workbench/context", Handler: h.WorkbenchContext, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/his/workbench/items", Handler: h.WorkbenchItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/ensure", Handler: h.EnsureEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/emr/ensure-auto", Handler: h.EnsureEMRRecordAuto, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/save", Handler: h.SaveEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/complete", Handler: h.CompleteEMRRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/his/emr/records/{id}/template", Handler: h.SwitchEMRTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/emr/records/{id}/quality/latest", Handler: h.LatestEMRQuality, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/his/emr/templates/{id}/fields", Handler: h.TemplateFields, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+
+		// 临床科室字典（HIS 排班/医生科室/模板映射）
+		{Method: "GET", Path: "/api/v1/his/departments/clinical", Handler: h.ListClinicalDepartments, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 医生工作站：处方
 		{Method: "GET", Path: "/api/v1/his/prescriptions", Handler: h.ListPrescriptions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -343,6 +364,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/refund", Handler: h.RefundOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/refunds", Handler: h.RefundOrderItems, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/his/orders/{id}/void", Handler: h.VoidOrder, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 门诊「收费项目」取消：删除未结单中的一条 charge_item 行（耗材/其他收费项目）。
+		{Method: "POST", Path: "/api/v1/his/orders/{id}/items/{item_id}/cancel", Handler: h.CancelOrderItem, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 
 		// 药房
 		{Method: "GET", Path: "/api/v1/his/pharmacy/prescriptions", Handler: h.ListPharmacyPrescriptions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -1166,6 +1189,82 @@ func (h *Handler) WorkbenchContext(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, ctx2)
 }
 
+// WorkbenchItems 门诊已开项目（检查/检验/治疗/收费项目，全部读库）。
+func (h *Handler) WorkbenchItems(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	encounterID, err := strconv.ParseInt(r.URL.Query().Get("encounter_id"), 10, 64)
+	if err != nil || encounterID <= 0 {
+		httputil.WriteBadRequest(w, "encounter_id is required")
+		return
+	}
+	items, err := h.service.ListOutpatientItems(r.Context(), tenantID, encounterID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// ListClinicalDepartments 临床科室字典（含 EMR 模板映射）。
+func (h *Handler) ListClinicalDepartments(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.service.ListClinicalDepartments(r.Context(), tenantID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, items)
+}
+
+// EnsureEMRRecordAuto 按就诊科室自动创建/复用一个病历（门诊打开病历时调用）。
+func (h *Handler) EnsureEMRRecordAuto(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		EncounterID int64 `json:"encounter_id"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	result, err := h.service.EnsureEMRRecordAuto(r.Context(), tenantID, claims.UserID, req.EncounterID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
+}
+
+// SwitchEMRTemplate 更换病历模板（仅空草稿）。
+func (h *Handler) SwitchEMRTemplate(w http.ResponseWriter, r *http.Request) {
+	_, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	recordID := strings.TrimSpace(r.PathValue("id"))
+	if recordID == "" {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req SwitchEMRTemplateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	record, err := h.service.SwitchEMRTemplate(r.Context(), tenantID, recordID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, record)
+}
+
 // EnsureEMRRecord 确保就诊病历存在。
 func (h *Handler) EnsureEMRRecord(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
@@ -1248,6 +1347,25 @@ func (h *Handler) CompleteEMRRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		var blocked *QualityBlockedError
+		if errors.As(err, &blocked) {
+			// 沿用 {code,message,details} 错误格式，并在顶层同时给出 missing_fields/run_id，
+			// 前端无需二次请求即可渲染缺项清单并定位到最新 run。
+			details := map[string]any{
+				"missing_fields": blocked.Missing,
+				"run_id":         blocked.RunID,
+				"record_id":      blocked.RecordID,
+				"quality":        blocked.Quality,
+			}
+			httputil.WriteJSON(w, http.StatusBadRequest, map[string]any{
+				"code":           "BAD_REQUEST",
+				"message":        blocked.Message,
+				"missing_fields": blocked.Missing,
+				"run_id":         blocked.RunID,
+				"details":        details,
+			})
+			return
+		}
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -1889,6 +2007,31 @@ func (h *Handler) UpdateDiscountSettings(w http.ResponseWriter, r *http.Request)
 	httputil.WriteSuccess(w, matrix)
 }
 
+// UpdatePatient 编辑患者档案（出生日期/身份证/基础信息）。
+func (h *Handler) UpdatePatient(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "patients") {
+		return
+	}
+	customerID, ok := parseIDParam(w, r, "customer_id")
+	if !ok {
+		return
+	}
+	var req UpdatePatientRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	profile, err := h.service.UpdatePatient(r.Context(), tenantID, customerID, req)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, profile)
+}
+
 // UpdatePatientIdentity 设置患者价格身份（留痕）。
 func (h *Handler) UpdatePatientIdentity(w http.ResponseWriter, r *http.Request) {
 	claims, tenantID, ok := h.requireTenant(w, r)
@@ -2055,6 +2198,31 @@ func (h *Handler) VoidOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	order, err := h.service.VoidOrder(r.Context(), tenantID, id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, order)
+}
+
+// CancelOrderItem 取消未结单中的一条收费项目行（门诊耗材/其他收费项目取消入口）。
+func (h *Handler) CancelOrderItem(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.requireTenant(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireModule(w, r, tenantID, claims.UserID, "clinic") {
+		return
+	}
+	orderID, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	itemID, ok := parseIDParam(w, r, "item_id")
+	if !ok {
+		return
+	}
+	order, err := h.service.CancelOutpatientChargeItem(r.Context(), tenantID, orderID, itemID)
 	if err != nil {
 		writeServiceError(w, err)
 		return

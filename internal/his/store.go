@@ -78,11 +78,15 @@ func scanDoctor(row pgx.Row) (Doctor, error) {
 	return d, err
 }
 
-// ListDoctors 返回租户下全部医生（含停用），供管理台配置。
+// ListDoctors 返回租户下全部医生（含停用），供管理台配置；带临床科室名以便排班默认科室。
 func (s *Store) ListDoctors(ctx context.Context, tenantID int64) ([]Doctor, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+doctorColumns+` FROM his_doctors
-		WHERE tenant_id = $1 ORDER BY id`, tenantID)
+		SELECT d.id, d.employee_id, d.department_id, COALESCE(dep.name, ''),
+		       d.title, d.license_no, d.is_prescribing, d.status
+		FROM his_doctors d
+		LEFT JOIN departments dep ON dep.id = d.department_id
+			AND dep.tenant_id = d.tenant_id AND dep.deleted_at IS NULL
+		WHERE d.tenant_id = $1 ORDER BY d.id`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +94,9 @@ func (s *Store) ListDoctors(ctx context.Context, tenantID int64) ([]Doctor, erro
 
 	doctors := make([]Doctor, 0)
 	for rows.Next() {
-		d, err := scanDoctor(rows)
-		if err != nil {
+		var d Doctor
+		if err := rows.Scan(&d.ID, &d.EmployeeID, &d.DepartmentID, &d.DepartmentName,
+			&d.Title, &d.LicenseNo, &d.IsPrescribing, &d.Status); err != nil {
 			return nil, err
 		}
 		doctors = append(doctors, d)
@@ -652,14 +657,33 @@ func (s *Store) FindCustomerByPhone(ctx context.Context, tenantID int64, phone s
 }
 
 // CreateCustomer 建档写入 customers 主档（HIS 来源；到院患者视为已转化）。
+// birth_date 落库是 EMR 质控 GEN-001 能通过的前提；缺少时留空，由详情页提示补录。
 func (s *Store) CreateCustomer(ctx context.Context, tenantID, createdBy int64, req RegisterPatientRequest) (int64, error) {
+	birthDate, err := birthDateForRequest(req.BirthDate, req.IDCard)
+	if err != nil {
+		return 0, err
+	}
+	if birthDate != nil && req.Age == nil {
+		age := ageFromBirthDate(*birthDate, time.Now())
+		if age > 0 {
+			req.Age = &age
+		}
+	}
+	extra, err := extraDataJSON(map[string]string{
+		"address": req.Address,
+		"allergy": req.Allergy,
+		"id_card": req.IDCard,
+	})
+	if err != nil {
+		return 0, err
+	}
 	var id int64
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO customers (tenant_id, name, phone, gender, age, source, lifecycle_stage, status, momentum, extra_data, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'his', 'patient', 'converted', 50, $6::jsonb, $7, NOW(), NOW())
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO customers (tenant_id, name, phone, gender, age, birth_date, source, lifecycle_stage, status, momentum, extra_data, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'his', 'patient', 'converted', 50, $7::jsonb, $8, NOW(), NOW())
 		RETURNING id`,
-		tenantID, req.Name, req.Phone, nullIfEmpty(req.Gender), req.Age,
-		extraDataWithAddress(req.Address, req.Allergy), createdBy).Scan(&id)
+		tenantID, req.Name, req.Phone, nullIfEmpty(req.Gender), req.Age, birthDate,
+		extra, createdBy).Scan(&id)
 	return id, err
 }
 
@@ -670,18 +694,21 @@ func nullIfEmpty(value string) *string {
 	return &value
 }
 
-func extraDataWithAddress(address, allergy string) string {
-	fields := []string{}
-	if address != "" {
-		fields = append(fields, `"address":"`+strings.ReplaceAll(address, `"`, `\"`)+`"`)
+// extraDataJSON 仅写入非空字段，避免把空串当成"已登记"。
+func extraDataJSON(fields map[string]string) (string, error) {
+	extra := make(map[string]string, len(fields))
+	for key, value := range fields {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		extra[key] = value
 	}
-	if allergy != "" {
-		fields = append(fields, `"allergy":"`+strings.ReplaceAll(allergy, `"`, `\"`)+`"`)
+	raw, err := json.Marshal(extra)
+	if err != nil {
+		return "", err
 	}
-	if len(fields) == 0 {
-		return "{}"
-	}
-	return `{` + strings.Join(fields, ",") + `}`
+	return string(raw), nil
 }
 
 // NextNumber 原子递增租户内编号流水（scope: mrn/rx/order/po），返回序列值。
@@ -768,7 +795,10 @@ func (s *Store) ListPatientIdentifiers(ctx context.Context, tenantID, customerID
 const scheduleColumns = `s.id, s.doctor_id,
 	(SELECT COALESCE(e.full_name, e.name, e.username, '') FROM his_doctors d
 	  JOIN employees e ON e.id = d.employee_id WHERE d.id = s.doctor_id) AS doctor_name,
-	s.department_id, s.room_id, s.work_date::text,
+	s.department_id,
+	COALESCE((SELECT dep.name FROM departments dep
+	  WHERE dep.id = s.department_id AND dep.tenant_id = s.tenant_id AND dep.deleted_at IS NULL), '') AS department_name,
+	s.room_id, s.work_date::text,
 	s.period, to_char(s.start_time, 'HH24:MI'), to_char(s.end_time, 'HH24:MI'),
 	s.slot_interval_minutes, s.status, s.remark`
 
@@ -789,7 +819,8 @@ type scheduleQuery struct {
 
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var sched Schedule
-	err := row.Scan(&sched.ID, &sched.DoctorID, &sched.DoctorName, &sched.DepartmentID, &sched.RoomID, &sched.WorkDate,
+	err := row.Scan(&sched.ID, &sched.DoctorID, &sched.DoctorName, &sched.DepartmentID, &sched.DepartmentName,
+		&sched.RoomID, &sched.WorkDate,
 		&sched.Period, &sched.StartTime, &sched.EndTime, &sched.SlotIntervalMinutes, &sched.Status, &sched.Remark,
 		&sched.TotalSlots, &sched.FreeSlots, &sched.ReservedSlots, &sched.RegisteredSlots)
 	return sched, err
@@ -993,6 +1024,9 @@ func (s *Store) UpdateSchedule(ctx context.Context, tenantID, id int64, req Upda
 		args = append(args, value)
 		sets = append(sets, fmt.Sprintf("%s = COALESCE($%d, %s)", column, len(args), column))
 	}
+	if req.DepartmentID != nil {
+		add("department_id", req.DepartmentID)
+	}
 	if req.StartTime != nil {
 		add("start_time", req.StartTime)
 	}
@@ -1084,7 +1118,7 @@ func (s *Store) DeleteSchedule(ctx context.Context, tenantID, id int64) error {
 // 挂号与分诊队列
 
 const registrationColumns = `r.id, r.customer_id, COALESCE(c.name, ''), COALESCE(c.phone, ''),
-	COALESCE(pi.value, ''), r.department_id, r.doctor_id, COALESCE(e.full_name, e.name, e.username, ''),
+	COALESCE(pi.value, ''), r.department_id, COALESCE(dep.name, ''), r.doctor_id, COALESCE(e.full_name, e.name, e.username, ''),
 	d.employee_id, r.schedule_id, r.slot_id,
 	COALESCE(to_char(sl.time_start, 'HH24:MI'), ''), COALESCE(to_char(sl.time_end, 'HH24:MI'), ''),
 	r.reg_type, r.source, r.visit_date::text, r.fee, r.status, en.id, r.created_by, r.created_at`
@@ -1094,6 +1128,8 @@ const registrationFromClause = `FROM his_registrations r
 	LEFT JOIN patient_identifiers pi ON pi.customer_id = r.customer_id
 		AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 	LEFT JOIN his_slots sl ON sl.id = r.slot_id
+	LEFT JOIN departments dep ON dep.id = r.department_id
+		AND dep.tenant_id = r.tenant_id AND dep.deleted_at IS NULL
 	LEFT JOIN his_doctors d ON d.id = r.doctor_id
 	LEFT JOIN employees e ON e.id = d.employee_id
 	LEFT JOIN encounters en ON en.tenant_id = r.tenant_id
@@ -1102,7 +1138,7 @@ const registrationFromClause = `FROM his_registrations r
 func scanRegistration(row pgx.Row) (Registration, error) {
 	var reg Registration
 	err := row.Scan(&reg.ID, &reg.CustomerID, &reg.CustomerName, &reg.Phone, &reg.MRN,
-		&reg.DepartmentID, &reg.DoctorID, &reg.DoctorName, &reg.DoctorEmployeeID, &reg.ScheduleID, &reg.SlotID,
+		&reg.DepartmentID, &reg.DepartmentName, &reg.DoctorID, &reg.DoctorName, &reg.DoctorEmployeeID, &reg.ScheduleID, &reg.SlotID,
 		&reg.SlotTimeStart, &reg.SlotTimeEnd, &reg.RegType, &reg.Source, &reg.VisitDate,
 		&reg.Fee, &reg.Status, &reg.EncounterID, &reg.CreatedBy, &reg.CreatedAt)
 	return reg, err
@@ -1645,14 +1681,15 @@ func (s *Store) CustomerSummary(ctx context.Context, tenantID, customerID int64)
 	var extraData []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''),
-		       COALESCE(c.age, 0), COALESCE(pi.value, ''), c.extra_data,
+		       COALESCE(c.age, 0), COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''),
+		       COALESCE(pi.value, ''), c.extra_data,
 		       COALESCE(NULLIF(c.price_identity, ''), 'standard')
 		FROM customers c
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = c.id
 			AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, customerID).
 		Scan(&summary.CustomerID, &summary.Name, &summary.Phone, &summary.Gender,
-			&summary.Age, &summary.MRN, &extraData, &summary.PriceIdentity)
+			&summary.Age, &summary.BirthDate, &summary.MRN, &extraData, &summary.PriceIdentity)
 	if err != nil {
 		return summary, err
 	}
@@ -1660,6 +1697,12 @@ func (s *Store) CustomerSummary(ctx context.Context, tenantID, customerID int64)
 	if err := json.Unmarshal(extraData, &extra); err == nil {
 		if allergy, ok := extra["allergy"].(string); ok && allergy != "" {
 			summary.Allergy = allergy
+		}
+		if idCard, ok := extra["id_card"].(string); ok {
+			summary.IDCard = strings.TrimSpace(idCard)
+		}
+		if address, ok := extra["address"].(string); ok {
+			summary.Address = strings.TrimSpace(address)
 		}
 	}
 	if summary.Allergy == "" {
@@ -2339,6 +2382,10 @@ func (s *Store) WorkbenchContext(ctx context.Context, tenantID, encounterID int6
 	context3 := &WorkbenchContext{
 		Registration: &reg,
 		Customer:     customer,
+	}
+	// P0-4：接诊上下文带科室 + 自动模板（encounter.department_id 优先，历史数据回退挂号单）。
+	if resolution, err := s.ResolveEncounterTemplate(ctx, tenantID, encounterID); err == nil {
+		context3.Department = resolution.Department
 	}
 	if recordID != nil {
 		record, err := s.GetEMRRecordSummary(ctx, tenantID, *recordID)
@@ -4088,7 +4135,7 @@ func (s *Store) SetEmployeeActive(ctx context.Context, tenantID, employeeID int6
 func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword string) ([]PatientSearchRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT c.id, COALESCE(c.name, ''), COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0),
-		       COALESCE(pi.value, '')
+		       COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''), COALESCE(pi.value, '')
 		FROM customers c
 		LEFT JOIN patient_identifiers pi
 		  ON pi.tenant_id = c.tenant_id AND pi.customer_id = c.id AND pi.identifier_type = 'mrn'
@@ -4102,7 +4149,7 @@ func (s *Store) SearchPatients(ctx context.Context, tenantID int64, keyword stri
 	out := make([]PatientSearchRow, 0)
 	for rows.Next() {
 		var row PatientSearchRow
-		if err := rows.Scan(&row.ID, &row.Name, &row.Phone, &row.Gender, &row.Age, &row.MRN); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Phone, &row.Gender, &row.Age, &row.BirthDate, &row.MRN); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
