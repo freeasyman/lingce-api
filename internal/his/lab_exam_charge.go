@@ -196,6 +196,44 @@ func (s *Store) createPendingChargeOrderTx(ctx context.Context, tx pgx.Tx, tenan
 	return orderID, nil
 }
 
+// appendOrCreatePendingChargeOrderTx 检验/检查挂单：该 encounter 已有未结清单则追加行并重算，
+// 否则新建一张 pending 单。返回申请单 order_id 指向的收费单 id。
+// 追加时保留单内已有行（如上一张检验/检查、挂号费+处方），已有折扣不丢失。
+func (s *Store) appendOrCreatePendingChargeOrderTx(ctx context.Context, tx pgx.Tx, tenantID, createdBy, customerID, encounterID int64, item chargeItemSnapshot) (int64, error) {
+	line, err := newPendingChargeLine(item)
+	if err != nil {
+		return 0, err
+	}
+	orderID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, encounterID)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return s.createPendingChargeOrderTx(ctx, tx, tenantID, createdBy, customerID, encounterID, item)
+	}
+
+	var discountTotal float64
+	if err := tx.QueryRow(ctx, `
+		SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
+		tenantID, orderID).Scan(&discountTotal); err != nil {
+		return 0, err
+	}
+	if err := insertOrderItemRowsTx(ctx, tx, orderID, []orderItemRow{{
+		ItemType:  line.ItemType,
+		RefID:     &line.RefID,
+		Name:      line.Name,
+		UnitPrice: line.UnitPrice,
+		Quantity:  line.Quantity,
+		LineTotal: line.LineTotal,
+	}}); err != nil {
+		return 0, err
+	}
+	if err := recomputeOrderTotals(ctx, tx, orderID, discountTotal); err != nil {
+		return 0, err
+	}
+	return orderID, nil
+}
+
 // attachChargeToLabExamRequestTx 解析收费项目并在同一事务内挂单，返回回写申请单的关联字段。
 // explicitChargeItemID > 0 时按 id 校验（租户 + active）；否则按 itemName 在本分类启用项目里精确匹配。
 func (s *Store) attachChargeToLabExamRequestTx(
@@ -232,7 +270,7 @@ func (s *Store) attachChargeToLabExamRequestTx(
 		return requestChargeLink{}, nil
 	}
 
-	orderID, err := s.createPendingChargeOrderTx(ctx, tx, tenantID, createdBy, customerID, encounterID, item)
+	orderID, err := s.appendOrCreatePendingChargeOrderTx(ctx, tx, tenantID, createdBy, customerID, encounterID, item)
 	if err != nil {
 		return requestChargeLink{}, err
 	}
@@ -244,9 +282,11 @@ func (s *Store) attachChargeToLabExamRequestTx(
 	}, nil
 }
 
-// voidPendingOrderTx 取消检验/检查申请时联动作废仍为挂单的收费单。
-// 已收费/部分收费的单据不能自动作废，返回 ErrInvalidState 让调用方先走退费。
-func (s *Store) voidPendingOrderTx(ctx context.Context, tx pgx.Tx, tenantID, orderID int64) error {
+// releaseLabExamChargeTx 取消检验/检查申请时释放它占用的一条收费行。
+// 合并收费后一张单可能承载多个申请/挂号费/处方，不能整单作废：只删本次申请对应的那一行，
+// 单内仍有其它行时保留 pending 并重算，删空后才作废整单。
+// 已发生收款的单据（partial/paid）不能自动释放，返回 ErrInvalidState 让调用方先走退费。
+func (s *Store) releaseLabExamChargeTx(ctx context.Context, tx pgx.Tx, tenantID, orderID, chargeItemID int64) error {
 	var status string
 	err := tx.QueryRow(ctx, `
 		SELECT status FROM his_orders WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, orderID).Scan(&status)
@@ -258,12 +298,39 @@ func (s *Store) voidPendingOrderTx(ctx context.Context, tx pgx.Tx, tenantID, ord
 	}
 	switch status {
 	case "pending":
-		_, err := tx.Exec(ctx, `UPDATE his_orders SET status = 'void', updated_at = NOW() WHERE tenant_id = $1 AND id = $2`, tenantID, orderID)
-		return err
-	case "void":
+		tag, err := tx.Exec(ctx, `
+			DELETE FROM his_order_items
+			WHERE id IN (
+				SELECT id FROM his_order_items
+				WHERE order_id = $1 AND item_type = $2 AND ref_id = $3
+				ORDER BY id LIMIT 1
+			)`, orderID, chargeItemType, chargeItemID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		var remaining int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM his_order_items WHERE order_id = $1`, orderID).Scan(&remaining); err != nil {
+			return err
+		}
+		if remaining == 0 {
+			if err := recomputeOrderTotals(ctx, tx, orderID, 0); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE his_orders SET status = 'void', updated_at = NOW() WHERE tenant_id = $1 AND id = $2`, tenantID, orderID)
+			return err
+		}
+		var discountTotal float64
+		if err := tx.QueryRow(ctx, `SELECT discount_total FROM his_orders WHERE id = $1`, orderID).Scan(&discountTotal); err != nil {
+			return err
+		}
+		return recomputeOrderTotals(ctx, tx, orderID, discountTotal)
+	case "void", "refunded":
 		return nil
 	default:
-		// paid/partial/refunded：已发生收款，必须先退费再取消。
+		// partial/paid：已发生收款，必须先退费再取消。
 		return ErrInvalidState
 	}
 }

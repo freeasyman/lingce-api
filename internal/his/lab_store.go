@@ -192,10 +192,10 @@ func (s *Store) transitionLabRequest(ctx context.Context, tenantID, id int64, ac
 	defer tx.Rollback(ctx)
 
 	var status string
-	var orderID *int64
+	var orderID, chargeItemID *int64
 	err = tx.QueryRow(ctx, `
-		SELECT status, order_id FROM his_lab_requests
-		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID)
+		SELECT status, order_id, charge_item_id FROM his_lab_requests
+		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tenantID, id).Scan(&status, &orderID, &chargeItemID)
 	if err == pgx.ErrNoRows {
 		return LabRequest{}, ErrNotFound
 	}
@@ -216,7 +216,11 @@ func (s *Store) transitionLabRequest(ctx context.Context, tenantID, id int64, ac
 			WHERE tenant_id = $1 AND id = $2`
 	}
 	if action == labActionCancel && orderID != nil {
-		if err := s.voidPendingOrderTx(ctx, tx, tenantID, *orderID); err != nil {
+		refID := int64(0)
+		if chargeItemID != nil {
+			refID = *chargeItemID
+		}
+		if err := s.releaseLabExamChargeTx(ctx, tx, tenantID, *orderID, refID); err != nil {
 			return LabRequest{}, err
 		}
 	}

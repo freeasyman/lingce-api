@@ -2476,7 +2476,9 @@ func recomputeOrderTotals(ctx context.Context, tx pgx.Tx, orderID int64, discoun
 	return err
 }
 
-// CreateOrder 划价：生成收费单（pending）。
+// CreateOrder 划价：该 encounter 已有未结清单（pending/partial）则合并本次行并重算，否则新建。
+// 合并保留单内已有行（检验/检查/挂号费/处方），按 item_type+ref_id+prescription_id 去重；
+// 折扣采用「单内已有折扣 + 本次优惠」累加，避免挂单时的优惠在结账时丢失。
 func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req CreateOrderRequest) (Order, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2488,6 +2490,29 @@ func (s *Store) CreateOrder(ctx context.Context, tenantID, createdBy int64, req 
 	if err != nil {
 		return Order{}, err
 	}
+
+	if openID, found, err := s.findOpenOrderTx(ctx, tx, tenantID, req.EncounterID); err != nil {
+		return Order{}, err
+	} else if found {
+		var existingDiscount float64
+		if err := tx.QueryRow(ctx, `
+			SELECT discount_total FROM his_orders WHERE tenant_id = $1 AND id = $2`,
+			tenantID, openID).Scan(&existingDiscount); err != nil {
+			return Order{}, err
+		}
+		discountTotal := existingDiscount + req.DiscountTotal
+		if _, err := s.mergeOpenOrderItemsTx(ctx, tx, tenantID, req.EncounterID, openID, req.Items, discountTotal); err != nil {
+			return Order{}, err
+		}
+		if err := recomputeOrderTotals(ctx, tx, openID, discountTotal); err != nil {
+			return Order{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Order{}, err
+		}
+		return s.loadOrder(ctx, s.pool, tenantID, openID)
+	}
+
 	seq, err := s.NextNumber(ctx, tenantID, "order")
 	if err != nil {
 		return Order{}, err
