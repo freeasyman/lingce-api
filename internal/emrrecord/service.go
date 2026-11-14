@@ -826,3 +826,11 @@ func isTCMTemplateCode(code string) bool {
 	code = strings.TrimSpace(code)
 	return code == "tcm" || strings.HasPrefix(code, "tcm_")
 }
+
+// RelatedOrders 读取病历对应就诊的 HIS 单据聚合（只读）。
+func (s *Service) RelatedOrders(ctx context.Context, tenantID int64, record *Record) (*RelatedOrders, error) {
+	if record == nil {
+		return nil, nil
+	}
+	return s.store.RelatedOrders(ctx, tenantID, record.EncounterID, record.WorkingContent)
+}

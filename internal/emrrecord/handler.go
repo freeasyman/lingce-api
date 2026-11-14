@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -381,6 +382,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if item == nil {
 		httputil.WriteNotFound(w, "record not found")
 		return
+	}
+	// P0-2：详情页只读聚合 HIS 全部单据；聚合失败不影响病历正文查看。
+	if related, relErr := h.service.RelatedOrders(r.Context(), tenantID, item); relErr != nil {
+		slog.Error("emrrecord: load related orders", "tenant_id", tenantID, "record_id", item.ID, "error", relErr)
+	} else {
+		item.RelatedOrders = related
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }

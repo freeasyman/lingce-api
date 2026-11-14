@@ -49,6 +49,8 @@ type Record struct {
 	QualityStatus       string     `json:"quality_status,omitempty"`
 	QualityStatusReason string     `json:"quality_status_reason,omitempty"`
 	QualityStatusAt     *time.Time `json:"quality_status_at,omitempty"`
+	// RelatedOrders 仅详情接口填充：按 encounter 聚合 HIS 处方/检验/检查/治疗/收费/文书（只读）。
+	RelatedOrders *RelatedOrders `json:"related_orders,omitempty"`
 }
 
 type Snapshot struct {

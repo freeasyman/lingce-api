@@ -113,6 +113,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 			started_at timestamptz NOT NULL DEFAULT NOW(), updated_at timestamptz NOT NULL DEFAULT NOW(),
 			content_json jsonb NOT NULL DEFAULT '{}'::jsonb,
 			patient_snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+			voided_at timestamptz,
 			created_at timestamptz NOT NULL DEFAULT NOW()
 		);
 		INSERT INTO tenants VALUES (0, '系统模板', 'system', NULL), (1, '测试机构', 't1', NULL);
@@ -146,6 +147,7 @@ func newTestService(t *testing.T) (*Service, *pgxpool.Pool) {
 		"20261113_013_his_pinyin_repricing.sql",
 		"20261113_015_his_dictionary_permission.sql",
 		"20261113_016_his_documents_center.sql",
+		"20261114_036_his_diagnosis_record_link.sql",
 	} {
 		sourceSQL, err := os.ReadFile("../store/migrations/" + migration)
 		if err != nil {

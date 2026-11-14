@@ -60,23 +60,27 @@ func (s *Store) CreateLabRequest(ctx context.Context, tenantID, createdBy int64,
 		return LabRequest{}, err
 	}
 
+	// P0-1：申请单只记录病历关联；诊断读取时从 EMR 病历取得。
+	resolution := s.resolveEncounterDiagnosis(ctx, tx, tenantID, req.EncounterID,
+		s.latestHisDiagnosis(ctx, tx, tenantID, req.EncounterID))
+
 	var item LabRequest
 	err = tx.QueryRow(ctx, `
 		INSERT INTO his_lab_requests (
 			tenant_id, encounter_id, customer_id, request_no, item_name, specimen_type,
-			purpose, status, created_by, charge_item_id, charge_amount, order_id
+			purpose, status, created_by, charge_item_id, charge_amount, order_id, record_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), $10, $11, $12, NULLIF($13, '')::uuid)
 		RETURNING id, encounter_id, customer_id, request_no, item_name, specimen_type, purpose,
 		          status, sampled_at, reported_at, created_by, created_at, updated_at,
-		          charge_item_id, charge_amount, order_id`,
+		          charge_item_id, charge_amount, order_id, COALESCE(record_id::text, '')`,
 		tenantID, req.EncounterID, customerID, requestNo, req.ItemName, req.SpecimenType,
 		req.Purpose, labStatusPending, createdBy,
-		charge.ChargeItemID, charge.ChargeAmount, charge.OrderID).
+		charge.ChargeItemID, charge.ChargeAmount, charge.OrderID, resolution.RecordID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 			&item.SpecimenType, &item.Purpose, &item.Status, &item.SampledAt, &item.ReportedAt,
 			&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
-			&item.ChargeItemID, &item.ChargeAmount, &item.OrderID)
+			&item.ChargeItemID, &item.ChargeAmount, &item.OrderID, &item.RecordID)
 	if err != nil {
 		return LabRequest{}, err
 	}
@@ -87,6 +91,7 @@ func (s *Store) CreateLabRequest(ctx context.Context, tenantID, createdBy int64,
 	item.CustomerName = customerName
 	item.MRN = mrn
 	item.ResultItemCount = 0
+	item.Diagnosis, item.DiagnosisSource = resolution.Text, resolution.Source
 	return item, nil
 }
 
@@ -94,8 +99,8 @@ const labRequestSelectSQL = `
 	SELECT l.id, l.encounter_id, l.customer_id, l.request_no, l.item_name, l.specimen_type,
 	       l.purpose, l.status, l.sampled_at, l.reported_at, l.created_by, l.created_at, l.updated_at,
 	       COALESCE(c.name, ''), COALESCE(pi.value, ''), COALESCE(rc.cnt, 0),
-	       l.charge_item_id, l.charge_amount, l.order_id,
-	       COALESCE(dx.diagnosis, ''), COALESCE(NULLIF(emp.name, ''), NULLIF(enc.provider_name, ''), '')
+	       l.charge_item_id, l.charge_amount, l.order_id, COALESCE(l.record_id::text, ''),
+	       COALESCE(NULLIF(emp.name, ''), NULLIF(enc.provider_name, ''), '')
 	FROM his_lab_requests l
 	LEFT JOIN customers c ON c.tenant_id = l.tenant_id AND c.id = l.customer_id
 	LEFT JOIN LATERAL (
@@ -107,13 +112,6 @@ const labRequestSelectSQL = `
 	LEFT JOIN LATERAL (
 		SELECT COUNT(*) AS cnt FROM his_lab_result_items ri WHERE ri.request_id = l.id
 	) rc ON TRUE
-	LEFT JOIN LATERAL (
-		SELECT COALESCE(NULLIF(er.content_json->'diagnosis'->>'diagnosis_name', ''),
-		                NULLIF(er.content_json->'tcm_diagnosis'->>'diagnosis_name', ''), '') AS diagnosis
-		FROM emr_records er
-		WHERE er.tenant_id = l.tenant_id AND er.encounter_id = l.encounter_id
-		ORDER BY er.updated_at DESC, er.created_at DESC LIMIT 1
-	) dx ON TRUE
 	LEFT JOIN encounters enc ON enc.tenant_id = l.tenant_id AND enc.id = l.encounter_id
 	LEFT JOIN employees emp ON emp.tenant_id = l.tenant_id AND emp.id = enc.provider_id`
 
@@ -122,7 +120,7 @@ func scanLabRequest(row pgx.Row) (LabRequest, error) {
 	err := row.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.RequestNo, &item.ItemName,
 		&item.SpecimenType, &item.Purpose, &item.Status, &item.SampledAt, &item.ReportedAt,
 		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.CustomerName, &item.MRN,
-		&item.ResultItemCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID, &item.Diagnosis, &item.DoctorName)
+		&item.ResultItemCount, &item.ChargeItemID, &item.ChargeAmount, &item.OrderID, &item.RecordID, &item.DoctorName)
 	return item, err
 }
 
@@ -147,11 +145,13 @@ func (s *Store) ListLabRequests(ctx context.Context, tenantID int64, statuses []
 	defer rows.Close()
 
 	items := make([]LabRequest, 0)
+	cache := make(map[int64]encounterDiagnosis)
 	for rows.Next() {
 		item, err := scanLabRequest(rows)
 		if err != nil {
 			return nil, err
 		}
+		item.Diagnosis, item.DiagnosisSource = s.applyRequestDiagnosisCached(ctx, s.pool, tenantID, item.EncounterID, cache)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -167,6 +167,7 @@ func (s *Store) GetLabRequest(ctx context.Context, tenantID, id int64) (LabReque
 	if err != nil {
 		return LabRequest{}, err
 	}
+	item.Diagnosis, item.DiagnosisSource = s.applyRequestDiagnosis(ctx, s.pool, tenantID, item.EncounterID)
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, request_id, item_code, item_name, value, unit, reference_range, flag

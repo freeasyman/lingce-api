@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/freeasyman/lingce-api/internal/emrdiagnosis"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -399,27 +400,27 @@ func (s *Store) LoadDocumentSource(ctx context.Context, tenantID, encounterID in
 		return nil, err
 	}
 
-	// 诊断与医嘱以本次就诊病历为准；无病历时回退到处方诊断。
-	var contentDiagnosis, contentAdvice string
+	// 诊断与医嘱以本次就诊病历为准；无病历时回退到 HIS 历史处方诊断并标注来源。
+	var contentRaw []byte
+	var contentAdvice string
 	err = s.pool.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(content_json->'diagnosis'->>'diagnosis_name', ''),
-		                NULLIF(content_json->'tcm_diagnosis'->>'diagnosis_name', ''), ''),
+		SELECT content_json,
 		       COALESCE(NULLIF(content_json->>'medical_advice', ''), NULLIF(content_json->>'disposition', ''), '')
 		FROM emr_records
-		WHERE tenant_id = $1 AND encounter_id = $2
-		ORDER BY updated_at DESC, created_at DESC
-		LIMIT 1`, tenantID, encounterID).Scan(&contentDiagnosis, &contentAdvice)
+		WHERE tenant_id = $1 AND encounter_id = $2 AND voided_at IS NULL
+		ORDER BY updated_at DESC NULLS LAST, created_at DESC
+		LIMIT 1`, tenantID, encounterID).Scan(&contentRaw, &contentAdvice)
 	if err != nil && err != pgx.ErrNoRows {
 		return nil, err
 	}
-	source.Diagnosis = strings.TrimSpace(contentDiagnosis)
+	var content map[string]any
+	if len(contentRaw) > 0 {
+		_ = json.Unmarshal(contentRaw, &content)
+	}
+	source.Diagnosis = strings.TrimSpace(emrdiagnosis.Display(content))
 	source.Advice = strings.TrimSpace(contentAdvice)
 	if source.Diagnosis == "" {
-		_ = s.pool.QueryRow(ctx, `
-			SELECT diagnosis FROM his_prescriptions
-			WHERE tenant_id = $1 AND encounter_id = $2 AND COALESCE(diagnosis, '') <> ''
-			ORDER BY id DESC LIMIT 1`, tenantID, encounterID).Scan(&source.Diagnosis)
-		source.Diagnosis = strings.TrimSpace(source.Diagnosis)
+		source.Diagnosis = s.latestHisDiagnosis(ctx, s.pool, tenantID, encounterID)
 	}
 
 	source.PrescriptionRows, err = s.loadDocumentPrescriptionRows(ctx, tenantID, encounterID)

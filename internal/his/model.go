@@ -500,16 +500,20 @@ type PrescriptionItem struct {
 
 // Prescription 处方。
 type Prescription struct {
-	ID             int64              `json:"id"`
-	EncounterID    int64              `json:"encounter_id"`
-	CustomerID     int64              `json:"customer_id"`
-	DoctorID       *int64             `json:"doctor_id"`
-	PrescriptionNo string             `json:"prescription_no"`
-	Type           string             `json:"type"` // western/herbal/mixed
-	Diagnosis      string             `json:"diagnosis"`
-	Status         string             `json:"status"`
-	Items          []PrescriptionItem `json:"items"`
-	CreatedAt      time.Time          `json:"created_at"`
+	ID             int64  `json:"id"`
+	EncounterID    int64  `json:"encounter_id"`
+	CustomerID     int64  `json:"customer_id"`
+	DoctorID       *int64 `json:"doctor_id"`
+	PrescriptionNo string `json:"prescription_no"`
+	Type           string `json:"type"` // western/herbal/mixed
+	Diagnosis      string `json:"diagnosis"`
+	// DiagnosisSource：emr_record 表示诊断取自 EMR 病历（唯一真值）；his_fallback 表示病历缺失、回退到 HIS 历史文本。
+	DiagnosisSource string `json:"diagnosis_source,omitempty"`
+	// RecordID 为开单时关联的 EMR 病历；历史数据可能为空，读取侧仍按 encounter_id 联查。
+	RecordID  string             `json:"record_id,omitempty"`
+	Status    string             `json:"status"`
+	Items     []PrescriptionItem `json:"items"`
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 // CreatePrescriptionRequest 开具处方。
@@ -564,6 +568,8 @@ type TreatmentOrder struct {
 	MRN              string     `json:"mrn,omitempty"`
 	LastExecutedAt   *time.Time `json:"last_executed_at,omitempty"`
 	LastExecutorName string     `json:"last_executor_name,omitempty"`
+	// RecordID 为开单时关联的 EMR 病历（P0-1 诊断单一来源）。
+	RecordID string `json:"record_id,omitempty"`
 }
 
 // CreateTreatmentOrderRequest 开治疗医嘱。
@@ -617,8 +623,11 @@ type LabRequest struct {
 	ChargeAmount float64 `json:"charge_amount"`
 	OrderID      *int64  `json:"order_id"`
 	// 申请单打印：本次就诊诊断 + 申请医生（取自 EMR / 就诊医生）。
-	Diagnosis  string `json:"diagnosis,omitempty"`
-	DoctorName string `json:"doctor_name,omitempty"`
+	Diagnosis       string `json:"diagnosis,omitempty"`
+	DiagnosisSource string `json:"diagnosis_source,omitempty"`
+	DoctorName      string `json:"doctor_name,omitempty"`
+	// RecordID 为开单时关联的 EMR 病历（P0-1 诊断单一来源）。
+	RecordID string `json:"record_id,omitempty"`
 }
 
 // CreateLabRequestRequest 开检验申请。
@@ -683,8 +692,11 @@ type ExamRequest struct {
 	ChargeAmount float64 `json:"charge_amount"`
 	OrderID      *int64  `json:"order_id"`
 	// 申请单打印：本次就诊诊断 + 申请医生（取自 EMR / 就诊医生）。
-	Diagnosis  string `json:"diagnosis,omitempty"`
-	DoctorName string `json:"doctor_name,omitempty"`
+	Diagnosis       string `json:"diagnosis,omitempty"`
+	DiagnosisSource string `json:"diagnosis_source,omitempty"`
+	DoctorName      string `json:"doctor_name,omitempty"`
+	// RecordID 为开单时关联的 EMR 病历（P0-1 诊断单一来源）。
+	RecordID string `json:"record_id,omitempty"`
 }
 
 // CreateExamRequestRequest 开检查申请。

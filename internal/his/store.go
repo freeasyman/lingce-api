@@ -1716,17 +1716,18 @@ func (s *Store) CustomerSummary(ctx context.Context, tenantID, customerID int64)
 // ---------------------------------------------------------------------------
 // 处方
 
-const prescriptionColumns = `id, encounter_id, customer_id, doctor_id, COALESCE(prescription_no, ''), type, diagnosis, status, created_at`
+const prescriptionColumns = `id, encounter_id, customer_id, doctor_id, COALESCE(prescription_no, ''), type, diagnosis, status, created_at, COALESCE(record_id::text, '')`
 
 func (s *Store) loadPrescription(ctx context.Context, q querier, tenantID, id int64) (Prescription, error) {
 	var p Prescription
 	err := q.QueryRow(ctx, `
 		SELECT `+prescriptionColumns+` FROM his_prescriptions WHERE tenant_id = $1 AND id = $2`,
 		tenantID, id).Scan(&p.ID, &p.EncounterID, &p.CustomerID, &p.DoctorID, &p.PrescriptionNo,
-		&p.Type, &p.Diagnosis, &p.Status, &p.CreatedAt)
+		&p.Type, &p.Diagnosis, &p.Status, &p.CreatedAt, &p.RecordID)
 	if err != nil {
 		return p, err
 	}
+	s.applyPrescriptionDiagnosis(ctx, q, tenantID, &p)
 	return s.prescriptionWithItems(ctx, q, p)
 }
 
@@ -1768,9 +1769,10 @@ func (s *Store) ListPrescriptionsByEncounter(ctx context.Context, tenantID, enco
 	for rows.Next() {
 		var p Prescription
 		if err := rows.Scan(&p.ID, &p.EncounterID, &p.CustomerID, &p.DoctorID, &p.PrescriptionNo,
-			&p.Type, &p.Diagnosis, &p.Status, &p.CreatedAt); err != nil {
+			&p.Type, &p.Diagnosis, &p.Status, &p.CreatedAt, &p.RecordID); err != nil {
 			return nil, err
 		}
+		s.applyPrescriptionDiagnosis(ctx, s.pool, tenantID, &p)
 		p, err = s.prescriptionWithItems(ctx, s.pool, p)
 		if err != nil {
 			return nil, err
@@ -1847,11 +1849,14 @@ func (s *Store) CreatePrescription(ctx context.Context, tenantID int64, req Crea
 		return Prescription{}, err
 	}
 
+	// P0-1：诊断以 EMR 病历为唯一来源；req.Diagnosis 仅在病历缺失时作为历史兼容回退。
+	resolution := s.resolveEncounterDiagnosis(ctx, tx, tenantID, req.EncounterID, req.Diagnosis)
+
 	var id int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO his_prescriptions (tenant_id, encounter_id, customer_id, doctor_id, diagnosis)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		tenantID, req.EncounterID, customerID, doctorID, req.Diagnosis).Scan(&id)
+		INSERT INTO his_prescriptions (tenant_id, encounter_id, customer_id, doctor_id, diagnosis, record_id)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid) RETURNING id`,
+		tenantID, req.EncounterID, customerID, doctorID, resolution.Text, resolution.RecordID).Scan(&id)
 	if err != nil {
 		return Prescription{}, err
 	}
@@ -1932,9 +1937,11 @@ func (s *Store) UpdatePrescription(ctx context.Context, tenantID, id int64, req 
 	defer tx.Rollback(ctx)
 
 	var status string
+	var encounterID int64
+	var currentDiagnosis string
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM his_prescriptions WHERE tenant_id = $1 AND id = $2
-		FOR UPDATE`, tenantID, id).Scan(&status)
+		SELECT status, encounter_id, COALESCE(diagnosis, '') FROM his_prescriptions WHERE tenant_id = $1 AND id = $2
+		FOR UPDATE`, tenantID, id).Scan(&status, &encounterID, &currentDiagnosis)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return Prescription{}, ErrNotFound
@@ -1944,8 +1951,13 @@ func (s *Store) UpdatePrescription(ctx context.Context, tenantID, id int64, req 
 	if status != "draft" && status != "issued" {
 		return Prescription{}, ErrInvalidState
 	}
-	if req.Diagnosis != nil {
-		if _, err := tx.Exec(ctx, `UPDATE his_prescriptions SET diagnosis = $2, updated_at = NOW() WHERE id = $1`, id, *req.Diagnosis); err != nil {
+	// P0-1：有病历时诊断只从病历取，忽略客户端回传的旧诊断文本；无病历时保留历史兼容写入。
+	resolution := s.resolveEncounterDiagnosis(ctx, tx, tenantID, encounterID, currentDiagnosis)
+	if req.Diagnosis != nil && resolution.Source != diagnosisSourceEMR {
+		resolution.Text = *req.Diagnosis
+	}
+	if req.Diagnosis != nil || resolution.RecordID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE his_prescriptions SET diagnosis = $2, record_id = NULLIF($3, '')::uuid, updated_at = NOW() WHERE id = $1`, id, resolution.Text, resolution.RecordID); err != nil {
 			return Prescription{}, err
 		}
 	}
@@ -2103,16 +2115,19 @@ func (s *Store) CreateTreatmentOrder(ctx context.Context, tenantID, createdBy in
 		return TreatmentOrder{}, err
 	}
 
+	// P0-1：治疗医嘱同样只记录病历关联，诊断不在 HIS 侧另存。
+	resolution := s.resolveEncounterDiagnosis(ctx, tx, tenantID, req.EncounterID, "")
+
 	var created TreatmentOrder
 	err = tx.QueryRow(ctx, `
 		INSERT INTO his_treatment_orders (
-			tenant_id, encounter_id, customer_id, charge_item_id, order_id, plan_total_times
-		) VALUES ($1, $2, $3, $4, $5, $6)
+			tenant_id, encounter_id, customer_id, charge_item_id, order_id, plan_total_times, record_id
+		) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid)
 		RETURNING id, encounter_id, customer_id, charge_item_id, order_id,
-		          plan_total_times, completed_times, status, created_at`,
-		tenantID, req.EncounterID, customerID, item.ID, orderID, req.PlanTotalTimes).
+		          plan_total_times, completed_times, status, created_at, COALESCE(record_id::text, '')`,
+		tenantID, req.EncounterID, customerID, item.ID, orderID, req.PlanTotalTimes, resolution.RecordID).
 		Scan(&created.ID, &created.EncounterID, &created.CustomerID, &created.ChargeItemID, &created.OrderID,
-			&created.PlanTotalTimes, &created.CompletedTimes, &created.Status, &created.CreatedAt)
+			&created.PlanTotalTimes, &created.CompletedTimes, &created.Status, &created.CreatedAt, &created.RecordID)
 	if err != nil {
 		return TreatmentOrder{}, err
 	}
@@ -2171,7 +2186,7 @@ func (s *Store) CancelTreatmentOrder(ctx context.Context, tenantID, orderID int6
 func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID int64) ([]TreatmentOrder, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
-		       t.plan_total_times, t.completed_times, t.status, t.created_at
+		       t.plan_total_times, t.completed_times, t.status, t.created_at, COALESCE(t.record_id::text, '')
 		FROM his_treatment_orders t
 		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
 		WHERE t.tenant_id = $1 AND t.encounter_id = $2 ORDER BY t.id`, tenantID, encounterID)
@@ -2184,7 +2199,7 @@ func (s *Store) ListTreatmentOrders(ctx context.Context, tenantID, encounterID i
 	for rows.Next() {
 		var item TreatmentOrder
 		if err := rows.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt); err != nil {
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt, &item.RecordID); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -2200,7 +2215,7 @@ func (s *Store) ListTreatmentStationOrders(ctx context.Context, tenantID int64, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
-		       t.plan_total_times, t.completed_times, t.status, t.created_at,
+		       t.plan_total_times, t.completed_times, t.status, t.created_at, COALESCE(t.record_id::text, ''),
 		       COALESCE(c.name, ''), COALESCE(pi.value, ''),
 		       last.executed_at, COALESCE(last.executor_name, '')
 		FROM his_treatment_orders t
@@ -2239,7 +2254,7 @@ func (s *Store) ListTreatmentStationOrders(ctx context.Context, tenantID int64, 
 	for rows.Next() {
 		var item TreatmentOrder
 		if err := rows.Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt,
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt, &item.RecordID,
 			&item.CustomerName, &item.MRN, &item.LastExecutedAt, &item.LastExecutorName); err != nil {
 			return nil, err
 		}
@@ -2347,12 +2362,12 @@ func (s *Store) loadTreatmentOrder(ctx context.Context, tenantID, orderID int64)
 	var item TreatmentOrder
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.id, t.encounter_id, t.customer_id, t.charge_item_id, COALESCE(ci.name, ''), t.order_id,
-		       t.plan_total_times, t.completed_times, t.status, t.created_at
+		       t.plan_total_times, t.completed_times, t.status, t.created_at, COALESCE(t.record_id::text, '')
 		FROM his_treatment_orders t
 		LEFT JOIN his_charge_items ci ON ci.tenant_id = t.tenant_id AND ci.id = t.charge_item_id
 		WHERE t.tenant_id = $1 AND t.id = $2`, tenantID, orderID).
 		Scan(&item.ID, &item.EncounterID, &item.CustomerID, &item.ChargeItemID, &item.ChargeItemName,
-			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt)
+			&item.OrderID, &item.PlanTotalTimes, &item.CompletedTimes, &item.Status, &item.CreatedAt, &item.RecordID)
 	return item, err
 }
 
@@ -2976,6 +2991,7 @@ func (s *Store) ListPharmacyPrescriptions(ctx context.Context, tenantID int64, s
 			&item.Type, &item.Diagnosis, &item.Status, &item.CreatedAt, &item.CustomerName, &item.MRN); err != nil {
 			return nil, err
 		}
+		s.applyPrescriptionDiagnosis(ctx, s.pool, tenantID, &item.Prescription)
 		item, err = s.prescriptionWithItemsPharmacy(ctx, item)
 		if err != nil {
 			return nil, err
