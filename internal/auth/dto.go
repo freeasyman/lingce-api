@@ -39,11 +39,12 @@ type LoginUser struct {
 
 // MeResponse represents current user info
 type MeResponse struct {
-	UserID   int64       `json:"user_id"`
-	UserType string      `json:"user_type"`
-	Username string      `json:"username"`
-	TenantID *int64      `json:"tenant_id,omitempty"`
-	UserInfo interface{} `json:"user_info"`
+	UserID               int64       `json:"user_id"`
+	UserType             string      `json:"user_type"`
+	Username             string      `json:"username"`
+	TenantID             *int64      `json:"tenant_id,omitempty"`
+	UserInfo             interface{} `json:"user_info"`
+	NewSystemTrialEndsAt *string     `json:"new_system_trial_ends_at,omitempty"`
 }
 
 // ChangePasswordRequest represents a password change request

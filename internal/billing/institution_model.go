@@ -264,33 +264,42 @@ type InstitutionDocument struct {
 // Institution 是机构档案，字段与 billingMock.ts 的 Institution 一致。
 // products 是 产品代码 -> 单位 -> {granted, used, balance} 的两层对象。
 type Institution struct {
-	ID           int64                                  `json:"id"`
-	Name         string                                 `json:"name"`
-	Legal        string                                 `json:"legal"`
-	Code         string                                 `json:"code"`
-	Industry     string                                 `json:"industry"`
-	Departments  []string                               `json:"departments"`
-	Region       InstitutionRegion                      `json:"region"`
-	Contact      string                                 `json:"contact"`
-	Title        string                                 `json:"title"`
-	Phone        string                                 `json:"phone"`
-	Email        string                                 `json:"email"`
-	Channel      string                                 `json:"channel"`
-	Sales        string                                 `json:"sales"`
-	Start        string                                 `json:"start"`
-	End          string                                 `json:"end"`
-	Mode         string                                 `json:"mode"`
-	Open         bool                                   `json:"open"`
-	Status       string                                 `json:"status"`
-	PausedAt     string                                 `json:"pausedAt,omitempty"`
-	PausedReason string                                 `json:"pausedReason,omitempty"`
-	Products     map[string]map[string]InstitutionQuota `json:"products"`
-	Admins       []InstitutionAdmin                     `json:"admins"`
-	Receivables  []InstitutionReceivable                `json:"receivables"`
-	PayLogs      []InstitutionPayLog                    `json:"payLogs"`
-	Consumptions []InstitutionConsumption               `json:"consumptions"`
-	Logs         []InstitutionLog                       `json:"logs"`
-	Documents    []InstitutionDocument                  `json:"documents"`
+	ID             int64                                  `json:"id"`
+	Name           string                                 `json:"name"`
+	Legal          string                                 `json:"legal"`
+	Code           string                                 `json:"code"`
+	Industry       string                                 `json:"industry"`
+	Departments    []string                               `json:"departments"`
+	Region         InstitutionRegion                      `json:"region"`
+	Contact        string                                 `json:"contact"`
+	Title          string                                 `json:"title"`
+	Phone          string                                 `json:"phone"`
+	Email          string                                 `json:"email"`
+	Channel        string                                 `json:"channel"`
+	Sales          string                                 `json:"sales"`
+	Start          string                                 `json:"start"`
+	End            string                                 `json:"end"`
+	Mode           string                                 `json:"mode"`
+	Open           bool                                   `json:"open"`
+	Status         string                                 `json:"status"`
+	PausedAt       string                                 `json:"pausedAt,omitempty"`
+	PausedReason   string                                 `json:"pausedReason,omitempty"`
+	Products       map[string]map[string]InstitutionQuota `json:"products"`
+	Admins         []InstitutionAdmin                     `json:"admins"`
+	Receivables    []InstitutionReceivable                `json:"receivables"`
+	PayLogs        []InstitutionPayLog                    `json:"payLogs"`
+	Consumptions   []InstitutionConsumption               `json:"consumptions"`
+	Logs           []InstitutionLog                       `json:"logs"`
+	Documents      []InstitutionDocument                  `json:"documents"`
+	NewSystemTrial *InstitutionNewSystemTrial             `json:"newSystemTrial,omitempty"`
+}
+
+// InstitutionNewSystemTrial 是正式客户叠加的新系统试用窗口。
+type InstitutionNewSystemTrial struct {
+	StartedAt     string `json:"startedAt"`
+	EndsAt        string `json:"endsAt"`
+	Status        string `json:"status"`
+	RemainingDays int    `json:"remainingDays"`
 }
 
 // InstitutionListResult 是 GET /ops/billing/institutions 的 data。

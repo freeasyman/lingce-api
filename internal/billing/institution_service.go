@@ -122,6 +122,30 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 	}
 
 	item := buildInstitution(base, nil, groupEntitlementRows(entitlementRows)[tenantID], s.today())
+	var trialStart, trialEnd *time.Time
+	if err := s.store.pool.QueryRow(ctx, `
+SELECT new_system_trial_started_at, new_system_trial_ends_at
+FROM tenants WHERE id = $1`, tenantID).Scan(&trialStart, &trialEnd); err != nil {
+		return nil, fmt.Errorf("read new-system trial: %w", err)
+	}
+	if trialEnd != nil {
+		status := "ended"
+		remaining := 0
+		if trialEnd.After(time.Now()) {
+			status = "active"
+			remaining = int(time.Until(*trialEnd).Hours()/24) + 1
+		}
+		started := ""
+		if trialStart != nil {
+			started = trialStart.Format("2006-01-02")
+		}
+		item.NewSystemTrial = &InstitutionNewSystemTrial{
+			StartedAt:     started,
+			EndsAt:        trialEnd.Format("2006-01-02"),
+			Status:        status,
+			RemainingDays: remaining,
+		}
+	}
 	item.Documents = make([]InstitutionDocument, 0, len(documents))
 	for _, doc := range documents {
 		item.Documents = append(item.Documents, institutionDocumentOf(doc))

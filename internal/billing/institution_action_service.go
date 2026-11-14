@@ -700,6 +700,13 @@ func (s *InstitutionService) StartNewSystemTrial(ctx context.Context, tenantID i
 	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
 		return nil, err
 	}
+	var lockedEnd *time.Time
+	if err := tx.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&lockedEnd); err != nil {
+		return nil, fmt.Errorf("lock new-system trial window: %w", err)
+	}
+	if lockedEnd != nil && lockedEnd.After(now) {
+		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "该机构已有未结束的新系统试用"}
+	}
 	for _, product := range products {
 		for _, quota := range product.Quotas {
 			amount, err := scaleQuotaWhole(quota.Amount, days, 365)

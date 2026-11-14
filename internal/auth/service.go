@@ -426,8 +426,7 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 			return nil, fmt.Errorf("failed to get employee: %w", err)
 		}
 		roleCode := employee.RoleCode
-
-		return &MeResponse{
+		me := &MeResponse{
 			UserID:   employee.ID,
 			UserType: string(userType),
 			Username: employee.Username,
@@ -442,7 +441,12 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 				"is_active":               employee.IsActive,
 				"role_code":               roleCode,
 			},
-		}, nil
+		}
+		if trialEnd, trailErr := s.store.GetNewSystemTrialEnd(ctx, employee.TenantID); trailErr == nil && trialEnd != nil {
+			value := trialEnd.Format("2006-01-02")
+			me.NewSystemTrialEndsAt = &value
+		}
+		return me, nil
 
 	default:
 		return nil, fmt.Errorf("unknown user type")
