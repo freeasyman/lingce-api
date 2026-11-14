@@ -562,6 +562,85 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	return s.GetInstitution(ctx, tenantID)
 }
 
+// MigrateTrial 存量客户迁移试用：保留租户/账号/业务数据，发放 365 天试用额度，
+// 不生成订单、不产生应收、不发新客包；正式客户拒绝降级。
+func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
+	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
+		return nil, err
+	}
+	base, err := s.store.GetInstitutionBase(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if normalizeEnum(base.AccountMode) == AccountModeFormal {
+		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "正式客户不能降级为迁移试用，请单独处理"}
+	}
+	req, err = req.normalize()
+	if err != nil {
+		return nil, err
+	}
+	index, _, err := s.loadCatalogProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	products, err := resolveCatalogProducts(index, req.ProductCodes)
+	if err != nil {
+		return nil, err
+	}
+
+	today := s.today()
+	days := int64(req.Days)
+	endDate := addDaysDate(today, int(days)-1)
+	quotasByProduct := make(map[string][]quotaPair, len(products))
+	for _, product := range products {
+		quotas := make([]quotaPair, 0, len(product.Quotas))
+		for _, quota := range product.Quotas {
+			amount, err := scaleQuotaWhole(quota.Amount, days, 365)
+			if err != nil {
+				return nil, fmt.Errorf("migration trial quota %s/%s: %w", product.Code, quota.Unit, err)
+			}
+			quotas = append(quotas, quotaPair{Unit: quota.Unit, Amount: amount})
+		}
+		quotasByProduct[product.Code] = quotas
+	}
+
+	operator := s.service.resolveOperator(ctx, adminID)
+	reason := fmt.Sprintf("存量迁移试用 %d 天（保留租户与账号，不收款）", days)
+	tx, err := s.store.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin migration trial transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	for _, product := range products {
+		for _, quota := range quotasByProduct[product.Code] {
+			if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteSet, tenantID,
+				product.Code, quota.Unit, EditionTrial, QuotaTypeTrial, quota.Amount, formatDateOnly(endDate)); err != nil {
+				return nil, err
+			}
+			if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, product.Code, quota.Unit,
+				quota.Amount, LedgerSourceTrial, reason, nil, operator); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := s.store.CloseActivePeriodTx(ctx, tx, tenantID, PeriodStatusTerminated); err != nil {
+		return nil, err
+	}
+	if _, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceTrial); err != nil {
+		return nil, err
+	}
+	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeTrial, today, endDate); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit migration trial transaction: %w", err)
+	}
+	return s.GetInstitution(ctx, tenantID)
+}
+
 // ---------------------------------------------------------------------------
 // 加量 / 赠送
 // ---------------------------------------------------------------------------

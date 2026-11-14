@@ -45,6 +45,7 @@ func (h *Handler) institutionRoutes() []router.Route {
 		// 机构动作
 		ops("POST", institution+"/{id}/activate-formal", h.ActivateFormalInstitution),
 		ops("POST", institution+"/{id}/activate-trial", h.ActivateTrialInstitution),
+		ops("POST", institution+"/{id}/migrate-trial", h.MigrateTrialInstitution),
 		ops("POST", institution+"/{id}/increments", h.AddInstitutionIncrement),
 		ops("POST", institution+"/{id}/gifts", h.GiftInstitutionIncrement),
 		ops("POST", institution+"/{id}/renew", h.RenewInstitution),
@@ -428,6 +429,29 @@ func (h *Handler) AddInstitutionProduct(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	item, err := h.institutions.AddProduct(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// MigrateTrialInstitution 存量客户迁移试用：保留租户与数据，发放一年试用额度，不收款。
+func (h *Handler) MigrateTrialInstitution(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req TrialActivationRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.MigrateTrial(r.Context(), tenantID, req, adminID)
 	if err != nil {
 		writeInstitutionError(w, err)
 		return
