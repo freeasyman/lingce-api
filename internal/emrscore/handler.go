@@ -81,7 +81,10 @@ func (h *Handler) Current(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if item == nil {
-		httputil.WriteNotFound(w, "current score not found")
+		// 历史病历可能从未跑过质检，或只跑过保存级程序质检但尚未同步。
+		// 详情页需要「—/暂无评分」而不是错误提示，因此返回 200 + data:null；
+		// 前端据此显示暂无评分，不再触发 404 错误。
+		httputil.WriteSuccess(w, map[string]any{"data": nil})
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})

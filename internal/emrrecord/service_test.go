@@ -179,3 +179,22 @@ func TestValidateAuditTrail(t *testing.T) {
 		t.Fatal("expected missing after snapshot error")
 	}
 }
+
+func TestScoreProjectionStatusAndValues(t *testing.T) {
+	status, total, grade := scoreProjection(&emrquality.Report{ScoreReady: true, TotalScore: 98, Grade: "甲级"})
+	if status != "已完成" || total != 98 || grade != "甲级" {
+		t.Fatalf("completed projection = %v/%v/%v", status, total, grade)
+	}
+	status, total, grade = scoreProjection(&emrquality.Report{ScoreReady: true, TotalScore: 88, Grade: "乙级", PendingCount: 1})
+	if status != "待人工复核" || total != 88 || grade != "乙级" {
+		t.Fatalf("pending projection = %v/%v/%v", status, total, grade)
+	}
+	status, total, grade = scoreProjection(&emrquality.Report{TotalScore: 0, Grade: ""})
+	if status != "未评分" || total != nil || grade != nil {
+		t.Fatalf("unscored projection = %v/%v/%v", status, total, grade)
+	}
+	status, total, grade = scoreProjection(&emrquality.Report{ScoreReady: true, TotalScore: 0, Grade: "", FailureReason: "boom"})
+	if status != "执行失败" || total != nil || grade != nil {
+		t.Fatalf("failed projection = %v/%v/%v", status, total, grade)
+	}
+}

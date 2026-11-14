@@ -322,12 +322,29 @@ func saveReportTx(ctx context.Context, db qualityDB, report *Report) error {
 			return fmt.Errorf("insert quality result %s: %w", result.RuleCode, err)
 		}
 	}
-	if (report.Action == ActionComplete || report.Action == ActionArchive) && report.FailureReason == "" {
+	if ShouldWriteCurrentScore(report) {
 		if err := saveCurrentScore(ctx, db, report); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ShouldWriteCurrentScore 判断一次质检 run 是否应该覆盖 EMR 当前评分。
+//
+// 覆盖顺序固定为「最新 run 覆盖」：
+//   - EMR/HIS 的完成、归档：总是写入；
+//   - HIS 标准版的纯程序质检（ProgramOnly）在保存时也写入，让医生保存后
+//     立刻能在 EMR 详情看到分数/等级；
+//   - EMR 普通保存仍不写 current，避免草稿阶段用半成品结果覆盖已完成评分。
+func ShouldWriteCurrentScore(report *Report) bool {
+	if report == nil || report.FailureReason != "" {
+		return false
+	}
+	if report.Action == ActionComplete || report.Action == ActionArchive {
+		return true
+	}
+	return report.Action == ActionSave && report.ProgramOnly && report.ScoreReady
 }
 
 func saveCurrentScore(ctx context.Context, db qualityDB, report *Report) error {

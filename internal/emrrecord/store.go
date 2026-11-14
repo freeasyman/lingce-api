@@ -750,12 +750,11 @@ func saveFormalTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, id st
 	return &WriteOutcome{Record: updated, Snapshot: snapshot, BeforeContent: beforeContent, BeforeStatus: current.Status, AfterStatus: current.Status, BeforeSnapshot: beforeSnapshot, BeforePatient: beforePatient}, nil
 }
 
-func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, outcome *WriteOutcome, report *emrquality.Report) error {
-	if outcome == nil || outcome.Snapshot == nil || report == nil {
-		return fmt.Errorf("score projection requires formal snapshot and report")
+func scoreProjection(report *emrquality.Report) (status string, totalScore, grade any) {
+	if report == nil {
+		return "未评分", nil, nil
 	}
-	runID := report.RunID
-	status := "已完成"
+	status = "已完成"
 	if report.FailureReason != "" {
 		status = "执行失败"
 	} else if report.PendingCount > 0 {
@@ -763,19 +762,27 @@ func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID i
 	} else if !report.ScoreReady {
 		status = "未评分"
 	}
-	var totalScore any
-	var grade any
 	if status == "已完成" || status == "待人工复核" {
 		totalScore = report.TotalScore
 		if strings.TrimSpace(report.Grade) != "" {
 			grade = report.Grade
 		}
 	}
+	return status, totalScore, grade
+}
+
+// updateScoreProjectionTx 在完成/归档事务内同步病历与快照的当前评分投影，
+// 并把最近一次提交/归档级质检标记为已执行。
+func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, outcome *WriteOutcome, report *emrquality.Report) error {
+	if outcome == nil || outcome.Snapshot == nil || report == nil {
+		return fmt.Errorf("score projection requires formal snapshot and report")
+	}
+	status, totalScore, grade := scoreProjection(report)
 	if _, err := tx.Exec(ctx, `
 		UPDATE emr_record_snapshots
 		SET score_status=$2,total_score=$3,grade=$4,score_version=$5,quality_run_id=$6
 		WHERE id=$1
-	`, outcome.Snapshot.ID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID)); err != nil {
+	`, outcome.Snapshot.ID, status, totalScore, grade, report.RuleSetVersion, nullableString(report.RunID)); err != nil {
 		return fmt.Errorf("update snapshot score projection: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -783,10 +790,38 @@ func updateScoreProjectionTx(ctx context.Context, tx pgx.Tx, tenantID, actorID i
 		SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7,
 		    quality_status=$8,quality_status_reason='',quality_status_at=NOW()
 		WHERE id=$1 AND tenant_id=$2
-	`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(runID), QualityStatusChecked); err != nil {
+	`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(report.RunID), QualityStatusChecked); err != nil {
 		return fmt.Errorf("update record score projection: %w", err)
 	}
 	return nil
+}
+
+// SyncScoreProjection 把已经持久化的质检 run 同步到病历与快照的当前评分投影。
+// 供 HIS 保存（纯程序质检）使用：EMR 详情读取的是 emr_records 上的投影字段，
+// 只写 emr_record_score_current 会让详情继续显示「未评分」。
+// 该方法不修改 quality_status——保存级质检不改变「最近一次提交/归档级质检」语义。
+func (s *Store) SyncScoreProjection(ctx context.Context, tenantID int64, outcome *WriteOutcome, report *emrquality.Report) error {
+	if outcome == nil || outcome.Snapshot == nil || report == nil {
+		return nil
+	}
+	status, totalScore, grade := scoreProjection(report)
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_record_snapshots
+			SET score_status=$2,total_score=$3,grade=$4,score_version=$5,quality_run_id=$6
+			WHERE id=$1
+		`, outcome.Snapshot.ID, status, totalScore, grade, report.RuleSetVersion, nullableString(report.RunID)); err != nil {
+			return fmt.Errorf("update snapshot score projection: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE emr_records
+			SET current_score_status=$3,current_total_score=$4,current_grade=$5,current_score_version=$6,current_quality_run_id=$7
+			WHERE id=$1 AND tenant_id=$2
+		`, outcome.Record.ID, tenantID, status, totalScore, grade, report.RuleSetVersion, nullableString(report.RunID)); err != nil {
+			return fmt.Errorf("update record score projection: %w", err)
+		}
+		return nil
+	})
 }
 
 // markQualitySkippedTx 在提交事务内记录「本次保存跳过了质检」。

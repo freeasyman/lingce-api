@@ -84,6 +84,10 @@ type Report struct {
 	ModelAudit      map[string]any `json:"-"`
 	StartedAt       time.Time      `json:"-"`
 	CompletedAt     time.Time      `json:"-"`
+	// ProgramOnly 标记本次 run 是否只执行纯代码规则。HIS 保存/完成触发的
+	// 程序质检需要在 save 动作后也写入当前评分；EMR 的 save 仍保持只在
+	// complete/archive 时更新当前评分。
+	ProgramOnly bool `json:"-"`
 }
 
 func (r *Report) HasBlocking() bool { return r != nil && r.BlockingCount > 0 }

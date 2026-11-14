@@ -87,12 +87,13 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		return nil, err
 	}
 	report := &Report{
-		TenantID:   input.TenantID,
-		RecordID:   input.RecordID,
-		SnapshotID: input.SnapshotID,
-		Action:     input.Action,
-		Results:    make([]RuleResult, 0, len(rules)),
-		StartedAt:  time.Now(),
+		TenantID:    input.TenantID,
+		RecordID:    input.RecordID,
+		SnapshotID:  input.SnapshotID,
+		Action:      input.Action,
+		Results:     make([]RuleResult, 0, len(rules)),
+		StartedAt:   time.Now(),
+		ProgramOnly: input.ProgramOnly,
 	}
 	report.InputDigest = inputDigest(input)
 	report.RuleSetVersion, report.ScoreReady, err = s.store.activeVersion(ctx)

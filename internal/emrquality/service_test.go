@@ -253,3 +253,24 @@ func TestCalculateReportKeepsGradeWhenPending(t *testing.T) {
 		t.Fatal("grade was cleared for a pending/manual-review result")
 	}
 }
+
+func TestShouldWriteCurrentScore(t *testing.T) {
+	cases := []struct {
+		name   string
+		report *Report
+		want   bool
+	}{
+		{name: "nil", report: nil, want: false},
+		{name: "emr save does not overwrite current", report: &Report{Action: ActionSave, ScoreReady: true}, want: false},
+		{name: "his program save writes current", report: &Report{Action: ActionSave, ProgramOnly: true, ScoreReady: true}, want: true},
+		{name: "his program save without scoring rules", report: &Report{Action: ActionSave, ProgramOnly: true}, want: false},
+		{name: "his program complete writes current", report: &Report{Action: ActionComplete, ProgramOnly: true, ScoreReady: true}, want: true},
+		{name: "archive writes current", report: &Report{Action: ActionArchive, ScoreReady: true}, want: true},
+		{name: "failed run never writes current", report: &Report{Action: ActionComplete, ScoreReady: true, FailureReason: "llm timeout"}, want: false},
+	}
+	for _, tc := range cases {
+		if got := ShouldWriteCurrentScore(tc.report); got != tc.want {
+			t.Fatalf("%s: ShouldWriteCurrentScore() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

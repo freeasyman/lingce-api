@@ -250,6 +250,14 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 			return outcome, qualityErr
 		}
 		outcome.QualityReport = report
+		// HIS 标准版的保存会跑纯程序质检。除了把 run 落到质检表，还必须把
+		// 分数/等级/run_id 同步到 emr_records 与快照的当前评分投影，否则 EMR
+		// 详情读取 current_score_status 时仍显示「未评分」。
+		if emrquality.ShouldWriteCurrentScore(report) {
+			if projectionErr := s.store.SyncScoreProjection(ctx, tenantID, outcome, report); projectionErr != nil {
+				return outcome, projectionErr
+			}
+		}
 	}
 	if processErr := s.appendProcess(ctx, tenantID, id, actorID, "手动保存", outcome, req.Note, nil); processErr != nil {
 		return nil, processErr
