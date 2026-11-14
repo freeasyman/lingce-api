@@ -19,10 +19,28 @@ type Service struct {
 	llm   *llmgateway.Client
 }
 
-// drugAllergyNegativePhrases 是「药物过敏史」明确否认的常见表述。草稿生成侧目前
-// 只把过敏情况写进 allergy_history、未单列 drug_allergy，因此 GEN-005 在
-// drug_allergy 缺失时用这些短语回退判断，避免误阻断。
-var drugAllergyNegativePhrases = []string{"无药物过敏史", "否认药物过敏史", "无药物过敏", "否认药物过敏", "无过敏史", "否认过敏史"}
+// allergyHistoryText 按「病历过敏史 → 患者快照过敏史」的顺序取过敏史原文。
+// 病历侧优先 allergy_history（HIS/EMR 填写），兼容历史 drug_allergy；
+// 患者侧兼容快照的 drug_allergy / drug_allergies / allergy_history / allergy
+// 以及 extra_data.allergy。两者都为空才视为「真正未记录」。
+func allergyHistoryText(input Context) string {
+	for _, key := range []string{"allergy_history", "drug_allergy"} {
+		if value := strings.TrimSpace(contentText(input.Content, key)); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"drug_allergy", "drug_allergies", "allergy_history", "allergy"} {
+		if value := strings.TrimSpace(valueString(input.Patient, key)); value != "" {
+			return value
+		}
+	}
+	if extra, ok := input.Patient["extra_data"].(map[string]any); ok {
+		if value := strings.TrimSpace(valueString(extra, "allergy")); value != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 func NewService(store *Store, clients ...*llmgateway.Client) *Service {
 	var llm *llmgateway.Client
@@ -848,22 +866,25 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.content", Path: "allergy_history", Excerpt: text}}
 		}
 	case "GEN-005":
-		text := strings.TrimSpace(contentOrPatient(input, "drug_allergy", "drug_allergy"))
+		// 读取顺序：content.allergy_history → content.drug_allergy →
+		// 患者快照 allergy/drug_allergy/extra_data.allergy。任一有值（含「无」）
+		// 即视为已明确记录；只有两边都为空才报。
+		text := allergyHistoryText(input)
 		var spec struct {
 			Uncertain []string `json:"uncertain"`
 		}
 		if err := json.Unmarshal(rule.EvaluationSpec, &spec); err != nil {
 			return nil, err
 		}
-		// 草稿生成侧目前只写 allergy_history（过敏史）、未单列 drug_allergy。
-		// 当 drug_allergy 缺失时，若过敏史已明确否认药物过敏，视为已明确记录，避免误阻断。
-		if text == "" && containsAny(strings.TrimSpace(contentText(input.Content, "allergy_history")), drugAllergyNegativePhrases) {
-			break
-		}
-		if text == "" || containsAny(text, spec.Uncertain) {
+		uncertain := append([]string{"待确认", "尚未询问", "不详", "未询问"}, spec.Uncertain...)
+		if text == "" || containsAny(text, uncertain) {
 			result.Result = "problem"
 			result.Reason = "没有明确记录药物过敏史"
-			result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.drug_allergy", Excerpt: text}}
+			if strings.TrimSpace(contentText(input.Content, "allergy_history")) == "" {
+				result.Evidence = []Evidence{{Source: "record.patient_snapshot", Path: "patient.drug_allergy", Excerpt: text}}
+			} else {
+				result.Evidence = []Evidence{{Source: "record.content", Path: "allergy_history", Excerpt: text}}
+			}
 		}
 	case "GEN-004":
 		// started_at is a timestamp with minute precision in the current schema;
@@ -1213,13 +1234,6 @@ func valueString(values map[string]any, key string) string {
 		}
 	}
 	return ""
-}
-
-func contentOrPatient(input Context, contentKey, patientKey string) string {
-	if value := strings.TrimSpace(contentText(input.Content, contentKey)); value != "" {
-		return value
-	}
-	return valueString(input.Patient, patientKey)
 }
 
 func keyToCamel(key string) string {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -821,10 +822,154 @@ func toQualityResult(report *emrquality.Report) *QualityResult {
 	return quality
 }
 
+// prepareEMRContent 在 HIS 保存/完成病历前补齐过敏史，并校验结构化生命体征。
+// 过敏史优先级：医生已填内容 → 患者档案 extra_data.allergy → 病历患者快照 allergy → 「无」。
+func (s *Service) prepareEMRContent(ctx context.Context, tenantID int64, recordID string, req *SaveEMRRequest) error {
+	current, err := s.store.GetEMRRecordSummary(ctx, tenantID, recordID)
+	if err != nil {
+		// 记录不存在时交给 emrrecord 返回统一的 record not found 错误。
+		if errors.Is(err, pgx.ErrNoRows) {
+			return validatePhysicalExamContent(req.Content["physical_exam"])
+		}
+		return err
+	}
+	content := req.Content
+	if content == nil {
+		content = current.Content
+	}
+	if content == nil {
+		content = map[string]any{}
+	}
+	patient := req.PatientSnapshot
+	if patient == nil {
+		patient = current.PatientSnapshot
+	}
+	customerAllergy := ""
+	if current.CustomerID > 0 {
+		// 患者档案可能在看诊期间被更新，优先使用最新档案值；查询失败不阻断保存。
+		_ = s.store.pool.QueryRow(ctx, `
+			SELECT COALESCE(extra_data->>'allergy', '')
+			FROM customers WHERE tenant_id = $1 AND id = $2`, tenantID, current.CustomerID).Scan(&customerAllergy)
+	}
+	ensureAllergyHistory(content, patient, customerAllergy)
+	if err := validatePhysicalExamContent(content["physical_exam"]); err != nil {
+		return err
+	}
+	req.Content = content
+	return nil
+}
+
+// ensureAllergyHistory 保证病历 content 始终写入 allergy_history：
+// 医生已填写则保留；否则写患者过敏史原文；患者档案也没有则写「无」。
+func ensureAllergyHistory(content map[string]any, patient map[string]any, customerAllergy string) {
+	if content == nil {
+		return
+	}
+	if anyTrimmedString(content["allergy_history"]) != "" {
+		return
+	}
+	allergy := strings.TrimSpace(customerAllergy)
+	if allergy == "" {
+		for _, key := range []string{"allergy", "drug_allergy", "allergy_history"} {
+			if value := anyTrimmedString(patient[key]); value != "" {
+				allergy = value
+				break
+			}
+		}
+	}
+	if allergy == "" {
+		allergy = "无"
+	}
+	content["allergy_history"] = allergy
+}
+
+func anyTrimmedString(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+// vitalRange 为 HIS 门诊病历生命体征的合法范围（integer=true 表示必须为整数）。
+type vitalRange struct {
+	key     string
+	label   string
+	min     float64
+	max     float64
+	integer bool
+}
+
+var physicalVitalRanges = []vitalRange{
+	{key: "temperature", label: "体温", min: 34, max: 42},
+	{key: "pulse", label: "脉搏", min: 30, max: 200, integer: true},
+	{key: "respiration", label: "呼吸", min: 5, max: 60, integer: true},
+	{key: "blood_glucose", label: "血糖", min: 1, max: 40},
+	{key: "height", label: "身高", min: 50, max: 250},
+	{key: "weight", label: "体重", min: 2, max: 300},
+}
+
+// validatePhysicalExamContent 校验 HIS 写入的 physical_exam 结构化子项。
+// 兼容纯文本（历史数据）与 object（结构化）两种形态；空值不校验。
+func validatePhysicalExamContent(value any) error {
+	object, ok := value.(map[string]any)
+	if !ok || object == nil {
+		return nil
+	}
+	for _, spec := range physicalVitalRanges {
+		raw := anyTrimmedString(object[spec.key])
+		if raw == "" {
+			continue
+		}
+		number, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("%s需填写数字", spec.label)
+		}
+		if spec.integer && number != float64(int64(number)) {
+			return fmt.Errorf("%s需填写整数", spec.label)
+		}
+		if number < spec.min || number > spec.max {
+			return fmt.Errorf("%s需在 %g～%g 之间", spec.label, spec.min, spec.max)
+		}
+	}
+	bloodPressure := anyTrimmedString(object["blood_pressure"])
+	if bloodPressure == "" {
+		return nil
+	}
+	parts := strings.Split(bloodPressure, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("血压需按「收缩压/舒张压」填写")
+	}
+	systolic, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil {
+		return fmt.Errorf("收缩压需填写数字")
+	}
+	diastolic, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err != nil {
+		return fmt.Errorf("舒张压需填写数字")
+	}
+	if systolic < 70 || systolic > 220 {
+		return fmt.Errorf("收缩压需在 70～220 之间")
+	}
+	if diastolic < 40 || diastolic > 140 {
+		return fmt.Errorf("舒张压需在 40～140 之间")
+	}
+	return nil
+}
+
 // SaveEMRRecord 保存病历内容（复用 emrrecord 手动保存，附质检报告）。
 func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*EMRSaveResponse, error) {
 	if s.emr == nil {
 		return nil, ErrNotFound
+	}
+	if err := s.prepareEMRContent(ctx, tenantID, recordID, &req); err != nil {
+		return nil, err
 	}
 	// HIS 标准版：只跑纯代码质检规则，不调用 LLM（免费钩子产品零 AI 成本）。
 	outcome, err := s.emr.ManualSave(ctx, tenantID, actorID, recordID, emrrecord.ActionRequest{
@@ -848,6 +993,9 @@ func (s *Service) SaveEMRRecord(ctx context.Context, tenantID, actorID int64, re
 func (s *Service) CompleteEMRRecord(ctx context.Context, tenantID, actorID int64, recordID string, req SaveEMRRequest) (*CompleteEMRResponse, error) {
 	if s.emr == nil {
 		return nil, ErrNotFound
+	}
+	if err := s.prepareEMRContent(ctx, tenantID, recordID, &req); err != nil {
+		return nil, err
 	}
 	outcome, err := s.emr.Complete(ctx, tenantID, actorID, recordID, emrrecord.ActionRequest{
 		Content:          req.Content,

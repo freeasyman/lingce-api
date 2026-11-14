@@ -40,20 +40,53 @@ func TestHIS009AcceptsNegativeAndRejectsUnasked(t *testing.T) {
 	}
 }
 
-func TestGEN005FallsBackToAllergyHistoryNegative(t *testing.T) {
+func TestGEN005ReadsAllergyHistoryThenPatientSnapshot(t *testing.T) {
 	rule := programRule("GEN-005", 2, `{"uncertain":["待确认","尚未询问","不详","未询问"]}`)
-	denied := Context{Content: map[string]any{"allergy_history": "否认药物过敏史。"}, Patient: map[string]any{}}
-	got, err := evaluateRule(denied, rule)
+	cases := []struct {
+		name    string
+		content map[string]any
+		patient map[string]any
+		want    string
+	}{
+		// 病历已写过敏史：无论阳性还是否认，均视为已明确记录。
+		{"content positive", map[string]any{"allergy_history": "青霉素过敏（皮试阳性）"}, map[string]any{}, "pass"},
+		{"content negative", map[string]any{"allergy_history": "否认药物过敏史。"}, map[string]any{}, "pass"},
+		{"content no allergy", map[string]any{"allergy_history": "无"}, map[string]any{}, "pass"},
+		// 病历为空时回退患者快照 allergy/extra_data.allergy。
+		{"patient allergy fallback", map[string]any{}, map[string]any{"allergy": "青霉素过敏（皮试阳性，曾出现皮疹）"}, "pass"},
+		{"patient extra_data fallback", map[string]any{}, map[string]any{"extra_data": map[string]any{"allergy": "磺胺类过敏"}}, "pass"},
+		{"patient no allergy", map[string]any{}, map[string]any{"allergy": "无"}, "pass"},
+		// 未询问/待确认不算明确记录。
+		{"content uncertain", map[string]any{"allergy_history": "未询问"}, map[string]any{"allergy": "青霉素过敏"}, "problem"},
+		// 病历与患者档案都为空才报。
+		{"both empty", map[string]any{}, map[string]any{}, "problem"},
+		{"blank values", map[string]any{"allergy_history": "   "}, map[string]any{"allergy": "  "}, "problem"},
+	}
+	for _, tc := range cases {
+		got, err := evaluateRule(Context{Content: tc.content, Patient: tc.patient}, rule)
+		if err != nil {
+			t.Fatalf("%s: evaluate GEN-005: %v", tc.name, err)
+		}
+		if got.Result != tc.want {
+			t.Fatalf("%s: want %s, got %s", tc.name, tc.want, got.Result)
+		}
+	}
+}
+
+func TestGEN005ContentTakesPrecedenceOverPatient(t *testing.T) {
+	rule := programRule("GEN-005", 2, `{"uncertain":["待确认","尚未询问","不详","未询问"]}`)
+	got, err := evaluateRule(Context{
+		Content: map[string]any{"allergy_history": "未询问"},
+		Patient: map[string]any{"allergy": "青霉素过敏"},
+	}, rule)
 	if err != nil {
 		t.Fatalf("evaluate GEN-005: %v", err)
 	}
-	if got.Result != "pass" {
-		t.Fatalf("allergy_history 明确否认药物过敏应视为通过，got %s", got.Result)
-	}
-	missing := Context{Content: map[string]any{"allergy_history": "否认食物过敏。"}, Patient: map[string]any{}}
-	got, _ = evaluateRule(missing, rule)
 	if got.Result != "problem" {
-		t.Fatalf("allergy_history 未明确否认药物过敏仍应阻断，got %s", got.Result)
+		t.Fatalf("content 未询问应阻断，got %s", got.Result)
+	}
+	if len(got.Evidence) != 1 || got.Evidence[0].Source != "record.content" || got.Evidence[0].Path != "allergy_history" {
+		t.Fatalf("evidence 应指向病历字段，got %#v", got.Evidence)
 	}
 }
 
