@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/menuaccess"
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -1561,7 +1562,14 @@ func (s *Store) SetEmployeeRole(ctx context.Context, employeeID, roleID int64) e
 		if err := s.upsertInstitutionEmployeeRoleTx(ctx, tx, tenantID, employeeID, institutionRoleID, roleCode, "manual"); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		// 岗位默认产品一并补基础权限，保证「看得到产品就能用」。
+		if err := permission.EnsureEmployeeProductGrants(ctx, s.pool, tenantID, employeeID, 0, RoleDefaultProducts(roleCode)); err != nil {
+			return err
+		}
+		return nil
 	}
 	return fmt.Errorf("institution employee role table not prepared")
 }

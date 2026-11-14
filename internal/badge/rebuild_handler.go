@@ -207,10 +207,12 @@ func (h *Handler) RebuildAssignBadgeDevice(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 机构管理员只能把工牌分配到本机构，强制 tenant_id 收敛到自己机构。
+	var scopeTenantID *int64
 	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil {
 		req.TenantID = *claims.TenantID
+		scopeTenantID = claims.TenantID
 	}
-	if err := h.service.RebuildAssignBadgeDevice(r.Context(), id, req, claims.UserID, ""); err != nil {
+	if err := h.service.RebuildAssignBadgeDevice(r.Context(), id, req, claims.UserID, "", scopeTenantID); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
@@ -318,7 +320,11 @@ func (h *Handler) RebuildSwapBadgeDevice(w http.ResponseWriter, r *http.Request)
 		httputil.WriteBadRequest(w, "invalid body")
 		return
 	}
-	resp, err := h.service.RebuildSwapBadgeDevices(r.Context(), oldID, req, claims.UserID, "")
+	var scopeTenantID *int64
+	if claims.UserType != auth.UserTypeAdmin {
+		scopeTenantID = claims.TenantID
+	}
+	resp, err := h.service.RebuildSwapBadgeDevices(r.Context(), oldID, req, claims.UserID, "", scopeTenantID)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return

@@ -625,7 +625,7 @@ func (s *Store) RebuildRejectAcceptance(ctx context.Context, id int64, reason st
 	})
 }
 
-func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID, employeeID int64, operatorID int64, operatorName string) error {
+func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID, employeeID int64, operatorID int64, operatorName string, scopeTenantID *int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -635,6 +635,10 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 	device, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, id)
 	if err != nil {
 		return err
+	}
+	// 机构管理员只能操作本机构（或未分配）的工牌，防止跨机构挪设备。
+	if scopeTenantID != nil && device.CurrentTenantID != nil && *device.CurrentTenantID != *scopeTenantID {
+		return fmt.Errorf("badge belongs to another institution")
 	}
 	// 在库可用 → 领用；已在用 → 换人（同一事务内直接转移归属）。
 	transfer := device.Position == "in_use"
@@ -652,6 +656,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 
 	var employeeName string
 	var employeePhone *string
+	var employeeActive bool
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(
 			NULLIF(NULLIF(full_name, 'unknown'), ''),
@@ -659,14 +664,22 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 			NULLIF(username, ''),
 			NULLIF(phone, ''),
 			'未知员工'
-		), NULLIF(phone, '')
+		), NULLIF(phone, ''),
+		CASE WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true ELSE false END
 		FROM employees
 		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-	`, employeeID, tenantID).Scan(&employeeName, &employeePhone); err != nil {
+	`, employeeID, tenantID).Scan(&employeeName, &employeePhone, &employeeActive); err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("employee not found in tenant")
 		}
 		return fmt.Errorf("failed to load employee: %w", err)
+	}
+	if !employeeActive {
+		return fmt.Errorf("employee is inactive")
+	}
+	// 目标员工就是当前持有人：直接拒绝，避免刷新 assigned_at 并写一条「X 换 X」的脏日志。
+	if device.CurrentEmployeeID != nil && *device.CurrentEmployeeID == employeeID {
+		return fmt.Errorf("员工已持有该工牌，无需重复绑定")
 	}
 
 	var occupiedID int64
@@ -727,7 +740,7 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 }
 
 // RebuildSwapBadgeDevices 换机：旧机转为待寄回，新机承接原归属。一个事务内完成。
-func (s *Store) RebuildSwapBadgeDevices(ctx context.Context, oldID, newID int64, reason string, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+func (s *Store) RebuildSwapBadgeDevices(ctx context.Context, oldID, newID int64, reason string, operatorID int64, operatorName string, scopeTenantID *int64) (*BadgeDeviceV2, error) {
 	if oldID == newID {
 		return nil, fmt.Errorf("old and new badge must differ")
 	}
@@ -744,6 +757,10 @@ func (s *Store) RebuildSwapBadgeDevices(ctx context.Context, oldID, newID int64,
 	newDevice, err := s.rebuildGetBadgeDeviceForUpdate(ctx, tx, newID)
 	if err != nil {
 		return nil, err
+	}
+	// 机构管理员只能换本机构的工牌。
+	if scopeTenantID != nil && (oldDevice.CurrentTenantID == nil || *oldDevice.CurrentTenantID != *scopeTenantID) {
+		return nil, fmt.Errorf("badge belongs to another institution")
 	}
 	if oldDevice.Position != "in_use" {
 		return nil, fmt.Errorf("old badge must be in_use, got %s/%s", oldDevice.Position, oldDevice.Availability)

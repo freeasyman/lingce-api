@@ -167,5 +167,16 @@ DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, upda
 			return fmt.Errorf("save product override: %w", err)
 		}
 	}
+
+	// 有产品就必须能用：给生效产品补一条基础权限（幂等，不覆盖产品管理员已配的）。
+	enabledProducts := make([]string, 0, len(AllPortalProducts))
+	for _, item := range AllPortalProducts {
+		if desired[item] || defaults[item] {
+			enabledProducts = append(enabledProducts, item)
+		}
+	}
+	if err := permission.EnsureEmployeeProductGrants(ctx, q, tenantID, employeeID, actorID, enabledProducts); err != nil {
+		return err
+	}
 	return nil
 }

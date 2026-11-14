@@ -73,14 +73,14 @@ func (s *Service) RebuildRejectAcceptance(ctx context.Context, id int64, reason 
 	return s.store.RebuildRejectAcceptance(ctx, id, reason, operatorID, operatorName)
 }
 
-func (s *Service) RebuildAssignBadgeDevice(ctx context.Context, id int64, req RebuildBadgeAssignRequest, operatorID int64, operatorName string) error {
+func (s *Service) RebuildAssignBadgeDevice(ctx context.Context, id int64, req RebuildBadgeAssignRequest, operatorID int64, operatorName string, scopeTenantID *int64) error {
 	if req.TenantID <= 0 {
 		return fmt.Errorf("tenant_id is required")
 	}
 	if req.EmployeeID <= 0 {
 		return fmt.Errorf("employee_id is required")
 	}
-	return s.store.RebuildAssignBadgeDevice(ctx, id, req.TenantID, req.EmployeeID, operatorID, operatorName)
+	return s.store.RebuildAssignBadgeDevice(ctx, id, req.TenantID, req.EmployeeID, operatorID, operatorName, scopeTenantID)
 }
 
 func (s *Service) RebuildBatchSetAvailability(ctx context.Context, req RebuildBadgeBatchRequest, operatorID int64) (int, []int64, error) {
@@ -105,11 +105,11 @@ func (s *Service) RebuildChangeBadgePlacement(ctx context.Context, id int64, req
 	return s.store.RebuildChangeBadgePlacement(ctx, id, req, operatorID, operatorName)
 }
 
-func (s *Service) RebuildSwapBadgeDevices(ctx context.Context, oldID int64, req RebuildBadgeSwapRequest, operatorID int64, operatorName string) (*BadgeDeviceV2, error) {
+func (s *Service) RebuildSwapBadgeDevices(ctx context.Context, oldID int64, req RebuildBadgeSwapRequest, operatorID int64, operatorName string, scopeTenantID *int64) (*BadgeDeviceV2, error) {
 	if req.NewDeviceID <= 0 {
 		return nil, fmt.Errorf("new_device_id is required")
 	}
-	return s.store.RebuildSwapBadgeDevices(ctx, oldID, req.NewDeviceID, req.Reason, operatorID, operatorName)
+	return s.store.RebuildSwapBadgeDevices(ctx, oldID, req.NewDeviceID, req.Reason, operatorID, operatorName, scopeTenantID)
 }
 
 func (s *Service) RebuildReclaimBadgeDevice(ctx context.Context, id int64, reason string, operatorID int64, operatorName string) error {
