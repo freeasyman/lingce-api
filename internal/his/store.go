@@ -1185,7 +1185,8 @@ func (s *Store) ListRegistrations(ctx context.Context, tenantID int64, date, sta
 func (s *Store) ListQueue(ctx context.Context, tenantID int64, date string, doctorID int64, status string) ([]QueueEntry, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT q.id, q.encounter_id, q.registration_id, r.customer_id, COALESCE(c.name, ''),
-		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0), q.seq_no, q.status, q.called_at,
+		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0),
+		       COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''), q.seq_no, q.status, q.called_at,
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
@@ -1206,7 +1207,7 @@ func (s *Store) ListQueue(ctx context.Context, tenantID int64, date string, doct
 	for rows.Next() {
 		var q QueueEntry
 		if err := rows.Scan(&q.ID, &q.EncounterID, &q.RegistrationID, &q.CustomerID, &q.CustomerName,
-			&q.Phone, &q.Gender, &q.Age, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName); err != nil {
+			&q.Phone, &q.Gender, &q.Age, &q.BirthDate, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName); err != nil {
 			return nil, err
 		}
 		items = append(items, q)
@@ -1565,7 +1566,8 @@ func (s *Store) queueItemByRegistration(ctx context.Context, tenantID, registrat
 	var q QueueEntry
 	err := s.pool.QueryRow(ctx, `
 		SELECT q.id, q.encounter_id, q.registration_id, r.customer_id, COALESCE(c.name, ''),
-		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0), q.seq_no, q.status, q.called_at,
+		       COALESCE(c.phone, ''), COALESCE(c.gender, ''), COALESCE(c.age, 0),
+		       COALESCE(to_char(c.birth_date, 'YYYY-MM-DD'), ''), q.seq_no, q.status, q.called_at,
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
@@ -1574,7 +1576,7 @@ func (s *Store) queueItemByRegistration(ctx context.Context, tenantID, registrat
 		LEFT JOIN employees e ON e.id = d.employee_id
 		WHERE q.tenant_id = $1 AND q.registration_id = $2`, tenantID, registrationID).
 		Scan(&q.ID, &q.EncounterID, &q.RegistrationID, &q.CustomerID, &q.CustomerName,
-			&q.Phone, &q.Gender, &q.Age, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName)
+			&q.Phone, &q.Gender, &q.Age, &q.BirthDate, &q.SeqNo, &q.Status, &q.CalledAt, &q.DoctorID, &q.DoctorName)
 	if err != nil {
 		return QueueEntry{}, err
 	}

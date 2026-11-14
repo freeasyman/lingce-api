@@ -1,8 +1,10 @@
 package his
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testDocumentSource() *documentSource {
@@ -133,5 +135,49 @@ func TestDocumentPlaceholderNoLeak(t *testing.T) {
 	}
 	if !strings.Contains(html, "无") {
 		t.Fatalf("missing placeholder should render 无: %s", html)
+	}
+}
+
+func TestDocumentAgeUsesBirthDateAndFallsBackToSnapshot(t *testing.T) {
+	birth, err := time.ParseInLocation(birthDateLayout, "1987-01-01", time.Local)
+	if err != nil {
+		t.Fatalf("parse birth date: %v", err)
+	}
+	withBirth := testDocumentSource()
+	withBirth.Customer.BirthDate = "1987-01-01"
+	withBirth.Customer.Age = 36
+
+	tpl := DocumentTemplate{Code: "diagnosis_certificate", Name: "诊断证明书", BodyTemplate: `<p>年龄：{{age}}</p>`}
+	values, err := buildDocumentValues(tpl, withBirth, nil)
+	if err != nil {
+		t.Fatalf("build values: %v", err)
+	}
+	want := strconv.Itoa(ageFromBirthDate(birth, time.Now()))
+	if values["age"] != want {
+		t.Fatalf("age = %s, want %s (from birth_date)", values["age"], want)
+	}
+	html := renderDocumentHTML(tpl, withBirth, values)
+	if !strings.Contains(html, "年龄："+want) {
+		t.Fatalf("expected rendered {{age}} = %s, got %s", want, html)
+	}
+
+	noBirth := testDocumentSource()
+	noBirth.Customer.BirthDate = ""
+
+	values, err = buildDocumentValues(tpl, noBirth, nil)
+	if err != nil {
+		t.Fatalf("build values: %v", err)
+	}
+	if values["age"] != "36" {
+		t.Fatalf("age without birth_date = %s, want snapshot 36", values["age"])
+	}
+}
+
+func TestDocumentAgeIgnoresInvalidBirthDate(t *testing.T) {
+	source := testDocumentSource()
+	source.Customer.BirthDate = "not-a-date"
+	source.Customer.Age = 52
+	if got := documentAge(source.Customer); got != 52 {
+		t.Fatalf("documentAge = %d, want fallback 52", got)
 	}
 }

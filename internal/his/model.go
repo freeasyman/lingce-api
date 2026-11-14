@@ -416,6 +416,7 @@ type QueueEntry struct {
 	Phone          string     `json:"phone"`
 	Gender         string     `json:"gender"`
 	Age            int        `json:"age"`
+	BirthDate      string     `json:"birth_date"`
 	SeqNo          int        `json:"seq_no"`
 	Status         string     `json:"status"`
 	CalledAt       *time.Time `json:"called_at"`

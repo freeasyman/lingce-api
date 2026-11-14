@@ -56,6 +56,7 @@ type DocumentPrefill struct {
 	PatientName       string `json:"patient_name"`
 	Gender            string `json:"gender"`
 	Age               string `json:"age"`
+	BirthDate         string `json:"birth_date"`
 	Date              string `json:"date"`
 	Diagnosis         string `json:"diagnosis"`
 	DoctorName        string `json:"doctor_name"`
@@ -115,6 +116,19 @@ func documentTextOr(value, fallback string) string {
 	return value
 }
 
+// documentAge 优先按出生日期实时计算周岁；无出生日期时回退年龄快照。
+func documentAge(customer CustomerSummary) int {
+	birthDate := strings.TrimSpace(customer.BirthDate)
+	if birthDate == "" {
+		return customer.Age
+	}
+	parsed, err := time.ParseInLocation(birthDateLayout, birthDate, time.Local)
+	if err != nil {
+		return customer.Age
+	}
+	return ageFromBirthDate(parsed, time.Now())
+}
+
 // escapeDocumentValue 对用户/事实文本做 HTML 转义，并保留换行。
 func escapeDocumentValue(value string) string {
 	value = strings.ReplaceAll(value, "\r\n", "\n")
@@ -158,11 +172,12 @@ func buildDocumentValues(tpl DocumentTemplate, source *documentSource, extra map
 	if referralSummary == "" {
 		referralSummary = "无"
 	}
+	age := documentAge(source.Customer)
 
 	values := map[string]string{
 		"patient_name":       documentTextOr(source.Customer.Name, "未登记"),
 		"gender":             normalizeGenderLabel(source.Customer.Gender),
-		"age":                strconv.Itoa(source.Customer.Age),
+		"age":                strconv.Itoa(age),
 		"date":               today,
 		"diagnosis":          documentTextOr(source.Diagnosis, "未明确"),
 		"doctor_name":        documentTextOr(source.DoctorName, "________"),
@@ -181,7 +196,7 @@ func buildDocumentValues(tpl DocumentTemplate, source *documentSource, extra map
 		"disclosure":         "",
 	}
 
-	if source.Customer.Age <= 0 {
+	if age <= 0 {
 		values["age"] = "未登记"
 	}
 
@@ -608,7 +623,8 @@ func (s *Service) DocumentPrefill(ctx context.Context, tenantID, encounterID int
 		EncounterID:       encounterID,
 		PatientName:       source.Customer.Name,
 		Gender:            normalizeGenderLabel(source.Customer.Gender),
-		Age:               strconv.Itoa(source.Customer.Age),
+		Age:               strconv.Itoa(documentAge(source.Customer)),
+		BirthDate:         strings.TrimSpace(source.Customer.BirthDate),
 		Date:              today,
 		Diagnosis:         documentTextOr(source.Diagnosis, "未明确"),
 		DoctorName:        documentTextOr(source.DoctorName, "________"),
