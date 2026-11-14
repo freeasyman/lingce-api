@@ -316,6 +316,24 @@ WHERE tenant_id = $1 AND status = 'active'`, tenantID, status); err != nil {
 	return nil
 }
 
+// DeactivateTrialProductsTx 暂停未选中的试用产品，保留额度/流水以备重新加回。
+func (s *Store) DeactivateTrialProductsTx(ctx context.Context, tx pgx.Tx, tenantID int64, keepCodes []string) error {
+	if len(keepCodes) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+UPDATE product_entitlements
+SET status = 'paused', updated_at = NOW()
+WHERE tenant_id = $1
+  AND quota_type = 'trial'
+  AND NOT (product_code = ANY($2))
+`, tenantID, keepCodes)
+	if err != nil {
+		return fmt.Errorf("deactivate unselected trial products: %w", err)
+	}
+	return nil
+}
+
 // InsertActivePeriodTx 插入一条 active 服务期。
 func (s *Store) InsertActivePeriodTx(ctx context.Context, tx pgx.Tx, tenantID int64, startedOn, expiredOn time.Time, source string) (int64, error) {
 	var id int64

@@ -46,6 +46,7 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/activate-formal", h.ActivateFormalInstitution),
 		ops("POST", institution+"/{id}/activate-trial", h.ActivateTrialInstitution),
 		ops("POST", institution+"/{id}/migrate-trial", h.MigrateTrialInstitution),
+		ops("POST", institution+"/{id}/trial-products", h.SetTrialProducts),
 		ops("POST", institution+"/{id}/increments", h.AddInstitutionIncrement),
 		ops("POST", institution+"/{id}/gifts", h.GiftInstitutionIncrement),
 		ops("POST", institution+"/{id}/renew", h.RenewInstitution),
@@ -429,6 +430,29 @@ func (h *Handler) AddInstitutionProduct(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	item, err := h.institutions.AddProduct(r.Context(), tenantID, req, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, item)
+}
+
+// SetTrialProducts 调整试用期的产品集合：可增加/移除产品，不改到期日、不收款。
+func (h *Handler) SetTrialProducts(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	var req SetTrialProductsRequest
+	if err := decodeInstitutionBody(r, &req); err != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.institutions.SetTrialProducts(r.Context(), tenantID, req, adminID)
 	if err != nil {
 		writeInstitutionError(w, err)
 		return

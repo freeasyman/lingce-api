@@ -336,17 +336,17 @@ func normalizeInstitutionQuery(query InstitutionQuery) (InstitutionQuery, error)
 // CreateInstitutionRequest 是 POST /ops/billing/institutions 的请求体。
 // 字段与 billingService.ts 的 CreateInstitutionPayload 一致。
 type CreateInstitutionRequest struct {
-	Name        string            `json:"name"`
-	Legal       string            `json:"legal"`
-	Code        string            `json:"code"`
-	Industry    string            `json:"industry"`
-	Region      InstitutionRegion `json:"region"`
-	Contact     string            `json:"contact"`
-	Title       string            `json:"title"`
-	Phone       string            `json:"phone"`
-	Email       string            `json:"email"`
-	Channel     string            `json:"channel"`
-	Sales       string            `json:"sales"`
+	Name     string            `json:"name"`
+	Legal    string            `json:"legal"`
+	Code     string            `json:"code"`
+	Industry string            `json:"industry"`
+	Region   InstitutionRegion `json:"region"`
+	Contact  string            `json:"contact"`
+	Title    string            `json:"title"`
+	Phone    string            `json:"phone"`
+	Email    string            `json:"email"`
+	Channel  string            `json:"channel"`
+	Sales    string            `json:"sales"`
 }
 
 // normalize 校验建档入参，规则与 billingService.ts createInstitution 一致。
@@ -660,6 +660,39 @@ func (r AddProductRequest) normalize() (AddProductRequest, error) {
 	r.Code = normalizeEnum(r.Code)
 	if r.Code == "" {
 		return AddProductRequest{}, invalidf("请选择产品")
+	}
+	return r, nil
+}
+
+// SetTrialProductsRequest 是调整试用产品集合请求体：{ productCodes }。
+type SetTrialProductsRequest struct {
+	ProductCodes      []string `json:"productCodes"`
+	SnakeProductCodes []string `json:"product_codes"`
+}
+
+func (r SetTrialProductsRequest) normalize() (SetTrialProductsRequest, error) {
+	if len(r.ProductCodes) == 0 {
+		r.ProductCodes = r.SnakeProductCodes
+	}
+	codes := make([]string, 0, len(r.ProductCodes))
+	seen := make(map[string]struct{}, len(r.ProductCodes))
+	for _, raw := range r.ProductCodes {
+		code := normalizeEnum(raw)
+		if code == "" {
+			continue
+		}
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+	}
+	r.ProductCodes = codes
+	if len(codes) == 0 {
+		return SetTrialProductsRequest{}, invalidf("至少选一个产品")
+	}
+	if len(codes) > maxActiveProducts {
+		return SetTrialProductsRequest{}, invalidf("产品数量过多")
 	}
 	return r, nil
 }

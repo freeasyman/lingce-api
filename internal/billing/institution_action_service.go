@@ -562,6 +562,93 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	return s.GetInstitution(ctx, tenantID)
 }
 
+// SetTrialProducts 调整试用期的产品集合：新增产品发试用额度，移除产品暂停，
+// 不改服务期、不生成订单、不产生应收。
+func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int64, req SetTrialProductsRequest, adminID int64) (*Institution, error) {
+	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
+		return nil, err
+	}
+	base, err := s.store.GetInstitutionBase(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOpenInstitution(base); err != nil {
+		return nil, err
+	}
+	if normalizeEnum(base.AccountMode) != AccountModeTrial {
+		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有试用机构可以调整试用产品"}
+	}
+	req, err = req.normalize()
+	if err != nil {
+		return nil, err
+	}
+	index, _, err := s.loadCatalogProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	products, err := resolveCatalogProducts(index, req.ProductCodes)
+	if err != nil {
+		return nil, err
+	}
+	today := s.today()
+	endDate := today
+	if base.ExpiredOn != nil {
+		if parsed, err := parseDateOnly(*base.ExpiredOn); err == nil {
+			endDate = parsed
+		}
+	}
+	days := daysUntil(endDate, today)
+	if days < 1 {
+		days = 1
+	}
+	operator := s.service.resolveOperator(ctx, adminID)
+	reason := fmt.Sprintf("调整试用产品（保留 %d 天，免费）", days)
+	tx, err := s.store.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin set trial products transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	rows, err := s.store.LoadEntitlementRowsForUpdateTx(ctx, tx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	activeTrial := make(map[string]struct{})
+	for _, row := range rows {
+		if normalizeEnum(row.QuotaType) == QuotaTypeTrial && normalizeEnum(row.Status) == entitlementStatusActive {
+			activeTrial[normalizeEnum(row.ProductCode)] = struct{}{}
+		}
+	}
+	for _, product := range products {
+		if _, exists := activeTrial[product.Code]; exists {
+			continue
+		}
+		for _, quota := range product.Quotas {
+			amount, err := scaleQuotaWhole(quota.Amount, int64(days), 365)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteSet, tenantID,
+				product.Code, quota.Unit, EditionTrial, QuotaTypeTrial, amount, formatDateOnly(endDate)); err != nil {
+				return nil, err
+			}
+			if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, product.Code, quota.Unit,
+				amount, LedgerSourceTrial, reason, nil, operator); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := s.store.DeactivateTrialProductsTx(ctx, tx, tenantID, req.ProductCodes); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit set trial products transaction: %w", err)
+	}
+	return s.GetInstitution(ctx, tenantID)
+}
+
 // MigrateTrial 存量客户迁移试用：保留租户/账号/业务数据，发放 365 天试用额度，
 // 不生成订单、不产生应收、不发新客包；正式客户拒绝降级。
 func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
