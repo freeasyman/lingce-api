@@ -649,8 +649,8 @@ func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int6
 	return s.GetInstitution(ctx, tenantID)
 }
 
-// MigrateTrial 存量客户迁移试用：保留租户/账号/业务数据，发放 365 天试用额度，
-// 不生成订单、不产生应收、不发新客包；正式客户拒绝降级。
+// MigrateTrial 存量客户迁移试用：保留租户/账号/业务数据，按请求天数发放试用额度，
+// 不生成订单、不产生应收、不发新客包；正式客户拒绝降级。默认天数由运营端选择（通常 14/30 天）。
 func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
 		return nil, err
