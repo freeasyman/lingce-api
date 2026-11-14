@@ -1057,9 +1057,7 @@ func (s *InstitutionService) AddProduct(ctx context.Context, tenantID int64, req
 	if err := requireOpenInstitution(base); err != nil {
 		return nil, err
 	}
-	if err := requireFormalInstitution(base); err != nil {
-		return nil, err
-	}
+	isTrial := normalizeEnum(base.AccountMode) == AccountModeTrial
 	index, priceVersion, err := s.loadCatalogProducts(ctx)
 	if err != nil {
 		return nil, err
@@ -1067,6 +1065,9 @@ func (s *InstitutionService) AddProduct(ctx context.Context, tenantID int64, req
 	product, ok := index[req.Code]
 	if !ok {
 		return nil, invalidf("产品 %s 不在价目表中", req.Code)
+	}
+	if isTrial {
+		return s.addTrialProduct(ctx, tenantID, base, product, adminID)
 	}
 
 	today := s.today()
@@ -1158,6 +1159,64 @@ func (s *InstitutionService) AddProduct(ctx context.Context, tenantID int64, req
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit add product transaction: %w", err)
+	}
+	return s.GetInstitution(ctx, tenantID)
+}
+
+// addTrialProduct 给已开通的试用机构补一个试用产品：免费，按剩余试用天数折算，
+// 到期日不变；不生成订单、不产生应收。
+func (s *InstitutionService) addTrialProduct(ctx context.Context, tenantID int64, base institutionBaseRow, product catalogProduct, adminID int64) (*Institution, error) {
+	today := s.today()
+	endDate := today
+	if base.ExpiredOn != nil {
+		if parsed, err := parseDateOnly(*base.ExpiredOn); err == nil {
+			endDate = parsed
+		}
+	}
+	days := daysUntil(endDate, today)
+	if days < 1 {
+		days = 1
+	}
+	grants := make([]quotaPair, 0, len(product.Quotas))
+	for _, quota := range product.Quotas {
+		amount, err := scaleQuotaWhole(quota.Amount, int64(days), 365)
+		if err != nil {
+			return nil, err
+		}
+		grants = append(grants, quotaPair{Unit: quota.Unit, Amount: amount})
+	}
+
+	operator := s.service.resolveOperator(ctx, adminID)
+	reason := fmt.Sprintf("试用加产品：%s（剩余 %d 天折算，免费）", product.Name, days)
+	tx, err := s.store.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin trial add product transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	rows, err := s.store.LoadEntitlementRowsForUpdateTx(ctx, tx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if normalizeEnum(row.ProductCode) == product.Code && normalizeEnum(row.QuotaType) == QuotaTypeTrial {
+			return nil, ErrProductAlreadyActive
+		}
+	}
+	for _, grant := range grants {
+		if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteAdd, tenantID,
+			product.Code, grant.Unit, EditionTrial, QuotaTypeTrial, grant.Amount, formatDateOnly(endDate)); err != nil {
+			return nil, err
+		}
+		if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, product.Code, grant.Unit,
+			grant.Amount, LedgerSourceTrial, reason, nil, operator); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit trial add product transaction: %w", err)
 	}
 	return s.GetInstitution(ctx, tenantID)
 }
