@@ -75,10 +75,6 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 	for _, base := range bases {
 		tenantIDs = append(tenantIDs, base.ID)
 	}
-	departments, err := s.store.ListInstitutionDepartments(ctx, tenantIDs)
-	if err != nil {
-		return nil, err
-	}
 	entitlementRows, err := s.store.ListInstitutionEntitlementRows(ctx, tenantIDs)
 	if err != nil {
 		return nil, err
@@ -88,7 +84,7 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 
 	items := make([]Institution, 0, len(bases))
 	for _, base := range bases {
-		items = append(items, buildInstitution(base, departments[base.ID], entitlementsByTenant[base.ID], today))
+		items = append(items, buildInstitution(base, nil, entitlementsByTenant[base.ID], today))
 	}
 	return &InstitutionListResult{Items: items, Total: int64(len(items)), IsMock: false}, nil
 }
@@ -96,10 +92,6 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 // GetInstitution 返回机构详情（不做数据权限校验，内部调用用）。
 func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64) (*Institution, error) {
 	base, err := s.store.GetInstitutionBase(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	departments, err := s.store.ListInstitutionDepartments(ctx, []int64{tenantID})
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +121,7 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 		return nil, err
 	}
 
-	item := buildInstitution(base, departments[tenantID], groupEntitlementRows(entitlementRows)[tenantID], s.today())
+	item := buildInstitution(base, nil, groupEntitlementRows(entitlementRows)[tenantID], s.today())
 	item.Documents = make([]InstitutionDocument, 0, len(documents))
 	for _, doc := range documents {
 		item.Documents = append(item.Documents, institutionDocumentOf(doc))
@@ -383,19 +375,6 @@ func (s *InstitutionService) CreateInstitution(ctx context.Context, req CreateIn
 	} else if !found {
 		return nil, invalidf("行业不存在，请先在行业字典里新增")
 	}
-	departmentIDsByName, err := s.store.GetDepartmentIDsByNames(ctx, req.Departments)
-	if err != nil {
-		return nil, err
-	}
-	departmentIDs := make([]int64, 0, len(req.Departments))
-	for _, name := range req.Departments {
-		id, ok := departmentIDsByName[name]
-		if !ok {
-			return nil, invalidf("科室「%s」不存在，请先在科室字典里新增", name)
-		}
-		departmentIDs = append(departmentIDs, id)
-	}
-
 	// 手机号全局唯一：先给运营一个能看懂的冲突提示。
 	if owner, found, err := s.store.InstitutionPhoneOwner(ctx, req.Phone); err != nil {
 		return nil, err
@@ -439,9 +418,6 @@ func (s *InstitutionService) CreateInstitution(ctx context.Context, req CreateIn
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := s.store.UpdateInstitutionProfileTx(ctx, tx, created.ID, req); err != nil {
-		return nil, err
-	}
-	if err := s.store.ReplaceTenantDepartmentsTx(ctx, tx, created.ID, departmentIDs); err != nil {
 		return nil, err
 	}
 	// 建档时默认主管理员：tenant.Store.CreateTenant 已经在 employees 建了管理员，

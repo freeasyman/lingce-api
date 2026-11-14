@@ -37,12 +37,12 @@ func DefaultAdminAssignment(tenantID, employeeID int64) *Assignment {
 
 type Access struct {
 	UserID       int64
-	TenantID     int64
-	DepartmentID *int64
-	Scope        string
-	Role         string
-	Admin        bool
-	Abilities    map[string]struct{}
+	TenantID      int64
+	DepartmentIDs []int64
+	Scope         string
+	Role          string
+	Admin         bool
+	Abilities     map[string]struct{}
 }
 
 func (a *Access) CanManagePermissions() bool {
@@ -76,7 +76,14 @@ func (a *Access) CanRecord(doctorID int64, departmentID *int64) bool {
 	if a.Scope == "self" {
 		return doctorID == a.UserID
 	}
-	return a.Scope == "department" && a.DepartmentID != nil && departmentID != nil && *a.DepartmentID == *departmentID
+	if a.Scope == "department" && departmentID != nil {
+		for _, id := range a.DepartmentIDs {
+			if id == *departmentID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type Assignment struct {

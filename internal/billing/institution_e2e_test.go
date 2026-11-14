@@ -168,7 +168,6 @@ func (e *billingTestEnv) createInstitution(name, industry string, departments []
 		Name:        name,
 		Legal:       name + "有限公司",
 		Industry:    industry,
-		Departments: departments,
 		Region:      billing.InstitutionRegion{Province: "310000", City: "310100", District: "310104"},
 		Contact:     "联系人",
 		Title:       "信息科",
@@ -298,7 +297,7 @@ FROM tenant_ownerships WHERE tenant_id = $1 AND effective_to IS NULL`, instituti
 
 	// 2. 手机号撞号 -> 409（conflict）
 	dupPayload := billing.CreateInstitutionRequest{
-		Name: "撞号机构", Legal: "撞号机构有限公司", Industry: "口腔", Departments: []string{"口腔科"},
+		Name: "撞号机构", Legal: "撞号机构有限公司", Industry: "口腔",
 		Region:  billing.InstitutionRegion{Province: "310000", City: "310100", District: "310104"},
 		Contact: "联系人", Phone: institution.Phone, Channel: channelName, Sales: salesName,
 	}
@@ -816,7 +815,7 @@ RETURNING id`, "他组织运营-"+env.suffix, env.nextPhone("19"), otherOrgID).S
 	}
 	// 越权给别家渠道建档 403
 	if _, err := env.svc.CreateInstitution(ctx, billing.CreateInstitutionRequest{
-		Name: "越权建档", Legal: "越权建档有限公司", Industry: "口腔", Departments: []string{"口腔科"},
+		Name: "越权建档", Legal: "越权建档有限公司", Industry: "口腔",
 		Region:  billing.InstitutionRegion{Province: "310000", City: "310100", District: "310104"},
 		Contact: "联系人", Phone: env.nextPhone("15"), Channel: channelName, Sales: salesName,
 	}, otherAdminID); err == nil {

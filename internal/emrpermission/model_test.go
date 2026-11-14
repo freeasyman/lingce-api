@@ -58,17 +58,24 @@ func TestAccessCanRecordByScope(t *testing.T) {
 		},
 		{
 			name:         "department allows same department",
-			access:       &Access{DepartmentID: &departmentID, Scope: "department"},
+			access:       &Access{DepartmentIDs: []int64{departmentID}, Scope: "department"},
 			doctorID:     8,
 			recordDeptID: &departmentID,
 			want:         true,
 		},
 		{
 			name:         "department denies another department",
-			access:       &Access{DepartmentID: &departmentID, Scope: "department"},
+			access:       &Access{DepartmentIDs: []int64{departmentID}, Scope: "department"},
 			doctorID:     8,
 			recordDeptID: &otherDepartmentID,
 			want:         false,
+		},
+		{
+			name:         "multi-department allows any of the employee departments",
+			access:       &Access{DepartmentIDs: []int64{departmentID, otherDepartmentID}, Scope: "department"},
+			doctorID:     8,
+			recordDeptID: &otherDepartmentID,
+			want:         true,
 		},
 		{
 			name:         "tenant allows all departments",

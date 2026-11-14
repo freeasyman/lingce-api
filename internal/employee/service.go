@@ -189,3 +189,14 @@ func toEmployeeResponse(e *Employee) *EmployeeResponse {
 		UpdatedAt:             e.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
+
+// writeAuditLog 记录机构基础动作日志（复用 system_action_logs，仅写关键字段）。
+func (s *Service) writeAuditLog(ctx context.Context, tenantID, actorID int64, actorName, action, objectType string, objectID int64) {
+	if s == nil || s.store == nil {
+		return
+	}
+	_, _ = s.store.pool.Exec(ctx, `
+		INSERT INTO system_action_logs (tenant_id, actor_id, actor_name, log_type, action_code, action_name, object_type, object_id, result)
+		VALUES ($1, $2, $3, 'institution', $4, $4, $5, $6::text, 'success')
+	`, tenantID, actorID, actorName, action, objectType, objectID)
+}

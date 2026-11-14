@@ -384,28 +384,34 @@ func (s *Store) ListInstitutionRoles(ctx context.Context, tenantID int64, req In
 		return roles, total, nil
 	}
 
-	// Self-heal sync: keep new role table aligned with legacy role definitions
-	// for tenants that previously only wrote inst_roles.
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
-		SELECT $1,
-		       COALESCE(NULLIF(r.name_cn, ''), r.code),
-		       r.code,
-		       r.description,
-		       COALESCE(r.is_active, true),
-		       COALESCE(r.created_at, NOW()),
-		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
-		FROM inst_roles r
-		WHERE lower(COALESCE(r.code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
-		  AND COALESCE(r.name_cn, '') <> '联调角色225052已编辑'
-		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
-		DO UPDATE SET
-		    name = EXCLUDED.name,
-		    description = EXCLUDED.description,
-		    is_active = EXCLUDED.is_active,
-		    updated_at = NOW()
-	`, tenantID); err != nil {
-		return nil, 0, fmt.Errorf("failed to sync institution roles: %w", err)
+	// 仅当该租户在新表中完全没有记录时，才从旧表初始化一次；之后以新表为唯一权威。
+	// 避免旧表（inst_roles）把人工停用的角色重新灌回来。
+	var roleCount int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM institution_roles WHERE tenant_id = $1`, tenantID).Scan(&roleCount); err != nil {
+		return nil, 0, fmt.Errorf("failed to count institution roles: %w", err)
+	}
+	if roleCount == 0 {
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+			SELECT $1,
+			       COALESCE(NULLIF(r.name_cn, ''), r.code),
+			       r.code,
+			       r.description,
+			       COALESCE(r.is_active, true),
+			       COALESCE(r.created_at, NOW()),
+			       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
+			FROM inst_roles r
+			WHERE lower(COALESCE(r.code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
+			  AND COALESCE(r.name_cn, '') <> '联调角色225052已编辑'
+			ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
+			DO UPDATE SET
+			    name = EXCLUDED.name,
+			    description = EXCLUDED.description,
+			    is_active = EXCLUDED.is_active,
+			    updated_at = NOW()
+		`, tenantID); err != nil {
+			return nil, 0, fmt.Errorf("failed to sync institution roles: %w", err)
+		}
 	}
 
 	query := `

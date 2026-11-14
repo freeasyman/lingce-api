@@ -195,11 +195,11 @@ func (s *Store) ListScoped(ctx context.Context, tenantID int64, status string, a
 			args = append(args, access.UserID)
 			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
 		case "department":
-			if access.DepartmentID == nil {
+			if len(access.DepartmentIDs) == 0 {
 				return []*Record{}, nil
 			}
-			args = append(args, *access.DepartmentID)
-			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+			args = append(args, access.DepartmentIDs)
+			where += fmt.Sprintf(" AND r.department_id = ANY($%d)", len(args))
 		default:
 			return []*Record{}, nil
 		}
@@ -273,11 +273,11 @@ func (s *Store) ListScopedPaginated(ctx context.Context, tenantID int64, filter 
 			args = append(args, access.UserID)
 			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
 		case "department":
-			if access.DepartmentID == nil {
+			if len(access.DepartmentIDs) == 0 {
 				return []*Record{}, 0, nil
 			}
-			args = append(args, *access.DepartmentID)
-			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+			args = append(args, access.DepartmentIDs)
+			where += fmt.Sprintf(" AND r.department_id = ANY($%d)", len(args))
 		default:
 			return []*Record{}, 0, nil
 		}
@@ -302,11 +302,11 @@ func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrper
 			args = append(args, access.UserID)
 			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
 		case "department":
-			if access.DepartmentID == nil {
+			if len(access.DepartmentIDs) == 0 {
 				return 0, 0, 0, nil
 			}
-			args = append(args, *access.DepartmentID)
-			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+			args = append(args, access.DepartmentIDs)
+			where += fmt.Sprintf(" AND r.department_id = ANY($%d)", len(args))
 		default:
 			return 0, 0, 0, nil
 		}
@@ -414,11 +414,11 @@ func (s *Store) listByPatient(ctx context.Context, tenantID, patientID int64, pa
 			args = append(args, access.UserID)
 			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
 		case "department":
-			if access.DepartmentID == nil {
+			if len(access.DepartmentIDs) == 0 {
 				return []*Record{}, 0, nil
 			}
-			args = append(args, *access.DepartmentID)
-			where += fmt.Sprintf(" AND r.department_id=$%d", len(args))
+			args = append(args, access.DepartmentIDs)
+			where += fmt.Sprintf(" AND r.department_id = ANY($%d)", len(args))
 		default:
 			return []*Record{}, 0, nil
 		}

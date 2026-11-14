@@ -57,19 +57,6 @@ func (s *InstitutionService) UpdateInstitution(ctx context.Context, tenantID int
 		}
 	}
 
-	// 科室必须真实存在；departmentIds 是全量替换。
-	if req.DepartmentIDs != nil {
-		existing, lookupErr := s.store.GetExistingDepartmentIDs(ctx, *req.DepartmentIDs)
-		if lookupErr != nil {
-			return nil, lookupErr
-		}
-		for _, id := range *req.DepartmentIDs {
-			if _, ok := existing[id]; !ok {
-				return nil, invalidf("科室不存在（id=%d）", id)
-			}
-		}
-	}
-
 	// 联系人手机号冲突：employees.phone 全局唯一，先给运营可读的 409。
 	if req.ContactPhone != nil {
 		owner, found, lookupErr := s.store.InstitutionPhoneOwnerExcludingTenant(ctx, *req.ContactPhone, tenantID)
@@ -84,29 +71,19 @@ func (s *InstitutionService) UpdateInstitution(ctx context.Context, tenantID int
 		}
 	}
 
-	beforeDepartmentIDs, err := s.store.ListTenantDepartmentIDs(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
+	var beforeDepartmentIDs []int64
 	summaryBefore, summaryAfter := institutionUpdateSummary(before, req, beforeDepartmentIDs)
 
-	// 计费档案列 + 科室：同一事务，避免「档案改了科室没改」。
-	if req.hasBillingProfileFields() || req.DepartmentIDs != nil {
+	// 计费档案列：同一事务。
+	if req.hasBillingProfileFields() {
 		tx, beginErr := s.store.pool.Begin(ctx)
 		if beginErr != nil {
 			return nil, fmt.Errorf("begin institution update transaction: %w", beginErr)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		if req.hasBillingProfileFields() {
-			if updateErr := s.store.UpdateInstitutionProfileFieldsTx(ctx, tx, tenantID, req); updateErr != nil {
-				return nil, updateErr
-			}
-		}
-		if req.DepartmentIDs != nil {
-			if updateErr := s.store.ReplaceTenantDepartmentsTx(ctx, tx, tenantID, *req.DepartmentIDs); updateErr != nil {
-				return nil, updateErr
-			}
+		if updateErr := s.store.UpdateInstitutionProfileFieldsTx(ctx, tx, tenantID, req); updateErr != nil {
+			return nil, updateErr
 		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return nil, fmt.Errorf("commit institution update transaction: %w", commitErr)

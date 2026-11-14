@@ -3,6 +3,7 @@ package department
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 )
@@ -13,6 +14,79 @@ type Service struct {
 
 func NewService(store *Store) *Service {
 	return &Service{store: store}
+}
+
+// ListEmrTemplateOptions 返回科室可选病历模板。
+func (s *Service) ListEmrTemplateOptions(ctx context.Context, tenantID int64) ([]EmrTemplateOption, error) {
+	return s.store.ListEmrTemplateOptions(ctx, tenantID)
+}
+
+// SetDepartmentTemplate 设置科室默认病历模板（空表示不配置）。
+func (s *Service) SetDepartmentTemplate(ctx context.Context, tenantID, id int64, code string) error {
+	code = strings.TrimSpace(code)
+	if code != "" {
+		ok, err := s.store.EmrTemplateAvailable(ctx, tenantID, code)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("模板不存在或未发布")
+		}
+	}
+	return s.store.SetDepartmentTemplate(ctx, tenantID, id, code)
+}
+
+// ListDepartmentDictionary 返回平台组织字典（科室 + 职能部）。
+func (s *Service) ListDepartmentDictionary(ctx context.Context) ([]DepartmentDictItem, error) {
+	return s.store.ListDepartmentDictionary(ctx)
+}
+
+// ResolveDepartmentInput 归一化建部门入参：标准科室以字典为准，否则按自定义处理。
+func (s *Service) ResolveDepartmentInput(ctx context.Context, req CreateDepartmentRequest) (CreateDepartmentRequest, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Code = strings.TrimSpace(req.Code)
+	req.DictCode = strings.TrimSpace(req.DictCode)
+	if req.DictCode != "" {
+		item, found, err := s.store.GetDepartmentDictionaryItem(ctx, req.DictCode)
+		if err != nil {
+			return req, err
+		}
+		if !found {
+			return req, fmt.Errorf("部门不在平台字典中，请从字典选择或改为自定义")
+		}
+		req.Name = item.Name
+		req.Code = item.Code
+		req.Type = item.Type
+		req.TemplateCode = item.TemplateCode
+		req.IsCustom = false
+		return req, nil
+	}
+	if req.Name == "" {
+		return req, fmt.Errorf("请填部门名称")
+	}
+	if req.Code == "" {
+		req.Code = buildDepartmentCode(req.Name)
+	}
+	if req.Type != "functional" {
+		req.Type = "clinical"
+	}
+	req.IsCustom = true
+	return req, nil
+}
+
+// ValidateDepartmentCode 校验部门编码来自平台字典。
+func (s *Service) ValidateDepartmentCode(ctx context.Context, code string) error {
+	if strings.TrimSpace(code) == "" {
+		return fmt.Errorf("请从平台字典选择部门")
+	}
+	exists, err := s.store.DepartmentCodeExists(ctx, code)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("部门编码不在平台字典中，请从字典选择")
+	}
+	return nil
 }
 
 // ListDepartments retrieves a paginated list of departments
@@ -104,6 +178,9 @@ func toDepartmentResponse(d *Department) *DepartmentResponse {
 		Code:            d.Code,
 		ParentID:        d.ParentID,
 		IsActive:        d.IsActive,
+		Type:            d.Type,
+		TemplateCode:    d.TemplateCode,
+		IsCustom:        d.IsCustom,
 		DefaultRoleCode: d.DefaultRoleCode,
 		DefaultRoleName: d.DefaultRoleName,
 		CreatedAt:       d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),

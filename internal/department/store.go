@@ -2,6 +2,7 @@ package department
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -236,6 +237,9 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 		           ORDER BY dr.created_at DESC
 		           LIMIT 1
 		       ) AS default_role_name,
+		       COALESCE(d.type, '') AS type,
+		       COALESCE(d.template_code, '') AS template_code,
+		       COALESCE(d.is_custom, false) AS is_custom,
 		       d.created_at, d.updated_at, d.deleted_at
 		FROM departments d
 		WHERE %s
@@ -263,6 +267,9 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 			&d.IsActive,
 			&d.DefaultRoleCode,
 			&d.DefaultRoleName,
+			&d.Type,
+			&d.TemplateCode,
+			&d.IsCustom,
 			&d.CreatedAt,
 			&d.UpdatedAt,
 			&d.DeletedAt,
@@ -302,6 +309,9 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		           ORDER BY dr.created_at DESC
 		           LIMIT 1
 		       ) AS default_role_name,
+		       COALESCE(d.type, '') AS type,
+		       COALESCE(d.template_code, '') AS template_code,
+		       COALESCE(d.is_custom, false) AS is_custom,
 		       d.created_at, d.updated_at, d.deleted_at
 		FROM departments d
 		WHERE d.id = $1 AND d.deleted_at IS NULL
@@ -317,6 +327,9 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		&d.IsActive,
 		&d.DefaultRoleCode,
 		&d.DefaultRoleName,
+		&d.Type,
+		&d.TemplateCode,
+		&d.IsCustom,
 		&d.CreatedAt,
 		&d.UpdatedAt,
 		&d.DeletedAt,
@@ -332,16 +345,119 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 	return &d, nil
 }
 
+// ListDepartmentDictionary 返回平台组织字典（科室 + 职能部）。
+func (s *Store) ListDepartmentDictionary(ctx context.Context) ([]DepartmentDictItem, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT code, name, type
+FROM organization_department_dict
+WHERE is_active
+ORDER BY type, sort_order, code`)
+	if err != nil {
+		return nil, fmt.Errorf("list department dictionary: %w", err)
+	}
+	defer rows.Close()
+	items := make([]DepartmentDictItem, 0, 24)
+	for rows.Next() {
+		var item DepartmentDictItem
+		if err := rows.Scan(&item.Code, &item.Name, &item.Type); err != nil {
+			return nil, fmt.Errorf("scan department dictionary: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// GetDepartmentDictionaryItem 按编码取平台字典项。
+func (s *Store) GetDepartmentDictionaryItem(ctx context.Context, code string) (DepartmentDictItem, bool, error) {
+	var item DepartmentDictItem
+	err := s.pool.QueryRow(ctx, `
+SELECT code, name, type, COALESCE(template_code, '') FROM organization_department_dict WHERE code = $1 AND is_active`, code).
+		Scan(&item.Code, &item.Name, &item.Type, &item.TemplateCode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DepartmentDictItem{}, false, nil
+	}
+	if err != nil {
+		return DepartmentDictItem{}, false, fmt.Errorf("get department dictionary item: %w", err)
+	}
+	return item, true, nil
+}
+
+// DepartmentCodeExists 判断 code 是否是平台组织字典里的有效项。
+func (s *Store) DepartmentCodeExists(ctx context.Context, code string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM organization_department_dict WHERE code = $1)`, code).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check department code: %w", err)
+	}
+	return exists, nil
+}
+
+// EmrTemplateOption 是科室可选病历模板。
+type EmrTemplateOption struct {
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	DocumentType string `json:"document_type"`
+	VisitType    string `json:"visit_type"`
+}
+
+// ListEmrTemplateOptions 返回本机构可用（已发布且为当前版本）的病历模板。
+func (s *Store) ListEmrTemplateOptions(ctx context.Context, tenantID int64) ([]EmrTemplateOption, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT code, name, COALESCE(document_type, ''), COALESCE(visit_type, '')
+FROM emr_templates
+WHERE status = 'published' AND is_current AND tenant_id IN (0, $1)
+ORDER BY code`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list emr template options: %w", err)
+	}
+	defer rows.Close()
+	items := make([]EmrTemplateOption, 0, 12)
+	for rows.Next() {
+		var item EmrTemplateOption
+		if err := rows.Scan(&item.Code, &item.Name, &item.DocumentType, &item.VisitType); err != nil {
+			return nil, fmt.Errorf("scan emr template option: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// EmrTemplateAvailable 判断模板 code 是否可用于该机构。
+func (s *Store) EmrTemplateAvailable(ctx context.Context, tenantID int64, code string) (bool, error) {
+	var ok bool
+	if err := s.pool.QueryRow(ctx, `
+SELECT EXISTS(
+    SELECT 1 FROM emr_templates
+    WHERE code = $1 AND status = 'published' AND is_current AND tenant_id IN (0, $2)
+)`, code, tenantID).Scan(&ok); err != nil {
+		return false, fmt.Errorf("check emr template: %w", err)
+	}
+	return ok, nil
+}
+
+// SetDepartmentTemplate 设置科室默认病历模板；code 为空表示不配置（走标准模板）。
+func (s *Store) SetDepartmentTemplate(ctx context.Context, tenantID, id int64, code string) error {
+	tag, err := s.pool.Exec(ctx, `
+UPDATE departments SET template_code = NULLIF($1, ''), updated_at = NOW()
+WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL`, code, id, tenantID)
+	if err != nil {
+		return fmt.Errorf("set department template: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("department not found")
+	}
+	return nil
+}
+
 // CreateDepartment creates a new department
 func (s *Store) CreateDepartment(ctx context.Context, req CreateDepartmentRequest) (*Department, error) {
 	query := `
-		INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, true, NOW(), NOW())
+		INSERT INTO departments (tenant_id, name, code, dict_code, type, template_code, is_custom, parent_id, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), $7, $8, true, NOW(), NOW())
 		RETURNING id, tenant_id, name, code, parent_id, is_active, created_at, updated_at, deleted_at
 	`
 
 	var d Department
-	err := s.pool.QueryRow(ctx, query, req.TenantID, req.Name, req.Code, req.ParentID).Scan(
+	err := s.pool.QueryRow(ctx, query, req.TenantID, req.Name, req.Code, req.DictCode, req.Type, req.TemplateCode, req.IsCustom, req.ParentID).Scan(
 		&d.ID,
 		&d.TenantID,
 		&d.Name,
@@ -481,10 +597,20 @@ func (s *Store) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) 
 		columns[name] = true
 	}
 
+	// 选第一个「真实有数据」的科室列：department_name 常为空，department 有值。
 	deptColumnCandidates := []string{"department_name", "department", "dept_name"}
 	deptColumn := ""
 	for _, col := range deptColumnCandidates {
-		if columns[col] {
+		if !columns[col] {
+			continue
+		}
+		var hasData bool
+		if err := s.pool.QueryRow(ctx, fmt.Sprintf(
+			"SELECT EXISTS(SELECT 1 FROM op_visits WHERE %s IS NOT NULL AND TRIM(%s) <> '')", col, col,
+		)).Scan(&hasData); err != nil {
+			return nil, fmt.Errorf("failed to probe op_visits column %s: %w", col, err)
+		}
+		if hasData {
 			deptColumn = col
 			break
 		}
@@ -556,14 +682,44 @@ func (s *Store) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) 
 			LIMIT 1
 		`, candidateTenantID, deptName).Scan(&existingID, &existingActive)
 		if err == pgx.ErrNoRows {
-			code := buildDepartmentCode(deptName)
-			if _, err := s.pool.Exec(ctx, `
-				INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
-				VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
-			`, candidateTenantID, deptName, code); err != nil {
-				return nil, fmt.Errorf("failed to create synced department: %w", err)
+			// 只从平台字典匹配；匹配不到不自动建，记入 unmatched 待人工处理。
+			var dictCode, dictName string
+			dictErr := s.pool.QueryRow(ctx, `
+				SELECT code, name FROM organization_department_dict
+				WHERE is_active AND (LOWER(name) = LOWER($1) OR $1 = ANY(legacy_codes))
+				LIMIT 1`, deptName).Scan(&dictCode, &dictName)
+			if dictErr == pgx.ErrNoRows {
+				result["unmatched"]++
+				continue
 			}
-			result["created"]++
+			if dictErr != nil {
+				return nil, fmt.Errorf("failed to match department dictionary: %w", dictErr)
+			}
+			// 字典命中后要按字典项判重：机构可能已默认拥有该科室（dict_code 已存在）。
+			var dictDeptID int64
+			var dictDeptActive bool
+			dictLookupErr := s.pool.QueryRow(ctx, `
+				SELECT id, is_active FROM departments
+				WHERE tenant_id = $1 AND deleted_at IS NULL
+				  AND (dict_code = $2 OR LOWER(name) = LOWER($3))
+				LIMIT 1`, candidateTenantID, dictCode, dictName).Scan(&dictDeptID, &dictDeptActive)
+			if dictLookupErr == pgx.ErrNoRows {
+				if _, err := s.pool.Exec(ctx, `
+					INSERT INTO departments (tenant_id, name, code, dict_code, parent_id, is_active, created_at, updated_at)
+					VALUES ($1, $2, $3, $3, NULL, true, NOW(), NOW())
+				`, candidateTenantID, dictName, dictCode); err != nil {
+					return nil, fmt.Errorf("failed to create synced department: %w", err)
+				}
+				result["created"]++
+			} else if dictLookupErr != nil {
+				return nil, fmt.Errorf("failed to lookup synced department: %w", dictLookupErr)
+			} else if !dictDeptActive {
+				if _, err := s.pool.Exec(ctx, `
+					UPDATE departments SET is_active = true, updated_at = NOW() WHERE id = $1`, dictDeptID); err != nil {
+					return nil, fmt.Errorf("failed to reactivate synced department: %w", err)
+				}
+				result["updated"]++
+			}
 			continue
 		}
 		if err != nil {

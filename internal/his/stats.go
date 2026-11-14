@@ -343,7 +343,7 @@ func (s *Store) StatsOverview(ctx context.Context, tenantID int64, from, to time
 	deptRows, err := s.pool.Query(ctx, `
 		SELECT r.department_id, COALESCE(d.name, '未分科'), COUNT(*)
 		FROM his_registrations r
-		LEFT JOIN billing_department_dict d ON d.id = r.department_id
+		LEFT JOIN departments d ON d.id = r.department_id
 		WHERE r.tenant_id = $1 AND r.visit_date BETWEEN $2::date AND $3::date
 		  AND r.status IN ('registered','visited','cancelled','refunded','no_show')
 		GROUP BY r.department_id, d.name

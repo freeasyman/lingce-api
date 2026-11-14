@@ -99,6 +99,123 @@ func AdminAbilities(product string) []string {
 	return nil
 }
 
+// SetProductAdmin 将某员工设为/撤销某产品的管理员。
+//
+// isAdmin=true 时按产品管理员口径 upsert（enabled + admin 角色 + 完整能力包）；
+// isAdmin=false 时把该产品的权限行停用（enabled=false），不物理删除、保留可追溯。
+// content 无独立权限表，返回 skipped。
+func SetProductAdmin(ctx context.Context, q QueryExecer, product string, tenantID, employeeID, actorID int64, isAdmin bool) (*GrantResult, error) {
+	if q == nil {
+		return nil, fmt.Errorf("permission: queryer is nil")
+	}
+	if tenantID <= 0 || employeeID <= 0 {
+		return nil, fmt.Errorf("permission: tenant_id and employee_id are required")
+	}
+	var spec *productGrantSpec
+	for i := range productGrantSpecs {
+		if productGrantSpecs[i].Product == product {
+			spec = &productGrantSpecs[i]
+			break
+		}
+	}
+	if spec == nil {
+		return nil, fmt.Errorf("permission: unknown product %q", product)
+	}
+	if spec.SkipReason != "" {
+		return &GrantResult{Product: product, Status: GrantStatusSkipped, Reason: spec.SkipReason}, nil
+	}
+	exists, err := tableExists(ctx, q, spec.Table)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &GrantResult{Product: product, Table: spec.Table, Status: GrantStatusSkipped, Reason: "table_missing"}, nil
+	}
+	var actor *int64
+	if actorID > 0 {
+		value := actorID
+		actor = &value
+	}
+	if !isAdmin {
+		tag, err := disableProductGrant(ctx, q, spec, tenantID, employeeID, actor)
+		if err != nil {
+			return nil, err
+		}
+		status := GrantStatusExists
+		if tag.RowsAffected() > 0 {
+			status = GrantStatusGranted
+		}
+		return &GrantResult{Product: product, Table: spec.Table, Status: status}, nil
+	}
+	tag, err := upsertAdminGrant(ctx, q, *spec, tenantID, employeeID, actor)
+	if err != nil {
+		return nil, err
+	}
+	status := GrantStatusExists
+	if tag.RowsAffected() > 0 {
+		status = GrantStatusGranted
+	}
+	return &GrantResult{Product: product, Table: spec.Table, Status: status}, nil
+}
+
+func upsertAdminGrant(ctx context.Context, q QueryExecer, spec productGrantSpec, tenantID, employeeID int64, actor *int64) (pgconn.CommandTag, error) {
+	raw, err := json.Marshal(spec.Abilities)
+	if err != nil {
+		return pgconn.CommandTag{}, fmt.Errorf("permission: encode %s admin abilities: %w", spec.Product, err)
+	}
+	switch spec.Product {
+	case ProductEMR:
+		return q.Exec(ctx, `
+			INSERT INTO emr_permission_assignments
+				(tenant_id, employee_id, enabled, emr_role_code, scope, abilities_json, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, 'tenant', $4::jsonb, $5, $5)
+			ON CONFLICT (tenant_id, employee_id)
+			DO UPDATE SET enabled = TRUE, emr_role_code = EXCLUDED.emr_role_code, scope = 'tenant',
+				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	case ProductPatientOps:
+		return q.Exec(ctx, `
+			INSERT INTO patient_ops_permission_assignments
+				(tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, $4::jsonb, $5, $5)
+			ON CONFLICT (tenant_id, employee_id)
+			DO UPDATE SET enabled = TRUE, role_code = EXCLUDED.role_code,
+				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	case ProductDealExpert:
+		return q.Exec(ctx, `
+			INSERT INTO deal_expert_permission_assignments
+				(tenant_id, employee_id, enabled, role_code, abilities_json, data_scope, visible_employee_ids, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, $4::jsonb, 'tenant', '{}'::bigint[], $5, $5)
+			ON CONFLICT (tenant_id, employee_id)
+			DO UPDATE SET enabled = TRUE, role_code = EXCLUDED.role_code, data_scope = 'tenant',
+				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	case ProductCompliance, ProductFollowup:
+		table := "compliance_permission_assignments"
+		if spec.Product == ProductFollowup {
+			table = "followup_permission_assignments"
+		}
+		return q.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO %s
+				(tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, $4::jsonb, $5, $5)
+			ON CONFLICT (tenant_id, employee_id)
+			DO UPDATE SET enabled = TRUE, role_code = EXCLUDED.role_code,
+				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+		`, table), tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	default:
+		return pgconn.CommandTag{}, fmt.Errorf("permission: unsupported product %q", spec.Product)
+	}
+}
+
+func disableProductGrant(ctx context.Context, q QueryExecer, spec *productGrantSpec, tenantID, employeeID int64, actor *int64) (pgconn.CommandTag, error) {
+	return q.Exec(ctx, fmt.Sprintf(`
+		UPDATE %s SET enabled = FALSE, updated_by = $3, updated_at = NOW()
+		WHERE tenant_id = $1 AND employee_id = $2
+	`, spec.Table), tenantID, employeeID, actor)
+}
+
 // EnsureInstitutionAdminGrants 给一个机构管理员补齐六个产品的默认管理员权限。
 //
 // 幂等：每张表都是 INSERT ... ON CONFLICT (tenant_id, employee_id) DO NOTHING，

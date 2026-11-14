@@ -112,18 +112,23 @@ func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID i
 		return newAdminAccess(claims.UserID, tenantID), nil
 	}
 
-	var departmentID *int64
+	var departmentIDs []int64
 	var enabled bool
 	var scope string
 	var role string
 	var abilitiesRaw []byte
 	err = s.store.pool.QueryRow(ctx, `
-		SELECT e.department_id, COALESCE(ep.enabled, false), COALESCE(ep.scope, ''), COALESCE(ep.emr_role_code, ''), COALESCE(ep.abilities_json, '[]'::jsonb)
+		SELECT COALESCE((
+			SELECT array_agg(ed.department_id ORDER BY ed.department_id)
+			FROM employee_departments ed
+			WHERE ed.employee_id=e.id AND ed.tenant_id=e.tenant_id
+		), '{}'::bigint[]),
+		COALESCE(ep.enabled, false), COALESCE(ep.scope, ''), COALESCE(ep.emr_role_code, ''), COALESCE(ep.abilities_json, '[]'::jsonb)
 		FROM employees e
 		LEFT JOIN emr_permission_assignments ep
 		  ON ep.tenant_id=e.tenant_id AND ep.employee_id=e.id
 		WHERE e.id=$1 AND e.tenant_id=$2 AND e.deleted_at IS NULL
-	`, claims.UserID, tenantID).Scan(&departmentID, &enabled, &scope, &role, &abilitiesRaw)
+	`, claims.UserID, tenantID).Scan(&departmentIDs, &enabled, &scope, &role, &abilitiesRaw)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("employee not found")
@@ -145,7 +150,7 @@ func (s *Service) Authorize(ctx context.Context, claims *auth.Claims, tenantID i
 			abilitySet[value] = struct{}{}
 		}
 	}
-	access := &Access{UserID: claims.UserID, TenantID: tenantID, DepartmentID: departmentID, Scope: scope, Role: role, Abilities: abilitySet}
+	access := &Access{UserID: claims.UserID, TenantID: tenantID, DepartmentIDs: departmentIDs, Scope: scope, Role: role, Abilities: abilitySet}
 	if !access.Has(ability) {
 		return nil, fmt.Errorf("emr permission denied")
 	}

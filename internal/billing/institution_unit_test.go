@@ -149,7 +149,6 @@ func TestNormalizeCreateInstitutionRequest(t *testing.T) {
 		Name:        " 测试口腔 ",
 		Legal:       " 测试口腔有限公司 ",
 		Industry:    "口腔",
-		Departments: []string{"口腔科", "咨询客服", "口腔科", " "},
 		Region:      InstitutionRegion{Province: "310000", City: "310100", District: "310104"},
 		Contact:     "张三",
 		Phone:       "13800000000",
@@ -163,9 +162,6 @@ func TestNormalizeCreateInstitutionRequest(t *testing.T) {
 	if normalized.Name != "测试口腔" || normalized.Legal != "测试口腔有限公司" {
 		t.Fatalf("名称未 trim: %+v", normalized)
 	}
-	if len(normalized.Departments) != 2 {
-		t.Fatalf("科室应去重去空，实际 %v", normalized.Departments)
-	}
 
 	bad := base
 	bad.Legal = " "
@@ -176,11 +172,6 @@ func TestNormalizeCreateInstitutionRequest(t *testing.T) {
 	bad.Phone = "123"
 	if _, err := bad.normalize(); err == nil || !strings.Contains(err.Error(), "手机号") {
 		t.Fatalf("手机号格式应被校验，实际 %v", err)
-	}
-	bad = base
-	bad.Departments = nil
-	if _, err := bad.normalize(); err == nil {
-		t.Fatalf("没有科室应被拒绝")
 	}
 	bad = base
 	bad.Region.District = ""

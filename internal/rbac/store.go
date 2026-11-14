@@ -1095,7 +1095,7 @@ func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminRes
 	query := `
 		SELECT a.id, COALESCE(a.name, ''), COALESCE(a.phone, ''), COALESCE(a.username, ''), COALESCE(a.email, ''), a.org_id, COALESCE(o.name, '') AS org_name,
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
 		       a.created_at, a.updated_at
@@ -1144,7 +1144,7 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 		VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NOW(), NOW())
 		RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          created_at, updated_at
@@ -1246,7 +1246,7 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 	args = append(args, id)
 	query += ` RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          created_at, updated_at`

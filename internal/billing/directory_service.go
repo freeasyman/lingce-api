@@ -423,14 +423,28 @@ func (s *InstitutionService) SaveDictItem(ctx context.Context, kind string, payl
 		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "已存在同名"}
 	}
 
+	if kind == DictKindDepartment {
+		payload.Code = strings.TrimSpace(payload.Code)
+		payload.Type = strings.TrimSpace(payload.Type)
+		if payload.Type == "" {
+			payload.Type = "clinical"
+		}
+		if payload.Type != "clinical" && payload.Type != "functional" {
+			return nil, invalidf("科室类型必须是 clinical 或 functional")
+		}
+		if payload.ID == 0 && payload.Code == "" {
+			return nil, invalidf("新增科室必须填编码（如 internal_medicine）")
+		}
+	}
+
 	if payload.ID > 0 {
-		item, err := s.store.UpdateDictItem(ctx, kind, payload.ID, name, payload.Order)
+		item, err := s.store.UpdateDictItem(ctx, kind, payload)
 		if err != nil {
 			return nil, err
 		}
 		return &item, nil
 	}
-	item, err := s.store.InsertDictItem(ctx, kind, name, payload.Order)
+	item, err := s.store.InsertDictItem(ctx, kind, payload)
 	if err != nil {
 		return nil, err
 	}

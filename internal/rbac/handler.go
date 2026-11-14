@@ -61,6 +61,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/departments/{id}/role", Handler: h.GetDepartmentRole, Auth: true},
 		{Method: "PUT", Path: "/api/v1/departments/{id}/role", Handler: h.SetDepartmentRole, Auth: true},
 		{Method: "DELETE", Path: "/api/v1/departments/{id}/role", Handler: h.RemoveDepartmentRole, Auth: true},
+		{Method: "GET", Path: "/api/v1/portal/product-admins", Handler: h.ListProductAdmins, Auth: true},
+		{Method: "GET", Path: "/api/v1/portal/employee-products", Handler: h.ListEmployeeProducts, Auth: true},
+		{Method: "PUT", Path: "/api/v1/portal/employee-products/{employee_id}", Handler: h.SetEmployeeProducts, Auth: true},
+		{Method: "GET", Path: "/api/v1/portal/my-products", Handler: h.MyProducts, Auth: true},
+		{Method: "PUT", Path: "/api/v1/portal/product-admins/{product}/{employee_id}", Handler: h.SetProductAdmin, Auth: true},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 

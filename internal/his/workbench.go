@@ -261,7 +261,7 @@ func (s *Store) loadWorkbenchTodos(ctx context.Context, tenantID int64, dateStr 
 		         r.fee AS amount, TRUE AS has_amount, r.created_at
 		  FROM his_registrations r
 		  JOIN customers c ON c.id = r.customer_id
-		  LEFT JOIN billing_department_dict d ON d.id = r.department_id
+		  LEFT JOIN departments d ON d.id = r.department_id
 		  WHERE r.tenant_id = $1 AND r.visit_date = $2::date AND r.status = 'registered'
 
 		  UNION ALL

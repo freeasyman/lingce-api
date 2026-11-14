@@ -137,7 +137,7 @@ func (s *Store) ListEmployees(ctx context.Context, req EmployeeListRequest) ([]*
 		       ), '') AS role_name,
 		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
 		       created_at, updated_at, deleted_at
@@ -232,7 +232,7 @@ func (s *Store) GetEmployeeByID(ctx context.Context, id int64) (*Employee, error
 		       ), '') AS role_name,
 		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
 		       created_at, updated_at, deleted_at
@@ -275,9 +275,9 @@ func (s *Store) CreateEmployee(ctx context.Context, tenantID int64, username, pa
 	query := `
 		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, medical_department_code, session_version, is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, NOW(), NOW())
-		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, medical_department_code, session_version,
+		RETURNING id, tenant_id, username, password_hash, full_name, phone, email, department_id, COALESCE(medical_department_code, ''), session_version,
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          created_at, updated_at, deleted_at
@@ -376,7 +376,7 @@ func (s *Store) UpdateEmployee(ctx context.Context, id int64, req UpdateEmployee
 		WHERE id = $%d AND deleted_at IS NULL
 		RETURNING id, tenant_id, COALESCE(username, ''), COALESCE(password_hash, ''), COALESCE(full_name, ''), COALESCE(phone, ''), COALESCE(email, ''), department_id, COALESCE(medical_department_code, ''), session_version,
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          created_at, updated_at, deleted_at
@@ -502,7 +502,7 @@ func (s *Store) GetByIDs(ctx context.Context, ids []int64) ([]*Employee, error) 
 		       ), '') AS role_name,
 		       department_id, COALESCE(medical_department_code, ''), COALESCE(session_version, 0),
 		       CASE
-		           WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
 		       created_at, updated_at, deleted_at

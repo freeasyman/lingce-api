@@ -151,6 +151,7 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	h.service.writeAuditLog(r.Context(), req.TenantID, claims.UserID, "", "employee.create", "employee", employee.ID)
 
 	httputil.WriteSuccess(w, employee)
 }
@@ -191,6 +192,7 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	h.service.writeAuditLog(r.Context(), employee.TenantID, claims.UserID, "", "employee.update", "employee", employee.ID)
 
 	httputil.WriteSuccess(w, employee)
 }
@@ -257,6 +259,9 @@ func (h *Handler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.DeleteEmployee(r.Context(), id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
+	}
+	if claims != nil && claims.TenantID != nil {
+		h.service.writeAuditLog(r.Context(), *claims.TenantID, claims.UserID, "", "employee.delete", "employee", id)
 	}
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Employee deleted successfully"})

@@ -211,7 +211,7 @@ func (s *Store) ListDoctors(ctx context.Context, tenantID *int64, name *string, 
 		       COALESCE(email, '') AS email,
 		       CASE
 		           WHEN is_active IS NULL THEN true
-		           WHEN is_active::text IN ('1', 't', 'true') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1', 't', 'true') THEN true
 		           ELSE false
 		       END AS is_active,
 		       created_at, updated_at
@@ -247,7 +247,7 @@ func (s *Store) GetDoctorByID(ctx context.Context, id int64) (*Doctor, error) {
 		       COALESCE(email, '') AS email,
 		       CASE
 		           WHEN is_active IS NULL THEN true
-		           WHEN is_active::text IN ('1', 't', 'true') THEN true
+		           WHEN COALESCE(is_active::text, 'true') IN ('1', 't', 'true') THEN true
 		           ELSE false
 		       END AS is_active,
 		       created_at, updated_at
@@ -607,10 +607,20 @@ func (s *Store) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) 
 		columns[name] = true
 	}
 
+	// 选第一个「真实有数据」的科室列：department_name 常为空，department 有值。
 	deptColumnCandidates := []string{"department_name", "department", "dept_name"}
 	deptColumn := ""
 	for _, col := range deptColumnCandidates {
-		if columns[col] {
+		if !columns[col] {
+			continue
+		}
+		var hasData bool
+		if err := s.pool.QueryRow(ctx, fmt.Sprintf(
+			"SELECT EXISTS(SELECT 1 FROM op_visits WHERE %s IS NOT NULL AND TRIM(%s) <> '')", col, col,
+		)).Scan(&hasData); err != nil {
+			return nil, fmt.Errorf("failed to probe op_visits column %s: %w", col, err)
+		}
+		if hasData {
 			deptColumn = col
 			break
 		}
@@ -682,14 +692,44 @@ func (s *Store) SyncDepartmentsFromVisits(ctx context.Context, tenantID *int64) 
 			LIMIT 1
 		`, candidateTenantID, deptName).Scan(&existingID, &existingActive)
 		if err == pgx.ErrNoRows {
-			code := buildDepartmentCode(deptName)
-			if _, err := s.pool.Exec(ctx, `
-				INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
-				VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
-			`, candidateTenantID, deptName, code); err != nil {
-				return nil, fmt.Errorf("failed to create synced department: %w", err)
+			// 只从平台字典匹配；匹配不到不自动建，记入 unmatched 待人工处理。
+			var dictCode, dictName string
+			dictErr := s.pool.QueryRow(ctx, `
+				SELECT code, name FROM organization_department_dict
+				WHERE is_active AND (LOWER(name) = LOWER($1) OR $1 = ANY(legacy_codes))
+				LIMIT 1`, deptName).Scan(&dictCode, &dictName)
+			if dictErr == pgx.ErrNoRows {
+				result["unmatched"]++
+				continue
 			}
-			result["created"]++
+			if dictErr != nil {
+				return nil, fmt.Errorf("failed to match department dictionary: %w", dictErr)
+			}
+			// 字典命中后要按字典项判重：机构可能已默认拥有该科室（dict_code 已存在）。
+			var dictDeptID int64
+			var dictDeptActive bool
+			dictLookupErr := s.pool.QueryRow(ctx, `
+				SELECT id, is_active FROM departments
+				WHERE tenant_id = $1 AND deleted_at IS NULL
+				  AND (dict_code = $2 OR LOWER(name) = LOWER($3))
+				LIMIT 1`, candidateTenantID, dictCode, dictName).Scan(&dictDeptID, &dictDeptActive)
+			if dictLookupErr == pgx.ErrNoRows {
+				if _, err := s.pool.Exec(ctx, `
+					INSERT INTO departments (tenant_id, name, code, dict_code, parent_id, is_active, created_at, updated_at)
+					VALUES ($1, $2, $3, $3, NULL, true, NOW(), NOW())
+				`, candidateTenantID, dictName, dictCode); err != nil {
+					return nil, fmt.Errorf("failed to create synced department: %w", err)
+				}
+				result["created"]++
+			} else if dictLookupErr != nil {
+				return nil, fmt.Errorf("failed to lookup synced department: %w", dictLookupErr)
+			} else if !dictDeptActive {
+				if _, err := s.pool.Exec(ctx, `
+					UPDATE departments SET is_active = true, updated_at = NOW() WHERE id = $1`, dictDeptID); err != nil {
+					return nil, fmt.Errorf("failed to reactivate synced department: %w", err)
+				}
+				result["updated"]++
+			}
 			continue
 		}
 		if err != nil {

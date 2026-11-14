@@ -272,7 +272,7 @@ func (s *Store) ListInstitutionDepartments(ctx context.Context, tenantIDs []int6
 	rows, err := s.pool.Query(ctx, `
 SELECT td.tenant_id, d.name
 FROM tenant_departments td
-JOIN billing_department_dict d ON d.id = td.department_id
+JOIN organization_department_dict d ON d.id = td.department_id
 WHERE td.tenant_id = ANY($1)
 ORDER BY td.tenant_id, d.sort_order, d.id`, tenantIDs)
 	if err != nil {
@@ -513,7 +513,7 @@ func (s *Store) GetDepartmentIDsByNames(ctx context.Context, names []string) (ma
 	if len(names) == 0 {
 		return result, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT name, id FROM billing_department_dict WHERE name = ANY($1)`, names)
+	rows, err := s.pool.Query(ctx, `SELECT name, id FROM organization_department_dict WHERE name = ANY($1)`, names)
 	if err != nil {
 		return nil, fmt.Errorf("resolve departments: %w", err)
 	}
@@ -640,7 +640,7 @@ func (s *Store) GetExistingDepartmentIDs(ctx context.Context, ids []int64) (map[
 	if len(ids) == 0 {
 		return result, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id FROM billing_department_dict WHERE id = ANY($1)`, ids)
+	rows, err := s.pool.Query(ctx, `SELECT id FROM organization_department_dict WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("check department ids: %w", err)
 	}
@@ -696,6 +696,19 @@ INSERT INTO tenant_departments (tenant_id, department_id)
 SELECT $1, unnest($2::bigint[])
 ON CONFLICT DO NOTHING`, tenantID, departmentIDs); err != nil {
 		return fmt.Errorf("insert tenant departments: %w", err)
+	}
+	// 勾选的涉及科室同步为机构部门（已存在则跳过）。
+	if _, err := tx.Exec(ctx, `
+INSERT INTO departments (tenant_id, name, code, dict_code, parent_id, is_active, created_at, updated_at)
+SELECT $1, od.name, od.code, od.code, NULL, TRUE, NOW(), NOW()
+FROM organization_department_dict od
+WHERE od.id = ANY($2::bigint[])
+  AND NOT EXISTS (
+      SELECT 1 FROM departments d
+      WHERE d.tenant_id = $1 AND d.deleted_at IS NULL AND (d.dict_code = od.code OR d.code = od.code)
+  )
+ON CONFLICT DO NOTHING`, tenantID, departmentIDs); err != nil {
+		return fmt.Errorf("sync tenant departments to departments: %w", err)
 	}
 	return nil
 }

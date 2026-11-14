@@ -422,6 +422,16 @@ SET plan_id = EXCLUDED.plan_id,
     updated_at = NOW()`, tenantID, planID, formatDateOnly(startedOn), formatDateOnly(expiredOn)); err != nil {
 		return fmt.Errorf("upsert tenant subscription: %w", err)
 	}
+	// 订阅套餐绑定功能组时同步 tenant_feature_assignments；
+	// 否则机构侧菜单鉴权（如 /departments）会因缺行直接 403。
+	if _, err := tx.Exec(ctx, `
+INSERT INTO tenant_feature_assignments (tenant_id, group_id, created_at, updated_at)
+SELECT $1, p.feature_group_id, NOW(), NOW()
+FROM tenant_subscription_plans p
+WHERE p.id = $2 AND p.feature_group_id IS NOT NULL
+ON CONFLICT (tenant_id) DO UPDATE SET group_id = EXCLUDED.group_id, updated_at = NOW()`, tenantID, planID); err != nil {
+		return fmt.Errorf("sync tenant feature assignment from plan: %w", err)
+	}
 	return nil
 }
 

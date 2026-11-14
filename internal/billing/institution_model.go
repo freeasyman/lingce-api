@@ -340,7 +340,6 @@ type CreateInstitutionRequest struct {
 	Legal       string            `json:"legal"`
 	Code        string            `json:"code"`
 	Industry    string            `json:"industry"`
-	Departments []string          `json:"departments"`
 	Region      InstitutionRegion `json:"region"`
 	Contact     string            `json:"contact"`
 	Title       string            `json:"title"`
@@ -381,29 +380,6 @@ func (r CreateInstitutionRequest) normalize() (CreateInstitutionRequest, error) 
 	if r.Industry == "" {
 		return CreateInstitutionRequest{}, invalidf("请选择行业")
 	}
-	if len(r.Departments) == 0 {
-		return CreateInstitutionRequest{}, invalidf("请至少选一个科室")
-	}
-	if len(r.Departments) > 50 {
-		return CreateInstitutionRequest{}, invalidf("涉及科室过多")
-	}
-	departments := make([]string, 0, len(r.Departments))
-	seen := make(map[string]struct{}, len(r.Departments))
-	for _, raw := range r.Departments {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
-		departments = append(departments, name)
-	}
-	if len(departments) == 0 {
-		return CreateInstitutionRequest{}, invalidf("请至少选一个科室")
-	}
-	r.Departments = departments
 	if r.Region.Province == "" || r.Region.City == "" || r.Region.District == "" {
 		return CreateInstitutionRequest{}, invalidf("请选择省 / 市 / 区")
 	}
@@ -809,6 +785,7 @@ type DictItem struct {
 	Name   string `json:"name"`
 	Order  int    `json:"order"`
 	Active bool   `json:"active"`
+	Type   string `json:"type,omitempty"` // clinical / functional（仅科室字典）
 }
 
 // DictionaryPayload 是 GET /ops/billing/dictionaries 的 data。
@@ -823,6 +800,8 @@ type DictItemPayload struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Order int    `json:"order"`
+	Code  string `json:"code,omitempty"` // 科室编码（新增科室必填）
+	Type  string `json:"type,omitempty"` // clinical / functional（科室必填）
 }
 
 // ProductDefinition 是价目表的一行（billingMock.ts 的 ProductDefinition）。

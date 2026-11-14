@@ -159,8 +159,9 @@ func (s *Store) AcceptTrialAgreement(ctx context.Context, tenantID, acceptedBy i
 var (
 	doctorScopeRoleCodes     = []string{"doctor", "doctor_assistant"}
 	consultantScopeRoleCodes = []string{"consultant"}
-	frontdeskScopeRoleCodes  = []string{"frontdesk", "receptionist", "reception"}
-	therapistScopeRoleCodes  = []string{"therapist"}
+	// customer_service（客服）已并入前台接待场景；receptionist/reception 为历史兼容。
+	frontdeskScopeRoleCodes = []string{"frontdesk", "customer_service", "receptionist", "reception"}
+	therapistScopeRoleCodes = []string{"therapist"}
 )
 
 func NewStore(pool *pgxpool.Pool) *Store {

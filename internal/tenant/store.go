@@ -23,16 +23,15 @@ type Store struct {
 
 const defaultTenantAdminPassword = "123456"
 
+// 新机构默认只建三个职能部；名称/编码必须与平台组织字典一致。
 var defaultTenantDepartments = []struct {
 	Name        string
 	Code        string
 	DefaultRole string
 }{
-	{Name: "医疗部", Code: "medical_department", DefaultRole: "doctor"},
-	{Name: "运营部", Code: "operations_department", DefaultRole: "operating_manager"},
-	{Name: "市场部", Code: "marketing_department", DefaultRole: "marketing_manager"},
-	{Name: "咨询部", Code: "consulting_department", DefaultRole: "consultant"},
-	{Name: "客服部", Code: "service_department", DefaultRole: "customer_service"},
+	{Name: "客服部", Code: "customer_service_dept", DefaultRole: "customer_service"},
+	{Name: "运营部", Code: "operations_dept", DefaultRole: "operations"},
+	{Name: "市场部", Code: "marketing_dept", DefaultRole: "publicity"},
 }
 
 type TrialDemoEmployeeSeed struct {
@@ -333,7 +332,7 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          valid_from, valid_to,
@@ -380,28 +379,36 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	return &t, nil
 }
 
+// standardInstitutionRoles 是新机构初始化的标准岗位（7 岗位 + 机构管理员）。
+var standardInstitutionRoles = []struct {
+	Code        string
+	Name        string
+	Description string
+}{
+	{"admin", "机构管理员", "拥有本机构全部权限"},
+	{"doctor", "医生", "临床医生"},
+	{"consultant", "咨询师", "咨询与成交"},
+	{"customer_service", "客服", "客户服务与回访"},
+	{"publicity", "宣传", "市场宣传与内容"},
+	{"therapist", "康复师", "康复治疗"},
+	{"medical_affairs", "医务", "医务与质量管理"},
+	{"operations", "运营", "机构运营"},
+}
+
 func (s *Store) ensureInstitutionRolesForTenantTx(ctx context.Context, tx pgx.Tx, tenantID int64) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
-		SELECT $1,
-		       COALESCE(NULLIF(r.name_cn, ''), r.code),
-		       r.code,
-		       r.description,
-		       COALESCE(r.is_active, true),
-		       COALESCE(r.created_at, NOW()),
-		       COALESCE(r.updated_at, COALESCE(r.created_at, NOW()))
-		FROM inst_roles r
-		WHERE lower(COALESCE(r.code, '')) NOT IN ('lingce_sales', 'inst_test_225052')
-		  AND COALESCE(r.name_cn, '') <> '联调角色225052已编辑'
-		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
-		DO UPDATE SET
-		    name = EXCLUDED.name,
-		    description = EXCLUDED.description,
-		    is_active = EXCLUDED.is_active,
-		    updated_at = NOW()
-	`, tenantID)
-	if err != nil {
-		return fmt.Errorf("failed to initialize tenant roles: %w", err)
+	for _, role := range standardInstitutionRoles {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO institution_roles (tenant_id, name, code, description, is_active, created_at, updated_at)
+VALUES ($1, $2, $3, $4, true, NOW(), NOW())
+ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL
+DO UPDATE SET
+    name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    is_active = true,
+    updated_at = NOW()
+`, tenantID, role.Name, role.Code, role.Description); err != nil {
+			return fmt.Errorf("failed to initialize tenant role %s: %w", role.Code, err)
+		}
 	}
 	return nil
 }
@@ -461,8 +468,8 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 
 	var employeeID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::varchar, $5::text, $6, $7, $8, 1, NOW(), NOW())
+		INSERT INTO employees (tenant_id, username, password_hash, name, full_name, phone, email, department_id, session_version, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::varchar, $5::text, $6, $7, $8, 1, '1', NOW(), NOW())
 		RETURNING id
 	`, tenantID, username, string(passwordHashBytes), fullName, fullName, phone, email, adminDepartmentID).Scan(&employeeID)
 	if err != nil {
@@ -590,40 +597,53 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 	return nil
 }
 
+// ensureDefaultDepartmentsTx 把平台标准字典里的全部部门开给该机构（默认全开放）。
+// 已存在的按 dict_code 复用，不重复建；返回 名称 -> id。
 func (s *Store) ensureDefaultDepartmentsTx(ctx context.Context, tx pgx.Tx, tenantID int64) (map[string]int64, error) {
-	result := make(map[string]int64, len(defaultTenantDepartments))
-	for _, item := range defaultTenantDepartments {
+	type stdDept struct {
+		code         string
+		name         string
+		deptType     string
+		templateCode string
+	}
+	rows, err := tx.Query(ctx, `
+SELECT code, name, COALESCE(type, ''), COALESCE(template_code, '') FROM organization_department_dict WHERE is_active ORDER BY type, sort_order, code`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standard departments: %w", err)
+	}
+	items := make([]stdDept, 0, 24)
+	for rows.Next() {
+		var item stdDept
+		if err := rows.Scan(&item.code, &item.name, &item.deptType, &item.templateCode); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan standard department: %w", err)
+		}
+		items = append(items, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate standard departments: %w", err)
+	}
+
+	result := make(map[string]int64, len(items))
+	for _, item := range items {
 		var departmentID int64
 		err := tx.QueryRow(ctx, `
-			SELECT id
-			FROM departments
-			WHERE tenant_id = $1
-			  AND deleted_at IS NULL
-			  AND (code = $2 OR name = $3)
-			ORDER BY id ASC
-			LIMIT 1
-		`, tenantID, item.Code, item.Name).Scan(&departmentID)
+			SELECT id FROM departments
+			WHERE tenant_id = $1 AND deleted_at IS NULL AND (dict_code = $2 OR code = $2)
+			ORDER BY id ASC LIMIT 1`, tenantID, item.code).Scan(&departmentID)
 		if err == pgx.ErrNoRows {
 			err = tx.QueryRow(ctx, `
-				INSERT INTO departments (tenant_id, name, code, parent_id, is_active, created_at, updated_at)
-				VALUES ($1, $2, $3, NULL, true, NOW(), NOW())
-				RETURNING id
-			`, tenantID, item.Name, item.Code).Scan(&departmentID)
+				INSERT INTO departments (tenant_id, name, code, dict_code, type, template_code, parent_id, is_active, created_at, updated_at)
+				VALUES ($1, $2, $3, $3, NULLIF($4, ''), NULLIF($5, ''), NULL, true, NOW(), NOW())
+				RETURNING id`, tenantID, item.name, item.code, item.deptType, item.templateCode).Scan(&departmentID)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create default department %s: %w", item.Name, err)
+				return nil, fmt.Errorf("failed to create standard department %s: %w", item.name, err)
 			}
 		} else if err != nil {
-			return nil, fmt.Errorf("failed to query default department %s: %w", item.Name, err)
-		} else {
-			if _, err := tx.Exec(ctx, `
-				UPDATE departments
-				SET name = $1, code = $2, is_active = true, updated_at = NOW()
-				WHERE id = $3
-			`, item.Name, item.Code, departmentID); err != nil {
-				return nil, fmt.Errorf("failed to refresh default department %s: %w", item.Name, err)
-			}
+			return nil, fmt.Errorf("failed to query standard department %s: %w", item.name, err)
 		}
-		result[item.Name] = departmentID
+		result[item.name] = departmentID
 	}
 	return result, nil
 }
@@ -1118,7 +1138,7 @@ func (s *Store) UpdateTenant(ctx context.Context, id int64, req UpdateTenantRequ
 		WHERE id = $%d AND deleted_at IS NULL
 		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
 		          CASE
-		              WHEN is_active::text IN ('1','t','true','TRUE') THEN true
+		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
 		          END AS is_active,
 		          valid_from, valid_to,

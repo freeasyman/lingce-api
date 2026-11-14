@@ -265,7 +265,7 @@ func dictTable(kind string) (string, error) {
 	case DictKindIndustry:
 		return "billing_industry_dict", nil
 	case DictKindDepartment:
-		return "billing_department_dict", nil
+		return "organization_department_dict", nil
 	default:
 		return "", invalidf("kind must be industry/department")
 	}
@@ -277,10 +277,15 @@ func (s *Store) ListDictItems(ctx context.Context, kind string) ([]DictItem, err
 	if err != nil {
 		return nil, err
 	}
+	withType := normalizeEnum(kind) == DictKindDepartment
+	cols := "id, name, sort_order, is_active"
+	if withType {
+		cols += ", COALESCE(type, '')"
+	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-SELECT id, name, sort_order, is_active
+SELECT %s
 FROM %s
-ORDER BY sort_order, id`, table))
+ORDER BY sort_order, id`, cols, table))
 	if err != nil {
 		return nil, fmt.Errorf("list dict items: %w", err)
 	}
@@ -289,8 +294,14 @@ ORDER BY sort_order, id`, table))
 	items := make([]DictItem, 0, 32)
 	for rows.Next() {
 		var item DictItem
-		if err := rows.Scan(&item.ID, &item.Name, &item.Order, &item.Active); err != nil {
-			return nil, fmt.Errorf("scan dict item: %w", err)
+		var scanErr error
+		if withType {
+			scanErr = rows.Scan(&item.ID, &item.Name, &item.Order, &item.Active, &item.Type)
+		} else {
+			scanErr = rows.Scan(&item.ID, &item.Name, &item.Order, &item.Active)
+		}
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan dict item: %w", scanErr)
 		}
 		items = append(items, item)
 	}
@@ -307,8 +318,13 @@ func (s *Store) GetDictItem(ctx context.Context, kind string, id int64) (DictIte
 		return DictItem{}, err
 	}
 	var item DictItem
-	err = s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT id, name, sort_order, is_active FROM %s WHERE id = $1`, table), id).
-		Scan(&item.ID, &item.Name, &item.Order, &item.Active)
+	if normalizeEnum(kind) == DictKindDepartment {
+		err = s.pool.QueryRow(ctx, `SELECT id, name, sort_order, is_active, COALESCE(type,'') FROM organization_department_dict WHERE id = $1`, id).
+			Scan(&item.ID, &item.Name, &item.Order, &item.Active, &item.Type)
+	} else {
+		err = s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT id, name, sort_order, is_active FROM %s WHERE id = $1`, table), id).
+			Scan(&item.ID, &item.Name, &item.Order, &item.Active)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DictItem{}, ErrPeerNotFound
 	}
@@ -336,7 +352,22 @@ SELECT EXISTS (
 }
 
 // InsertDictItem 新增字典项；sort_order 为 0 时排到末尾（最大排序 +10）。
-func (s *Store) InsertDictItem(ctx context.Context, kind, name string, sortOrder int) (DictItem, error) {
+func (s *Store) InsertDictItem(ctx context.Context, kind string, payload DictItemPayload) (DictItem, error) {
+	if normalizeEnum(kind) == DictKindDepartment {
+		var item DictItem
+		err := s.pool.QueryRow(ctx, `
+INSERT INTO organization_department_dict (code, name, type, sort_order)
+VALUES ($1, $2, $3, COALESCE(NULLIF($4::int, 0), (SELECT COALESCE(MAX(sort_order), 0) + 10 FROM organization_department_dict)))
+RETURNING id, name, sort_order, is_active, type`, payload.Code, payload.Name, payload.Type, payload.Order).
+			Scan(&item.ID, &item.Name, &item.Order, &item.Active, &item.Type)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return DictItem{}, ErrPeerConflict
+			}
+			return DictItem{}, fmt.Errorf("insert dict item: %w", err)
+		}
+		return item, nil
+	}
 	table, err := dictTable(kind)
 	if err != nil {
 		return DictItem{}, err
@@ -345,7 +376,7 @@ func (s *Store) InsertDictItem(ctx context.Context, kind, name string, sortOrder
 	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s (name, sort_order)
 VALUES ($1, COALESCE(NULLIF($2::int, 0), (SELECT COALESCE(MAX(sort_order), 0) + 10 FROM %s)))
-RETURNING id, name, sort_order, is_active`, table, table), name, sortOrder).
+RETURNING id, name, sort_order, is_active`, table, table), payload.Name, payload.Order).
 		Scan(&item.ID, &item.Name, &item.Order, &item.Active)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -357,7 +388,26 @@ RETURNING id, name, sort_order, is_active`, table, table), name, sortOrder).
 }
 
 // UpdateDictItem 修改字典项名称与排序。
-func (s *Store) UpdateDictItem(ctx context.Context, kind string, id int64, name string, sortOrder int) (DictItem, error) {
+func (s *Store) UpdateDictItem(ctx context.Context, kind string, payload DictItemPayload) (DictItem, error) {
+	if normalizeEnum(kind) == DictKindDepartment {
+		var item DictItem
+		err := s.pool.QueryRow(ctx, `
+UPDATE organization_department_dict
+SET name = $2, type = $3, sort_order = $4, updated_at = NOW()
+WHERE id = $1
+RETURNING id, name, sort_order, is_active, type`, payload.ID, payload.Name, payload.Type, payload.Order).
+			Scan(&item.ID, &item.Name, &item.Order, &item.Active, &item.Type)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DictItem{}, ErrPeerNotFound
+		}
+		if err != nil {
+			if isUniqueViolation(err) {
+				return DictItem{}, ErrPeerConflict
+			}
+			return DictItem{}, fmt.Errorf("update dict item: %w", err)
+		}
+		return item, nil
+	}
 	table, err := dictTable(kind)
 	if err != nil {
 		return DictItem{}, err
@@ -367,7 +417,7 @@ func (s *Store) UpdateDictItem(ctx context.Context, kind string, id int64, name 
 UPDATE %s
 SET name = $2, sort_order = $3, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, sort_order, is_active`, table), id, name, sortOrder).
+RETURNING id, name, sort_order, is_active`, table), payload.ID, payload.Name, payload.Order).
 		Scan(&item.ID, &item.Name, &item.Order, &item.Active)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DictItem{}, ErrPeerNotFound

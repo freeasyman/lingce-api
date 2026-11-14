@@ -8,9 +8,26 @@ import (
 	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
+
+// isBadgeAssignmentManager 判断当前用户是否可做「绑定/换绑」：
+// 平台管理员（灵策运营）可跨机构；机构管理员只能管本机构工牌。
+func (h *Handler) isBadgeAssignmentManager(ctx context.Context, claims *auth.Claims) bool {
+	if claims == nil {
+		return false
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return true
+	}
+	if claims.TenantID == nil || *claims.TenantID <= 0 {
+		return false
+	}
+	isAdmin, err := permission.IsInstitutionAdmin(ctx, h.service.store.pool, *claims.TenantID, claims.UserID)
+	return err == nil && isAdmin
+}
 
 func (h *Handler) RebuildRefreshAllBadgeStatus(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.service.V2RefreshAllRealtimeStatus(r.Context())
@@ -175,8 +192,8 @@ func (h *Handler) RebuildRetireBadgeDevice(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) RebuildAssignBadgeDevice(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil || claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "only admin can assign badge devices")
+	if !h.isBadgeAssignmentManager(r.Context(), claims) {
+		httputil.WriteForbidden(w, "only admin or institution admin can assign badge devices")
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -188,6 +205,10 @@ func (h *Handler) RebuildAssignBadgeDevice(w http.ResponseWriter, r *http.Reques
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid body")
 		return
+	}
+	// 机构管理员只能把工牌分配到本机构，强制 tenant_id 收敛到自己机构。
+	if claims.UserType != auth.UserTypeAdmin && claims.TenantID != nil {
+		req.TenantID = *claims.TenantID
 	}
 	if err := h.service.RebuildAssignBadgeDevice(r.Context(), id, req, claims.UserID, ""); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
@@ -283,8 +304,8 @@ func (h *Handler) RebuildChangeBadgePlacement(w http.ResponseWriter, r *http.Req
 
 func (h *Handler) RebuildSwapBadgeDevice(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil || claims.UserType != auth.UserTypeAdmin {
-		httputil.WriteForbidden(w, "only admin can operate badge devices")
+	if !h.isBadgeAssignmentManager(r.Context(), claims) {
+		httputil.WriteForbidden(w, "only admin or institution admin can operate badge devices")
 		return
 	}
 	oldID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
