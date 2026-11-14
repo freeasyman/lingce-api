@@ -649,6 +649,87 @@ func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int6
 	return s.GetInstitution(ctx, tenantID)
 }
 
+// StartNewSystemTrial 正式客户叠加新系统试用：
+// 不改 account_mode、原 subscription_periods、原合同额度；只发新系统试用额度并记录窗口。
+func (s *InstitutionService) StartNewSystemTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
+	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
+		return nil, err
+	}
+	base, err := s.store.GetInstitutionBase(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOpenInstitution(base); err != nil {
+		return nil, err
+	}
+	if normalizeEnum(base.AccountMode) != AccountModeFormal {
+		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有正式客户可以开通新系统叠加试用"}
+	}
+	req, err = req.normalize()
+	if err != nil {
+		return nil, err
+	}
+	var existingEnd *time.Time
+	if err := s.store.pool.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1`, tenantID).Scan(&existingEnd); err != nil {
+		return nil, fmt.Errorf("read new-system trial window: %w", err)
+	}
+	now := time.Now()
+	if existingEnd != nil && existingEnd.After(now) {
+		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "该机构已有未结束的新系统试用"}
+	}
+	index, _, err := s.loadCatalogProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	products, err := resolveCatalogProducts(index, req.ProductCodes)
+	if err != nil {
+		return nil, err
+	}
+	days := int64(req.Days)
+	startedAt := now
+	endedAt := now.AddDate(0, 0, int(days))
+	endDate := formatDateOnly(endedAt)
+	operator := s.service.resolveOperator(ctx, adminID)
+	reason := fmt.Sprintf("新系统迁移试用 %d 天（叠加，不影响老合同）", days)
+
+	tx, err := s.store.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin new-system trial transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	for _, product := range products {
+		for _, quota := range product.Quotas {
+			amount, err := scaleQuotaWhole(quota.Amount, days, 365)
+			if err != nil {
+				return nil, err
+			}
+			if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteSet, tenantID,
+				product.Code, quota.Unit, EditionTrial, QuotaTypeTrial, amount, endDate); err != nil {
+				return nil, err
+			}
+			if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, product.Code, quota.Unit,
+				amount, LedgerSourceTrial, reason, nil, operator); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE tenants
+SET new_system_trial_started_at = $2,
+    new_system_trial_ends_at = $3,
+    updated_at = NOW()
+WHERE id = $1`, tenantID, startedAt, endedAt); err != nil {
+		return nil, fmt.Errorf("set new-system trial window: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit new-system trial: %w", err)
+	}
+	return s.GetInstitution(ctx, tenantID)
+}
+
 // MigrateTrial 存量客户迁移试用：保留租户/账号/业务数据，按请求天数发放试用额度，
 // 不生成订单、不产生应收、不发新客包；正式客户拒绝降级。默认天数由运营端选择（通常 14/30 天）。
 func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {

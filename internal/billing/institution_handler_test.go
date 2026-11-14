@@ -68,8 +68,8 @@ func TestWriteInstitutionErrorMapping(t *testing.T) {
 func TestInstitutionRouteRegistration(t *testing.T) {
 	h := &Handler{}
 	routes := h.institutionRoutes()
-	if len(routes) != 54 {
-		t.Fatalf("institutionRoutes 数量 = %d, want 54", len(routes))
+	if len(routes) != 55 {
+		t.Fatalf("institutionRoutes 数量 = %d, want 55", len(routes))
 	}
 	seen := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
@@ -101,6 +101,7 @@ func TestInstitutionRouteRegistration(t *testing.T) {
 		"POST /api/v1/ops/billing/institutions/{id}/activate-formal",
 		"POST /api/v1/ops/billing/institutions/{id}/activate-trial",
 		"POST /api/v1/ops/billing/institutions/{id}/migrate-trial",
+		"POST /api/v1/ops/billing/institutions/{id}/new-system-trial",
 		"POST /api/v1/ops/billing/institutions/{id}/trial-products",
 		"POST /api/v1/ops/billing/institutions/{id}/increments",
 		"POST /api/v1/ops/billing/institutions/{id}/gifts",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +18,19 @@ type Store struct {
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+// GetNewSystemTrialEnd 返回正式客户的新系统叠加试用到期时间；没有则返回 nil。
+func (s *Store) GetNewSystemTrialEnd(ctx context.Context, tenantID int64) (*time.Time, error) {
+	var endedAt *time.Time
+	err := s.pool.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1`, tenantID).Scan(&endedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read new-system trial end: %w", err)
+	}
+	return endedAt, nil
 }
 
 // GetAdminByUsername retrieves an operations admin by username

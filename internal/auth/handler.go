@@ -47,6 +47,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string, pool *pgx
 		},
 		{
 			Method:  "POST",
+			Path:    "/api/v1/auth/login/portal",
+			Handler: h.LoginPortal,
+			Auth:    false,
+		},
+		{
+			Method:  "POST",
 			Path:    "/api/v1/auth/login/mobile",
 			Handler: h.LoginMobile,
 			Auth:    false,
@@ -142,8 +148,17 @@ func (h *Handler) LoginAdmin(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, resp)
 }
 
-// LoginInstitution handles institution employee login
+// LoginInstitution handles institution employee login (old system entry).
 func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
+	h.loginInstitution(w, r, false)
+}
+
+// LoginPortal handles the new system portal login and enforces the new-system trial window.
+func (h *Handler) LoginPortal(w http.ResponseWriter, r *http.Request) {
+	h.loginInstitution(w, r, true)
+}
+
+func (h *Handler) loginInstitution(w http.ResponseWriter, r *http.Request, portal bool) {
 	var req struct {
 		Username    string `json:"username"`
 		Phone       string `json:"phone"`
@@ -189,6 +204,17 @@ func (h *Handler) LoginInstitution(w http.ResponseWriter, r *http.Request) {
 		}
 		httputil.WriteUnauthorized(w, err.Error())
 		return
+	}
+	if portal && resp != nil && resp.TenantID != nil {
+		endedAt, trialErr := h.service.store.GetNewSystemTrialEnd(r.Context(), *resp.TenantID)
+		if trialErr != nil {
+			httputil.WriteInternalError(w, trialErr.Error())
+			return
+		}
+		if endedAt != nil && !time.Now().Before(*endedAt) {
+			httputil.WriteError(w, http.StatusUnauthorized, "MIGRATION_TRIAL_ENDED", "新系统迁移试用已到期，请联系管理员", nil)
+			return
+		}
 	}
 
 	httputil.WriteSuccess(w, resp)
