@@ -168,7 +168,7 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 
 	// Check tenant validity period
 	now := time.Now()
-	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+	if !tenantCanLogin(tenant, now) {
 		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
 	}
 
@@ -294,7 +294,7 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 	}
 
 	now := time.Now()
-	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+	if !tenantCanLogin(tenant, now) {
 		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
 	}
 
@@ -453,6 +453,14 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 	}
 }
 
+// tenantCanLogin 判断机构当前能否登录：主服务有效，或新版本体验窗口有效。
+func tenantCanLogin(tenant *Tenant, now time.Time) bool {
+	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+		return tenant.NewSystemTrialEndsAt != nil && !tenant.NewSystemTrialEndsAt.Before(now)
+	}
+	return true
+}
+
 // ChangePassword changes user password
 func (s *Service) ChangePassword(ctx context.Context, userID int64, userType auth.UserType, oldPassword, newPassword string) error {
 	// Validate new password
@@ -565,7 +573,7 @@ func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginRespo
 	}
 
 	now := time.Now()
-	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+	if !tenantCanLogin(tenant, now) {
 		return nil, fmt.Errorf("tenant subscription expired")
 	}
 

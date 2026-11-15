@@ -652,6 +652,19 @@ func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int6
 // StartNewSystemTrial 正式客户叠加新系统试用：
 // 不改 account_mode、原 subscription_periods、原合同额度；只发新系统试用额度并记录窗口。
 func (s *InstitutionService) StartNewSystemTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
+	return s.startExperienceTrial(ctx, tenantID, req, adminID, true)
+}
+
+// ActivateExperienceTrial 存量客户开通「新版本体验」：
+// 任何非暂停机构都可以开，不动原合同/服务期/模式，只发体验额度并记录窗口。
+func (s *InstitutionService) ActivateExperienceTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
+	return s.startExperienceTrial(ctx, tenantID, req, adminID, false)
+}
+
+// startExperienceTrial 开通新版本体验窗口。
+// requireFormal=true 时保留旧语义（只有正式且服务期生效的客户可开）；
+// requireFormal=false 时只排除暂停机构，面向存量客户（未开通/已过期也可体验新版本）。
+func (s *InstitutionService) startExperienceTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64, requireFormal bool) (*Institution, error) {
 	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
 		return nil, err
 	}
@@ -659,11 +672,16 @@ func (s *InstitutionService) StartNewSystemTrial(ctx context.Context, tenantID i
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
-		return nil, err
+	if base.PausedAt != nil {
+		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "机构已暂停，请先恢复服务"}
 	}
-	if normalizeEnum(base.AccountMode) != AccountModeFormal {
-		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有正式客户可以开通新系统叠加试用"}
+	if requireFormal {
+		if err := requireOpenInstitution(base); err != nil {
+			return nil, err
+		}
+		if normalizeEnum(base.AccountMode) != AccountModeFormal {
+			return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有正式客户可以开通新系统叠加试用"}
+		}
 	}
 	req, err = req.normalize()
 	if err != nil {
