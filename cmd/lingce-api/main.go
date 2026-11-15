@@ -24,8 +24,8 @@ import (
 	"github.com/freeasyman/lingce-api/internal/dashboard"
 	"github.com/freeasyman/lingce-api/internal/dealexpert"
 	"github.com/freeasyman/lingce-api/internal/dealexpertpermission"
-	"github.com/freeasyman/lingce-api/internal/dealintervention"
 	"github.com/freeasyman/lingce-api/internal/dealexpush"
+	"github.com/freeasyman/lingce-api/internal/dealintervention"
 	"github.com/freeasyman/lingce-api/internal/department"
 	"github.com/freeasyman/lingce-api/internal/employee"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
@@ -63,7 +63,7 @@ import (
 )
 
 var (
-	version     = "1.2.8"
+	version     = "1.2.9"
 	gitSHA      = "unknown"
 	buildTime   = "unknown"
 	releaseNote = "API单体治理重大更新：统一租户访问模型，收口路由鉴权、租户隔离与服务层边界校验"

@@ -430,11 +430,13 @@ SELECT id FROM tenant_subscription_plans WHERE lower(COALESCE(code, '')) = lower
 // UpsertTenantSubscriptionTx 同步 tenant_subscriptions（存量客户侧逻辑仍读这张表）。
 func (s *Store) UpsertTenantSubscriptionTx(ctx context.Context, tx pgx.Tx, tenantID, planID int64, startedOn, expiredOn time.Time) error {
 	if _, err := tx.Exec(ctx, `
-INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, started_on, expired_on, updated_at)
-VALUES ($1, $2, 'active', $3::date, $4::date, NOW())
+INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, start_date, end_date, started_on, expired_on, updated_at)
+VALUES ($1, $2, 'active', $3::date, $4::date, $3::date, $4::date, NOW())
 ON CONFLICT (tenant_id) DO UPDATE
 SET plan_id = EXCLUDED.plan_id,
     status = 'active',
+    start_date = EXCLUDED.start_date,
+    end_date = EXCLUDED.end_date,
     started_on = EXCLUDED.started_on,
     expired_on = EXCLUDED.expired_on,
     updated_at = NOW()`, tenantID, planID, formatDateOnly(startedOn), formatDateOnly(expiredOn)); err != nil {

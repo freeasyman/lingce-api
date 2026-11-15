@@ -1522,6 +1522,24 @@ func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
 		subSetClauses = append(subSetClauses, "expired_on = aligned.end_at::date")
 	}
 
+	// 服务期以 started_on / expired_on 为准；旧列 start_date / end_date
+	// 仅作为兼容回退。否则延期后旧列还是旧日期，启动校正会把租户有效期改回去。
+	startExpr := "COALESCE(s.start_date, t.valid_from, t.created_at, NOW())"
+	if hasStartedOn {
+		startExpr = "COALESCE(s.started_on::timestamp, s.start_date, t.valid_from, t.created_at, NOW())"
+	}
+	endExpr := "COALESCE(s.end_date, " + startExpr + " + make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1)))"
+	if hasExpiredOn {
+		endExpr = "COALESCE(s.expired_on::timestamp, s.end_date, " + startExpr + " + make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1)))"
+	}
+	staleCond := "s.start_date IS DISTINCT FROM aligned.start_at::date\n\t\t\tOR s.end_date IS DISTINCT FROM aligned.end_at::date"
+	if hasStartedOn {
+		staleCond += "\n\t\t\tOR s.started_on IS DISTINCT FROM aligned.start_at::date"
+	}
+	if hasExpiredOn {
+		staleCond += "\n\t\t\tOR s.expired_on IS DISTINCT FROM aligned.end_at::date"
+	}
+
 	tenantIDs := make(map[int64]struct{})
 	subQuery := fmt.Sprintf(`
 		UPDATE tenant_subscriptions s
@@ -1530,9 +1548,8 @@ func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
 			SELECT
 				s.id AS subscription_id,
 				t.id AS tenant_id,
-				COALESCE(s.start_date, t.valid_from, t.created_at, NOW()) AS start_at,
-				COALESCE(s.start_date, t.valid_from, t.created_at, NOW())
-					+ make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1)) AS end_at
+				%s AS start_at,
+				%s AS end_at
 			FROM tenant_subscriptions s
 			JOIN tenants t ON t.id = s.tenant_id
 			JOIN tenant_subscription_plans p ON p.id = s.plan_id
@@ -1542,11 +1559,10 @@ func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
 		) aligned
 		WHERE s.id = aligned.subscription_id
 		  AND (
-			s.start_date IS DISTINCT FROM aligned.start_at
-			OR s.end_date IS DISTINCT FROM aligned.end_at
+			%s
 		  )
 		RETURNING aligned.tenant_id
-	`, strings.Join(subSetClauses, ", "))
+	`, strings.Join(subSetClauses, ", "), startExpr, endExpr, staleCond)
 	rows, err := tx.Query(ctx, subQuery)
 	if err != nil {
 		return 0, fmt.Errorf("realign trial subscriptions: %w", err)
@@ -1583,11 +1599,8 @@ func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
 		FROM (
 			SELECT DISTINCT ON (t.id)
 				t.id AS tenant_id,
-				COALESCE(s.start_date, t.valid_from, t.created_at, NOW()) AS start_at,
-				COALESCE(s.end_date,
-					COALESCE(s.start_date, t.valid_from, t.created_at, NOW())
-					+ make_interval(days => GREATEST(COALESCE(p.duration_days, 7), 1))
-				) AS end_at
+				%s AS start_at,
+				%s AS end_at
 			FROM tenants t
 			JOIN tenant_subscriptions s ON s.tenant_id = t.id
 			JOIN tenant_subscription_plans p ON p.id = s.plan_id
@@ -1602,7 +1615,7 @@ func (s *Store) RealignTrialTenantValidity(ctx context.Context) (int, error) {
 			OR t.valid_to IS DISTINCT FROM aligned.end_at
 		  )
 		RETURNING aligned.tenant_id
-	`, strings.Join(tenantSetClauses, ", "))
+	`, strings.Join(tenantSetClauses, ", "), startExpr, endExpr)
 	rows, err = tx.Query(ctx, tenantQuery)
 	if err != nil {
 		return 0, fmt.Errorf("realign trial tenant validity: %w", err)

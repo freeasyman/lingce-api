@@ -374,7 +374,12 @@ func (s *Store) PerformSubscriptionAction(ctx context.Context, tenantID int64, r
 	// Update subscription
 	updateQuery := `
 		UPDATE tenant_subscriptions
-		SET status = $1, end_date = $2, plan_id = $3, updated_at = NOW()
+		SET status = $1,
+		    end_date = $2,
+		    expired_on = $2::date,
+		    started_on = COALESCE(started_on, start_date),
+		    plan_id = $3,
+		    updated_at = NOW()
 		WHERE id = $4
 	`
 	_, err = tx.Exec(ctx, updateQuery, newStatus, newEndDate, currentSub.PlanID, currentSub.ID)
