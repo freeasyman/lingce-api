@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -59,7 +60,15 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 				httputil.WriteUnauthorized(w, "Invalid or expired token")
 				return
 			}
-			if err := validateRuntimeClaims(r.Context(), claims); err != nil {
+			valid, err := validateRuntimeClaims(r.Context(), claims)
+			if err != nil {
+				// 数据库不可用等基础设施故障不是「登录失效」。返回 401 会让前端清空
+				// 登录态并把用户踢回登录页（例如开发库连接数耗尽时整页请求随机 401）。
+				slog.Error("auth session validation failed", "user_id", claims.UserID, "user_type", claims.UserType, "error", err)
+				httputil.WriteError(w, http.StatusServiceUnavailable, "SESSION_CHECK_UNAVAILABLE", "服务暂时不可用，请稍后重试", nil)
+				return
+			}
+			if !valid {
 				httputil.WriteUnauthorized(w, "Invalid or expired token")
 				return
 			}
@@ -71,9 +80,12 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 	}
 }
 
-func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
+// validateRuntimeClaims 按 token 里的会话版本与账号状态校验会话是否仍然有效。
+// 返回 (false, nil) 表示会话被明确判定为失效（撤销、停用、到期）；
+// 返回 error 表示校验过程本身失败（数据库不可用等），调用方应视为临时故障而非登出。
+func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, error) {
 	if authValidationPool == nil || claims == nil {
-		return nil
+		return true, nil
 	}
 
 	switch claims.UserType {
@@ -87,16 +99,19 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 			WHERE id = $1
 		`, claims.UserID).Scan(&sessionVersion, &isActive)
 		if err != nil {
-			return fmt.Errorf("admin session invalid: %w", err)
+			if err == pgx.ErrNoRows {
+				return false, nil
+			}
+			return false, fmt.Errorf("admin session invalid: %w", err)
 		}
 		if !isActive || sessionVersion != claims.SessionVersion {
-			return fmt.Errorf("admin inactive or session revoked")
+			return false, nil
 		}
-		return nil
+		return true, nil
 
 	case auth.UserTypeEmployee, auth.UserTypeMobile:
 		if claims.TenantID == nil || *claims.TenantID <= 0 {
-			return fmt.Errorf("tenant id missing")
+			return false, nil
 		}
 		var sessionVersion int
 		var employeeActive bool
@@ -118,21 +133,21 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) error {
 		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantValidTo, &trialEnd)
 		if err != nil {
 			if err == pgx.ErrNoRows {
-				return fmt.Errorf("employee tenant relation not found")
+				return false, nil
 			}
-			return fmt.Errorf("employee session invalid: %w", err)
+			return false, fmt.Errorf("employee session invalid: %w", err)
 		}
 		if !employeeActive || !tenantActive || sessionVersion != claims.SessionVersion {
-			return fmt.Errorf("employee inactive/tenant inactive/session revoked")
+			return false, nil
 		}
 		// 主服务过期但新版本体验窗口未过期的，仍放行（存量客户体验新版本）。
 		if tenantValidTo != nil && tenantValidTo.Before(time.Now()) && (trialEnd == nil || trialEnd.Before(time.Now())) {
-			return fmt.Errorf("tenant expired")
+			return false, nil
 		}
-		return nil
+		return true, nil
 	}
 
-	return nil
+	return true, nil
 }
 
 // GetUserClaims retrieves user claims from context
