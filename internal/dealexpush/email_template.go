@@ -5,6 +5,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // 邮件文案约束：只放客户称呼（姓氏+先生/女士），不放金额、病情、全名。
@@ -18,7 +19,7 @@ var (
 )
 
 // buildEmailCopy 生成纯文本 + HTML 两版正文；主题只含客户称呼。
-func buildEmailCopy(eventType, customerName, salutation, recipientName string, analysis *AnalysisCopy, link string) (subject, text, htmlBody string) {
+func buildEmailCopy(eventType, customerName, salutation, recipientName, consultantName string, recordedAt time.Time, analysis *AnalysisCopy, link string) (subject, text, htmlBody string) {
 	name := strings.TrimSpace(salutation)
 	if name == "" {
 		name = "客户"
@@ -43,25 +44,32 @@ func buildEmailCopy(eventType, customerName, salutation, recipientName string, a
 		if action == "" {
 			action = "与咨询师对齐一次，明确下一步跟进口径。"
 		}
-		subject = fmt.Sprintf("紧要介入提醒 · %s", name)
-		text = joinEmailLines(
-			greeting+"：",
-			"",
-			"这位客户需要您介入处理。",
-			"",
-			"原因："+reason,
-			"建议动作："+action,
-			"",
-			"查看详情："+link,
-			"",
-			"本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。",
+		subject = "紧要介入提醒"
+		if consultantName != "" {
+			subject += " · " + consultantName
+		}
+		if name != "" {
+			subject += " · " + name
+		}
+		contextFields := make([]emailField, 0, 5)
+		if consultantName != "" {
+			contextFields = append(contextFields, emailField{Label: "咨询师", Value: consultantName})
+		}
+		if !recordedAt.IsZero() {
+			contextFields = append(contextFields, emailField{Label: "接待时间", Value: recordedAt.Local().Format("2006-01-02 15:04")})
+		}
+		contextFields = append(contextFields, emailField{Label: "客户", Value: name})
+		contextFields = append(contextFields,
+			emailField{Label: "原因", Value: reason},
+			emailField{Label: "建议动作", Value: action},
 		)
-		htmlBody = renderEmailHTML(greeting+"：", []string{
-			"这位客户需要您介入处理。",
-		}, []emailField{
-			{Label: "原因", Value: reason},
-			{Label: "建议动作", Value: action},
-		}, link)
+		textLines := []string{greeting + "：", "", "这位客户需要您介入处理。", ""}
+		for _, field := range contextFields {
+			textLines = append(textLines, field.Label+"："+field.Value)
+		}
+		textLines = append(textLines, "", "查看详情："+link, "", "本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。")
+		text = joinEmailLines(textLines...)
+		htmlBody = renderEmailHTML(greeting+"：", []string{"这位客户需要您介入处理。"}, contextFields, link)
 		return subject, text, htmlBody
 	}
 
@@ -85,11 +93,26 @@ func buildEmailCopy(eventType, customerName, salutation, recipientName string, a
 		"",
 		"本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。",
 	)
+	consultantFields := make([]emailField, 0, 3)
+	if !recordedAt.IsZero() {
+		consultantFields = append(consultantFields, emailField{Label: "接待时间", Value: recordedAt.Local().Format("2006-01-02 15:04")})
+	}
+	consultantFields = append(consultantFields, emailField{Label: "建议动作", Value: action})
+	text = joinEmailLines(
+		greeting+"：",
+		"",
+		"本次接待分析已完成。"+judgment,
+		"",
+		"接待时间："+recordedAt.Local().Format("2006-01-02 15:04"),
+		"建议动作："+action,
+		"",
+		"查看详情："+link,
+		"",
+		"本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。",
+	)
 	htmlBody = renderEmailHTML(greeting+"：", []string{
 		"本次接待分析已完成。" + judgment,
-	}, []emailField{
-		{Label: "建议动作", Value: action},
-	}, link)
+	}, consultantFields, link)
 	return subject, text, htmlBody
 }
 

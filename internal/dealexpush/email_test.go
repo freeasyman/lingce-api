@@ -485,7 +485,7 @@ func TestEmailCopyRedactsSensitiveData(t *testing.T) {
 		ManagerReason: "赵子墨干眼手术后犹豫，报价6000元，电话13800000000",
 		ManagerAction: "让赵子墨补缴6000元并确认术前时间",
 	}
-	subject, text, htmlBody := buildEmailCopy("manager", "赵子墨", "赵女士", "王院长", analysis, "https://test.local/s/ABC123")
+	subject, text, htmlBody := buildEmailCopy("manager", "赵子墨", "赵女士", "王院长", "廖晓琴", time.Now(), analysis, "https://test.local/s/ABC123")
 	for _, forbidden := range []string{"赵子墨", "6000", "13800000000", "干眼", "手术", "术前"} {
 		for name, content := range map[string]string{"subject": subject, "text": text, "html": htmlBody} {
 			if strings.Contains(content, forbidden) {

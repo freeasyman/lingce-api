@@ -22,8 +22,10 @@ type EmailEvent struct {
 	RecipientRole       string
 	// ConsultantEmployeeID 是该接待的咨询师（recordings.employee_id），负责人事件的 owner。
 	ConsultantEmployeeID int64
+	ConsultantName       string
 	CustomerName         string
 	CustomerGender       string
+	RecordedAt           time.Time
 }
 
 // AnalysisCopy 是邮件正文可用的、已脱敏前的分析字段。
@@ -109,14 +111,17 @@ func (s *pgEmailStore) LoadEmailEvent(ctx context.Context, eventID int64) (*Emai
 		       COALESCE(e.analysis_version, ''),
 		       COALESCE(e.payload->>'recipient_role', 'consultant'),
 		       COALESCE(r.employee_id, 0),
-		       COALESCE(c.name, ''), COALESCE(c.gender, '')
+		       COALESCE(cons.name, ''),
+		       COALESCE(c.name, ''), COALESCE(c.gender, ''),
+		       r.recorded_at
 		FROM deal_push_events e
 		LEFT JOIN recordings r ON r.id = e.recording_id AND r.tenant_id = e.tenant_id
+		LEFT JOIN employees cons ON cons.id = r.employee_id AND cons.tenant_id = e.tenant_id
 		LEFT JOIN customers c ON c.id = r.customer_id
 		WHERE e.id = $1
 	`, eventID).Scan(&item.ID, &item.TenantID, &item.RecordingID, &item.RecipientEmployeeID,
 		&item.AnalysisVersion, &item.RecipientRole, &item.ConsultantEmployeeID,
-		&item.CustomerName, &item.CustomerGender)
+		&item.ConsultantName, &item.CustomerName, &item.CustomerGender, &item.RecordedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrEmailEventNotFound
 	}

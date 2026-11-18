@@ -315,7 +315,7 @@ func (s *Service) deliverEmail(ctx context.Context, event *EmailEvent, analysis 
 
 	eventType := normalizeEventType(event.RecipientRole)
 	salutation := pushSalutation(event.CustomerName, event.CustomerGender)
-	subject, text, htmlBody := buildEmailCopy(eventType, event.CustomerName, salutation, recipient.Name, analysis, s.emailLink(code))
+	subject, text, htmlBody := buildEmailCopy(eventType, event.CustomerName, salutation, recipient.Name, event.ConsultantName, event.RecordedAt, analysis, s.emailLink(code))
 	messageID, sendErr := s.mailer.Send(ctx, EmailMessage{
 		From: s.emailFrom(), To: recipient.Email, Subject: subject, Text: text, HTML: htmlBody,
 	})
