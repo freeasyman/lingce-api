@@ -13,6 +13,8 @@ var (
 	emailPhonePattern = regexp.MustCompile(`1[3-9]\d{9}`)
 	// 诊疗信息脱敏：只保留业务动作，不把病情/术式带进邮件。
 	emailMedicalPattern = regexp.MustCompile(`干眼|类风湿|后遗症|角膜|交联|散光|近视|远视|老花|白内障|青光眼|眼压|眼底|术前|术后|手术|用药|生物制剂|病史|诊断|病情|度数`)
+	// 邮件客户端会把“48小时内”识别成日期/日程链接，改成自然语言。
+	emailHourWindowPattern = regexp.MustCompile(`(\d+)\s*小时内?`)
 )
 
 // buildEmailCopy 生成纯文本 + HTML 两版正文；主题只含客户称呼。
@@ -52,7 +54,7 @@ func buildEmailCopy(eventType, customerName, salutation, recipientName string, a
 			"",
 			"查看详情："+link,
 			"",
-			"本邮件由赢客专家自动发送，请勿回复。",
+			"本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。",
 		)
 		htmlBody = renderEmailHTML(greeting+"：", []string{
 			"这位客户需要您介入处理。",
@@ -81,7 +83,7 @@ func buildEmailCopy(eventType, customerName, salutation, recipientName string, a
 		"",
 		"查看详情："+link,
 		"",
-		"本邮件由赢客专家自动发送，请勿回复。",
+		"本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。",
 	)
 	htmlBody = renderEmailHTML(greeting+"：", []string{
 		"本次接待分析已完成。" + judgment,
@@ -110,7 +112,7 @@ func renderEmailHTML(greeting string, paragraphs []string, fields []emailField, 
 		builder.WriteString(`<p style="margin:0 0 12px"><strong>` + html.EscapeString(field.Label) + `：</strong>` + html.EscapeString(field.Value) + `</p>`)
 	}
 	builder.WriteString(`<p style="margin:24px 0"><a href="` + html.EscapeString(link) + `" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:8px">查看详情</a></p>`)
-	builder.WriteString(`<p style="margin:24px 0 0;color:#9ca3af;font-size:12px">本邮件由赢客专家自动发送，请勿回复。</p>`)
+	builder.WriteString(`<p style="margin:24px 0 0;color:#9ca3af;font-size:12px">本邮件由灵策智能 · 赢客专家系统自动发送，请勿回复。</p>`)
 	builder.WriteString(`</div></body></html>`)
 	return builder.String()
 }
@@ -133,6 +135,23 @@ func sanitizeEmailText(raw, customerName, salutation string) string {
 	value = emailMoneyPattern.ReplaceAllString(value, "（金额略）")
 	value = emailPhonePattern.ReplaceAllString(value, "（电话略）")
 	value = emailMedicalPattern.ReplaceAllString(value, "（诊疗信息略）")
+	value = emailHourWindowPattern.ReplaceAllStringFunc(value, func(match string) string {
+		n := "0"
+		for _, r := range match {
+			if r < '0' || r > '9' {
+				break
+			}
+			n += string(r)
+		}
+		switch strings.TrimLeft(n, "0") {
+		case "24":
+			return "一天内"
+		case "48":
+			return "两天内"
+		default:
+			return "近期"
+		}
+	})
 	runes := []rune(value)
 	if len(runes) > 120 {
 		value = string(runes[:120])
