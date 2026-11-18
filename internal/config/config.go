@@ -80,10 +80,11 @@ func (c ContentConfig) AnalysisOn() bool {
 // DealConfig 赢客专家后台分析配置。
 // analysis_version 为空表示沿用默认 v200；dev 可显式切到 v210-rc11（v2.1 新流水线）。
 type DealConfig struct {
-	AnalysisVersion      string         `toml:"analysis_version"`
-	InstantEnabled       bool           `toml:"instant_enabled"`
-	ConsultantSMSEnabled bool           `toml:"consultant_sms_enabled"`
-	Push                 DealPushConfig `toml:"push"`
+	AnalysisVersion      string          `toml:"analysis_version"`
+	InstantEnabled       bool            `toml:"instant_enabled"`
+	ConsultantSMSEnabled bool            `toml:"consultant_sms_enabled"`
+	Push                 DealPushConfig  `toml:"push"`
+	Email                DealEmailConfig `toml:"email"`
 }
 
 // DealPushConfig 分析完成后的实时推送配置。
@@ -106,6 +107,26 @@ type DealPushConfig struct {
 
 // IsDryRun 返回是否干跑：未显式配置时默认 true，保证绝不真实发送。
 func (c DealPushConfig) IsDryRun() bool {
+	return c.DryRun == nil || *c.DryRun
+}
+
+// DealEmailConfig 是赢客专家邮件提醒配置。
+// 默认 enabled=false、dry_run=true，只记录投递结果不发信；开启真实发送后仍强制
+// 通过 whitelist 过滤，避免误发给真实员工。smtp_* 留空时回退 external.ticket_notify。
+type DealEmailConfig struct {
+	Enabled   bool     `toml:"enabled"`
+	DryRun    *bool    `toml:"dry_run"`
+	From      string   `toml:"from"`
+	LinkBase  string   `toml:"link_base"`
+	Whitelist []string `toml:"whitelist"`
+	SMTPHost  string   `toml:"smtp_host"`
+	SMTPPort  int      `toml:"smtp_port"`
+	SMTPUser  string   `toml:"smtp_user"`
+	SMTPPass  string   `toml:"smtp_pass"`
+}
+
+// IsDryRun 返回是否干跑：未显式配置时默认 true，保证不会误发邮件。
+func (c DealEmailConfig) IsDryRun() bool {
 	return c.DryRun == nil || *c.DryRun
 }
 
@@ -389,6 +410,12 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.External.TicketNotify.SMTPPort == 0 {
 		cfg.External.TicketNotify.SMTPPort = 25
+	}
+	if cfg.Deal.Email.From == "" {
+		cfg.Deal.Email.From = "tianjinlingce@163.com"
+	}
+	if cfg.Deal.Email.LinkBase == "" {
+		cfg.Deal.Email.LinkBase = "https://khgl.xyz/s"
 	}
 	if cfg.DashScope.Model == "" {
 		cfg.DashScope.Model = "qwen3.8-max"

@@ -30,6 +30,12 @@ type Service struct {
 	sender  TemplateSender
 	devices PushDeviceStore
 	expo    ExpoSender
+
+	// 邮件提醒（与短信/Expo 状态解耦）：enabled=false 不发信；开启后按 dry_run/白名单投递。
+	emailCfg   config.DealEmailConfig
+	ticketCfg  config.TicketNotifyConfig
+	mailer     EmailMailer
+	emailStore EmailStore
 }
 
 func NewService(pool *pgxpool.Pool, cfg config.DealPushConfig, log *slog.Logger) *Service {
@@ -42,6 +48,30 @@ func NewService(pool *pgxpool.Pool, cfg config.DealPushConfig, log *slog.Logger)
 		log:     log,
 		devices: newPostgresPushDeviceStore(pool),
 		expo:    NewExpoClient(cfg.ExpoAccessToken, log),
+	}
+}
+
+// NewServiceWithEmail 构建带邮件提醒的服务：SMTP 参数留空时回退 external.ticket_notify。
+func NewServiceWithEmail(pool *pgxpool.Pool, pushCfg config.DealPushConfig, emailCfg config.DealEmailConfig, ticketCfg config.TicketNotifyConfig, log *slog.Logger) *Service {
+	service := NewService(pool, pushCfg, log)
+	service.ConfigureEmail(emailCfg, ticketCfg)
+	return service
+}
+
+// ConfigureEmail 解析 SMTP 凭据并挂载真实发送器；密码只保存在内存，不写日志。
+func (s *Service) ConfigureEmail(cfg config.DealEmailConfig, fallback config.TicketNotifyConfig) {
+	if s == nil {
+		return
+	}
+	s.emailCfg = cfg
+	s.ticketCfg = fallback
+	s.emailStore = newPGEmailStore(s.pool)
+
+	smtpCfg := ResolveSMTPConfig(cfg, fallback)
+	s.mailer = NewSMTPMailer(smtpCfg)
+	if cfg.Enabled && s.mailer == nil && s.log != nil {
+		s.log.Warn("deal email enabled but smtp is not configured; deliveries will be recorded as failed",
+			"missing", missingSMTPConfigFields(cfg, fallback))
 	}
 }
 
@@ -283,7 +313,7 @@ func (s *Service) loadAnalysis(ctx context.Context, tenantID, recordingID int64)
 }
 
 // createEvent 幂等生成一条推送事件：同一 recording+version+recipient 不重复生成，短链各自独立。
-// 事件插入后立即尝试 Expo App 推送；短信仍按 enabled/dry_run/白名单决定。
+// 事件插入后触发邮件提醒；短信仍按 enabled/dry_run/白名单决定。
 func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, version string, recipient int64, recipientRole, customerName, pushName string, extra map[string]any) error {
 	channel := "sms"
 	template := s.cfg.SMSTemplateConsultant
@@ -343,15 +373,9 @@ func (s *Service) createEvent(ctx context.Context, tenantID, recordingID int64, 
 		return fmt.Errorf("insert push event: %w", err)
 	}
 
-	// 事件生成后立即尝试 Expo 推送；无 token 静默跳过，发送失败只记录，不阻断分析。
-	s.sendExpoForEvent(ctx, expoPushEvent{
-		EventID:             eventID,
-		TenantID:            tenantID,
-		RecordingID:         recordingID,
-		RecipientEmployeeID: recipient,
-		RecipientRole:       recipientRole,
-		CustomerName:        pushName,
-	})
+	// 事件生成后触发邮件提醒；短信保持 enabled=false/dry_run=true 的干跑链路。
+	// 不再调用 Expo Push（设备 token / App 推送链路保留代码，但不在事件生成时触发）。
+	s.sendEmailForEvent(ctx, eventID)
 
 	// 短信按开关决定是否真实发送（enabled && !dry_run && 白名单内）；否则保持 dry_run。
 	s.tryAutoSend(ctx, eventID, recipient)

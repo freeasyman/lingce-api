@@ -319,7 +319,10 @@ func main() {
 	dealExpertStore := dealexpert.NewStore(pool)
 	dealExpertHandler := dealexpert.NewHandler(dealexpert.NewService(dealExpertStore), pool)
 	dealExpertGenerator := dealexpert.NewConsultationAnalysisGenerator(pool, llmClient, slog.Default())
-	dealExpertGenerator.SetPushNotifier(dealexpush.NewService(pool, cfg.Deal.Push, slog.Default()))
+	// 赢客专家实时提醒（短信干跑 + 邮件提醒）：短链解析、推送事件与邮件路由共用同一 Service。
+	dealPushService := dealexpush.NewServiceWithEmail(pool, cfg.Deal.Push, cfg.Deal.Email, cfg.External.TicketNotify, slog.Default())
+	dealPushService.SetSender(dealexpush.NewAliyunTemplateSender(smsClient))
+	dealExpertGenerator.SetPushNotifier(dealPushService)
 	dealExpertHandler.SetConsultationAnalysisGenerator(dealExpertGenerator)
 	if !strings.EqualFold(cfg.App.Env, "production") {
 		dealExpertHandler.RegisterDevLoginRoute(mux, cfg.JWT.Secret)
@@ -331,9 +334,7 @@ func main() {
 	dealExpertPermissionModule := dealexpertpermission.NewModule(pool)
 	dealExpertPermissionModule.RegisterRoutes(mux, cfg.JWT.Secret)
 
-	// 赢客专家实时推送（干跑链路）：短链解析与推送事件记录；真实发送默认关闭（enabled=false）。
-	dealPushService := dealexpush.NewService(pool, cfg.Deal.Push, slog.Default())
-	dealPushService.SetSender(dealexpush.NewAliyunTemplateSender(smsClient))
+	// 推送/邮件事件与短链解析；短信保持 enabled=false/dry_run=true，邮件默认关闭。
 	dealPushModule := dealexpush.NewModuleWithService(dealPushService)
 	dealPushModule.RegisterRoutes(mux, cfg.JWT.Secret)
 

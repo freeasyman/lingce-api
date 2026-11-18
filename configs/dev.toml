@@ -81,3 +81,16 @@ sms_template_manager = "SMS_512538140"
 sms_template_fallback = "SMS_512617916"
 # Expo Push 不需要密钥；如启用 Enhanced Push Security，在这里填 access token，默认留空。
 expo_access_token = ""
+
+# 赢客专家邮件提醒（SMTP 163 测试）：默认关闭；开启后仍受 dry_run + whitelist 双重约束。
+# smtp_* 留空时回退 external.ticket_notify（本地密钥文件），不把密码写进仓库配置。
+[deal.email]
+enabled = false
+dry_run = true
+from = "tianjinlingce@163.com"
+link_base = "http://127.0.0.1:18080/s"
+whitelist = ["freeasyman@yeah.net", "yiliang@lingce.pro"]
+smtp_host = ""
+smtp_port = 0
+smtp_user = ""
+smtp_pass = ""

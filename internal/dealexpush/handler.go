@@ -37,6 +37,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/push-events", Handler: h.ListEvents, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		// 单号补发：管理员显式触发一条事件真实发送（白名单内），用于单号测试。
 		{Method: "POST", Path: "/api/v1/deal-expert/push-events/{id}/send", Handler: h.SendEvent, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 邮件路由：租户内「谁收 / 谁抄送」配置；管理员/负责人可用，普通员工 403。
+		{Method: "GET", Path: "/api/v1/deal-expert/alert-routes", Handler: h.ListAlertRoutes, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PUT", Path: "/api/v1/deal-expert/alert-routes/{owner_employee_id}/{event_type}", Handler: h.UpdateAlertRoute, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 邮件补发：管理员/测试用，按当前路由逐人发送，强制白名单。
+		{Method: "POST", Path: "/api/v1/deal-expert/push-events/{id}/send-email", Handler: h.SendEventEmail, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		// Expo 设备 token 注册/注销：员工 App 登录（mobile/employee）与管理员均可调用。
 		{Method: "POST", Path: "/api/v1/deal-expert/push-devices", Handler: h.RegisterPushDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "DELETE", Path: "/api/v1/deal-expert/push-devices/{token}", Handler: h.UnregisterPushDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
