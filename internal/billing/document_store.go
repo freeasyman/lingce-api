@@ -82,6 +82,21 @@ RETURNING id, generated_at`,
 	return item, nil
 }
 
+// UpdateDocumentContent 用新的 PDF 内容更新一份通知函（销售/归属变更后重排）。
+func (s *Store) UpdateDocumentContent(ctx context.Context, docID int64, content []byte, generatedBy int64, generatedAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+UPDATE tenant_documents
+SET content = $2,
+    file_size = $3,
+    generated_by = $4,
+    generated_at = $5
+WHERE id = $1`, docID, content, int64(len(content)), generatedBy, generatedAt)
+	if err != nil {
+		return fmt.Errorf("update document content: %w", err)
+	}
+	return nil
+}
+
 // ListDocumentsByTenant 返回机构下的全部文档记录（不含 PDF 正文），按生成时间倒序。
 func (s *Store) ListDocumentsByTenant(ctx context.Context, tenantID int64) ([]Document, error) {
 	rows, err := s.pool.Query(ctx, `SELECT`+documentColumns+documentFrom+`

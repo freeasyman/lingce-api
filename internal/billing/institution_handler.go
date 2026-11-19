@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -123,6 +124,17 @@ func (h *Handler) ListInstitutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, result)
+}
+
+// regenerateNoticeLetters 归属（销售）变更后重排该机构已生成的通知函。
+// 失败只记日志：归属已经保存成功，不应因为重排失败让用户以为归属没改。
+func (h *Handler) regenerateNoticeLetters(r *http.Request, tenantID, adminID int64) {
+	if h.documents == nil {
+		return
+	}
+	if _, err := h.documents.RegenerateForTenant(r.Context(), tenantID, adminID); err != nil {
+		slog.Warn("regenerate notice letters after ownership change failed", "tenant_id", tenantID, "error", err)
+	}
 }
 
 // GetInstitution 机构详情。
@@ -676,6 +688,8 @@ func (h *Handler) CreateInstitutionOwnership(w http.ResponseWriter, r *http.Requ
 		writeInstitutionError(w, err)
 		return
 	}
+	// 归属（销售）变了，已生成的通知函按新销售重排；失败不影响归属本身。
+	h.regenerateNoticeLetters(r, tenantID, adminID)
 	httputil.WriteSuccess(w, item)
 }
 
@@ -703,6 +717,8 @@ func (h *Handler) UpdateInstitutionOwnership(w http.ResponseWriter, r *http.Requ
 		writeInstitutionError(w, err)
 		return
 	}
+	// 归属（销售）变了，已生成的通知函按新销售重排；失败不影响归属本身。
+	h.regenerateNoticeLetters(r, tenantID, adminID)
 	httputil.WriteSuccess(w, item)
 }
 
@@ -730,6 +746,8 @@ func (h *Handler) CloseInstitutionOwnership(w http.ResponseWriter, r *http.Reque
 		writeInstitutionError(w, err)
 		return
 	}
+	// 归属（销售）变了，已生成的通知函按新销售重排；失败不影响归属本身。
+	h.regenerateNoticeLetters(r, tenantID, adminID)
 	httputil.WriteSuccess(w, item)
 }
 

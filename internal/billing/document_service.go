@@ -64,45 +64,13 @@ func (s *DocumentService) Generate(ctx context.Context, tenantID, adminID int64,
 		}
 	}
 
-	institution, err := s.institutions.GetInstitutionForAdmin(ctx, tenantID, adminID)
-	if err != nil {
-		return nil, err
-	}
-	if !institution.Open {
-		return nil, invalidf("机构尚未开通，无法生成通知函")
-	}
-
-	productCodes := documentProductCodes(institution.Products)
-	productNames, err := s.store.ListProductNames(ctx, productCodes)
-	if err != nil {
-		return nil, err
-	}
-	salesName, salesPhone, err := s.store.GetTenantSalesPhone(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	now := s.clock()
-	letter, err := buildDocumentLetter(documentLetterInput{
-		Institution:  institution,
-		DocType:      docType,
-		DocNo:        "",
-		Date:         now,
-		ProductNames: productNames,
-		SalesName:    salesName,
-		SalesPhone:   salesPhone,
-		Company:      s.company,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	generatedByName, err := s.store.GetOperatorName(ctx, adminID)
 	if err != nil || strings.TrimSpace(generatedByName) == "" {
 		// 操作人名字取不到不影响文档本身，退回账号 id（前端显示 admin#123）。
 		generatedByName = fmt.Sprintf("admin#%d", adminID)
 	}
 
+	now := s.clock()
 	prefix := documentNoPrefix(docType, now.Year())
 	for attempt := 0; attempt < documentNoMaxAttempts; attempt++ {
 		existing, err := s.store.ListDocumentNumbers(ctx, prefix)
@@ -110,11 +78,10 @@ func (s *DocumentService) Generate(ctx context.Context, tenantID, adminID int64,
 			return nil, err
 		}
 		docNo := nextDocumentNo(prefix, existing)
-		letter.DocNo = docNo
 
-		content, err := billingpdf.Render(letter)
+		content, err := s.renderLetter(ctx, tenantID, adminID, docType, docNo, now)
 		if err != nil {
-			return nil, fmt.Errorf("渲染通知函失败: %w", err)
+			return nil, err
 		}
 
 		doc, err := s.store.InsertDocument(ctx, InsertDocumentInput{
@@ -137,6 +104,72 @@ func (s *DocumentService) Generate(ctx context.Context, tenantID, adminID int64,
 		return &item, nil
 	}
 	return nil, fmt.Errorf("billing: 文档编号连续冲突，请稍后重试")
+}
+
+// renderLetter 按当前机构数据（机构信息、产品、销售归属）渲染一份通知函 PDF。
+// 生成与「销售变更后重排」共用同一份排版逻辑，保证函内容永远跟随当前数据。
+func (s *DocumentService) renderLetter(ctx context.Context, tenantID, adminID int64, docType, docNo string, now time.Time) ([]byte, error) {
+	institution, err := s.institutions.GetInstitutionForAdmin(ctx, tenantID, adminID)
+	if err != nil {
+		return nil, err
+	}
+	if !institution.Open {
+		return nil, invalidf("机构尚未开通，无法生成通知函")
+	}
+
+	productCodes := documentProductCodes(institution.Products)
+	productNames, err := s.store.ListProductNames(ctx, productCodes)
+	if err != nil {
+		return nil, err
+	}
+	salesName, salesPhone, err := s.store.GetTenantSalesPhone(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	letter, err := buildDocumentLetter(documentLetterInput{
+		Institution:  institution,
+		DocType:      docType,
+		DocNo:        docNo,
+		Date:         now,
+		ProductNames: productNames,
+		SalesName:    salesName,
+		SalesPhone:   salesPhone,
+		Company:      s.company,
+	})
+	if err != nil {
+		return nil, err
+	}
+	content, err := billingpdf.Render(letter)
+	if err != nil {
+		return nil, fmt.Errorf("渲染通知函失败: %w", err)
+	}
+	return content, nil
+}
+
+// RegenerateForTenant 用当前数据（机构信息、产品、销售归属）重排该机构已生成的通知函。
+//
+// 用途：归属（销售）变更后让函自动更新。只更新已存在的函；没有函时什么也不做，
+// 避免在客户还没有开通过时凭空生成一封「通知函」。
+func (s *DocumentService) RegenerateForTenant(ctx context.Context, tenantID, adminID int64) (int, error) {
+	docs, err := s.store.ListDocumentsByTenant(ctx, tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("查询已有通知函失败: %w", err)
+	}
+	now := s.clock()
+	updated := 0
+	for index := range docs {
+		doc := docs[index]
+		content, err := s.renderLetter(ctx, tenantID, adminID, doc.DocType, doc.DocNo, now)
+		if err != nil {
+			return updated, err
+		}
+		if err := s.store.UpdateDocumentContent(ctx, doc.ID, content, adminID, now); err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
 }
 
 // List 返回机构下的全部通知函记录（新→旧）。
