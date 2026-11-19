@@ -48,8 +48,6 @@ type Tenant struct {
 	IsActive  bool
 	ValidFrom *time.Time
 	ValidTo   *time.Time
-	// NewSystemTrialEndsAt 是新版本体验窗口到期日：主服务过期但体验期内仍可登录。
-	NewSystemTrialEndsAt *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time

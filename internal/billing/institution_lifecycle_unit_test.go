@@ -3,6 +3,7 @@ package billing
 // 第 2 批（暂停 / 取消 / 作废订单 / 调额度）的纯逻辑单测：不依赖数据库。
 
 import (
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"context"
 	"encoding/json"
 	"errors"
@@ -100,52 +101,57 @@ func TestInstitutionStatusPriority(t *testing.T) {
 	terminated := PeriodStatusTerminated
 	endFuture := formatDateOnly(tomorrow)
 	endPast := formatDateOnly(yesterday)
+	startPast := formatDateOnly(yesterday)
 
 	cases := []struct {
 		name string
 		base institutionBaseRow
-		mode string
 		want string
 	}{
 		{
 			name: "paused wins over expired",
 			base: institutionBaseRow{PausedAt: &pausedAt, PeriodID: &periodID,
 				PeriodStatus: active, ExpiredOn: &endPast},
-			mode: AccountModeFormal, want: InstitutionStatusPaused,
+			want: InstitutionStatusPaused,
 		},
 		{
 			name: "no period is unopened",
 			base: institutionBaseRow{},
-			mode: AccountModeFormal, want: InstitutionStatusUnopened,
+			want: InstitutionStatusUnopened,
 		},
 		{
 			name: "terminated period is unopened",
-			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: terminated, ExpiredOn: &endPast},
-			mode: AccountModeFormal, want: InstitutionStatusUnopened,
+			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: terminated, ExpiredOn: &endPast,
+				PrimaryType: string(contract.Formal), PrimaryStatus: terminated, PrimaryStartedOn: &startPast, PrimaryExpiredOn: &endPast},
+			want: InstitutionStatusUnopened,
 		},
 		{
 			name: "period status expired",
-			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: expired, ExpiredOn: &endFuture},
-			mode: AccountModeFormal, want: InstitutionStatusExpired,
+			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: expired, ExpiredOn: &endFuture,
+				PrimaryType: string(contract.Formal), PrimaryStatus: expired, PrimaryStartedOn: &startPast, PrimaryExpiredOn: &endFuture},
+			want: InstitutionStatusExpired,
 		},
 		{
 			name: "active but end date passed",
-			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endPast},
-			mode: AccountModeFormal, want: InstitutionStatusExpired,
+			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endPast,
+				PrimaryType: string(contract.Formal), PrimaryStatus: active, PrimaryStartedOn: &startPast, PrimaryExpiredOn: &endPast},
+			want: InstitutionStatusExpired,
 		},
 		{
 			name: "trial not expired",
-			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endFuture},
-			mode: AccountModeTrial, want: InstitutionStatusTrial,
+			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endFuture,
+				PrimaryType: string(contract.Trial), PrimaryStatus: active, PrimaryStartedOn: &startPast, PrimaryExpiredOn: &endFuture},
+			want: InstitutionStatusTrial,
 		},
 		{
 			name: "formal active",
-			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endFuture},
-			mode: AccountModeFormal, want: InstitutionStatusActive,
+			base: institutionBaseRow{PeriodID: &periodID, PeriodStatus: active, ExpiredOn: &endFuture,
+				PrimaryType: string(contract.Formal), PrimaryStatus: active, PrimaryStartedOn: &startPast, PrimaryExpiredOn: &endFuture},
+			want: InstitutionStatusActive,
 		},
 	}
 	for _, item := range cases {
-		if got := institutionStatus(item.base, item.mode, today); got != item.want {
+		if got := institutionStatus(item.base, today); got != item.want {
 			t.Fatalf("%s: status=%s, want %s", item.name, got, item.want)
 		}
 	}

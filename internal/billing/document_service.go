@@ -52,6 +52,18 @@ func (s *DocumentService) Generate(ctx context.Context, tenantID, adminID int64,
 		return nil, err
 	}
 
+	// 幂等：一次开通只对应一份函。同机构同类型已生成过 → 直接返回已有的那份。
+	existingDocs, err := s.store.ListDocumentsByTenant(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("查询已有通知函失败: %w", err)
+	}
+	for index := range existingDocs {
+		if normalizeEnum(existingDocs[index].DocType) == docType {
+			item := documentItemOf(existingDocs[index])
+			return &item, nil
+		}
+	}
+
 	institution, err := s.institutions.GetInstitutionForAdmin(ctx, tenantID, adminID)
 	if err != nil {
 		return nil, err
@@ -156,8 +168,17 @@ func (s *DocumentService) Download(ctx context.Context, docID, adminID int64) (*
 }
 
 // documentFileName 返回下载文件名（含扩展名）。
-func documentFileName(doc *Document) string {
+// 文件名带机构名：销售下载后不用打开文件就知道这封函是给哪个机构的。
+func documentFileName(doc *Document, tenantName string) string {
+	if name := strings.TrimSpace(tenantName); name != "" {
+		return documentTitleOf(doc.DocType) + "-" + name + "-" + doc.DocNo + ".pdf"
+	}
 	return documentFileBaseName(doc.DocType, doc.DocNo) + ".pdf"
+}
+
+// TenantName 返回机构名（下载文件名用）。
+func (s *DocumentService) TenantName(ctx context.Context, tenantID int64) (string, error) {
+	return s.store.GetTenantName(ctx, tenantID)
 }
 
 // documentFallbackFileName 返回 ASCII 兜底文件名（老浏览器不支持 filename* 时使用）。

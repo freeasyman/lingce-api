@@ -17,16 +17,30 @@ const (
 )
 
 // Claims represents JWT claims
+// Entry 常量：登录入口。机构端/移动端（老产品）看 tenants 老有效期，
+// 门户（新产品）看合同行。旧 token 无该字段，默认按老产品处理。
+const (
+	EntryInstitution = "institution"
+	EntryPortal      = "portal"
+	EntryMobile      = "mobile"
+)
+
 type Claims struct {
 	UserID         int64    `json:"sub"`
 	UserType       UserType `json:"type"`
 	TenantID       *int64   `json:"tenant_id,omitempty"`
 	SessionVersion int      `json:"session_version"`
+	Entry          string   `json:"entry,omitempty"`
 	jwt.RegisteredClaims
 }
 
 // GenerateToken generates a JWT token
 func GenerateToken(secret string, userID int64, userType UserType, tenantID *int64, sessionVersion int, expiryHours int) (string, int64, error) {
+	return GenerateTokenWithEntry(secret, userID, userType, tenantID, sessionVersion, expiryHours, "")
+}
+
+// GenerateTokenWithEntry 与 GenerateToken 相同，额外携带登录入口（entry）。
+func GenerateTokenWithEntry(secret string, userID int64, userType UserType, tenantID *int64, sessionVersion int, expiryHours int, entry string) (string, int64, error) {
 	expiresAt := time.Now().Add(time.Duration(expiryHours) * time.Hour)
 
 	claims := Claims{
@@ -34,6 +48,7 @@ func GenerateToken(secret string, userID int64, userType UserType, tenantID *int
 		UserType:       userType,
 		TenantID:       tenantID,
 		SessionVersion: sessionVersion,
+		Entry:          entry,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

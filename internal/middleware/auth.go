@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 	"github.com/jackc/pgx/v5"
@@ -113,24 +115,69 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, erro
 		if claims.TenantID == nil || *claims.TenantID <= 0 {
 			return false, nil
 		}
-		var sessionVersion int
-		var employeeActive bool
-		var tenantActive bool
-		var tenantValidTo *time.Time
-		var trialEnd *time.Time
-		err := authValidationPool.QueryRow(ctx, `
+		// 会话校验与服务期校验彼此独立，并发执行：远程库每次往返约 70-90ms。
+		var (
+			sessionVersion int
+			employeeActive bool
+			tenantActive   bool
+			tenantValidTo  *time.Time
+			empErr         error
+			wg             sync.WaitGroup
+		)
+		if claims.Entry == auth.EntryPortal {
+			// 门户（新产品）：服务期看合同行。
+			var canAccess bool
+			var accessErr error
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				empErr = authValidationPool.QueryRow(ctx, `
 			SELECT COALESCE(e.session_version, 1) AS session_version,
 			       CASE WHEN lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN true ELSE false END AS employee_active,
-			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active,
-			       COALESCE(t.valid_to, t.service_expired_on) AS tenant_valid_to,
-			       t.new_system_trial_ends_at AS trial_end
+			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active
 			FROM employees e
 			JOIN tenants t ON t.id = e.tenant_id
 			WHERE e.id = $1
 			  AND e.tenant_id = $2
 			  AND e.deleted_at IS NULL
 			  AND t.deleted_at IS NULL
-		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantValidTo, &trialEnd)
+		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive)
+			}()
+			go func() {
+				defer wg.Done()
+				canAccess, accessErr = contract.CanAccess(ctx, authValidationPool, *claims.TenantID, time.Now())
+			}()
+			wg.Wait()
+			if empErr != nil {
+				if empErr == pgx.ErrNoRows {
+					return false, nil
+				}
+				return false, fmt.Errorf("employee session invalid: %w", empErr)
+			}
+			if !employeeActive || !tenantActive || sessionVersion != claims.SessionVersion {
+				return false, nil
+			}
+			if accessErr != nil {
+				return false, fmt.Errorf("tenant validity check failed: %w", accessErr)
+			}
+			if !canAccess {
+				return false, nil
+			}
+			return true, nil
+		}
+		// 机构端/移动端（老产品）：维持原判断，读 tenants 老有效期。
+		err := authValidationPool.QueryRow(ctx, `
+			SELECT COALESCE(e.session_version, 1) AS session_version,
+			       CASE WHEN lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN true ELSE false END AS employee_active,
+			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active,
+			       COALESCE(t.valid_to, t.service_expired_on) AS tenant_valid_to
+			FROM employees e
+			JOIN tenants t ON t.id = e.tenant_id
+			WHERE e.id = $1
+			  AND e.tenant_id = $2
+			  AND e.deleted_at IS NULL
+			  AND t.deleted_at IS NULL
+		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantValidTo)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return false, nil
@@ -140,8 +187,7 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, erro
 		if !employeeActive || !tenantActive || sessionVersion != claims.SessionVersion {
 			return false, nil
 		}
-		// 主服务过期但新版本体验窗口未过期的，仍放行（存量客户体验新版本）。
-		if tenantValidTo != nil && tenantValidTo.Before(time.Now()) && (trialEnd == nil || trialEnd.Before(time.Now())) {
+		if tenantValidTo != nil && tenantValidTo.Before(time.Now()) {
 			return false, nil
 		}
 		return true, nil

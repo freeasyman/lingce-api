@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,19 +17,6 @@ type Store struct {
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
-}
-
-// GetNewSystemTrialEnd 返回正式客户的新系统叠加试用到期时间；没有则返回 nil。
-func (s *Store) GetNewSystemTrialEnd(ctx context.Context, tenantID int64) (*time.Time, error) {
-	var endedAt *time.Time
-	err := s.pool.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1`, tenantID).Scan(&endedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read new-system trial end: %w", err)
-	}
-	return endedAt, nil
 }
 
 // GetAdminByUsername retrieves an operations admin by username
@@ -567,7 +553,6 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 		       lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       COALESCE(valid_from, service_started_on) AS valid_from,
 		       COALESCE(valid_to, service_expired_on) AS valid_to,
-		       new_system_trial_ends_at,
 		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
 		WHERE id = $1 AND deleted_at IS NULL
@@ -581,7 +566,6 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 		&tenant.IsActive,
 		&tenant.ValidFrom,
 		&tenant.ValidTo,
-		&tenant.NewSystemTrialEndsAt,
 		&tenant.CreatedAt,
 		&tenant.UpdatedAt,
 		&tenant.DeletedAt,

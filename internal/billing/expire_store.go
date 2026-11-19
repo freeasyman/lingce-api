@@ -12,7 +12,7 @@ import (
 // expired_on 为 NULL 的历史行不参与（NULL < date 不成立），避免误清没有到期日的订阅。
 const listExpiringTenantIDsSQL = `
 SELECT DISTINCT tenant_id
-FROM tenant_subscriptions
+FROM subscription_periods
 WHERE expired_on < $1::date
   AND status = 'active'
 ORDER BY tenant_id`
@@ -90,23 +90,19 @@ func (s *Store) ExpireTenant(ctx context.Context, tenantID int64, today string) 
 		return 0, err
 	}
 
-	tag, err := tx.Exec(ctx, expireTenantSubscriptionsSQL, tenantID, today)
-	if err != nil {
-		return 0, fmt.Errorf("mark tenant subscription expired: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return 0, nil
-	}
-
-	// 同步运营端计费的服务期表：到期任务把 active 服务期也关成 expired，
-	// 保证「机构列表的状态/到期筛选」与新表口径一致（tenant_subscriptions 仍是历史来源）。
-	if _, err := tx.Exec(ctx, `
+	// 到期口径：合同行。把 active 合同行关成 expired（并发续费延期时命中 0 行，跳过清零）。
+	// 两套分开后不再写 tenant_subscriptions（老产品数据）。
+	tag, err := tx.Exec(ctx, `
 UPDATE subscription_periods
 SET status = 'expired', updated_at = NOW()
 WHERE tenant_id = $1
   AND status = 'active'
-  AND expired_on < $2::date`, tenantID, today); err != nil {
+  AND expired_on < $2::date`, tenantID, today)
+	if err != nil {
 		return 0, fmt.Errorf("mark subscription period expired: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, nil
 	}
 
 	rows, err := lockTenantEntitlements(ctx, tx, tenantID)

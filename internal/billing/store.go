@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,7 +51,19 @@ type Repository interface {
 }
 
 // Store 是 Repository 的 pgx 实现：读价目表/额度/流水，写订单、服务期、额度与流水。
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool *pgxpool.Pool
+
+	// 运营账号数据权限的进程内缓存（远程库单次往返约 70-90ms）。
+	scopeMu    sync.Mutex
+	scopeCache map[int64]cachedAdminScope
+}
+
+// cachedAdminScope 是 GetAdminScope 的缓存项。
+type cachedAdminScope struct {
+	scope   AdminScope
+	expires time.Time
+}
 
 // NewStore 构造基于连接池的存储层。
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }

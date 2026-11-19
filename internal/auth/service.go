@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/sms"
 )
@@ -129,7 +130,7 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 }
 
 // LoginEmployee authenticates an institution employee
-func (s *Service) LoginEmployee(ctx context.Context, username, password string, tenantID int64, expiryHours int) (*LoginResponse, error) {
+func (s *Service) LoginEmployee(ctx context.Context, username, password string, tenantID int64, expiryHours int, entry string) (*LoginResponse, error) {
 	if tenantID == 0 {
 		options, optErr := s.store.ListEmployeeTenantOptionsByLoginID(ctx, username)
 		if optErr != nil {
@@ -166,10 +167,8 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
 	}
 
-	// Check tenant validity period
-	now := time.Now()
-	if !tenantCanLogin(tenant, now) {
-		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
+	if authErr := s.checkEntryAccess(ctx, tenant, time.Now(), entry); authErr != nil {
+		return nil, authErr
 	}
 
 	// Get employee
@@ -199,13 +198,14 @@ func (s *Service) LoginEmployee(ctx context.Context, username, password string, 
 	if expiryHours <= 0 {
 		expiryHours = s.jwtExpiryHours
 	}
-	token, expiresAt, err := auth.GenerateToken(
+	token, expiresAt, err := auth.GenerateTokenWithEntry(
 		s.jwtSecret,
 		employee.ID,
 		auth.UserTypeEmployee,
 		&employee.TenantID,
 		employee.SessionVersion,
 		expiryHours,
+		entry,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
@@ -293,9 +293,8 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant is inactive")
 	}
 
-	now := time.Now()
-	if !tenantCanLogin(tenant, now) {
-		return nil, newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
+	if authErr := s.checkEntryAccess(ctx, tenant, time.Now(), auth.EntryMobile); authErr != nil {
+		return nil, authErr
 	}
 
 	employee, err := s.store.GetEmployeeByUsername(ctx, username, tenantID)
@@ -322,13 +321,14 @@ func (s *Service) LoginMobile(ctx context.Context, username, password string, te
 		return nil, fmt.Errorf("failed to persist login event: %w", err)
 	}
 
-	token, expiresAt, err := auth.GenerateToken(
+	token, expiresAt, err := auth.GenerateTokenWithEntry(
 		s.jwtSecret,
 		employee.ID,
 		auth.UserTypeMobile,
 		&employee.TenantID,
 		employee.SessionVersion,
 		s.jwtExpiryHours,
+		auth.EntryMobile,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
@@ -442,10 +442,6 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 				"role_code":               roleCode,
 			},
 		}
-		if trialEnd, trailErr := s.store.GetNewSystemTrialEnd(ctx, employee.TenantID); trailErr == nil && trialEnd != nil {
-			value := trialEnd.Format("2006-01-02")
-			me.NewSystemTrialEndsAt = &value
-		}
 		return me, nil
 
 	default:
@@ -453,12 +449,24 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 	}
 }
 
-// tenantCanLogin 判断机构当前能否登录：主服务有效，或新版本体验窗口有效。
-func tenantCanLogin(tenant *Tenant, now time.Time) bool {
-	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
-		return tenant.NewSystemTrialEndsAt != nil && !tenant.NewSystemTrialEndsAt.Before(now)
+// checkEntryAccess 按登录入口判断机构可用性：
+// 门户（新产品）看合同行；机构端/移动端（老产品）看 tenants 老有效期，与旧版一致。
+func (s *Service) checkEntryAccess(ctx context.Context, tenant *Tenant, now time.Time, entry string) *AuthError {
+	if entry == auth.EntryPortal {
+		ok, err := contract.CanAccess(ctx, s.store.pool, tenant.ID, now)
+		if err != nil {
+			return newAuthError(500, "TENANT_CHECK_FAILED", "tenant validity check failed", nil)
+		}
+		if !ok {
+			return newUnauthorizedError("NEW_PRODUCT_NOT_OPENED", "机构未开通新产品，请联系顾问开通试用")
+		}
+		return nil
 	}
-	return true
+	// 老产品：维持原判断（tenants.valid_to）。
+	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
+		return newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
+	}
+	return nil
 }
 
 // ChangePassword changes user password
@@ -572,19 +580,19 @@ func (s *Service) LoginSMS(ctx context.Context, phone, code string) (*LoginRespo
 		return nil, fmt.Errorf("tenant is inactive")
 	}
 
-	now := time.Now()
-	if !tenantCanLogin(tenant, now) {
-		return nil, fmt.Errorf("tenant subscription expired")
+	if authErr := s.checkEntryAccess(ctx, tenant, time.Now(), auth.EntryMobile); authErr != nil {
+		return nil, fmt.Errorf("%s", authErr.Message)
 	}
 
 	// Generate JWT token with mobile user type
-	token, expiresAt, err := auth.GenerateToken(
+	token, expiresAt, err := auth.GenerateTokenWithEntry(
 		s.jwtSecret,
 		employee.ID,
 		auth.UserTypeMobile,
 		&employee.TenantID,
 		employee.SessionVersion,
 		s.jwtExpiryHours,
+		auth.EntryMobile,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)

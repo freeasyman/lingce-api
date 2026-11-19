@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+
+	"github.com/freeasyman/lingce-api/internal/contract"
 )
 
 // SuspendInstitution 暂停服务。重复暂停幂等返回当前档案。
@@ -275,7 +277,11 @@ func (s *InstitutionService) CorrectEntitlement(ctx context.Context, tenantID in
 	if err != nil {
 		return nil, err
 	}
-	row, err := pickCorrectionEntitlement(rows, req.ProductCode, req.Unit, base.AccountMode)
+	accountMode := AccountModeFormal
+	if normalizeEnum(base.PrimaryType) == string(contract.Trial) {
+		accountMode = AccountModeTrial
+	}
+	row, err := pickCorrectionEntitlement(rows, req.ProductCode, req.Unit, accountMode)
 	if err != nil {
 		return nil, err
 	}

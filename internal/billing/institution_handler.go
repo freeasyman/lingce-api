@@ -46,8 +46,6 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/activate-formal", h.ActivateFormalInstitution),
 		ops("POST", institution+"/{id}/activate-trial", h.ActivateTrialInstitution),
 		ops("POST", institution+"/{id}/migrate-trial", h.MigrateTrialInstitution),
-		ops("POST", institution+"/{id}/new-system-trial", h.StartNewSystemTrial),
-		ops("POST", institution+"/{id}/activate-experience", h.ActivateExperienceTrial),
 		ops("POST", institution+"/{id}/trial-products", h.SetTrialProducts),
 		ops("POST", institution+"/{id}/increments", h.AddInstitutionIncrement),
 		ops("POST", institution+"/{id}/gifts", h.GiftInstitutionIncrement),
@@ -112,9 +110,13 @@ func (h *Handler) ListInstitutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
 	result, err := h.institutions.ListInstitutions(r.Context(), InstitutionQuery{
-		Filter:  query.Get("filter"),
-		Keyword: query.Get("keyword"),
+		Filter:   query.Get("filter"),
+		Keyword:  query.Get("keyword"),
+		Page:     page,
+		PageSize: pageSize,
 	}, adminID)
 	if err != nil {
 		writeInstitutionError(w, err)
@@ -432,52 +434,6 @@ func (h *Handler) AddInstitutionProduct(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	item, err := h.institutions.AddProduct(r.Context(), tenantID, req, adminID)
-	if err != nil {
-		writeInstitutionError(w, err)
-		return
-	}
-	httputil.WriteSuccess(w, item)
-}
-
-// ActivateExperienceTrial 存量客户开通新版本体验（详情页「体验」Tab 用）。
-func (h *Handler) ActivateExperienceTrial(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireInstitutionID(w, r)
-	if !ok {
-		return
-	}
-	adminID, ok := requireAdminActor(w, r)
-	if !ok {
-		return
-	}
-	var req TrialActivationRequest
-	if err := decodeInstitutionBody(r, &req); err != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	item, err := h.institutions.ActivateExperienceTrial(r.Context(), tenantID, req, adminID)
-	if err != nil {
-		writeInstitutionError(w, err)
-		return
-	}
-	httputil.WriteSuccess(w, item)
-}
-
-// StartNewSystemTrial 正式客户叠加新系统试用：不改原合同/原服务期，只开新系统窗口。
-func (h *Handler) StartNewSystemTrial(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := requireInstitutionID(w, r)
-	if !ok {
-		return
-	}
-	adminID, ok := requireAdminActor(w, r)
-	if !ok {
-		return
-	}
-	var req TrialActivationRequest
-	if err := decodeInstitutionBody(r, &req); err != nil {
-		httputil.WriteBadRequest(w, "invalid request body")
-		return
-	}
-	item, err := h.institutions.StartNewSystemTrial(r.Context(), tenantID, req, adminID)
 	if err != nil {
 		writeInstitutionError(w, err)
 		return

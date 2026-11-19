@@ -86,8 +86,12 @@ func (h *Handler) DownloadBillingDocument(w http.ResponseWriter, r *http.Request
 		writeInstitutionError(w, err)
 		return
 	}
+	tenantName := ""
+	if name, err := h.documents.TenantName(r.Context(), doc.TenantID); err == nil {
+		tenantName = name
+	}
 	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", contentDispositionAttachment(documentFileName(doc), documentFallbackFileName(doc)))
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(documentFileName(doc, tenantName), documentFallbackFileName(doc)))
 	w.Header().Set("Content-Length", strconv.Itoa(len(doc.Content)))
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

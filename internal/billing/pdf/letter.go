@@ -89,6 +89,8 @@ type ProductRow struct {
 type Advisor struct {
 	Name  string
 	Phone string
+	// IsBrand 表示没有具体员工顾问，头像位置画灵策品牌标记而不是取名字首字。
+	IsBrand bool
 }
 
 // validate 校验渲染所需的最小内容集合，缺内容时直接报错，避免生成空白函。

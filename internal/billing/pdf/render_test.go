@@ -36,7 +36,7 @@ func trialLetter() Letter {
 		},
 		StartSection: "开始使用",
 		StartItems: []string{
-			"打开浏览器访问　**https://app.lingce.com**",
+			"打开浏览器访问　**https://portal.khgl.xyz**",
 			"使用管理员手机号 **139 0000 2002** 登录；初始密码由您的专属顾问单独告知，首次登录后请及时修改",
 		},
 		TipSection: "温馨提示",
@@ -77,7 +77,7 @@ func formalLetter() Letter {
 		},
 		StartSection: "开始使用",
 		StartItems: []string{
-			"打开浏览器访问　**https://app.lingce.com**",
+			"打开浏览器访问　**https://portal.khgl.xyz**",
 			"使用管理员手机号 **137 0000 3003** 登录；初始密码由您的专属顾问单独告知，首次登录后请及时修改",
 		},
 		TipSection: "温馨提示",
@@ -160,7 +160,7 @@ func TestRenderShrinksInsteadOfOverflowing(t *testing.T) {
 // TestWrapSpansBreaksCJK 校验中文按字断行、ASCII 片段不被拆碎、行宽不超限。
 func TestWrapSpansBreaksCJK(t *testing.T) {
 	doc := newTestCanvas(t)
-	lines := doc.wrapText("打开浏览器访问　https://app.lingce.com 并使用管理员手机号 139 0000 2002 登录；初始密码由您的专属顾问单独告知，首次登录后请及时修改", 9.6, 100)
+	lines := doc.wrapText("打开浏览器访问　https://portal.khgl.xyz 并使用管理员手机号 139 0000 2002 登录；初始密码由您的专属顾问单独告知，首次登录后请及时修改", 9.6, 100)
 	if len(lines) < 2 {
 		t.Fatalf("长句应当断成多行，实际 %d 行", len(lines))
 	}
@@ -175,7 +175,7 @@ func TestWrapSpansBreaksCJK(t *testing.T) {
 			joined += unit.text
 		}
 	}
-	if !strings.Contains(joined, "https://app.lingce.com") {
+	if !strings.Contains(joined, "https://portal.khgl.xyz") {
 		t.Fatalf("URL 不应被拆碎: %q", joined)
 	}
 }

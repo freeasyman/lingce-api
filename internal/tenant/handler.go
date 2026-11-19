@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -620,6 +622,15 @@ func (h *Handler) GetTenantProfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
 		return
+	}
+	// 门户（新产品）读当前覆盖合同的有效期；机构端/移动端（老产品）保持 tenants 老日期。
+	if claims.Entry == auth.EntryPortal {
+		if primary, primaryErr := contract.Primary(r.Context(), h.service.store.pool, id, time.Now()); primaryErr == nil && primary != nil {
+			started, expired := primary.StartedOn, primary.ExpiredOn
+			profile.ValidFrom = &started
+			profile.ValidTo = &expired
+			profile.DaysRemaining = calcDaysRemaining(profile.ValidTo)
+		}
 	}
 	httputil.WriteSuccess(w, profile)
 }

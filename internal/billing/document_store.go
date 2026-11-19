@@ -107,6 +107,16 @@ ORDER BY d.generated_at DESC, d.id DESC`, tenantID)
 }
 
 // GetDocument 按 id 取一条文档记录（含 PDF 正文），不存在返回 ErrDocumentNotFound。
+// GetTenantName 取机构名（通知函文件名用）。
+func (s *Store) GetTenantName(ctx context.Context, tenantID int64) (string, error) {
+	var name string
+	err := s.pool.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1`, tenantID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("get tenant name: %w", err)
+	}
+	return name, nil
+}
+
 func (s *Store) GetDocument(ctx context.Context, docID int64) (Document, error) {
 	row := s.pool.QueryRow(ctx, `SELECT`+documentColumns+`, d.content`+documentFrom+`
 WHERE d.id = $1`, docID)

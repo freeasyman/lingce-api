@@ -75,7 +75,9 @@ const (
 	InstitutionFilterAll      = "all"
 	InstitutionFilterUnopened = "unopened"
 	InstitutionFilterExpiring = "expiring"
-	InstitutionFilterExpired  = "expired"
+	// InstitutionFilterTrialExpiring 试用临期（跟单名单）。
+	InstitutionFilterTrialExpiring = "trial-expiring"
+	InstitutionFilterExpired       = "expired"
 	InstitutionFilterUnpaid   = "unpaid"
 	InstitutionFilterTrial    = "trial"
 )
@@ -291,15 +293,20 @@ type Institution struct {
 	Consumptions   []InstitutionConsumption               `json:"consumptions"`
 	Logs           []InstitutionLog                       `json:"logs"`
 	Documents      []InstitutionDocument                  `json:"documents"`
-	NewSystemTrial *InstitutionNewSystemTrial             `json:"newSystemTrial,omitempty"`
+	// Contracts 是该机构的全部合同行（服务期 Tab 展示用，含历史/未来）。
+	Contracts []InstitutionContract                        `json:"contracts,omitempty"`
+	// TrialCount 历史试用次数（含当前），前端展示「已试用 N 次」。
+	TrialCount int `json:"trialCount"`
 }
 
-// InstitutionNewSystemTrial 是正式客户叠加的新系统试用窗口。
-type InstitutionNewSystemTrial struct {
-	StartedAt     string `json:"startedAt"`
-	EndsAt        string `json:"endsAt"`
-	Status        string `json:"status"`
-	RemainingDays int    `json:"remainingDays"`
+// InstitutionContract 一行合同（服务期）。
+type InstitutionContract struct {
+	ID        int64    `json:"id"`
+	Type      string   `json:"type"`
+	Status    string   `json:"status"`
+	StartedOn string   `json:"startedOn"`
+	ExpiredOn string   `json:"expiredOn"`
+	Products  []string `json:"products"`
 }
 
 // InstitutionListResult 是 GET /ops/billing/institutions 的 data。
@@ -319,6 +326,9 @@ type InstitutionDetailResult struct {
 type InstitutionQuery struct {
 	Filter  string
 	Keyword string
+	// Page/PageSize 服务端分页（PageSize<=0 时按默认 20，最多 100）。
+	Page     int
+	PageSize int
 	// OrgID 为运营账号的数据权限范围：0 表示平台账号（可看全部）。
 	OrgID int64
 }
@@ -331,13 +341,22 @@ func normalizeInstitutionQuery(query InstitutionQuery) (InstitutionQuery, error)
 	}
 	switch query.Filter {
 	case InstitutionFilterAll, InstitutionFilterUnopened, InstitutionFilterExpiring,
-		InstitutionFilterExpired, InstitutionFilterUnpaid, InstitutionFilterTrial:
+		InstitutionFilterTrialExpiring, InstitutionFilterExpired, InstitutionFilterUnpaid, InstitutionFilterTrial:
 	default:
-		return InstitutionQuery{}, invalidf("filter must be one of all/unopened/expiring/expired/unpaid/trial")
+		return InstitutionQuery{}, invalidf("filter must be one of all/unopened/expiring/trial-expiring/expired/unpaid/trial")
 	}
 	query.Keyword = strings.TrimSpace(query.Keyword)
 	if len([]rune(query.Keyword)) > 64 {
 		return InstitutionQuery{}, invalidf("keyword must be at most 64 characters")
+	}
+	if query.Page < 1 {
+		query.Page = 1
+	}
+	if query.PageSize <= 0 {
+		query.PageSize = 20
+	}
+	if query.PageSize > 100 {
+		query.PageSize = 100
 	}
 	return query, nil
 }

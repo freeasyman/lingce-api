@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -59,12 +60,14 @@ func (h *Handler) UploadTrialRecording(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(profile.AccountMode), "trial") {
-		httputil.WriteForbidden(w, "当前租户不是试用账号")
+	// 试用判定统一走合同行：主体合同必须是 trial 且覆盖今天。
+	primary, err := contract.Primary(r.Context(), h.service.store.pool, tenantID, time.Now())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	if profile.ValidTo != nil && profile.ValidTo.Before(time.Now()) {
-		httputil.WriteForbidden(w, "试用已过期")
+	if primary == nil || primary.Type != contract.Trial {
+		httputil.WriteForbidden(w, "当前租户不是试用账号或试用已过期")
 		return
 	}
 	if profile.TrialUsedRecordings >= profile.TrialMaxRecordings {

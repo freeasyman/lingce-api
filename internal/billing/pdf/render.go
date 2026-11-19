@@ -63,10 +63,13 @@ var (
 	colorWhite      = rgb{0xff, 0xff, 0xff}
 )
 
-// widthKey 是字宽缓存的键（同一次排版内字号固定，按文本+粗细缓存即可）。
+// widthKey 是字宽缓存的键。同一份文档里同一段文字会在不同字号下测量
+// （例如「灵策」既用于页头 logo，也用于顾问头像的「灵」），字号必须进 key，
+// 否则会命中错误的缓存宽度、把字推到偏左/偏右。
 type widthKey struct {
 	text string
 	bold bool
+	size float64
 }
 
 // canvas 是排版游标：dry=true 时只推进 y、不落笔。
@@ -102,7 +105,7 @@ func (c *canvas) textWidth(text string, bold bool, size float64) float64 {
 	if text == "" {
 		return 0
 	}
-	key := widthKey{text: text, bold: bold}
+	key := widthKey{text: text, bold: bold, size: size}
 	if width, ok := c.widthCache[key]; ok {
 		return width
 	}
@@ -364,14 +367,28 @@ func (c *canvas) bottomBlock(letter Letter) {
 		c.f.SetFillColor(colorPrimary.r, colorPrimary.g, colorPrimary.b)
 		c.f.Circle(avatarX, avatarY, avatarRadius, "F")
 	}
-	initialRunes := []rune(strings.TrimSpace(letter.Advisor.Name))
-	initial := "灵"
-	if len(initialRunes) > 0 {
-		initial = string(initialRunes[0])
-	}
-	initialWidth := c.textWidth(initial, true, 10)
 	avatarCenterX := marginLeft + c.scale(6.6)
-	c.text(avatarCenterX-initialWidth/2, cardTop+cardHeight/2+ptToMM(10)*c.k*0.36, initial, true, 10, colorWhite)
+	avatarCenterY := cardTop + cardHeight/2
+	if letter.Advisor.IsBrand {
+		// 没有具体员工顾问：头像里画灵策品牌标记（两个小字），而不是取名字首字。
+		size := 6.4
+		gap := c.scale(0.35)
+		width := c.textWidth("灵", true, size) + gap + c.textWidth("策", true, size)
+		baseline := avatarCenterY + ptToMM(size)*c.k*0.40
+		x := avatarCenterX - width/2
+		c.text(x, baseline, "灵", true, size, colorWhite)
+		c.text(x+c.textWidth("灵", true, size)+gap, baseline, "策", true, size, colorWhite)
+	} else {
+		initialRunes := []rune(strings.TrimSpace(letter.Advisor.Name))
+		initial := "灵"
+		if len(initialRunes) > 0 {
+			initial = string(initialRunes[0])
+		}
+		initialWidth := c.textWidth(initial, true, 10)
+		// 汉字字面中心在基线上方约 0.40em（Noto Sans SC 实测）：基线放在圆心下方 0.40em，
+		// 字面中心才落在圆心上。上下方向用正号（gofpdf 的 y 向下为正）。
+		c.text(avatarCenterX-initialWidth/2, avatarCenterY+ptToMM(10)*c.k*0.40, initial, true, 10, colorWhite)
+	}
 	c.text(marginLeft+c.scale(14.6), cardTop+c.scale(6.8), letter.Advisor.Name, true, 10.5, colorTitle)
 	c.text(marginLeft+c.scale(14.6), cardTop+c.scale(12.0), letter.Advisor.Phone, false, 9, colorMuted)
 
@@ -383,13 +400,13 @@ func (c *canvas) bottomBlock(letter Letter) {
 	dateWidth := c.textWidth(letter.SignDate, false, 9.5)
 	c.text(contentRight-dateWidth, dateBaseline, letter.SignDate, false, 9.5, colorMuted)
 
-	// 电子章：红色圆形、半透明，压在公司名上。
-	c.seal(contentRight-c.scale(5.5), companyBaseline-c.scale(5.8), c.scale(10), letter.sealLines())
+	// 电子章：红色圆形、半透明，盖在公司名落款的后部（只压住名字尾部）。
+	c.seal(contentRight+c.scale(2.5), companyBaseline-c.scale(5.8), c.scale(10), letter.sealLines())
 
 	c.y = blockTop + blockHeight
 }
 
-// seal 画电子章：圆环 + 两行字，整体逆时针旋转 12°、半透明。
+// seal 画电子章：圆环 + 两行字，正立、半透明。
 func (c *canvas) seal(centerX, centerY, radius float64, lines []string) {
 	if c.dry {
 		return
@@ -400,7 +417,6 @@ func (c *canvas) seal(centerX, centerY, radius float64, lines []string) {
 	firstBaseline := centerY - totalHeight/2 + lineHeight*0.75
 
 	c.f.TransformBegin()
-	c.f.TransformRotate(-12, centerX, centerY)
 	c.f.SetAlpha(0.42, "Normal")
 	c.f.SetDrawColor(colorSealRed.r, colorSealRed.g, colorSealRed.b)
 	c.f.SetLineWidth(c.scale(0.7))

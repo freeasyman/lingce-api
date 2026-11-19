@@ -37,6 +37,17 @@ type institutionBaseRow struct {
 	StartedOn    *string
 	ExpiredOn    *string
 
+	// 主体合同行（formal/trial 中最近到期的一条 active），用于状态推导。
+	PrimaryType      string
+	PrimaryStartedOn *string
+	PrimaryExpiredOn *string
+	PrimaryStatus    string
+
+	// 全部合同行（随基础行一次取回，避免多次远程往返）。
+	ContractsJSON string
+	// TrialCount 历史试用合同条数（含当前），用于「已试用 N 次」与重开权限。
+	TrialCount int
+
 	// 服务生命周期标记（migration 20261112_012）：暂停只改这两列，
 	// 不改服务期、不改额度。
 	PausedAt     *time.Time
@@ -68,25 +79,55 @@ SELECT t.id,
        COALESCE(p.status, ''),
        to_char(p.started_on, 'YYYY-MM-DD'),
        to_char(p.expired_on, 'YYYY-MM-DD'),
+       COALESCE(pc.contract_type, ''),
+       to_char(pc.started_on, 'YYYY-MM-DD'),
+       to_char(pc.expired_on, 'YYYY-MM-DD'),
+       COALESCE(pc.status, ''),
        t.paused_at,
        COALESCE(t.paused_reason, ''),
        ow.org_id,
        COALESCE(org.name, ''),
        ow.sales_admin_id,
-       COALESCE(sales.name, '')
+       COALESCE(sales.name, ''),
+       (SELECT count(*) FROM subscription_periods spc
+         WHERE spc.tenant_id = t.id AND spc.contract_type = 'trial') AS trial_count,
+       COALESCE((
+           SELECT json_agg(json_build_object(
+                      'id', sp2.id, 'type', sp2.contract_type, 'status', sp2.status,
+                      'startedOn', to_char(sp2.started_on, 'YYYY-MM-DD'),
+                      'expiredOn', to_char(sp2.expired_on, 'YYYY-MM-DD'),
+                      'products', COALESCE((
+                          SELECT json_agg(DISTINCT e.product_code)
+                          FROM product_entitlements e
+                          WHERE e.tenant_id = sp2.tenant_id AND e.period_id = sp2.id
+                      ), '[]'::json))
+                  ORDER BY sp2.id DESC)
+           FROM subscription_periods sp2 WHERE sp2.tenant_id = t.id
+       ), '[]'::json)::text AS contracts_json
 FROM tenants t
 LEFT JOIN LATERAL (
-    SELECT sp.id, sp.status, sp.started_on, sp.expired_on
+    SELECT sp.id, sp.status, sp.started_on, sp.expired_on, sp.contract_type
     FROM subscription_periods sp
     WHERE sp.tenant_id = t.id
-    -- 服务期可能有多条：正式期 expired、被替代的试用期 terminated。
-    -- 先 active、再 expired，同级按 id 倒序（最近插入/调整的一条才是当前服务期）。
+    -- 服务期可能有多条：优先主体合同（formal/trial），体验行不抢主体展示位；
+    -- 再 active、再 expired，同级按 id 倒序。
     -- 不能按 expired_on 倒序：服务期被置 terminated 后，旧的试用期可能因
     -- 到期日更晚而胜出，导致档案显示错误的服务期。
-    ORDER BY (sp.status = 'active') DESC, (sp.status = 'expired') DESC,
+    ORDER BY (CASE WHEN sp.contract_type IN ('formal','trial') THEN 1 ELSE 0 END) DESC,
+             (sp.status = 'active') DESC, (sp.status = 'expired') DESC,
              sp.id DESC
     LIMIT 1
 ) p ON TRUE
+LEFT JOIN LATERAL (
+    -- 主体合同（formal/trial）里最当前的一条（active 优先、expired 次之），
+    -- 用于推导机构状态与动作门槛；是否覆盖今天在服务层按日期再判断。
+    SELECT sp.contract_type, sp.started_on, sp.expired_on, sp.status
+    FROM subscription_periods sp
+    WHERE sp.tenant_id = t.id
+      AND sp.contract_type IN ('formal','trial')
+    ORDER BY (sp.status = 'active') DESC, (sp.status = 'expired') DESC, sp.id DESC
+    LIMIT 1
+) pc ON TRUE
 LEFT JOIN tenant_ownerships ow ON ow.tenant_id = t.id AND ow.effective_to IS NULL
 LEFT JOIN ops_organizations org ON org.id = ow.org_id
 LEFT JOIN operations_admins sales ON sales.id = ow.sales_admin_id AND sales.deleted_at IS NULL
@@ -121,9 +162,12 @@ WHERE t.deleted_at IS NULL
        OR ($3 = 'unopened' AND p.id IS NULL)
        OR ($3 = 'trial' AND p.id IS NOT NULL AND p.status <> 'terminated'
            AND p.expired_on >= CURRENT_DATE
-           AND COALESCE(NULLIF(lower(t.account_mode), ''), 'formal') = 'trial')
+           AND p.contract_type = 'trial')
        OR ($3 = 'expiring' AND p.status = 'active'
-           AND COALESCE(NULLIF(lower(t.account_mode), ''), 'formal') <> 'trial'
+           AND p.contract_type = 'formal'
+           AND p.expired_on >= CURRENT_DATE AND p.expired_on <= CURRENT_DATE + 7)
+       OR ($3 = 'trial-expiring' AND p.status = 'active'
+           AND p.contract_type = 'trial'
            AND p.expired_on >= CURRENT_DATE AND p.expired_on <= CURRENT_DATE + 7)
        OR ($3 = 'expired' AND p.id IS NOT NULL AND p.status <> 'terminated' AND p.expired_on < CURRENT_DATE)
        OR ($3 = 'unpaid' AND EXISTS (
@@ -141,7 +185,13 @@ func (s *Store) ListInstitutionBases(ctx context.Context, query InstitutionQuery
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, listInstitutionsSQL, query.OrgID, strings.ToLower(query.Keyword), query.Filter)
+	sql := listInstitutionsSQL
+	args := []any{query.OrgID, strings.ToLower(query.Keyword), query.Filter}
+	if query.PageSize > 0 {
+		sql += " LIMIT $4 OFFSET $5"
+		args = append(args, query.PageSize, int64(query.Page-1)*int64(query.PageSize))
+	}
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list institutions: %w", err)
 	}
@@ -159,6 +209,21 @@ func (s *Store) ListInstitutionBases(ctx context.Context, query InstitutionQuery
 		return nil, fmt.Errorf("iterate institutions: %w", err)
 	}
 	return items, nil
+}
+
+// CountInstitutions 返回符合筛选条件的机构总数（服务端分页用）。
+func (s *Store) CountInstitutions(ctx context.Context, query InstitutionQuery) (int64, error) {
+	query, err := normalizeInstitutionQuery(query)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	err = s.pool.QueryRow(ctx, `SELECT count(*) FROM (`+listInstitutionsSQL+`) sub`,
+		query.OrgID, strings.ToLower(query.Keyword), query.Filter).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("count institutions: %w", err)
+	}
+	return total, nil
 }
 
 // GetInstitutionBase 按租户 id 取基础行；不存在返回 ErrInstitutionNotFound。
@@ -199,17 +264,60 @@ func scanInstitutionBase(scan func(dest ...any) error) (institutionBaseRow, erro
 		&item.PeriodStatus,
 		&item.StartedOn,
 		&item.ExpiredOn,
+		&item.PrimaryType,
+		&item.PrimaryStartedOn,
+		&item.PrimaryExpiredOn,
+		&item.PrimaryStatus,
 		&item.PausedAt,
 		&item.PausedReason,
 		&item.OrgID,
 		&item.OrgName,
 		&item.SalesAdminID,
 		&item.SalesName,
+		&item.TrialCount,
+		&item.ContractsJSON,
 	); err != nil {
 		return institutionBaseRow{}, err
 	}
 	item.PeriodID = periodID
 	return item, nil
+}
+
+// CountTrialContracts 统计机构的试用合同条数（含历史），用于重开次数与权限。
+func (s *Store) CountTrialContracts(ctx context.Context, tenantID int64) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `
+SELECT count(*) FROM subscription_periods
+WHERE tenant_id = $1 AND contract_type = 'trial'`, tenantID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count trial contracts: %w", err)
+	}
+	return n, nil
+}
+
+// ListContracts 返回机构的全部合同行（倒序，最新在前）。
+func (s *Store) ListContracts(ctx context.Context, tenantID int64) ([]InstitutionContract, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, contract_type, status,
+       to_char(started_on, 'YYYY-MM-DD'), to_char(expired_on, 'YYYY-MM-DD')
+FROM subscription_periods
+WHERE tenant_id = $1
+ORDER BY id DESC`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list institution contracts: %w", err)
+	}
+	defer rows.Close()
+	var out []InstitutionContract
+	for rows.Next() {
+		var c InstitutionContract
+		if err := rows.Scan(&c.ID, &c.Type, &c.Status, &c.StartedOn, &c.ExpiredOn); err != nil {
+			return nil, fmt.Errorf("scan institution contract: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate institution contracts: %w", err)
+	}
+	return out, nil
 }
 
 // entitlementRow 是机构额度的一行（按额度类型分组由 service 处理）。
@@ -971,7 +1079,15 @@ type AdminScope struct {
 
 // GetAdminScope 取运营账号的归属组织与「能否看全部」：
 // ops_super_admin 角色或 platform 组织 -> 可看全部；其余按 org_id 收敛。
+// 结果进程内缓存 60 秒：远程库每次往返约 70-90ms，列表/详情会各调一次。
 func (s *Store) GetAdminScope(ctx context.Context, adminID int64) (AdminScope, error) {
+	s.scopeMu.Lock()
+	if cached, ok := s.scopeCache[adminID]; ok && time.Now().Before(cached.expires) {
+		s.scopeMu.Unlock()
+		return cached.scope, nil
+	}
+	s.scopeMu.Unlock()
+
 	var (
 		scope   AdminScope
 		orgType string
@@ -1008,6 +1124,13 @@ WHERE a.id = $1
 			return AdminScope{}, ErrAdminScopeMissing
 		}
 	}
+
+	s.scopeMu.Lock()
+	if s.scopeCache == nil {
+		s.scopeCache = make(map[int64]cachedAdminScope)
+	}
+	s.scopeCache[adminID] = cachedAdminScope{scope: scope, expires: time.Now().Add(60 * time.Second)}
+	s.scopeMu.Unlock()
 	return scope, nil
 }
 

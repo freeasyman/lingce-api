@@ -194,7 +194,11 @@ func (h *Handler) loginInstitution(w http.ResponseWriter, r *http.Request, porta
 	if req.Remember {
 		expiryHours = 30 * 24
 	}
-	resp, err := h.service.LoginEmployee(r.Context(), loginID, req.Password, req.TenantID, expiryHours)
+	entry := authpkg.EntryInstitution
+	if portal {
+		entry = authpkg.EntryPortal
+	}
+	resp, err := h.service.LoginEmployee(r.Context(), loginID, req.Password, req.TenantID, expiryHours, entry)
 	h.recordInstitutionLoginLog(r, req.TenantID, loginID, resp, err)
 	if err != nil {
 		var authErr *AuthError
@@ -205,18 +209,6 @@ func (h *Handler) loginInstitution(w http.ResponseWriter, r *http.Request, porta
 		httputil.WriteUnauthorized(w, err.Error())
 		return
 	}
-	if portal && resp != nil && resp.TenantID != nil {
-		endedAt, trialErr := h.service.store.GetNewSystemTrialEnd(r.Context(), *resp.TenantID)
-		if trialErr != nil {
-			httputil.WriteInternalError(w, trialErr.Error())
-			return
-		}
-		if endedAt != nil && !time.Now().Before(*endedAt) {
-			httputil.WriteError(w, http.StatusUnauthorized, "MIGRATION_TRIAL_ENDED", "新系统迁移试用已到期，请联系管理员", nil)
-			return
-		}
-	}
-
 	httputil.WriteSuccess(w, resp)
 }
 

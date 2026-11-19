@@ -15,6 +15,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -178,16 +179,18 @@ func (s *InstitutionService) insertOrderWithRetryTx(ctx context.Context, tx pgx.
 }
 
 // requireOpenInstitution 校验机构已开通（有 active 服务期）。
-func requireOpenInstitution(base institutionBaseRow) error {
-	if base.PeriodID == nil || base.PeriodStatus != PeriodStatusActive {
+// requireOpenInstitution 校验机构当前有生效中的主体合同（formal/trial 覆盖今天）。
+// 唯一口径：合同行；不再读 PeriodID/status 与 account_mode。
+func requireOpenInstitution(base institutionBaseRow, today time.Time) error {
+	if primaryCoveringType(base, today) == "" {
 		return ErrInstitutionNotOpened
 	}
 	return nil
 }
 
-// requireFormalInstitution 校验机构处于正式模式（试用机构不能加量/赠送/续期）。
+// requireFormalInstitution 校验机构主体合同是正式（试用机构不能加量/赠送/续期）。
 func requireFormalInstitution(base institutionBaseRow) error {
-	if normalizeEnum(base.AccountMode) == AccountModeTrial {
+	if base.PeriodID != nil && normalizeEnum(base.PrimaryType) == string(contract.Trial) {
 		return &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "试用机构请先转正式后再操作"}
 	}
 	return nil
@@ -364,10 +367,14 @@ func (s *InstitutionService) ActivateFormal(ctx context.Context, tenantID int64,
 	if err := s.store.CloseActivePeriodTx(ctx, tx, tenantID, PeriodStatusTerminated); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceActivation); err != nil {
+	periodID, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceActivation, string(contract.Formal))
+	if err != nil {
 		return nil, err
 	}
-	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeFormal, today, endDate); err != nil {
+	if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, periodID); err != nil {
+		return nil, err
+	}
+	if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, AccountModeFormal); err != nil {
 		return nil, err
 	}
 
@@ -446,13 +453,29 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return nil, err
 	}
-	// 试用只用于「已建档未开通」的机构。已开通（含试用中/正式/已过期）的机构
-	// 再走试用会把正式服务期直接关成 terminated 并切到 trial，属于不可逆的降级；
-	// 试用续期走 extend-trial，正式开通/重新开通走 activate-formal。
-	if base.PeriodID != nil {
+	// 试用重开规则：当前没有「生效中的主体合同」即可开通（未开通/已过期均可），
+	// 到期日一律从今天起算；生效中的机构请走延长试用或体验，不覆盖生效合同。
+	if base.PausedAt != nil {
+		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "机构已暂停，请先恢复服务"}
+	}
+	if primaryCoveringType(base, s.today()) != "" {
 		return nil, &ConflictError{
 			Sentinel: ErrPeerConflict,
-			Message:  "该机构已开通，不能重复开通试用；试用续期请用「延长试用」",
+			Message:  "该机构当前有生效中的服务期，不能重复开通试用；试用续期请用「延长试用」",
+		}
+	}
+	// 业务规则：最多免费试用 2 次；第 3 次起需要主管权限（平台/超管）。
+	trialCount, err := s.store.CountTrialContracts(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if trialCount >= 2 {
+		scope, scopeErr := s.store.GetAdminScope(ctx, adminID)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
+		if !scope.CanSeeAll {
+			return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: fmt.Sprintf("该机构已试用 %d 次，再次开通试用需要主管权限", trialCount)}
 		}
 	}
 	req, err = req.normalize()
@@ -546,13 +569,23 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 		}
 	}
 
-	if err := s.store.CloseActivePeriodTx(ctx, tx, tenantID, PeriodStatusTerminated); err != nil {
+	closeStatus := PeriodStatusTerminated
+	if base.ExpiredOn != nil {
+		if end, parseErr := parseDateOnly(*base.ExpiredOn); parseErr == nil && end.Before(s.today()) {
+			closeStatus = PeriodStatusExpired
+		}
+	}
+	if err := s.store.CloseActivePeriodTx(ctx, tx, tenantID, closeStatus); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceTrial); err != nil {
+	periodID, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceTrial, string(contract.Trial))
+	if err != nil {
 		return nil, err
 	}
-	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeTrial, today, endDate); err != nil {
+	if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, periodID); err != nil {
+		return nil, err
+	}
+	if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, AccountModeTrial); err != nil {
 		return nil, err
 	}
 
@@ -572,10 +605,10 @@ func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int6
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
+	if err := requireOpenInstitution(base, s.today()); err != nil {
 		return nil, err
 	}
-	if normalizeEnum(base.AccountMode) != AccountModeTrial {
+	if normalizeEnum(base.PrimaryType) != string(contract.Trial) {
 		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有试用机构可以调整试用产品"}
 	}
 	req, err = req.normalize()
@@ -643,114 +676,13 @@ func (s *InstitutionService) SetTrialProducts(ctx context.Context, tenantID int6
 	if err := s.store.DeactivateTrialProductsTx(ctx, tx, tenantID, req.ProductCodes); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit set trial products transaction: %w", err)
-	}
-	return s.GetInstitution(ctx, tenantID)
-}
-
-// StartNewSystemTrial 正式客户叠加新系统试用：
-// 不改 account_mode、原 subscription_periods、原合同额度；只发新系统试用额度并记录窗口。
-func (s *InstitutionService) StartNewSystemTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
-	return s.startExperienceTrial(ctx, tenantID, req, adminID, true)
-}
-
-// ActivateExperienceTrial 存量客户开通「新版本体验」：
-// 任何非暂停机构都可以开，不动原合同/服务期/模式，只发体验额度并记录窗口。
-func (s *InstitutionService) ActivateExperienceTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64) (*Institution, error) {
-	return s.startExperienceTrial(ctx, tenantID, req, adminID, false)
-}
-
-// startExperienceTrial 开通新版本体验窗口。
-// requireFormal=true 时保留旧语义（只有正式且服务期生效的客户可开）；
-// requireFormal=false 时只排除暂停机构，面向存量客户（未开通/已过期也可体验新版本）。
-func (s *InstitutionService) startExperienceTrial(ctx context.Context, tenantID int64, req TrialActivationRequest, adminID int64, requireFormal bool) (*Institution, error) {
-	if err := s.requireTenantAccess(ctx, tenantID, adminID); err != nil {
-		return nil, err
-	}
-	base, err := s.store.GetInstitutionBase(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	if base.PausedAt != nil {
-		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "机构已暂停，请先恢复服务"}
-	}
-	if requireFormal {
-		if err := requireOpenInstitution(base); err != nil {
+	if base.PeriodID != nil {
+		if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, *base.PeriodID); err != nil {
 			return nil, err
 		}
-		if normalizeEnum(base.AccountMode) != AccountModeFormal {
-			return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有正式客户可以开通新系统叠加试用"}
-		}
-	}
-	req, err = req.normalize()
-	if err != nil {
-		return nil, err
-	}
-	var existingEnd *time.Time
-	if err := s.store.pool.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1`, tenantID).Scan(&existingEnd); err != nil {
-		return nil, fmt.Errorf("read new-system trial window: %w", err)
-	}
-	now := time.Now()
-	if existingEnd != nil && existingEnd.After(now) {
-		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "该机构已有未结束的新系统试用"}
-	}
-	index, _, err := s.loadCatalogProducts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	products, err := resolveCatalogProducts(index, req.ProductCodes)
-	if err != nil {
-		return nil, err
-	}
-	days := int64(req.Days)
-	startedAt := now
-	endedAt := now.AddDate(0, 0, int(days))
-	endDate := formatDateOnly(endedAt)
-	operator := s.service.resolveOperator(ctx, adminID)
-	reason := fmt.Sprintf("新系统迁移试用 %d 天（叠加，不影响老合同）", days)
-
-	tx, err := s.store.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin new-system trial transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := lockTenantRow(ctx, tx, tenantID); err != nil {
-		return nil, err
-	}
-	var lockedEnd *time.Time
-	if err := tx.QueryRow(ctx, `SELECT new_system_trial_ends_at FROM tenants WHERE id = $1 FOR UPDATE`, tenantID).Scan(&lockedEnd); err != nil {
-		return nil, fmt.Errorf("lock new-system trial window: %w", err)
-	}
-	if lockedEnd != nil && lockedEnd.After(now) {
-		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "该机构已有未结束的新系统试用"}
-	}
-	for _, product := range products {
-		for _, quota := range product.Quotas {
-			amount, err := scaleQuotaWhole(quota.Amount, days, 365)
-			if err != nil {
-				return nil, err
-			}
-			if err := s.store.WriteEntitlementTx(ctx, tx, entitlementWriteSet, tenantID,
-				product.Code, quota.Unit, EditionTrial, QuotaTypeTrial, amount, endDate); err != nil {
-				return nil, err
-			}
-			if err := s.store.InsertGrantLedgerTx(ctx, tx, tenantID, product.Code, quota.Unit,
-				amount, LedgerSourceTrial, reason, nil, operator); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE tenants
-SET new_system_trial_started_at = $2,
-    new_system_trial_ends_at = $3,
-    updated_at = NOW()
-WHERE id = $1`, tenantID, startedAt, endedAt); err != nil {
-		return nil, fmt.Errorf("set new-system trial window: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit new-system trial: %w", err)
+		return nil, fmt.Errorf("commit set trial products transaction: %w", err)
 	}
 	return s.GetInstitution(ctx, tenantID)
 }
@@ -765,7 +697,7 @@ func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, r
 	if err != nil {
 		return nil, err
 	}
-	if normalizeEnum(base.AccountMode) == AccountModeFormal {
+	if normalizeEnum(base.PrimaryType) == string(contract.Formal) {
 		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "正式客户不能降级为迁移试用，请单独处理"}
 	}
 	req, err = req.normalize()
@@ -822,10 +754,14 @@ func (s *InstitutionService) MigrateTrial(ctx context.Context, tenantID int64, r
 	if err := s.store.CloseActivePeriodTx(ctx, tx, tenantID, PeriodStatusTerminated); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceTrial); err != nil {
+	periodID, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, today, endDate, PeriodSourceTrial, string(contract.Trial))
+	if err != nil {
 		return nil, err
 	}
-	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeTrial, today, endDate); err != nil {
+	if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, periodID); err != nil {
+		return nil, err
+	}
+	if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, AccountModeTrial); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -851,7 +787,7 @@ func (s *InstitutionService) AddIncrement(ctx context.Context, tenantID int64, r
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
+	if err := requireOpenInstitution(base, s.today()); err != nil {
 		return nil, err
 	}
 	if err := requireFormalInstitution(base); err != nil {
@@ -908,7 +844,7 @@ func (s *InstitutionService) GiftIncrement(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
+	if err := requireOpenInstitution(base, s.today()); err != nil {
 		return nil, err
 	}
 	if err := requireFormalInstitution(base); err != nil {
@@ -1212,11 +1148,15 @@ func (s *InstitutionService) RenewInstitution(ctx context.Context, tenantID int6
 		return nil, err
 	}
 	if !extended {
-		if _, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, periodStart, newEnd, PeriodSourceRenewal); err != nil {
+		periodID, err := s.store.InsertActivePeriodTx(ctx, tx, tenantID, periodStart, newEnd, PeriodSourceRenewal, string(contract.Formal))
+		if err != nil {
+			return nil, err
+		}
+		if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, periodID); err != nil {
 			return nil, err
 		}
 	}
-	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeFormal, periodStart, newEnd); err != nil {
+	if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, AccountModeFormal); err != nil {
 		return nil, err
 	}
 
@@ -1326,10 +1266,10 @@ func (s *InstitutionService) AddProduct(ctx context.Context, tenantID int64, req
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
+	if err := requireOpenInstitution(base, s.today()); err != nil {
 		return nil, err
 	}
-	isTrial := normalizeEnum(base.AccountMode) == AccountModeTrial
+	isTrial := normalizeEnum(base.PrimaryType) == string(contract.Trial)
 	index, priceVersion, err := s.loadCatalogProducts(ctx)
 	if err != nil {
 		return nil, err
@@ -1429,6 +1369,11 @@ func (s *InstitutionService) AddProduct(ctx context.Context, tenantID int64, req
 			return nil, err
 		}
 	}
+	if base.PeriodID != nil {
+		if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, *base.PeriodID); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit add product transaction: %w", err)
 	}
@@ -1487,6 +1432,11 @@ func (s *InstitutionService) addTrialProduct(ctx context.Context, tenantID int64
 			return nil, err
 		}
 	}
+	if base.PeriodID != nil {
+		if err := s.store.AttachEntitlementsTx(ctx, tx, tenantID, *base.PeriodID); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit trial add product transaction: %w", err)
 	}
@@ -1510,10 +1460,10 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 	if err != nil {
 		return nil, err
 	}
-	if err := requireOpenInstitution(base); err != nil {
+	if err := requireOpenInstitution(base, s.today()); err != nil {
 		return nil, err
 	}
-	if normalizeEnum(base.AccountMode) != AccountModeTrial {
+	if normalizeEnum(base.PrimaryType) != string(contract.Trial) {
 		return nil, &ConflictError{Sentinel: ErrInstitutionNotOpened, Message: "只有试用机构可以延长试用"}
 	}
 	index, _, err := s.loadCatalogProducts(ctx)
@@ -1526,6 +1476,10 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 		if parsed, err := parseDateOnly(*base.ExpiredOn); err == nil {
 			currentEnd = parsed
 		}
+	}
+	// 业务规则：单次最多延长 30 天；一条试用合同累计（开始→到期）不超过 60 天。
+	if req.Days > 30 {
+		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: "单次最多延长 30 天"}
 	}
 	// 现到期日就是含首尾的最后一天，再延 N 天就是 +N
 	newEnd := addDaysDate(currentEnd, req.Days)
@@ -1541,6 +1495,9 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 	totalDays := int64(newEnd.Sub(periodStart).Hours()/24) + 1
 	if totalDays < 0 {
 		totalDays = 0
+	}
+	if totalDays > 60 {
+		return nil, &ConflictError{Sentinel: ErrPeerConflict, Message: fmt.Sprintf("试用累计最长 60 天，当前已 %d 天，无法再延长", totalDays-int64(req.Days))}
 	}
 	operator := s.service.resolveOperator(ctx, adminID)
 
@@ -1609,7 +1566,7 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 	if !extended {
 		return nil, ErrInstitutionNotOpened
 	}
-	if err := s.syncServicePeriodTx(ctx, tx, tenantID, AccountModeTrial, periodStart, newEnd); err != nil {
+	if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, AccountModeTrial); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

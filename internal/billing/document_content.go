@@ -235,12 +235,12 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 	}
 	if trial {
 		tips = []string{
-			"试用额度按试用天数折算，如不够使用，可随时联系顾问为您追加。",
-			"试用期内产生的病历、录音等数据在试用结束后仍会保留；如需转为正式服务，请联系您的专属顾问。",
+			"试用期至 " + formatDocumentDate(periodEnd) + "，试用额度有限，请合理安排使用。",
+			"试用期内贵机构产生的数据在试用结束后仍会保留；试用到期后服务自动停止，如需继续使用，请联系您的专属顾问。",
 		}
 	}
 
-	startItems := []string{"打开浏览器访问　**https://app.lingce.com**"}
+	startItems := []string{"打开浏览器访问　**https://portal.khgl.xyz**"}
 	if adminPhone := documentAdminPhone(institution); adminPhone != "" {
 		startItems = append(startItems, "使用管理员手机号 **"+formatDocumentPhone(adminPhone, " ")+
 			"** 登录；初始密码由您的专属顾问单独告知，首次登录后请及时修改")
@@ -252,8 +252,11 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 	if advisorName == "" {
 		advisorName = strings.TrimSpace(institution.Sales)
 	}
+	isBrandAdvisor := false
 	if advisorName == "" {
+		// 没有具体员工顾问：名字用「灵策顾问」，头像改用灵策品牌标记。
 		advisorName = "灵策顾问"
+		isBrandAdvisor = true
 	}
 
 	dateText := input.Date.Format("2006-01-02")
@@ -277,7 +280,7 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 		StartItems:     startItems,
 		TipSection:     "温馨提示",
 		TipItems:       tips,
-		Advisor:        billingpdf.Advisor{Name: advisorName, Phone: formatDocumentPhone(input.SalesPhone, "-")},
+		Advisor:        billingpdf.Advisor{Name: advisorName, Phone: formatDocumentPhone(input.SalesPhone, "-"), IsBrand: isBrandAdvisor},
 		AdvisorSection: "您的专属顾问",
 		Company:        company,
 		SignDate:       formatDocumentDate(dateText),

@@ -9,12 +9,15 @@ package billing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/freeasyman/lingce-api/internal/tenant"
 	"github.com/jackc/pgx/v5"
 )
@@ -67,6 +70,10 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 		query.OrgID = *scope.OrgID
 	}
 
+	total, err := s.store.CountInstitutions(ctx, query)
+	if err != nil {
+		return nil, err
+	}
 	bases, err := s.store.ListInstitutionBases(ctx, query)
 	if err != nil {
 		return nil, err
@@ -86,7 +93,7 @@ func (s *InstitutionService) ListInstitutions(ctx context.Context, query Institu
 	for _, base := range bases {
 		items = append(items, buildInstitution(base, nil, entitlementsByTenant[base.ID], today))
 	}
-	return &InstitutionListResult{Items: items, Total: int64(len(items)), IsMock: false}, nil
+	return &InstitutionListResult{Items: items, Total: total, IsMock: false}, nil
 }
 
 // GetInstitution 返回机构详情（不做数据权限校验，内部调用用）。
@@ -95,55 +102,34 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 	if err != nil {
 		return nil, err
 	}
-	entitlementRows, err := s.store.ListInstitutionEntitlementRows(ctx, []int64{tenantID})
-	if err != nil {
-		return nil, err
-	}
-	admins, err := s.store.ListInstitutionAdminRows(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	receivables, err := s.store.ListInstitutionReceivables(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	payLogs, err := s.store.ListInstitutionPayLogs(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	consumptions, err := s.store.ListInstitutionConsumptions(ctx, tenantID, 100)
-	if err != nil {
-		return nil, err
-	}
-
-	documents, err := s.store.ListDocumentsByTenant(ctx, tenantID)
-	if err != nil {
+	// 6 个只读查询彼此独立，并发执行：远程库每次往返约 70-90ms，
+	// 串行会让详情页累计到 1s 以上；并发后约为最慢一条的耗时。
+	var (
+		entitlementRows []entitlementRow
+		admins          []institutionAdminRow
+		receivables     []InstitutionReceivable
+		payLogs         []InstitutionPayLog
+		consumptions    []InstitutionConsumption
+		documents       []Document
+		errEnt, errAdm, errRec, errPay, errCon, errDoc error
+		wg              sync.WaitGroup
+	)
+	wg.Add(6)
+	go func() { defer wg.Done(); entitlementRows, errEnt = s.store.ListInstitutionEntitlementRows(ctx, []int64{tenantID}) }()
+	go func() { defer wg.Done(); admins, errAdm = s.store.ListInstitutionAdminRows(ctx, tenantID) }()
+	go func() { defer wg.Done(); receivables, errRec = s.store.ListInstitutionReceivables(ctx, tenantID) }()
+	go func() { defer wg.Done(); payLogs, errPay = s.store.ListInstitutionPayLogs(ctx, tenantID) }()
+	go func() { defer wg.Done(); consumptions, errCon = s.store.ListInstitutionConsumptions(ctx, tenantID, 100) }()
+	go func() { defer wg.Done(); documents, errDoc = s.store.ListDocumentsByTenant(ctx, tenantID) }()
+	wg.Wait()
+	if err := errors.Join(errEnt, errAdm, errRec, errPay, errCon, errDoc); err != nil {
 		return nil, err
 	}
 
 	item := buildInstitution(base, nil, groupEntitlementRows(entitlementRows)[tenantID], s.today())
-	var trialStart, trialEnd *time.Time
-	if err := s.store.pool.QueryRow(ctx, `
-SELECT new_system_trial_started_at, new_system_trial_ends_at
-FROM tenants WHERE id = $1`, tenantID).Scan(&trialStart, &trialEnd); err != nil {
-		return nil, fmt.Errorf("read new-system trial: %w", err)
-	}
-	if trialEnd != nil {
-		status := "ended"
-		remaining := 0
-		if trialEnd.After(time.Now()) {
-			status = "active"
-			remaining = int(time.Until(*trialEnd).Hours()/24) + 1
-		}
-		started := ""
-		if trialStart != nil {
-			started = trialStart.Format("2006-01-02")
-		}
-		item.NewSystemTrial = &InstitutionNewSystemTrial{
-			StartedAt:     started,
-			EndsAt:        trialEnd.Format("2006-01-02"),
-			Status:        status,
-			RemainingDays: remaining,
+	if strings.TrimSpace(base.ContractsJSON) != "" {
+		if err := json.Unmarshal([]byte(base.ContractsJSON), &item.Contracts); err != nil {
+			return nil, fmt.Errorf("decode institution contracts: %w", err)
 		}
 	}
 	item.Documents = make([]InstitutionDocument, 0, len(documents))
@@ -193,8 +179,9 @@ func (s *InstitutionService) requireTenantAccess(ctx context.Context, tenantID, 
 
 // buildInstitution 把基础行 + 科室 + 额度组装成前端契约的 Institution。
 func buildInstitution(base institutionBaseRow, departments []string, entitlements []entitlementRow, today time.Time) Institution {
+	// 模式由主体合同类型推导（两套分开后 account_mode 不再随新产品动作变化）。
 	mode := AccountModeFormal
-	if normalizeEnum(base.AccountMode) == AccountModeTrial {
+	if normalizeEnum(base.PrimaryType) == string(contract.Trial) {
 		mode = AccountModeTrial
 	}
 
@@ -207,7 +194,7 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 			end = *base.ExpiredOn
 		}
 	}
-	status := institutionStatus(base, mode, today)
+	status := institutionStatus(base, today)
 
 	item := Institution{
 		ID:          base.ID,
@@ -230,6 +217,8 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 		Start:   start,
 		End:     end,
 		Mode:    mode,
+		// 历史试用次数（含当前），列表/详情展示「已试用 N 次」。
+		TrialCount: base.TrialCount,
 		// 暂停仍然算「已开通」：服务期未结束，只是扣量与登录闸门被临时关上。
 		Open:         status != InstitutionStatusUnopened,
 		Status:       status,
@@ -254,35 +243,42 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 }
 
 // institutionStatus 推导机构服务状态，优先级：
-// 已暂停 > 未开通 > 已到期 > 试用中 > 正常。
+// 已暂停 > 未开通 > 已过期 > 试用中 > 正式。
 //
-// 「已到期」同时认服务期 status=expired 与 expired_on < 今天：到期任务每天跑一次，
-// 白天到期但任务还没跑时，接口也不能继续显示「正常」。
-func institutionStatus(base institutionBaseRow, mode string, today time.Time) string {
+// 唯一口径：主体合同行（formal/trial）是否覆盖今天。体验行不参与状态推导。
+// 「已过期」覆盖两类：有 active 主体行但到期日已过，或仅有 expired 审计行。
+func institutionStatus(base institutionBaseRow, today time.Time) string {
 	// 暂停优先于到期：暂停期间即使跨过到期日，状态徽标仍显示「已暂停」，
 	// 扣量闸门返回 SUBSCRIPTION_PAUSED；恢复后自然落到「已到期」。
 	if base.PausedAt != nil {
 		return InstitutionStatusPaused
 	}
-	if base.PeriodID == nil {
-		return InstitutionStatusUnopened
-	}
-	switch normalizeEnum(base.PeriodStatus) {
-	case PeriodStatusExpired:
-		return InstitutionStatusExpired
-	case PeriodStatusActive:
-	default:
-		return InstitutionStatusUnopened
-	}
-	if base.ExpiredOn != nil {
-		if end, err := parseDateOnly(*base.ExpiredOn); err == nil && end.Before(today) {
+	primary := primaryCoveringType(base, today)
+	if primary == "" {
+		if base.PeriodID != nil && (normalizeEnum(base.PeriodStatus) == PeriodStatusActive || normalizeEnum(base.PeriodStatus) == PeriodStatusExpired) {
 			return InstitutionStatusExpired
 		}
+		return InstitutionStatusUnopened
 	}
-	if normalizeEnum(mode) == AccountModeTrial {
+	if primary == string(contract.Trial) {
 		return InstitutionStatusTrial
 	}
 	return InstitutionStatusActive
+}
+
+// primaryCoveringType 返回覆盖今天的主体合同类型（formal/trial）；没有则返回 ""。
+// 覆盖 = 行 status 为 active 且 [started_on, expired_on] 包含今天。
+func primaryCoveringType(base institutionBaseRow, today time.Time) string {
+	if base.PrimaryType == "" || normalizeEnum(base.PrimaryStatus) != PeriodStatusActive ||
+		base.PrimaryStartedOn == nil || base.PrimaryExpiredOn == nil {
+		return ""
+	}
+	start, startErr := parseDateOnly(*base.PrimaryStartedOn)
+	end, endErr := parseDateOnly(*base.PrimaryExpiredOn)
+	if startErr != nil || endErr != nil || start.After(today) || end.Before(today) {
+		return ""
+	}
+	return normalizeEnum(base.PrimaryType)
 }
 
 // groupEntitlementRows 按租户分组额度行。
@@ -769,10 +765,10 @@ func (s *InstitutionService) CreateSubscriptionPeriod(ctx context.Context, tenan
 	}
 	if status == PeriodStatusActive {
 		accountMode := AccountModeFormal
-		if normalizeEnum(base.AccountMode) == AccountModeTrial || source == PeriodSourceTrial {
+		if normalizeEnum(base.PrimaryType) == string(contract.Trial) || source == PeriodSourceTrial {
 			accountMode = AccountModeTrial
 		}
-		if err := s.syncServicePeriodTx(ctx, tx, tenantID, accountMode, startedOn, expiredOn); err != nil {
+		if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, accountMode); err != nil {
 			return SubscriptionPeriod{}, err
 		}
 	}
@@ -849,10 +845,10 @@ WHERE tenant_id = $1 AND id <> $2 AND status = 'active'`, tenantID, periodID, Pe
 	}
 	if status == PeriodStatusActive {
 		accountMode := AccountModeFormal
-		if normalizeEnum(base.AccountMode) == AccountModeTrial || source == PeriodSourceTrial {
+		if normalizeEnum(base.PrimaryType) == string(contract.Trial) || source == PeriodSourceTrial {
 			accountMode = AccountModeTrial
 		}
-		if err := s.syncServicePeriodTx(ctx, tx, tenantID, accountMode, startedOn, expiredOn); err != nil {
+		if err := s.ensurePlanAndFeatureTx(ctx, tx, tenantID, accountMode); err != nil {
 			return SubscriptionPeriod{}, err
 		}
 	}
@@ -912,8 +908,9 @@ func normalizeSubscriptionPeriodPayload(payload SubscriptionPeriodPayload, today
 	return startedOn, expiredOn, status, source, nil
 }
 
-// syncServicePeriodTx 同步 tenant_subscriptions 与 tenants 有效期（两张历史表保持自洽）。
-func (s *InstitutionService) syncServicePeriodTx(ctx context.Context, tx pgx.Tx, tenantID int64, accountMode string, startedOn, expiredOn time.Time) error {
+// ensurePlanAndFeatureTx 保证订阅套餐与功能组分配存在（新产品菜单鉴权依赖）。
+// 两套分开后，新产品动作只写合同表 + 额度 + 功能组，不再写 tenants / tenant_subscriptions。
+func (s *InstitutionService) ensurePlanAndFeatureTx(ctx context.Context, tx pgx.Tx, tenantID int64, accountMode string) error {
 	planCode, planName, planDays := "standard", "标准版", 365
 	if accountMode == AccountModeTrial {
 		planCode, planName, planDays = "trial", "试用版", 14
@@ -922,10 +919,7 @@ func (s *InstitutionService) syncServicePeriodTx(ctx context.Context, tx pgx.Tx,
 	if err != nil {
 		return err
 	}
-	if err := s.store.UpsertTenantSubscriptionTx(ctx, tx, tenantID, planID, startedOn, expiredOn); err != nil {
-		return err
-	}
-	return s.store.SyncTenantValidityTx(ctx, tx, tenantID, accountMode, startedOn, expiredOn)
+	return s.store.EnsureTenantFeatureAssignmentTx(ctx, tx, tenantID, planID)
 }
 
 // subscriptionPeriodFromRow 转前端 DTO。

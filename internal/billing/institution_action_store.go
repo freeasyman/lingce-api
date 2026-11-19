@@ -335,12 +335,12 @@ WHERE tenant_id = $1
 }
 
 // InsertActivePeriodTx 插入一条 active 服务期。
-func (s *Store) InsertActivePeriodTx(ctx context.Context, tx pgx.Tx, tenantID int64, startedOn, expiredOn time.Time, source string) (int64, error) {
+func (s *Store) InsertActivePeriodTx(ctx context.Context, tx pgx.Tx, tenantID int64, startedOn, expiredOn time.Time, source, contractType string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `
-INSERT INTO subscription_periods (tenant_id, started_on, expired_on, status, source)
-VALUES ($1, $2::date, $3::date, 'active', $4)
-RETURNING id`, tenantID, formatDateOnly(startedOn), formatDateOnly(expiredOn), source).Scan(&id)
+INSERT INTO subscription_periods (tenant_id, started_on, expired_on, status, source, contract_type)
+VALUES ($1, $2::date, $3::date, 'active', $4, $5)
+RETURNING id`, tenantID, formatDateOnly(startedOn), formatDateOnly(expiredOn), source, contractType).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return 0, ErrPeerConflict
@@ -355,7 +355,8 @@ func (s *Store) ExtendActivePeriodTx(ctx context.Context, tx pgx.Tx, tenantID in
 	tag, err := tx.Exec(ctx, `
 UPDATE subscription_periods
 SET expired_on = $2::date, updated_at = NOW()
-WHERE tenant_id = $1 AND status = 'active'`, tenantID, formatDateOnly(expiredOn))
+WHERE tenant_id = $1 AND status = 'active'
+  AND contract_type IN ('formal', 'trial')`, tenantID, formatDateOnly(expiredOn))
 	if err != nil {
 		return false, fmt.Errorf("extend active subscription period: %w", err)
 	}
@@ -427,23 +428,23 @@ SELECT id FROM tenant_subscription_plans WHERE lower(COALESCE(code, '')) = lower
 	return id, nil
 }
 
-// UpsertTenantSubscriptionTx 同步 tenant_subscriptions（存量客户侧逻辑仍读这张表）。
-func (s *Store) UpsertTenantSubscriptionTx(ctx context.Context, tx pgx.Tx, tenantID, planID int64, startedOn, expiredOn time.Time) error {
-	if _, err := tx.Exec(ctx, `
-INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, start_date, end_date, started_on, expired_on, updated_at)
-VALUES ($1, $2, 'active', $3::date, $4::date, $3::date, $4::date, NOW())
-ON CONFLICT (tenant_id) DO UPDATE
-SET plan_id = EXCLUDED.plan_id,
-    status = 'active',
-    start_date = EXCLUDED.start_date,
-    end_date = EXCLUDED.end_date,
-    started_on = EXCLUDED.started_on,
-    expired_on = EXCLUDED.expired_on,
-    updated_at = NOW()`, tenantID, planID, formatDateOnly(startedOn), formatDateOnly(expiredOn)); err != nil {
-		return fmt.Errorf("upsert tenant subscription: %w", err)
+// AttachEntitlementsTx 把尚未归属合同的额度行挂到指定合同行（新产品额度归属）。
+func (s *Store) AttachEntitlementsTx(ctx context.Context, tx pgx.Tx, tenantID, periodID int64) error {
+	if periodID <= 0 {
+		return nil
 	}
-	// 订阅套餐绑定功能组时同步 tenant_feature_assignments；
-	// 否则机构侧菜单鉴权（如 /departments）会因缺行直接 403。
+	if _, err := tx.Exec(ctx, `
+UPDATE product_entitlements
+SET period_id = $2, updated_at = NOW()
+WHERE tenant_id = $1 AND period_id IS NULL`, tenantID, periodID); err != nil {
+		return fmt.Errorf("attach entitlements to period: %w", err)
+	}
+	return nil
+}
+
+// EnsureTenantFeatureAssignmentTx 同步套餐功能组到 tenant_feature_assignments（新产品菜单鉴权用）。
+// 两套分开后，新产品动作不再写 tenant_subscriptions 与 tenants（老产品数据）。
+func (s *Store) EnsureTenantFeatureAssignmentTx(ctx context.Context, tx pgx.Tx, tenantID, planID int64) error {
 	if _, err := tx.Exec(ctx, `
 INSERT INTO tenant_feature_assignments (tenant_id, group_id, created_at, updated_at)
 SELECT $1, p.feature_group_id, NOW(), NOW()
@@ -451,24 +452,6 @@ FROM tenant_subscription_plans p
 WHERE p.id = $2 AND p.feature_group_id IS NOT NULL
 ON CONFLICT (tenant_id) DO UPDATE SET group_id = EXCLUDED.group_id, updated_at = NOW()`, tenantID, planID); err != nil {
 		return fmt.Errorf("sync tenant feature assignment from plan: %w", err)
-	}
-	return nil
-}
-
-// SyncTenantValidityTx 把服务期同步到 tenants 的有效期列：
-// 客户侧登录校验读 COALESCE(valid_to, service_expired_on)，不同步会出现
-// 「服务期已续费但账号仍被判定过期」的问题。
-func (s *Store) SyncTenantValidityTx(ctx context.Context, tx pgx.Tx, tenantID int64, accountMode string, startedOn, expiredOn time.Time) error {
-	if _, err := tx.Exec(ctx, `
-UPDATE tenants
-SET account_mode = $2,
-    valid_from = $3::date::timestamp,
-    valid_to = $4::date::timestamp,
-    service_started_on = $3::date,
-    service_expired_on = $4::date,
-    updated_at = NOW()
-WHERE id = $1`, tenantID, accountMode, formatDateOnly(startedOn), formatDateOnly(expiredOn)); err != nil {
-		return fmt.Errorf("sync tenant validity: %w", err)
 	}
 	return nil
 }
