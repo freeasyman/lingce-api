@@ -70,6 +70,7 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("POST", institution+"/{id}/documents", h.GenerateInstitutionDocument),
 		ops("GET", institution+"/{id}/documents", h.ListInstitutionDocuments),
 		ops("GET", base+"/documents/{docId}/file", h.DownloadBillingDocument),
+		ops("GET", base+"/documents/{docId}/preview", h.PreviewBillingDocument),
 		// 服务期
 		ops("GET", institution+"/{id}/periods", h.ListInstitutionPeriods),
 		ops("POST", institution+"/{id}/periods", h.CreateInstitutionPeriod),

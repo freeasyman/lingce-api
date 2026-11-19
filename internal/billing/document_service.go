@@ -106,28 +106,28 @@ func (s *DocumentService) Generate(ctx context.Context, tenantID, adminID int64,
 	return nil, fmt.Errorf("billing: 文档编号连续冲突，请稍后重试")
 }
 
-// renderLetter 按当前机构数据（机构信息、产品、销售归属）渲染一份通知函 PDF。
-// 生成与「销售变更后重排」共用同一份排版逻辑，保证函内容永远跟随当前数据。
-func (s *DocumentService) renderLetter(ctx context.Context, tenantID, adminID int64, docType, docNo string, now time.Time) ([]byte, error) {
+// buildLetter 按当前机构数据（机构信息、产品、销售归属）组装通知函内容 DTO。
+// 生成 PDF、重排、前端预览三处共用同一份数据，保证内容永远一致。
+func (s *DocumentService) buildLetter(ctx context.Context, tenantID, adminID int64, docType, docNo string, now time.Time) (billingpdf.Letter, error) {
 	institution, err := s.institutions.GetInstitutionForAdmin(ctx, tenantID, adminID)
 	if err != nil {
-		return nil, err
+		return billingpdf.Letter{}, err
 	}
 	if !institution.Open {
-		return nil, invalidf("机构尚未开通，无法生成通知函")
+		return billingpdf.Letter{}, invalidf("机构尚未开通，无法生成通知函")
 	}
 
 	productCodes := documentProductCodes(institution.Products)
 	productNames, err := s.store.ListProductNames(ctx, productCodes)
 	if err != nil {
-		return nil, err
+		return billingpdf.Letter{}, err
 	}
 	salesName, salesPhone, err := s.store.GetTenantSalesPhone(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return billingpdf.Letter{}, err
 	}
 
-	letter, err := buildDocumentLetter(documentLetterInput{
+	return buildDocumentLetter(documentLetterInput{
 		Institution:  institution,
 		DocType:      docType,
 		DocNo:        docNo,
@@ -137,6 +137,11 @@ func (s *DocumentService) renderLetter(ctx context.Context, tenantID, adminID in
 		SalesPhone:   salesPhone,
 		Company:      s.company,
 	})
+}
+
+// renderLetter 渲染一份通知函 PDF。
+func (s *DocumentService) renderLetter(ctx context.Context, tenantID, adminID int64, docType, docNo string, now time.Time) ([]byte, error) {
+	letter, err := s.buildLetter(ctx, tenantID, adminID, docType, docNo, now)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +150,22 @@ func (s *DocumentService) renderLetter(ctx context.Context, tenantID, adminID in
 		return nil, fmt.Errorf("渲染通知函失败: %w", err)
 	}
 	return content, nil
+}
+
+// Preview 返回一份通知函的结构化内容，供前端直接排版预览（不解析 PDF）。
+func (s *DocumentService) Preview(ctx context.Context, docID, adminID int64) (*billingpdf.Letter, error) {
+	doc, err := s.store.GetDocument(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.institutions.requireTenantAccess(ctx, doc.TenantID, adminID); err != nil {
+		return nil, err
+	}
+	letter, err := s.buildLetter(ctx, doc.TenantID, adminID, doc.DocType, doc.DocNo, doc.GeneratedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &letter, nil
 }
 
 // RegenerateForTenant 用当前数据（机构信息、产品、销售归属）重排该机构已生成的通知函。

@@ -42,6 +42,28 @@ func (h *Handler) GenerateInstitutionDocument(w http.ResponseWriter, r *http.Req
 	httputil.WriteSuccess(w, map[string]any{"data": item})
 }
 
+// PreviewBillingDocument 返回一份通知函的结构化内容（前端直接排版预览，不解析 PDF）。
+func (h *Handler) PreviewBillingDocument(w http.ResponseWriter, r *http.Request) {
+	docID, ok := requirePathID(w, r, "docId", "Invalid document ID")
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	if h.documents == nil {
+		httputil.WriteInternalError(w, "文档能力未装配")
+		return
+	}
+	letter, err := h.documents.Preview(r.Context(), docID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, letter)
+}
+
 // ListInstitutionDocuments 返回机构下已生成的通知函记录（新→旧）。
 func (h *Handler) ListInstitutionDocuments(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := requireInstitutionID(w, r)
