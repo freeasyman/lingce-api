@@ -78,6 +78,10 @@ var (
 		"deal.ledger.correct", "deal.quotes.read", "deal.quotes.manage", "deal.product.manage",
 		"deal.permission.manage",
 	}
+	contentAdminAbilities = []string{
+		"content.item.read", "content.item.create", "content.item.edit", "content.item.publish",
+		"content.template.manage", "content.analysis.read", "content.permission.manage",
+	}
 )
 
 var productGrantSpecs = []productGrantSpec{
@@ -86,7 +90,7 @@ var productGrantSpecs = []productGrantSpec{
 	{Product: ProductFollowup, Table: "followup_permission_assignments", RoleCode: "followup_admin", Abilities: followupAdminAbilities},
 	{Product: ProductPatientOps, Table: "patient_ops_permission_assignments", RoleCode: "patient_ops_admin", Abilities: patientOpsAdminAbilities},
 	{Product: ProductDealExpert, Table: "deal_expert_permission_assignments", RoleCode: "deal_admin", Abilities: dealExpertAdminAbilities},
-	{Product: ProductContent, SkipReason: "no per-employee permission table; content access is tenant-scoped"},
+	{Product: ProductContent, Table: "content_permission_assignments", RoleCode: "content_admin", Abilities: contentAdminAbilities},
 }
 
 // AdminAbilities 返回某产品默认管理员的完整能力包（只读副本）。
@@ -103,7 +107,7 @@ func AdminAbilities(product string) []string {
 //
 // isAdmin=true 时按产品管理员口径 upsert（enabled + admin 角色 + 完整能力包）；
 // isAdmin=false 时把该产品的权限行停用（enabled=false），不物理删除、保留可追溯。
-// content 无独立权限表，返回 skipped。
+// 六个产品（含获客先锋 content）各写自己的 *_permission_assignments，口径一致。
 func SetProductAdmin(ctx context.Context, q QueryExecer, product string, tenantID, employeeID, actorID int64, isAdmin bool) (*GrantResult, error) {
 	if q == nil {
 		return nil, fmt.Errorf("permission: queryer is nil")
@@ -204,6 +208,15 @@ func upsertAdminGrant(ctx context.Context, q QueryExecer, spec productGrantSpec,
 			DO UPDATE SET enabled = TRUE, role_code = EXCLUDED.role_code,
 				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
 		`, table), tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	case ProductContent:
+		return q.Exec(ctx, `
+			INSERT INTO content_permission_assignments
+				(tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, $4::jsonb, $5, $5)
+			ON CONFLICT (tenant_id, employee_id)
+			DO UPDATE SET enabled = TRUE, role_code = EXCLUDED.role_code,
+				abilities_json = EXCLUDED.abilities_json, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
 	default:
 		return pgconn.CommandTag{}, fmt.Errorf("permission: unsupported product %q", spec.Product)
 	}
@@ -222,8 +235,7 @@ func disableProductGrant(ctx context.Context, q QueryExecer, spec *productGrantS
 // 已存在的人工配置（包括被停用、被降为 staff 的行）一律不覆盖。
 // dryRun 只查询是否存在，不写库。
 //
-// 返回每个产品的处理结果；没有权限表的产品（content）以及表尚未迁移的产品
-// 返回 skipped + reason，不阻断其它产品。
+// 返回每个产品的处理结果；表尚未迁移的产品返回 skipped + reason，不阻断其它产品。
 func EnsureInstitutionAdminGrants(ctx context.Context, q QueryExecer, tenantID, employeeID, actorID int64, dryRun bool) ([]GrantResult, error) {
 	if q == nil {
 		return nil, fmt.Errorf("permission: queryer is nil")
@@ -324,6 +336,13 @@ func insertAdminGrant(ctx context.Context, q QueryExecer, spec productGrantSpec,
 			INSERT INTO deal_expert_permission_assignments
 				(tenant_id, employee_id, enabled, role_code, abilities_json, data_scope, visible_employee_ids, created_by, updated_by)
 			VALUES ($1, $2, TRUE, $3, $4::jsonb, 'tenant', '{}'::bigint[], $5, $5)
+			ON CONFLICT (tenant_id, employee_id) DO NOTHING
+		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
+	case ProductContent:
+		tag, err = q.Exec(ctx, `
+			INSERT INTO content_permission_assignments
+				(tenant_id, employee_id, enabled, role_code, abilities_json, created_by, updated_by)
+			VALUES ($1, $2, TRUE, $3, $4::jsonb, $5, $5)
 			ON CONFLICT (tenant_id, employee_id) DO NOTHING
 		`, tenantID, employeeID, spec.RoleCode, string(raw), actor)
 	case ProductCompliance, ProductFollowup:

@@ -31,7 +31,11 @@ func TestAdminAbilityDefaultsMatchProductPackages(t *testing.T) {
 			t.Fatalf("%s admin abilities mismatch:\n got: %v\nwant: %v", tc.product, got, tc.want)
 		}
 	}
-	if got := permission.AdminAbilities(permission.ProductContent); got != nil {
-		t.Fatalf("content admin abilities = %v, want nil (no assignment table)", got)
+	contentAbilities := permission.AdminAbilities(permission.ProductContent)
+	if len(contentAbilities) == 0 {
+		t.Fatal("content admin abilities empty, want content admin ability set (content_permission_assignments)")
+	}
+	if !slices.Contains(contentAbilities, "content.permission.manage") {
+		t.Fatalf("content admin abilities = %v, want to contain content.permission.manage", contentAbilities)
 	}
 }

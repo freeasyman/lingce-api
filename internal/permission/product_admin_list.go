@@ -18,6 +18,7 @@ var productAdminTables = []struct {
 	{ProductFollowup, "followup_permission_assignments", "role_code", "followup_admin"},
 	{ProductPatientOps, "patient_ops_permission_assignments", "role_code", "patient_ops_admin"},
 	{ProductDealExpert, "deal_expert_permission_assignments", "role_code", "deal_admin"},
+	{ProductContent, "content_permission_assignments", "role_code", "content_admin"},
 }
 
 // ProductAdminRow 是某产品的管理员员工。
@@ -27,7 +28,7 @@ type ProductAdminRow struct {
 	EmployeeName string `json:"employee_name"`
 }
 
-// ListProductAdmins 返回该机构各产品当前的管理员员工。
+// ListProductAdmins 返回该机构各产品当前的管理员员工（六个产品各一张权限表）。
 func ListProductAdmins(ctx context.Context, q Queryer, tenantID int64) ([]ProductAdminRow, error) {
 	if q == nil {
 		return nil, fmt.Errorf("permission: queryer is nil")
@@ -67,5 +68,6 @@ ORDER BY a.employee_id`, spec.Table, spec.RoleColumn), tenantID, spec.RoleCode)
 			return nil, err
 		}
 	}
+
 	return result, nil
 }

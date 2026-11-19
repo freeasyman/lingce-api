@@ -183,27 +183,27 @@ func TestEnsureInstitutionAdminGrantsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if got := countStatus(dry, permission.GrantStatusWouldGrant); got != 5 {
-		t.Fatalf("dry run would_grant = %d, want 5 (%#v)", got, dry)
+	if got := countStatus(dry, permission.GrantStatusWouldGrant); got != 6 {
+		t.Fatalf("dry run would_grant = %d, want 6 (%#v)", got, dry)
 	}
-	if got := countStatus(dry, permission.GrantStatusSkipped); got != 1 {
-		t.Fatalf("dry run skipped = %d, want 1 for content (%#v)", got, dry)
+	if got := countStatus(dry, permission.GrantStatusSkipped); got != 0 {
+		t.Fatalf("dry run skipped = %d, want 0 (%#v)", got, dry)
 	}
 
 	first, err := permission.EnsureInstitutionAdminGrants(ctx, pool, f.TenantID, employeeID, employeeID, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if got := countStatus(first, permission.GrantStatusGranted); got != 5 {
-		t.Fatalf("apply granted = %d, want 5 (%#v)", got, first)
+	if got := countStatus(first, permission.GrantStatusGranted); got != 6 {
+		t.Fatalf("apply granted = %d, want 6 (%#v)", got, first)
 	}
 
 	second, err := permission.EnsureInstitutionAdminGrants(ctx, pool, f.TenantID, employeeID, employeeID, false)
 	if err != nil {
 		t.Fatalf("re-apply: %v", err)
 	}
-	if got := countStatus(second, permission.GrantStatusExists); got != 5 {
-		t.Fatalf("re-apply exists = %d, want 5 (%#v)", got, second)
+	if got := countStatus(second, permission.GrantStatusExists); got != 6 {
+		t.Fatalf("re-apply exists = %d, want 6 (%#v)", got, second)
 	}
 
 	for _, table := range []string{
@@ -212,6 +212,7 @@ func TestEnsureInstitutionAdminGrantsIdempotent(t *testing.T) {
 		"followup_permission_assignments",
 		"patient_ops_permission_assignments",
 		"deal_expert_permission_assignments",
+		"content_permission_assignments",
 	} {
 		var count int
 		if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE tenant_id=$1 AND employee_id=$2`, table), f.TenantID, employeeID).Scan(&count); err != nil {

@@ -1,8 +1,7 @@
 package permission_test
 
 // 机构建档默认授权的集成测试：真实调用 tenant.Store.CreateTenant，
-// 验证「新建机构的主管理员在五个有权限表的产品上默认就是管理员」。
-// 内容获客没有独立人员权限表，不在数据层发放（运行时也不需要单独判定）。
+// 验证「新建机构的主管理员在六个产品上默认就是管理员」（含获客先锋 content）。
 
 import (
 	"context"
@@ -62,6 +61,7 @@ func TestCreateTenantGrantsProductAdminToDefaultAdmin(t *testing.T) {
 		{table: "followup_permission_assignments", roleColumn: "role_code", roleCode: "followup_admin"},
 		{table: "patient_ops_permission_assignments", roleColumn: "role_code", roleCode: "patient_ops_admin"},
 		{table: "deal_expert_permission_assignments", roleColumn: "role_code", roleCode: "deal_admin"},
+		{table: "content_permission_assignments", roleColumn: "role_code", roleCode: "content_admin"},
 	} {
 		var enabled bool
 		var roleCode string

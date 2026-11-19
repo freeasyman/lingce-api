@@ -1,6 +1,5 @@
 // Command institution-product-admin-backfill 给存量机构的主管理员补齐六个产品的
-// 默认管理员权限（EMR / 合规卫士 / 随访顾问 / 客户总监 / 赢客专家；内容获客没有
-// 独立人员权限表，跳过并记录）。
+// 默认管理员权限（EMR / 合规卫士 / 随访顾问 / 客户总监 / 赢客专家 / 获客先锋）。
 //
 // 背景：机构建档时只写了 employees + institution_employee_roles(role_code=admin)，
 // 没有往各产品自己的 *_permission_assignments 表写记录，导致主管理员登录每个产品
