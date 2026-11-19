@@ -89,7 +89,6 @@ enabled = false
 dry_run = true
 from = "no-reply@notify.khgl.xyz"
 link_base = "https://khgl.xyz/s"
-whitelist = ["freeasyman@yeah.net", "yiliang@lingce.pro"]
 smtp_host = "smtpdm.aliyun.com"
 smtp_port = 465
 smtp_user = "no-reply@notify.khgl.xyz"

@@ -25,7 +25,7 @@ type emailRecipient struct {
 	Name       string
 	Email      string
 	Kind       string // to | cc
-	Skip       string // 非空表示不发送：no_email / not_in_whitelist / employee_not_found
+	Skip       string // 非空表示不发送：no_email / employee_not_found
 }
 
 // EmailDeliveryResult 是单收件人投递结果（API 返回）。
@@ -254,8 +254,6 @@ func (s *Service) buildRecipients(ctx context.Context, tenantID int64, employeeI
 		recipient := emailRecipient{EmployeeID: employee.ID, Name: employee.Name, Email: employee.Email, Kind: kind}
 		if strings.TrimSpace(employee.Email) == "" {
 			recipient.Skip = "no_email"
-		} else if !emailWhitelisted(s.emailCfg.Whitelist, employee.Email) {
-			recipient.Skip = "not_in_whitelist"
 		}
 		recipients = append(recipients, recipient)
 	}
@@ -372,20 +370,6 @@ func normalizeEventType(role string) string {
 	default:
 		return "consultant"
 	}
-}
-
-// emailWhitelisted 大小写不敏感地匹配邮箱白名单；空名单一律拒绝，避免误发。
-func emailWhitelisted(whitelist []string, email string) bool {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return false
-	}
-	for _, item := range whitelist {
-		if strings.ToLower(strings.TrimSpace(item)) == email {
-			return true
-		}
-	}
-	return false
 }
 
 func uniquePositive(ids []int64) []int64 {

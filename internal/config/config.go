@@ -112,17 +112,16 @@ func (c DealPushConfig) IsDryRun() bool {
 
 // DealEmailConfig 是赢客专家邮件提醒配置。
 // 默认 enabled=false、dry_run=true，只记录投递结果不发信；开启真实发送后仍强制
-// 通过 whitelist 过滤，避免误发给真实员工。smtp_* 留空时回退 external.ticket_notify。
+// 收件人按员工邮箱发送；smtp_* 留空时回退 external.ticket_notify。
 type DealEmailConfig struct {
-	Enabled   bool     `toml:"enabled"`
-	DryRun    *bool    `toml:"dry_run"`
-	From      string   `toml:"from"`
-	LinkBase  string   `toml:"link_base"`
-	Whitelist []string `toml:"whitelist"`
-	SMTPHost  string   `toml:"smtp_host"`
-	SMTPPort  int      `toml:"smtp_port"`
-	SMTPUser  string   `toml:"smtp_user"`
-	SMTPPass  string   `toml:"smtp_pass"`
+	Enabled  bool   `toml:"enabled"`
+	DryRun   *bool  `toml:"dry_run"`
+	From     string `toml:"from"`
+	LinkBase string `toml:"link_base"`
+	SMTPHost string `toml:"smtp_host"`
+	SMTPPort int    `toml:"smtp_port"`
+	SMTPUser string `toml:"smtp_user"`
+	SMTPPass string `toml:"smtp_pass"`
 }
 
 // IsDryRun 返回是否干跑：未显式配置时默认 true，保证不会误发邮件。

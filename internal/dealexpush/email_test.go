@@ -180,10 +180,10 @@ func (f *fakeEmailMailer) Send(_ context.Context, msg EmailMessage) (string, err
 	return fmt.Sprintf("msg-%d", f.calls), nil
 }
 
-func testEmailConfig(dryRun bool, whitelist ...string) config.DealEmailConfig {
+func testEmailConfig(dryRun bool, _ ...string) config.DealEmailConfig {
 	return config.DealEmailConfig{
 		Enabled: true, DryRun: &dryRun, From: "noreply@test.local",
-		LinkBase: "https://test.local/s", Whitelist: whitelist,
+		LinkBase: "https://test.local/s",
 	}
 }
 
@@ -289,38 +289,6 @@ func TestResolveEmailRecipientsEmptyRouteFallsBackToDefault(t *testing.T) {
 	}
 	if len(recipients) != 1 || recipients[0].EmployeeID != 42 || recipients[0].Kind != "to" {
 		t.Fatalf("empty route must fall back to default owner, got %+v", recipients)
-	}
-}
-
-func TestEmailWhitelistFiltersRecipients(t *testing.T) {
-	store, mailer, service, consultantEmail, _ := newEmailFixture(t)
-	service.emailCfg = testEmailConfig(false, consultantEmail)
-	store.routes[routeKey(1, 42, "consultant")] = &AlertRoute{
-		ID: 1, TenantID: 1, OwnerEmployeeID: 42, EventType: "consultant",
-		ToEmployeeIDs: []int64{7, 42}, CcEmployeeIDs: []int64{8},
-	}
-	results, err := service.SendEventEmail(context.Background(), 9, 1)
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	if mailer.calls != 1 || len(mailer.messages) != 1 || mailer.messages[0].To != consultantEmail {
-		t.Fatalf("mailer calls=%d messages=%+v, want only whitelisted consultant", mailer.calls, mailer.messages)
-	}
-	if len(results) != 3 {
-		t.Fatalf("results = %d, want 3", len(results))
-	}
-	statuses := map[int64]string{}
-	for _, result := range results {
-		statuses[result.RecipientEmployeeID] = result.Status + ":" + result.Error
-	}
-	if statuses[42] != "sent:" {
-		t.Fatalf("consultant status = %q", statuses[42])
-	}
-	if statuses[7] != "skipped:not_in_whitelist" {
-		t.Fatalf("manager status = %q", statuses[7])
-	}
-	if statuses[8] != "skipped:no_email" {
-		t.Fatalf("cc status = %q", statuses[8])
 	}
 }
 
@@ -582,25 +550,6 @@ func TestResolveSMTPConfigFallsBackToTicketNotify(t *testing.T) {
 	}, fallback)
 	if override.Host != "smtp.example.com" || override.Port != 2525 || override.User != "u" || override.Pass != "p" {
 		t.Fatalf("override = %+v", override)
-	}
-}
-
-func TestEmailWhitelisted(t *testing.T) {
-	whitelist := []string{"freeasyman@yeah.net", " Yiliang@Lingce.Pro "}
-	cases := map[string]bool{
-		"freeasyman@yeah.net": true,
-		"FREEASYMAN@YEAH.NET": true,
-		"yiliang@lingce.pro":  true,
-		"other@example.com":   false,
-		"":                    false,
-	}
-	for email, want := range cases {
-		if got := emailWhitelisted(whitelist, email); got != want {
-			t.Fatalf("emailWhitelisted(%q) = %v, want %v", email, got, want)
-		}
-	}
-	if emailWhitelisted(nil, "freeasyman@yeah.net") {
-		t.Fatal("empty whitelist must reject all recipients")
 	}
 }
 
