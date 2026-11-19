@@ -87,10 +87,10 @@ expo_access_token = ""
 [deal.email]
 enabled = false
 dry_run = true
-from = "tianjinlingce@163.com"
-link_base = "http://127.0.0.1:18080/s"
+from = "no-reply@notify.khgl.xyz"
+link_base = "https://khgl.xyz/s"
 whitelist = ["freeasyman@yeah.net", "yiliang@lingce.pro"]
-smtp_host = ""
-smtp_port = 0
-smtp_user = ""
+smtp_host = "smtpdm.aliyun.com"
+smtp_port = 465
+smtp_user = "no-reply@notify.khgl.xyz"
 smtp_pass = ""

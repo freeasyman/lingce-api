@@ -238,6 +238,19 @@ type secretsConfig struct {
 	DashScope DashScopeSecrets `toml:"dashscope"`
 	Aliyun    AliyunSecrets    `toml:"aliyun"`
 	WeCom     WeComSecrets     `toml:"wecom"`
+	Deal      DealSecrets      `toml:"deal"`
+}
+
+type DealSecrets struct {
+	Email DealEmailSecrets `toml:"email"`
+}
+
+type DealEmailSecrets struct {
+	SMTPHost string `toml:"smtp_host"`
+	SMTPPort int    `toml:"smtp_port"`
+	SMTPUser string `toml:"smtp_user"`
+	SMTPPass string `toml:"smtp_pass"`
+	From     string `toml:"from"`
 }
 
 type DatabaseSecrets struct {
@@ -429,6 +442,21 @@ func applyDefaults(cfg *Config) {
 }
 
 func mergeSecrets(cfg *Config, secrets *secretsConfig) {
+	if secrets.Deal.Email.SMTPPass != "" {
+		cfg.Deal.Email.SMTPPass = secrets.Deal.Email.SMTPPass
+	}
+	if secrets.Deal.Email.SMTPHost != "" {
+		cfg.Deal.Email.SMTPHost = secrets.Deal.Email.SMTPHost
+	}
+	if secrets.Deal.Email.SMTPPort > 0 {
+		cfg.Deal.Email.SMTPPort = secrets.Deal.Email.SMTPPort
+	}
+	if secrets.Deal.Email.SMTPUser != "" {
+		cfg.Deal.Email.SMTPUser = secrets.Deal.Email.SMTPUser
+	}
+	if secrets.Deal.Email.From != "" {
+		cfg.Deal.Email.From = secrets.Deal.Email.From
+	}
 	if secrets.Database.Password != "" {
 		cfg.Database.Password = secrets.Database.Password
 	}
