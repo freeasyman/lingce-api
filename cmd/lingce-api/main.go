@@ -337,6 +337,7 @@ func main() {
 	// 推送/邮件事件与短链解析；短信保持 enabled=false/dry_run=true，邮件默认关闭。
 	dealPushModule := dealexpush.NewModuleWithService(dealPushService)
 	dealPushModule.RegisterRoutes(mux, cfg.JWT.Secret)
+	go dealexpush.StartEmailRetentionWorker(context.Background(), pool, 24*time.Hour)
 
 	// 介入信号：Web 工作台「待我处理」与 H5「待介入」共用数据源。
 	dealInterventionModule := dealintervention.NewModule(pool)

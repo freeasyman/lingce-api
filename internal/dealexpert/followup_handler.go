@@ -50,6 +50,8 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/my-actions", Handler: h.ListMyActions, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/diagnosis", Handler: h.GetDiagnosis, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/forecast-calibration", Handler: h.GetForecastCalibration, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/email-deliveries", Handler: h.ListEmailDeliveries, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/operation/email-deliveries", Handler: h.ListEmailDeliveriesForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/approval-rules", Handler: h.GetApprovalRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/deal-expert/approval-rules", Handler: h.SaveApprovalRules, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret, Pool: h.pool})
