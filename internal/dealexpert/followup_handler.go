@@ -40,6 +40,7 @@ func (h *Handler) RegisterUserRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "PATCH", Path: "/api/v1/deal-expert/outcomes/{id}", Handler: h.UpdateOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/outcomes/{id}/void", Handler: h.VoidOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/claims/unreported", Handler: h.ListUnreportedClaims, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/recording-record.docx", Handler: h.ExportRecordingRecord, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/analysis", Handler: h.GetConsultationAnalysis, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/recordings/{id}/outcome", Handler: h.GetRecordingOutcome, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/recordings/{id}/analyze", Handler: h.AnalyzeRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},

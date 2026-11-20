@@ -127,6 +127,29 @@ func (s *Store) EmployeeHasEmrAbility(ctx context.Context, tenantID, employeeID 
 	return found == 1, nil
 }
 
+// EmployeeHasDealAbility 判断员工是否在赢客专家里具备查看接待的能力。
+// 赢客专家详情页的录音播放与 EMR 共用同一套窗口/本人/名单规则，
+// 但员工不一定有 EMR 权限，因此把 deal.consultation.read 作为等价查看能力。
+func (s *Store) EmployeeHasDealAbility(ctx context.Context, tenantID, employeeID int64, ability string) (bool, error) {
+	const query = `
+		SELECT 1
+		FROM deal_expert_permission_assignments
+		WHERE tenant_id = $1 AND employee_id = $2 AND enabled = TRUE
+		  AND (role_code = 'deal_admin' OR EXISTS (
+			SELECT 1 FROM jsonb_array_elements_text(abilities_json) AS t(v) WHERE t.v = $3
+		  ))
+		LIMIT 1
+	`
+	var found int
+	if err := s.pool.QueryRow(ctx, query, tenantID, employeeID, ability).Scan(&found); err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return found == 1, nil
+}
+
 // IsPlaybackListener 判断 listener 是否被授权听 owner 的录音。
 func (s *Store) IsPlaybackListener(ctx context.Context, tenantID, ownerEmployeeID, listenerEmployeeID int64) (bool, error) {
 	const query = `

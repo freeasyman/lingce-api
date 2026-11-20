@@ -1222,6 +1222,13 @@ func (h *Handler) GetPlayURL(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteInternalError(w, err.Error())
 			return
 		}
+		if !hasViewAbility {
+			hasViewAbility, err = h.service.store.EmployeeHasDealAbility(r.Context(), tenantID, claims.UserID, "deal.consultation.read")
+			if err != nil {
+				httputil.WriteInternalError(w, err.Error())
+				return
+			}
+		}
 	}
 	policyAllowed := isAdmin || (hasViewAbility && cfg.PlaybackEnabled && (isOwner || isListener || isTenantAdmin) && withinWindow)
 
@@ -1342,6 +1349,13 @@ func (h *Handler) RequestPlaybackAccess(w http.ResponseWriter, r *http.Request) 
 			if viewErr != nil {
 				httputil.WriteInternalError(w, viewErr.Error())
 				return
+			}
+			if !hasView {
+				hasView, viewErr = h.service.store.EmployeeHasDealAbility(r.Context(), *claims.TenantID, claims.UserID, "deal.consultation.read")
+				if viewErr != nil {
+					httputil.WriteInternalError(w, viewErr.Error())
+					return
+				}
 			}
 			if !hasView {
 				httputil.WriteForbidden(w, "当前账号没有查看接诊记录权限")
@@ -1528,6 +1542,13 @@ func (h *Handler) GetPlaybackPermission(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			httputil.WriteInternalError(w, err.Error())
 			return
+		}
+		if !hasViewAbility {
+			hasViewAbility, err = h.service.store.EmployeeHasDealAbility(r.Context(), tenantID, claims.UserID, "deal.consultation.read")
+			if err != nil {
+				httputil.WriteInternalError(w, err.Error())
+				return
+			}
 		}
 	}
 	isPlaybackSubject := isOwner || isListener || isTenantAdmin
