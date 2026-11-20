@@ -554,7 +554,7 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	rows, err := h.pool.Query(r.Context(), `
-		SELECT a.recording_id, a.status, a.analysis, COALESCE(r.encounter_id,0),
+		SELECT a.recording_id, a.status, a.analysis, COALESCE(r.encounter_id,0), COALESCE(r.customer_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at,
 		       COALESCE(ov.type,''), ov.amount, ov.occurred_at, ov.voided_at, COALESCE(ov.void_reason,'')
 		FROM consultation_analyses a
@@ -581,12 +581,12 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 	defer rows.Close()
 	items := make([]map[string]any, 0, 64)
 	for rows.Next() {
-		var recordingID, encID int64
+		var recordingID, encID, customerID int64
 		var status, customer, consultant, outcomeType, outcomeVoidReason string
 		var raw []byte
 		var recordedAt, outcomeAt, outcomeVoidedAt any
 		var outcomeAmount *float64
-		if err := rows.Scan(&recordingID, &status, &raw, &encID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
+		if err := rows.Scan(&recordingID, &status, &raw, &encID, &customerID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
 			continue
 		}
 		var parsed map[string]any
@@ -600,6 +600,7 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 		items = append(items, map[string]any{
 			"recording_id":        recordingID,
 			"encounter_id":        encID,
+			"customer_id":         customerID,
 			"status":              status,
 			"customer":            customer,
 			"consultant":          consultant,
