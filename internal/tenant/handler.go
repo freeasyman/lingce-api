@@ -53,7 +53,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.GetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.SetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/tenants/{id}/feature-overrides", Handler: h.SetFeatureOverrides, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "GET", Path: "/api/v1/tenants/{id}/profile", Handler: h.GetTenantProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/tenants/{id}/profile", Handler: h.GetTenantProfile, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/tenants/{id}/trial-home", Handler: h.GetTrialHomeSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/tenants/{id}/trial-home/demo-view", Handler: h.MarkTrialDemoViewed, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/tenants/{id}/actions/init-trial", Handler: h.InitTrialTenant, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
