@@ -493,6 +493,59 @@ func isEncounterAlreadyUsed(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "emr_records_tenant_encounter_uq"
 }
 
+func isPlaceholderPatientName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	return trimmed == "" || (strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && strings.Contains(trimmed, "接待的客户"))
+}
+
+func patientString(snapshot map[string]any, key string) string {
+	value, _ := snapshot[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// syncCustomerFromPatientSnapshot 把医生在病历里填写的真实姓名同步回客户主档。
+// 不覆盖匿名占位名；客户主档是客户总监/接待记录/客户搜索的统一来源。
+func syncCustomerFromPatientSnapshot(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, tenantID int64, recordID string, snapshot map[string]any) error {
+	name := patientString(snapshot, "name")
+	if isPlaceholderPatientName(name) {
+		return nil
+	}
+	var customerID, encounterID int64
+	if err := q.QueryRow(ctx, `
+		SELECT COALESCE(customer_id,0), COALESCE(encounter_id,0)
+		FROM emr_records WHERE tenant_id=$1 AND id=$2
+	`, tenantID, recordID).Scan(&customerID, &encounterID); err != nil {
+		return err
+	}
+	if customerID > 0 {
+		if _, err := q.Exec(ctx, `
+			UPDATE customers SET
+				name=$1,
+				phone=COALESCE(NULLIF($2,''), phone),
+				gender=COALESCE(NULLIF($3,''), gender),
+				age=COALESCE(NULLIF($4,0), age),
+				pinyin='',
+				initials='',
+				updated_at=NOW()
+			WHERE tenant_id=$5 AND id=$6 AND deleted_at IS NULL
+		`, name, patientString(snapshot, "phone"), patientString(snapshot, "gender"), snapshot["age"], tenantID, customerID); err != nil {
+			return err
+		}
+	}
+	if encounterID > 0 {
+		if _, err := q.Exec(ctx, `
+			UPDATE encounters SET patient_name=$1, updated_at=NOW()
+			WHERE tenant_id=$2 AND id=$3
+		`, name, tenantID, encounterID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id string, content, patientSnapshot map[string]any) (*Record, error) {
 	var templateCode string
 	if err := s.pool.QueryRow(ctx, `SELECT t.code FROM emr_records r JOIN emr_templates t ON t.id=r.template_id WHERE r.id=$1 AND r.tenant_id=$2`, id, tenantID).Scan(&templateCode); err != nil {
@@ -522,6 +575,11 @@ func (s *Store) SaveWorking(ctx context.Context, tenantID, actorID int64, id str
 	}
 	if cmd.RowsAffected() == 0 {
 		return nil, fmt.Errorf("record not found or not editable")
+	}
+	if patientSnapshot != nil {
+		if err := syncCustomerFromPatientSnapshot(ctx, s.pool, tenantID, id, patientSnapshot); err != nil {
+			return nil, fmt.Errorf("sync customer from emr snapshot: %w", err)
+		}
 	}
 	_ = actorID
 	return s.Get(ctx, tenantID, id)
@@ -646,6 +704,9 @@ func (s *Store) SaveGeneratedWorkingDraft(ctx context.Context, tenantID int64, r
 			encounterContext, sourceReferences, content); err != nil {
 			return nil, fmt.Errorf("update generated emr record: %w", err)
 		}
+		if err := syncCustomerFromPatientSnapshot(ctx, tx, tenantID, recordID, req.PatientSnapshot); err != nil {
+			return nil, fmt.Errorf("sync customer from generated emr snapshot: %w", err)
+		}
 	}
 
 	// Keep the generated draft as the first comparison baseline. Automatic
@@ -742,6 +803,9 @@ func saveFormalTx(ctx context.Context, tx pgx.Tx, tenantID, actorID int64, id st
 		WHERE id=$1 AND tenant_id=$2
 	`, id, tenantID, contentRaw, encodeObject(patientSnapshot)); err != nil {
 		return nil, fmt.Errorf("update formal emr content: %w", err)
+	}
+	if err := syncCustomerFromPatientSnapshot(ctx, tx, tenantID, id, patientSnapshot); err != nil {
+		return nil, fmt.Errorf("sync customer from emr snapshot: %w", err)
 	}
 	updated, err := scanRecord(tx.QueryRow(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE r.id=$1 AND r.tenant_id=$2", id, tenantID))
 	if err != nil {
