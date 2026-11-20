@@ -452,6 +452,10 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 // checkEntryAccess 按登录入口判断机构可用性：
 // 门户（新产品）看合同行；机构端/移动端（老产品）看 tenants 老有效期，与旧版一致。
 func (s *Service) checkEntryAccess(ctx context.Context, tenant *Tenant, now time.Time, entry string) *AuthError {
+	// 暂停中的机构一律拒绝（与计费闸门/中间件同口径）。
+	if tenant.PausedAt != nil {
+		return newUnauthorizedError("SUBSCRIPTION_PAUSED", "该机构服务已暂停，请联系运营恢复")
+	}
 	if entry == auth.EntryPortal {
 		ok, err := contract.CanAccess(ctx, s.store.pool, tenant.ID, now)
 		if err != nil {
@@ -462,7 +466,23 @@ func (s *Service) checkEntryAccess(ctx context.Context, tenant *Tenant, now time
 		}
 		return nil
 	}
-	// 老产品：维持原判断（tenants.valid_to）。
+	// 老产品：合同优先、老表兜底。
+	// 有服务期记录的租户按合同判定（避免「已续费但 tenants.valid_to 没同步」被误拒）；
+	// 没有服务期记录的纯老客户仍看 tenants.valid_to，行为不变。
+	hasPeriods, err := contract.HasPeriods(ctx, s.store.pool, tenant.ID)
+	if err != nil {
+		return newAuthError(500, "TENANT_CHECK_FAILED", "tenant validity check failed", nil)
+	}
+	if hasPeriods {
+		ok, err := contract.CanAccess(ctx, s.store.pool, tenant.ID, now)
+		if err != nil {
+			return newAuthError(500, "TENANT_CHECK_FAILED", "tenant validity check failed", nil)
+		}
+		if !ok {
+			return newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
+		}
+		return nil
+	}
 	if tenant.ValidTo != nil && tenant.ValidTo.Before(now) {
 		return newUnauthorizedError("TENANT_INACTIVE", "tenant subscription expired")
 	}

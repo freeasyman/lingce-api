@@ -89,6 +89,21 @@ SELECT EXISTS (
 	return ok, nil
 }
 
+// HasPeriods 判断租户是否已有服务期（合同）记录。
+//
+// 这是「合同优先、老表兜底」的分叉点：只要租户出现过服务期记录，
+// 服务期判定就以合同为准，不再回退到 tenants.valid_to。
+func HasPeriods(ctx context.Context, q Queryer, tenantID int64) (bool, error) {
+	var ok bool
+	err := q.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM subscription_periods WHERE tenant_id = $1)
+`, tenantID).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("contract: has periods: %w", err)
+	}
+	return ok, nil
+}
+
 // ProductActive 判断租户当前是否有指定产品的生效额度——即「当前覆盖合同开通了该产品」。
 // 这是新产品侧判断「产品权限（合同维度）」的唯一接口；各产品入口只传产品码。
 func ProductActive(ctx context.Context, q Queryer, tenantID int64, productCode string, now time.Time) (bool, error) {

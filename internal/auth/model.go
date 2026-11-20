@@ -48,6 +48,7 @@ type Tenant struct {
 	IsActive  bool
 	ValidFrom *time.Time
 	ValidTo   *time.Time
+	PausedAt  *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time

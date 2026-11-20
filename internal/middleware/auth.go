@@ -120,7 +120,8 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, erro
 			sessionVersion int
 			employeeActive bool
 			tenantActive   bool
-			tenantValidTo  *time.Time
+			tenantPaused   bool
+			tenantAllowed  bool
 			empErr         error
 			wg             sync.WaitGroup
 		)
@@ -165,19 +166,31 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, erro
 			}
 			return true, nil
 		}
-		// 机构端/移动端（老产品）：维持原判断，读 tenants 老有效期。
+		// 机构端/移动端（老产品）：合同优先、老表兜底，与计费闸门/登录同口径。
+		// 有服务期记录按合同判定；没有服务期记录才回退 tenants.valid_to。
 		err := authValidationPool.QueryRow(ctx, `
 			SELECT COALESCE(e.session_version, 1) AS session_version,
 			       CASE WHEN lower(COALESCE(e.is_active::text, 'true')) IN ('1', 't', 'true', 'yes') THEN true ELSE false END AS employee_active,
 			       CASE WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true ELSE false END AS tenant_active,
-			       COALESCE(t.valid_to, t.service_expired_on) AS tenant_valid_to
+			       (t.paused_at IS NOT NULL) AS tenant_paused,
+			       CASE
+			         WHEN EXISTS (SELECT 1 FROM subscription_periods sp WHERE sp.tenant_id = t.id)
+			           THEN EXISTS (
+			                  SELECT 1 FROM subscription_periods sp
+			                  WHERE sp.tenant_id = t.id
+			                    AND sp.status = 'active'
+			                    AND sp.started_on <= CURRENT_DATE
+			                    AND sp.expired_on >= CURRENT_DATE
+			                )
+			         ELSE COALESCE(t.valid_to, t.service_expired_on) > NOW()
+			       END AS tenant_allowed
 			FROM employees e
 			JOIN tenants t ON t.id = e.tenant_id
 			WHERE e.id = $1
 			  AND e.tenant_id = $2
 			  AND e.deleted_at IS NULL
 			  AND t.deleted_at IS NULL
-		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantValidTo)
+		`, claims.UserID, *claims.TenantID).Scan(&sessionVersion, &employeeActive, &tenantActive, &tenantPaused, &tenantAllowed)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return false, nil
@@ -187,7 +200,7 @@ func validateRuntimeClaims(ctx context.Context, claims *auth.Claims) (bool, erro
 		if !employeeActive || !tenantActive || sessionVersion != claims.SessionVersion {
 			return false, nil
 		}
-		if tenantValidTo != nil && tenantValidTo.Before(time.Now()) {
+		if tenantPaused || !tenantAllowed {
 			return false, nil
 		}
 		return true, nil

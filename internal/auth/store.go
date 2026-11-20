@@ -553,6 +553,7 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 		       lower(COALESCE(is_active::text, 'true')) IN ('1', 't', 'true', 'yes') AS is_active,
 		       COALESCE(valid_from, service_started_on) AS valid_from,
 		       COALESCE(valid_to, service_expired_on) AS valid_to,
+		       paused_at,
 		       created_at, COALESCE(updated_at, created_at, NOW()) AS updated_at, NULL::timestamp AS deleted_at
 		FROM tenants
 		WHERE id = $1 AND deleted_at IS NULL
@@ -566,6 +567,7 @@ func (s *Store) GetTenantByID(ctx context.Context, tenantID int64) (*Tenant, err
 		&tenant.IsActive,
 		&tenant.ValidFrom,
 		&tenant.ValidTo,
+		&tenant.PausedAt,
 		&tenant.CreatedAt,
 		&tenant.UpdatedAt,
 		&tenant.DeletedAt,
