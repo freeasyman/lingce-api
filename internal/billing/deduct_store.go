@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/freeasyman/lingce-api/internal/contract"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -26,45 +28,60 @@ func (s *Store) BeginDeduct(ctx context.Context) (DeductTx, error) {
 
 // GetSubscriptionState 返回机构的服务闸门状态：暂停优先，其次到期，其余返回空串。
 //
-// 与机构详情的 status 口径保持一致（暂停 > 未开通 > 已到期）：
-//   - 暂停：tenants.paused_at 非空；
-//   - 到期：当前服务期已过期（到期任务每天只跑一次，白天跨过到期日也要挡住）。
+// 判定顺序（唯一出口，产品交付的 CheckQuota / Deduct 都走这里）：
+//  1. 暂停：tenants.paused_at 非空；
+//  2. 有合同行（subscription_periods，排除 terminated）→ 交给 contract.CanAccess，
+//     与登录/中间件/产品闸门用的是同一段合同判定，覆盖今天即有效，否则到期；
+//  3. 没有任何合同行 → 回退旧的 tenant_subscriptions（未迁移的老产品客户）。
 //
-// 服务期来源优先新表 subscription_periods（合同/试用，覆盖今天即有效）；
-// 只有当机构没有任何合同时，才回退旧的 tenant_subscriptions（老产品客户）。
 // 两套栈迁移后这里曾只读旧表，导致有试用合同的老客户被判「已到期」。
-//
-// 找不到租户时返回空串，让后续额度查询按「没有额度」走
-// （避免把不存在租户误报成服务暂停）。
 func (s *Store) GetSubscriptionState(ctx context.Context, tenantID int64) (string, error) {
-	var state string
+	var paused bool
 	err := s.pool.QueryRow(ctx, `
+SELECT (t.paused_at IS NOT NULL)
+FROM tenants t
+WHERE t.id = $1
+  AND t.deleted_at IS NULL`, tenantID).Scan(&paused)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("query subscription state: %w", err)
+	}
+	if paused {
+		return InstitutionStatusPaused, nil
+	}
+
+	var contractCount int64
+	if err := s.pool.QueryRow(ctx, `
+SELECT count(*)
+FROM subscription_periods
+WHERE tenant_id = $1
+  AND status <> 'terminated'`, tenantID).Scan(&contractCount); err != nil {
+		return "", fmt.Errorf("count subscription periods: %w", err)
+	}
+	if contractCount > 0 {
+		// 有合同：有效期判断交给 contract 包，保证与其它入口同一口径。
+		ok, err := contract.CanAccess(ctx, s.pool, tenantID, time.Now())
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return "", nil
+		}
+		return InstitutionStatusExpired, nil
+	}
+
+	// 老客户（从未迁移到合同表）：沿用旧表口径。
+	var state string
+	err = s.pool.QueryRow(ctx, `
 SELECT CASE
-           WHEN t.paused_at IS NOT NULL THEN 'paused'
-           -- 新表：优先合同/试用；covers_today 为真表示今天落在某个生效合同内
-           WHEN p.covers_today THEN ''
-           WHEN p.id IS NOT NULL THEN 'expired'
-           -- 回退旧表（没有任何合同行的老客户）
            WHEN legacy.status = 'expired' THEN 'expired'
            WHEN legacy.expired_on IS NOT NULL AND legacy.expired_on < CURRENT_DATE THEN 'expired'
            ELSE ''
        END
 FROM tenants t
 LEFT JOIN LATERAL (
-    SELECT sp.id,
-           (sp.status = 'active'
-            AND sp.started_on <= CURRENT_DATE
-            AND sp.expired_on >= CURRENT_DATE) AS covers_today
-    FROM subscription_periods sp
-    WHERE sp.tenant_id = t.id
-      AND sp.status <> 'terminated'
-    ORDER BY
-        (sp.status = 'active' AND sp.started_on <= CURRENT_DATE AND sp.expired_on >= CURRENT_DATE) DESC,
-        sp.expired_on DESC
-    LIMIT 1
-) p ON TRUE
-LEFT JOIN LATERAL (
-    -- 旧表只有老产品客户会写：取最新一条服务期。
     SELECT ts.status, ts.expired_on
     FROM tenant_subscriptions ts
     WHERE ts.tenant_id = t.id
@@ -77,7 +94,7 @@ WHERE t.id = $1
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("query subscription state: %w", err)
+		return "", fmt.Errorf("query legacy subscription state: %w", err)
 	}
 	return state, nil
 }
