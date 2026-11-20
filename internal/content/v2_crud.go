@@ -45,6 +45,15 @@ type ContentInsightRecord struct {
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 }
 
+// ContentTopicOption 是选题的轻量视图：只给选择/映射用的字段。
+type ContentTopicOption struct {
+	ID          int64           `json:"id"`
+	Title       string          `json:"title"`
+	InsightIDs  json.RawMessage `json:"insight_ids"`
+	EvidenceRef *int64          `json:"evidence_ref,omitempty"`
+	Status      string          `json:"status"`
+}
+
 type ContentTopicV2Record struct {
 	ID             int64           `json:"id"`
 	TenantID       int64           `json:"tenant_id"`
@@ -1051,4 +1060,29 @@ func (s *Store) countContentItemsV2(ctx context.Context, tenantID int64, deleted
 		  AND ($2 = '' OR ci.title ILIKE '%' || $2 || '%' OR COALESCE(ct.title,'') ILIKE '%' || $2 || '%')`,
 		tenantID, q).Scan(&total)
 	return total, err
+}
+
+// listTopicOptions 返回选题的轻量全量列表：只有列表选择/映射需要的字段。
+//
+// 页面上的「选题数 / 灵感→选题映射」需要全量数据，而 listTopicsV2 每页最多 200 条、
+// 单条还带 brief 与派生表单（实测 200 条约 51KB）。数据超过 200 条时，
+// 页面原先只取第一页，会静默漏掉后面的选题；这里给一个只回
+// id/title/insight_ids/evidence_ref/status 的全量接口（1000 条约 40KB 以内）。
+func (s *Store) listTopicOptions(ctx context.Context, tenantID int64) ([]ContentTopicOption, int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, title, COALESCE(insight_ids, '[]'::jsonb), evidence_ref, `+topicStatusSQL+`
+		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC`, tenantID)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := make([]ContentTopicOption, 0)
+	for rows.Next() {
+		var item ContentTopicOption
+		if err := rows.Scan(&item.ID, &item.Title, &item.InsightIDs, &item.EvidenceRef, &item.Status); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, item)
+	}
+	return out, int64(len(out)), rows.Err()
 }

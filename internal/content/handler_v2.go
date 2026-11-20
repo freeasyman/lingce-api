@@ -211,6 +211,24 @@ func (h *Handler) RecommendTopics(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, items)
 }
 
+// ListTopicOptionsV2 返回选题的轻量全量列表（id/title/insight_ids/evidence_ref/status）。
+//
+// 页面需要一个不受 200 条上限影响的全量集合：工作台要总数、灵感页要把灵感映射到选题。
+// 用 listTopicsV2 分页取全量既慢又大，这里单独给一个只含必要字段的接口。
+func (h *Handler) ListTopicOptionsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	items, total, err := h.service.store.listTopicOptions(r.Context(), tenantID)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total})
+}
+
 func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
 	if !ok {
@@ -677,6 +695,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-insights/frequent-questions", Handler: h.ListFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/{id}/status", Handler: h.SetInsightStatusV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/frequent-questions/actions/rebuild", Handler: h.RebuildFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/options", Handler: h.ListTopicOptionsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/recommendations", Handler: h.RecommendTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContentItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
