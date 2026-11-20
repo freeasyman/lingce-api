@@ -1062,27 +1062,37 @@ func (s *Store) countContentItemsV2(ctx context.Context, tenantID int64, deleted
 	return total, err
 }
 
-// listTopicOptions 返回选题的轻量全量列表：只有列表选择/映射需要的字段。
+// listTopicOptions 按灵感 ID 批量取选题（只回映射需要的字段）。
 //
-// 页面上的「选题数 / 灵感→选题映射」需要全量数据，而 listTopicsV2 每页最多 200 条、
-// 单条还带 brief 与派生表单（实测 200 条约 51KB）。数据超过 200 条时，
-// 页面原先只取第一页，会静默漏掉后面的选题；这里给一个只回
-// id/title/insight_ids/evidence_ref/status 的全量接口（1000 条约 40KB 以内）。
-func (s *Store) listTopicOptions(ctx context.Context, tenantID int64) ([]ContentTopicOption, int64, error) {
+// 页面要把「灵感」映射到「已做成的选题」，只需要当页灵感涉及的选题：
+// ID 数量由调用方决定（当页条数，通常 ≤ 20–50），接口再设 500 上限兜底。
+// 注意：这里刻意不做「全量不分页」——那样响应没有天花板，数据涨上去会失控。
+func (s *Store) listTopicOptions(ctx context.Context, tenantID int64, insightIDs []int64) ([]ContentTopicOption, error) {
+	if len(insightIDs) == 0 {
+		return []ContentTopicOption{}, nil
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, title, COALESCE(insight_ids, '[]'::jsonb), evidence_ref, `+topicStatusSQL+`
-		FROM content_topics WHERE tenant_id = $1 ORDER BY id DESC`, tenantID)
+		FROM content_topics
+		WHERE content_topics.tenant_id = $1 AND (
+			content_topics.evidence_ref = ANY($2::bigint[])
+			OR EXISTS (
+				SELECT 1 FROM jsonb_array_elements_text(COALESCE(content_topics.insight_ids, '[]'::jsonb)) AS e(v)
+				WHERE e.v ~ '^[0-9]+$' AND e.v::bigint = ANY($2::bigint[])
+			)
+		)
+		ORDER BY content_topics.id DESC`, tenantID, insightIDs)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 	out := make([]ContentTopicOption, 0)
 	for rows.Next() {
 		var item ContentTopicOption
 		if err := rows.Scan(&item.ID, &item.Title, &item.InsightIDs, &item.EvidenceRef, &item.Status); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		out = append(out, item)
 	}
-	return out, int64(len(out)), rows.Err()
+	return out, rows.Err()
 }

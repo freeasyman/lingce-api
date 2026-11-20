@@ -211,22 +211,37 @@ func (h *Handler) RecommendTopics(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, items)
 }
 
-// ListTopicOptionsV2 返回选题的轻量全量列表（id/title/insight_ids/evidence_ref/status）。
+// ListTopicOptionsV2 按灵感 ID 批量返回选题（id/title/insight_ids/evidence_ref/status）。
 //
-// 页面需要一个不受 200 条上限影响的全量集合：工作台要总数、灵感页要把灵感映射到选题。
-// 用 listTopicsV2 分页取全量既慢又大，这里单独给一个只含必要字段的接口。
+// 供「灵感 → 已做成选题」映射使用：只查当页灵感涉及的选题，ID 数量由请求方决定，
+// 上限 500 兜底。不提供「全量不分页」的用法——那会让响应没有天花板。
 func (h *Handler) ListTopicOptionsV2(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
 	if !ok {
 		httputil.WriteUnauthorized(w, "Invalid token")
 		return
 	}
-	items, total, err := h.service.store.listTopicOptions(r.Context(), tenantID)
+	raw := strings.TrimSpace(r.URL.Query().Get("insight_ids"))
+	if raw == "" {
+		httputil.WriteBadRequest(w, "insight_ids is required")
+		return
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 500 {
+		parts = parts[:500]
+	}
+	ids := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		if v, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && v > 0 {
+			ids = append(ids, v)
+		}
+	}
+	items, err := h.service.store.listTopicOptions(r.Context(), tenantID, ids)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total})
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
 }
 
 func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
