@@ -160,6 +160,16 @@ func (s *Store) QualityRecords(ctx context.Context, tenantID int64, filter Quali
 	return page, rows.Err()
 }
 
+// firstNonEmptyQuery 返回第一个非空去空格参数：q 与 keyword 等价。
+func firstNonEmptyQuery(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 type QualityRecordFilter struct {
 	From       time.Time
 	To         time.Time
@@ -188,7 +198,7 @@ func (h *QueryHandler) QualityRecords(w http.ResponseWriter, r *http.Request) {
 		Month:      strings.TrimSpace(r.URL.Query().Get("month")),
 		Department: strings.TrimSpace(r.URL.Query().Get("department")),
 		Doctor:     strings.TrimSpace(r.URL.Query().Get("doctor")),
-		Keyword:    strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Keyword:    firstNonEmptyQuery(r.URL.Query().Get("q"), r.URL.Query().Get("keyword")),
 	}
 	filter.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 	filter.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
