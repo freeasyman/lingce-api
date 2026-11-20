@@ -924,3 +924,97 @@ func (s *Service) rejectUnconfirmedPlanCustomers(ctx context.Context, tenantID i
 	}
 	return nil
 }
+
+// ReportPlans 取非草稿计划（最多 20 个，按创建时间倒序）并带任务统计。
+// 三次查库：计划列表、按计划分组的任务统计、按计划分组的成交产品分布。
+func (s *Service) ReportPlans(ctx context.Context, tenantID int64) ([]PlanReportItem, error) {
+	query := fmt.Sprintf("SELECT %s FROM patient_ops_plans p WHERE p.tenant_id=$1 AND p.deleted_at IS NULL AND p.status <> 'draft' ORDER BY p.created_at DESC, p.id DESC LIMIT 20", planSelectColumns)
+	rows, err := s.pool.Query(ctx, query, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("report plans: %w", err)
+	}
+	defer rows.Close()
+	plans := make([]*Plan, 0, 20)
+	index := make(map[int64]int, 20)
+	for rows.Next() {
+		item, err := scanPlanRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("report scan plan: %w", err)
+		}
+		index[item.ID] = len(plans)
+		plans = append(plans, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("report iterate plans: %w", err)
+	}
+	out := make([]PlanReportItem, 0, len(plans))
+	for _, plan := range plans {
+		out = append(out, PlanReportItem{Plan: plan, Stats: PlanStats{ProductBreakdown: []PlanProductStat{}}})
+	}
+	if len(plans) == 0 {
+		return out, nil
+	}
+	ids := make([]int64, 0, len(plans))
+	for _, plan := range plans {
+		ids = append(ids, plan.ID)
+	}
+
+	// 任务统计：与 loadPlanStats 口径一致，只是按 plan_id 分组一次算出。
+	statRows, err := s.pool.Query(ctx, `
+		SELECT plan_id, COUNT(*), COUNT(*) FILTER (WHERE status='已完成'),
+		       COUNT(*) FILTER (WHERE result IN ('已回复','患者有回应')),
+		       COUNT(*) FILTER (WHERE result='已预约'),
+		       COUNT(*) FILTER (WHERE result='已购买'),
+		       COALESCE(SUM(result_amount) FILTER (WHERE amount_source<>''),0)::float8
+		FROM patient_operation_tasks
+		WHERE tenant_id=$1 AND plan_id = ANY($2::bigint[])
+		GROUP BY plan_id
+	`, tenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("report plan stats: %w", err)
+	}
+	defer statRows.Close()
+	for statRows.Next() {
+		var planID int64
+		var stats PlanStats
+		if err := statRows.Scan(&planID, &stats.TaskTotal, &stats.TaskDone, &stats.TaskReplied, &stats.TaskBooked, &stats.TaskDeals, &stats.DealAmount); err != nil {
+			return nil, fmt.Errorf("report scan stats: %w", err)
+		}
+		if position, ok := index[planID]; ok {
+			out[position].Stats = stats
+			out[position].Stats.ProductBreakdown = []PlanProductStat{}
+		}
+	}
+	if err := statRows.Err(); err != nil {
+		return nil, fmt.Errorf("report iterate stats: %w", err)
+	}
+
+	// 成交产品分布：与 loadPlanStats 的 product 查询口径一致。
+	productRows, err := s.pool.Query(ctx, `
+		SELECT t.plan_id,
+		       COALESCE(NULLIF(t.result_product_id,0),t.product_id,0) AS pid,
+		       COALESCE(MAX(p.name),''), COUNT(*),
+		       COALESCE(SUM(t.result_amount),0)::float8
+		FROM patient_operation_tasks t
+		LEFT JOIN products p ON p.id=COALESCE(NULLIF(t.result_product_id,0),t.product_id)
+		WHERE t.tenant_id=$1 AND t.plan_id = ANY($2::bigint[]) AND t.status='已完成'
+		  AND (t.product_id IS NOT NULL OR t.result_product_id IS NOT NULL)
+		GROUP BY 1, 2
+		ORDER BY 1, 2
+	`, tenantID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("report plan products: %w", err)
+	}
+	defer productRows.Close()
+	for productRows.Next() {
+		var planID int64
+		var item PlanProductStat
+		if err := productRows.Scan(&planID, &item.ProductID, &item.ProductName, &item.TaskCount, &item.DealAmount); err != nil {
+			return nil, fmt.Errorf("report scan product: %w", err)
+		}
+		if position, ok := index[planID]; ok {
+			out[position].Stats.ProductBreakdown = append(out[position].Stats.ProductBreakdown, item)
+		}
+	}
+	return out, productRows.Err()
+}

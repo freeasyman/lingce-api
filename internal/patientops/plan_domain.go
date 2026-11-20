@@ -62,6 +62,12 @@ type PlanStats struct {
 	ProductBreakdown []PlanProductStat `json:"product_breakdown"`
 }
 
+// PlanReportItem 是报表页需要的计划 + 任务统计（不含成员明细）。
+type PlanReportItem struct {
+	Plan  *Plan     `json:"plan"`
+	Stats PlanStats `json:"stats"`
+}
+
 type PlanDetail struct {
 	Plan    *Plan        `json:"plan"`
 	Members []PlanMember `json:"members"`

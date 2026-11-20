@@ -63,6 +63,28 @@ func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
 	httputil.WritePaginated(w, items, total, page, pageSize)
 }
 
+// ReportPlans 返回「非草稿」计划（最多 20 个）与各自的任务统计，一次 HTTP 请求完成。
+//
+// 报表页以前是 listPlans(1,100) 取列表 + 对前 20 个计划逐个 getPlan（每个 getPlan
+// 又要 3–4 次查库）—— 21 次 HTTP 请求、60+ 次数据库往返。现在合并成一个接口，
+// 3 次查库一次返回。
+func (h *Handler) ReportPlans(w http.ResponseWriter, r *http.Request) {
+	tenantID, _, ok := planTenantAndEmployee(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	items, err := h.service.ReportPlans(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if items == nil {
+		items = []PlanReportItem{}
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
 func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
