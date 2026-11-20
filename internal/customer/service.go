@@ -721,6 +721,7 @@ func toCustomerResponse(c *Customer) *CustomerResponse {
 		IdentityCount:        c.IdentityCount,
 		TotalInteractions:    c.TotalInteractions,
 		DealCount:            c.DealCount,
+		PendingCount:         c.PendingCount,
 		TotalConvertedAmount: c.TotalConvertedAmount,
 		LastConsultationItem: c.LastConsultationItem,
 		LastDealResult:       c.LastDealResult,

@@ -8,27 +8,30 @@ import (
 
 // Customer represents a customer
 type Customer struct {
-	ID                   int64      `json:"id"`
-	TenantID             int64      `json:"tenant_id"`
-	Name                 string     `json:"name"`
-	Phone                *string    `json:"phone,omitempty"`
-	Email                *string    `json:"email,omitempty"`
-	Gender               *string    `json:"gender,omitempty"` // "male", "female", "other"
-	Age                  *int       `json:"age,omitempty"`
-	Source               *string    `json:"source,omitempty"` // "wechat", "phone", "referral", "website"
-	Status               string     `json:"status"`           // "lead", "contacted", "qualified", "converted", "lost"
-	Momentum             int        `json:"momentum"`         // 热度值 0-100
-	AssignedTo           *int64     `json:"assigned_to,omitempty"`
-	AssignedAt           *time.Time `json:"assigned_at,omitempty"`
-	ConvertedAt          *time.Time `json:"converted_at,omitempty"`
-	LastContactedAt      *time.Time `json:"last_contacted_at,omitempty"`
-	NextFollowUpAt       *time.Time `json:"next_follow_up_at,omitempty"`
-	LifecycleStage       string     `json:"lifecycle_stage,omitempty"`
-	ValueScore           int        `json:"value_score,omitempty"`
-	FirstChannel         *string    `json:"first_channel,omitempty"`
-	IdentityCount        int        `json:"identity_count,omitempty"`
-	TotalInteractions    int        `json:"total_interactions,omitempty"`
-	DealCount            int        `json:"deal_count,omitempty"`
+	ID                int64      `json:"id"`
+	TenantID          int64      `json:"tenant_id"`
+	Name              string     `json:"name"`
+	Phone             *string    `json:"phone,omitempty"`
+	Email             *string    `json:"email,omitempty"`
+	Gender            *string    `json:"gender,omitempty"` // "male", "female", "other"
+	Age               *int       `json:"age,omitempty"`
+	Source            *string    `json:"source,omitempty"` // "wechat", "phone", "referral", "website"
+	Status            string     `json:"status"`           // "lead", "contacted", "qualified", "converted", "lost"
+	Momentum          int        `json:"momentum"`         // 热度值 0-100
+	AssignedTo        *int64     `json:"assigned_to,omitempty"`
+	AssignedAt        *time.Time `json:"assigned_at,omitempty"`
+	ConvertedAt       *time.Time `json:"converted_at,omitempty"`
+	LastContactedAt   *time.Time `json:"last_contacted_at,omitempty"`
+	NextFollowUpAt    *time.Time `json:"next_follow_up_at,omitempty"`
+	LifecycleStage    string     `json:"lifecycle_stage,omitempty"`
+	ValueScore        int        `json:"value_score,omitempty"`
+	FirstChannel      *string    `json:"first_channel,omitempty"`
+	IdentityCount     int        `json:"identity_count,omitempty"`
+	TotalInteractions int        `json:"total_interactions,omitempty"`
+	DealCount         int        `json:"deal_count,omitempty"`
+	// 该客户未完成/未取消的待办数。列表页直接用它显示「待办 N」，
+	// 不再额外请求一次 task-summary 拉全租户的待办汇总。
+	PendingCount         int        `json:"pending_count"`
 	TotalConvertedAmount float64    `json:"total_converted_amount,omitempty"`
 	LastInteractionAt    *time.Time `json:"last_interaction_at,omitempty"`
 	LastConsultationItem *string    `json:"last_consultation_item,omitempty"`

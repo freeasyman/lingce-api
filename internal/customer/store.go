@@ -183,6 +183,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		       COALESCE(it.total_interactions, 0) AS total_interactions,
 		       COALESCE(ds.deal_count, 0) AS deal_count,
 		       COALESCE(ds.total_converted_amount, 0)::float8 AS total_converted_amount,
+		       COALESCE(pt.pending_count, 0) AS pending_count,
 		       it.last_interaction_at,
 		       lr.last_consultation_item,
 		       lr.last_deal_result,
@@ -231,6 +232,12 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 			GROUP BY r.customer_id
 		) ds ON ds.customer_id = customers.id
 		LEFT JOIN (
+			SELECT customer_id, COUNT(*)::int AS pending_count
+			FROM patient_operation_tasks
+			WHERE customer_id = ANY($__PAGE_IDS__) AND status NOT IN ('已完成', '已取消')
+			GROUP BY customer_id
+		) pt ON pt.customer_id = customers.id
+		LEFT JOIN (
 			SELECT DISTINCT ON (r.customer_id)
 			       r.customer_id,
 			       NULLIF(TRIM(COALESCE(
@@ -278,7 +285,7 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Phone, &c.Email, &c.Gender, &c.Age,
 			&c.Source, &c.Status, &c.Momentum, &c.AssignedTo, &c.AssignedAt, &c.ConvertedAt,
 			&c.LastContactedAt, &c.NextFollowUpAt, &c.LifecycleStage, &c.ValueScore, &c.FirstChannel,
-			&c.IdentityCount, &c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.LastInteractionAt, &c.LastConsultationItem, &c.LastDealResult, &c.Notes, &c.ExtraData, &c.CreatedBy,
+			&c.IdentityCount, &c.TotalInteractions, &c.DealCount, &c.TotalConvertedAmount, &c.PendingCount, &c.LastInteractionAt, &c.LastConsultationItem, &c.LastDealResult, &c.Notes, &c.ExtraData, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan customer: %w", err)
 		}
