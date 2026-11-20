@@ -173,6 +173,7 @@ func (h *Handler) ExportRecordingRecord(w http.ResponseWriter, r *http.Request) 
 	filename := fmt.Sprintf("接待录音记录-%s-%s-%s.docx", safeFilename(data.Tenant), safeFilename(data.Customer), data.RecordedAt.Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"recording-record.docx\"; filename*=UTF-8''"+urlEncode(filename))
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
 	w.Header().Set("Content-Length", strconv.Itoa(len(doc)))
 	_, _ = w.Write(doc)
 }
