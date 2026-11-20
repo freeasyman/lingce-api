@@ -272,6 +272,35 @@ type OverviewBucket struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
 	Count int64  `json:"count"`
+	// Serious 是其中的重大风险数（priority=urgent）。只有按人/按科/按规则的桶会填。
+	Serious int64 `json:"serious,omitempty"`
+}
+
+// OverviewPerson 是「人员核查记录」需要的按人聚合：
+// 条数、重大风险数、已关闭/待核实、最近一条时间与主要问题名。
+type OverviewPerson struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	RoleCode   string   `json:"role_code,omitempty"`
+	Department string   `json:"department,omitempty"`
+	Total      int64    `json:"total"`
+	Serious    int64    `json:"serious"`
+	Closed     int64    `json:"closed"`
+	Pending    int64    `json:"pending"`
+	LastAt     string   `json:"last_at,omitempty"`
+	TopRules   []string `json:"top_rules,omitempty"`
+}
+
+// OverviewTotals 让页面不再为了几个总数把整本台账拉回去。
+type OverviewTotals struct {
+	Total         int64 `json:"total"`
+	Closed        int64 `json:"closed"`
+	Pending       int64 `json:"pending"`
+	UrgentTotal   int64 `json:"urgent_total"`
+	UrgentPending int64 `json:"urgent_pending"`
+	// 按优先级分布，用于总览页「重大/一般/培训」三档计数。
+	ImportantTotal int64 `json:"important_total"`
+	NormalTotal    int64 `json:"normal_total"`
 }
 
 // MonthlyTrendPoint 是近几个月核查事项数量的一个点。
@@ -304,6 +333,8 @@ type ComplianceOverview struct {
 	ByDepartment           []OverviewBucket    `json:"by_department"`
 	ByEmployee             []OverviewBucket    `json:"by_employee"`
 	ByRule                 []OverviewBucket    `json:"by_rule"`
+	People                 []OverviewPerson    `json:"people"`
+	Totals                 OverviewTotals      `json:"totals"`
 	RecentPending          []CheckItemListItem `json:"recent_pending"`
 	RecentReviewed         []CheckItemListItem `json:"recent_reviewed"`
 	RecentConfirmed        []CheckItemListItem `json:"recent_confirmed"`

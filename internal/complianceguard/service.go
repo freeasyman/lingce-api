@@ -610,7 +610,8 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 	}
 
 	overview.ByScene, err = s.loadOverviewBuckets(ctx, `
-		SELECT f.scene_code, f.scene_code, COUNT(*)
+		SELECT f.scene_code, f.scene_code, COUNT(*),
+		       COUNT(*) FILTER (WHERE f.priority = 'urgent')
 		FROM compliance_check_items f
 		WHERE f.tenant_id = $1
 		GROUP BY f.scene_code
@@ -620,7 +621,8 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 		return nil, fmt.Errorf("load compliance overview scenes: %w", err)
 	}
 	overview.ByDepartment, err = s.loadOverviewBuckets(ctx, `
-		SELECT COALESCE(d.id::text, ''), COALESCE(NULLIF(d.name, ''), '未记录科室'), COUNT(*)
+		SELECT COALESCE(d.id::text, ''), COALESCE(NULLIF(d.name, ''), '未记录科室'), COUNT(*),
+		       COUNT(*) FILTER (WHERE f.priority = 'urgent')
 		FROM compliance_check_items f
 		LEFT JOIN employees e
 		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
@@ -634,7 +636,8 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 		return nil, fmt.Errorf("load compliance overview departments: %w", err)
 	}
 	overview.ByEmployee, err = s.loadOverviewBuckets(ctx, `
-		SELECT COALESCE(f.employee_id::text, ''), COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员'), COUNT(*)
+		SELECT COALESCE(f.employee_id::text, ''), COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员'), COUNT(*),
+		       COUNT(*) FILTER (WHERE f.priority = 'urgent')
 		FROM compliance_check_items f
 		LEFT JOIN employees e
 		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
@@ -646,7 +649,8 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 		return nil, fmt.Errorf("load compliance overview employees: %w", err)
 	}
 	overview.ByRule, err = s.loadOverviewBuckets(ctx, `
-		SELECT src.rule_code, COALESCE(NULLIF(r.rule_name, ''), '其他问题'), COUNT(DISTINCT i.id)
+		SELECT src.rule_code, COALESCE(NULLIF(r.rule_name, ''), '其他问题'), COUNT(DISTINCT i.id),
+		       COUNT(DISTINCT i.id) FILTER (WHERE i.priority = 'urgent')
 		FROM compliance_check_items i
 		JOIN compliance_check_item_sources src ON src.item_id = i.id
 		LEFT JOIN LATERAL (
@@ -666,6 +670,14 @@ func (s *Service) GetOverview(ctx context.Context, tenantID int64) (*ComplianceO
 	`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("load compliance overview rules: %w", err)
+	}
+	overview.Totals, err = s.complianceTotals(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance totals: %w", err)
+	}
+	overview.People, err = s.loadOverviewPeople(ctx, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load compliance overview people: %w", err)
 	}
 	overview.RecentPending, err = s.loadRecentCheckItems(ctx, tenantID, "pending")
 	if err != nil {
@@ -692,7 +704,7 @@ func (s *Service) loadOverviewBuckets(ctx context.Context, query string, tenantI
 	items := make([]OverviewBucket, 0)
 	for rows.Next() {
 		var item OverviewBucket
-		if err := rows.Scan(&item.Key, &item.Label, &item.Count); err != nil {
+		if err := rows.Scan(&item.Key, &item.Label, &item.Count, &item.Serious); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -701,6 +713,115 @@ func (s *Service) loadOverviewBuckets(ctx context.Context, query string, tenantI
 		return nil, err
 	}
 	return items, nil
+}
+
+// complianceTotals 汇总总数/已关闭/待核实/重大风险，供总览页直接使用。
+func (s *Service) complianceTotals(ctx context.Context, tenantID int64) (OverviewTotals, error) {
+	var totals OverviewTotals
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE `+checkItemPhaseExpr+` = 'closed'),
+		       COUNT(*) FILTER (WHERE `+checkItemPhaseExpr+` = 'pending'),
+		       COUNT(*) FILTER (WHERE i.priority = 'urgent'),
+		       COUNT(*) FILTER (WHERE i.priority = 'urgent' AND `+checkItemPhaseExpr+` <> 'closed'),
+		       COUNT(*) FILTER (WHERE i.priority = 'important'),
+		       COUNT(*) FILTER (WHERE i.priority = 'normal')
+		FROM compliance_check_items i
+		WHERE i.tenant_id = $1
+	`, tenantID).Scan(&totals.Total, &totals.Closed, &totals.Pending, &totals.UrgentTotal, &totals.UrgentPending, &totals.ImportantTotal, &totals.NormalTotal)
+	if err != nil {
+		return totals, err
+	}
+	return totals, nil
+}
+
+// loadOverviewPeople 按人聚合，替代「人员核查记录」页把整本台账拉回浏览器再分组。
+func (s *Service) loadOverviewPeople(ctx context.Context, tenantID int64) ([]OverviewPerson, error) {
+	// 按「姓名」聚合，与页面上 /people/$id 用姓名做标识的口径一致；
+	// 直接按 employee_id 分组会把同一显示名的多条记录拆成两行。
+	rows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员') AS name,
+		       COALESCE(MIN(NULLIF(f.role_code, '')), ''),
+		       COALESCE(NULLIF(d.name, ''), '未记录科室'),
+		       COUNT(*),
+		       COUNT(*) FILTER (WHERE f.priority = 'urgent'),
+		       COUNT(*) FILTER (WHERE f.status = 'closed'),
+		       COUNT(*) FILTER (WHERE f.status IN ('pending','in_progress')),
+		       to_char(MAX(f.created_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')
+		FROM compliance_check_items f
+		LEFT JOIN employees e
+		  ON e.id = f.employee_id AND e.tenant_id = f.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN departments d
+		  ON d.id = e.department_id AND d.tenant_id = f.tenant_id AND d.deleted_at IS NULL
+		WHERE f.tenant_id = $1
+		GROUP BY 1, 3
+		ORDER BY COUNT(*) DESC, 1
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	people := make([]OverviewPerson, 0)
+	index := make(map[string]int)
+	for rows.Next() {
+		var person OverviewPerson
+		if err := rows.Scan(&person.Name, &person.RoleCode, &person.Department,
+			&person.Total, &person.Serious, &person.Closed, &person.Pending, &person.LastAt); err != nil {
+			return nil, err
+		}
+		person.ID = person.Name
+		people = append(people, person)
+		index[person.ID] = len(people) - 1
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 每个人最主要的两类问题，用于列表里的一句话摘要。
+	// 优先用规则名；早期数据没有 sources 关联（实测 65 条无关联），回退到问题文本前若干字。
+	ruleRows, err := s.pool.Query(ctx, `
+		SELECT COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员') AS name,
+		       COALESCE(NULLIF(r.rule_name, ''), left(i.question, 16) ||
+		         CASE WHEN length(i.question) > 16 THEN '…' ELSE '' END) AS label,
+		       COUNT(*) AS hits
+		FROM compliance_check_items i
+		LEFT JOIN employees e
+		  ON e.id = i.employee_id AND e.tenant_id = i.tenant_id AND e.deleted_at IS NULL
+		LEFT JOIN LATERAL (
+		    SELECT COALESCE(NULLIF(cr.rule_name, ''), NULLIF(src.rule_code, ''), '') AS rule_name
+		    FROM compliance_check_item_sources src
+		    LEFT JOIN LATERAL (
+		        SELECT rule_name FROM compliance_rules
+		        WHERE compliance_rules.rule_code = src.rule_code AND compliance_rules.status = 'published'
+		        ORDER BY compliance_rules.updated_at DESC, compliance_rules.id DESC
+		        LIMIT 1
+		    ) cr ON true
+		    WHERE src.item_id = i.id
+		    ORDER BY src.created_at DESC
+		    LIMIT 1
+		) r ON true
+		WHERE i.tenant_id = $1
+		GROUP BY 1, 2
+		ORDER BY 1, COUNT(*) DESC, 2
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer ruleRows.Close()
+	for ruleRows.Next() {
+		var personName, ruleName string
+		var hits int64
+		if err := ruleRows.Scan(&personName, &ruleName, &hits); err != nil {
+			return nil, err
+		}
+		position, ok := index[personName]
+		if !ok || len(people[position].TopRules) >= 2 || ruleName == "" {
+			continue
+		}
+		people[position].TopRules = append(people[position].TopRules, ruleName)
+	}
+	return people, ruleRows.Err()
 }
 
 func (s *Service) loadRecentPendingFindings(ctx context.Context, tenantID int64) ([]FindingListItem, error) {

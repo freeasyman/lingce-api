@@ -185,6 +185,7 @@ func (h *Handler) ListCheckItems(w http.ResponseWriter, r *http.Request) {
 	params := CheckItemListParams{
 		Tab:      strings.TrimSpace(q.Get("tab")),
 		Query:    strings.TrimSpace(q.Get("q")),
+		Person:   strings.TrimSpace(q.Get("person")),
 		Page:     page,
 		PageSize: pageSize,
 	}

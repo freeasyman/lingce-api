@@ -12,8 +12,10 @@ type CheckItemListParams struct {
 	Tab        string
 	Query      string
 	EmployeeID *int64
-	Page       int
-	PageSize   int
+	// Person 按「员工显示名」过滤，供人员核查记录详情页只取该人的事项。
+	Person   string
+	Page     int
+	PageSize int
 }
 
 // checkItemPhaseExpr 把数据库状态映射成页面三分法，口径与前端 statusOf 一致：
@@ -60,6 +62,10 @@ func checkItemFilters(params CheckItemListParams, args *[]any) string {
 		*args = append(*args, "%"+q+"%")
 		n := len(*args)
 		filter += fmt.Sprintf(` AND (i.question ILIKE $%[1]d OR i.risk_hypothesis ILIKE $%[1]d OR COALESCE(e.full_name, e.name, '') ILIKE $%[1]d OR COALESCE(d.name, '') ILIKE $%[1]d)`, n)
+	}
+	if person := strings.TrimSpace(params.Person); person != "" {
+		*args = append(*args, person)
+		filter += fmt.Sprintf(" AND COALESCE(NULLIF(e.full_name, ''), NULLIF(e.name, ''), '未记录人员') = $%d", len(*args))
 	}
 	if params.EmployeeID != nil && *params.EmployeeID > 0 {
 		*args = append(*args, *params.EmployeeID)
