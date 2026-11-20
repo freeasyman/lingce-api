@@ -565,7 +565,7 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 	}
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT a.recording_id, a.status, a.analysis, COALESCE(r.encounter_id,0), COALESCE(r.customer_id,0),
-		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), r.recorded_at,
+		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(r.recorded_at, r.created_at),
 		       COALESCE(ov.type,''), ov.amount, ov.occurred_at, ov.voided_at, COALESCE(ov.void_reason,'')
 		FROM consultation_analyses a
 		JOIN recordings r ON r.id = a.recording_id
@@ -594,7 +594,8 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 		var recordingID, encID, customerID int64
 		var status, customer, consultant, outcomeType, outcomeVoidReason string
 		var raw []byte
-		var recordedAt, outcomeAt, outcomeVoidedAt any
+		var recordedAt time.Time
+		var outcomeAt, outcomeVoidedAt any
 		var outcomeAmount *float64
 		if err := rows.Scan(&recordingID, &status, &raw, &encID, &customerID, &customer, &consultant, &recordedAt, &outcomeType, &outcomeAmount, &outcomeAt, &outcomeVoidedAt, &outcomeVoidReason); err != nil {
 			continue
@@ -614,7 +615,7 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 			"status":              status,
 			"customer":            customer,
 			"consultant":          consultant,
-			"recorded_at":         recordedAt,
+			"recorded_at":         formatDealDBLocalTime(recordedAt),
 			"outcome_type":        outcomeType,
 			"outcome_amount":      outcomeAmount,
 			"outcome_at":          outcomeAt,
@@ -624,6 +625,14 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
+}
+
+// formatDealDBLocalTime 把数据库 timestamp without timezone 按北京时间输出。
+// 这些列保存的是北京时间墙上时间，直接让 Go 按 UTC 序列化会被前端再加 8 小时。
+func formatDealDBLocalTime(t time.Time) string {
+	cst := time.FixedZone("CST", 8*3600)
+	wall := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), cst)
+	return wall.Format(time.RFC3339)
 }
 
 func (h *Handler) outcomeFilterFromRequest(r *http.Request, scope *dealScope) (OutcomeFilter, error) {
