@@ -40,6 +40,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret, internalToken st
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/{id}/tasks", Handler: h.ListCustomerTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/customers/task-summary", Handler: h.ListCustomerTaskSummary, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks", Handler: h.ListTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/patient-operations/pending-customers", Handler: h.ListPendingCustomers, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks/summary", Handler: h.SummaryTasksAuthenticated, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/patient-operations/tasks/assignees", Handler: h.TaskAssignees, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/patient-operations/tasks/bulk-reschedule", Handler: h.BulkRescheduleTasks, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -402,6 +403,46 @@ func (h *Handler) ListTasksAuthenticated(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httputil.WritePaginated(w, items, total, page, pageSize)
+}
+
+// ListPendingCustomers 返回客户中心「待处理」页签的一页：按客户分组、服务端分页。
+// 分页单位是客户，队列分类在库里用与前端一致的规则判定。
+func (h *Handler) ListPendingCustomers(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
+	page, pageSize := 1, 20
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+		page = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && v > 0 && v <= 100 {
+		pageSize = v
+	}
+	allEmployees := claims.UserType == auth.UserTypeAdmin
+	if !allEmployees && strings.TrimSpace(r.URL.Query().Get("all_employees")) == "1" {
+		allowed, err := h.service.HasPatientOpsPermission(r.Context(), *claims.TenantID, claims.UserID, PatientOpsAbilityTasksReadAll)
+		if err != nil || !allowed {
+			httputil.WriteForbidden(w, "patient operations all-employee task permission required")
+			return
+		}
+		allEmployees = true
+	}
+	queue := strings.TrimSpace(r.URL.Query().Get("queue"))
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, total, counts, err := h.service.ListPendingCustomers(r.Context(), *claims.TenantID, claims.UserID, page, pageSize, allEmployees, queue, query)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"items":        items,
+		"total":        total,
+		"page":         page,
+		"page_size":    pageSize,
+		"queue_counts": counts,
+	})
 }
 
 func parseTaskFilterOptions(r *http.Request) (TaskFilterOptions, error) {

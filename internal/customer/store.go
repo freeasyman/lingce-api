@@ -77,6 +77,30 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		argIndex++
 	}
 
+	// 「是否有待处理」在库里判断，避免客户中心先把全部客户和全部待办拉回前端再过滤。
+	// 判定口径与 /patient-operations/customers/task-summary 一致：未完成、未取消。
+	if req.HasPending != nil {
+		ownerCondition := ""
+		if req.PendingOwnerID != nil {
+			args = append(args, *req.PendingOwnerID)
+			ownerCondition = fmt.Sprintf(` AND (t.employee_id = $%d OR t.employee_id IN (
+				SELECT id FROM employees WHERE tenant_id = t.tenant_id AND deleted_at IS NOT NULL
+			))`, len(args))
+			argIndex++
+		}
+		exists := fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM patient_operation_tasks t
+			WHERE t.customer_id = customers.id
+			  AND t.tenant_id = customers.tenant_id
+			  AND t.status NOT IN ('已完成', '已取消')%s
+		)`, ownerCondition)
+		if *req.HasPending {
+			conditions = append(conditions, exists)
+		} else {
+			conditions = append(conditions, "NOT "+exists)
+		}
+	}
+
 	if req.AssignedTo != nil {
 		conditions = append(conditions, fmt.Sprintf("assigned_to = $%d", argIndex))
 		args = append(args, *req.AssignedTo)
@@ -238,7 +262,11 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	query = strings.ReplaceAll(query, "__TENANT_FILTER__", tenantFilter)
 	query = strings.ReplaceAll(query, "__PAGE_IDS__", fmt.Sprintf("%d", argIndex+1))
 	args = append(args, req.PageSize, pageIDs)
-	rows, err := s.pool.Query(ctx, query, args...)
+	// 这条 SQL 带 4 个客户聚合子查询，参数全未知时（prepared statement 跑满 5 次后
+	// PostgreSQL 切换成的通用计划）会退化成 Nested Loop + Join Filter：
+	// 实测定制计划 86ms、通用计划 1486ms。用 exec 模式每次带真实参数重新规划，
+	// 稳定在 ~100ms；规划开销 2–3ms，远小于一次远程库往返。
+	rows, err := s.pool.Query(ctx, query, append([]any{pgx.QueryExecModeExec}, args...)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query customers: %w", err)
 	}

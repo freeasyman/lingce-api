@@ -2523,6 +2523,15 @@ func (s *Store) ListRecordingTasks(ctx context.Context, req TaskListRequest) ([]
 			orderBy = "rt.due_at ASC NULLS LAST, rt.created_at DESC, rt.id DESC"
 		case "due_at_desc":
 			orderBy = "rt.due_at DESC NULLS LAST, rt.created_at DESC, rt.id DESC"
+		case "workspace_priority":
+			// 工作台「优先处理」的排序口径：逾期优先，其次按优先级，再按计划联系时间。
+			orderBy = `(rt.execution_status = 'to_execute' AND rt.due_at IS NOT NULL AND rt.due_at < NOW()) DESC,
+				CASE lower(COALESCE(rt.priority, 'medium'))
+					WHEN 'urgent' THEN 0
+					WHEN 'high' THEN 1
+					ELSE 2
+				END ASC,
+				rt.due_at ASC NULLS LAST, rt.id DESC`
 		case "priority_desc":
 			orderBy = `CASE
 				WHEN lower(COALESCE(rt.priority, 'medium')) IN ('high', 'h', '1', '高') THEN 3
@@ -2850,6 +2859,41 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 	if stats.TotalTasks > 0 {
 		stats.CompletionRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks) * 100
 	}
+	// 工作台统计：待执行总数、其中逾期数、按执行人分布。
+	if followupOnly {
+		openQuery := fmt.Sprintf(`SELECT
+			COUNT(*) FILTER (WHERE t.execution_status = 'to_execute'),
+			COUNT(*) FILTER (WHERE t.execution_status = 'to_execute' AND t.due_at IS NOT NULL AND t.due_at < NOW())
+			FROM recording_tasks t WHERE %s`, whereClause)
+		if err := s.pool.QueryRow(ctx, openQuery, args...).Scan(&stats.OpenTasks, &stats.OpenOverdueTasks); err != nil {
+			return nil, fmt.Errorf("failed to get workspace task counts: %w", err)
+		}
+		executorQuery := fmt.Sprintf(`SELECT COALESCE(t.assigned_to, 0) AS employee_id,
+			COALESCE(NULLIF(e.full_name, ''), e.name, '') AS name,
+			COUNT(*) AS pending,
+			COUNT(*) FILTER (WHERE t.due_at IS NOT NULL AND t.due_at < NOW()) AS overdue
+			FROM recording_tasks t
+			LEFT JOIN employees e ON e.id = t.assigned_to AND e.tenant_id = t.tenant_id
+			WHERE %s AND t.execution_status = 'to_execute'
+			GROUP BY 1, 2 ORDER BY pending DESC, 1`, whereClause)
+		executorRows, err := s.pool.Query(ctx, executorQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get workspace executor stats: %w", err)
+		}
+		defer executorRows.Close()
+		stats.ByExecutor = []ExecutorStats{}
+		for executorRows.Next() {
+			var item ExecutorStats
+			if err := executorRows.Scan(&item.EmployeeID, &item.Name, &item.Pending, &item.Overdue); err != nil {
+				return nil, err
+			}
+			stats.ByExecutor = append(stats.ByExecutor, item)
+		}
+		if err := executorRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
 	stats.ByTaskCategory = map[string]int64{}
 	categoryRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT COALESCE(NULLIF(t.task_category,''),'uncategorized'), COUNT(*) FROM recording_tasks t WHERE %s GROUP BY 1`, whereClause), args...)
 	if err != nil {

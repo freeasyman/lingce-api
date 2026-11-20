@@ -164,12 +164,47 @@ func (h *Handler) ListCheckItems(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.service.ListCheckItems(r.Context(), tenantID, r.URL.Query().Get("status"))
+	q := r.URL.Query()
+	// all=1 保留给仍需全量做聚合的页面（风险总览、人员核查记录）；台账页走分页。
+	if q.Get("all") == "1" {
+		items, err := h.service.ListCheckItemsAll(r.Context(), tenantID)
+		if err != nil {
+			httputil.WriteInternalError(w, err.Error())
+			return
+		}
+		httputil.WriteSuccess(w, items)
+		return
+	}
+	page, pageSize := 1, 20
+	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page"))); err == nil && v > 0 {
+		page = v
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page_size"))); err == nil && v > 0 && v <= 200 {
+		pageSize = v
+	}
+	params := CheckItemListParams{
+		Tab:      strings.TrimSpace(q.Get("tab")),
+		Query:    strings.TrimSpace(q.Get("q")),
+		Page:     page,
+		PageSize: pageSize,
+	}
+	if raw := strings.TrimSpace(q.Get("employee_id")); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+			params.EmployeeID = &v
+		}
+	}
+	items, total, counts, err := h.service.ListCheckItemsPaged(r.Context(), tenantID, params)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, items)
+	httputil.WriteSuccess(w, map[string]any{
+		"items":         items,
+		"total":         total,
+		"page":          page,
+		"page_size":     pageSize,
+		"status_counts": counts,
+	})
 }
 func (h *Handler) GetCheckItem(w http.ResponseWriter, r *http.Request) {
 	_, tenantID, ok := h.requireAbility(w, r, compliancepermission.AbilityFindingRead)

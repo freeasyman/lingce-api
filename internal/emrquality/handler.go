@@ -22,7 +22,11 @@ func NewQueryHandler(store *Store, permissions *emrpermission.Service) *QueryHan
 	return &QueryHandler{store: store, permissions: permissions}
 }
 func (h *QueryHandler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
-	router.Register(mux, []router.Route{{Method: "GET", Path: "/api/v1/quality/problem-details", Handler: h.ProblemDetails, Auth: true, AllowedUserTypes: []string{"admin", "employee"}}}, router.RouteDeps{JWTSecret: jwtSecret})
+	router.Register(mux, []router.Route{
+		{Method: "GET", Path: "/api/v1/quality/problem-details", Handler: h.ProblemDetails, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/quality/overview", Handler: h.QualityOverview, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/emr/quality/records", Handler: h.QualityRecords, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 func (h *QueryHandler) ProblemDetails(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())

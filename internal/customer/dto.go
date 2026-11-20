@@ -17,6 +17,11 @@ type CustomerListRequest struct {
 	Tags        []string `json:"tags,omitempty"`
 	StartDate   *string  `json:"start_date,omitempty"`
 	EndDate     *string  `json:"end_date,omitempty"`
+	// HasPending 只筛「当前存在未完成待办」的客户（nil 不筛）。客户中心用它替代
+	// 「先拉全部客户 + 全部待办、再在前端过滤」的写法。
+	HasPending *bool `json:"has_pending,omitempty"`
+	// PendingOwnerID 为「有待处理」筛选的负责人范围；nil 表示全租户。
+	PendingOwnerID *int64 `json:"-"`
 	Page        int      `json:"page"`
 	PageSize    int      `json:"page_size"`
 }

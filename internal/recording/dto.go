@@ -1083,6 +1083,19 @@ type RecordingTaskStatsResponse struct {
 	AnonymousTasks          int64            `json:"anonymous_tasks"`
 	ByPriority              map[string]int64 `json:"by_priority,omitempty"`
 	ByRecordingRole         map[string]int64 `json:"by_recording_role,omitempty"`
+	// 工作台口径：待执行任务数、其中逾期数，以及按执行人的分布。
+	// 之前这些数字是前端把全部待办翻页拉回来自己数的。
+	OpenTasks        int64           `json:"open_tasks"`
+	OpenOverdueTasks int64           `json:"open_overdue_tasks"`
+	ByExecutor       []ExecutorStats `json:"by_executor,omitempty"`
+}
+
+// ExecutorStats 是按执行人聚合的待执行任务分布（employee_id=0 表示未指定执行人）。
+type ExecutorStats struct {
+	EmployeeID int64  `json:"employee_id"`
+	Name       string `json:"name"`
+	Pending    int64  `json:"pending"`
+	Overdue    int64  `json:"overdue"`
 }
 
 // DailyBriefingResponse represents daily briefing

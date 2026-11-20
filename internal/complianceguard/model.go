@@ -179,28 +179,28 @@ type FindingSource struct {
 }
 
 type CheckItemListItem struct {
-	ID               string                   `json:"id"`
-	TenantID         int64                    `json:"tenant_id"`
-	SourceType       string                   `json:"source_type"`
-	SourceID         string                   `json:"source_id"`
-	SourceVersion    string                   `json:"source_version"`
-	SceneCode        string                   `json:"scene_code"`
-	RoleCode         string                   `json:"role_code"`
-	EmployeeID       *int64                   `json:"employee_id,omitempty"`
-	ThemeKey         string                   `json:"theme_key"`
-	Question         string                   `json:"question"`
-	RiskHypothesis   string                   `json:"risk_hypothesis"`
-	PrimaryRiskType  string                   `json:"primary_risk_type"`
-	RelatedRiskTypes json.RawMessage          `json:"related_risk_types"`
-	Evidence         json.RawMessage          `json:"evidence"`
-	CheckBasis       json.RawMessage          `json:"check_basis"`
-	SuggestedActions json.RawMessage          `json:"suggested_actions"`
-	Priority         string                   `json:"priority"`
-	Status           string                   `json:"status"`
-	Conclusion       string                   `json:"conclusion,omitempty"`
-	ProcessReason    string                   `json:"process_reason,omitempty"`
-	ProcessActions   json.RawMessage          `json:"process_actions,omitempty"`
-	ProcessNote      string                   `json:"process_note,omitempty"`
+	ID               string          `json:"id"`
+	TenantID         int64           `json:"tenant_id"`
+	SourceType       string          `json:"source_type"`
+	SourceID         string          `json:"source_id"`
+	SourceVersion    string          `json:"source_version"`
+	SceneCode        string          `json:"scene_code"`
+	RoleCode         string          `json:"role_code"`
+	EmployeeID       *int64          `json:"employee_id,omitempty"`
+	ThemeKey         string          `json:"theme_key"`
+	Question         string          `json:"question"`
+	RiskHypothesis   string          `json:"risk_hypothesis"`
+	PrimaryRiskType  string          `json:"primary_risk_type"`
+	RelatedRiskTypes json.RawMessage `json:"related_risk_types"`
+	Evidence         json.RawMessage `json:"evidence"`
+	CheckBasis       json.RawMessage `json:"check_basis"`
+	SuggestedActions json.RawMessage `json:"suggested_actions"`
+	Priority         string          `json:"priority"`
+	Status           string          `json:"status"`
+	Conclusion       string          `json:"conclusion,omitempty"`
+	ProcessReason    string          `json:"process_reason,omitempty"`
+	ProcessActions   json.RawMessage `json:"process_actions,omitempty"`
+	ProcessNote      string          `json:"process_note,omitempty"`
 	// 处理决定 / 签收 / 复查 / 关闭：页面三分法的正式落库字段。
 	DecisionAction   string                   `json:"decision_action,omitempty"`
 	DecisionReason   string                   `json:"decision_reason,omitempty"`
@@ -215,6 +215,11 @@ type CheckItemListItem struct {
 	CreatedAt        time.Time                `json:"created_at"`
 	UpdatedAt        time.Time                `json:"updated_at"`
 	ProcessRecords   []CheckItemProcessRecord `json:"process_records,omitempty"`
+	// 列表随行返回展示用的员工/科室/规则，前端不再为了人名额外拉 200 条发现记录。
+	EmployeeName string `json:"employee_name,omitempty"`
+	Department   string `json:"department,omitempty"`
+	RuleCode     string `json:"rule_code,omitempty"`
+	RuleName     string `json:"rule_name,omitempty"`
 }
 
 // CheckItemDecisionRequest 是页面对一条核查事项提交处理决定的入参。
@@ -284,17 +289,17 @@ type MonthlyTrendPoint struct {
 // encounters_total 等三项来自 recordings（排除已删除），按租户隔离；
 // monthly_trend 来自 compliance_check_items 的创建时间。
 type ComplianceOverview struct {
-	PendingCount   int64               `json:"pending_count"`
-	ReviewedCount  int64               `json:"reviewed_count"`
-	ConfirmedCount int64               `json:"confirmed_count"`
+	PendingCount   int64 `json:"pending_count"`
+	ReviewedCount  int64 `json:"reviewed_count"`
+	ConfirmedCount int64 `json:"confirmed_count"`
 	// 接诊口径统计
-	EncountersTotal        int64              `json:"encounters_total"`
-	EncountersWithFindings int64              `json:"encounters_with_findings"`
-	AnalyzedEncounters     int64              `json:"analyzed_encounters"`
-	ComplianceRate         float64            `json:"compliance_rate"`
+	EncountersTotal        int64               `json:"encounters_total"`
+	EncountersWithFindings int64               `json:"encounters_with_findings"`
+	AnalyzedEncounters     int64               `json:"analyzed_encounters"`
+	ComplianceRate         float64             `json:"compliance_rate"`
 	MonthlyTrend           []MonthlyTrendPoint `json:"monthly_trend"`
-	DoctorsCount           int64              `json:"doctors_count"`
-	DepartmentsCount       int64              `json:"departments_count"`
+	DoctorsCount           int64               `json:"doctors_count"`
+	DepartmentsCount       int64               `json:"departments_count"`
 	ByScene                []OverviewBucket    `json:"by_scene"`
 	ByDepartment           []OverviewBucket    `json:"by_department"`
 	ByEmployee             []OverviewBucket    `json:"by_employee"`

@@ -39,6 +39,45 @@ const recordColumns = `
 	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id,
 	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at`
 
+// recordListColumns 供「列表」使用：只回列表界面上真正会渲染的字段。
+// content_json 原本是整份病历（生产上单条几 KB），列表只用得到其中十几个字段；
+// 完整内容由 GET /emr/records/{id} 负责。source_references_json 同理，列表不使用。
+const recordListColumns = `
+	r.id, r.tenant_id, r.encounter_id, r.customer_id, r.patient_snapshot_json,
+	r.template_id, r.document_type, r.visit_type, r.department_id, r.doctor_id,
+	(SELECT t.code FROM emr_templates t WHERE t.id=r.template_id), NULL::varchar, r.started_at, r.ended_at, r.encounter_context_json, '{}'::jsonb,
+	CASE WHEN r.content_json IS NULL THEN NULL ELSE jsonb_strip_nulls(jsonb_build_object(
+		'chief_complaint', to_jsonb(r.content_json)->'chief_complaint',
+		'present_illness', to_jsonb(r.content_json)->'present_illness',
+		'history', to_jsonb(r.content_json)->'history',
+		'past_history', to_jsonb(r.content_json)->'past_history',
+		'allergy_history', to_jsonb(r.content_json)->'allergy_history',
+		'physical_exam', to_jsonb(r.content_json)->'physical_exam',
+		'examination', to_jsonb(r.content_json)->'examination',
+		'auxiliary_exam', to_jsonb(r.content_json)->'auxiliary_exam',
+		'tests', to_jsonb(r.content_json)->'tests',
+		'diagnosis', to_jsonb(r.content_json)->'diagnosis',
+		'prescription', to_jsonb(r.content_json)->'prescription',
+		'treatment', to_jsonb(r.content_json)->'treatment',
+		'disposition', to_jsonb(r.content_json)->'disposition',
+		'medical_advice', to_jsonb(r.content_json)->'medical_advice',
+		'personal_history', to_jsonb(r.content_json)->'personal_history',
+		'family_history', to_jsonb(r.content_json)->'family_history',
+		'followup', to_jsonb(r.content_json)->'followup',
+		'supplement', to_jsonb(r.content_json)->'supplement',
+		'tcm_diagnosis', to_jsonb(r.content_json)->'tcm_diagnosis',
+		'tcm_four_examinations', to_jsonb(r.content_json)->'tcm_four_examinations'
+	)) END, ''::varchar,
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
+	r.status, r.revision_no,
+	r.confirmed_by, r.confirmed_at,
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
+	(SELECT s.id FROM emr_record_snapshots s WHERE s.record_id=r.id ORDER BY s.snapshot_no DESC LIMIT 1),
+	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
+	COALESCE(r.updated_at, r.created_at), r.updated_at,
+	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id,
+	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at`
+
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
 	var patient, encounterContext, sourceReferences, content []byte
@@ -179,7 +218,7 @@ func (s *Store) List(ctx context.Context, tenantID int64, status string) ([]*Rec
 		where += " AND r.status=$2"
 		args = append(args, status)
 	}
-	return s.list(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
+	return s.list(ctx, "SELECT "+recordListColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
 }
 
 func (s *Store) ListScoped(ctx context.Context, tenantID int64, status string, access *emrpermission.Access) ([]*Record, error) {
@@ -204,7 +243,7 @@ func (s *Store) ListScoped(ctx context.Context, tenantID int64, status string, a
 			return []*Record{}, nil
 		}
 	}
-	return s.list(ctx, "SELECT "+recordColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
+	return s.list(ctx, "SELECT "+recordListColumns+" FROM emr_records r WHERE "+where+" ORDER BY r.updated_at DESC", args...)
 }
 
 // ListFilter 病历列表过滤条件。
@@ -287,7 +326,7 @@ func (s *Store) ListScopedPaginated(ctx context.Context, tenantID int64, filter 
 		return nil, 0, fmt.Errorf("count emr records: %w", err)
 	}
 	args = append(args, pageSize, (page-1)*pageSize)
-	query := "SELECT " + recordColumns + " FROM emr_records r WHERE " + where + " ORDER BY r.updated_at DESC LIMIT $" + strconv.Itoa(len(args)-1) + " OFFSET $" + strconv.Itoa(len(args))
+	query := "SELECT " + recordListColumns + " FROM emr_records r WHERE " + where + " ORDER BY r.updated_at DESC LIMIT $" + strconv.Itoa(len(args)-1) + " OFFSET $" + strconv.Itoa(len(args))
 	items, err := s.list(ctx, query, args...)
 	return items, total, err
 }
@@ -428,7 +467,7 @@ func (s *Store) listByPatient(ctx context.Context, tenantID, patientID int64, pa
 		return nil, 0, fmt.Errorf("count emr records by patient: %w", err)
 	}
 	args = append(args, pageSize, (page-1)*pageSize)
-	query := "SELECT " + recordColumns + " FROM emr_records r WHERE " + where + " ORDER BY r.started_at DESC, r.updated_at DESC LIMIT $" + strconv.Itoa(len(args)-1) + " OFFSET $" + strconv.Itoa(len(args))
+	query := "SELECT " + recordListColumns + " FROM emr_records r WHERE " + where + " ORDER BY r.started_at DESC, r.updated_at DESC LIMIT $" + strconv.Itoa(len(args)-1) + " OFFSET $" + strconv.Itoa(len(args))
 	items, err := s.list(ctx, query, args...)
 	return items, total, err
 }

@@ -188,6 +188,27 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		req.Source = &source
 	}
 
+	// has_pending=1/0、true/false 都接受；客户中心「是否有待处理」用它做服务端筛选。
+	if raw := strings.TrimSpace(r.URL.Query().Get("has_pending")); raw != "" {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes":
+			value := true
+			req.HasPending = &value
+		case "0", "false", "no":
+			value := false
+			req.HasPending = &value
+		default:
+			httputil.WriteBadRequest(w, "has_pending must be 1/0 or true/false")
+			return
+		}
+		// 与 /patient-operations/tasks 的可见范围保持一致：admin 看全租户，
+		// 普通员工只看自己负责的（含已离职员工遗留的待办池）。
+		if claims.UserType != auth.UserTypeAdmin {
+			ownerID := claims.UserID
+			req.PendingOwnerID = &ownerID
+		}
+	}
+
 	if assignedToStr := r.URL.Query().Get("assigned_to"); assignedToStr != "" {
 		assignedTo, _ := strconv.ParseInt(assignedToStr, 10, 64)
 		req.AssignedTo = &assignedTo

@@ -51,8 +51,9 @@ type checkItemScanner interface {
 }
 
 // scanCheckItem 按 checkItemSelectColumns 的顺序读取一行核查事项。
-func scanCheckItem(row checkItemScanner, item *CheckItemListItem) error {
-	return row.Scan(
+// extra 用于查询在标准列之后追加的列（如员工姓名/科室/规则名）。
+func scanCheckItem(row checkItemScanner, item *CheckItemListItem, extra ...any) error {
+	dest := []any{
 		&item.ID, &item.TenantID, &item.SourceType, &item.SourceID, &item.SourceVersion,
 		&item.SceneCode, &item.RoleCode, &item.EmployeeID, &item.ThemeKey, &item.Question,
 		&item.RiskHypothesis, &item.PrimaryRiskType, &item.RelatedRiskTypes, &item.Evidence,
@@ -61,7 +62,9 @@ func scanCheckItem(row checkItemScanner, item *CheckItemListItem) error {
 		&item.DecisionAction, &item.DecisionReason, &item.DecisionBy, &item.DecisionAt,
 		&item.SignMethod, &item.SignedAt, &item.ReviewDate, &item.ReviewMethod,
 		&item.ReviewConclusion, &item.ClosedAt,
-	)
+	}
+	dest = append(dest, extra...)
+	return row.Scan(dest...)
 }
 
 // parseDecisionTime 解析前端传来的时间。

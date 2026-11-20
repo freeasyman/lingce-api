@@ -45,6 +45,17 @@ func (h *Handler) ListIncompletePatients(w http.ResponseWriter, r *http.Request)
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
+	// 工作台只需要前几条 + 总数：带 limit 时只回这么多条，避免为显示 2 条把全部线索传一遍。
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if limit, convErr := strconv.Atoi(raw); convErr == nil && limit > 0 {
+			total := len(items)
+			if limit < total {
+				items = items[:limit]
+			}
+			httputil.WriteSuccess(w, map[string]any{"items": items, "total": total})
+			return
+		}
+	}
 	httputil.WriteSuccess(w, items)
 }
 

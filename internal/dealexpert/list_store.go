@@ -85,8 +85,29 @@ func (s *Store) ListEncounters(ctx context.Context, tenantID int64, params Encou
 			COALESCE(NULLIF(r.analysis_result->>'business_title', ''), latest_analysis.analysis->'intent_project'->>'name', '') AS product_name,
 			COALESCE(latest_analysis.analysis->>'blocker_label', '') AS concern_type,
 			COALESCE(latest_analysis.analysis->>'next_action', '') AS next_action,
-			r.analysis_result
+			-- 列表只回前端真正会读的键：完整的 analysis_result 单行 11–17KB，
+			-- 里面 llm_raw_outputs / raw / annotated_transcription 等占了九成以上，
+			-- 列表从不读它们（详情走 /recordings/{id}?light=2 另取）。
+			-- quality_review 占单页 21KB，但列表用到的 qualityWeakness 全仓无人读取，一并去掉。
+			CASE WHEN r.analysis_result IS NULL THEN NULL ELSE jsonb_strip_nulls(jsonb_build_object(
+				'deal_outcome', aj.ar->'deal_outcome',
+				'persuasive', aj.ar->'persuasive',
+				'conversion_analysis', aj.ar->'conversion_analysis',
+				'clinical_conflict', aj.ar->'clinical_conflict',
+				'pool_reason', aj.ar->'pool_reason',
+				'status_summary', aj.ar->'status_summary',
+				'not_closed_reason', aj.ar->'not_closed_reason',
+				'estimated_amount', aj.ar->'estimated_amount',
+				'intent_amount', aj.ar->'intent_amount',
+				'deal_amount', aj.ar->'deal_amount',
+				'refund_amount', aj.ar->'refund_amount',
+				'amount_source', aj.ar->'amount_source',
+				'business_title', aj.ar->'business_title',
+				'customer_name', aj.ar->'customer_name',
+				'decision_status', aj.ar->'decision_status'
+			)) END AS analysis_result
 		FROM recordings r
+		LEFT JOIN LATERAL (SELECT to_jsonb(r.analysis_result) AS ar) aj ON true
 		LEFT JOIN customers c ON c.id = r.customer_id
 		LEFT JOIN employees e ON e.id = r.employee_id
 		LEFT JOIN latest_outcome lo ON lo.tenant_id = r.tenant_id AND lo.encounter_id = r.encounter_id

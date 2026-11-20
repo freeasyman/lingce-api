@@ -825,7 +825,7 @@ func (s *Service) ClosePlan(ctx context.Context, tenantID, planID int64) error {
 
 const patientTaskSelect = `
 	t.id,t.customer_id,t.employee_id,COALESCE(c.name,''),COALESCE(c.phone,''),COALESCE(emp.name,''),t.source_id,t.task_type,t.goal,t.action,t.content,t.evidence,
-	COALESCE(t.due_at::text,''),t.status,t.created_at::text,t.result,t.result_note,COALESCE(t.completed_at::text,''),
+	COALESCE(t.due_at::text,'') AS due_at,t.status,t.created_at::text AS created_at,t.result,t.result_note,COALESCE(t.completed_at::text,''),
 	t.parent_task_id,t.plan_id,t.plan_member_id,t.task_subtype,t.product_id,COALESCE(p.name,''),
 	t.priority,t.match_score,t.risk_medical,t.risk_commercial,t.next_action,COALESCE(t.next_due_at::text,''),
 	t.expected_result,t.result_amount,t.result_product_id,t.amount_source`
@@ -836,19 +836,23 @@ const patientTaskFrom = `
 	LEFT JOIN employees emp ON emp.id=t.employee_id
 	LEFT JOIN products p ON p.id=t.product_id`
 
+// scanPatientTask 解析 patientTaskSelect 的列。extra 用于查询在任务列之后追加的列
+// （例如按客户分组时附带的 pending_count）。
 func scanPatientTask(row interface {
 	Scan(dest ...any) error
-}) (PatientTaskResponse, error) {
+}, extra ...any) (PatientTaskResponse, error) {
 	var item PatientTaskResponse
 	var planID, planMemberID, productID, parentTaskID, matchScore, resultProductID sql.NullInt64
 	var resultAmount sql.NullFloat64
-	err := row.Scan(
+	dest := []any{
 		&item.ID, &item.CustomerID, &item.OwnerID, &item.CustomerName, &item.CustomerPhone, &item.OwnerName, &item.SourceID, &item.TaskType, &item.Goal, &item.Action, &item.Content, &item.Evidence,
 		&item.DueAt, &item.Status, &item.CreatedAt, &item.Result, &item.ResultNote, &item.CompletedAt,
 		&parentTaskID, &planID, &planMemberID, &item.TaskSubtype, &productID, &item.ProductName,
 		&item.Priority, &matchScore, &item.RiskMedical, &item.RiskCommercial, &item.NextAction, &item.NextDueAt,
 		&item.ExpectedResult, &resultAmount, &resultProductID, &item.AmountSource,
-	)
+	}
+	dest = append(dest, extra...)
+	err := row.Scan(dest...)
 	if err != nil {
 		return item, err
 	}
