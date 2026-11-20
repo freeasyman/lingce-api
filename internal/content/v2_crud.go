@@ -510,6 +510,14 @@ func (s *Store) listTopicsV2(ctx context.Context, tenantID int64, offset, limit 
 	return out, total, rows.Err()
 }
 
+// countTopicsV2 只统计选题总数，不回任何行。
+// 供「工作台选题数」使用：总数就是一次 COUNT，不需要借用分页接口的 total。
+func (s *Store) countTopicsV2(ctx context.Context, tenantID int64) (int64, error) {
+	var total int64
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM content_topics WHERE tenant_id = $1`, tenantID).Scan(&total)
+	return total, err
+}
+
 // listTopicsWithoutHelp 取缺"判断"信息的选题（expected_help 为空）。
 func (s *Store) listTopicsWithoutHelp(ctx context.Context, tenantID int64, limit int) ([]ContentTopicV2Record, error) {
 	if limit <= 0 {

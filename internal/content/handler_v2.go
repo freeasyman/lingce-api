@@ -244,6 +244,21 @@ func (h *Handler) ListTopicOptionsV2(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": len(items)})
 }
 
+// CountTopicsV2 返回租户的选题总数（只做 COUNT，不回行）。
+func (h *Handler) CountTopicsV2(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := tenantOf(r)
+	if !ok {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	total, err := h.service.store.countTopicsV2(r.Context(), tenantID)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"total": total})
+}
+
 func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := tenantOf(r)
 	if !ok {
@@ -711,6 +726,7 @@ func (h *Handler) registerV2Routes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/content-insights/{id}/status", Handler: h.SetInsightStatusV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-insights/frequent-questions/actions/rebuild", Handler: h.RebuildFrequentQuestions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/options", Handler: h.ListTopicOptionsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "GET", Path: "/api/v1/content-topics/count", Handler: h.CountTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics", Handler: h.ListTopicsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-topics/recommendations", Handler: h.RecommendTopics, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-items", Handler: h.ListContentItemsV2, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
