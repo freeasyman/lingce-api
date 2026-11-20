@@ -564,9 +564,10 @@ func (s *Store) getTopicV2(ctx context.Context, tenantID, id int64) (*ContentTop
 		       COALESCE(goal,''), COALESCE(source,''), COALESCE(recommendation,''), COALESCE(expected_help,'{}'::jsonb), evidence_ref,
 		       COALESCE(source_frequent_question_id,0), COALESCE(source_frequent_question_topic,''), COALESCE(source_frequent_question_frequency,0),
 		       COALESCE(brief,'{}'::jsonb), COALESCE(insight_ids,'[]'::jsonb),
+		       COALESCE((SELECT jsonb_agg(DISTINCT ci.form) FROM content_items ci WHERE ci.topic_id = content_topics.id AND ci.deleted_at IS NULL AND ci.body <> ''), '[]'::jsonb),
 		       `+topicStatusSQL+`, created_at
 		FROM content_topics WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceFrequentQuestionID, &r.SourceFrequentQuestionTopic, &r.SourceFrequentQuestionFrequency, &r.Brief, &r.InsightIDs, &r.Status, &r.CreatedAt)
+		Scan(&r.ID, &r.TenantID, &r.Title, &r.Description, &r.Form, &r.AccountID, &r.Goal, &r.Source, &r.Recommendation, &r.ExpectedHelp, &r.EvidenceRef, &r.SourceFrequentQuestionID, &r.SourceFrequentQuestionTopic, &r.SourceFrequentQuestionFrequency, &r.Brief, &r.InsightIDs, &r.GeneratedForms, &r.Status, &r.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
