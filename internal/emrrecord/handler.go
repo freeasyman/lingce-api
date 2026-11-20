@@ -100,7 +100,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := r.URL.Query().Get("status")
-	keyword := r.URL.Query().Get("keyword")
+	// 列表契约统一：q 与 keyword 等价（q 优先）。
+	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	if keyword == "" {
+		keyword = strings.TrimSpace(r.URL.Query().Get("keyword"))
+	}
 
 	// 带 page 参数走服务端分页；不带则返回全部（兼容内部 list() 的整表读取场景）。
 	if r.URL.Query().Get("page") == "" {

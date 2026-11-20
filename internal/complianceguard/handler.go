@@ -179,7 +179,7 @@ func (h *Handler) ListCheckItems(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page"))); err == nil && v > 0 {
 		page = v
 	}
-	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page_size"))); err == nil && v > 0 && v <= 200 {
+	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page_size"))); err == nil && v > 0 && v <= 100 {
 		pageSize = v
 	}
 	params := CheckItemListParams{

@@ -411,8 +411,12 @@ func (h *Handler) ListRecordings(w http.ResponseWriter, r *http.Request) {
 	if patientName := r.URL.Query().Get("patient_name"); patientName != "" {
 		req.PatientName = &patientName
 	}
-	if keyword := r.URL.Query().Get("keyword"); keyword != "" {
-		req.Keyword = &keyword
+	keywordParam := strings.TrimSpace(r.URL.Query().Get("q"))
+	if keywordParam == "" {
+		keywordParam = strings.TrimSpace(r.URL.Query().Get("keyword"))
+	}
+	if keywordParam != "" {
+		req.Keyword = &keywordParam
 	}
 	if recordingIDStr := strings.TrimSpace(r.URL.Query().Get("recording_id")); recordingIDStr != "" {
 		recordingID, err := strconv.ParseInt(recordingIDStr, 10, 64)
@@ -1023,8 +1027,13 @@ func (h *Handler) ListRecordingTasks(w http.ResponseWriter, r *http.Request) {
 		req.TaskType = &taskType
 	}
 
-	if keyword := strings.TrimSpace(r.URL.Query().Get("keyword")); keyword != "" {
-		req.Keyword = &keyword
+	// 列表契约统一：q 与 keyword 等价（q 优先）。
+	taskKeyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	if taskKeyword == "" {
+		taskKeyword = strings.TrimSpace(r.URL.Query().Get("keyword"))
+	}
+	if taskKeyword != "" {
+		req.Keyword = &taskKeyword
 	}
 
 	if sort := strings.TrimSpace(r.URL.Query().Get("sort")); sort != "" {

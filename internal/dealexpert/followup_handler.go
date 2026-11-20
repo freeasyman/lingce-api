@@ -328,6 +328,16 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, overview)
 }
 
+// firstNonEmpty 返回第一个非空去空格值：用于 q/keyword 这类同义参数兼容。
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 	scope, httpErr := h.resolveDealScope(r)
 	if httpErr != nil {
@@ -368,7 +378,7 @@ func (h *Handler) ListEncounters(w http.ResponseWriter, r *http.Request) {
 		Page:           page,
 		PageSize:       pageSize,
 		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
-		Keyword:        strings.TrimSpace(r.URL.Query().Get("keyword")),
+		Keyword:        firstNonEmpty(r.URL.Query().Get("q"), r.URL.Query().Get("keyword")),
 		CustomerID:     customerID,
 		DateFrom:       dateFrom,
 		DateTo:         dateTo,

@@ -246,19 +246,34 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 	}
 	deleted := r.URL.Query().Get("deleted") == "true"
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		q = strings.TrimSpace(r.URL.Query().Get("keyword"))
+	}
+	// 列表契约统一：优先 page/page_size，兼容老的 limit/offset。
 	limit := 20
-	if v := r.URL.Query().Get("limit"); v != "" {
+	page := 1
+	offset := 0
+	if v := r.URL.Query().Get("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	} else if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > 100 {
+		limit = 100
 	}
-	offset := 0
-	if v := r.URL.Query().Get("offset"); v != "" {
+	if v := r.URL.Query().Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+		offset = (page - 1) * limit
+	} else if v := r.URL.Query().Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
+			page = offset/limit + 1
 		}
 	}
 	items, err := h.service.store.listContentItemsV2(r.Context(), tenantID, limit, offset, deleted, q)
@@ -271,7 +286,7 @@ func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": limit, "limit": limit, "offset": offset})
 }
 
 func (h *Handler) ListStyleTemplatesV2(w http.ResponseWriter, r *http.Request) {
