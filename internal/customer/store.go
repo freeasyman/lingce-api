@@ -139,29 +139,28 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 		tenantFilter = "r.tenant_id = $1"
 	}
 
-	// Count total
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM customers WHERE %s", whereClause)
-	var total int
-	if err := s.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("failed to count customers: %w", err)
-	}
-
 	// Query customers
 	offset := (req.Page - 1) * req.PageSize
 	// 先取当前页客户 ID，再让录音/互动/成交子查询只扫这一页客户。
 	// 否则 1500+ 客户的租户会为 20 条列表扫描全部录音和 JSON，接口达到数秒。
 	pageArgs := append(append([]any{}, args...), req.PageSize, offset)
-	pageRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id FROM customers WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`, whereClause, len(args)+1, len(args)+2), pageArgs...)
+	// 总数用窗口函数和页 ID 一次取回：COUNT(*) OVER () 在 LIMIT 之前计算，
+	// 等于「符合条件的总行数」。这样少一次跨公网 RDS 往返（每次 50–100ms），
+	// 同时保留原来「先取页 ID、再用数组做聚合」的快计划。
+	pageRows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id, COUNT(*) OVER () AS total_count FROM customers WHERE %s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`, whereClause, len(args)+1, len(args)+2), pageArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query customer page ids: %w", err)
 	}
 	pageIDs := make([]int64, 0, req.PageSize)
+	total := 0
 	for pageRows.Next() {
 		var id int64
-		if err := pageRows.Scan(&id); err != nil {
+		var rowTotal int
+		if err := pageRows.Scan(&id, &rowTotal); err != nil {
 			pageRows.Close()
 			return nil, 0, fmt.Errorf("failed to scan customer page id: %w", err)
 		}
+		total = rowTotal
 		pageIDs = append(pageIDs, id)
 	}
 	if err := pageRows.Err(); err != nil {
@@ -170,6 +169,10 @@ func (s *Store) ListCustomers(ctx context.Context, req CustomerListRequest) ([]*
 	}
 	pageRows.Close()
 	if len(pageIDs) == 0 {
+		// 页码超出范围时窗口函数没有行可算，补一次只查 count 的请求（罕见路径）。
+		if err := s.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM customers WHERE %s", whereClause), args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("failed to count customers: %w", err)
+		}
 		return []*Customer{}, total, nil
 	}
 
