@@ -86,16 +86,32 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	// 列表契约统一：优先 page/page_size，兼容老的 limit/offset。
+	// 上限 300：现有调用方（工作台）一次取 300 条，压更低会静默截断。
 	limit := 50
-	if v := q.Get("limit"); v != "" {
+	page := 1
+	offset := 0
+	if v := q.Get("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	} else if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	offset := 0
-	if v := q.Get("offset"); v != "" {
+	if limit > 300 {
+		limit = 300
+	}
+	if v := q.Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+		offset = (page - 1) * limit
+	} else if v := q.Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
+			page = offset/limit + 1
 		}
 	}
 	employeeID, _ := strconv.ParseInt(q.Get("employee_id"), 10, 64)
@@ -117,6 +133,8 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{
 		"items":       items,
 		"total":       total,
+		"page":        page,
+		"page_size":   limit,
 		"limit":       limit,
 		"offset":      offset,
 		"employees":   employees,
