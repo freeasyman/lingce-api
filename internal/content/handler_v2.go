@@ -218,16 +218,32 @@ func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	// 列表契约统一：优先 page/page_size，兼容老的 limit/offset；上限 100。
 	limit := 20
-	if v := q.Get("limit"); v != "" {
+	page := 1
+	offset := 0
+	if v := q.Get("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	} else if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	offset := 0
-	if v := q.Get("offset"); v != "" {
+	// 保留原有 200 上限：选题下拉等场景会一次取 200 条，压到 100 会静默截断。
+	if limit > 200 {
+		limit = 200
+	}
+	if v := q.Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+		offset = (page - 1) * limit
+	} else if v := q.Get("offset"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			offset = n
+			page = offset/limit + 1
 		}
 	}
 	topics, total, err := h.service.store.listTopicsV2(r.Context(), tenantID, offset, limit)
@@ -235,7 +251,7 @@ func (h *Handler) ListTopicsV2(w http.ResponseWriter, r *http.Request) {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": topics, "total": total, "limit": limit, "offset": offset})
+	httputil.WriteSuccess(w, map[string]any{"items": topics, "total": total, "page": page, "page_size": limit, "limit": limit, "offset": offset})
 }
 
 func (h *Handler) ListContentItemsV2(w http.ResponseWriter, r *http.Request) {
