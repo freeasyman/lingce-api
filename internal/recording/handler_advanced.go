@@ -990,6 +990,12 @@ func (h *Handler) uploadRecordingMultipart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	customerID, err := h.ensureMobileUploadCustomer(r.Context(), tenantID, employeeID, patientName, time.Now())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+
 	ossClient, err := ossutil.NewClient(
 		h.ossConfig.Endpoint,
 		h.ossConfig.AccessKeyID,
@@ -1021,6 +1027,7 @@ func (h *Handler) uploadRecordingMultipart(w http.ResponseWriter, r *http.Reques
 		OSSKey:          objectKey,
 		Notes:           patientName,
 		Source:          source,
+		CustomerID:      &customerID,
 		Scene:           "consultation",
 		TriggerSource:   "mobile_app_upload",
 		// App 上传后会显式调用 transcribe。这里不再入队，避免 App 的

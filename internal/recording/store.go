@@ -64,6 +64,17 @@ func (s *Store) EnsureEncounterForRecording(ctx context.Context, tenantID, recor
 	`, tenantID, recordingID, encounterID); err != nil {
 		return 0, fmt.Errorf("link recording to encounter: %w", err)
 	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE encounters e
+		SET patient_id = COALESCE(NULLIF(r.customer_id, 0), e.patient_id),
+		    patient_name = COALESCE(NULLIF(c.name, ''), e.patient_name),
+		    updated_at = NOW()
+		FROM recordings r
+		LEFT JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id AND c.deleted_at IS NULL
+		WHERE e.id = $3 AND e.tenant_id = $1 AND r.id = $2 AND r.tenant_id = $1
+	`, tenantID, recordingID, encounterID); err != nil {
+		return 0, fmt.Errorf("link encounter patient: %w", err)
+	}
 	return encounterID, nil
 }
 
