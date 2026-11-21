@@ -1824,6 +1824,22 @@ func (s *Service) AckMyLearningTask(ctx context.Context, tenantID int64, employe
 	return s.store.AckEmployeeLearningTask(ctx, tenantID, employeeID, pushID)
 }
 
+func benchmarkQuoteKey(value string) string {
+	replacer := strings.NewReplacer(
+		" ", "", "\n", "", "\t", "", "“", "", "”", "", "\"", "", "‘", "", "’", "", "\"", "",
+		"，", "", "。", "", "！", "", "？", "", "；", "", "：", "", "、", "", "（", "", "）", "", "(", "", ")", "",
+	)
+	return replacer.Replace(strings.TrimSpace(value))
+}
+
+func isVerbatimBenchmarkQuote(transcript, quote string) bool {
+	key := benchmarkQuoteKey(quote)
+	if len([]rune(key)) < 4 {
+		return false
+	}
+	return strings.Contains(benchmarkQuoteKey(transcript), key)
+}
+
 func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCandidateInput {
 	if len(row.AnalysisRaw) == 0 {
 		return nil
@@ -1862,13 +1878,7 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 			if text == "" {
 				text = pickFirstPositiveText(highlights)
 			}
-			if text == "" {
-				text = fmt.Sprintf("该片段在%s维度达到高分，表达方式具备复制价值。", name)
-			}
-			if looksNegativeText(text) {
-				text = fmt.Sprintf("该片段在%s维度达到高分，表达方式具备复制价值。", name)
-			}
-			if strings.TrimSpace(text) == "" {
+			if strings.TrimSpace(text) == "" || looksNegativeText(text) || !isVerbatimBenchmarkQuote(row.Transcript, text) {
 				continue
 			}
 			out = append(out, benchmarkCandidateInput{
@@ -1911,8 +1921,8 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 			if text == "" {
 				text = pickFirstPositiveText(highlights)
 			}
-			if text == "" || looksNegativeText(text) {
-				text = fmt.Sprintf("该片段在%s维度表现稳定且具备可复制性，适合用于团队讲评。", k)
+			if strings.TrimSpace(text) == "" || looksNegativeText(text) || !isVerbatimBenchmarkQuote(row.Transcript, text) {
+				continue
 			}
 			out = append(out, benchmarkCandidateInput{
 				RoleCode:   role,
@@ -1936,8 +1946,8 @@ func deriveBenchmarkCandidatesFromAnalysis(row benchmarkSourceRow) []benchmarkCa
 			if text == "" {
 				text = pickFirstPositiveText(highlights)
 			}
-			if text == "" || looksNegativeText(text) {
-				text = fmt.Sprintf("该片段在%s维度表现稳定且具备可复制性，适合用于团队讲评。", dim)
+			if strings.TrimSpace(text) == "" || looksNegativeText(text) || !isVerbatimBenchmarkQuote(row.Transcript, text) {
+				continue
 			}
 			out = append(out, benchmarkCandidateInput{
 				RoleCode:   role,

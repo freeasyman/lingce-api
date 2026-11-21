@@ -1114,7 +1114,7 @@ func (s *Store) ListBenchmarkClips(
 	}
 	offset := (page - 1) * pageSize
 
-	conditions := []string{"bc.tenant_id = $1"}
+	conditions := []string{"bc.tenant_id = $1", "COALESCE(bc.clip_text, '') NOT LIKE '该片段在%'"}
 	args := []interface{}{tenantID}
 	argIndex := 2
 	if v := strings.TrimSpace(status); v != "" {
@@ -1714,6 +1714,7 @@ type benchmarkSourceRow struct {
 	AnalysisRaw   []byte
 	StructuredRaw []byte
 	RecordedAtRaw *time.Time
+	Transcript    string
 }
 
 func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, days int) ([]benchmarkSourceRow, error) {
@@ -1727,7 +1728,8 @@ func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, day
 			COALESCE(NULLIF(r.business_scope,''), 'unknown') AS role_code,
 			COALESCE(r.analysis_result, '{}'::json)::text,
 			COALESCE(rar.result_data, '{}'::json)::text,
-			r.recorded_at
+			r.recorded_at,
+			COALESCE(r.transcription_text, '') || ' ' || COALESCE(r.cleaned_transcription::text, '')
 		FROM recordings r
 		LEFT JOIN LATERAL (
 			SELECT result_data
@@ -1750,7 +1752,7 @@ func (s *Store) ListBenchmarkSourceRows(ctx context.Context, tenantID int64, day
 	out := make([]benchmarkSourceRow, 0)
 	for rows.Next() {
 		var item benchmarkSourceRow
-		if err := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.RoleCode, &item.AnalysisRaw, &item.StructuredRaw, &item.RecordedAtRaw); err != nil {
+		if err := rows.Scan(&item.RecordingID, &item.EmployeeID, &item.RoleCode, &item.AnalysisRaw, &item.StructuredRaw, &item.RecordedAtRaw, &item.Transcript); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
