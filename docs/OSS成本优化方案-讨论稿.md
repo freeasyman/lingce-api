@@ -190,6 +190,13 @@
   2. API `internal/badge/store.go`（underscore）
 - 精确孤儿数需 DB 交叉（`recordings.oss_key` vs OSS 对象），待生产库 `lingce_prod` 访问后确认（SQL 见正文）。
 
+✅ **存量清理已完成（2026-11-21 12:34）**：
+- 交叉口径：OSS `recordings/` 全量 286,569 个对象 vs 「lingce_dev + lingce_dev_real + 生产 lingce_prod」三库的 `oss_key ∪ file_url 派生 key` 引用集（1,913 个 key）；
+- 孤儿 = 284,657 个对象 / 2158.45 GB，全部删除（0 失败批次、二次校验 0 误删）；
+- 保留 = 1,912 个对象 / 10.60 GB（全部有库引用）；
+- 删除后实测（ListObjects）：recordings/ 剩 1,912 对象 / 10.60 GB；
+- 存储费量级：约 2.17TB → 约 10.6GB，月存储费从 ~235 元降到 ~1 元量级（12 月账单核对）。
+
 ---
 
 ## 3. 优化方向（按「省钱力度 / 改动风险」排序）
