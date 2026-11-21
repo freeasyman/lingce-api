@@ -81,3 +81,17 @@ systemctl restart lingce-api
 3. 重启后第一轮会按厂商默认窗口回填最近 24 小时，全部被查重跳过——**属预期，不是故障**。
 4. 厂商回调通道（audio.khgl.xyz）保持现状，不动。
 5. 发布完成后回告 lead 会话，由 lead 做最终复核。
+
+---
+
+## 八、发布记录与复核结果（2026-11-21 12:13）
+
+- **发布完成**：worker（提交 `864ad52`，二进制 sha256 `52eaf593...c0793`）、api（提交 `c35cf12`，sha256 `c92627d6...eb28d2`）。
+- 实际 systemd 路径为 `/opt/lingce/bin/`（本说明第五节写的是仓库内 service 文件的旧路径，发布时以实际路径为准）。
+- 配置已恢复：`badge_middleware_url = http://127.0.0.1:18082`、`badge_pull_interval_minutes = 2`（备份 `lingce-worker.toml.bak.pre-restore-20261121-120226`）。
+- **复核通过**：
+  - 首轮 `pulled=28, inserted=0, skipped=28`（24h 回填全部去重跳过，零上传）；
+  - 之后每 2 分钟 `pulled=0`（游标生效）；
+  - OSS 近 30 分钟 worker 侧新增 = 0（无新孤儿）；
+  - 回调路径近 30 分钟新增 2 条（真实录音持续进来）。
+- **遗留**：存量约 2TB 孤儿对象未清理（独立任务）；游标持久化（方案 B）为可选增强。

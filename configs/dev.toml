@@ -45,8 +45,9 @@ smtp_port = 25
 sms_sign_name = ""
 sms_template_code = ""
 oss_endpoint = "oss-cn-beijing.aliyuncs.com"
-oss_bucket = "lince"
-oss_public_base_url = "https://lince.oss-cn-beijing.aliyuncs.com"
+# dev 环境禁止使用生产桶 lince（2026-11-21：曾因误配向生产桶灌入约 2TB 重复数据）
+oss_bucket = "lingce-test"
+oss_public_base_url = "https://lingce-test.oss-cn-beijing.aliyuncs.com"
 
 [wecom]
 api_base_url = "https://qyapi.weixin.qq.com"
