@@ -15,6 +15,7 @@ type OperationsAdmin struct {
 	OrgType        string
 	SessionVersion int
 	IsActive       bool
+	MenuCodes      []string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	DeletedAt      *time.Time

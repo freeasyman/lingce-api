@@ -48,6 +48,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/product"
 	"github.com/freeasyman/lingce-api/internal/rbac"
 	"github.com/freeasyman/lingce-api/internal/recording"
+	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/sandbox"
 	"github.com/freeasyman/lingce-api/internal/splitdemo"
 	"github.com/freeasyman/lingce-api/internal/store"
@@ -103,6 +104,14 @@ func main() {
 	}
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
+	router.SetOpsMenuCodeResolver(func(ctx context.Context, adminID int64) ([]string, error) {
+		var codes []string
+		err := pool.QueryRow(ctx, `SELECT COALESCE(menu_codes, '{}') FROM operations_admins WHERE id = $1 AND deleted_at IS NULL`, adminID).Scan(&codes)
+		if err != nil {
+			return nil, err
+		}
+		return codes, nil
+	})
 
 	if *convergeOnly || *verifyConvergence {
 		if strings.EqualFold(cfg.Schema.Mode, "history") {

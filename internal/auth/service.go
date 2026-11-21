@@ -121,10 +121,11 @@ func (s *Service) LoginAdmin(ctx context.Context, username, password string) (*L
 			TenantID: nil,
 		},
 		UserInfo: map[string]interface{}{
-			"name":      firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
-			"real_name": admin.RealName,
-			"email":     admin.Email,
-			"phone":     admin.Phone,
+			"name":       firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
+			"real_name":  admin.RealName,
+			"email":      admin.Email,
+			"phone":      admin.Phone,
+			"menu_codes": admin.MenuCodes,
 		},
 	}, nil
 }
@@ -401,9 +402,10 @@ func (s *Service) GetMe(ctx context.Context, userID int64, userType auth.UserTyp
 		}
 
 		return &MeResponse{
-			UserID:   admin.ID,
-			UserType: string(auth.UserTypeAdmin),
-			Username: admin.Username,
+			UserID:    admin.ID,
+			UserType:  string(auth.UserTypeAdmin),
+			Username:  admin.Username,
+			MenuCodes: admin.MenuCodes,
 			UserInfo: map[string]interface{}{
 				"name":      firstNonEmpty(admin.RealName, admin.Username, admin.Phone),
 				"real_name": admin.RealName,

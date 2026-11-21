@@ -126,6 +126,7 @@ type CreateAdminRequest struct {
 	Email    *string `json:"email,omitempty"`
 	OrgID    *int64  `json:"org_id,omitempty"`
 	RoleIDs  []int64 `json:"role_ids,omitempty"`
+	MenuCodes []string `json:"menu_codes,omitempty"`
 }
 
 // UpdateAdminRequest represents a request to update an admin
@@ -136,6 +137,7 @@ type UpdateAdminRequest struct {
 	OrgID    *int64  `json:"org_id,omitempty"`
 	IsActive *bool   `json:"is_active,omitempty"`
 	RoleIDs  []int64 `json:"role_ids,omitempty"`
+	MenuCodes []string `json:"menu_codes,omitempty"`
 }
 
 // AdminResponse represents an admin response
@@ -149,6 +151,7 @@ type AdminResponse struct {
 	OrgName   string         `json:"org_name,omitempty"`
 	IsActive  bool           `json:"is_active"`
 	Roles     []RoleResponse `json:"roles,omitempty"`
+	MenuCodes []string       `json:"menu_codes"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 }

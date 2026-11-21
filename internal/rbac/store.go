@@ -939,6 +939,7 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 		           WHEN a.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
+		       COALESCE(a.menu_codes, '{}'),
 		       a.created_at, a.updated_at
 		FROM operations_admins a
 		LEFT JOIN ops_organizations o ON o.id = a.org_id
@@ -1001,7 +1002,7 @@ func (s *Store) ListOperationsAdmins(ctx context.Context, req AdminListRequest) 
 	adminIDs := make([]int64, 0)
 	for rows.Next() {
 		var admin AdminResponse
-		err := rows.Scan(&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt)
+		err := rows.Scan(&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.MenuCodes, &admin.CreatedAt, &admin.UpdatedAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan admin: %w", err)
 		}
@@ -1098,6 +1099,7 @@ func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminRes
 		           WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		           ELSE false
 		       END AS is_active,
+		       COALESCE(a.menu_codes, '{}'),
 		       a.created_at, a.updated_at
 		FROM operations_admins a
 		LEFT JOIN ops_organizations o ON o.id = a.org_id
@@ -1106,7 +1108,7 @@ func (s *Store) GetOperationsAdminByID(ctx context.Context, id int64) (*AdminRes
 
 	var admin AdminResponse
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.OrgName, &admin.IsActive, &admin.MenuCodes, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("admin not found: %w", err)
@@ -1140,9 +1142,10 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 
 	// Create admin
 	query := `
-		INSERT INTO operations_admins (name, phone, username, password_hash, email, org_id, is_active, session_version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 1, NOW(), NOW())
+		INSERT INTO operations_admins (name, phone, username, password_hash, email, org_id, menu_codes, is_active, session_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '{}'), $8, 1, NOW(), NOW())
 		RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
+		          COALESCE(menu_codes, '{}'),
 		          CASE
 		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -1151,8 +1154,8 @@ func (s *Store) CreateOperationsAdmin(ctx context.Context, req CreateAdminReques
 	`
 
 	var admin AdminResponse
-	err = tx.QueryRow(ctx, query, req.Name, req.Phone, req.Username, hashedPassword, req.Email, req.OrgID, isActiveValue).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+	err = tx.QueryRow(ctx, query, req.Name, req.Phone, req.Username, hashedPassword, req.Email, req.OrgID, req.MenuCodes, isActiveValue).Scan(
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.MenuCodes, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create admin: %w", err)
@@ -1242,9 +1245,16 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 		argPos++
 	}
 
+	if req.MenuCodes != nil {
+		query += fmt.Sprintf(", menu_codes = $%d", argPos)
+		args = append(args, req.MenuCodes)
+		argPos++
+	}
+
 	query += fmt.Sprintf(" WHERE id = $%d AND deleted_at IS NULL", argPos)
 	args = append(args, id)
 	query += ` RETURNING id, COALESCE(name, ''), COALESCE(phone, ''), COALESCE(username, ''), COALESCE(email, ''), org_id,
+		          COALESCE(menu_codes, '{}'),
 		          CASE
 		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -1253,7 +1263,7 @@ func (s *Store) UpdateOperationsAdmin(ctx context.Context, id int64, req UpdateA
 
 	var admin AdminResponse
 	err = tx.QueryRow(ctx, query, args...).Scan(
-		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
+		&admin.ID, &admin.Name, &admin.Phone, &admin.Username, &admin.Email, &admin.OrgID, &admin.MenuCodes, &admin.IsActive, &admin.CreatedAt, &admin.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update admin: %w", err)

@@ -80,6 +80,9 @@ func Register(mux *http.ServeMux, routes []Route, deps RouteDeps) {
 			// 4. 新产品产品 API 统一入口闸门（必须在 Auth 之后拿到 claims，再拦门户 token）
 			handler = wrapHandler(middleware.ProductGate(http.HandlerFunc(handler)))
 
+			// 4.5 运营管理台菜单级拦截（auth 之后拿到 claims，仅拦 admin）
+			handler = opsMenuCodeMiddleware(handler)
+
 			// 5. JWT authentication (outermost)
 			authMw := middleware.Auth(deps.JWTSecret)
 			handler = wrapHandler(authMw(http.HandlerFunc(handler)))

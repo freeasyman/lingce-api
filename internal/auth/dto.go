@@ -44,6 +44,7 @@ type MeResponse struct {
 	Username             string      `json:"username"`
 	TenantID             *int64      `json:"tenant_id,omitempty"`
 	UserInfo             interface{} `json:"user_info"`
+	MenuCodes            []string    `json:"menu_codes,omitempty"`
 	NewSystemTrialEndsAt *string     `json:"new_system_trial_ends_at,omitempty"`
 }
 
