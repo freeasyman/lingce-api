@@ -262,6 +262,47 @@ func (s *Store) UpsertRecordingFromAudioCallback(ctx context.Context, payload Ca
 		)
 		return nil, fmt.Errorf("device mapping not ready for %s: %w", core.DeviceNo, err)
 	}
+
+	// 幂等预检：order_no(=event_id) 已存在说明该录音已入库（本回调重复、
+	// 或 worker 拉取已先入库同一事件）。此时不再重复下载/上传 OSS，
+	// 只把事件行关联到已存在的录音上，避免每次重复回调都产生孤儿对象。
+	var existingRecordingID int64
+	err = s.pool.QueryRow(ctx, `SELECT id FROM recordings WHERE order_no = $1 LIMIT 1`, core.EventID).Scan(&existingRecordingID)
+	switch {
+	case err == nil:
+		if _, linkErr := s.pool.Exec(ctx, `
+			INSERT INTO smart_badge_audio_events (
+				app_id, event_id, device_no, order_no, audio_file, start_time, end_time,
+				seconds, raw_payload, status, recording_id, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6::timestamp, $7::timestamp,
+				$8, $9::jsonb, 'received', $10, NOW(), NOW())
+			ON CONFLICT (app_id, event_id) DO UPDATE SET
+				recording_id = COALESCE(smart_badge_audio_events.recording_id, EXCLUDED.recording_id),
+				raw_payload = EXCLUDED.raw_payload,
+				updated_at = NOW()
+		`, core.AppID, core.EventID, core.DeviceNo, core.OrderNo, core.OriginalFileURL, core.StartTime, core.EndTime, core.Seconds, data, existingRecordingID); linkErr != nil {
+			return nil, fmt.Errorf("link smart badge audio event: %w", linkErr)
+		}
+		slog.Info("audio callback already ingested, skip re-upload",
+			"device_no", core.DeviceNo,
+			"app_id", core.AppID,
+			"event_id", core.EventID,
+			"order_no", core.OrderNo,
+			"recording_id", existingRecordingID,
+		)
+		return &AudioCallbackIngestResult{
+			RecordingID: existingRecordingID,
+			TenantID:    tenantID,
+			EmployeeID:  employeeID,
+			Created:     false,
+		}, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// 尚未入库，继续走正常的上传 + 入库流程
+	default:
+		return nil, fmt.Errorf("check existing badge recording: %w", err)
+	}
+
 	normalizedURL, ossKey, err := s.normalizeAudioToOwnedOSS(ctx, tenantID, core.OrderNo, core.FileName, core.OriginalFileURL)
 	if err != nil {
 		slog.Error("audio callback oss normalization failed",
