@@ -50,7 +50,13 @@ func (h *Handler) ListEmployeeProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	employeeID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("employee_id")), 10, 64)
 	if err != nil || employeeID <= 0 {
-		httputil.WriteBadRequest(w, "invalid employee_id")
+		// 没传 employee_id：批量返回全机构的有效产品（员工产品矩阵视图）。
+		items, batchErr := EffectiveTenantEmployeeProducts(r.Context(), h.service.store.pool, tenantID)
+		if batchErr != nil {
+			httputil.WriteInternalError(w, batchErr.Error())
+			return
+		}
+		httputil.WriteSuccess(w, map[string]any{"items": items})
 		return
 	}
 	role, items, err := EffectiveEmployeeProducts(r.Context(), h.service.store.pool, tenantID, employeeID)

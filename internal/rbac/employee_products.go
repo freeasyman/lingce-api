@@ -69,6 +69,110 @@ LIMIT 1`, tenantID, employeeID).Scan(&code)
 	return code, nil
 }
 
+// EmployeeProductRow 是矩阵视图的一行：员工 + 各产品的有效权限。
+type EmployeeProductRow struct {
+	EmployeeID int64           `json:"employee_id"`
+	Name       string          `json:"name"`
+	Phone      string          `json:"phone"`
+	RoleCode   string          `json:"role_code"`
+	IsAdmin    bool            `json:"is_admin"`
+	Items      []ProductAccess `json:"items"`
+}
+
+// EffectiveTenantEmployeeProducts 批量返回机构下全部员工的有效产品权限（矩阵视图用）。
+// 规则与 EffectiveEmployeeProducts 完全一致，只是把逐人查询改成批量查询。
+func EffectiveTenantEmployeeProducts(ctx context.Context, q *pgxpool.Pool, tenantID int64) ([]EmployeeProductRow, error) {
+	rows, err := q.Query(ctx, `
+SELECT e.id,
+       COALESCE(NULLIF(trim(e.full_name), ''), NULLIF(trim(e.name), ''), ''),
+       COALESCE(e.phone, ''),
+       COALESCE((
+           SELECT lower(trim(ier.role_code))
+           FROM institution_employee_roles ier
+           WHERE ier.tenant_id = $1 AND ier.employee_id = e.id AND trim(COALESCE(ier.role_code, '')) <> ''
+           ORDER BY ier.updated_at DESC NULLS LAST, ier.id DESC
+           LIMIT 1
+       ), '')
+FROM employees e
+WHERE e.tenant_id = $1
+  AND e.deleted_at IS NULL
+ORDER BY e.id`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant employees: %w", err)
+	}
+	result := make([]EmployeeProductRow, 0, 32)
+	index := map[int64]int{}
+	for rows.Next() {
+		var item EmployeeProductRow
+		if err := rows.Scan(&item.EmployeeID, &item.Name, &item.Phone, &item.RoleCode); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan tenant employee: %w", err)
+		}
+		item.IsAdmin = item.RoleCode == "admin"
+		result = append(result, item)
+		index[item.EmployeeID] = len(result) - 1
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant employees: %w", err)
+	}
+
+	overrides := map[int64]map[string]bool{}
+	orows, err := q.Query(ctx, `
+SELECT employee_id, product_code, enabled
+FROM employee_product_overrides
+WHERE tenant_id = $1`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("load product overrides: %w", err)
+	}
+	for orows.Next() {
+		var employeeID int64
+		var code string
+		var enabled bool
+		if err := orows.Scan(&employeeID, &code, &enabled); err != nil {
+			orows.Close()
+			return nil, fmt.Errorf("scan product override: %w", err)
+		}
+		if _, ok := overrides[employeeID]; !ok {
+			overrides[employeeID] = map[string]bool{}
+		}
+		overrides[employeeID][code] = enabled
+	}
+	orows.Close()
+	if err := orows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate product overrides: %w", err)
+	}
+
+	for i := range result {
+		item := &result[i]
+		defaults := map[string]bool{}
+		if item.IsAdmin {
+			for _, code := range AllPortalProducts {
+				defaults[code] = true
+			}
+		} else {
+			for _, code := range RoleDefaultProducts(item.RoleCode) {
+				defaults[code] = true
+			}
+		}
+		items := make([]ProductAccess, 0, len(AllPortalProducts))
+		for _, code := range AllPortalProducts {
+			enabled := defaults[code]
+			source := "role"
+			if item.IsAdmin {
+				source = "admin"
+			}
+			if value, ok := overrides[item.EmployeeID][code]; ok {
+				enabled = value
+				source = "manual"
+			}
+			items = append(items, ProductAccess{ProductCode: code, Enabled: enabled, Source: source})
+		}
+		item.Items = items
+	}
+	return result, nil
+}
+
 // EffectiveEmployeeProducts 计算员工的有效产品权限。
 func EffectiveEmployeeProducts(ctx context.Context, q *pgxpool.Pool, tenantID, employeeID int64) (string, []ProductAccess, error) {
 	role, err := employeeRoleCode(ctx, q, tenantID, employeeID)
