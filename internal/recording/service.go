@@ -1643,6 +1643,9 @@ func (s *Service) ListBenchmarkClips(
 	page int,
 	pageSize int,
 ) (*BenchmarkClipListResponse, error) {
+	if strings.TrimSpace(status) == "pending" && strings.TrimSpace(source) == "" {
+		source = "auto_v2"
+	}
 	items, total, err := s.store.ListBenchmarkClips(ctx, tenantID, status, source, roleCode, dimension, keyword, page, pageSize)
 	if err != nil {
 		return nil, err
