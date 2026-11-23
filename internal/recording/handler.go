@@ -50,6 +50,20 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 	if claims.TenantID != nil && h.isTenantRecordingAdmin(ctx, *claims.TenantID, claims.UserID) {
 		return nil
 	}
+	// 金句库同时是赢客专家的产品能力；产品管理员不一定有旧的
+	// management_dashboard_benchmarks 机构菜单，但拿到 deal.quotes.* 就应可访问。
+	if menuCode == "management_dashboard_benchmarks" && claims.TenantID != nil {
+		var allowed bool
+		if err := h.service.store.pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM deal_expert_permission_assignments
+				WHERE tenant_id=$1 AND employee_id=$2 AND enabled
+				  AND (abilities_json ? 'deal.quotes.read' OR abilities_json ? 'deal.quotes.manage')
+			)
+		`, *claims.TenantID, claims.UserID).Scan(&allowed); err == nil && allowed {
+			return nil
+		}
+	}
 	if claims.UserType != auth.UserTypeEmployee && claims.UserType != auth.UserTypeMobile {
 		return nil
 	}
