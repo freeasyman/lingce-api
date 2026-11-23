@@ -2870,6 +2870,18 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 		if err := s.pool.QueryRow(ctx, openQuery, args...).Scan(&stats.OpenTasks, &stats.OpenOverdueTasks); err != nil {
 			return nil, fmt.Errorf("failed to get workspace task counts: %w", err)
 		}
+		// 未读数：待执行且当前查看人还没点开过的任务（菜单角标用）。
+		if viewerEmployeeID != nil && *viewerEmployeeID > 0 {
+			unreadArgs := append(append([]any{}, args...), *viewerEmployeeID)
+			unreadQuery := fmt.Sprintf(`SELECT COUNT(*) FROM recording_tasks t
+				WHERE %s AND t.execution_status = 'to_execute'
+				  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
+				                  WHERE m.tenant_id = t.tenant_id AND m.employee_id = $%d
+				                    AND m.resource_type = 'followup_task' AND m.resource_id = t.id)`, whereClause, len(unreadArgs))
+			if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&stats.OpenUnreadTasks); err != nil {
+				return nil, fmt.Errorf("failed to get unread task count: %w", err)
+			}
+		}
 		executorQuery := fmt.Sprintf(`SELECT COALESCE(t.assigned_to, 0) AS employee_id,
 			COALESCE(NULLIF(e.full_name, ''), e.name, '') AS name,
 			COUNT(*) AS pending,

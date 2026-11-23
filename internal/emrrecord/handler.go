@@ -138,12 +138,16 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		"page_size": pagination.PageSize,
 	}
 	if r.URL.Query().Get("with_counts") == "1" {
-		pending, archived, returned, countErr := h.service.CountByState(r.Context(), tenantID, access)
+		var employeeID int64
+		if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+			employeeID = claims.UserID
+		}
+		pending, archived, returned, unread, countErr := h.service.CountByState(r.Context(), tenantID, access, employeeID)
 		if countErr != nil {
 			httputil.WriteInternalError(w, countErr.Error())
 			return
 		}
-		resp["counts"] = map[string]int{"pending": pending, "archived": archived, "returned": returned}
+		resp["counts"] = map[string]int{"pending": pending, "archived": archived, "returned": returned, "unread": unread}
 	}
 	httputil.WriteSuccess(w, resp)
 }

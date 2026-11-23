@@ -331,8 +331,9 @@ func (s *Store) ListScopedPaginated(ctx context.Context, tenantID int64, filter 
 	return items, total, err
 }
 
-// CountByState 返回授权范围内各队列的病历数（pending/archived/returned）。
-func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access) (pending, archived, returned int, err error) {
+// CountByState 返回授权范围内各队列的病历数（pending/archived/returned）以及
+// 当前审核人还没看过的待审数（unread，菜单角标用）。
+func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access, employeeID int64) (pending, archived, returned, unread int, err error) {
 	args := []any{tenantID}
 	where := "r.tenant_id=$1"
 	if access != nil && !access.Admin && access.Scope != "tenant" {
@@ -342,12 +343,12 @@ func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrper
 			where += fmt.Sprintf(" AND r.doctor_id=$%d", len(args))
 		case "department":
 			if len(access.DepartmentIDs) == 0 {
-				return 0, 0, 0, nil
+				return 0, 0, 0, 0, nil
 			}
 			args = append(args, access.DepartmentIDs)
 			where += fmt.Sprintf(" AND r.department_id = ANY($%d)", len(args))
 		default:
-			return 0, 0, 0, nil
+			return 0, 0, 0, 0, nil
 		}
 	}
 	err = s.pool.QueryRow(ctx, `
@@ -356,7 +357,17 @@ func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrper
 			COUNT(*) FILTER (WHERE r.status = '已归档'),
 			COUNT(*) FILTER (WHERE r.status = '退回')
 		FROM emr_records r WHERE `+where, args...).Scan(&pending, &archived, &returned)
-	return pending, archived, returned, err
+	if err != nil {
+		return pending, archived, returned, 0, err
+	}
+	if employeeID > 0 {
+		unreadArgs := append(append([]any{}, args...), employeeID)
+		unreadWhere := fmt.Sprintf("%s AND r.status NOT IN ('草稿','需补全','已归档','退回') AND NOT EXISTS (SELECT 1 FROM user_resource_reads m WHERE m.tenant_id=$1 AND m.employee_id=$%d AND m.resource_type='emr_record' AND m.resource_id=r.id)", where, len(unreadArgs))
+		if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM emr_records r WHERE `+unreadWhere, unreadArgs...).Scan(&unread); err != nil {
+			return pending, archived, returned, 0, err
+		}
+	}
+	return pending, archived, returned, unread, nil
 }
 
 func (s *Store) list(ctx context.Context, query string, args ...any) ([]*Record, error) {
@@ -1140,7 +1151,15 @@ func (s *Store) GetPublishedTemplateVersion(ctx context.Context, tenantID int64,
 }
 
 func (s *Store) listTemplateSections(ctx context.Context, versionID string) ([]*emrtemplate.Section, error) {
-	rows, err := s.pool.Query(ctx, `SELECT tf.id,tf.template_id,f.code,f.name,f.content_category,f.input_type,TRUE,tf.is_visible,tf.display_order,f.description,f.options_json,f.structure_json FROM emr_template_fields tf JOIN emr_fields f ON f.id=tf.field_id WHERE tf.template_id=$1 ORDER BY tf.display_order`, versionID)
+	rows, err := s.pool.Query(ctx, `SELECT tf.id,tf.template_id,f.code,
+		COALESCE(NULLIF(tf.name_override,''), f.name),
+		f.content_category,
+		COALESCE(NULLIF(tf.input_type_override,''), f.input_type),
+		TRUE,tf.is_visible,tf.display_order,
+		COALESCE(NULLIF(tf.description,''), f.description),
+		f.options_json,
+		COALESCE(NULLIF(tf.structure_json,'{}'::jsonb), f.structure_json)
+		FROM emr_template_fields tf JOIN emr_fields f ON f.id=tf.field_id WHERE tf.template_id=$1 ORDER BY tf.display_order`, versionID)
 	if err != nil {
 		return nil, err
 	}

@@ -1086,6 +1086,7 @@ type RecordingTaskStatsResponse struct {
 	// 工作台口径：待执行任务数、其中逾期数，以及按执行人的分布。
 	// 之前这些数字是前端把全部待办翻页拉回来自己数的。
 	OpenTasks        int64           `json:"open_tasks"`
+	OpenUnreadTasks  int64           `json:"open_unread_tasks"`
 	OpenOverdueTasks int64           `json:"open_overdue_tasks"`
 	ByExecutor       []ExecutorStats `json:"by_executor,omitempty"`
 }

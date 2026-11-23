@@ -110,7 +110,12 @@ func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID
 	fieldDefinitions := make([]string, 0, len(prepared.Template.Sections))
 	fieldNames := make(map[string]string, len(prepared.Template.Sections))
 	for _, section := range prepared.Template.Sections {
-		fieldDefinitions = append(fieldDefinitions, fmt.Sprintf("%s=%s", section.Code, section.Name))
+		definition := fmt.Sprintf("%s=%s", section.Code, section.Name)
+		if template, ok := inlineTemplateOf(section); ok {
+			_, defaults := emrtemplate.InlineTemplateSegments(template)
+			definition += fmt.Sprintf("（固定句式：%s；返回 {\"slots\":[...]}，%d 个，只填括号内，括号外不改；默认值：%s）", template, len(defaults), strings.Join(defaults, "｜"))
+		}
+		fieldDefinitions = append(fieldDefinitions, definition)
 		fieldNames[strings.TrimSpace(section.Name)] = section.Code
 	}
 	fieldDefinitionText := strings.Join(fieldDefinitions, ", ")
@@ -125,7 +130,7 @@ func (h *InternalHandler) GenerateIncrementalDraft(ctx context.Context, tenantID
 不要编造转写中没有出现的事实；不要修改已锁定栏位；不要输出解释文字。
 必须返回合法 JSON，格式为：{"updates":{"模板栏位编码":"更新后的完整栏位内容"},"unresolved_items":[]}。
 updates 只能使用当前模板中的栏位编码。没有足够信息时返回空 updates。
-结构化栏位必须返回完整对象，并按模板结构合并子字段，不能只返回字符串。`
+结构化栏位必须返回完整对象，并按模板结构合并子字段，不能只返回字符串。带固定句式的栏位必须返回 {"slots":[...]}，slots 数量与括号数量一致，只填括号内内容，不得改写括号外文字。`
 	response, _, _, err := h.callLLM(ctx, llmgateway.TextInferenceRequest{
 		TenantID: tenantID, CallerService: "lingce-api", CallerModule: "emr.experimental_incremental_draft",
 		TraceID: requestID, FunctionType: config.FunctionType, Provider: config.Provider, ModelCode: config.ModelCode,
@@ -203,7 +208,9 @@ updates 只能使用当前模板中的栏位编码。没有足够信息时返回
 			updates[code] = value
 			continue
 		}
-		if sectionUsesStructuredContent(section) {
+		if template, ok := inlineTemplateOf(section); ok {
+			updates[code] = normalizeInlineTemplateValue(value, template)
+		} else if sectionUsesStructuredContent(section) {
 			normalized, normalizeErr := validateAndNormalizeSectionValue(value, section)
 			if normalizeErr != nil {
 				continue
@@ -832,6 +839,8 @@ func parseAndValidateEMRResult(raw string, template *emrtemplate.PublishedVersio
 				return nil, nil, err
 			}
 			normalizedContent[section.Code] = value
+		} else if template, ok := inlineTemplateOf(section); ok {
+			normalizedContent[section.Code] = normalizeInlineTemplateValue(envelope.WorkingContent[section.Code], template)
 		} else if sectionUsesStructuredContent(section) {
 			value, err := validateAndNormalizeSectionValue(envelope.WorkingContent[section.Code], section)
 			if err != nil {
@@ -866,6 +875,91 @@ func sectionUsesStructuredContent(section *emrtemplate.Section) bool {
 		return false
 	}
 	return strings.Contains(section.InputType, "结构化") && len(section.Structure) > 0
+}
+
+// inlineTemplateOf 返回栏位的固定句式（structure.template）；没有则 false。
+func inlineTemplateOf(section *emrtemplate.Section) (string, bool) {
+	if section == nil {
+		return "", false
+	}
+	value, ok := section.Structure["template"]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// normalizeInlineTemplateValue 把模型返回的 {"slots":[...]} 拼回固定句式。
+// 模型直接返回整句时，只有整句包含全部固定文字才采信；否则回退到默认值。
+// 这样括号外文字永远来自模板，模型无法改写。
+func normalizeInlineTemplateValue(value any, template string) string {
+	segments, defaults := emrtemplate.InlineTemplateSegments(template)
+	if object, ok := value.(map[string]any); ok {
+		if raw, ok := object["slots"]; ok {
+			if slots, ok := toStringSlice(raw); ok && len(slots) == len(defaults) {
+				return emrtemplate.AssembleInlineTemplate(segments, defaults, slots)
+			}
+		}
+	}
+	if text, ok := value.(string); ok {
+		if trimmed := strings.TrimSpace(text); trimmed != "" && inlineTextMatchesTemplate(segments, trimmed) {
+			return trimmed
+		}
+	}
+	return emrtemplate.AssembleInlineTemplate(segments, defaults, defaults)
+}
+
+func toStringSlice(value any) ([]string, bool) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		if item == nil {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, fmt.Sprint(item))
+	}
+	return out, true
+}
+
+func inlineTextMatchesTemplate(segments []string, text string) bool {
+	cursor := 0
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		index := strings.Index(text[cursor:], segment)
+		if index < 0 {
+			return false
+		}
+		cursor += index + len(segment)
+	}
+	return true
+}
+
+func sectionOptions(section *emrtemplate.Section) []string {
+	if section == nil || section.Options == nil {
+		return nil
+	}
+	raw, ok := section.Options["options"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 // Empty physical-exam groups represent missing observations, not text content.
@@ -1151,7 +1245,11 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 	if err != nil {
 		return nil, err
 	}
+	systemPrompt = appendInlineTemplateSystemRule(systemPrompt, template.Sections)
 	rendered := renderPrompt(userPrompt, req, employee, template)
+	if hasInlineTemplate(template.Sections) {
+		rendered = strings.TrimSpace(rendered) + "\n\n【固定句式栏位补充】\n栏位定义中标注“固定句式”的栏位，不适用“文本栏位返回字符串”，必须返回 {\"slots\":[...]}；slots 数量与括号数量一致，只填括号内内容，括号外文字不要输出或改写。"
+	}
 	if strings.TrimSpace(systemPrompt) == "" || strings.TrimSpace(rendered) == "" {
 		return nil, fmt.Errorf("病历生成提示词不能为空")
 	}
@@ -1205,6 +1303,32 @@ func (h *InternalHandler) loadPrompt(ctx context.Context) (string, string, error
 		return "", "", fmt.Errorf("电子病历生成提示词不完整：emr_working_draft_generation_v1")
 	}
 	return systemPrompt, userPrompt, nil
+}
+
+func hasInlineTemplate(sections []*emrtemplate.Section) bool {
+	for _, section := range sections {
+		if _, ok := inlineTemplateOf(section); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// appendInlineTemplateSystemRule 在有固定句式栏位时，追加一条覆盖系统提示词
+// “普通文本栏位返回自然语言字符串”的硬规则，确保模型按 slots 输出。
+func appendInlineTemplateSystemRule(systemPrompt string, sections []*emrtemplate.Section) string {
+	hasInline := false
+	for _, section := range sections {
+		if _, ok := inlineTemplateOf(section); ok {
+			hasInline = true
+			break
+		}
+	}
+	if !hasInline {
+		return systemPrompt
+	}
+	const rule = "\n\n【固定句式栏位】\n有的栏位提供了固定句式（structure.template）。这类栏位不能返回自然语言字符串，必须返回 {\"slots\":[...]}：slots 数量与括号数量一致，按顺序只填写括号内的内容；括号外文字由系统用模板拼回，不要输出或改写。无法从转写确定的括号保留给定默认值。"
+	return strings.TrimSpace(systemPrompt) + rule
 }
 
 func renderPrompt(templateText string, req EmrWorkerRequest, employee map[string]any, template *emrtemplate.PublishedVersionDetail) string {
@@ -1261,8 +1385,18 @@ func renderGenerationFieldSpecs(sections []*emrtemplate.Section) string {
 		if section.Code == "diagnosis" || section.Code == "tcm_diagnosis" {
 			lines = append(lines, diagnosisGenerationRequirement(section.Code))
 		}
-		if !sectionUsesStructuredContent(section) {
+		if template, ok := inlineTemplateOf(section); ok {
+			_, defaults := emrtemplate.InlineTemplateSegments(template)
+			lines = append(lines, "  固定句式："+template)
+			lines = append(lines, fmt.Sprintf("  输出要求：返回 JSON 对象 {\"slots\":[...]}；slots 必须恰好 %d 个，按顺序对应每个括号；只填写括号内内容，禁止输出或改写括号外文字；无法从转写确定的括号保留默认值。括号默认值依次为：%s", len(defaults), strings.Join(defaults, " ｜ ")))
+			if hints := emrtemplate.InlineTemplateSlotHints(template); len(hints) > 0 {
+				lines = append(lines, "  槽位填写要求（按顺序）："+strings.Join(hints, "；"))
+			}
+		} else if !sectionUsesStructuredContent(section) {
 			lines = append(lines, "  输出要求：返回简洁连贯的自然语言字符串，禁止 JSON 对象、数组或名称/备注/状态等键值对。")
+			if options := sectionOptions(section); len(options) > 0 {
+				lines = append(lines, "  可选值（只能选一个）："+strings.Join(options, " / "))
+			}
 		}
 		if sectionUsesStructuredContent(section) {
 			structureJSON, _ := json.Marshal(section.Structure)

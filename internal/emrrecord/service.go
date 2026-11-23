@@ -75,8 +75,8 @@ func (s *Service) ListScopedPaginated(ctx context.Context, tenantID int64, filte
 	return s.store.ListScopedPaginated(ctx, tenantID, filter, page, pageSize, access)
 }
 
-func (s *Service) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access) (int, int, int, error) {
-	return s.store.CountByState(ctx, tenantID, access)
+func (s *Service) CountByState(ctx context.Context, tenantID int64, access *emrpermission.Access, employeeID int64) (int, int, int, int, error) {
+	return s.store.CountByState(ctx, tenantID, access, employeeID)
 }
 
 func (s *Service) ListByPatient(ctx context.Context, tenantID, patientID int64, page, pageSize int) ([]*Record, int, error) {

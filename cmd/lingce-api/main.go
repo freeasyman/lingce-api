@@ -47,6 +47,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/patientops"
 	"github.com/freeasyman/lingce-api/internal/product"
 	"github.com/freeasyman/lingce-api/internal/rbac"
+	"github.com/freeasyman/lingce-api/internal/readmark"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/sandbox"
@@ -246,6 +247,8 @@ func main() {
 	kbService := knowledge.NewService(kbStore)
 	kbHandler := knowledge.NewHandler(kbService)
 	kbHandler.RegisterRoutes(mux, cfg.JWT.Secret)
+
+	readmark.NewHandler(pool).RegisterRoutes(mux, cfg.JWT.Secret)
 
 	productStore := product.NewStore(pool)
 	productService := product.NewService(productStore)
