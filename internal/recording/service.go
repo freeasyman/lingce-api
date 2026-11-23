@@ -5455,8 +5455,8 @@ func (s *Service) AddBestPractice(ctx context.Context, tenantID, recordingID, cr
 }
 
 // DeleteBestPractice removes a recording from best practices
-func (s *Service) DeleteBestPractice(ctx context.Context, recordingID int64) error {
-	return s.store.DeleteBestPractice(ctx, recordingID)
+func (s *Service) DeleteBestPractice(ctx context.Context, tenantID, recordingID int64) error {
+	return s.store.DeleteBestPractice(ctx, tenantID, recordingID)
 }
 
 // Placeholder methods for remaining endpoints (to be implemented)

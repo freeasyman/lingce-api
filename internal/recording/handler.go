@@ -1095,6 +1095,10 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.UserType != auth.UserTypeAdmin {
+		if err := tenancy.RequireSameTenant(claims, task.TenantID); err != nil {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
 		tenantID, tenantErr := getTaskTenantIDFromClaimsOrQuery(claims, r)
 		if tenantErr != nil {
 			httputil.WriteForbidden(w, tenantErr.Error())
@@ -1560,7 +1564,18 @@ func (h *Handler) DeleteBestPractice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.DeleteBestPractice(r.Context(), id); err != nil {
+	// P1：先校验录音归属，再按租户删除。
+	rec, err := h.service.GetRecording(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, rec.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
+	if err := h.service.DeleteBestPractice(r.Context(), rec.TenantID, id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
