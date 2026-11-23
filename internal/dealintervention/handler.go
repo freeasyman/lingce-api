@@ -29,6 +29,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/deal-expert/interventions", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/deal-expert/interventions/by-recording/{recordingID}", Handler: h.GetByRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/deal-expert/interventions/{recordingID}/actions", Handler: h.Act, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "POST", Path: "/api/v1/deal-expert/interventions/{recordingID}/view", Handler: h.MarkViewed, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 	}, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
@@ -73,12 +74,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if pageSize <= 0 || pageSize > 100 {
 		pageSize = 20
 	}
-	items, total, err := h.service.List(r.Context(), tenantID, status, visibility.VisibilityEmployeeIDs(), page, pageSize)
+	items, total, unread, err := h.service.List(r.Context(), tenantID, status, visibility.VisibilityEmployeeIDs(), page, pageSize)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "unread_total": unread, "page": page, "page_size": pageSize})
 }
 
 func (h *Handler) GetByRecording(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +108,43 @@ func (h *Handler) GetByRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	if !visibility.Allows(item.ConsultantID) {
 		httputil.WriteForbidden(w, "无权查看该介入信号")
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"signal": item})
+}
+
+// MarkViewed 标记已读：门户详情打开即调用，角标只统计未读数。
+func (h *Handler) MarkViewed(w http.ResponseWriter, r *http.Request) {
+	claims, tenantID, ok := h.tenantAndClaims(w, r)
+	if !ok {
+		return
+	}
+	visibility, err := h.visibility(r, claims, tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, "无法解析数据可见范围")
+		return
+	}
+	recordingID, err := strconv.ParseInt(r.PathValue("recordingID"), 10, 64)
+	if err != nil || recordingID <= 0 {
+		httputil.WriteBadRequest(w, "invalid recording id")
+		return
+	}
+	current, err := h.service.GetByRecording(r.Context(), tenantID, recordingID)
+	if err != nil {
+		if errors.Is(err, ErrSignalNotFound) {
+			httputil.WriteNotFound(w, "介入信号不存在")
+			return
+		}
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if !visibility.Allows(current.ConsultantID) {
+		httputil.WriteForbidden(w, "无权查看该介入信号")
+		return
+	}
+	item, err := h.service.MarkViewed(r.Context(), tenantID, recordingID, claims.UserID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"signal": item})

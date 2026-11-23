@@ -31,6 +31,8 @@ type Signal struct {
 	HandledAt      *time.Time `json:"handled_at,omitempty"`
 	HandledBy      *int64     `json:"handled_by,omitempty"`
 	HandledByName  string     `json:"handled_by_name,omitempty"`
+	ViewedAt       *time.Time `json:"viewed_at,omitempty"`
+	ViewedBy       *int64     `json:"viewed_by,omitempty"`
 	ManagerID      int64      `json:"manager_employee_id"`
 	ConsultantID   int64      `json:"consultant_employee_id"`
 }
@@ -45,6 +47,7 @@ func NewService(pool *pgxpool.Pool) *Service {
 
 const signalColumns = `s.id, s.recording_id, s.customer_name, s.project_name, s.level, s.reason, s.action,
 	s.evidence, s.status, s.short_code, s.note, s.created_at, s.handled_at, s.handled_by,
+	s.viewed_at, s.viewed_by,
 	COALESCE(NULLIF(e.full_name,''), NULLIF(e.name,''), ''), COALESCE(r.recorded_at::text, ''),
 	COALESCE(NULLIF(h.full_name,''), NULLIF(h.name,''), ''), s.manager_employee_id, s.consultant_employee_id`
 
@@ -52,7 +55,7 @@ func scanSignal(row rowScanner) (*Signal, error) {
 	var item Signal
 	err := row.Scan(&item.ID, &item.RecordingID, &item.CustomerName, &item.ProjectName, &item.Level, &item.Reason, &item.Action,
 		&item.Evidence, &item.Status, &item.ShortCode, &item.Note, &item.CreatedAt, &item.HandledAt, &item.HandledBy,
-		&item.ConsultantName, &item.RecordedAt, &item.HandledByName, &item.ManagerID, &item.ConsultantID)
+		&item.ViewedAt, &item.ViewedBy, &item.ConsultantName, &item.RecordedAt, &item.HandledByName, &item.ManagerID, &item.ConsultantID)
 	return &item, err
 }
 
@@ -62,7 +65,7 @@ type rowScanner interface {
 
 // List 返回介入信号列表：status=pending/handled（intervened+dismissed）。
 // employeeIDs 来自统一数据可见范围：nil 表示全机构，否则只看这些咨询师名下的信号。
-func (s *Service) List(ctx context.Context, tenantID int64, status string, employeeIDs []int64, page, pageSize int) ([]*Signal, int, error) {
+func (s *Service) List(ctx context.Context, tenantID int64, status string, employeeIDs []int64, page, pageSize int) ([]*Signal, int, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -85,7 +88,14 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string, emplo
 
 	var total int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deal_intervention_signals s WHERE `+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count intervention signals: %w", err)
+		return nil, 0, 0, fmt.Errorf("count intervention signals: %w", err)
+	}
+	// 未读数：角标只统计「待处理且未看过」的信号。
+	unread := 0
+	if status == "pending" {
+		if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deal_intervention_signals s WHERE `+where+` AND s.viewed_at IS NULL`, args...).Scan(&unread); err != nil {
+			return nil, 0, 0, fmt.Errorf("count unread intervention signals: %w", err)
+		}
 	}
 
 	args = append(args, pageSize, (page-1)*pageSize)
@@ -100,7 +110,7 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string, emplo
 		LIMIT $%d OFFSET $%d`, signalColumns, where, len(args)-1, len(args))
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list intervention signals: %w", err)
+		return nil, 0, 0, fmt.Errorf("list intervention signals: %w", err)
 	}
 	defer rows.Close()
 
@@ -108,11 +118,11 @@ func (s *Service) List(ctx context.Context, tenantID int64, status string, emplo
 	for rows.Next() {
 		item, err := scanSignal(rows)
 		if err != nil {
-			return nil, 0, fmt.Errorf("scan intervention signal: %w", err)
+			return nil, 0, 0, fmt.Errorf("scan intervention signal: %w", err)
 		}
 		items = append(items, item)
 	}
-	return items, total, rows.Err()
+	return items, total, unread, rows.Err()
 }
 
 // GetByRecording 返回一条接待最新的介入信号。
@@ -133,6 +143,18 @@ func (s *Service) GetByRecording(ctx context.Context, tenantID, recordingID int6
 		return nil, fmt.Errorf("get intervention signal: %w", err)
 	}
 	return item, nil
+}
+
+// MarkViewed 标记介入信号已读：详情打开即调用。只对 pending 生效，已处理不再改。
+func (s *Service) MarkViewed(ctx context.Context, tenantID, recordingID, viewerID int64) (*Signal, error) {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deal_intervention_signals
+		SET viewed_at = NOW(), viewed_by = $3
+		WHERE tenant_id = $1 AND recording_id = $2 AND status = 'pending' AND viewed_at IS NULL
+	`, tenantID, recordingID, viewerID); err != nil {
+		return nil, fmt.Errorf("mark intervention viewed: %w", err)
+	}
+	return s.GetByRecording(ctx, tenantID, recordingID)
 }
 
 // Act 处理介入信号：intervened/dismissed；幂等——已处理返回当前状态，不报错。
@@ -158,7 +180,8 @@ func (s *Service) Act(ctx context.Context, tenantID, recordingID, actorID int64,
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE deal_intervention_signals
-		SET status = $3, note = $4, handled_at = NOW(), handled_by = $5
+		SET status = $3, note = $4, handled_at = NOW(), handled_by = $5,
+		    viewed_at = COALESCE(viewed_at, NOW()), viewed_by = COALESCE(viewed_by, $5)
 		WHERE tenant_id = $1 AND recording_id = $2
 	`, tenantID, recordingID, action, note, actorID); err != nil {
 		return nil, fmt.Errorf("update intervention signal: %w", err)
