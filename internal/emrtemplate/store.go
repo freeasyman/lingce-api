@@ -399,7 +399,7 @@ func (s *Store) UpdateVersion(ctx context.Context, tenantID int64, versionID str
 		UPDATE emr_templates
 		SET version_no=$2, name=$3, document_type=$4, visit_type=$5, department_id=$6,
 		    specialty=$7, print_title=$8, description=$9, updated_at=NOW()
-		WHERE id=$1 AND tenant_id IN (0, $10)
+		WHERE id=$1 AND tenant_id=$10
 	`, versionID, req.VersionNo, req.Name, req.DocumentType, req.VisitType, req.DepartmentID, req.SpecialtyModule, req.PrintTitle, req.Description, tenantID)
 	if err != nil {
 		return nil, err
@@ -448,7 +448,7 @@ func (s *Store) SaveSections(ctx context.Context, tenantID int64, versionID stri
 
 func (s *Store) requireDraftVersion(ctx context.Context, tenantID int64, versionID string) error {
 	var status string
-	err := s.pool.QueryRow(ctx, `SELECT status FROM emr_templates WHERE id=$1 AND tenant_id IN (0, $2)`, versionID, tenantID).Scan(&status)
+	err := s.pool.QueryRow(ctx, `SELECT status FROM emr_templates WHERE id=$1 AND tenant_id=$2`, versionID, tenantID).Scan(&status)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("template version not found")
 	}
@@ -469,7 +469,7 @@ func (s *Store) Publish(ctx context.Context, tenantID int64, versionID string, a
 	defer tx.Rollback(ctx)
 	var status, code string
 	var templateTenant int64
-	err = tx.QueryRow(ctx, `SELECT status, code, tenant_id FROM emr_templates WHERE id=$1 AND tenant_id IN (0, $2) FOR UPDATE`, versionID, tenantID).Scan(&status, &code, &templateTenant)
+	err = tx.QueryRow(ctx, `SELECT status, code, tenant_id FROM emr_templates WHERE id=$1 AND tenant_id=$2 FOR UPDATE`, versionID, tenantID).Scan(&status, &code, &templateTenant)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("template version not found")
 	}
@@ -519,7 +519,7 @@ func (s *Store) SetCurrent(ctx context.Context, tenantID int64, versionID string
 	if err := tx.QueryRow(ctx, `
 		SELECT code, tenant_id, status
 		FROM emr_templates
-		WHERE id=$1 AND tenant_id IN (0,$2)
+		WHERE id=$1 AND tenant_id=$2
 		FOR UPDATE
 	`, versionID, tenantID).Scan(&code, &templateTenant, &status); err != nil {
 		if err == pgx.ErrNoRows {
@@ -642,7 +642,7 @@ func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, a
 	cmd, err := s.pool.Exec(ctx, `
 		UPDATE emr_templates
 		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
-		WHERE id=$1 AND tenant_id IN (0, $2) AND status<>'disabled'
+		WHERE id=$1 AND tenant_id=$2 AND status<>'disabled'
 	`, versionID, tenantID, actorID)
 	if err != nil {
 		return err
@@ -716,9 +716,9 @@ func (s *Store) AssignToTenant(ctx context.Context, actorID int64, platformTempl
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE emr_templates
-		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
-		WHERE COALESCE(tenant_id,0)=$1 AND code=$2 AND is_current=true
-	`, targetTenantID, code, actorID); err != nil {
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$4, updated_at=NOW()
+		WHERE COALESCE(tenant_id,0)=$1 AND code=$2 AND visit_type=$3 AND is_current=true
+	`, targetTenantID, code, visitType, actorID); err != nil {
 		return "", fmt.Errorf("disable current tenant template: %w", err)
 	}
 
@@ -728,7 +728,7 @@ func (s *Store) AssignToTenant(ctx context.Context, actorID int64, platformTempl
 			(tenant_id, code, name, version_no, document_type, visit_type, department_id, specialty,
 			 status, is_current, print_title, description, created_by, updated_by, published_at, published_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'published',TRUE,$9,$10,$11,$11,NOW(),$11)
-		ON CONFLICT (tenant_id, code, version_no) DO UPDATE
+		ON CONFLICT (tenant_id, code, version_no, visit_type) DO UPDATE
 		SET name=EXCLUDED.name, document_type=EXCLUDED.document_type, visit_type=EXCLUDED.visit_type,
 		    department_id=EXCLUDED.department_id, specialty=EXCLUDED.specialty,
 		    status='published', is_current=true, print_title=EXCLUDED.print_title,
@@ -763,22 +763,21 @@ func (s *Store) AssignToTenant(ctx context.Context, actorID int64, platformTempl
 	return newID, nil
 }
 
-// UnassignFromTenant 停用目标租户从该平台模板复制出来的当前模板。
-func (s *Store) UnassignFromTenant(ctx context.Context, actorID int64, platformTemplateID string, targetTenantID int64) error {
+// UnassignFromTenant 停用目标租户的一条专有模板（按该租户模板行 id，仅停这一行）。
+func (s *Store) UnassignFromTenant(ctx context.Context, actorID int64, tenantTemplateID string, targetTenantID int64) error {
 	if targetTenantID <= 0 {
 		return fmt.Errorf("目标租户不能为空")
 	}
 	command, err := s.pool.Exec(ctx, `
 		UPDATE emr_templates
 		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
-		WHERE COALESCE(tenant_id,0)=$1 AND is_current=true
-		  AND code=(SELECT code FROM emr_templates WHERE id=$2 AND COALESCE(tenant_id,0)=0)
-	`, targetTenantID, strings.TrimSpace(platformTemplateID), actorID)
+		WHERE id=$1 AND COALESCE(tenant_id,0)=$2 AND is_current=true
+	`, strings.TrimSpace(tenantTemplateID), targetTenantID, actorID)
 	if err != nil {
 		return fmt.Errorf("unassign template: %w", err)
 	}
 	if command.RowsAffected() == 0 {
-		return fmt.Errorf("该租户未分配此模板")
+		return fmt.Errorf("该模板不属于此租户或已停用")
 	}
 	return nil
 }
