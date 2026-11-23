@@ -90,3 +90,15 @@ func validateSections(items []SectionInput) error {
 	}
 	return nil
 }
+
+func (s *Service) Assign(ctx context.Context, actorID int64, sourceTemplateID string, targetTenantID int64) (string, error) {
+	return s.store.AssignToTenant(ctx, actorID, sourceTemplateID, targetTenantID)
+}
+
+func (s *Service) Unassign(ctx context.Context, actorID int64, tenantTemplateID string, targetTenantID int64) error {
+	return s.store.UnassignFromTenant(ctx, actorID, tenantTemplateID, targetTenantID)
+}
+
+func (s *Service) ListTenantTemplates(ctx context.Context) ([]*Template, error) {
+	return s.store.ListTenantTemplates(ctx)
+}

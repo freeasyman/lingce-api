@@ -26,6 +26,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, []router.Route{
 		{Method: "GET", Path: "/api/v1/emr/templates", Handler: h.List, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/platform-templates", Handler: h.ListPlatform, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/emr/tenant-templates", Handler: h.ListTenantTemplates, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/emr/templates/{id}/assign", Handler: h.Assign, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/templates/{id}/unassign", Handler: h.Unassign, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/templates", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/templates/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/templates/{id}/versions", Handler: h.CreateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -240,4 +243,66 @@ func (h *Handler) ListPlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// ListTenantTemplates 列出全部租户的专有模板（运营控制台只读+分发）。
+func (h *Handler) ListTenantTemplates(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	items, err := h.service.ListTenantTemplates(r.Context())
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// Assign 把源模板（标准或任一租户专有）复制给目标租户。
+func (h *Handler) Assign(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req AssignRequest
+	if decode(r, &req) != nil || req.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	if _, err := h.permissions.Authorize(r.Context(), claims, req.TenantID, "template.manage"); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	id, err := h.service.Assign(r.Context(), claims.UserID, parseID(r), req.TenantID)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": map[string]any{"id": id}})
+}
+
+// Unassign 停用目标租户的一条专有模板（按该模板行 id）。
+func (h *Handler) Unassign(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	var req AssignRequest
+	if decode(r, &req) != nil || req.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	if _, err := h.permissions.Authorize(r.Context(), claims, req.TenantID, "template.manage"); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.service.Unassign(r.Context(), claims.UserID, parseID(r), req.TenantID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }

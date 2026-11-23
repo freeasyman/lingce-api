@@ -686,3 +686,129 @@ func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section,
 	}
 	return out, rows.Err()
 }
+
+// AssignToTenant 把源模板（平台标准或任一租户专有）复制成目标租户的专有行。
+func (s *Store) AssignToTenant(ctx context.Context, actorID int64, sourceTemplateID string, targetTenantID int64) (string, error) {
+	if targetTenantID <= 0 {
+		return "", fmt.Errorf("目标租户不能为空")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin assign template: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var sourceTenantID int64
+	var code, versionNo, name, documentType, visitType, printTitle, description string
+	var departmentID *int64
+	var specialty *string
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(tenant_id,0), code, version_no, name, document_type, visit_type, department_id, specialty, print_title, description
+		FROM emr_templates
+		WHERE id=$1 AND status='published' AND is_current=true
+	`, strings.TrimSpace(sourceTemplateID)).Scan(&sourceTenantID, &code, &versionNo, &name, &documentType, &visitType, &departmentID, &specialty, &printTitle, &description)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("模板不存在或未发布")
+	}
+	if err != nil {
+		return "", fmt.Errorf("load source template: %w", err)
+	}
+	if sourceTenantID == targetTenantID {
+		return "", fmt.Errorf("模板已属于该租户")
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_templates
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$4, updated_at=NOW()
+		WHERE COALESCE(tenant_id,0)=$1 AND code=$2 AND visit_type=$3 AND is_current=true
+	`, targetTenantID, code, visitType, actorID); err != nil {
+		return "", fmt.Errorf("disable current tenant template: %w", err)
+	}
+
+	var newID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO emr_templates
+			(tenant_id, code, name, version_no, document_type, visit_type, department_id, specialty,
+			 status, is_current, print_title, description, created_by, updated_by, published_at, published_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'published',TRUE,$9,$10,$11,$11,NOW(),$11)
+		ON CONFLICT (tenant_id, code, version_no, visit_type) DO UPDATE
+		SET name=EXCLUDED.name, document_type=EXCLUDED.document_type, visit_type=EXCLUDED.visit_type,
+		    department_id=EXCLUDED.department_id, specialty=EXCLUDED.specialty,
+		    status='published', is_current=true, print_title=EXCLUDED.print_title,
+		    description=EXCLUDED.description, updated_by=EXCLUDED.updated_by,
+		    published_at=COALESCE(emr_templates.published_at, NOW()), published_by=EXCLUDED.published_by,
+		    updated_at=NOW()
+		RETURNING id
+	`, targetTenantID, code, name, versionNo, documentType, visitType, departmentID, specialty,
+		printTitle, description, actorID).Scan(&newID)
+	if err != nil {
+		return "", fmt.Errorf("copy template to tenant: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM emr_template_fields WHERE template_id=$1`, newID); err != nil {
+		return "", fmt.Errorf("clear tenant template fields: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO emr_template_fields
+			(tenant_id, template_id, field_id, display_order, is_visible, is_required, description,
+			 name_override, input_type_override, structure_json, created_by)
+		SELECT 0, $1, field_id, display_order, is_visible, is_required, description,
+		       name_override, input_type_override, structure_json, $3
+		FROM emr_template_fields
+		WHERE template_id=$2
+	`, newID, strings.TrimSpace(sourceTemplateID), actorID); err != nil {
+		return "", fmt.Errorf("copy template fields: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit assign template: %w", err)
+	}
+	return newID, nil
+}
+
+// UnassignFromTenant 停用目标租户的一条专有模板（按该租户模板行 id，仅停这一行）。
+func (s *Store) UnassignFromTenant(ctx context.Context, actorID int64, tenantTemplateID string, targetTenantID int64) error {
+	if targetTenantID <= 0 {
+		return fmt.Errorf("目标租户不能为空")
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE emr_templates
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
+		WHERE id=$1 AND COALESCE(tenant_id,0)=$2 AND is_current=true
+	`, strings.TrimSpace(tenantTemplateID), targetTenantID, actorID)
+	if err != nil {
+		return fmt.Errorf("unassign template: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return fmt.Errorf("该模板不属于此租户或已停用")
+	}
+	return nil
+}
+
+// ListTenantTemplates 列出全部租户的专有模板（当前生效）。
+func (s *Store) ListTenantTemplates(ctx context.Context) ([]*Template, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, code, name, version_no, document_type, visit_type,
+		       department_id, COALESCE(specialty, ''), status, is_current, scope,
+		       created_by, created_at, updated_at
+		FROM emr_templates
+		WHERE COALESCE(tenant_id,0) <> 0 AND status='published' AND is_current=true
+		ORDER BY tenant_id, code, visit_type
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant templates: %w", err)
+	}
+	defer rows.Close()
+	items := make([]*Template, 0)
+	for rows.Next() {
+		item := &Template{}
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Code, &item.Name, &item.VersionNo,
+			&item.DocumentType, &item.VisitType, &item.DepartmentID, &item.Specialty,
+			&item.Status, &item.IsCurrent, &item.Scope, &item.CreatedBy,
+			&item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
