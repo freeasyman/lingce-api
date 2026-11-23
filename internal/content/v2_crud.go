@@ -3,6 +3,7 @@ package content
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -328,6 +329,28 @@ type insightEmployeeOption struct {
 	Name string `json:"name"`
 }
 
+// CountUnreadInsights 返回当前用户还没点开过的待处理灵感数（菜单角标用）。
+func (s *Store) CountUnreadInsights(ctx context.Context, tenantID, employeeID int64) (int64, error) {
+	if tenantID <= 0 || employeeID <= 0 {
+		return 0, nil
+	}
+	var unread int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM content_insights ci
+		WHERE ci.tenant_id = $1
+		  AND COALESCE(ci.status,'new') = 'new'
+		  AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id = ci.tenant_id)
+		  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
+		                  WHERE m.tenant_id = ci.tenant_id AND m.employee_id = $2
+		                    AND m.resource_type = 'content_insight' AND m.resource_id = ci.id)`,
+		tenantID, employeeID).Scan(&unread)
+	if err != nil {
+		return 0, fmt.Errorf("count unread insights: %w", err)
+	}
+	return unread, nil
+}
+
 // insightDepartmentOption 科室筛选项（code 为 medical_department_code）。
 type insightDepartmentOption struct {
 	Code string `json:"code"`
@@ -336,6 +359,7 @@ type insightDepartmentOption struct {
 
 // listInsightsFiltered 按类型/医生/科室筛选并分页，返回当页数据、总数与筛选项。
 func (s *Store) listInsightsFiltered(ctx context.Context, tenantID int64, f insightListFilter) ([]ContentInsightRecord, int64, []insightEmployeeOption, []insightDepartmentOption, error) {
+	// 未读数由 CountUnreadInsights 单独返回（菜单角标用）。
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}

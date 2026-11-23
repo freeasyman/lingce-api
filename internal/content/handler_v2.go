@@ -11,6 +11,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -130,15 +131,22 @@ func (h *Handler) ListInsightsV2(w http.ResponseWriter, r *http.Request) {
 		writeContentError(w, err)
 		return
 	}
+	unread := int64(0)
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil && claims.UserType == auth.UserTypeEmployee {
+		if count, countErr := h.service.store.CountUnreadInsights(r.Context(), tenantID, claims.UserID); countErr == nil {
+			unread = count
+		}
+	}
 	httputil.WriteSuccess(w, map[string]any{
-		"items":       items,
-		"total":       total,
-		"page":        page,
-		"page_size":   limit,
-		"limit":       limit,
-		"offset":      offset,
-		"employees":   employees,
-		"departments": departments,
+		"items":        items,
+		"total":        total,
+		"unread_total": unread,
+		"page":         page,
+		"page_size":    limit,
+		"limit":        limit,
+		"offset":       offset,
+		"employees":    employees,
+		"departments":  departments,
 	})
 }
 
