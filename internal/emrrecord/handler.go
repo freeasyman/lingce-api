@@ -16,6 +16,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -25,10 +26,11 @@ import (
 type Handler struct {
 	service     *Service
 	permissions *emrpermission.Service
+	internal    *InternalHandler
 }
 
-func NewHandler(service *Service, permissions *emrpermission.Service) *Handler {
-	return &Handler{service: service, permissions: permissions}
+func NewHandler(service *Service, permissions *emrpermission.Service, internal *InternalHandler) *Handler {
+	return &Handler{service: service, permissions: permissions, internal: internal}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
@@ -42,6 +44,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/versions", Handler: h.Snapshots, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/records/{id}/export", Handler: h.ExportAudit, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/working-draft", Handler: h.AutoSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "PATCH", Path: "/api/v1/emr/records/{id}/visit-type", Handler: h.UpdateVisitType, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/emr/records/{id}/regenerate", Handler: h.Regenerate, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/save", Handler: h.ManualSave, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/submit", Handler: h.Submit, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/records/{id}/complete", Handler: h.Complete, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -607,4 +611,120 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"data": item})
+}
+
+// UpdateVisitType 在正文生成前修改病历就诊类型，并按（科室, 就诊类型）重选模板。
+func (h *Handler) UpdateVisitType(w http.ResponseWriter, r *http.Request) {
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	var req struct {
+		VisitType string `json:"visit_type"`
+	}
+	if decodeBody(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	item, err := h.service.UpdateVisitType(r.Context(), tenantID, access.UserID, recordID(r), strings.TrimSpace(req.VisitType))
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": item})
+}
+
+// Regenerate 按新的就诊类型重选模板，并用同一段听写全文重新生成工作稿。
+func (h *Handler) Regenerate(w http.ResponseWriter, r *http.Request) {
+	access, tenantID, err := h.authorizeRecord(r, "record.edit")
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	var req struct {
+		VisitType  string `json:"visit_type"`
+		Transcript string `json:"transcript"`
+	}
+	if decodeBody(r, &req) != nil {
+		httputil.WriteBadRequest(w, "invalid request body")
+		return
+	}
+	req.VisitType = strings.TrimSpace(req.VisitType)
+	req.Transcript = strings.TrimSpace(req.Transcript)
+	if req.VisitType != "初诊" && req.VisitType != "复诊" {
+		httputil.WriteBadRequest(w, "visit_type 必须是 初诊 或 复诊")
+		return
+	}
+	if req.Transcript == "" {
+		httputil.WriteBadRequest(w, "transcript is required")
+		return
+	}
+	if h.internal == nil {
+		httputil.WriteInternalError(w, "generation service not configured")
+		return
+	}
+	record, err := h.service.Get(r.Context(), tenantID, recordID(r))
+	if err != nil || record == nil {
+		httputil.WriteNotFound(w, "病历不存在")
+		return
+	}
+	departmentCode := contextText(record.EncounterContext["medical_department_code"])
+	if departmentCode == "" {
+		departmentCode, err = h.service.store.DoctorDepartmentCode(r.Context(), tenantID, record.DoctorID)
+		if err != nil {
+			httputil.WriteBadRequest(w, err.Error())
+			return
+		}
+	}
+	resolved, err := emrtemplate.ResolveCurrentTemplate(r.Context(), h.service.store.pool, tenantID, departmentCode, record.DocumentType, req.VisitType)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	if err := h.service.store.SetVisitTypeAndTemplate(r.Context(), tenantID, record.ID, req.VisitType, resolved.ID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	recordingID := recordingIDFromRecord(record)
+	if err := h.internal.ensureDraftQuotaForRecord(r.Context(), tenantID, recordingID, record.ID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	payload := EmrWorkerRequest{
+		TenantID:          tenantID,
+		RecordingID:       recordingID,
+		EncounterID:       record.EncounterID,
+		EmployeeID:        access.UserID,
+		CustomerID:        int64Value(record.PatientID),
+		CustomerName:      contextText(record.PatientSnapshot["name"]),
+		BusinessScope:     "doctor",
+		RoleCode:          "doctor",
+		RecordedAt:        record.StartedAt.Format(time.RFC3339),
+		CleanedTranscript: req.Transcript,
+		PatientSnapshot:   record.PatientSnapshot,
+	}
+	result, err := h.internal.RunRegeneration(r.Context(), payload)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"data": result})
+}
+
+func contextText(value any) string {
+	switch text := value.(type) {
+	case string:
+		return strings.TrimSpace(text)
+	case fmt.Stringer:
+		return strings.TrimSpace(text.String())
+	}
+	return ""
+}
+
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }

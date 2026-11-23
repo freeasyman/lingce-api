@@ -1248,3 +1248,36 @@ func mergeObjectJSON(base string, patch map[string]any) string {
 	}
 	return string(raw)
 }
+
+// DoctorDepartmentCode 返回员工当前医疗科室 code（无则空串）。
+func (s *Store) DoctorDepartmentCode(ctx context.Context, tenantID, employeeID int64) (string, error) {
+	var code string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(medical_department_code, ''), '')
+		FROM employees
+		WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL
+	`, employeeID, tenantID).Scan(&code)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("查询医生科室失败：%w", err)
+	}
+	return code, nil
+}
+
+// SetVisitTypeAndTemplate 更新病历就诊类型与模板（就诊类型变更时重选模板）。
+func (s *Store) SetVisitTypeAndTemplate(ctx context.Context, tenantID int64, id, visitType, templateID string) error {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE emr_records
+		SET visit_type=$3, template_id=$4, updated_at=NOW()
+		WHERE id=$1 AND tenant_id=$2
+	`, id, tenantID, visitType, templateID)
+	if err != nil {
+		return fmt.Errorf("update record visit type: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return fmt.Errorf("病历不存在")
+	}
+	return nil
+}

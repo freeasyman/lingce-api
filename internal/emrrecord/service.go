@@ -14,6 +14,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrprocess"
 	"github.com/freeasyman/lingce-api/internal/emrquality"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -841,4 +842,53 @@ func (s *Service) RelatedOrders(ctx context.Context, tenantID int64, record *Rec
 		return nil, nil
 	}
 	return s.store.RelatedOrders(ctx, tenantID, record.EncounterID, record.WorkingContent)
+}
+
+// UpdateVisitType 在正文生成前修改病历就诊类型，并按（科室, 就诊类型）重选模板。
+func (s *Service) UpdateVisitType(ctx context.Context, tenantID, actorID int64, id, visitType string) (*Record, error) {
+	if visitType != "初诊" && visitType != "复诊" {
+		return nil, fmt.Errorf("就诊类型必须是 初诊 或 复诊")
+	}
+	record, err := s.store.Get(ctx, tenantID, id)
+	if err != nil || record == nil {
+		return nil, fmt.Errorf("病历不存在")
+	}
+	if hasWorkingContent(record.WorkingContent) {
+		return nil, fmt.Errorf("正文已生成，就诊类型已锁定")
+	}
+	departmentCode := contextText(record.EncounterContext["medical_department_code"])
+	if departmentCode == "" {
+		if departmentCode, err = s.store.DoctorDepartmentCode(ctx, tenantID, record.DoctorID); err != nil {
+			return nil, err
+		}
+	}
+	resolved, err := emrtemplate.ResolveCurrentTemplate(ctx, s.store.pool, tenantID, departmentCode, record.DocumentType, visitType)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.SetVisitTypeAndTemplate(ctx, tenantID, id, visitType, resolved.ID); err != nil {
+		return nil, err
+	}
+	return s.store.Get(ctx, tenantID, id)
+}
+
+func hasWorkingContent(content map[string]any) bool {
+	for _, value := range content {
+		if value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return true
+			}
+		case map[string]any:
+			if len(typed) > 0 {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }

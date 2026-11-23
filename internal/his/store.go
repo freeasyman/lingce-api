@@ -1252,15 +1252,15 @@ func acquireSlot(ctx context.Context, tx pgx.Tx, slotID *int64, scheduleID int64
 }
 
 // ensureEncounterForRegistration 挂号确认后生产共享 encounters 事实（source_type='his'）。
-// visit_type 沿用共享域取值：该患者已有 HIS 就诊 → return_visit，否则 first_visit。
+// visit_type 沿用共享域取值：该患者同科室已有 HIS 就诊 → return_visit，否则 first_visit。
 func ensureEncounterForRegistration(ctx context.Context, tx pgx.Tx, tenantID int64, reg Registration) (int64, error) {
 	visitType := "first_visit"
 	var priorCount int
 	if err := tx.QueryRow(ctx, `
 		SELECT COUNT(*) FROM encounters
-		WHERE tenant_id = $1 AND patient_id = $2 AND source_type = 'his' AND id <> ALL (
+		WHERE tenant_id = $1 AND patient_id = $2 AND source_type = 'his' AND department_id = $4 AND id <> ALL (
 			SELECT id FROM encounters WHERE source_type = 'his' AND source_id = $3
-		)`, tenantID, reg.CustomerID, reg.ID).Scan(&priorCount); err == nil && priorCount > 0 {
+		)`, tenantID, reg.CustomerID, reg.ID, reg.DepartmentID).Scan(&priorCount); err == nil && priorCount > 0 {
 		visitType = "return_visit"
 	}
 	var encounterID int64

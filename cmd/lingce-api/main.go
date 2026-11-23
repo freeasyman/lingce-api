@@ -292,10 +292,10 @@ func main() {
 
 	emrRecordStore := emrrecord.NewStore(pool)
 	emrRecordService := emrrecord.NewService(emrRecordStore, emrProcessService, emrQualityService)
-	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService)
-	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 	emrInternalHandler := emrrecord.NewInternalHandler(pool, llmClient, emrProcessService)
 	emrInternalHandler.RegisterRoutes(mux, cfg.External.InternalWorkerToken)
+	emrRecordHandler := emrrecord.NewHandler(emrRecordService, emrPermissionService, emrInternalHandler)
+	emrRecordHandler.RegisterRoutes(mux, cfg.JWT.Secret)
 
 	complianceGuardModule := complianceguard.NewModule(pool, llmClient)
 	compliancePermissionModule := compliancepermission.NewModule(pool)

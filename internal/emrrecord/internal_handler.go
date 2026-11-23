@@ -1230,7 +1230,7 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 		"role_code": roleCode, "medical_department_code": departmentCode,
 	}
 
-	templateID, err := h.currentPublishedTemplateIDByCode(ctx, req.TenantID, departmentCode)
+	templateID, err := h.recordTemplateIDForPrompt(ctx, req, departmentCode)
 	if err != nil {
 		return nil, err
 	}
@@ -1257,6 +1257,62 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 		Employee: employee, Template: template,
 		SystemPrompt: strings.TrimSpace(systemPrompt),
 		UserPrompt:   rendered,
+	}, nil
+}
+
+// recordTemplateIDForPrompt 生成时优先使用病历已落库的 template_id（与建病历同一事实源），
+// 查不到病历时再按 科室+就诊类型 统一解析兜底。
+func (h *InternalHandler) recordTemplateIDForPrompt(ctx context.Context, req EmrWorkerRequest, departmentCode string) (string, error) {
+	if recordID, err := h.recordStore.FindIDByEncounter(ctx, req.TenantID, req.EncounterID); err == nil && strings.TrimSpace(recordID) != "" {
+		if record, getErr := h.recordStore.GetRaw(ctx, req.TenantID, recordID); getErr == nil && record != nil && strings.TrimSpace(record.TemplateVersionID) != "" {
+			return record.TemplateVersionID, nil
+		}
+	}
+	return h.currentPublishedTemplateIDByCode(ctx, req.TenantID, departmentCode)
+}
+
+// RunRegeneration 用同一段听写全文、按当前病历（含新就诊类型/模板）重新执行正式生成。
+// 与 Worker 的 Generate 共用 preparePrompt → LLM → 校验 → 落库 的完整链路。
+func (h *InternalHandler) RunRegeneration(ctx context.Context, payload EmrWorkerRequest) (map[string]any, error) {
+	requestID := fmt.Sprintf("emr-regen-%d", time.Now().UnixNano())
+	prepared, err := h.preparePrompt(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	config, err := h.loadModelConfig(ctx, payload.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	llmResponse, _, _, err := h.callLLM(ctx, buildEMRLLMRequest(payload, requestID, prepared, config))
+	if err != nil {
+		return nil, err
+	}
+	if llmResponse == nil {
+		return nil, fmt.Errorf("LLM 网关返回为空")
+	}
+	workingContent, unresolvedItems, err := parseAndValidateEMRResult(llmResponse.Content, prepared.Template)
+	if err != nil {
+		return nil, err
+	}
+	writeOutcome, err := h.saveGeneratedWorkingDraft(ctx, payload, requestID, prepared, config, llmResponse, workingContent, unresolvedItems, parseRecordedAt(payload.RecordedAt))
+	if err != nil {
+		return nil, err
+	}
+	h.chargeGeneratedDraft(ctx, payload, writeOutcome.Record)
+	if err := h.appendGeneratedProcessRecord(ctx, payload, requestID, writeOutcome, llmResponse); err != nil {
+		return nil, err
+	}
+	if h.resultBinder != nil {
+		_ = h.resultBinder.BindWorkerResult(ctx, payload.TenantID, payload.RecordingID, payload.EncounterID, writeOutcome.Record.ID)
+	}
+	return map[string]any{
+		"code":             "EMR_GENERATED",
+		"status":           "generated",
+		"message":          "病历已按指定就诊类型重新生成",
+		"record_id":        writeOutcome.Record.ID,
+		"template_code":    prepared.Template.Version.TemplateCode,
+		"working_content":  workingContent,
+		"unresolved_items": unresolvedItems,
 	}, nil
 }
 
