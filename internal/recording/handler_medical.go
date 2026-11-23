@@ -312,9 +312,13 @@ func (h *Handler) GetMedicalRecordingSegue(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	recording, err := h.service.GetRecording(r.Context(), id)
-	if err != nil {
-		httputil.WriteNotFound(w, err.Error())
+	recording, accessErr := h.assertRecordingAccess(r, id)
+	if accessErr != nil {
+		if accessErr.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		httputil.WriteNotFound(w, accessErr.Error())
 		return
 	}
 
@@ -718,6 +722,30 @@ func (h *Handler) AcceptBenchmarkClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// ClearRejectedBenchmarkClips 清空回收站。
+func (h *Handler) ClearRejectedBenchmarkClips(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "management_dashboard_benchmarks"); err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	removed, err := h.service.ClearRejectedBenchmarkClips(r.Context(), tenantID)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"removed": removed})
 }
 
 func (h *Handler) RejectBenchmarkClip(w http.ResponseWriter, r *http.Request) {

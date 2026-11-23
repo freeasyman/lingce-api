@@ -227,6 +227,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/generate-candidates", Handler: h.GenerateBenchmarkCandidates, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/{id}/actions/accept", Handler: h.AcceptBenchmarkClip, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/{id}/actions/reject", Handler: h.RejectBenchmarkClip, Auth: true},
+		{Method: "DELETE", Path: "/api/v1/recordings/benchmark-clips/actions/clear-rejected", Handler: h.ClearRejectedBenchmarkClips, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/actions/mark-meeting-used", Handler: h.MarkBenchmarkUsedInMeeting, Auth: true},
 		{Method: "POST", Path: "/api/v1/recordings/benchmark-clips/clip/{id}/actions/push", Handler: h.PushBenchmarkClip, Auth: true},
 		{Method: "GET", Path: "/api/v1/recordings/benchmark-clips/clip/{id}/pushes", Handler: h.ListBenchmarkClipPushes, Auth: true},

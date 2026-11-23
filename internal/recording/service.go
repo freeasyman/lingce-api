@@ -1643,9 +1643,6 @@ func (s *Service) ListBenchmarkClips(
 	page int,
 	pageSize int,
 ) (*BenchmarkClipListResponse, error) {
-	if strings.TrimSpace(status) == "pending" && strings.TrimSpace(source) == "" {
-		source = "auto"
-	}
 	items, total, err := s.store.ListBenchmarkClips(ctx, tenantID, status, source, roleCode, dimension, keyword, page, pageSize)
 	if err != nil {
 		return nil, err
@@ -1664,18 +1661,42 @@ func (s *Service) ListBenchmarkClips(
 	}, nil
 }
 
+// GenerateBenchmarkCandidates 从赢客专家咨询录音分析（consultation_analyses）
+// 的逐字原话字段生成金句候选。这里不做任何 LLM 调用，只把分析已产出的
+// evidence / quality_review 原话写入 benchmark_clips（status=pending）。
 func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int64) (int, error) {
-	rows, err := s.store.ListBenchmarkSourceRows(ctx, tenantID, 30)
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT a.recording_id, COALESCE(r.employee_id, 0), a.analysis::text,
+		       COALESCE(r.cleaned_transcription::text, 'null')
+		FROM consultation_analyses a
+		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id AND r.deleted_at IS NULL
+		WHERE a.tenant_id = $1
+		  AND a.status = 'analyzed'
+		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
+		  AND COALESCE(r.recorded_at, r.created_at) >= NOW() - INTERVAL '60 days'
+		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, a.id DESC
+	`, tenantID)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("list consultation analyses for golden quotes: %w", err)
 	}
+	defer rows.Close()
+
 	created := 0
-	for _, row := range rows {
-		candidates := deriveBenchmarkCandidatesFromAnalysis(row)
-		for _, c := range candidates {
+	for rows.Next() {
+		var recordingID, employeeID int64
+		var raw, transcriptRaw string
+		if err := rows.Scan(&recordingID, &employeeID, &raw, &transcriptRaw); err != nil {
+			continue
+		}
+		var analysis map[string]any
+		if err := json.Unmarshal([]byte(raw), &analysis); err != nil {
+			continue
+		}
+		consultantText, customerText := transcriptSpeakerTexts(transcriptRaw)
+		for _, c := range deriveGoldenQuoteCandidatesFromAnalysis(analysis, consultantText, customerText) {
 			c.TenantID = tenantID
-			c.RecordingID = row.RecordingID
-			c.EmployeeID = row.EmployeeID
+			c.RecordingID = recordingID
+			c.EmployeeID = employeeID
 			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
 			if insErr != nil {
 				continue
@@ -1685,7 +1706,172 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return created, fmt.Errorf("iterate consultation analyses for golden quotes: %w", err)
+	}
 	return created, nil
+}
+
+// transcriptSpeakerTexts 把清洗后转写按说话人归并成两个规范化文本串。
+func transcriptSpeakerTexts(raw string) (consultant, customer string) {
+	var segments []map[string]any
+	_ = json.Unmarshal([]byte(raw), &segments)
+	var c1, c2 strings.Builder
+	for _, seg := range segments {
+		text := strings.TrimSpace(pickString(seg, "text"))
+		if text == "" {
+			continue
+		}
+		speaker := strings.TrimSpace(pickString(seg, "speaker"))
+		if speaker == "" {
+			speaker = strings.TrimSpace(pickString(seg, "speaker_role"))
+		}
+		key := goldenQuoteKey(text)
+		if key == "" {
+			continue
+		}
+		switch {
+		case isConsultantSpeaker(speaker):
+			c1.WriteString(key)
+		case isCustomerSpeaker(speaker):
+			c2.WriteString(key)
+		}
+	}
+	return c1.String(), c2.String()
+}
+
+// deriveGoldenQuoteCandidatesFromAnalysis 只取咨询师/医生亲口说的逐字原话：
+//   - quality_review.dimensions[].evidence（score >= 4 的维度原话）
+//   - evidence[] 中 speaker 为咨询师/医生的原话
+//
+// 客户原话作为 context_text，客户/咨询师前缀会在展示层区分。
+func deriveGoldenQuoteCandidatesFromAnalysis(analysis map[string]any, consultantText, customerText string) []benchmarkCandidateInput {
+	out := make([]benchmarkCandidateInput, 0, 8)
+	seen := map[string]struct{}{}
+
+	customerQuotes := make([]string, 0, 4)
+	if evidence, ok := analysis["evidence"].([]any); ok {
+		for _, itemAny := range evidence {
+			item, ok := itemAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			quote := strings.TrimSpace(pickString(item, "quote"))
+			speaker := strings.TrimSpace(pickString(item, "speaker"))
+			if quote == "" {
+				continue
+			}
+			if isCustomerSpeaker(speaker) {
+				if len(customerQuotes) < 4 {
+					customerQuotes = append(customerQuotes, quote)
+				}
+				continue
+			}
+			if !isConsultantSpeaker(speaker) {
+				continue
+			}
+			id := strings.TrimSpace(pickString(item, "id"))
+			if id == "" {
+				id = fmt.Sprintf("ev_%d", len(out)+1)
+			}
+			key := goldenQuoteKey(quote)
+			if key == "" {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, benchmarkCandidateInput{
+				RoleCode:    "consultant",
+				Dimension:   "evidence·" + id,
+				Score:       80,
+				ClipText:    quote,
+				Confidence:  "medium",
+				Source:      "auto_v2",
+				ContextText: strings.Join(customerQuotes, "\n"),
+			})
+		}
+	}
+
+	customerKeys := map[string]struct{}{}
+	for _, q := range customerQuotes {
+		if k := goldenQuoteKey(q); k != "" {
+			customerKeys[k] = struct{}{}
+		}
+	}
+
+	qr, _ := analysis["quality_review"].(map[string]any)
+	dimensions, _ := qr["dimensions"].([]any)
+	for idx, itemAny := range dimensions {
+		item, ok := itemAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		scorePtr := pickFloat(item, "score")
+		if scorePtr == nil || *scorePtr < 4 {
+			continue
+		}
+		quote := strings.TrimSpace(pickString(item, "evidence"))
+		label := strings.TrimSpace(pickString(item, "label"))
+		key := goldenQuoteKey(quote)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		// 客户亲口说的原话不是可复用金句，跳过。
+		if _, isCustomer := customerKeys[key]; isCustomer {
+			continue
+		}
+		// 质检 evidence 不带说话人：必须能在原始转写里确认是咨询师说的。
+		if customerText != "" && strings.Contains(customerText, key) {
+			continue
+		}
+		if consultantText != "" && !strings.Contains(consultantText, key) {
+			continue
+		}
+		seen[key] = struct{}{}
+		if label == "" {
+			label = "质检维度"
+		}
+		out = append(out, benchmarkCandidateInput{
+			RoleCode:   "consultant",
+			Dimension:  fmt.Sprintf("%s·%d", label, idx+1),
+			Score:      *scorePtr * 20,
+			ClipText:   quote,
+			Confidence: "medium",
+			Source:     "auto_v2",
+			AIComment:  strings.TrimSpace(pickString(item, "impact_on_deal")),
+		})
+	}
+	return out
+}
+
+func isCustomerSpeaker(speaker string) bool {
+	s := strings.TrimSpace(speaker)
+	return s == "客户" || s == "患者" || strings.Contains(s, "patient") || strings.Contains(s, "customer")
+}
+
+func isConsultantSpeaker(speaker string) bool {
+	s := strings.TrimSpace(speaker)
+	return s == "咨询师" || s == "医生" || strings.Contains(s, "consultant") || strings.Contains(s, "doctor")
+}
+
+func goldenQuoteKey(quote string) string {
+	replacer := strings.NewReplacer(" ", "", "\n", "", "\t", "", "“", "", "”", "", "\"", "", "‘", "", "’", "", "\"", "", "，", "", "。", "", "！", "", "？", "", "；", "", "：", "", "、", "")
+	key := replacer.Replace(strings.TrimSpace(quote))
+	runes := []rune(key)
+	if len(runes) < 8 || len(runes) > 160 {
+		return ""
+	}
+	return key
+}
+
+// ClearRejectedBenchmarkClips 清空回收站。
+func (s *Service) ClearRejectedBenchmarkClips(ctx context.Context, tenantID int64) (int64, error) {
+	return s.store.ClearRejectedBenchmarkClips(ctx, tenantID)
 }
 
 func (s *Service) AcceptBenchmarkClip(ctx context.Context, tenantID int64, id int64, req UpdateBenchmarkClipStatusRequest) (*BenchmarkClip, error) {

@@ -1292,6 +1292,21 @@ type benchmarkCandidateInput struct {
 	ClipText    string
 	Confidence  string
 	Source      string
+	ContextText string
+	UseWhen     string
+	AIComment   string
+}
+
+// ClearRejectedBenchmarkClips 清空回收站：删除本机构所有 status=rejected 的金句候选。
+func (s *Store) ClearRejectedBenchmarkClips(ctx context.Context, tenantID int64) (int64, error) {
+	cmd, err := s.pool.Exec(ctx, `
+		DELETE FROM benchmark_clips
+		WHERE tenant_id = $1 AND status = 'rejected'
+	`, tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("clear rejected benchmark clips: %w", err)
+	}
+	return cmd.RowsAffected(), nil
 }
 
 func (s *Store) InsertBenchmarkClipIfNotExists(ctx context.Context, in benchmarkCandidateInput) (bool, error) {
@@ -1306,13 +1321,13 @@ func (s *Store) InsertBenchmarkClipIfNotExists(ctx context.Context, in benchmark
 	cmd, err := s.pool.Exec(ctx, `
 		INSERT INTO benchmark_clips (
 			tenant_id, recording_id, employee_id, role_code, dimension, score,
-			clip_text, learning_points, source, status, confidence, used_in_meetings, created_at, updated_at
+			clip_text, context_text, use_when, ai_comment, learning_points, source, status, confidence, used_in_meetings, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8::jsonb, $9, 'pending', $10, 0, NOW(), NOW()
+			$7, $8, $9, $10, $11::jsonb, $12, 'pending', $13, 0, NOW(), NOW()
 		)
 		ON CONFLICT (tenant_id, recording_id, role_code, dimension) DO NOTHING
-	`, in.TenantID, in.RecordingID, in.EmployeeID, in.RoleCode, in.Dimension, in.Score, strings.TrimSpace(in.ClipText), string(learningBytes), tag, strings.TrimSpace(in.Confidence))
+	`, in.TenantID, in.RecordingID, in.EmployeeID, in.RoleCode, in.Dimension, in.Score, strings.TrimSpace(in.ClipText), strings.TrimSpace(in.ContextText), strings.TrimSpace(in.UseWhen), strings.TrimSpace(in.AIComment), string(learningBytes), tag, strings.TrimSpace(in.Confidence))
 	if err != nil {
 		return false, err
 	}
