@@ -1717,7 +1717,8 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 	return created, nil
 }
 
-var goldenMarkerPattern = regexp.MustCompile(`就像|好像|相当于|好比|比喻|一样|口袋|高铁|手机|胶水|气球|牛仔裤|大油|发呆|愣神|导航|磨薄|回弹|补上|隐形眼镜|虚焦|头发丝|玻璃上|长痘|锁水|高跟鞋|剪子|别找|灯在晃|8到10秒|9秒|26秒|5%`)
+var goldenMarkerPattern = regexp.MustCompile(`就像|好像|相当于|好比|比喻|一样|口袋|剪子|磨薄|回弹|发呆|愣神|导航|胶水|气球|牛仔裤|大油|锁水|高跟鞋|虚焦|头发丝|玻璃上|长痘|灯在晃|8到10秒|9秒|26秒|5%|隐形眼镜|高铁`)
+var routineAdvicePattern = regexp.MustCompile(`少吃|多喝水|少熬夜|少玩|早睡|多运动|别揉|保持清洁|多吃`)
 
 func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCode string) []benchmarkCandidateInput {
 	out := make([]benchmarkCandidateInput, 0, 8)
@@ -1767,7 +1768,7 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCo
 					continue
 				}
 				// 金句类型直接收；其他类型必须是带精彩表达的原话。
-				if !isGoldenType && !goldenMarkerPattern.MatchString(text) {
+				if !isGoldenType && (!goldenMarkerPattern.MatchString(text) || routineAdvicePattern.MatchString(text)) {
 					continue
 				}
 				seen[key] = struct{}{}
