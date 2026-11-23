@@ -13,9 +13,14 @@ import (
 type ResolvedTemplate struct {
 	ID           string
 	Code         string
+	Name         string
 	Scope        string
 	DocumentType string
 	VisitType    string
+	// Fallback 表示已降级到标准门诊兜底。
+	Fallback bool
+	// TypeFallback 表示未命中该就诊类型的模板，使用了该科室其它就诊类型的模板（如复诊缺模板用初诊）。
+	TypeFallback bool
 }
 
 // ResolveCurrentTemplate 是全系统唯一的模板解析入口：
@@ -37,15 +42,19 @@ func ResolveCurrentTemplate(ctx context.Context, pool *pgxpool.Pool, tenantID in
 	steps := []struct {
 		tenantID int64
 		code     string
-		visit    string
+		visit    string // 空串 = 不限制就诊类型
 		scope    string
+		fallback bool
 	}{
-		{tenantID, departmentCode, visitType, "tenant"},
-		{tenantID, departmentCode, "通用", "tenant"},
-		{0, departmentCode, visitType, "platform"},
-		{0, departmentCode, "通用", "platform"},
-		{0, "standard_outpatient", visitType, "platform"},
-		{0, "standard_outpatient", "通用", "platform"},
+		{tenantID, departmentCode, visitType, "tenant", false},
+		{tenantID, departmentCode, "通用", "tenant", false},
+		{0, departmentCode, visitType, "platform", false},
+		{0, departmentCode, "通用", "platform", false},
+		// 就诊类型无对应模板时，降级到该科室任意就诊类型的模板（如复诊缺模板用初诊）。
+		{tenantID, departmentCode, "", "tenant", false},
+		{0, departmentCode, "", "platform", false},
+		{0, "standard_outpatient", visitType, "platform", true},
+		{0, "standard_outpatient", "通用", "platform", true},
 	}
 	seen := map[string]bool{}
 	for _, step := range steps {
@@ -60,6 +69,8 @@ func ResolveCurrentTemplate(ctx context.Context, pool *pgxpool.Pool, tenantID in
 		}
 		if resolved != nil {
 			resolved.Scope = step.scope
+			resolved.Fallback = step.fallback
+			resolved.TypeFallback = !step.fallback && resolved.VisitType != "通用" && resolved.VisitType != visitType
 			return resolved, nil
 		}
 	}
@@ -78,8 +89,8 @@ func findCurrentTemplate(ctx context.Context, pool *pgxpool.Pool, tenantID int64
 		where += fmt.Sprintf(" AND document_type = $%d", len(args))
 	}
 	var item ResolvedTemplate
-	err := pool.QueryRow(ctx, "SELECT id, code, scope, document_type, visit_type FROM emr_templates WHERE "+where+" ORDER BY updated_at DESC, id DESC LIMIT 1", args...).
-		Scan(&item.ID, &item.Code, &item.Scope, &item.DocumentType, &item.VisitType)
+	err := pool.QueryRow(ctx, "SELECT id, code, name, scope, document_type, visit_type FROM emr_templates WHERE "+where+" ORDER BY updated_at DESC, id DESC LIMIT 1", args...).
+		Scan(&item.ID, &item.Code, &item.Name, &item.Scope, &item.DocumentType, &item.VisitType)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

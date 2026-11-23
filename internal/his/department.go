@@ -5,15 +5,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/jackc/pgx/v5"
 )
 
 // 科室链路（P0-4）：临床科室字典 → 医生科室 → 排班 → 挂号/encounter → 门诊按科室自动匹配 EMR 模板。
 //
 // 设计约束：
-//   - departments 是共享表，只读取 type/template_code 两个新增列，不改共享 department 产品的接口。
-//   - 模板解析顺序：租户自有模板（tenant_id=租户）优先，其次全局模板（tenant_id=0）；
-//     科室未配置 template_code / 模板未发布时，降级到 standard_outpatient 并给出提示。
+//   - 模板匹配与 EMR 听写共用统一解析器（emrtemplate.ResolveCurrentTemplate）：
+//     租户同就诊类型 → 租户通用 → 平台同就诊类型 → 平台通用 → 科室任意就诊类型 → 标准门急诊。
 //   - 历史数据（排班/挂号/encounter 无 department_id）不报错：返回 Department=nil，前端提示补科室。
 
 const (
@@ -41,22 +41,6 @@ type templateResolution struct {
 	// 否则 emrrecord.Create 会因模板 visit_type 不匹配而报「共享接诊或已发布病历模板不存在」。
 	EffectiveVisitType string
 	Reason             string
-}
-
-// templateSupportsVisitType 模板 visit_type 为「通用」或与本次就诊类型一致才可直接使用。
-func templateSupportsVisitType(template *EMRTemplate, visitType string) bool {
-	if template == nil {
-		return false
-	}
-	return template.VisitType == "通用" || template.VisitType == visitType
-}
-
-// templateVisitFallbackNotice 就诊类型无对应模板时的提示，例如「复诊模板缺失，已使用妇科初诊病历」。
-func templateVisitFallbackNotice(visitType string, template *EMRTemplate) string {
-	if template == nil {
-		return ""
-	}
-	return visitType + "模板缺失，已使用" + template.Name
 }
 
 // ListClinicalDepartments 管理台/排班可选临床科室：departments.type='clinical'，带可用的模板名。
@@ -91,32 +75,6 @@ func (s *Store) ListClinicalDepartments(ctx context.Context, tenantID int64) ([]
 		items = append(items, item)
 	}
 	return items, rows.Err()
-}
-
-// findPublishedTemplateByCode 按 code 查找租户可用模板：租户模板优先，全局模板兜底。
-func (s *Store) findPublishedTemplateByCode(ctx context.Context, q querier, tenantID int64, code string) (*EMRTemplate, error) {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return nil, nil
-	}
-	var item EMRTemplate
-	err := q.QueryRow(ctx, `
-		SELECT id::text, code, name, COALESCE(version_no, ''), document_type, visit_type,
-		       COALESCE(specialty, ''), department_id
-		FROM emr_templates
-		WHERE code = $1 AND status = 'published' AND is_current
-		  AND tenant_id IN (0, $2)
-		ORDER BY tenant_id DESC
-		LIMIT 1`, code, tenantID).
-		Scan(&item.ID, &item.Code, &item.Name, &item.VersionNo, &item.DocumentType,
-			&item.VisitType, &item.Specialty, &item.DepartmentID)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
 }
 
 // departmentBrief 读取科室基础信息。
@@ -175,57 +133,44 @@ func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounte
 		return nil, err
 	}
 	resolution.Department = brief
-
-	code := ""
-	if brief != nil {
-		code = strings.TrimSpace(brief.TemplateCode)
-	}
-
 	if brief == nil {
 		resolution.Reason = templateReasonNoDepartment
-	} else if code == "" {
-		resolution.Reason = templateReasonNoTemplateCode
-	} else {
-		template, err := s.findPublishedTemplateByCode(ctx, s.pool, tenantID, code)
-		if err != nil {
-			return nil, err
-		}
-		if template != nil {
-			brief.TemplateID = template.ID
-			brief.TemplateName = template.Name
-			if templateSupportsVisitType(template, visitType) {
-				resolution.Template = template
-				resolution.Matched = true
-				brief.Matched = true
-				return resolution, nil
-			}
-			// 复诊（或初诊）无对应模板：降级到该科室已配置的模板（通常是初诊模板）。
-			// 记录 visit_type 跟随模板，避免共享病历域按 visit_type 拒建。
-			resolution.Template = template
-			resolution.Fallback = true
-			resolution.Notice = templateVisitFallbackNotice(visitType, template)
-			resolution.EffectiveVisitType = template.VisitType
-			brief.Matched = true
-			return resolution, nil
-		}
-		resolution.Reason = templateReasonTemplateNotPublished
+		return resolution, nil
 	}
 
-	// 降级：标准门急诊病历（科室未匹配模板时也保证能书写病历）。
-	fallback, err := s.findPublishedTemplateByCode(ctx, s.pool, tenantID, fallbackTemplateCode)
-	if err != nil {
-		return nil, err
-	}
-	if fallback == nil {
+	// 与 EMR 听写共用统一解析器：科室 code + 就诊类型 → 租户模板 → 平台模板 → 标准门急诊。
+	resolved, err := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, brief.Code, "", visitType)
+	if err != nil || resolved == nil {
 		resolution.Reason = templateReasonNoFallback
 		return resolution, nil
 	}
-	resolution.Template = fallback
-	resolution.Fallback = true
-	if brief != nil {
-		brief.TemplateID = fallback.ID
-		brief.TemplateName = fallback.Name
-		brief.Matched = false
+	template := &EMRTemplate{
+		ID:           resolved.ID,
+		Code:         resolved.Code,
+		Name:         resolved.Name,
+		DocumentType: resolved.DocumentType,
+		VisitType:    resolved.VisitType,
+	}
+	resolution.Template = template
+	resolution.Matched = !resolved.Fallback && !resolved.TypeFallback
+	resolution.Fallback = resolved.Fallback || resolved.TypeFallback
+	if template.VisitType == "通用" {
+		resolution.EffectiveVisitType = visitType
+	} else {
+		resolution.EffectiveVisitType = template.VisitType
+	}
+	brief.TemplateID = template.ID
+	brief.TemplateName = template.Name
+	brief.Matched = !resolved.Fallback
+
+	if resolved.Fallback {
+		resolution.Reason = templateReasonNoTemplateCode
+		resolution.Notice = "科室无专属模板，已使用" + template.Name
+	} else if resolved.TypeFallback {
+		resolution.Reason = templateReasonNone
+		resolution.Notice = visitType + "模板缺失，已使用" + template.Name
+	} else {
+		resolution.Reason = templateReasonNone
 	}
 	return resolution, nil
 }

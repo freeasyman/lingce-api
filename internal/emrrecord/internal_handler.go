@@ -1268,7 +1268,11 @@ func (h *InternalHandler) recordTemplateIDForPrompt(ctx context.Context, req Emr
 			return record.TemplateVersionID, nil
 		}
 	}
-	return h.currentPublishedTemplateIDByCode(ctx, req.TenantID, departmentCode)
+	resolved, err := emrtemplate.ResolveCurrentTemplate(ctx, h.pool, req.TenantID, departmentCode, "", "")
+	if err != nil {
+		return "", err
+	}
+	return resolved.ID, nil
 }
 
 // RunRegeneration 用同一段听写全文、按当前病历（含新就诊类型/模板）重新执行正式生成。
@@ -1314,15 +1318,6 @@ func (h *InternalHandler) RunRegeneration(ctx context.Context, payload EmrWorker
 		"working_content":  workingContent,
 		"unresolved_items": unresolvedItems,
 	}, nil
-}
-
-func (h *InternalHandler) currentPublishedTemplateIDByCode(ctx context.Context, tenantID int64, code string) (string, error) {
-	// 与建病历共用同一套解析：租户 → 平台 → 标准门诊兜底。
-	resolved, err := emrtemplate.ResolveCurrentTemplate(ctx, h.pool, tenantID, code, "", "")
-	if err != nil {
-		return "", err
-	}
-	return resolved.ID, nil
 }
 
 func (h *InternalHandler) loadPrompt(ctx context.Context) (string, string, error) {
