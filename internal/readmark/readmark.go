@@ -18,6 +18,7 @@ const (
 	TypeComplianceFinding = "compliance_finding"
 	TypeCompliancePerson  = "compliance_person"
 	TypePatientScreenshot = "patient_screenshot"
+	TypePatientTask       = "patient_task"
 )
 
 var allowedTypes = map[string]bool{
@@ -27,6 +28,7 @@ var allowedTypes = map[string]bool{
 	TypeComplianceFinding: true,
 	TypeCompliancePerson:  true,
 	TypePatientScreenshot: true,
+	TypePatientTask:       true,
 }
 
 // ValidType 判断资源类型是否在白名单内。

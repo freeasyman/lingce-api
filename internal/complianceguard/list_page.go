@@ -16,6 +16,8 @@ type CheckItemListParams struct {
 	Person   string
 	Page     int
 	PageSize int
+	// ViewerID 当前查看人：用于算「未读」角标（进入页面前没看过的待核查事项）。
+	ViewerID int64
 }
 
 // checkItemPhaseExpr 把数据库状态映射成页面三分法，口径与前端 statusOf 一致：
@@ -102,6 +104,26 @@ func (s *Service) ListCheckItemsPaged(ctx context.Context, tenantID int64, param
 	filter := checkItemFilters(params, &args)
 
 	// 计数：只算 phase / 是否培训，不取重字段。
+	// 未读数：当前查看人没看过的待核查事项（角标用）。
+	var unreadPending, unreadPersons int64
+	if params.ViewerID > 0 {
+		unreadArgs := append(append([]any{}, args...), params.ViewerID)
+		viewerArg := fmt.Sprintf("$%d", len(unreadArgs))
+		unreadQuery := `WITH base AS (
+				SELECT ` + checkItemPhaseExpr + ` AS phase, ` + checkItemTrainExpr + ` AS is_train, i.employee_id, i.id AS item_id` + checkItemEnrichedFrom + filter + `
+			)
+			SELECT count(*) FILTER (WHERE phase = 'pending' AND NOT is_train AND NOT EXISTS (
+			           SELECT 1 FROM user_resource_reads m WHERE m.tenant_id = $1 AND m.employee_id = ` + viewerArg + `
+			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id)),
+			       count(DISTINCT employee_id) FILTER (WHERE phase <> 'closed' AND NOT EXISTS (
+			           SELECT 1 FROM user_resource_reads m WHERE m.tenant_id = $1 AND m.employee_id = ` + viewerArg + `
+			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id))
+			FROM base`
+		if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&unreadPending, &unreadPersons); err != nil {
+			return nil, 0, nil, fmt.Errorf("count unread compliance check items: %w", err)
+		}
+	}
+
 	countQuery := `WITH base AS (
 			SELECT ` + checkItemPhaseExpr + ` AS phase, ` + checkItemTrainExpr + ` AS is_train, i.employee_id` + checkItemEnrichedFrom + filter + `
 		)
@@ -119,12 +141,14 @@ func (s *Service) ListCheckItemsPaged(ctx context.Context, tenantID int64, param
 		return nil, 0, nil, fmt.Errorf("count compliance check items: %w", err)
 	}
 	counts := map[string]int64{
-		"pending":   pendingCount,
-		"reviewing": reviewingCount,
-		"closed":    closedCount,
-		"training":  trainingCount,
-		"total":     totalCount,
-		"persons":   personCount,
+		"pending":        pendingCount,
+		"reviewing":      reviewingCount,
+		"closed":         closedCount,
+		"training":       trainingCount,
+		"total":          totalCount,
+		"persons":        personCount,
+		"unread_pending": unreadPending,
+		"unread_persons": unreadPersons,
 	}
 
 	query := `SELECT ` + checkItemSelectColumnsAliased + checkItemEnrichedColumns +

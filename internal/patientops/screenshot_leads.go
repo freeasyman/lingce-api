@@ -197,12 +197,26 @@ func ensureScreenshotLead(ctx context.Context, tx pgx.Tx, tenantID, sourceID int
 
 const screenshotReviewCondition = `s.source_type='screenshot' AND s.match_status='pending_confirm'`
 
-func (s *Service) CountUnlinkedSources(ctx context.Context, tenantID int64) (int64, error) {
+func (s *Service) CountUnlinkedSources(ctx context.Context, tenantID, employeeID int64) (int64, int64, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	var count int64
+	var count, unread int64
 	err := s.pool.QueryRow(queryCtx, `SELECT COUNT(*) FROM patient_conversation_sources s WHERE s.tenant_id=$1 AND `+screenshotReviewCondition, tenantID).Scan(&count)
-	return count, err
+	if err != nil {
+		return 0, 0, err
+	}
+	if employeeID > 0 {
+		// 未读数：当前用户还没点开过的未关联截图来源（菜单角标用）。
+		unreadQuery := `SELECT COUNT(*) FROM patient_conversation_sources s
+			WHERE s.tenant_id=$1 AND ` + screenshotReviewCondition + `
+			  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
+			                  WHERE m.tenant_id=$1 AND m.employee_id=$2
+			                    AND m.resource_type='patient_screenshot' AND m.resource_id=s.id)`
+		if err := s.pool.QueryRow(queryCtx, unreadQuery, tenantID, employeeID).Scan(&unread); err != nil {
+			return count, 0, err
+		}
+	}
+	return count, unread, nil
 }
 func (s *Service) ListUnlinkedSources(ctx context.Context, tenantID int64, page, pageSize int) (*UnlinkedSourcesPage, error) {
 	if page < 1 {

@@ -67,7 +67,7 @@ func TestScreenshotAutomaticLeadRulesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := s.CountUnlinkedSources(ctx, 1)
+	count, _, err := s.CountUnlinkedSources(ctx, 1, 0)
 	if err != nil || count != queue.Total || count != 5 {
 		t.Fatalf("queue/count mismatch: %+v %d %v", queue, count, err)
 	}

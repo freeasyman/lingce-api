@@ -394,9 +394,11 @@ type PatientTaskCount struct {
 }
 
 type PatientTaskSummary struct {
-	Mine  PatientTaskCount  `json:"mine"`
-	Plans []TaskPlanOption  `json:"plans"`
-	Team  *PatientTaskCount `json:"team,omitempty"`
+	Mine PatientTaskCount `json:"mine"`
+	/** 我名下还没看过的任务数（菜单角标用）。 */
+	MineUnread int64             `json:"mine_unread"`
+	Plans      []TaskPlanOption  `json:"plans"`
+	Team       *PatientTaskCount `json:"team,omitempty"`
 }
 
 type TaskPlanOption struct {

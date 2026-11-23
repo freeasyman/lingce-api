@@ -31,7 +31,7 @@ func TestScreenshotQueueAndDuplicatePaginationIntegration(t *testing.T) {
 	if _, _, err := s.completeScreenshotRecognition(ctx, 1, extra); err != nil {
 		t.Fatal(err)
 	}
-	count, err := s.CountUnlinkedSources(ctx, 1)
+	count, _, err := s.CountUnlinkedSources(ctx, 1, 0)
 	if err != nil || count != 4 {
 		t.Fatal(count, err)
 	}

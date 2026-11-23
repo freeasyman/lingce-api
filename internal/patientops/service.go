@@ -566,7 +566,17 @@ func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID i
 	if err != nil {
 		return nil, fmt.Errorf("count patient operation tasks: %w", err)
 	}
-	summary := &PatientTaskSummary{Mine: mine}
+	// 未读数：我名下、未完成、且当前用户没点开过的任务（菜单角标用）。
+	unreadArgs := append(append([]any{}, args...), employeeID)
+	unreadQuery := `SELECT COUNT(*) FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id LEFT JOIN products p ON p.id=t.product_id
+		WHERE ` + where + ` AND ` + ownerMine + ` AND NOT EXISTS (
+			SELECT 1 FROM user_resource_reads m WHERE m.tenant_id=$1 AND m.employee_id=$` + fmt.Sprint(len(unreadArgs)) + `
+			  AND m.resource_type='patient_task' AND m.resource_id=t.id)`
+	var mineUnread int64
+	if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&mineUnread); err != nil {
+		return nil, fmt.Errorf("count unread patient operation tasks: %w", err)
+	}
+	summary := &PatientTaskSummary{Mine: mine, MineUnread: mineUnread}
 	if includeTeam {
 		summary.Team = &team
 	}

@@ -194,6 +194,9 @@ func (h *Handler) ListCheckItems(w http.ResponseWriter, r *http.Request) {
 			params.EmployeeID = &v
 		}
 	}
+	if claims := middleware.GetUserClaims(r.Context()); claims != nil {
+		params.ViewerID = claims.UserID
+	}
 	items, total, counts, err := h.service.ListCheckItemsPaged(r.Context(), tenantID, params)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())

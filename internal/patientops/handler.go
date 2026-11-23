@@ -74,12 +74,12 @@ func (h *Handler) CountUnlinkedSources(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
-	count, err := h.service.CountUnlinkedSources(r.Context(), *claims.TenantID)
+	count, unread, err := h.service.CountUnlinkedSources(r.Context(), *claims.TenantID, claims.UserID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, map[string]int64{"count": count})
+	httputil.WriteSuccess(w, map[string]int64{"count": count, "unread": unread})
 }
 
 func (h *Handler) AnalyzeRecording(w http.ResponseWriter, r *http.Request) {
