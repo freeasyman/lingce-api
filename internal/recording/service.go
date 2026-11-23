@@ -1669,7 +1669,8 @@ func (s *Service) ListBenchmarkClips(
 // evidence / quality_review 原话写入 benchmark_clips（status=pending）。
 func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int64) (int, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT r.id, COALESCE(r.employee_id, 0), COALESCE(lower(r.business_scope), ''), r.analysis_result::text
+		SELECT r.id, COALESCE(r.employee_id, 0), COALESCE(lower(r.business_scope), ''), r.analysis_result::text,
+		       COALESCE(r.cleaned_transcription::text, 'null')
 		FROM recordings r
 		WHERE r.tenant_id = $1
 		  AND r.deleted_at IS NULL
@@ -1685,8 +1686,8 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 	created := 0
 	for rows.Next() {
 		var recordingID, employeeID int64
-		var scope, raw string
-		if err := rows.Scan(&recordingID, &employeeID, &scope, &raw); err != nil {
+		var scope, raw, transcriptRaw string
+		if err := rows.Scan(&recordingID, &employeeID, &scope, &raw, &transcriptRaw); err != nil {
 			continue
 		}
 		var analysis map[string]any
@@ -1697,7 +1698,20 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 		if roleCode != "doctor" && roleCode != "therapist" {
 			roleCode = "consultant"
 		}
+		consultantText, customerText := transcriptSpeakerTexts(transcriptRaw)
 		for _, c := range deriveGoldenQuoteCandidatesFromContentSeeds(analysis, roleCode) {
+			c.TenantID = tenantID
+			c.RecordingID = recordingID
+			c.EmployeeID = employeeID
+			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
+			if insErr != nil {
+				continue
+			}
+			if inserted {
+				created++
+			}
+		}
+		for _, c := range deriveGoldenQuoteCandidatesFromQualityReview(analysis, consultantText, customerText) {
 			c.TenantID = tenantID
 			c.RecordingID = recordingID
 			c.EmployeeID = employeeID
@@ -1813,6 +1827,74 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCo
 			UseWhen:     stage,
 			AIComment:   summary,
 			Status:      "accepted",
+		})
+	}
+	return out
+}
+
+// deriveGoldenQuoteCandidatesFromQualityReview 保留质检高分原话作为待选候选。
+func deriveGoldenQuoteCandidatesFromQualityReview(analysis map[string]any, consultantText, customerText string) []benchmarkCandidateInput {
+	out := make([]benchmarkCandidateInput, 0, 8)
+	seen := map[string]struct{}{}
+	customerQuotes := make([]string, 0, 4)
+	if evidence, ok := analysis["evidence"].([]any); ok {
+		for _, itemAny := range evidence {
+			item, ok := itemAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			quote := strings.TrimSpace(pickString(item, "quote"))
+			speaker := strings.TrimSpace(pickString(item, "speaker"))
+			if quote == "" || !isCustomerSpeaker(speaker) {
+				continue
+			}
+			if len(customerQuotes) < 4 {
+				customerQuotes = append(customerQuotes, quote)
+			}
+		}
+	}
+	contextText := strings.Join(customerQuotes, "\n")
+	qr, _ := analysis["quality_review"].(map[string]any)
+	dimensions, _ := qr["dimensions"].([]any)
+	for idx, itemAny := range dimensions {
+		item, ok := itemAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		scorePtr := pickFloat(item, "score")
+		if scorePtr == nil || *scorePtr < 4 {
+			continue
+		}
+		quote := strings.TrimSpace(pickString(item, "evidence"))
+		label := strings.TrimSpace(pickString(item, "label"))
+		impact := strings.TrimSpace(pickString(item, "impact_on_deal"))
+		key := goldenQuoteKey(quote)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if customerText != "" && strings.Contains(customerText, key) {
+			continue
+		}
+		if consultantText != "" && !strings.Contains(consultantText, key) {
+			continue
+		}
+		seen[key] = struct{}{}
+		if label == "" {
+			label = "质检维度"
+		}
+		out = append(out, benchmarkCandidateInput{
+			RoleCode:    "consultant",
+			Dimension:   fmt.Sprintf("%s·%d", label, idx+1),
+			Score:       *scorePtr * 20,
+			ClipText:    quote,
+			Confidence:  "medium",
+			Source:      "auto_v2",
+			ContextText: contextText,
+			UseWhen:     label,
+			AIComment:   impact,
 		})
 	}
 	return out
@@ -5455,8 +5537,8 @@ func (s *Service) AddBestPractice(ctx context.Context, tenantID, recordingID, cr
 }
 
 // DeleteBestPractice removes a recording from best practices
-func (s *Service) DeleteBestPractice(ctx context.Context, tenantID, recordingID int64) error {
-	return s.store.DeleteBestPractice(ctx, tenantID, recordingID)
+func (s *Service) DeleteBestPractice(ctx context.Context, recordingID int64) error {
+	return s.store.DeleteBestPractice(ctx, recordingID)
 }
 
 // Placeholder methods for remaining endpoints (to be implemented)
