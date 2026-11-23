@@ -1676,7 +1676,6 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
 		  AND r.analysis_status = 'completed'
 		  AND r.analysis_result::text IS NOT NULL
-		  AND COALESCE(r.recorded_at, r.created_at) >= NOW() - INTERVAL '365 days'
 		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
 	`, tenantID)
 	if err != nil {
@@ -5452,8 +5451,8 @@ func (s *Service) AddBestPractice(ctx context.Context, tenantID, recordingID, cr
 }
 
 // DeleteBestPractice removes a recording from best practices
-func (s *Service) DeleteBestPractice(ctx context.Context, recordingID int64) error {
-	return s.store.DeleteBestPractice(ctx, recordingID)
+func (s *Service) DeleteBestPractice(ctx context.Context, tenantID, recordingID int64) error {
+	return s.store.DeleteBestPractice(ctx, tenantID, recordingID)
 }
 
 // Placeholder methods for remaining endpoints (to be implemented)
