@@ -1295,6 +1295,7 @@ type benchmarkCandidateInput struct {
 	ContextText string
 	UseWhen     string
 	AIComment   string
+	Status      string
 }
 
 // ClearRejectedBenchmarkClips 清空回收站：删除本机构所有 status=rejected 的金句候选。
@@ -1307,6 +1308,13 @@ func (s *Store) ClearRejectedBenchmarkClips(ctx context.Context, tenantID int64)
 		return 0, fmt.Errorf("clear rejected benchmark clips: %w", err)
 	}
 	return cmd.RowsAffected(), nil
+}
+
+func candidateStatus(status string) string {
+	if status == "accepted" || status == "rejected" {
+		return status
+	}
+	return "pending"
 }
 
 func (s *Store) InsertBenchmarkClipIfNotExists(ctx context.Context, in benchmarkCandidateInput) (bool, error) {
@@ -1324,10 +1332,10 @@ func (s *Store) InsertBenchmarkClipIfNotExists(ctx context.Context, in benchmark
 			clip_text, context_text, use_when, ai_comment, learning_points, source, status, confidence, used_in_meetings, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11::jsonb, $12, 'pending', $13, 0, NOW(), NOW()
+			$7, $8, $9, $10, $11::jsonb, $12, $13, $14, 0, NOW(), NOW()
 		)
 		ON CONFLICT (tenant_id, recording_id, role_code, dimension) DO NOTHING
-	`, in.TenantID, in.RecordingID, in.EmployeeID, in.RoleCode, in.Dimension, in.Score, strings.TrimSpace(in.ClipText), strings.TrimSpace(in.ContextText), strings.TrimSpace(in.UseWhen), strings.TrimSpace(in.AIComment), string(learningBytes), tag, strings.TrimSpace(in.Confidence))
+	`, in.TenantID, in.RecordingID, in.EmployeeID, in.RoleCode, in.Dimension, in.Score, strings.TrimSpace(in.ClipText), strings.TrimSpace(in.ContextText), strings.TrimSpace(in.UseWhen), strings.TrimSpace(in.AIComment), string(learningBytes), tag, candidateStatus(in.Status), strings.TrimSpace(in.Confidence))
 	if err != nil {
 		return false, err
 	}
@@ -2702,6 +2710,20 @@ func (s *Store) CompleteTask(ctx context.Context, id int64, completedBy int64, n
 	return tx.Commit(ctx)
 }
 
+// CompleteTaskForTenant 仅在任务属于 tenantID 时完成它（P1-4：批量确认接口的租户收口）。
+func (s *Store) CompleteTaskForTenant(ctx context.Context, tenantID, id, completedBy int64, notes *string) error {
+	var belongs bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM recording_tasks WHERE id = $1 AND tenant_id = $2)
+	`, id, tenantID).Scan(&belongs); err != nil {
+		return fmt.Errorf("check task tenant: %w", err)
+	}
+	if !belongs {
+		return fmt.Errorf("task not found")
+	}
+	return s.CompleteTask(ctx, id, completedBy, notes)
+}
+
 func (s *Store) SaveTaskExecution(ctx context.Context, id int64, req CompleteTaskRequest) error {
 	_, err := s.pool.Exec(ctx, `UPDATE recording_tasks SET execution_result=$1, execution_difficulty=$2, doctor_escalation=$3, next_contact_at=$4, updated_at=NOW() WHERE id=$5`, req.ExecutionResult, req.ExecutionDifficulty, req.DoctorEscalation, req.NextContactAt, id)
 	return err
@@ -3478,13 +3500,13 @@ func (s *Store) AddBestPractice(ctx context.Context, tenantID, recordingID, crea
 }
 
 // DeleteBestPractice removes a recording from best practices
-func (s *Store) DeleteBestPractice(ctx context.Context, recordingID int64) error {
+func (s *Store) DeleteBestPractice(ctx context.Context, tenantID, recordingID int64) error {
 	query := `
 		DELETE FROM recording_best_practices
-		WHERE recording_id = $1
+		WHERE recording_id = $1 AND tenant_id = $2
 	`
 
-	result, err := s.pool.Exec(ctx, query, recordingID)
+	result, err := s.pool.Exec(ctx, query, recordingID, tenantID)
 	if err != nil {
 		return fmt.Errorf("failed to delete best practice: %w", err)
 	}

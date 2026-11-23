@@ -1812,6 +1812,7 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCo
 			ContextText: customerContext,
 			UseWhen:     stage,
 			AIComment:   summary,
+			Status:      "accepted",
 		})
 	}
 	return out
