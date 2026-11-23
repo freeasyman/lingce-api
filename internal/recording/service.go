@@ -1725,7 +1725,50 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return created, fmt.Errorf("iterate consultation analyses for golden quotes: %w", err)
+		return created, fmt.Errorf("iterate recordings for golden quotes: %w", err)
+	}
+
+	// 质检高分原话候选：来自赢客专家接待分析（consultation_analyses）的七维质检。
+	qaRows, qaErr := s.store.pool.Query(ctx, `
+		SELECT a.recording_id, COALESCE(r.employee_id, 0), a.analysis::text,
+		       COALESCE(r.cleaned_transcription::text, 'null')
+		FROM consultation_analyses a
+		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id AND r.deleted_at IS NULL
+		WHERE a.tenant_id = $1
+		  AND a.status = 'analyzed'
+		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
+		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, a.id DESC
+	`, tenantID)
+	if qaErr != nil {
+		return created, fmt.Errorf("list consultation analyses for quality quotes: %w", qaErr)
+	}
+	defer qaRows.Close()
+	for qaRows.Next() {
+		var recordingID, employeeID int64
+		var raw, transcriptRaw string
+		if err := qaRows.Scan(&recordingID, &employeeID, &raw, &transcriptRaw); err != nil {
+			continue
+		}
+		var analysis map[string]any
+		if err := json.Unmarshal([]byte(raw), &analysis); err != nil {
+			continue
+		}
+		consultantText, customerText := transcriptSpeakerTexts(transcriptRaw)
+		for _, c := range deriveGoldenQuoteCandidatesFromQualityReview(analysis, consultantText, customerText) {
+			c.TenantID = tenantID
+			c.RecordingID = recordingID
+			c.EmployeeID = employeeID
+			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
+			if insErr != nil {
+				continue
+			}
+			if inserted {
+				created++
+			}
+		}
+	}
+	if err := qaRows.Err(); err != nil {
+		return created, fmt.Errorf("iterate consultation analyses for quality quotes: %w", err)
 	}
 	return created, nil
 }
