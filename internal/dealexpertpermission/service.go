@@ -259,7 +259,8 @@ func (s *Service) VisibilityFor(ctx context.Context, tenantID, employeeID int64)
 	if assignment == nil {
 		return ResolveVisibility(DefaultDataScopeForRole(employeeRole), nil, employeeID, false), nil
 	}
-	return ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, employeeID, false), nil
+	// 赢客专家管理员即使不是机构管理员，也允许使用已配置的全机构范围。
+	return ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, employeeID, assignment.RoleCode == RoleAdmin), nil
 }
 
 // DefaultAbilities 返回角色的默认能力包：负责人全开，其他咨询师默认包。
@@ -425,7 +426,7 @@ func (s *Service) AccessFor(ctx context.Context, claims *auth.Claims, tenantID i
 		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: true, RoleCode: roleCode,
 			Abilities: abilitySet(abilities), DataScope: visibility.Scope, VisibleEmployeeIDs: visibility.EmployeeIDs}, nil
 	}
-	visibility := ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, claims.UserID, false)
+	visibility := ResolveVisibility(assignment.DataScope, assignment.VisibleEmployeeIDs, claims.UserID, assignment.RoleCode == RoleAdmin)
 	if !assignment.Enabled {
 		return &Access{UserID: claims.UserID, TenantID: tenantID, Enabled: false, RoleCode: assignment.RoleCode,
 			Abilities: map[string]struct{}{}, DataScope: visibility.Scope, VisibleEmployeeIDs: visibility.EmployeeIDs}, nil
