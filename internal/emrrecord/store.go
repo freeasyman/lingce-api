@@ -362,7 +362,7 @@ func (s *Store) CountByState(ctx context.Context, tenantID int64, access *emrper
 	}
 	if employeeID > 0 {
 		unreadArgs := append(append([]any{}, args...), employeeID)
-		unreadWhere := fmt.Sprintf("%s AND r.status NOT IN ('草稿','需补全','已归档','退回') AND NOT EXISTS (SELECT 1 FROM user_resource_reads m WHERE m.tenant_id=$1 AND m.employee_id=$%d AND m.resource_type='emr_record' AND m.resource_id=r.id)", where, len(unreadArgs))
+		unreadWhere := fmt.Sprintf("%s AND r.status NOT IN ('草稿','需补全','已归档','退回') AND NOT EXISTS (SELECT 1 FROM user_resource_reads m WHERE m.tenant_id=$1 AND m.employee_id=$%d AND m.resource_type='emr_record' AND m.resource_id=r.id::text)", where, len(unreadArgs))
 		if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM emr_records r WHERE `+unreadWhere, unreadArgs...).Scan(&unread); err != nil {
 			return pending, archived, returned, 0, err
 		}

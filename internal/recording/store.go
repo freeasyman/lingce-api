@@ -2877,7 +2877,7 @@ func (s *Store) GetTaskStats(ctx context.Context, tenantID int64, tenantIDs []in
 				WHERE %s AND t.execution_status = 'to_execute'
 				  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
 				                  WHERE m.tenant_id = t.tenant_id AND m.employee_id = $%d
-				                    AND m.resource_type = 'followup_task' AND m.resource_id = t.id)`, whereClause, len(unreadArgs))
+				                    AND m.resource_type = 'followup_task' AND m.resource_id = t.id::text)`, whereClause, len(unreadArgs))
 			if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&stats.OpenUnreadTasks); err != nil {
 				return nil, fmt.Errorf("failed to get unread task count: %w", err)
 			}

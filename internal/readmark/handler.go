@@ -30,6 +30,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 }
 
 // MarkRead 标记一组资源为已读；只影响当前用户自己的角标。
+// resource_ids 支持数值 id 与 UUID（JSON 数字或字符串都接受）。
 func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
@@ -37,10 +38,12 @@ func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ResourceType string  `json:"resource_type"`
-		ResourceIDs  []int64 `json:"resource_ids"`
+		ResourceType string            `json:"resource_type"`
+		ResourceIDs  []json.RawMessage `json:"resource_ids"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "invalid body")
 		return
 	}
@@ -58,7 +61,19 @@ func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, "employee token required")
 		return
 	}
-	if err := MarkRead(r.Context(), h.pool, *claims.TenantID, claims.UserID, resourceType, req.ResourceIDs); err != nil {
+	ids := make([]string, 0, len(req.ResourceIDs))
+	for _, raw := range req.ResourceIDs {
+		var n json.Number
+		if err := json.Unmarshal(raw, &n); err == nil {
+			ids = append(ids, n.String())
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			ids = append(ids, s)
+		}
+	}
+	if err := MarkRead(r.Context(), h.pool, *claims.TenantID, claims.UserID, resourceType, ids); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

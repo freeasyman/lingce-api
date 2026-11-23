@@ -114,10 +114,10 @@ func (s *Service) ListCheckItemsPaged(ctx context.Context, tenantID int64, param
 			)
 			SELECT count(*) FILTER (WHERE phase = 'pending' AND NOT is_train AND NOT EXISTS (
 			           SELECT 1 FROM user_resource_reads m WHERE m.tenant_id = $1 AND m.employee_id = ` + viewerArg + `
-			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id)),
+			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id::text)),
 			       count(DISTINCT employee_id) FILTER (WHERE phase <> 'closed' AND NOT EXISTS (
 			           SELECT 1 FROM user_resource_reads m WHERE m.tenant_id = $1 AND m.employee_id = ` + viewerArg + `
-			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id))
+			             AND m.resource_type = 'compliance_finding' AND m.resource_id = base.item_id::text))
 			FROM base`
 		if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&unreadPending, &unreadPersons); err != nil {
 			return nil, 0, nil, fmt.Errorf("count unread compliance check items: %w", err)

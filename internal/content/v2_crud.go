@@ -343,7 +343,7 @@ func (s *Store) CountUnreadInsights(ctx context.Context, tenantID, employeeID in
 		  AND NOT EXISTS (SELECT 1 FROM content_topics t WHERE t.insight_ids @> to_jsonb(ci.id) AND t.tenant_id = ci.tenant_id)
 		  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
 		                  WHERE m.tenant_id = ci.tenant_id AND m.employee_id = $2
-		                    AND m.resource_type = 'content_insight' AND m.resource_id = ci.id)`,
+		                    AND m.resource_type = 'content_insight' AND m.resource_id = ci.id::text)`,
 		tenantID, employeeID).Scan(&unread)
 	if err != nil {
 		return 0, fmt.Errorf("count unread insights: %w", err)

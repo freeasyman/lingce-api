@@ -37,16 +37,17 @@ func ValidType(resourceType string) bool {
 }
 
 // MarkRead 幂等写入已读；同一条记录重复标记不报错。
-func MarkRead(ctx context.Context, q *pgxpool.Pool, tenantID, employeeID int64, resourceType string, ids []int64) error {
+func MarkRead(ctx context.Context, q *pgxpool.Pool, tenantID, employeeID int64, resourceType string, ids []string) error {
 	if tenantID <= 0 || employeeID <= 0 {
 		return fmt.Errorf("tenant and employee required")
 	}
 	if !ValidType(resourceType) {
 		return fmt.Errorf("invalid resource type")
 	}
-	seen := make(map[int64]bool, len(ids))
+	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		if id <= 0 || seen[id] {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true

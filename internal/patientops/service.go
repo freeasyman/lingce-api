@@ -571,7 +571,7 @@ func (s *Service) PatientTaskSummary(ctx context.Context, tenantID, employeeID i
 	unreadQuery := `SELECT COUNT(*) FROM patient_operation_tasks t JOIN customers c ON c.id=t.customer_id AND c.tenant_id=t.tenant_id LEFT JOIN products p ON p.id=t.product_id
 		WHERE ` + where + ` AND ` + ownerMine + ` AND NOT EXISTS (
 			SELECT 1 FROM user_resource_reads m WHERE m.tenant_id=$1 AND m.employee_id=$` + fmt.Sprint(len(unreadArgs)) + `
-			  AND m.resource_type='patient_task' AND m.resource_id=t.id)`
+			  AND m.resource_type='patient_task' AND m.resource_id=t.id::text)`
 	var mineUnread int64
 	if err := s.pool.QueryRow(ctx, unreadQuery, unreadArgs...).Scan(&mineUnread); err != nil {
 		return nil, fmt.Errorf("count unread patient operation tasks: %w", err)

@@ -211,7 +211,7 @@ func (s *Service) CountUnlinkedSources(ctx context.Context, tenantID, employeeID
 			WHERE s.tenant_id=$1 AND ` + screenshotReviewCondition + `
 			  AND NOT EXISTS (SELECT 1 FROM user_resource_reads m
 			                  WHERE m.tenant_id=$1 AND m.employee_id=$2
-			                    AND m.resource_type='patient_screenshot' AND m.resource_id=s.id)`
+			                    AND m.resource_type='patient_screenshot' AND m.resource_id=s.id::text)`
 		if err := s.pool.QueryRow(queryCtx, unreadQuery, tenantID, employeeID).Scan(&unread); err != nil {
 			return count, 0, err
 		}
