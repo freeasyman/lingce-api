@@ -1669,11 +1669,10 @@ func (s *Service) ListBenchmarkClips(
 // evidence / quality_review 原话写入 benchmark_clips（status=pending）。
 func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int64) (int, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT r.id, COALESCE(r.employee_id, 0), r.analysis_result::text
+		SELECT r.id, COALESCE(r.employee_id, 0), COALESCE(lower(r.business_scope), ''), r.analysis_result::text
 		FROM recordings r
 		WHERE r.tenant_id = $1
 		  AND r.deleted_at IS NULL
-		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
 		  AND r.analysis_status = 'completed'
 		  AND r.analysis_result::text IS NOT NULL
 		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, r.id DESC
@@ -1686,15 +1685,19 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 	created := 0
 	for rows.Next() {
 		var recordingID, employeeID int64
-		var raw string
-		if err := rows.Scan(&recordingID, &employeeID, &raw); err != nil {
+		var scope, raw string
+		if err := rows.Scan(&recordingID, &employeeID, &scope, &raw); err != nil {
 			continue
 		}
 		var analysis map[string]any
 		if err := json.Unmarshal([]byte(raw), &analysis); err != nil {
 			continue
 		}
-		for _, c := range deriveGoldenQuoteCandidatesFromContentSeeds(analysis) {
+		roleCode := scope
+		if roleCode != "doctor" && roleCode != "therapist" {
+			roleCode = "consultant"
+		}
+		for _, c := range deriveGoldenQuoteCandidatesFromContentSeeds(analysis, roleCode) {
 			c.TenantID = tenantID
 			c.RecordingID = recordingID
 			c.EmployeeID = employeeID
@@ -1746,7 +1749,7 @@ func transcriptSpeakerTexts(raw string) (consultant, customer string) {
 //   - evidence[] 中 speaker 为咨询师/医生的原话
 //
 // 客户原话作为 context_text，客户/咨询师前缀会在展示层区分。
-func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any) []benchmarkCandidateInput {
+func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCode string) []benchmarkCandidateInput {
 	out := make([]benchmarkCandidateInput, 0, 4)
 	seeds, _ := analysis["content_seeds"].([]any)
 	for idx, seedAny := range seeds {
@@ -1800,7 +1803,7 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any) []benc
 			stage = "通用场景"
 		}
 		out = append(out, benchmarkCandidateInput{
-			RoleCode:    "consultant",
+			RoleCode:    roleCode,
 			Dimension:   fmt.Sprintf("golden_quote·%d", idx+1),
 			Score:       100,
 			ClipText:    consultantQuote,
@@ -1821,7 +1824,7 @@ func isCustomerSpeaker(speaker string) bool {
 
 func isConsultantSpeaker(speaker string) bool {
 	s := strings.TrimSpace(speaker)
-	return s == "咨询师" || s == "医生" || strings.Contains(s, "consultant") || strings.Contains(s, "doctor")
+	return s == "咨询师" || s == "医生" || s == "治疗师" || strings.Contains(s, "consultant") || strings.Contains(s, "doctor") || strings.Contains(s, "therapist")
 }
 
 func goldenQuoteKey(quote string) string {
