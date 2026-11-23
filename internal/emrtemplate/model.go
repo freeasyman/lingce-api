@@ -12,6 +12,7 @@ type Template struct {
 	VisitType    string    `json:"visit_type"`
 	DepartmentID *int64    `json:"department_id,omitempty"`
 	Specialty    string    `json:"specialty,omitempty"`
+	Scope        string    `json:"scope,omitempty"`
 	IsCurrent    bool      `json:"is_current"`
 	Status       string    `json:"status"`
 	CreatedBy    int64     `json:"created_by"`
@@ -34,6 +35,7 @@ type TemplateVersion struct {
 	PrintTitle      string     `json:"print_title"`
 	Description     string     `json:"description"`
 	Status          string     `json:"status"`
+	Scope           string     `json:"scope,omitempty"`
 	CreatedBy       int64      `json:"created_by"`
 	PublishedAt     *time.Time `json:"published_at,omitempty"`
 	PublishedBy     *int64     `json:"published_by,omitempty"`
@@ -84,6 +86,10 @@ type SaveVersionRequest struct {
 	SpecialtyModule *string `json:"specialty_module,omitempty"`
 	PrintTitle      string  `json:"print_title"`
 	Description     string  `json:"description"`
+}
+
+type AssignRequest struct {
+	TenantID int64 `json:"tenant_id"`
 }
 
 type SaveSectionsRequest struct {

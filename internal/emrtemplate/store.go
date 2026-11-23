@@ -225,7 +225,7 @@ func mustJSON(value any) string {
 func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, code, name, version_no, document_type, visit_type,
-		       department_id, COALESCE(specialty, ''), status, is_current,
+		       department_id, COALESCE(specialty, ''), status, is_current, scope,
 		       created_by, created_at, updated_at
 		FROM emr_templates
 		WHERE tenant_id IN (0, $1)
@@ -240,7 +240,7 @@ func (s *Store) List(ctx context.Context, tenantID int64) ([]*Template, error) {
 		item := &Template{}
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.Code, &item.Name, &item.VersionNo,
 			&item.DocumentType, &item.VisitType, &item.DepartmentID, &item.Specialty,
-			&item.Status, &item.IsCurrent, &item.CreatedBy,
+			&item.Status, &item.IsCurrent, &item.Scope, &item.CreatedBy,
 			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -273,7 +273,7 @@ func (s *Store) ListVersions(ctx context.Context, tenantID int64, templateID str
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, id, code, version_no, name, document_type, visit_type, department_id,
-		       specialty, print_title, description, status, created_by,
+		       specialty, print_title, description, status, scope, created_by,
 		       published_at, published_by, disabled_at, disabled_by, created_at, is_current
 		FROM emr_templates
 		WHERE tenant_id IN (0, $1) AND code=$2
@@ -298,11 +298,11 @@ func (s *Store) GetVersion(ctx context.Context, tenantID int64, versionID string
 	v := &TemplateVersion{}
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, id, code, version_no, name, document_type, visit_type, department_id,
-		       specialty, print_title, description, status, created_by,
+		       specialty, print_title, description, status, scope, created_by,
 		       published_at, published_by, disabled_at, disabled_by, created_at, is_current
 		FROM emr_templates
 		WHERE id=$1 AND tenant_id IN (0, $2)
-	`, strings.TrimSpace(versionID), tenantID).Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
+	`, strings.TrimSpace(versionID), tenantID).Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.Scope, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -310,11 +310,11 @@ func (s *Store) GetVersion(ctx context.Context, tenantID int64, versionID string
 }
 
 func scanTemplateVersion(row pgx.Row, v *TemplateVersion) error {
-	return row.Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
+	return row.Scan(&v.ID, &v.TemplateID, &v.TemplateCode, &v.VersionNo, &v.Name, &v.DocumentType, &v.VisitType, &v.DepartmentID, &v.SpecialtyModule, &v.PrintTitle, &v.Description, &v.Status, &v.Scope, &v.CreatedBy, &v.PublishedAt, &v.PublishedBy, &v.DisabledAt, &v.DisabledBy, &v.CreatedAt, &v.IsCurrent)
 }
 
 func templateFromVersion(v *TemplateVersion) *Template {
-	return &Template{ID: v.ID, TenantID: nil, Code: v.TemplateCode, Name: v.Name, VersionNo: v.VersionNo, DocumentType: v.DocumentType, VisitType: v.VisitType, DepartmentID: v.DepartmentID, Specialty: derefString(v.SpecialtyModule), IsCurrent: v.IsCurrent, Status: v.Status, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt}
+	return &Template{ID: v.ID, TenantID: nil, Code: v.TemplateCode, Name: v.Name, VersionNo: v.VersionNo, DocumentType: v.DocumentType, VisitType: v.VisitType, DepartmentID: v.DepartmentID, Specialty: derefString(v.SpecialtyModule), Scope: v.Scope, IsCurrent: v.IsCurrent, Status: v.Status, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt}
 }
 
 func derefString(value *string) string {
@@ -685,4 +685,100 @@ func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section,
 		out = append(out, x)
 	}
 	return out, rows.Err()
+}
+
+// AssignToTenant 把平台模板复制成目标租户的一行（含栏目绑定与覆盖列），
+// 并保证同（租户, code）只有一个当前版本。
+func (s *Store) AssignToTenant(ctx context.Context, actorID int64, platformTemplateID string, targetTenantID int64) (string, error) {
+	if targetTenantID <= 0 {
+		return "", fmt.Errorf("目标租户不能为空")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin assign template: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var code, versionNo, name, documentType, visitType, printTitle, description string
+	var departmentID *int64
+	var specialty *string
+	err = tx.QueryRow(ctx, `
+		SELECT code, version_no, name, document_type, visit_type, department_id, specialty, print_title, description
+		FROM emr_templates
+		WHERE id=$1 AND COALESCE(tenant_id,0)=0 AND status='published'
+	`, strings.TrimSpace(platformTemplateID)).Scan(&code, &versionNo, &name, &documentType, &visitType, &departmentID, &specialty, &printTitle, &description)
+	if err == pgx.ErrNoRows {
+		return "", fmt.Errorf("平台模板不存在或未发布")
+	}
+	if err != nil {
+		return "", fmt.Errorf("load platform template: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE emr_templates
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
+		WHERE COALESCE(tenant_id,0)=$1 AND code=$2 AND is_current=true
+	`, targetTenantID, code, actorID); err != nil {
+		return "", fmt.Errorf("disable current tenant template: %w", err)
+	}
+
+	var newID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO emr_templates
+			(tenant_id, code, name, version_no, document_type, visit_type, department_id, specialty,
+			 status, is_current, print_title, description, created_by, updated_by, published_at, published_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'published',TRUE,$9,$10,$11,$11,NOW(),$11)
+		ON CONFLICT (tenant_id, code, version_no) DO UPDATE
+		SET name=EXCLUDED.name, document_type=EXCLUDED.document_type, visit_type=EXCLUDED.visit_type,
+		    department_id=EXCLUDED.department_id, specialty=EXCLUDED.specialty,
+		    status='published', is_current=true, print_title=EXCLUDED.print_title,
+		    description=EXCLUDED.description, updated_by=EXCLUDED.updated_by,
+		    published_at=COALESCE(emr_templates.published_at, NOW()), published_by=EXCLUDED.published_by,
+		    updated_at=NOW()
+		RETURNING id
+	`, targetTenantID, code, name, versionNo, documentType, visitType, departmentID, specialty,
+		printTitle, description, actorID).Scan(&newID)
+	if err != nil {
+		return "", fmt.Errorf("copy template to tenant: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM emr_template_fields WHERE template_id=$1`, newID); err != nil {
+		return "", fmt.Errorf("clear tenant template fields: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO emr_template_fields
+			(tenant_id, template_id, field_id, display_order, is_visible, is_required, description,
+			 name_override, input_type_override, structure_json, created_by)
+		SELECT 0, $1, field_id, display_order, is_visible, is_required, description,
+		       name_override, input_type_override, structure_json, $3
+		FROM emr_template_fields
+		WHERE template_id=$2
+	`, newID, strings.TrimSpace(platformTemplateID), actorID); err != nil {
+		return "", fmt.Errorf("copy template fields: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit assign template: %w", err)
+	}
+	return newID, nil
+}
+
+// UnassignFromTenant 停用目标租户从该平台模板复制出来的当前模板。
+func (s *Store) UnassignFromTenant(ctx context.Context, actorID int64, platformTemplateID string, targetTenantID int64) error {
+	if targetTenantID <= 0 {
+		return fmt.Errorf("目标租户不能为空")
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE emr_templates
+		SET status='disabled', is_current=false, disabled_at=NOW(), disabled_by=$3, updated_at=NOW()
+		WHERE COALESCE(tenant_id,0)=$1 AND is_current=true
+		  AND code=(SELECT code FROM emr_templates WHERE id=$2 AND COALESCE(tenant_id,0)=0)
+	`, targetTenantID, strings.TrimSpace(platformTemplateID), actorID)
+	if err != nil {
+		return fmt.Errorf("unassign template: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return fmt.Errorf("该租户未分配此模板")
+	}
+	return nil
 }

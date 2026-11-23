@@ -1261,24 +1261,12 @@ func (h *InternalHandler) preparePrompt(ctx context.Context, req EmrWorkerReques
 }
 
 func (h *InternalHandler) currentPublishedTemplateIDByCode(ctx context.Context, tenantID int64, code string) (string, error) {
-	var templateID string
-	err := h.pool.QueryRow(ctx, `
-		SELECT id
-		FROM emr_templates
-		WHERE code=$2
-		  AND status='published'
-		  AND is_current=true
-		  AND tenant_id IN ($1, 0)
-		ORDER BY CASE WHEN tenant_id=$1 THEN 0 ELSE 1 END, updated_at DESC, id DESC
-		LIMIT 1
-	`, tenantID, strings.TrimSpace(code)).Scan(&templateID)
-	if err == pgx.ErrNoRows {
-		return "", fmt.Errorf("没有可用的当前已发布病历模板：%s", code)
-	}
+	// 与建病历共用同一套解析：租户 → 平台 → 标准门诊兜底。
+	resolved, err := emrtemplate.ResolveCurrentTemplate(ctx, h.pool, tenantID, code, "", "")
 	if err != nil {
-		return "", fmt.Errorf("查询当前已发布病历模板失败：%w", err)
+		return "", err
 	}
-	return templateID, nil
+	return resolved.ID, nil
 }
 
 func (h *InternalHandler) loadPrompt(ctx context.Context) (string, string, error) {

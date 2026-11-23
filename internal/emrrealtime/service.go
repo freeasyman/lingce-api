@@ -14,6 +14,7 @@ import (
 	"github.com/freeasyman/lingce-api/internal/emrinput"
 	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/freeasyman/lingce-api/internal/encounter"
 	"github.com/freeasyman/lingce-api/internal/recording"
 	"github.com/freeasyman/lingce-api/pkg/llmgateway"
@@ -498,9 +499,21 @@ func (s *Service) Start(ctx context.Context, tenantID, actorID int64, access *em
 		}
 		req.CustomerID = &patient.ID
 	}
-	templateVersionID, documentType, err := s.store.GetPublishedTemplateVersion(ctx, tenantID, req.TemplateVersionID, req.DocumentType, req.VisitType)
-	if err != nil {
-		return nil, err
+	var templateVersionID, documentType string
+	if strings.TrimSpace(req.TemplateVersionID) != "" {
+		// 调用方显式指定模板（历史病案/指定版本）时沿用原逻辑。
+		templateVersionID, documentType, err = s.store.GetPublishedTemplateVersion(ctx, tenantID, req.TemplateVersionID, req.DocumentType, req.VisitType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// 未指定时按医生科室统一解析：租户 → 平台 → 标准门诊兜底。
+		resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.store.pool, tenantID, departmentCode, req.DocumentType, req.VisitType)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		templateVersionID = resolved.ID
+		documentType = resolved.DocumentType
 	}
 	if !found {
 		encounterID, err = s.encounters.EnsureRealtime(ctx, encounter.RealtimeRequest{
