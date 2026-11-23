@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1669,8 +1670,7 @@ func (s *Service) ListBenchmarkClips(
 // evidence / quality_review 原话写入 benchmark_clips（status=pending）。
 func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int64) (int, error) {
 	rows, err := s.store.pool.Query(ctx, `
-		SELECT r.id, COALESCE(r.employee_id, 0), COALESCE(lower(r.business_scope), ''), r.analysis_result::text,
-		       COALESCE(r.cleaned_transcription::text, 'null')
+		SELECT r.id, COALESCE(r.employee_id, 0), COALESCE(lower(r.business_scope), ''), r.analysis_result::text
 		FROM recordings r
 		WHERE r.tenant_id = $1
 		  AND r.deleted_at IS NULL
@@ -1686,8 +1686,8 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 	created := 0
 	for rows.Next() {
 		var recordingID, employeeID int64
-		var scope, raw, transcriptRaw string
-		if err := rows.Scan(&recordingID, &employeeID, &scope, &raw, &transcriptRaw); err != nil {
+		var scope, raw string
+		if err := rows.Scan(&recordingID, &employeeID, &scope, &raw); err != nil {
 			continue
 		}
 		var analysis map[string]any
@@ -1698,20 +1698,7 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 		if roleCode != "doctor" && roleCode != "therapist" {
 			roleCode = "consultant"
 		}
-		consultantText, customerText := transcriptSpeakerTexts(transcriptRaw)
 		for _, c := range deriveGoldenQuoteCandidatesFromContentSeeds(analysis, roleCode) {
-			c.TenantID = tenantID
-			c.RecordingID = recordingID
-			c.EmployeeID = employeeID
-			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
-			if insErr != nil {
-				continue
-			}
-			if inserted {
-				created++
-			}
-		}
-		for _, c := range deriveGoldenQuoteCandidatesFromQualityReview(analysis, consultantText, customerText) {
 			c.TenantID = tenantID
 			c.RecordingID = recordingID
 			c.EmployeeID = employeeID
@@ -1727,87 +1714,14 @@ func (s *Service) GenerateBenchmarkCandidates(ctx context.Context, tenantID int6
 	if err := rows.Err(); err != nil {
 		return created, fmt.Errorf("iterate recordings for golden quotes: %w", err)
 	}
-
-	// 质检高分原话候选：来自赢客专家接待分析（consultation_analyses）的七维质检。
-	qaRows, qaErr := s.store.pool.Query(ctx, `
-		SELECT a.recording_id, COALESCE(r.employee_id, 0), a.analysis::text,
-		       COALESCE(r.cleaned_transcription::text, 'null')
-		FROM consultation_analyses a
-		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id AND r.deleted_at IS NULL
-		WHERE a.tenant_id = $1
-		  AND a.status = 'analyzed'
-		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
-		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC, a.id DESC
-	`, tenantID)
-	if qaErr != nil {
-		return created, fmt.Errorf("list consultation analyses for quality quotes: %w", qaErr)
-	}
-	defer qaRows.Close()
-	for qaRows.Next() {
-		var recordingID, employeeID int64
-		var raw, transcriptRaw string
-		if err := qaRows.Scan(&recordingID, &employeeID, &raw, &transcriptRaw); err != nil {
-			continue
-		}
-		var analysis map[string]any
-		if err := json.Unmarshal([]byte(raw), &analysis); err != nil {
-			continue
-		}
-		consultantText, customerText := transcriptSpeakerTexts(transcriptRaw)
-		for _, c := range deriveGoldenQuoteCandidatesFromQualityReview(analysis, consultantText, customerText) {
-			c.TenantID = tenantID
-			c.RecordingID = recordingID
-			c.EmployeeID = employeeID
-			inserted, insErr := s.store.InsertBenchmarkClipIfNotExists(ctx, c)
-			if insErr != nil {
-				continue
-			}
-			if inserted {
-				created++
-			}
-		}
-	}
-	if err := qaRows.Err(); err != nil {
-		return created, fmt.Errorf("iterate consultation analyses for quality quotes: %w", err)
-	}
 	return created, nil
 }
 
-// transcriptSpeakerTexts 把清洗后转写按说话人归并成两个规范化文本串。
-func transcriptSpeakerTexts(raw string) (consultant, customer string) {
-	var segments []map[string]any
-	_ = json.Unmarshal([]byte(raw), &segments)
-	var c1, c2 strings.Builder
-	for _, seg := range segments {
-		text := strings.TrimSpace(pickString(seg, "text"))
-		if text == "" {
-			continue
-		}
-		speaker := strings.TrimSpace(pickString(seg, "speaker"))
-		if speaker == "" {
-			speaker = strings.TrimSpace(pickString(seg, "speaker_role"))
-		}
-		key := goldenQuoteKey(text)
-		if key == "" {
-			continue
-		}
-		switch {
-		case isConsultantSpeaker(speaker):
-			c1.WriteString(key)
-		case isCustomerSpeaker(speaker):
-			c2.WriteString(key)
-		}
-	}
-	return c1.String(), c2.String()
-}
+var goldenMarkerPattern = regexp.MustCompile(`就像|好像|相当于|好比|比喻|一样|口袋|高铁|手机|胶水|气球|牛仔裤|大油|发呆|愣神|导航|磨薄|回弹|补上|隐形眼镜|虚焦|头发丝|玻璃上|长痘|锁水|高跟鞋|剪子|别找|灯在晃|8到10秒|9秒|26秒|5%`)
 
-// deriveGoldenQuoteCandidatesFromAnalysis 只取咨询师/医生亲口说的逐字原话：
-//   - quality_review.dimensions[].evidence（score >= 4 的维度原话）
-//   - evidence[] 中 speaker 为咨询师/医生的原话
-//
-// 客户原话作为 context_text，客户/咨询师前缀会在展示层区分。
 func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCode string) []benchmarkCandidateInput {
-	out := make([]benchmarkCandidateInput, 0, 4)
+	out := make([]benchmarkCandidateInput, 0, 8)
+	seen := map[string]struct{}{}
 	seeds, _ := analysis["content_seeds"].([]any)
 	for idx, seedAny := range seeds {
 		seed, ok := seedAny.(map[string]any)
@@ -1815,10 +1729,16 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCo
 			continue
 		}
 		seedType := strings.TrimSpace(pickString(seed, "type"))
-		if seedType != "golden_quote" && seedType != "金句片段" && seedType != "金句表达" && seedType != "quote" {
-			continue
+		isGoldenType := seedType == "golden_quote" || seedType == "金句片段" || seedType == "金句表达" || seedType == "quote"
+		summary := strings.TrimSpace(pickString(seed, "summary"))
+		if summary == "" {
+			summary = strings.TrimSpace(pickString(seed, "content_angle"))
 		}
-		var consultantQuote, customerContext string
+		stage := strings.TrimSpace(pickString(seed, "stage"))
+		if stage == "" {
+			stage = "通用场景"
+		}
+		customerContext := ""
 		if quotes, ok := seed["key_quotes"].([]any); ok {
 			for _, qAny := range quotes {
 				q, ok := qAny.(map[string]any)
@@ -1830,115 +1750,49 @@ func deriveGoldenQuoteCandidatesFromContentSeeds(analysis map[string]any, roleCo
 				if text == "" {
 					continue
 				}
-				if isConsultantSpeaker(speaker) {
-					if consultantQuote == "" {
-						consultantQuote = text
-					}
-				} else if isCustomerSpeaker(speaker) {
+				if isCustomerSpeaker(speaker) {
 					if customerContext == "" {
 						customerContext = text
 					}
+					continue
 				}
+				if !isConsultantSpeaker(speaker) {
+					continue
+				}
+				key := goldenQuoteKey(text)
+				if key == "" {
+					continue
+				}
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				// 金句类型直接收；其他类型必须是带精彩表达的原话。
+				if !isGoldenType && !goldenMarkerPattern.MatchString(text) {
+					continue
+				}
+				seen[key] = struct{}{}
+				if customerContext == "" {
+					customerContext = strings.TrimSpace(pickString(seed, "patient_concern"))
+				}
+				dimPrefix := "quote"
+				if isGoldenType {
+					dimPrefix = "golden_quote"
+				}
+				out = append(out, benchmarkCandidateInput{
+					RoleCode:    roleCode,
+					Dimension:   fmt.Sprintf("%s·%d", dimPrefix, idx+1),
+					Score:       100,
+					ClipText:    text,
+					Confidence:  "medium",
+					Source:      "auto_v2",
+					ContextText: customerContext,
+					UseWhen:     stage,
+					AIComment:   summary,
+					Status:      "accepted",
+				})
+				break
 			}
 		}
-		if consultantQuote == "" {
-			continue
-		}
-		key := goldenQuoteKey(consultantQuote)
-		if key == "" {
-			continue
-		}
-		if customerContext == "" {
-			customerContext = strings.TrimSpace(pickString(seed, "patient_concern"))
-		}
-		summary := strings.TrimSpace(pickString(seed, "summary"))
-		if summary == "" {
-			summary = strings.TrimSpace(pickString(seed, "content_angle"))
-		}
-		stage := strings.TrimSpace(pickString(seed, "stage"))
-		if stage == "" {
-			stage = "通用场景"
-		}
-		out = append(out, benchmarkCandidateInput{
-			RoleCode:    roleCode,
-			Dimension:   fmt.Sprintf("golden_quote·%d", idx+1),
-			Score:       100,
-			ClipText:    consultantQuote,
-			Confidence:  "medium",
-			Source:      "auto_v2",
-			ContextText: customerContext,
-			UseWhen:     stage,
-			AIComment:   summary,
-			Status:      "accepted",
-		})
-	}
-	return out
-}
-
-// deriveGoldenQuoteCandidatesFromQualityReview 保留质检高分原话作为待选候选。
-func deriveGoldenQuoteCandidatesFromQualityReview(analysis map[string]any, consultantText, customerText string) []benchmarkCandidateInput {
-	out := make([]benchmarkCandidateInput, 0, 8)
-	seen := map[string]struct{}{}
-	customerQuotes := make([]string, 0, 4)
-	if evidence, ok := analysis["evidence"].([]any); ok {
-		for _, itemAny := range evidence {
-			item, ok := itemAny.(map[string]any)
-			if !ok {
-				continue
-			}
-			quote := strings.TrimSpace(pickString(item, "quote"))
-			speaker := strings.TrimSpace(pickString(item, "speaker"))
-			if quote == "" || !isCustomerSpeaker(speaker) {
-				continue
-			}
-			if len(customerQuotes) < 4 {
-				customerQuotes = append(customerQuotes, quote)
-			}
-		}
-	}
-	contextText := strings.Join(customerQuotes, "\n")
-	qr, _ := analysis["quality_review"].(map[string]any)
-	dimensions, _ := qr["dimensions"].([]any)
-	for idx, itemAny := range dimensions {
-		item, ok := itemAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		scorePtr := pickFloat(item, "score")
-		if scorePtr == nil || *scorePtr < 4 {
-			continue
-		}
-		quote := strings.TrimSpace(pickString(item, "evidence"))
-		label := strings.TrimSpace(pickString(item, "label"))
-		impact := strings.TrimSpace(pickString(item, "impact_on_deal"))
-		key := goldenQuoteKey(quote)
-		if key == "" {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		if customerText != "" && strings.Contains(customerText, key) {
-			continue
-		}
-		if consultantText != "" && !strings.Contains(consultantText, key) {
-			continue
-		}
-		seen[key] = struct{}{}
-		if label == "" {
-			label = "质检维度"
-		}
-		out = append(out, benchmarkCandidateInput{
-			RoleCode:    "consultant",
-			Dimension:   fmt.Sprintf("%s·%d", label, idx+1),
-			Score:       *scorePtr * 20,
-			ClipText:    quote,
-			Confidence:  "medium",
-			Source:      "auto_v2",
-			ContextText: contextText,
-			UseWhen:     label,
-			AIComment:   impact,
-		})
 	}
 	return out
 }
