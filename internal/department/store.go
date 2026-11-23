@@ -788,9 +788,13 @@ func (s *Store) CurrentDepartmentTemplates(ctx context.Context, tenantID int64) 
 		}
 		if resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, item.Code, "", "初诊"); resolveErr == nil && resolved != nil {
 			item.FirstVisitTemplateName = resolved.Name
+			item.FirstVisitScope = resolved.Scope
+			item.FirstVisitFallback = resolved.Fallback
 		}
 		if resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, item.Code, "", "复诊"); resolveErr == nil && resolved != nil {
 			item.FollowVisitTemplateName = resolved.Name
+			item.FollowVisitScope = resolved.Scope
+			item.FollowVisitFallback = resolved.Fallback
 		}
 		items = append(items, item)
 	}

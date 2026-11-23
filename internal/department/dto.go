@@ -5,9 +5,9 @@ type CreateDepartmentRequest struct {
 	TenantID int64  `json:"tenant_id"`
 	Name     string `json:"name"`
 	Code     string `json:"code"`
-	DictCode     string `json:"dict_code,omitempty"` // 标准科室：字典编码；为空表示自定义
-	Type         string `json:"type,omitempty"` // clinical / functional
-	IsCustom     bool   `json:"is_custom,omitempty"`
+	DictCode string `json:"dict_code,omitempty"` // 标准科室：字典编码；为空表示自定义
+	Type     string `json:"type,omitempty"`      // clinical / functional
+	IsCustom bool   `json:"is_custom,omitempty"`
 	ParentID *int64 `json:"parent_id,omitempty"`
 }
 
@@ -24,7 +24,11 @@ type DepartmentCurrentTemplate struct {
 	Name                    string `json:"name"`
 	Code                    string `json:"code"`
 	FirstVisitTemplateName  string `json:"first_visit_template_name"`
+	FirstVisitScope         string `json:"first_visit_scope"`
+	FirstVisitFallback      bool   `json:"first_visit_fallback"`
 	FollowVisitTemplateName string `json:"follow_visit_template_name"`
+	FollowVisitScope        string `json:"follow_visit_scope"`
+	FollowVisitFallback     bool   `json:"follow_visit_fallback"`
 }
 
 // UpdateDepartmentRequest represents a request to update a department
