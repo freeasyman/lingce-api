@@ -29,8 +29,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/emr/templates", Handler: h.Create, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/templates/{id}", Handler: h.Get, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/emr/templates/{id}/versions", Handler: h.CreateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/templates/{id}/assign", Handler: h.Assign, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
-		{Method: "POST", Path: "/api/v1/emr/templates/{id}/unassign", Handler: h.Unassign, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/templates/{id}/versions", Handler: h.ListVersions, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/emr/template-versions/{id}", Handler: h.GetVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "PUT", Path: "/api/v1/emr/template-versions/{id}", Handler: h.UpdateVersion, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
@@ -229,52 +227,7 @@ func (h *Handler) Disable(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }
 
-func (h *Handler) Assign(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	var req AssignRequest
-	if decode(r, &req) != nil || req.TenantID <= 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
-		return
-	}
-	if _, err := h.permissions.Authorize(r.Context(), claims, req.TenantID, "template.manage"); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	id, err := h.service.Assign(r.Context(), claims.UserID, parseID(r), req.TenantID)
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"data": map[string]any{"id": id}})
-}
-
-func (h *Handler) Unassign(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	var req AssignRequest
-	if decode(r, &req) != nil || req.TenantID <= 0 {
-		httputil.WriteBadRequest(w, "tenant_id is required")
-		return
-	}
-	if _, err := h.permissions.Authorize(r.Context(), claims, req.TenantID, "template.manage"); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	if err := h.service.Unassign(r.Context(), claims.UserID, parseID(r), req.TenantID); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"ok": true})
-}
-
-// ListPlatform 返回平台模板库（scope=platform），供内部运营后台分配使用。
+// ListPlatform 返回标准模板库（scope=platform），供运营控制台只读展示。
 func (h *Handler) ListPlatform(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil || claims.UserType != auth.UserTypeAdmin {

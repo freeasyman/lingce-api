@@ -88,10 +88,6 @@ type SaveVersionRequest struct {
 	Description     string  `json:"description"`
 }
 
-type AssignRequest struct {
-	TenantID int64 `json:"tenant_id"`
-}
-
 type SaveSectionsRequest struct {
 	Items []SectionInput `json:"items"`
 }
