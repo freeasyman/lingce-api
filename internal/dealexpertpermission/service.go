@@ -333,8 +333,10 @@ func (s *Service) Upsert(ctx context.Context, tenantID, employeeID, actorID int6
 	}
 	switch dataScope {
 	case DataScopeTenant:
-		if !isAdmin {
-			return nil, fmt.Errorf("全机构可见范围仅限机构管理员")
+		// 赢客专家的产品管理员也可以配置全机构可见范围；
+		// 不再要求目标员工同时是机构管理员。
+		if !isAdmin && roleCode != RoleAdmin {
+			return nil, fmt.Errorf("全机构可见范围仅限机构管理员或赢客专家管理员")
 		}
 		visibleEmployeeIDs = []int64{}
 	case DataScopeSelf:
