@@ -1761,48 +1761,15 @@ func deriveGoldenQuoteCandidatesFromAnalysis(analysis map[string]any, consultant
 			}
 			quote := strings.TrimSpace(pickString(item, "quote"))
 			speaker := strings.TrimSpace(pickString(item, "speaker"))
-			if quote == "" {
+			if quote == "" || !isCustomerSpeaker(speaker) {
 				continue
 			}
-			if isCustomerSpeaker(speaker) {
-				if len(customerQuotes) < 4 {
-					customerQuotes = append(customerQuotes, quote)
-				}
-				continue
+			if len(customerQuotes) < 4 {
+				customerQuotes = append(customerQuotes, quote)
 			}
-			if !isConsultantSpeaker(speaker) {
-				continue
-			}
-			id := strings.TrimSpace(pickString(item, "id"))
-			if id == "" {
-				id = fmt.Sprintf("ev_%d", len(out)+1)
-			}
-			key := goldenQuoteKey(quote)
-			if key == "" {
-				continue
-			}
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, benchmarkCandidateInput{
-				RoleCode:    "consultant",
-				Dimension:   "evidence·" + id,
-				Score:       80,
-				ClipText:    quote,
-				Confidence:  "medium",
-				Source:      "auto_v2",
-				ContextText: strings.Join(customerQuotes, "\n"),
-			})
 		}
 	}
-
-	customerKeys := map[string]struct{}{}
-	for _, q := range customerQuotes {
-		if k := goldenQuoteKey(q); k != "" {
-			customerKeys[k] = struct{}{}
-		}
-	}
+	contextText := strings.Join(customerQuotes, "\n")
 
 	qr, _ := analysis["quality_review"].(map[string]any)
 	dimensions, _ := qr["dimensions"].([]any)
@@ -1817,15 +1784,12 @@ func deriveGoldenQuoteCandidatesFromAnalysis(analysis map[string]any, consultant
 		}
 		quote := strings.TrimSpace(pickString(item, "evidence"))
 		label := strings.TrimSpace(pickString(item, "label"))
+		impact := strings.TrimSpace(pickString(item, "impact_on_deal"))
 		key := goldenQuoteKey(quote)
 		if key == "" {
 			continue
 		}
 		if _, exists := seen[key]; exists {
-			continue
-		}
-		// 客户亲口说的原话不是可复用金句，跳过。
-		if _, isCustomer := customerKeys[key]; isCustomer {
 			continue
 		}
 		// 质检 evidence 不带说话人：必须能在原始转写里确认是咨询师说的。
@@ -1840,13 +1804,15 @@ func deriveGoldenQuoteCandidatesFromAnalysis(analysis map[string]any, consultant
 			label = "质检维度"
 		}
 		out = append(out, benchmarkCandidateInput{
-			RoleCode:   "consultant",
-			Dimension:  fmt.Sprintf("%s·%d", label, idx+1),
-			Score:      *scorePtr * 20,
-			ClipText:   quote,
-			Confidence: "medium",
-			Source:     "auto_v2",
-			AIComment:  strings.TrimSpace(pickString(item, "impact_on_deal")),
+			RoleCode:    "consultant",
+			Dimension:   fmt.Sprintf("%s·%d", label, idx+1),
+			Score:       *scorePtr * 20,
+			ClipText:    quote,
+			Confidence:  "medium",
+			Source:      "auto_v2",
+			ContextText: contextText,
+			UseWhen:     label,
+			AIComment:   impact,
 		})
 	}
 	return out
