@@ -16,8 +16,7 @@ func TestTemplateFallbackMessage(t *testing.T) {
 	}{
 		{name: "matched 无提示", res: &templateResolution{Matched: true}, want: ""},
 		{name: "无科室", res: &templateResolution{Reason: templateReasonNoDepartment}, want: "本次就诊未关联科室，已使用标准门急诊病历；请补科室（排班/挂号）"},
-		{name: "科室无专属模板", res: &templateResolution{Reason: templateReasonNoTemplateCode}, want: "科室未匹配模板（未配置 template_code），已使用标准门急诊病历"},
-		{name: "模板未发布", res: &templateResolution{Reason: templateReasonTemplateNotPublished}, want: "科室未匹配模板（对应模板未发布），已使用标准门急诊病历"},
+		{name: "科室无专属模板", res: &templateResolution{Reason: templateReasonNoTemplateCode}, want: "科室无专属模板，已使用标准门急诊病历"},
 		{name: "无兜底模板", res: &templateResolution{Reason: templateReasonNoFallback}, want: "未找到可用病历模板，请联系管理员"},
 	}
 	for _, tc := range cases {

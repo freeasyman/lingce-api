@@ -696,9 +696,7 @@ func templateFallbackMessage(resolution *templateResolution) string {
 	case templateReasonNoDepartment:
 		return "本次就诊未关联科室，已使用标准门急诊病历；请补科室（排班/挂号）"
 	case templateReasonNoTemplateCode:
-		return "科室未匹配模板（未配置 template_code），已使用标准门急诊病历"
-	case templateReasonTemplateNotPublished:
-		return "科室未匹配模板（对应模板未发布），已使用标准门急诊病历"
+		return "科室无专属模板，已使用标准门急诊病历"
 	case templateReasonNoFallback:
 		return "未找到可用病历模板，请联系管理员"
 	default:

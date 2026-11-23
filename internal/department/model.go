@@ -11,7 +11,6 @@ type Department struct {
 	ParentID        *int64     `json:"parent_id,omitempty"`
 	IsActive        bool       `json:"is_active"`
 	Type            string     `json:"type,omitempty"`
-	TemplateCode    string     `json:"template_code,omitempty"`
 	IsCustom        bool       `json:"is_custom"`
 	DefaultRoleCode *string    `json:"default_role_code,omitempty"`
 	DefaultRoleName *string    `json:"default_role_name,omitempty"`

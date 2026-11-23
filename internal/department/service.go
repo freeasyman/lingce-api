@@ -16,24 +16,9 @@ func NewService(store *Store) *Service {
 	return &Service{store: store}
 }
 
-// ListEmrTemplateOptions 返回科室可选病历模板。
-func (s *Service) ListEmrTemplateOptions(ctx context.Context, tenantID int64) ([]EmrTemplateOption, error) {
-	return s.store.ListEmrTemplateOptions(ctx, tenantID)
-}
-
-// SetDepartmentTemplate 设置科室默认病历模板（空表示不配置）。
-func (s *Service) SetDepartmentTemplate(ctx context.Context, tenantID, id int64, code string) error {
-	code = strings.TrimSpace(code)
-	if code != "" {
-		ok, err := s.store.EmrTemplateAvailable(ctx, tenantID, code)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("模板不存在或未发布")
-		}
-	}
-	return s.store.SetDepartmentTemplate(ctx, tenantID, id, code)
+// ListCurrentTemplates 返回科室当前自动匹配的模板（只读展示）。
+func (s *Service) ListCurrentTemplates(ctx context.Context, tenantID int64) ([]DepartmentCurrentTemplate, error) {
+	return s.store.CurrentDepartmentTemplates(ctx, tenantID)
 }
 
 // ListDepartmentDictionary 返回平台组织字典（科室 + 职能部）。
@@ -57,7 +42,6 @@ func (s *Service) ResolveDepartmentInput(ctx context.Context, req CreateDepartme
 		req.Name = item.Name
 		req.Code = item.Code
 		req.Type = item.Type
-		req.TemplateCode = item.TemplateCode
 		req.IsCustom = false
 		return req, nil
 	}
@@ -179,7 +163,6 @@ func toDepartmentResponse(d *Department) *DepartmentResponse {
 		ParentID:        d.ParentID,
 		IsActive:        d.IsActive,
 		Type:            d.Type,
-		TemplateCode:    d.TemplateCode,
 		IsCustom:        d.IsCustom,
 		DefaultRoleCode: d.DefaultRoleCode,
 		DefaultRoleName: d.DefaultRoleName,

@@ -601,20 +601,19 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 // 已存在的按 dict_code 复用，不重复建；返回 名称 -> id。
 func (s *Store) ensureDefaultDepartmentsTx(ctx context.Context, tx pgx.Tx, tenantID int64) (map[string]int64, error) {
 	type stdDept struct {
-		code         string
-		name         string
-		deptType     string
-		templateCode string
+		code     string
+		name     string
+		deptType string
 	}
 	rows, err := tx.Query(ctx, `
-SELECT code, name, COALESCE(type, ''), COALESCE(template_code, '') FROM organization_department_dict WHERE is_active ORDER BY type, sort_order, code`)
+SELECT code, name, COALESCE(type, '') FROM organization_department_dict WHERE is_active ORDER BY type, sort_order, code`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load standard departments: %w", err)
 	}
 	items := make([]stdDept, 0, 24)
 	for rows.Next() {
 		var item stdDept
-		if err := rows.Scan(&item.code, &item.name, &item.deptType, &item.templateCode); err != nil {
+		if err := rows.Scan(&item.code, &item.name, &item.deptType); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("failed to scan standard department: %w", err)
 		}
@@ -634,9 +633,9 @@ SELECT code, name, COALESCE(type, ''), COALESCE(template_code, '') FROM organiza
 			ORDER BY id ASC LIMIT 1`, tenantID, item.code).Scan(&departmentID)
 		if err == pgx.ErrNoRows {
 			err = tx.QueryRow(ctx, `
-				INSERT INTO departments (tenant_id, name, code, dict_code, type, template_code, parent_id, is_active, created_at, updated_at)
-				VALUES ($1, $2, $3, $3, NULLIF($4, ''), NULLIF($5, ''), NULL, true, NOW(), NOW())
-				RETURNING id`, tenantID, item.name, item.code, item.deptType, item.templateCode).Scan(&departmentID)
+				INSERT INTO departments (tenant_id, name, code, dict_code, type, parent_id, is_active, created_at, updated_at)
+				VALUES ($1, $2, $3, $3, NULLIF($4, ''), NULL, true, NOW(), NOW())
+				RETURNING id`, tenantID, item.name, item.code, item.deptType).Scan(&departmentID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create standard department %s: %w", item.name, err)
 			}

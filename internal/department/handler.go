@@ -55,8 +55,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	routes := []router.Route{
 		{Method: "GET", Path: "/api/v1/departments", Handler: h.ListDepartments, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/departments/dictionary", Handler: h.ListDepartmentDictionary, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
-		{Method: "GET", Path: "/api/v1/departments/template-options", Handler: h.ListDepartmentTemplateOptions, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
-		{Method: "PUT", Path: "/api/v1/departments/{id}/template", Handler: h.SetDepartmentTemplate, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v1/departments/current-templates", Handler: h.ListCurrentTemplates, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/departments/{id}", Handler: h.GetDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/departments", Handler: h.CreateDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "PUT", Path: "/api/v1/departments/{id}", Handler: h.UpdateDepartment, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
@@ -150,8 +149,8 @@ func (h *Handler) GetDepartment(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateDepartment handles creating a new department
-// ListDepartmentTemplateOptions 返回科室可选病历模板。
-func (h *Handler) ListDepartmentTemplateOptions(w http.ResponseWriter, r *http.Request) {
+// ListCurrentTemplates 返回科室当前自动匹配的模板（只读，统一解析器结果）。
+func (h *Handler) ListCurrentTemplates(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
 		httputil.WriteUnauthorized(w, "Invalid token")
@@ -162,47 +161,12 @@ func (h *Handler) ListDepartmentTemplateOptions(w http.ResponseWriter, r *http.R
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
-	items, err := h.service.ListEmrTemplateOptions(r.Context(), *tenantID)
+	items, err := h.service.ListCurrentTemplates(r.Context(), *tenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}
-	httputil.WriteSuccess(w, items)
-}
-
-// SetDepartmentTemplate 设置科室默认病历模板（空表示不配置）。
-func (h *Handler) SetDepartmentTemplate(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetUserClaims(r.Context())
-	if claims == nil {
-		httputil.WriteUnauthorized(w, "Invalid token")
-		return
-	}
-	if err := h.requireInstitutionMenuAccess(r.Context(), claims, "departments"); err != nil {
-		httputil.WriteForbidden(w, err.Error())
-		return
-	}
-	tenantID, err := resolveDepartmentTenantID(claims, r.URL.Query().Get("tenant_id"))
-	if err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		httputil.WriteBadRequest(w, "Invalid department ID")
-		return
-	}
-	var req struct {
-		TemplateCode string `json:"template_code"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteBadRequest(w, "Invalid request body")
-		return
-	}
-	if err := h.service.SetDepartmentTemplate(r.Context(), *tenantID, id, req.TemplateCode); err != nil {
-		httputil.WriteBadRequest(w, err.Error())
-		return
-	}
-	httputil.WriteSuccess(w, map[string]any{"id": id, "template_code": req.TemplateCode})
+	httputil.WriteSuccess(w, map[string]any{"items": items})
 }
 
 // ListDepartmentDictionary 返回平台组织字典（科室 + 职能部），供门户建部门时选择。
@@ -413,6 +377,17 @@ func (h *Handler) GetDepartmentPerformance(w http.ResponseWriter, r *http.Reques
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+
+	// P1 补漏：目标科室必须属于本机构。
+	existing, err := h.service.GetDepartment(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, "department not found")
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 

@@ -21,23 +21,21 @@ type Doctor struct {
 	Status         string `json:"status"`
 }
 
-// ClinicalDepartment 临床科室（departments.type='clinical'）及其 EMR 模板映射。
-// 只暴露给 HIS 排班/挂号/管理台使用，不改共享 department 产品的接口。
+// ClinicalDepartment 临床科室（departments.type='clinical'）及其 EMR 模板名。
+// 模板名由统一解析器按 科室 code + 初诊 解析（只读，供展示）。
 type ClinicalDepartment struct {
 	ID           int64  `json:"id"`
 	Name         string `json:"name"`
 	Code         string `json:"code"`
-	TemplateCode string `json:"template_code"`
-	TemplateName string `json:"template_name"` // 当前租户实际可用的模板名；未配置/未发布时为空
+	TemplateName string `json:"template_name"`
 }
 
 // DepartmentBrief 一次就诊的科室 + 自动匹配到的 EMR 模板。
-// Matched=false 表示科室没有 template_code 或该模板未发布，已降级到标准门急诊病历。
+// Matched=false 表示该科室无专属模板，已降级到标准门急诊病历。
 type DepartmentBrief struct {
 	ID           int64  `json:"id"`
 	Name         string `json:"name"`
 	Code         string `json:"code"`
-	TemplateCode string `json:"template_code"`
 	TemplateID   string `json:"template_id"`
 	TemplateName string `json:"template_name"`
 	Matched      bool   `json:"matched"`

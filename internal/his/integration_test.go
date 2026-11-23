@@ -175,11 +175,11 @@ func createTestSchedule(t *testing.T, svc *Service, tenantID int64, slotsTime st
 	// P0-4：排班必须关联临床科室，测试 shim 里按需造一个“内科”。
 	var deptID int64
 	err := svc.store.pool.QueryRow(ctx, `
-		SELECT id FROM departments WHERE tenant_id = $1 AND code = 'internal' LIMIT 1`, tenantID).Scan(&deptID)
+		SELECT id FROM departments WHERE tenant_id = $1 AND code = 'internal_medicine' LIMIT 1`, tenantID).Scan(&deptID)
 	if err == pgx.ErrNoRows {
 		if err := svc.store.pool.QueryRow(ctx, `
-			INSERT INTO departments (tenant_id, name, code, type, template_code, is_active)
-			VALUES ($1, '内科', 'internal', 'clinical', 'internal_medicine', TRUE)
+			INSERT INTO departments (tenant_id, name, code, type, is_active)
+			VALUES ($1, '内科', 'internal_medicine', 'clinical', TRUE)
 			RETURNING id`, tenantID).Scan(&deptID); err != nil {
 			t.Fatalf("create test department: %v", err)
 		}

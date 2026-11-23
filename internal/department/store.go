@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/emrtemplate"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -238,7 +239,6 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 		           LIMIT 1
 		       ) AS default_role_name,
 		       COALESCE(d.type, '') AS type,
-		       COALESCE(d.template_code, '') AS template_code,
 		       COALESCE(d.is_custom, false) AS is_custom,
 		       d.created_at, d.updated_at, d.deleted_at
 		FROM departments d
@@ -268,7 +268,6 @@ func (s *Store) ListDepartments(ctx context.Context, req DepartmentListRequest) 
 			&d.DefaultRoleCode,
 			&d.DefaultRoleName,
 			&d.Type,
-			&d.TemplateCode,
 			&d.IsCustom,
 			&d.CreatedAt,
 			&d.UpdatedAt,
@@ -310,7 +309,6 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		           LIMIT 1
 		       ) AS default_role_name,
 		       COALESCE(d.type, '') AS type,
-		       COALESCE(d.template_code, '') AS template_code,
 		       COALESCE(d.is_custom, false) AS is_custom,
 		       d.created_at, d.updated_at, d.deleted_at
 		FROM departments d
@@ -328,7 +326,6 @@ func (s *Store) GetDepartmentByID(ctx context.Context, id int64) (*Department, e
 		&d.DefaultRoleCode,
 		&d.DefaultRoleName,
 		&d.Type,
-		&d.TemplateCode,
 		&d.IsCustom,
 		&d.CreatedAt,
 		&d.UpdatedAt,
@@ -371,8 +368,8 @@ ORDER BY type, sort_order, code`)
 func (s *Store) GetDepartmentDictionaryItem(ctx context.Context, code string) (DepartmentDictItem, bool, error) {
 	var item DepartmentDictItem
 	err := s.pool.QueryRow(ctx, `
-SELECT code, name, type, COALESCE(template_code, '') FROM organization_department_dict WHERE code = $1 AND is_active`, code).
-		Scan(&item.Code, &item.Name, &item.Type, &item.TemplateCode)
+SELECT code, name, type FROM organization_department_dict WHERE code = $1 AND is_active`, code).
+		Scan(&item.Code, &item.Name, &item.Type)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DepartmentDictItem{}, false, nil
 	}
@@ -392,72 +389,16 @@ func (s *Store) DepartmentCodeExists(ctx context.Context, code string) (bool, er
 }
 
 // EmrTemplateOption 是科室可选病历模板。
-type EmrTemplateOption struct {
-	Code         string `json:"code"`
-	Name         string `json:"name"`
-	DocumentType string `json:"document_type"`
-	VisitType    string `json:"visit_type"`
-}
-
-// ListEmrTemplateOptions 返回本机构可用（已发布且为当前版本）的病历模板。
-func (s *Store) ListEmrTemplateOptions(ctx context.Context, tenantID int64) ([]EmrTemplateOption, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT code, name, COALESCE(document_type, ''), COALESCE(visit_type, '')
-FROM emr_templates
-WHERE status = 'published' AND is_current AND tenant_id IN (0, $1)
-ORDER BY code`, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("list emr template options: %w", err)
-	}
-	defer rows.Close()
-	items := make([]EmrTemplateOption, 0, 12)
-	for rows.Next() {
-		var item EmrTemplateOption
-		if err := rows.Scan(&item.Code, &item.Name, &item.DocumentType, &item.VisitType); err != nil {
-			return nil, fmt.Errorf("scan emr template option: %w", err)
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-// EmrTemplateAvailable 判断模板 code 是否可用于该机构。
-func (s *Store) EmrTemplateAvailable(ctx context.Context, tenantID int64, code string) (bool, error) {
-	var ok bool
-	if err := s.pool.QueryRow(ctx, `
-SELECT EXISTS(
-    SELECT 1 FROM emr_templates
-    WHERE code = $1 AND status = 'published' AND is_current AND tenant_id IN (0, $2)
-)`, code, tenantID).Scan(&ok); err != nil {
-		return false, fmt.Errorf("check emr template: %w", err)
-	}
-	return ok, nil
-}
-
-// SetDepartmentTemplate 设置科室默认病历模板；code 为空表示不配置（走标准模板）。
-func (s *Store) SetDepartmentTemplate(ctx context.Context, tenantID, id int64, code string) error {
-	tag, err := s.pool.Exec(ctx, `
-UPDATE departments SET template_code = NULLIF($1, ''), updated_at = NOW()
-WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL`, code, id, tenantID)
-	if err != nil {
-		return fmt.Errorf("set department template: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("department not found")
-	}
-	return nil
-}
-
 // CreateDepartment creates a new department
 func (s *Store) CreateDepartment(ctx context.Context, req CreateDepartmentRequest) (*Department, error) {
 	query := `
-		INSERT INTO departments (tenant_id, name, code, dict_code, type, template_code, is_custom, parent_id, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), $7, $8, true, NOW(), NOW())
+		INSERT INTO departments (tenant_id, name, code, dict_code, type, is_custom, parent_id, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, true, NOW(), NOW())
 		RETURNING id, tenant_id, name, code, parent_id, is_active, created_at, updated_at, deleted_at
 	`
 
 	var d Department
-	err := s.pool.QueryRow(ctx, query, req.TenantID, req.Name, req.Code, req.DictCode, req.Type, req.TemplateCode, req.IsCustom, req.ParentID).Scan(
+	err := s.pool.QueryRow(ctx, query, req.TenantID, req.Name, req.Code, req.DictCode, req.Type, req.IsCustom, req.ParentID).Scan(
 		&d.ID,
 		&d.TenantID,
 		&d.Name,
@@ -826,4 +767,32 @@ func buildDepartmentCode(name string) string {
 		code = code[:20]
 	}
 	return "AUTO_" + code
+}
+
+// CurrentDepartmentTemplates 返回科室当前自动匹配的模板名（初诊/复诊，统一解析器，只读）。
+func (s *Store) CurrentDepartmentTemplates(ctx context.Context, tenantID int64) ([]DepartmentCurrentTemplate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.id, d.name, COALESCE(d.code, '')
+		FROM departments d
+		WHERE d.tenant_id = $1 AND d.deleted_at IS NULL AND COALESCE(d.is_active, TRUE) AND d.type = 'clinical'
+		ORDER BY d.id`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list clinical departments: %w", err)
+	}
+	defer rows.Close()
+	items := make([]DepartmentCurrentTemplate, 0, 16)
+	for rows.Next() {
+		var item DepartmentCurrentTemplate
+		if err := rows.Scan(&item.ID, &item.Name, &item.Code); err != nil {
+			return nil, fmt.Errorf("scan clinical department: %w", err)
+		}
+		if resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, item.Code, "", "初诊"); resolveErr == nil && resolved != nil {
+			item.FirstVisitTemplateName = resolved.Name
+		}
+		if resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, item.Code, "", "复诊"); resolveErr == nil && resolved != nil {
+			item.FollowVisitTemplateName = resolved.Name
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

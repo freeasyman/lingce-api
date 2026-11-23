@@ -23,11 +23,10 @@ const (
 
 // 模板降级原因（服务层据此生成给医生看的提示）。
 const (
-	templateReasonNone                 = ""
-	templateReasonNoDepartment         = "no_department"
-	templateReasonNoTemplateCode       = "no_template_code"
-	templateReasonTemplateNotPublished = "template_not_published"
-	templateReasonNoFallback           = "no_fallback_template"
+	templateReasonNone           = ""
+	templateReasonNoDepartment   = "no_department"
+	templateReasonNoTemplateCode = "no_template_code"
+	templateReasonNoFallback     = "no_fallback_template"
 )
 
 // templateResolution 一次就诊的科室 + 模板解析结果（内部结构，不直接出 JSON）。
@@ -46,15 +45,7 @@ type templateResolution struct {
 // ListClinicalDepartments 管理台/排班可选临床科室：departments.type='clinical'，带可用的模板名。
 func (s *Store) ListClinicalDepartments(ctx context.Context, tenantID int64) ([]ClinicalDepartment, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT d.id, d.name, COALESCE(d.code, ''), COALESCE(d.template_code, ''),
-		       COALESCE((
-		           SELECT t.name FROM emr_templates t
-		           WHERE t.code = d.template_code
-		             AND t.status = 'published' AND t.is_current
-		             AND t.tenant_id IN (0, $1)
-		           ORDER BY t.tenant_id DESC
-		           LIMIT 1
-		       ), '') AS template_name
+		SELECT d.id, d.name, COALESCE(d.code, '')
 		FROM departments d
 		WHERE d.tenant_id = $1
 		  AND d.deleted_at IS NULL
@@ -69,8 +60,12 @@ func (s *Store) ListClinicalDepartments(ctx context.Context, tenantID int64) ([]
 	items := make([]ClinicalDepartment, 0)
 	for rows.Next() {
 		var item ClinicalDepartment
-		if err := rows.Scan(&item.ID, &item.Name, &item.Code, &item.TemplateCode, &item.TemplateName); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Code); err != nil {
 			return nil, err
+		}
+		// 模板名由统一解析器给出（初诊口径），只读展示。
+		if resolved, resolveErr := emrtemplate.ResolveCurrentTemplate(ctx, s.pool, tenantID, item.Code, "", "初诊"); resolveErr == nil && resolved != nil {
+			item.TemplateName = resolved.Name
 		}
 		items = append(items, item)
 	}
@@ -84,11 +79,11 @@ func (s *Store) departmentBrief(ctx context.Context, q querier, tenantID int64, 
 	}
 	var brief DepartmentBrief
 	err := q.QueryRow(ctx, `
-		SELECT d.id, d.name, COALESCE(d.code, ''), COALESCE(d.template_code, '')
+		SELECT d.id, d.name, COALESCE(d.code, '')
 		FROM departments d
 		WHERE d.tenant_id = $1 AND d.id = $2 AND d.deleted_at IS NULL`,
 		tenantID, *departmentID).
-		Scan(&brief.ID, &brief.Name, &brief.Code, &brief.TemplateCode)
+		Scan(&brief.ID, &brief.Name, &brief.Code)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -100,8 +95,7 @@ func (s *Store) departmentBrief(ctx context.Context, q querier, tenantID int64, 
 
 // ResolveEncounterTemplate 解析本次就诊的科室与模板：
 //   - encounter.department_id 缺失时回退到挂号单 department_id（历史数据兼容）；
-//   - 按科室 template_code 找模板；复诊无对应模板时降级到该科室初诊模板（带提示）；
-//   - 科室没有 template_code 或模板未发布 → 标准门急诊病历 + 原因；
+//   - 与 EMR 听写共用统一解析器（科室 code + 就诊类型），无专属模板 → 标准门急诊病历 + 提示；
 //   - 找不到任何模板 → Template 为 nil（调用方返回 400，不静默写空病历）。
 func (s *Store) ResolveEncounterTemplate(ctx context.Context, tenantID, encounterID int64) (*templateResolution, error) {
 	if encounterID <= 0 {
