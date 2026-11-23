@@ -53,7 +53,11 @@ func (h *Handler) ListGoldenQuotes(w http.ResponseWriter, r *http.Request) {
 		WHERE r.tenant_id = $1
 		  AND r.deleted_at IS NULL
 		  AND COALESCE(lower(r.business_scope), '') = 'consultant'
-		  AND s->>'type' IN ('golden_quote', '金句片段', '金句表达', 'quote')
+		  AND EXISTS (
+		      SELECT 1
+		      FROM jsonb_array_elements(COALESCE(s->'key_quotes', '[]'::jsonb)) AS q
+		      WHERE q->>'speaker' IN ('咨询师', '医生')
+		  )
 		  AND ($2::bigint[] IS NULL OR r.employee_id = ANY($2))
 		ORDER BY COALESCE(r.recorded_at, r.created_at) DESC NULLS LAST, r.id DESC
 	`, scope.TenantID, scope.EmployeeIDs)
