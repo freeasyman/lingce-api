@@ -3932,8 +3932,12 @@ func (s *Store) SearchDiagnosisCatalog(ctx context.Context, keyword string, limi
 // TemplateFields 读取模板字段（复用 emr_template_fields + emr_fields，HIS 只读不写）。
 func (s *Store) TemplateFields(ctx context.Context, tenantID int64, templateID string) ([]TemplateField, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT f.code, f.name, tf.is_visible, tf.is_required, f.content_category,
-		       COALESCE(f.input_type, '长文本'), COALESCE(f.description, ''), f.options_json
+		SELECT f.code,
+		       COALESCE(NULLIF(tf.name_override,''), f.name),
+		       tf.is_visible, tf.is_required, f.content_category,
+		       COALESCE(NULLIF(tf.input_type_override,''), f.input_type, '长文本'),
+		       COALESCE(NULLIF(tf.description,''), f.description, ''),
+		       f.options_json
 		FROM emr_template_fields tf
 		JOIN emr_fields f ON f.id = tf.field_id
 		WHERE tf.template_id = $1::uuid

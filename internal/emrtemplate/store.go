@@ -655,9 +655,13 @@ func (s *Store) Disable(ctx context.Context, tenantID int64, versionID string, a
 
 func (s *Store) listSections(ctx context.Context, versionID string) ([]*Section, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT tf.id, tf.template_id, f.code, f.name, f.content_category, f.input_type,
+		SELECT tf.id, tf.template_id, f.code,
+		       COALESCE(NULLIF(tf.name_override,''), f.name),
+		       f.content_category,
+		       COALESCE(NULLIF(tf.input_type_override,''), f.input_type),
 		       TRUE, tf.is_visible, tf.is_required, tf.display_order, COALESCE(NULLIF(tf.description,''), f.description),
-		       f.options_json, f.structure_json
+		       f.options_json,
+		       COALESCE(NULLIF(tf.structure_json,'{}'::jsonb), f.structure_json)
 		FROM emr_template_fields tf
 		JOIN emr_fields f ON f.id=tf.field_id
 		WHERE tf.template_id=$1
