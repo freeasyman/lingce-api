@@ -236,7 +236,7 @@ func (s *Service) ReviewTicket(ctx context.Context, id, reviewerID int64, approv
 }
 
 // ExecuteTicket executes a ticket. 我方问题的换新会在这里完成换机并留下设备号/物流单号。
-func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, success bool, notes *string, resolutionType string, swapDeviceID *int64, outboundTracking, inboundTracking string) error {
+func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, success bool, notes *string, resolutionType string, swapDeviceID *int64, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress string) error {
 	ticket, err := s.store.GetTicketByID(ctx, id)
 	if err != nil {
 		return err
@@ -259,10 +259,19 @@ func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, succe
 				swapDeviceNo = device.DeviceNo
 			}
 		}
-		if swapDeviceNo == "" && strings.TrimSpace(outboundTracking) == "" {
-			return fmt.Errorf("我方问题换新时，请填写换上的设备号或物流单号")
+		if swapDeviceNo == "" {
+			return fmt.Errorf("我方问题换新时，请选择换上的设备")
 		}
-		if err := s.store.SetTicketReplacement(ctx, id, resolutionType, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking); err != nil {
+		if strings.TrimSpace(outboundTracking) == "" {
+			return fmt.Errorf("请填写寄出物流单号")
+		}
+		if strings.TrimSpace(recipientAddress) == "" {
+			recipientAddress = derefString(ticket.RecipientAddress)
+		}
+		if strings.TrimSpace(recipientAddress) == "" {
+			return fmt.Errorf("请填写收件地址（寄新机用）")
+		}
+		if err := s.store.SetTicketReplacement(ctx, id, resolutionType, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress); err != nil {
 			return err
 		}
 	}
@@ -647,6 +656,9 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		SwapDeviceNo:       t.SwapDeviceNo,
 		OutboundTrackingNo: t.OutboundTrackingNo,
 		InboundTrackingNo:  t.InboundTrackingNo,
+		RecipientName:    t.RecipientName,
+		RecipientPhone:   t.RecipientPhone,
+		RecipientAddress: t.RecipientAddress,
 		CreatedAt:          t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:          t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}

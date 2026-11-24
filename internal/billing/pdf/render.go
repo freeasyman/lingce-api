@@ -274,7 +274,7 @@ func (c *canvas) infoBox(rows []InfoRow) {
 }
 
 // productTable 画产品额度表（外框圆角、表头浅紫、行间细分隔线）。
-func (c *canvas) productTable(header string, rows []ProductRow) {
+func (c *canvas) productTable(header string, rows []ProductRow, firstColumn string) {
 	headerHeight := c.scale(8.8)
 	rowHeight := c.scale(9.3)
 	tableHeight := headerHeight + rowHeight*float64(len(rows))
@@ -299,7 +299,10 @@ func (c *canvas) productTable(header string, rows []ProductRow) {
 	}
 
 	headerBaseline := baseline(c.y, headerHeight, 9*c.k)
-	c.text(marginLeft+c.scale(4.6), headerBaseline, "产品", false, 9, colorMuted)
+	if firstColumn == "" {
+		firstColumn = "产品"
+	}
+	c.text(marginLeft+c.scale(4.6), headerBaseline, firstColumn, false, 9, colorMuted)
 	c.text(marginLeft+nameColumnWidth, headerBaseline, header, false, 9, colorMuted)
 
 	for i, row := range rows {
@@ -461,7 +464,7 @@ func (c *canvas) layout(letter Letter) float64 {
 	c.sectionTitle(letter.InfoSection)
 	c.infoBox(letter.InfoRows)
 	c.sectionTitle(letter.ProductSection)
-	c.productTable(letter.QuotaHeader, letter.Products)
+	c.productTable(letter.QuotaHeader, letter.Products, letter.ProductColumnLabel)
 	c.sectionTitle(letter.StartSection)
 	c.numberedList(letter.StartItems)
 	c.sectionTitle(letter.TipSection)

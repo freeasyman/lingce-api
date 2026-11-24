@@ -34,7 +34,7 @@ func (s *Store) CreateTicket(ctx context.Context, submitterID int64, req TicketS
 
 	query := `
 		INSERT INTO badge_tickets (ticket_no, type, status, device_id, device_no, tenant_id, employee_id, title, description,
-		                           submitter_id, extra_data, submitted_at, created_at, updated_at)
+		                           submitter_id, extra_data, recipient_name, recipient_phone, recipient_address, submitted_at, created_at, updated_at)
 		VALUES (
 		    $1, $2, 'pending', $3::bigint,
 		    COALESCE($4::text, (SELECT bd.device_no FROM badge_devices bd WHERE bd.id = $3::bigint AND bd.deleted_at IS NULL LIMIT 1)),
@@ -47,11 +47,12 @@ func (s *Store) CreateTicket(ctx context.Context, submitterID int64, req TicketS
 		      (SELECT bd.employee_id FROM badge_devices bd WHERE bd.id = $3::bigint AND bd.deleted_at IS NULL LIMIT 1),
 		      (SELECT bd.employee_id FROM badge_devices bd WHERE bd.device_no = $4::text AND bd.deleted_at IS NULL ORDER BY bd.updated_at DESC LIMIT 1)
 		    ),
-		    $6, $7, $8, $9, NOW(), NOW(), NOW()
+		    $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''), NOW(), NOW(), NOW()
 		)
 		RETURNING id, ticket_no, type, status, device_id, device_no, tenant_id, employee_id,
 		          submitter_id, reviewer_id, executor_id, title, description, review_notes, execute_notes,
-		          submitted_at, reviewed_at, executed_at, completed_at, extra_data, created_at, updated_at
+		          submitted_at, reviewed_at, executed_at, completed_at, extra_data, created_at, updated_at,
+		          recipient_name, recipient_phone, recipient_address
 	`
 
 	for i := 0; i < 5; i++ {
@@ -62,7 +63,7 @@ func (s *Store) CreateTicket(ctx context.Context, submitterID int64, req TicketS
 
 		var t BadgeTicket
 		err = s.pool.QueryRow(ctx, query, ticketNo, req.Type, req.DeviceID, req.DeviceNo, req.TenantID, req.Title,
-			req.Description, submitterID, req.ExtraData).Scan(
+			req.Description, submitterID, req.ExtraData, req.RecipientName, req.RecipientPhone, req.RecipientAddress).Scan(
 			&t.ID, &t.TicketNo, &t.Type, &t.Status, &t.DeviceID, &t.DeviceNo, &t.TenantID, &t.EmployeeID,
 			&t.SubmitterID, &t.ReviewerID, &t.ExecutorID, &t.Title, &t.Description, &t.ReviewNotes,
 			&t.ExecuteNotes, &t.SubmittedAt, &t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt,
@@ -176,6 +177,7 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 		       badge_tickets.submitted_at, badge_tickets.reviewed_at, badge_tickets.executed_at, badge_tickets.completed_at, badge_tickets.extra_data, badge_tickets.created_at, badge_tickets.updated_at,
 		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
 		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
+		       badge_tickets.recipient_name, badge_tickets.recipient_phone, badge_tickets.recipient_address,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -211,6 +213,8 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 			&t.Title, &t.Description, &t.ReviewNotes, &t.ExecuteNotes, &t.SubmittedAt,
 			&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
 			&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
+		&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
+			&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
 			&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan ticket: %w", err)
 		}
@@ -228,6 +232,7 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		       badge_tickets.submitted_at, badge_tickets.reviewed_at, badge_tickets.executed_at, badge_tickets.completed_at, badge_tickets.extra_data, badge_tickets.created_at, badge_tickets.updated_at,
 		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
 		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
+		       badge_tickets.recipient_name, badge_tickets.recipient_phone, badge_tickets.recipient_address,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -253,6 +258,7 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		&t.Title, &t.Description, &t.ReviewNotes, &t.ExecuteNotes, &t.SubmittedAt,
 		&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
 		&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
+		&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
 		&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName,
 	)
 	if err == pgx.ErrNoRows {

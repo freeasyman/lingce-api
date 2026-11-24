@@ -79,6 +79,10 @@ type TicketSubmitRequest struct {
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	ExtraData   JSONObject `json:"extra_data,omitempty"`
+	// 换新收件信息（客户报修时填/确认，寄新机用）
+	RecipientName    string `json:"recipient_name,omitempty"`
+	RecipientPhone   string `json:"recipient_phone,omitempty"`
+	RecipientAddress string `json:"recipient_address,omitempty"`
 }
 
 // TicketListRequest represents ticket list request
@@ -125,6 +129,9 @@ type TicketResponse struct {
 	OutboundTrackingNo *string `json:"outbound_tracking_no,omitempty"`
 	InboundTrackingNo  *string `json:"inbound_tracking_no,omitempty"`
 	ShippedAt          *string `json:"shipped_at,omitempty"`
+	RecipientName      *string `json:"recipient_name,omitempty"`
+	RecipientPhone     *string `json:"recipient_phone,omitempty"`
+	RecipientAddress   *string `json:"recipient_address,omitempty"`
 	CreatedAt          string  `json:"created_at"`
 	UpdatedAt          string  `json:"updated_at"`
 }
@@ -149,6 +156,10 @@ type TicketExecuteRequest struct {
 	// 物流留痕：寄出单号 / 寄回单号
 	OutboundTrackingNo string `json:"outbound_tracking_no,omitempty"`
 	InboundTrackingNo  string `json:"inbound_tracking_no,omitempty"`
+	// 本次换新的收件信息（可现场改）
+	RecipientName    string `json:"recipient_name,omitempty"`
+	RecipientPhone   string `json:"recipient_phone,omitempty"`
+	RecipientAddress string `json:"recipient_address,omitempty"`
 }
 
 // TicketMessageRequest 是运营回复客户的消息。

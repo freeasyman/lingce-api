@@ -44,15 +44,18 @@ func (s *Store) ListTicketMessages(ctx context.Context, ticketID int64) ([]*Badg
 }
 
 // SetTicketReplacement 记录换货留痕：换出的设备号与物流单号。
-func (s *Store) SetTicketReplacement(ctx context.Context, ticketID int64, resolutionType string, swapDeviceID *int64, swapDeviceNo, outboundTracking, inboundTracking string) error {
+func (s *Store) SetTicketReplacement(ctx context.Context, ticketID int64, resolutionType string, swapDeviceID *int64, swapDeviceNo, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE badge_tickets
 		SET resolution_type = $2, swap_device_id = $3, swap_device_no = NULLIF($4, ''),
 		    outbound_tracking_no = NULLIF($5, ''), inbound_tracking_no = NULLIF($6, ''),
+		    recipient_name = COALESCE(NULLIF($7, ''), recipient_name),
+		    recipient_phone = COALESCE(NULLIF($8, ''), recipient_phone),
+		    recipient_address = COALESCE(NULLIF($9, ''), recipient_address),
 		    shipped_at = CASE WHEN NULLIF($4, '') IS NULL AND NULLIF($5, '') IS NULL THEN shipped_at ELSE NOW() END,
 		    updated_at = NOW()
 		WHERE id = $1
-	`, ticketID, resolutionType, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking)
+	`, ticketID, resolutionType, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress)
 	if err != nil {
 		return fmt.Errorf("record ticket replacement: %w", err)
 	}

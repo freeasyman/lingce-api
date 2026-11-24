@@ -104,6 +104,10 @@ type BadgeTicket struct {
 	OutboundTrackingNo *string    `json:"outbound_tracking_no,omitempty"`
 	InboundTrackingNo  *string    `json:"inbound_tracking_no,omitempty"`
 	ShippedAt          *time.Time `json:"shipped_at,omitempty"`
+	// 本次换新的收件信息（寄新机用）
+	RecipientName    *string `json:"recipient_name,omitempty"`
+	RecipientPhone   *string `json:"recipient_phone,omitempty"`
+	RecipientAddress *string `json:"recipient_address,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }

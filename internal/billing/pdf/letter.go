@@ -30,7 +30,7 @@ var (
 // 文案里可以用 **文字** 标记加粗片段（例如网址、手机号），渲染时解析成富文本。
 type Letter struct {
 	// DocNo / DocDate 显示在页眉右上角：编号 LC-TR-2026-0005、日期 2026-11-12。
-	DocNo string `json:"docNo"`
+	DocNo   string `json:"docNo"`
 	DocDate string `json:"docDate"`
 
 	// Title 是居中大标题：试用开通通知函 / 服务开通确认函。
@@ -41,19 +41,21 @@ type Letter struct {
 	Intro string `json:"intro"`
 
 	// InfoSection 是「试用信息 / 服务信息」小标题与其下的两行信息盒。
-	InfoSection string `json:"infoSection"`
-	InfoRows []InfoRow `json:"infoRows"`
+	InfoSection string    `json:"infoSection"`
+	InfoRows    []InfoRow `json:"infoRows"`
 
 	// ProductSection 是「试用内容 / 服务内容」小标题与产品额度表。
 	ProductSection string `json:"productSection"`
-	QuotaHeader string `json:"quotaHeader"`
-	Products []ProductRow `json:"products"`
+	QuotaHeader    string `json:"quotaHeader"`
+	// ProductColumnLabel 是内容表第一列表头，默认「产品」（换新通知单用「项目」）。
+	ProductColumnLabel string       `json:"productColumnLabel,omitempty"`
+	Products           []ProductRow `json:"products"`
 
 	// 开始使用与温馨提示：items 按顺序编号（圆形序号），支持 **加粗** 片段。
-	StartSection string `json:"startSection"`
-	StartItems []string `json:"startItems"`
-	TipSection string `json:"tipSection"`
-	TipItems []string `json:"tipItems"`
+	StartSection string   `json:"startSection"`
+	StartItems   []string `json:"startItems"`
+	TipSection   string   `json:"tipSection"`
+	TipItems     []string `json:"tipItems"`
 
 	// Advisor 是页脚左侧的顾问卡，只显示姓名与电话。
 	Advisor Advisor `json:"advisor"`
@@ -61,11 +63,11 @@ type Letter struct {
 	AdvisorSection string `json:"advisorSection"`
 
 	// Company 是落款公司全称；SignDate 是落款日期（如 2026 年 11 月 12 日）。
-	Company string `json:"company"`
+	Company  string `json:"company"`
 	SignDate string `json:"signDate"`
 
 	// FooterLeft / FooterRight 是页脚两端的文字。
-	FooterLeft string `json:"footerLeft"`
+	FooterLeft  string `json:"footerLeft"`
 	FooterRight string `json:"footerRight"`
 
 	// SealLines 是电子章内的文字行，默认 ["灵策", "电子章"]。
@@ -74,20 +76,20 @@ type Letter struct {
 
 // InfoRow 是信息盒里的一行「标签 + 值」。
 type InfoRow struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
-	ValueBold bool `json:"valueBold"`
+	Label     string `json:"label"`
+	Value     string `json:"value"`
+	ValueBold bool   `json:"valueBold"`
 }
 
 // ProductRow 是内容表里的一行「产品 + 额度」。
 type ProductRow struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
 	Quota string `json:"quota"`
 }
 
 // Advisor 是顾问卡内容（不写渠道/组织）。
 type Advisor struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
 	Phone string `json:"phone"`
 	// IsBrand 表示没有具体员工顾问，头像位置画灵策品牌标记而不是取名字首字。
 	IsBrand bool `json:"isBrand"`

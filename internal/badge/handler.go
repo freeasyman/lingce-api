@@ -77,6 +77,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/actions/execute", Handler: h.ExecuteTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/badge-tickets/{ticket_id}/messages", Handler: h.ListTicketMessages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/messages", Handler: h.ReplyTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/badge-tickets/{ticket_id}/replacement-document", Handler: h.ReplacementDocument, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/developer", Handler: h.InternalDeveloperCallback},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/audio", Handler: h.InternalAudioCallback},
 	}
@@ -374,7 +375,7 @@ func (h *Handler) ExecuteTicket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = req.InboundTrackingNo
-	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, success, notes, req.ResolutionType, req.SwapDeviceID, req.OutboundTrackingNo, req.InboundTrackingNo); err != nil {
+	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, success, notes, req.ResolutionType, req.SwapDeviceID, req.OutboundTrackingNo, req.InboundTrackingNo, req.RecipientName, req.RecipientPhone, req.RecipientAddress); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
