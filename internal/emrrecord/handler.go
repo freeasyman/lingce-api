@@ -376,7 +376,14 @@ func timePtr(value sql.NullTime) *time.Time {
 	if !value.Valid {
 		return nil
 	}
-	t := value.Time
+	// recordings.recorded_at 是 timestamp without time zone（存的是北京时间），
+	// pgx 会解析成 UTC location；这里按 +08:00 重新解释，避免下游再整体晚 8 小时。
+	cst := time.FixedZone("CST", 8*3600)
+	t := time.Date(
+		value.Time.Year(), value.Time.Month(), value.Time.Day(),
+		value.Time.Hour(), value.Time.Minute(), value.Time.Second(), value.Time.Nanosecond(),
+		cst,
+	)
 	return &t
 }
 
