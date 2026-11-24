@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -296,7 +297,11 @@ func (h *InternalHandler) GenerateDirect(ctx context.Context, payload EmrWorkerR
 	if err != nil {
 		return nil, err
 	}
-	startedAt := parseRecordedAt(payload.RecordedAt)
+	startedAt := h.resolveRecordedAt(ctx, payload)
+	if startedAt.IsZero() {
+		log.Printf("emr generation: recorded_at 无法解析，回退当前时间 tenant=%d recording=%d", payload.TenantID, payload.RecordingID)
+		startedAt = time.Now()
+	}
 	outcome, err := h.saveGeneratedWorkingDraft(ctx, payload, requestID, prepared, config, llmResponse, workingContent, unresolvedItems, startedAt)
 	if err != nil {
 		return nil, err
@@ -416,7 +421,11 @@ func (h *InternalHandler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startedAt := parseRecordedAt(payload.RecordedAt)
+	startedAt := h.resolveRecordedAt(r.Context(), payload)
+	if startedAt.IsZero() {
+		log.Printf("emr generation: recorded_at 无法解析，回退当前时间 tenant=%d recording=%d", payload.TenantID, payload.RecordingID)
+		startedAt = time.Now()
+	}
 	writeOutcome, err := h.saveGeneratedWorkingDraft(r.Context(), payload, requestID, prepared, config, llmResponse, workingContent, unresolvedItems, startedAt)
 	if err != nil {
 		h.writeGenerationFailure(w, payload, requestID, prepared, config, requestJSON, responseJSON, err)
@@ -622,15 +631,45 @@ func (h *InternalHandler) saveGeneratedWorkingDraft(
 	})
 }
 
+// resolveRecordedAt 以录音表 recorded_at 为接诊时间的权威来源；拿不到录音才回退 payload。
+// 录音表 recorded_at 是 timestamp without time zone（存的是北京时间），pgx 会挂 UTC
+// location 读出来，因此统一按 Asia/Shanghai 重新解释挂钟值。
+func (h *InternalHandler) resolveRecordedAt(ctx context.Context, payload EmrWorkerRequest) time.Time {
+	if h != nil && h.pool != nil && payload.RecordingID > 0 {
+		var recordedAt time.Time
+		if err := h.pool.QueryRow(ctx, `
+			SELECT recorded_at FROM recordings WHERE id = $1
+		`, payload.RecordingID).Scan(&recordedAt); err == nil {
+			return beijingWallClock(recordedAt)
+		}
+	}
+	return parseRecordedAt(payload.RecordedAt)
+}
+
+// beijingWallClock 把「挂钟值」重新挂到 +08:00 时区（仅取年月日时分秒，不改变数字）。
+func beijingWallClock(t time.Time) time.Time {
+	cst := time.FixedZone("CST", 8*3600)
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), cst)
+}
+
+// parseRecordedAt 兼容三种 payload 形态：
+//   - "2026-11-19T22:53:40Z"（worker 历史上把北京时间标成了 Z）
+//   - "2026-11-19T22:53:40+08:00"（修复后的 worker）
+//   - "2026-11-19 22:53:40"（无时区）
+//
+// 三者都按「北京时间的挂钟值」重新解释，避免 +8 小时漂移；解析失败返回零值，
+// 由调用方兜底并记录日志，不再用 time.Now() 掩盖错误。
 func parseRecordedAt(value string) time.Time {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
-		return time.Now().UTC()
+		return time.Time{}
 	}
-	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
-		return parsed.UTC()
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, trimmed); err == nil {
+			return beijingWallClock(parsed)
+		}
 	}
-	return time.Now().UTC()
+	return time.Time{}
 }
 
 func int64PtrIfPositive(value int64) *int64 {
