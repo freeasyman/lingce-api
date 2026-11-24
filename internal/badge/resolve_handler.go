@@ -39,6 +39,30 @@ func (h *Handler) ResolveTicket(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, ticket)
 }
 
+// ReopenTicket 重新打开已关闭/不处理的工单。
+func (h *Handler) ReopenTicket(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can reopen tickets")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("ticket_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid ticket ID")
+		return
+	}
+	if err := h.service.ReopenTicket(r.Context(), id, claims.UserID); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	ticket, err := h.service.GetTicketByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, ticket)
+}
+
 // MarkCustomerNotified 记录换新通知单已由运营发送给客户。
 func (h *Handler) MarkCustomerNotified(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())

@@ -62,9 +62,20 @@ func (s *Service) ResolveTicket(ctx context.Context, id, operatorID int64, req T
 		}
 		return s.store.SetTicketResolved(ctx, id, "rejected", "none", req.Note, operatorID)
 
+	case "close":
+		if strings.TrimSpace(req.Note) == "" {
+			return fmt.Errorf("请选择关闭原因")
+		}
+		return s.store.SetTicketResolved(ctx, id, "closed", "closed", req.Note, operatorID)
+
 	default:
 		return fmt.Errorf("未知的处理方式")
 	}
+}
+
+// ReopenTicket 把已关闭/不处理的工单重新打开到待受理。
+func (s *Service) ReopenTicket(ctx context.Context, id, operatorID int64) error {
+	return s.store.ReopenTicket(ctx, id, operatorID)
 }
 
 // MarkCustomerNotified 记录换新通知单已由运营发送给客户。

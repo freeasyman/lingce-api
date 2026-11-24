@@ -50,6 +50,23 @@ func (s *Store) SetTicketSwapped(ctx context.Context, id int64, swapDeviceID *in
 	return nil
 }
 
+// ReopenTicket 重新打开已关闭/不处理的工单。
+func (s *Store) ReopenTicket(ctx context.Context, id, operatorID int64) error {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE badge_tickets
+		SET status = 'pending', resolution_type = NULL, executor_id = NULL,
+		    executed_at = NULL, completed_at = NULL, execute_notes = NULL, updated_at = NOW()
+		WHERE id = $1 AND status IN ('closed', 'rejected')
+	`, id)
+	if err != nil {
+		return fmt.Errorf("failed to reopen ticket: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("只有已关闭或不处理的工单才能重新打开")
+	}
+	return nil
+}
+
 // MarkTicketCustomerNotified 把「已发送给客户」写进 extra_data，不再新增列。
 func (s *Store) MarkTicketCustomerNotified(ctx context.Context, id, operatorID int64) error {
 	payload, err := json.Marshal(map[string]any{
