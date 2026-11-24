@@ -12,6 +12,7 @@ type Tenant struct {
 	ContactPhone           string     `json:"contact_phone,omitempty"`
 	ContactEmail           string     `json:"contact_email,omitempty"`
 	Industry               string     `json:"industry,omitempty"`
+	Address                string     `json:"address,omitempty"`
 	IsActive               bool       `json:"is_active"`
 	ValidFrom              *time.Time `json:"valid_from"`
 	ValidTo                *time.Time `json:"valid_to"`

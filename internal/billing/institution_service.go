@@ -105,21 +105,27 @@ func (s *InstitutionService) GetInstitution(ctx context.Context, tenantID int64)
 	// 6 个只读查询彼此独立，并发执行：远程库每次往返约 70-90ms，
 	// 串行会让详情页累计到 1s 以上；并发后约为最慢一条的耗时。
 	var (
-		entitlementRows []entitlementRow
-		admins          []institutionAdminRow
-		receivables     []InstitutionReceivable
-		payLogs         []InstitutionPayLog
-		consumptions    []InstitutionConsumption
-		documents       []Document
+		entitlementRows                                []entitlementRow
+		admins                                         []institutionAdminRow
+		receivables                                    []InstitutionReceivable
+		payLogs                                        []InstitutionPayLog
+		consumptions                                   []InstitutionConsumption
+		documents                                      []Document
 		errEnt, errAdm, errRec, errPay, errCon, errDoc error
-		wg              sync.WaitGroup
+		wg                                             sync.WaitGroup
 	)
 	wg.Add(6)
-	go func() { defer wg.Done(); entitlementRows, errEnt = s.store.ListInstitutionEntitlementRows(ctx, []int64{tenantID}) }()
+	go func() {
+		defer wg.Done()
+		entitlementRows, errEnt = s.store.ListInstitutionEntitlementRows(ctx, []int64{tenantID})
+	}()
 	go func() { defer wg.Done(); admins, errAdm = s.store.ListInstitutionAdminRows(ctx, tenantID) }()
 	go func() { defer wg.Done(); receivables, errRec = s.store.ListInstitutionReceivables(ctx, tenantID) }()
 	go func() { defer wg.Done(); payLogs, errPay = s.store.ListInstitutionPayLogs(ctx, tenantID) }()
-	go func() { defer wg.Done(); consumptions, errCon = s.store.ListInstitutionConsumptions(ctx, tenantID, 100) }()
+	go func() {
+		defer wg.Done()
+		consumptions, errCon = s.store.ListInstitutionConsumptions(ctx, tenantID, 100)
+	}()
 	go func() { defer wg.Done(); documents, errDoc = s.store.ListDocumentsByTenant(ctx, tenantID) }()
 	wg.Wait()
 	if err := errors.Join(errEnt, errAdm, errRec, errPay, errCon, errDoc); err != nil {
@@ -212,6 +218,7 @@ func buildInstitution(base institutionBaseRow, departments []string, entitlement
 		Title:   base.Title,
 		Phone:   base.Phone,
 		Email:   base.Email,
+		Address: base.Address,
 		Channel: base.OrgName,
 		Sales:   base.SalesName,
 		Start:   start,
@@ -417,6 +424,7 @@ func (s *InstitutionService) CreateInstitution(ctx context.Context, req CreateIn
 		ContactPhone: &contactPhone,
 		ContactEmail: &contactEmail,
 		Industry:     &req.Industry,
+		Address:      &req.Address,
 	}
 	created, err := s.tenantStore.CreateTenant(ctx, createReq)
 	if err != nil {

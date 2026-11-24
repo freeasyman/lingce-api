@@ -25,6 +25,7 @@ type UpdateInstitutionRequest struct {
 	ContactTitle  *string  `json:"contactTitle"`
 	ContactPhone  *string  `json:"contactPhone"`
 	ContactEmail  *string  `json:"contactEmail"`
+	Address       *string  `json:"address"`
 	ProvinceCode  *string  `json:"provinceCode"`
 	CityCode      *string  `json:"cityCode"`
 	DistrictCode  *string  `json:"districtCode"`
@@ -144,5 +145,5 @@ func (r UpdateInstitutionRequest) hasBaseTenantFields() bool {
 // 省市区 / customer_type）。
 func (r UpdateInstitutionRequest) hasBillingProfileFields() bool {
 	return r.LegalName != nil || r.ContactTitle != nil || r.ProvinceCode != nil ||
-		r.CityCode != nil || r.DistrictCode != nil || r.CustomerType != nil
+		r.CityCode != nil || r.DistrictCode != nil || r.CustomerType != nil || r.Address != nil
 }

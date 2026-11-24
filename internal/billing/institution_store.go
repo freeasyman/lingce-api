@@ -26,6 +26,7 @@ type institutionBaseRow struct {
 	Title       string
 	Phone       string
 	Email       string
+	Address     string
 	Province    string
 	City        string
 	District    string
@@ -70,6 +71,7 @@ SELECT t.id,
        COALESCE(t.contact_title, ''),
        COALESCE(t.contact_phone, ''),
        COALESCE(t.contact_email, ''),
+       COALESCE(t.address, ''),
        COALESCE(t.province_code, ''),
        COALESCE(t.city_code, ''),
        COALESCE(t.district_code, ''),
@@ -255,6 +257,7 @@ func scanInstitutionBase(scan func(dest ...any) error) (institutionBaseRow, erro
 		&item.Title,
 		&item.Phone,
 		&item.Email,
+		&item.Address,
 		&item.Province,
 		&item.City,
 		&item.District,
@@ -731,11 +734,12 @@ SET legal_name = COALESCE($2, legal_name),
     city_code = COALESCE($5, city_code),
     district_code = COALESCE($6, district_code),
     customer_type = COALESCE($7, customer_type),
+    address = COALESCE(NULLIF($8, ''), address),
     updated_at = NOW()
 WHERE id = $1
   AND deleted_at IS NULL`,
 		tenantID, req.LegalName, req.ContactTitle,
-		req.ProvinceCode, req.CityCode, req.DistrictCode, req.CustomerType)
+		req.ProvinceCode, req.CityCode, req.DistrictCode, req.CustomerType, derefUpdateAddress(req.Address))
 	if err != nil {
 		return fmt.Errorf("update institution profile fields: %w", err)
 	}
@@ -1161,4 +1165,12 @@ func nullableID(value int64) *int64 {
 		return nil
 	}
 	return &value
+}
+
+// derefUpdateAddress 把可空的地址入参转成 SQL 参数（未传时为空串，COALESCE 保持原值）。
+func derefUpdateAddress(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

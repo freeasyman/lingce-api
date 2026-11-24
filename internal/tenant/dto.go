@@ -67,6 +67,7 @@ type CreateTenantRequest struct {
 	ContactPhone             *string       `json:"contact_phone,omitempty"`
 	ContactEmail             *string       `json:"contact_email,omitempty"`
 	Industry                 *string       `json:"industry,omitempty"`
+	Address                  *string       `json:"address,omitempty"`
 	OwnerOrgID               *int64        `json:"owner_org_id,omitempty"`
 	TrialSalesOwnerAdminID   *int64        `json:"trial_sales_owner_admin_id,omitempty"`
 	TrialSource              *string       `json:"trial_source,omitempty"`
@@ -146,6 +147,7 @@ type TenantProfileResponse struct {
 	ContactPhone  string     `json:"contact_phone,omitempty"`
 	ContactEmail  string     `json:"contact_email,omitempty"`
 	Industry      string     `json:"industry,omitempty"`
+	Address       string     `json:"address,omitempty"`
 	ValidFrom     *time.Time `json:"valid_from,omitempty"`
 	ValidTo       *time.Time `json:"valid_to,omitempty"`
 	DaysRemaining int        `json:"days_remaining"`

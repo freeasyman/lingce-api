@@ -44,8 +44,11 @@ func (s *InstitutionService) UpdateInstitution(ctx context.Context, tenantID int
 	if req.DistrictCode != nil {
 		district = *req.DistrictCode
 	}
-	if province == "" || city == "" || district == "" {
-		return nil, invalidf("请选择省 / 市 / 区")
+	// 只有本次确实在改地区时才强制三项齐全；老档案地区为空时允许改其它字段。
+	if req.ProvinceCode != nil || req.CityCode != nil || req.DistrictCode != nil {
+		if province == "" || city == "" || district == "" {
+			return nil, invalidf("请选择省 / 市 / 区")
+		}
 	}
 
 	// 行业必须在字典里（任务硬要求，返回 400）。

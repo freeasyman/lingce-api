@@ -78,8 +78,8 @@ const (
 	// InstitutionFilterTrialExpiring 试用临期（跟单名单）。
 	InstitutionFilterTrialExpiring = "trial-expiring"
 	InstitutionFilterExpired       = "expired"
-	InstitutionFilterUnpaid   = "unpaid"
-	InstitutionFilterTrial    = "trial"
+	InstitutionFilterUnpaid        = "unpaid"
+	InstitutionFilterTrial         = "trial"
 )
 
 // 渠道类型（前端 ChannelType）：ops_organizations.type 的取值映射。
@@ -266,35 +266,36 @@ type InstitutionDocument struct {
 // Institution 是机构档案，字段与 billingMock.ts 的 Institution 一致。
 // products 是 产品代码 -> 单位 -> {granted, used, balance} 的两层对象。
 type Institution struct {
-	ID             int64                                  `json:"id"`
-	Name           string                                 `json:"name"`
-	Legal          string                                 `json:"legal"`
-	Code           string                                 `json:"code"`
-	Industry       string                                 `json:"industry"`
-	Departments    []string                               `json:"departments"`
-	Region         InstitutionRegion                      `json:"region"`
-	Contact        string                                 `json:"contact"`
-	Title          string                                 `json:"title"`
-	Phone          string                                 `json:"phone"`
-	Email          string                                 `json:"email"`
-	Channel        string                                 `json:"channel"`
-	Sales          string                                 `json:"sales"`
-	Start          string                                 `json:"start"`
-	End            string                                 `json:"end"`
-	Mode           string                                 `json:"mode"`
-	Open           bool                                   `json:"open"`
-	Status         string                                 `json:"status"`
-	PausedAt       string                                 `json:"pausedAt,omitempty"`
-	PausedReason   string                                 `json:"pausedReason,omitempty"`
-	Products       map[string]map[string]InstitutionQuota `json:"products"`
-	Admins         []InstitutionAdmin                     `json:"admins"`
-	Receivables    []InstitutionReceivable                `json:"receivables"`
-	PayLogs        []InstitutionPayLog                    `json:"payLogs"`
-	Consumptions   []InstitutionConsumption               `json:"consumptions"`
-	Logs           []InstitutionLog                       `json:"logs"`
-	Documents      []InstitutionDocument                  `json:"documents"`
+	ID           int64                                  `json:"id"`
+	Name         string                                 `json:"name"`
+	Legal        string                                 `json:"legal"`
+	Code         string                                 `json:"code"`
+	Industry     string                                 `json:"industry"`
+	Departments  []string                               `json:"departments"`
+	Region       InstitutionRegion                      `json:"region"`
+	Contact      string                                 `json:"contact"`
+	Title        string                                 `json:"title"`
+	Phone        string                                 `json:"phone"`
+	Email        string                                 `json:"email"`
+	Address      string                                 `json:"address"`
+	Channel      string                                 `json:"channel"`
+	Sales        string                                 `json:"sales"`
+	Start        string                                 `json:"start"`
+	End          string                                 `json:"end"`
+	Mode         string                                 `json:"mode"`
+	Open         bool                                   `json:"open"`
+	Status       string                                 `json:"status"`
+	PausedAt     string                                 `json:"pausedAt,omitempty"`
+	PausedReason string                                 `json:"pausedReason,omitempty"`
+	Products     map[string]map[string]InstitutionQuota `json:"products"`
+	Admins       []InstitutionAdmin                     `json:"admins"`
+	Receivables  []InstitutionReceivable                `json:"receivables"`
+	PayLogs      []InstitutionPayLog                    `json:"payLogs"`
+	Consumptions []InstitutionConsumption               `json:"consumptions"`
+	Logs         []InstitutionLog                       `json:"logs"`
+	Documents    []InstitutionDocument                  `json:"documents"`
 	// Contracts 是该机构的全部合同行（服务期 Tab 展示用，含历史/未来）。
-	Contracts []InstitutionContract                        `json:"contracts,omitempty"`
+	Contracts []InstitutionContract `json:"contracts,omitempty"`
 	// TrialCount 历史试用次数（含当前），前端展示「已试用 N 次」。
 	TrialCount int `json:"trialCount"`
 }
@@ -373,6 +374,7 @@ type CreateInstitutionRequest struct {
 	Title    string            `json:"title"`
 	Phone    string            `json:"phone"`
 	Email    string            `json:"email"`
+	Address  string            `json:"address"`
 	Channel  string            `json:"channel"`
 	Sales    string            `json:"sales"`
 }
@@ -387,6 +389,7 @@ func (r CreateInstitutionRequest) normalize() (CreateInstitutionRequest, error) 
 	r.Title = strings.TrimSpace(r.Title)
 	r.Phone = strings.TrimSpace(r.Phone)
 	r.Email = strings.TrimSpace(r.Email)
+	r.Address = strings.TrimSpace(r.Address)
 	r.Channel = strings.TrimSpace(r.Channel)
 	r.Sales = strings.TrimSpace(r.Sales)
 	r.Region.Province = strings.TrimSpace(r.Region.Province)

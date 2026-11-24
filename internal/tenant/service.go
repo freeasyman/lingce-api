@@ -367,6 +367,7 @@ func (s *Service) GetTenantProfile(ctx context.Context, tenantID int64) (*Tenant
 		ContactPhone:  t.ContactPhone,
 		ContactEmail:  t.ContactEmail,
 		Industry:      t.Industry,
+		Address:       t.Address,
 		ValidFrom:     t.ValidFrom,
 		ValidTo:       t.ValidTo,
 		DaysRemaining: calcDaysRemaining(t.ValidTo),

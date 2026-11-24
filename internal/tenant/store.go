@@ -173,6 +173,7 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 		       COALESCE(t.contact_phone, '') AS contact_phone,
 		       COALESCE(t.contact_email, '') AS contact_email,
 		       COALESCE(t.industry, '') AS industry,
+		       COALESCE(t.address, '') AS address,
 		       CASE
 		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -238,6 +239,7 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		       COALESCE(t.contact_phone, '') AS contact_phone,
 		       COALESCE(t.contact_email, '') AS contact_email,
 		       COALESCE(t.industry, '') AS industry,
+		       COALESCE(t.address, '') AS address,
 		       CASE
 		           WHEN t.is_active::text IN ('1','t','true','TRUE') THEN true
 		           ELSE false
@@ -268,6 +270,7 @@ func (s *Store) GetTenantByID(ctx context.Context, id int64) (*Tenant, error) {
 		&t.ContactPhone,
 		&t.ContactEmail,
 		&t.Industry,
+		&t.Address,
 		&t.IsActive,
 		&t.ValidFrom,
 		&t.ValidTo,
@@ -328,9 +331,9 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	defer tx.Rollback(ctx)
 
 	query := `
-		INSERT INTO tenants (name, code, account_mode, contact_name, contact_phone, contact_email, industry, is_active, valid_from, valid_to, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''),
+		INSERT INTO tenants (name, code, account_mode, contact_name, contact_phone, contact_email, industry, address, is_active, valid_from, valid_to, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+		RETURNING id, name, code, COALESCE(NULLIF(trim(account_mode), ''), 'formal'), COALESCE(contact_name, ''), COALESCE(contact_phone, ''), COALESCE(contact_email, ''), COALESCE(industry, ''), COALESCE(address, ''),
 		          CASE
 		              WHEN COALESCE(is_active::text, 'true') IN ('1','t','true','TRUE') THEN true
 		              ELSE false
@@ -341,7 +344,7 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 	`
 
 	var t Tenant
-	err = tx.QueryRow(ctx, query, req.Name, req.Code, accountMode, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, isActiveValue, validFrom, validTo).Scan(
+	err = tx.QueryRow(ctx, query, req.Name, req.Code, accountMode, req.ContactName, req.ContactPhone, req.ContactEmail, req.Industry, req.Address, isActiveValue, validFrom, validTo).Scan(
 		&t.ID,
 		&t.Name,
 		&t.Code,
@@ -350,6 +353,7 @@ func (s *Store) CreateTenant(ctx context.Context, req CreateTenantRequest) (*Ten
 		&t.ContactPhone,
 		&t.ContactEmail,
 		&t.Industry,
+		&t.Address,
 		&t.IsActive,
 		&t.ValidFrom,
 		&t.ValidTo,
