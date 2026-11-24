@@ -126,6 +126,14 @@ func (h *Handler) CreateSalesTask(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, accessErr)
 		return
 	}
+	// P1：关联录音必须属于本租户（此前只在 encounter_id=0 时校验，
+	// 传"本租户 encounter + 他院 recording_id"可把跨租户引用写进台账）。
+	if req.RecordingID > 0 {
+		if accessErr := h.checkRecordingAccess(r.Context(), scope, req.RecordingID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
+	}
 	item, inserted, err := h.service.CreateSalesTask(r.Context(), scope.TenantID, req)
 	if err != nil {
 		writeServiceError(w, err)
@@ -276,6 +284,13 @@ func (h *Handler) CreateOutcome(w http.ResponseWriter, r *http.Request) {
 	} else if accessErr := h.checkRecordingAccess(r.Context(), scope, req.RecordingID); accessErr != nil {
 		writeTenantError(w, accessErr)
 		return
+	}
+	// P1：同 CreateSalesTask——关联录音必须属于本租户。
+	if req.RecordingID > 0 {
+		if accessErr := h.checkRecordingAccess(r.Context(), scope, req.RecordingID); accessErr != nil {
+			writeTenantError(w, accessErr)
+			return
+		}
 	}
 	claims := middleware.GetUserClaims(r.Context())
 	actorID := int64(0)
@@ -564,14 +579,50 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 		writeTenantError(w, httpErr)
 		return
 	}
+	// 接待时间筛选：按北京时间解析 YYYY-MM-DD，落到无时区的 recorded_at 墙上时间比较。
+	cst := time.FixedZone("CST", 8*3600)
+	parseDate := func(value string, endOfDay bool) (*time.Time, error) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, nil
+		}
+		parsed, err := time.ParseInLocation("2006-01-02", value, cst)
+		if err != nil {
+			return nil, fmt.Errorf("invalid date %q, expected YYYY-MM-DD", value)
+		}
+		if endOfDay {
+			parsed = parsed.Add(24 * time.Hour)
+		}
+		return &parsed, nil
+	}
+	dateFrom, dateErr := parseDate(r.URL.Query().Get("date_from"), false)
+	if dateErr != nil {
+		httputil.WriteBadRequest(w, dateErr.Error())
+		return
+	}
+	dateTo, dateErr := parseDate(r.URL.Query().Get("date_to"), true)
+	if dateErr != nil {
+		httputil.WriteBadRequest(w, dateErr.Error())
+		return
+	}
+	queryArgs := []any{scope.TenantID, scope.EmployeeIDs}
+	dateCond := ""
+	if dateFrom != nil {
+		queryArgs = append(queryArgs, *dateFrom)
+		dateCond += fmt.Sprintf(" AND COALESCE(r.recorded_at, r.created_at) >= $%d", len(queryArgs))
+	}
+	if dateTo != nil {
+		queryArgs = append(queryArgs, *dateTo)
+		dateCond += fmt.Sprintf(" AND COALESCE(r.recorded_at, r.created_at) < $%d", len(queryArgs))
+	}
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT a.recording_id, a.status, a.analysis, COALESCE(r.encounter_id,0), COALESCE(r.customer_id,0),
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(r.recorded_at, r.created_at),
 		       COALESCE(ov.type,''), ov.amount, ov.occurred_at, ov.voided_at, COALESCE(ov.void_reason,'')
 		FROM consultation_analyses a
-		JOIN recordings r ON r.id = a.recording_id
-		LEFT JOIN customers cu ON cu.id = r.customer_id
-		LEFT JOIN employees e ON e.id = r.employee_id
+		JOIN recordings r ON r.id = a.recording_id AND r.tenant_id = a.tenant_id
+		LEFT JOIN customers cu ON cu.id = r.customer_id AND cu.tenant_id = r.tenant_id
+		LEFT JOIN employees e ON e.id = r.employee_id AND e.tenant_id = r.tenant_id
 		LEFT JOIN LATERAL (
 			SELECT o.type, o.amount, o.occurred_at, o.voided_at, o.void_reason
 			FROM deal_outcome_events o
@@ -581,10 +632,10 @@ func (h *Handler) ListConsultationAnalyses(w http.ResponseWriter, r *http.Reques
 			LIMIT 1
 		) ov ON TRUE
 		WHERE a.tenant_id = $1 AND a.status = 'analyzed' AND r.deleted_at IS NULL
-		  AND ($2::bigint[] IS NULL OR r.employee_id = ANY($2))
+		  AND ($2::bigint[] IS NULL OR r.employee_id = ANY($2))`+dateCond+`
 		ORDER BY r.recorded_at DESC
 		LIMIT 500
-	`, scope.TenantID, scope.EmployeeIDs)
+	`, queryArgs...)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "LIST_ANALYSES_FAILED", err.Error(), nil)
 		return
