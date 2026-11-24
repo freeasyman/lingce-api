@@ -78,6 +78,14 @@ func (s *Service) ReopenTicket(ctx context.Context, id, operatorID int64) error 
 	return s.store.ReopenTicket(ctx, id, operatorID)
 }
 
+// RecordReturnTracking 登记旧机寄回单号（内部进度，不影响工单完成）。
+func (s *Service) RecordReturnTracking(ctx context.Context, id, operatorID int64, inboundTracking string) error {
+	if strings.TrimSpace(inboundTracking) == "" {
+		return fmt.Errorf("请填写旧机寄回单号")
+	}
+	return s.store.SetTicketReturnTracking(ctx, id, inboundTracking, operatorID)
+}
+
 // MarkCustomerNotified 记录换新通知单已由运营发送给客户。
 func (s *Service) MarkCustomerNotified(ctx context.Context, id, operatorID int64) error {
 	return s.store.MarkTicketCustomerNotified(ctx, id, operatorID)

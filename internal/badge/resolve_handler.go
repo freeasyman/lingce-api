@@ -63,6 +63,35 @@ func (h *Handler) ReopenTicket(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteSuccess(w, ticket)
 }
 
+// RecordReturnTracking 登记旧机寄回单号（内部进度）。
+func (h *Handler) RecordReturnTracking(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can record return")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("ticket_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid ticket ID")
+		return
+	}
+	var req TicketReturnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	if err := h.service.RecordReturnTracking(r.Context(), id, claims.UserID, req.InboundTrackingNo); err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	ticket, err := h.service.GetTicketByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, ticket)
+}
+
 // MarkCustomerNotified 记录换新通知单已由运营发送给客户。
 func (h *Handler) MarkCustomerNotified(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())

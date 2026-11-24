@@ -580,7 +580,10 @@ func (s *Store) RebuildChangeBadgePlacement(ctx context.Context, id int64, req R
 		}
 	}
 
-	clearOwner := device.Position == "in_use"
+	// 只要设备有持有人，离开在用状态就必须清空持有人；
+	// 否则会留下「在库却有持有人」的脏数据，导致后续无法分配。
+	hasOwner := device.CurrentTenantID != nil || device.CurrentEmployeeID != nil
+	clearOwner := device.Position == "in_use" || hasOwner
 	sqlText := `UPDATE badge_devices SET position = $2, availability = $3, updated_at = NOW() WHERE id = $1`
 	if clearOwner {
 		sqlText = `UPDATE badge_devices SET position = $2, availability = $3, tenant_id = NULL, tenant_name = NULL,
@@ -677,8 +680,9 @@ func (s *Store) RebuildAssignBadgeDevice(ctx context.Context, id int64, tenantID
 	if !employeeActive {
 		return fmt.Errorf("employee is inactive")
 	}
-	// 目标员工就是当前持有人：直接拒绝，避免刷新 assigned_at 并写一条「X 换 X」的脏日志。
-	if device.CurrentEmployeeID != nil && *device.CurrentEmployeeID == employeeID {
+	// 只有在用设备、且目标员工就是当前持有人时才拒绝；
+	// 在库设备上残留的旧持有人允许重新分配（分配会把位置切成在用）。
+	if device.Position == "in_use" && device.CurrentEmployeeID != nil && *device.CurrentEmployeeID == employeeID {
 		return fmt.Errorf("员工已持有该工牌，无需重复绑定")
 	}
 

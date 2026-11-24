@@ -81,6 +81,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/resolve", Handler: h.ResolveTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/customer-notified", Handler: h.MarkCustomerNotified, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/reopen", Handler: h.ReopenTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/return-tracking", Handler: h.RecordReturnTracking, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/developer", Handler: h.InternalDeveloperCallback},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/audio", Handler: h.InternalAudioCallback},
 	}

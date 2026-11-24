@@ -85,6 +85,11 @@ type TicketSubmitRequest struct {
 	RecipientAddress string `json:"recipient_address,omitempty"`
 }
 
+// TicketReturnRequest 登记旧机寄回单号。
+type TicketReturnRequest struct {
+	InboundTrackingNo string `json:"inbound_tracking_no"`
+}
+
 // TicketResolveRequest 是「受理并选择处理方式」的入参。
 type TicketResolveRequest struct {
 	Method string `json:"method"` // swap | remote | none
