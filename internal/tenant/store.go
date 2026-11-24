@@ -211,6 +211,7 @@ func (s *Store) ListTenants(ctx context.Context, req TenantListRequest) ([]*Tena
 			&t.ContactPhone,
 			&t.ContactEmail,
 			&t.Industry,
+			&t.Address,
 			&t.IsActive,
 			&t.ValidFrom,
 			&t.ValidTo,

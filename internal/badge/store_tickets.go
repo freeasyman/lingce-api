@@ -213,7 +213,6 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 			&t.Title, &t.Description, &t.ReviewNotes, &t.ExecuteNotes, &t.SubmittedAt,
 			&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
 			&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
-		&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
 			&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
 			&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan ticket: %w", err)
