@@ -260,7 +260,7 @@ func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, succe
 			}
 		}
 		if swapDeviceNo == "" {
-			return fmt.Errorf("我方问题换新时，请选择换上的设备")
+			return fmt.Errorf("设备问题换新时，请选择换上的设备")
 		}
 		if strings.TrimSpace(outboundTracking) == "" {
 			return fmt.Errorf("请填写寄出物流单号")

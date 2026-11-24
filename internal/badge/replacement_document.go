@@ -60,7 +60,7 @@ func (h *Handler) ReplacementDocument(w http.ResponseWriter, r *http.Request) {
 		DocDate:     shippedAt.Format("2006-01-02"),
 		Title:       "工牌换新通知单",
 		Salutation:  fmt.Sprintf("尊敬的　%s：", tenantName),
-		Intro:       fmt.Sprintf("关于您反馈的工牌使用问题（工单号 %s，原设备 %s），经核实为我方设备问题，我们已为您安排换新，具体如下：", ticket.TicketNo, deviceNo),
+		Intro:       fmt.Sprintf("关于您反馈的工牌使用问题（工单号 %s，原设备 %s），经核实为设备问题，我们已为您安排换新，具体如下：", ticket.TicketNo, deviceNo),
 		InfoSection: "换新信息",
 		InfoRows: []billingpdf.InfoRow{
 			{Label: "原设备编号", Value: deviceNo},
