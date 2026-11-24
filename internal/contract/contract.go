@@ -22,8 +22,6 @@ const (
 	Formal Type = "formal"
 	// Trial 试用合同（白送，到期即失效）。
 	Trial Type = "trial"
-	// Experience 新版本体验合同（挂在老客户身上，与老合同并行）。
-	Experience Type = "experience"
 )
 
 // Contract 一行合同。

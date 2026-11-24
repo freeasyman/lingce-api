@@ -2,9 +2,9 @@ package billing
 
 // 机构动作：正式开通 / 试用开通 / 加量 / 赠送 / 续期 / 加产品 / 延长试用 / 收款。
 //
-// 每个动作都在一个事务里完成「锁租户 → 建订单 → 发额度写流水 → 写服务期 →（可选）收款核销」，
-// 并把服务期同步到 tenant_subscriptions 与 tenants 有效期，保证存量逻辑（登录校验、到期任务）
-// 与新表 subscription_periods 口径一致。
+// 每个动作都在一个事务里完成「锁租户 → 建订单 → 发额度写流水 → 写服务期 →（可选）收款核销」。
+// 两套分开后，新产品动作只写 subscription_periods / product_entitlements / tenant_feature_assignments，
+// 不再同步 tenants 与 tenant_subscriptions（老产品数据由机构端自己维护）。
 
 import (
 	"context"

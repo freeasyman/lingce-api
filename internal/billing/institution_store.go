@@ -111,7 +111,7 @@ LEFT JOIN LATERAL (
     SELECT sp.id, sp.status, sp.started_on, sp.expired_on, sp.contract_type
     FROM subscription_periods sp
     WHERE sp.tenant_id = t.id
-    -- 服务期可能有多条：优先主体合同（formal/trial），体验行不抢主体展示位；
+    -- 服务期可能有多条：优先主体合同（formal/trial）；
     -- 再 active、再 expired，同级按 id 倒序。
     -- 不能按 expired_on 倒序：服务期被置 terminated 后，旧的试用期可能因
     -- 到期日更晚而胜出，导致档案显示错误的服务期。
