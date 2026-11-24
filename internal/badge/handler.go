@@ -75,6 +75,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "GET", Path: "/api/v1/badge-tickets/{id}", Handler: h.GetTicket, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/actions/review", Handler: h.ReviewTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/actions/execute", Handler: h.ExecuteTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/badge-tickets/{ticket_id}/messages", Handler: h.ListTicketMessages, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		{Method: "POST", Path: "/api/v1/badge-tickets/{ticket_id}/messages", Handler: h.ReplyTicket, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/developer", Handler: h.InternalDeveloperCallback},
 		{Method: "POST", Path: "/api/v1/smart-badge/callback/audio", Handler: h.InternalAudioCallback},
 	}
@@ -277,6 +279,66 @@ func (h *Handler) ReviewTicket(w http.ResponseWriter, r *http.Request) {
 }
 
 // ExecuteTicket handles executing a ticket
+// ListTicketMessages 返回工单消息线程；员工只能看自己机构的工单。
+func (h *Handler) ListTicketMessages(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("ticket_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid ticket ID")
+		return
+	}
+	ticket, err := h.service.GetTicketByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, "工单不存在")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil || ticket.TenantID == nil || *claims.TenantID != *ticket.TenantID {
+			httputil.WriteForbidden(w, "无权查看该工单")
+			return
+		}
+	}
+	items, err := h.service.ListTicketMessages(r.Context(), id)
+	if err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items})
+}
+
+// ReplyTicket 运营回复客户：保存消息并邮件通知客户。
+func (h *Handler) ReplyTicket(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Only admin can reply tickets")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("ticket_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid ticket ID")
+		return
+	}
+	var req TicketMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+	authorName := "灵策客服"
+	if name, err := h.service.AdminDisplayName(r.Context(), claims.UserID); err == nil && strings.TrimSpace(name) != "" {
+		authorName = strings.TrimSpace(name)
+	}
+	msg, emailed, err := h.service.ReplyTicket(r.Context(), id, claims.UserID, authorName, req.Body)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"message": msg, "emailed": emailed})
+}
+
 func (h *Handler) ExecuteTicket(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
@@ -311,7 +373,8 @@ func (h *Handler) ExecuteTicket(w http.ResponseWriter, r *http.Request) {
 		notes = req.ResultMessage
 	}
 
-	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, success, notes); err != nil {
+	_ = req.InboundTrackingNo
+	if err := h.service.ExecuteTicket(r.Context(), id, claims.UserID, success, notes, req.ResolutionType, req.SwapDeviceID, req.OutboundTrackingNo, req.InboundTrackingNo); err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}

@@ -97,8 +97,27 @@ type BadgeTicket struct {
 	ExecutedAt    *time.Time `json:"executed_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 	ExtraData     JSONObject `json:"extra_data,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// 责任判定与换货留痕（我方问题换新时必填）
+	ResolutionType     *string    `json:"resolution_type,omitempty"`
+	SwapDeviceID       *int64     `json:"swap_device_id,omitempty"`
+	SwapDeviceNo       *string    `json:"swap_device_no,omitempty"`
+	OutboundTrackingNo *string    `json:"outbound_tracking_no,omitempty"`
+	InboundTrackingNo  *string    `json:"inbound_tracking_no,omitempty"`
+	ShippedAt          *time.Time `json:"shipped_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+// BadgeTicketMessage 是工单里与客户的往来消息（回复会同时发邮件）。
+type BadgeTicketMessage struct {
+	ID         int64      `json:"id"`
+	TicketID   int64      `json:"ticket_id"`
+	AuthorType string     `json:"author_type"` // ops / customer
+	AuthorID   *int64     `json:"author_id,omitempty"`
+	AuthorName string     `json:"author_name"`
+	Body       string     `json:"body"`
+	EmailedAt  *time.Time `json:"emailed_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // BadgeManufacturer represents a badge manufacturer

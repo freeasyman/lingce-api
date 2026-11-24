@@ -174,6 +174,8 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 		SELECT badge_tickets.id, badge_tickets.ticket_no, badge_tickets.type, badge_tickets.status, badge_tickets.device_id, badge_tickets.device_no, badge_tickets.tenant_id, badge_tickets.employee_id,
 		       badge_tickets.submitter_id, badge_tickets.reviewer_id, badge_tickets.executor_id, badge_tickets.title, badge_tickets.description, badge_tickets.review_notes, badge_tickets.execute_notes,
 		       badge_tickets.submitted_at, badge_tickets.reviewed_at, badge_tickets.executed_at, badge_tickets.completed_at, badge_tickets.extra_data, badge_tickets.created_at, badge_tickets.updated_at,
+		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
+		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -208,6 +210,7 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 			&t.TenantID, &t.EmployeeID, &t.SubmitterID, &t.ReviewerID, &t.ExecutorID,
 			&t.Title, &t.Description, &t.ReviewNotes, &t.ExecuteNotes, &t.SubmittedAt,
 			&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
+			&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
 			&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan ticket: %w", err)
 		}
@@ -223,6 +226,8 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		SELECT badge_tickets.id, badge_tickets.ticket_no, badge_tickets.type, badge_tickets.status, badge_tickets.device_id, badge_tickets.device_no, badge_tickets.tenant_id, badge_tickets.employee_id,
 		       badge_tickets.submitter_id, badge_tickets.reviewer_id, badge_tickets.executor_id, badge_tickets.title, badge_tickets.description, badge_tickets.review_notes, badge_tickets.execute_notes,
 		       badge_tickets.submitted_at, badge_tickets.reviewed_at, badge_tickets.executed_at, badge_tickets.completed_at, badge_tickets.extra_data, badge_tickets.created_at, badge_tickets.updated_at,
+		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
+		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -247,6 +252,7 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		&t.TenantID, &t.EmployeeID, &t.SubmitterID, &t.ReviewerID, &t.ExecutorID,
 		&t.Title, &t.Description, &t.ReviewNotes, &t.ExecuteNotes, &t.SubmittedAt,
 		&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
+		&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
 		&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName,
 	)
 	if err == pgx.ErrNoRows {
@@ -268,14 +274,14 @@ func (s *Store) ReviewTicket(ctx context.Context, id, reviewerID int64, approved
 	query := `
 		UPDATE badge_tickets
 		SET status = $1, reviewer_id = $2, review_notes = $3, reviewed_at = NOW(), updated_at = NOW()
-		WHERE id = $4
+		WHERE id = $4 AND status IN ('pending', 'submitted', 'reviewing')
 	`
 	result, err := s.pool.Exec(ctx, query, status, reviewerID, notes, id)
 	if err != nil {
 		return fmt.Errorf("failed to review ticket: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return fmt.Errorf("ticket not found")
+		return fmt.Errorf("工单已审核或状态已变化，请刷新后重试")
 	}
 	return nil
 }
@@ -291,7 +297,7 @@ func (s *Store) ExecuteTicket(ctx context.Context, id, executorID int64, success
 		UPDATE badge_tickets
 		SET status = $1, executor_id = $2, execute_notes = $3, executed_at = NOW(),
 		    completed_at = NOW(), updated_at = NOW()
-		WHERE id = $4
+		WHERE id = $4 AND status = 'approved'
 	`
 	result, err := s.pool.Exec(ctx, query, status, executorID, notes, id)
 	if err != nil {

@@ -135,6 +135,47 @@ func (n *TicketEmailNotifier) SendTicketCreated(ctx context.Context, t *BadgeTic
 	}
 }
 
+// SendTicketReply 把运营的回复发给客户（按工单解析出的收件邮箱）。
+func (n *TicketEmailNotifier) SendTicketReply(ctx context.Context, t *BadgeTicket, body string, to []string) error {
+	if n == nil || t == nil || strings.TrimSpace(body) == "" {
+		return fmt.Errorf("email notifier not configured or empty body")
+	}
+	recipients := to
+	if len(recipients) == 0 {
+		recipients = n.to
+	}
+	addr := fmt.Sprintf("%s:%d", n.host, n.port)
+	auth := smtp.PlainAuth("", n.username, n.password, n.host)
+	subject := fmt.Sprintf("[%s] 工牌工单回复：%s", strings.TrimSpace(derefString(t.TenantName)), t.TicketNo)
+	msg := []byte("To: " + strings.Join(recipients, ", ") + "\r\n" +
+		"From: " + n.from + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=UTF-8\r\n\r\n" +
+		body)
+	done := make(chan error, 1)
+	go func() {
+		if n.port == 465 {
+			done <- n.sendMailTLS(addr, auth, []byte(msg))
+			return
+		}
+		done <- smtp.SendMail(addr, auth, n.from, recipients, msg)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
 func (n *TicketEmailNotifier) sendMailTLS(addr string, auth smtp.Auth, msg []byte) error {
 	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: n.host, MinVersion: tls.VersionTLS12})
 	if err != nil {

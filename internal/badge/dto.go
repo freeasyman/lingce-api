@@ -118,8 +118,15 @@ type TicketResponse struct {
 	ExecutedAt    *string    `json:"executed_at,omitempty"`
 	CompletedAt   *string    `json:"completed_at,omitempty"`
 	ExtraData     JSONObject `json:"extra_data,omitempty"`
-	CreatedAt     string     `json:"created_at"`
-	UpdatedAt     string     `json:"updated_at"`
+	// 责任判定与换货留痕
+	ResolutionType     *string `json:"resolution_type,omitempty"`
+	SwapDeviceID       *int64  `json:"swap_device_id,omitempty"`
+	SwapDeviceNo       *string `json:"swap_device_no,omitempty"`
+	OutboundTrackingNo *string `json:"outbound_tracking_no,omitempty"`
+	InboundTrackingNo  *string `json:"inbound_tracking_no,omitempty"`
+	ShippedAt          *string `json:"shipped_at,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // TicketReviewRequest represents ticket review request
@@ -135,6 +142,18 @@ type TicketExecuteRequest struct {
 	Notes         *string `json:"notes,omitempty"`
 	Success       *bool   `json:"success,omitempty"`        // backward-compatible field
 	ResultMessage *string `json:"result_message,omitempty"` // backward-compatible field
+	// 责任判定：our_issue（我方问题，需换新）/ customer_issue / other
+	ResolutionType string `json:"resolution_type,omitempty"`
+	// 换上的设备（我方问题换新时选在库设备）
+	SwapDeviceID *int64 `json:"swap_device_id,omitempty"`
+	// 物流留痕：寄出单号 / 寄回单号
+	OutboundTrackingNo string `json:"outbound_tracking_no,omitempty"`
+	InboundTrackingNo  string `json:"inbound_tracking_no,omitempty"`
+}
+
+// TicketMessageRequest 是运营回复客户的消息。
+type TicketMessageRequest struct {
+	Body string `json:"body"`
 }
 
 // DashboardSummaryResponse represents dashboard summary

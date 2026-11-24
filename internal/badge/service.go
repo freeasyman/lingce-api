@@ -235,8 +235,37 @@ func (s *Service) ReviewTicket(ctx context.Context, id, reviewerID int64, approv
 	return s.store.ReviewTicket(ctx, id, reviewerID, approved, notes)
 }
 
-// ExecuteTicket executes a ticket
-func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, success bool, notes *string) error {
+// ExecuteTicket executes a ticket. 我方问题的换新会在这里完成换机并留下设备号/物流单号。
+func (s *Service) ExecuteTicket(ctx context.Context, id, executorID int64, success bool, notes *string, resolutionType string, swapDeviceID *int64, outboundTracking, inboundTracking string) error {
+	ticket, err := s.store.GetTicketByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if success && resolutionType == "our_issue" {
+		swapDeviceNo := ""
+		if swapDeviceID != nil && *swapDeviceID > 0 {
+			if ticket.DeviceID == nil || *ticket.DeviceID <= 0 {
+				return fmt.Errorf("工单没有关联设备，无法换新")
+			}
+			tenantID := int64(0)
+			if ticket.TenantID != nil {
+				tenantID = *ticket.TenantID
+			}
+			device, err := s.store.RebuildSwapBadgeDevices(ctx, *ticket.DeviceID, *swapDeviceID, "报修换新", executorID, "", &tenantID)
+			if err != nil {
+				return err
+			}
+			if device != nil && device.DeviceNo != "" {
+				swapDeviceNo = device.DeviceNo
+			}
+		}
+		if swapDeviceNo == "" && strings.TrimSpace(outboundTracking) == "" {
+			return fmt.Errorf("我方问题换新时，请填写换上的设备号或物流单号")
+		}
+		if err := s.store.SetTicketReplacement(ctx, id, resolutionType, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking); err != nil {
+			return err
+		}
+	}
 	return s.store.ExecuteTicket(ctx, id, executorID, success, notes)
 }
 
@@ -253,6 +282,52 @@ func (s *Service) notifyTicketCreated(ticket *BadgeTicket) {
 		}
 		slog.Info("badge ticket notification email sent", "ticket_id", t.ID, "ticket_no", t.TicketNo)
 	}(*ticket)
+}
+
+// AdminDisplayName 取运营账号显示名（回复客户时署名）。
+func (s *Service) AdminDisplayName(ctx context.Context, adminID int64) (string, error) {
+	var name string
+	err := s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(trim(name), ''), NULLIF(trim(username), ''), '') FROM operations_admins WHERE id = $1
+	`, adminID).Scan(&name)
+	return name, err
+}
+
+// ReplyTicket 保存运营回复并邮件通知客户；失败时仍保留消息，返回 emailed=false。
+func (s *Service) ReplyTicket(ctx context.Context, ticketID, authorID int64, authorName, body string) (*BadgeTicketMessage, bool, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, false, fmt.Errorf("回复内容不能为空")
+	}
+	ticket, err := s.store.GetTicketByID(ctx, ticketID)
+	if err != nil {
+		return nil, false, err
+	}
+	emailed := false
+	var emailedAt *time.Time
+	if s.notifier != nil {
+		to := []string{}
+		if email, err := s.store.TicketContactEmail(ctx, ticket); err == nil && email != "" {
+			to = append(to, email)
+		}
+		if err := s.notifier.SendTicketReply(ctx, ticket, body, to); err != nil {
+			slog.Warn("failed to send badge ticket reply email", "ticket_id", ticketID, "error", err)
+		} else {
+			emailed = true
+			now := time.Now()
+			emailedAt = &now
+		}
+	}
+	msg, err := s.store.AddTicketMessage(ctx, ticketID, "ops", &authorID, authorName, body, emailedAt)
+	if err != nil {
+		return nil, emailed, err
+	}
+	return msg, emailed, nil
+}
+
+// ListTicketMessages 返回工单的消息线程。
+func (s *Service) ListTicketMessages(ctx context.Context, ticketID int64) ([]*BadgeTicketMessage, error) {
+	return s.store.ListTicketMessages(ctx, ticketID)
 }
 
 // GetDashboardSummary retrieves dashboard summary
@@ -545,30 +620,35 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		submitterName = *t.SubmitterName
 	}
 	resp := &TicketResponse{
-		ID:            t.ID,
-		TicketNo:      t.TicketNo,
-		Type:          t.Type,
-		Status:        t.Status,
-		DeviceID:      t.DeviceID,
-		DeviceNo:      t.DeviceNo,
-		TenantID:      t.TenantID,
-		TenantName:    t.TenantName,
-		EmployeeID:    t.EmployeeID,
-		EmployeeName:  t.EmployeeName,
-		SubmitterID:   t.SubmitterID,
-		SubmitterName: submitterName,
-		ReviewerID:    t.ReviewerID,
-		ReviewerName:  t.ReviewerName,
-		ExecutorID:    t.ExecutorID,
-		ExecutorName:  t.ExecutorName,
-		Title:         t.Title,
-		Description:   t.Description,
-		ReviewNotes:   t.ReviewNotes,
-		ExecuteNotes:  t.ExecuteNotes,
-		SubmittedAt:   t.SubmittedAt.Format("2006-01-02T15:04:05Z07:00"),
-		ExtraData:     t.ExtraData,
-		CreatedAt:     t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:     t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:                 t.ID,
+		TicketNo:           t.TicketNo,
+		Type:               t.Type,
+		Status:             t.Status,
+		DeviceID:           t.DeviceID,
+		DeviceNo:           t.DeviceNo,
+		TenantID:           t.TenantID,
+		TenantName:         t.TenantName,
+		EmployeeID:         t.EmployeeID,
+		EmployeeName:       t.EmployeeName,
+		SubmitterID:        t.SubmitterID,
+		SubmitterName:      submitterName,
+		ReviewerID:         t.ReviewerID,
+		ReviewerName:       t.ReviewerName,
+		ExecutorID:         t.ExecutorID,
+		ExecutorName:       t.ExecutorName,
+		Title:              t.Title,
+		Description:        t.Description,
+		ReviewNotes:        t.ReviewNotes,
+		ExecuteNotes:       t.ExecuteNotes,
+		SubmittedAt:        t.SubmittedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ExtraData:          t.ExtraData,
+		ResolutionType:     t.ResolutionType,
+		SwapDeviceID:       t.SwapDeviceID,
+		SwapDeviceNo:       t.SwapDeviceNo,
+		OutboundTrackingNo: t.OutboundTrackingNo,
+		InboundTrackingNo:  t.InboundTrackingNo,
+		CreatedAt:          t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:          t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if t.ReviewedAt != nil {
@@ -579,6 +659,11 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 	if t.ExecutedAt != nil {
 		formatted := t.ExecutedAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.ExecutedAt = &formatted
+	}
+
+	if t.ShippedAt != nil {
+		formatted := t.ShippedAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.ShippedAt = &formatted
 	}
 
 	if t.CompletedAt != nil {
