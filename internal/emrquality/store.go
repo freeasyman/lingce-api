@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"sort"
 )
 
 type Store struct{ pool *pgxpool.Pool }
@@ -28,14 +29,18 @@ type ruleDefinition struct {
 	MessageTemplate []byte
 }
 
-func (s *Store) loadRules(ctx context.Context) ([]ruleDefinition, error) {
+// loadRules 按专科加载当前已发布规则：通用规则（specialty 为空）+ 该专科规则；
+// 同 rule_code 同时存在通用与专科行时，专科行优先（DISTINCT ON）。
+func (s *Store) loadRules(ctx context.Context, specialty string) ([]ruleDefinition, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, rule_code, version, section_code, name, standard_points,
+		SELECT DISTINCT ON (rule_code)
+		       id, rule_code, version, section_code, name, standard_points,
 		       executor_kind, evaluation_spec, action_policy, message_templates
 		FROM emr_quality_published_rule_set r
 		WHERE version=(SELECT version FROM emr_quality_rule_set_versions WHERE status='published' ORDER BY created_at DESC, version DESC LIMIT 1)
-		ORDER BY section_code, rule_code
-	`)
+		  AND (COALESCE(r.specialty,'') = '' OR r.specialty = $1)
+		ORDER BY rule_code, (r.specialty = $1) DESC
+	`, strings.TrimSpace(specialty))
 	if err != nil {
 		return nil, fmt.Errorf("load published emr quality rules: %w", err)
 	}
@@ -49,11 +54,20 @@ func (s *Store) loadRules(ctx context.Context) ([]ruleDefinition, error) {
 		}
 		rules = append(rules, rule)
 	}
-	return rules, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].SectionCode != rules[j].SectionCode {
+			return rules[i].SectionCode < rules[j].SectionCode
+		}
+		return rules[i].Code < rules[j].Code
+	})
+	return rules, nil
 }
 
 func (s *Store) LoadRules(ctx context.Context) ([]ruleDefinition, error) {
-	return s.loadRules(ctx)
+	return s.loadRules(ctx, "")
 }
 
 func (s *Store) activeVersion(ctx context.Context) (string, bool, error) {

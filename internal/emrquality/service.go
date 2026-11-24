@@ -82,7 +82,7 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 	if s == nil || s.store == nil {
 		return nil, fmt.Errorf("emr quality service is not configured")
 	}
-	rules, err := s.store.loadRules(ctx)
+	rules, err := s.store.loadRules(ctx, input.Specialty)
 	if err != nil {
 		return nil, err
 	}
@@ -106,9 +106,6 @@ func (s *Service) Evaluate(ctx context.Context, input Context) (*Report, error) 
 		}
 	}
 	for _, rule := range rules {
-		if strings.HasPrefix(rule.Code, "TCM-") && strings.TrimSpace(input.TemplateCode) != "tcm" {
-			continue
-		}
 		if rule.Version != report.RuleSetVersion {
 			return nil, fmt.Errorf("quality rule version changed during evaluation")
 		}
@@ -833,8 +830,20 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 			result.Evidence = []Evidence{{Source: "record.content", Path: "chief_complaint", Excerpt: ""}}
 		}
 	case "CC-005":
+		var spec struct {
+			MaxLength int `json:"max_length"`
+		}
+		if len(rule.EvaluationSpec) > 0 {
+			if err := json.Unmarshal(rule.EvaluationSpec, &spec); err != nil {
+				return nil, err
+			}
+		}
+		maxLength := spec.MaxLength
+		if maxLength <= 0 {
+			maxLength = 20
+		}
 		text := contentText(input.Content, "chief_complaint")
-		if utf8.RuneCountInString(text) > 20 {
+		if utf8.RuneCountInString(text) > maxLength {
 			result.Result = "problem"
 			result.Deduction = rule.StandardPoints
 			result.Reason = "主诉共有" + strconv.Itoa(utf8.RuneCountInString(text)) + "个字"

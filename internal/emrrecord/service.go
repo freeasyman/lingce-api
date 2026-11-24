@@ -246,7 +246,7 @@ func (s *Service) ManualSave(ctx context.Context, tenantID, actorID int64, id st
 		return nil, err
 	}
 	if s.quality != nil && !(req.AllowNonBlocking && req.QualityRunID != "") {
-		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionSave, outcome.Record, outcome.Snapshot, req.ProgramOnly))
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionSave, outcome.Record, outcome.Snapshot, req.ProgramOnly, s.templateSpecialty(ctx, outcome.Record.TemplateVersionID)))
 		if qualityErr != nil {
 			return outcome, qualityErr
 		}
@@ -302,7 +302,7 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		patient = current.PatientSnapshot
 	}
 	qualityInput := emrquality.Context{TenantID: tenantID, RecordID: current.ID, Action: emrquality.ActionComplete,
-		DocumentType: current.DocumentType, VisitType: current.VisitType, TemplateCode: current.TemplateCode, Patient: patient, Content: content,
+		DocumentType: current.DocumentType, VisitType: current.VisitType, TemplateCode: current.TemplateCode, Specialty: s.templateSpecialty(ctx, current.TemplateVersionID), Patient: patient, Content: content,
 		Encounter: current.EncounterContext, DepartmentID: current.DepartmentID, StartedAt: current.StartedAt,
 		DoctorID: current.DoctorID, CreatedBy: current.CreatedBy}
 	var report *emrquality.Report
@@ -328,7 +328,7 @@ func (s *Service) Complete(ctx context.Context, tenantID, actorID int64, id stri
 		if qualityDegraded == nil {
 			report, err = s.quality.Evaluate(ctx, qualityContext(tenantID, emrquality.ActionComplete, current, &Snapshot{
 				RecordID: current.ID, Content: content, PatientSnapshot: patient,
-			}, req.ProgramOnly))
+			}, req.ProgramOnly, s.templateSpecialty(ctx, current.TemplateVersionID)))
 			if err != nil {
 				return nil, err
 			}
@@ -452,7 +452,7 @@ func (s *Service) Archive(ctx context.Context, tenantID, actorID int64, id strin
 		if snapshotErr != nil || snapshot == nil {
 			return nil, fmt.Errorf("找不到归档版本")
 		}
-		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionArchive, current, snapshot, req.ProgramOnly))
+		report, qualityErr := s.quality.Execute(ctx, qualityContext(tenantID, emrquality.ActionArchive, current, snapshot, req.ProgramOnly, s.templateSpecialty(ctx, current.TemplateVersionID)))
 		if qualityErr != nil {
 			return nil, qualityErr
 		}
@@ -509,7 +509,22 @@ func (s *Service) Return(ctx context.Context, tenantID, actorID int64, id string
 	return outcome, nil
 }
 
-func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot, programOnly bool) emrquality.Context {
+// templateSpecialty 返回模板所属专科（空串表示无专科，质检只跑通用规则）。
+func (s *Service) templateSpecialty(ctx context.Context, templateVersionID string) string {
+	if s == nil || s.store == nil || s.store.pool == nil || strings.TrimSpace(templateVersionID) == "" {
+		return ""
+	}
+	var specialty string
+	if err := s.store.pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(specialty, ''), '')
+		FROM emr_templates WHERE id = $1
+	`, strings.TrimSpace(templateVersionID)).Scan(&specialty); err != nil {
+		return ""
+	}
+	return specialty
+}
+
+func qualityContext(tenantID int64, action emrquality.Action, record *Record, snapshot *Snapshot, programOnly bool, specialty string) emrquality.Context {
 	content := record.WorkingContent
 	patient := record.PatientSnapshot
 	if snapshot != nil {
@@ -517,7 +532,7 @@ func qualityContext(tenantID int64, action emrquality.Action, record *Record, sn
 		patient = snapshot.PatientSnapshot
 	}
 	return emrquality.Context{TenantID: tenantID, RecordID: record.ID, SnapshotID: snapshotIDPtr(snapshot), Action: action,
-		DocumentType: record.DocumentType, VisitType: record.VisitType, TemplateCode: record.TemplateCode, Patient: patient, Content: content,
+		DocumentType: record.DocumentType, VisitType: record.VisitType, TemplateCode: record.TemplateCode, Specialty: specialty, Patient: patient, Content: content,
 		Encounter: record.EncounterContext, DepartmentID: record.DepartmentID, StartedAt: record.StartedAt,
 		DoctorID: record.DoctorID, CreatedBy: record.CreatedBy, ProgramOnly: programOnly}
 }
