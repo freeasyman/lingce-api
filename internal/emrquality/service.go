@@ -831,12 +831,18 @@ func evaluateRule(input Context, rule ruleDefinition) (*RuleResult, error) {
 		}
 	case "CC-005":
 		var spec struct {
-			MaxLength int `json:"max_length"`
+			Disabled  bool `json:"disabled"`
+			MaxLength int  `json:"max_length"`
 		}
 		if len(rule.EvaluationSpec) > 0 {
 			if err := json.Unmarshal(rule.EvaluationSpec, &spec); err != nil {
 				return nil, err
 			}
+		}
+		if spec.Disabled {
+			result.Result = "pass"
+			result.Reason = "该专科不启用主诉字数检查"
+			break
 		}
 		maxLength := spec.MaxLength
 		if maxLength <= 0 {

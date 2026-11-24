@@ -39,7 +39,7 @@ func (s *Store) loadRules(ctx context.Context, specialty string) ([]ruleDefiniti
 		FROM emr_quality_published_rule_set r
 		WHERE version=(SELECT version FROM emr_quality_rule_set_versions WHERE status='published' ORDER BY created_at DESC, version DESC LIMIT 1)
 		  AND (COALESCE(r.specialty,'') = '' OR r.specialty = $1)
-		ORDER BY rule_code, (r.specialty = $1) DESC
+		ORDER BY rule_code, (r.specialty IS NOT DISTINCT FROM $1) DESC
 	`, strings.TrimSpace(specialty))
 	if err != nil {
 		return nil, fmt.Errorf("load published emr quality rules: %w", err)
