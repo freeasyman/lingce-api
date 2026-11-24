@@ -178,6 +178,7 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
 		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
 		       badge_tickets.recipient_name, badge_tickets.recipient_phone, badge_tickets.recipient_address,
+		       badge_tickets.resolution, badge_tickets.resolved_at, badge_tickets.customer_notified_at, badge_tickets.customer_notified_by,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -214,6 +215,7 @@ func (s *Store) ListTickets(ctx context.Context, req TicketListRequest) ([]*Badg
 			&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
 			&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
 			&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
+			&t.Resolution, &t.ResolvedAt, &t.CustomerNotifiedAt, &t.CustomerNotifiedBy,
 			&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName); err != nil {
 			return nil, 0, fmt.Errorf("failed to scan ticket: %w", err)
 		}
@@ -232,6 +234,7 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		       badge_tickets.resolution_type, badge_tickets.swap_device_id, badge_tickets.swap_device_no,
 		       badge_tickets.outbound_tracking_no, badge_tickets.inbound_tracking_no, badge_tickets.shipped_at,
 		       badge_tickets.recipient_name, badge_tickets.recipient_phone, badge_tickets.recipient_address,
+		       badge_tickets.resolution, badge_tickets.resolved_at, badge_tickets.customer_notified_at, badge_tickets.customer_notified_by,
 		       t.name AS tenant_name,
 		       emp.name AS employee_name,
 		       COALESCE(submitter_emp.name, submitter_admin.name, submitter_patient.name, '') AS submitter_name,
@@ -258,6 +261,7 @@ func (s *Store) GetTicketByID(ctx context.Context, id int64) (*BadgeTicket, erro
 		&t.ReviewedAt, &t.ExecutedAt, &t.CompletedAt, &t.ExtraData, &t.CreatedAt, &t.UpdatedAt,
 		&t.ResolutionType, &t.SwapDeviceID, &t.SwapDeviceNo, &t.OutboundTrackingNo, &t.InboundTrackingNo, &t.ShippedAt,
 		&t.RecipientName, &t.RecipientPhone, &t.RecipientAddress,
+		&t.Resolution, &t.ResolvedAt, &t.CustomerNotifiedAt, &t.CustomerNotifiedBy,
 		&t.TenantName, &t.EmployeeName, &t.SubmitterName, &t.ReviewerName, &t.ExecutorName,
 	)
 	if err == pgx.ErrNoRows {

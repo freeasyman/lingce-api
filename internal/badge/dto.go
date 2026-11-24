@@ -85,6 +85,19 @@ type TicketSubmitRequest struct {
 	RecipientAddress string `json:"recipient_address,omitempty"`
 }
 
+// TicketResolveRequest 是「受理并选择处理方式」的入参。
+type TicketResolveRequest struct {
+	Method string `json:"method"` // swap | remote | none
+	Note   string `json:"note,omitempty"`
+	// 换新专用
+	SwapDeviceID     *int64 `json:"swap_device_id,omitempty"`
+	OutboundTracking string `json:"outbound_tracking_no,omitempty"`
+	InboundTracking  string `json:"inbound_tracking_no,omitempty"`
+	RecipientName    string `json:"recipient_name,omitempty"`
+	RecipientPhone   string `json:"recipient_phone,omitempty"`
+	RecipientAddress string `json:"recipient_address,omitempty"`
+}
+
 // TicketListRequest represents ticket list request
 type TicketListRequest struct {
 	Type        *string `json:"type,omitempty"`
@@ -132,6 +145,10 @@ type TicketResponse struct {
 	RecipientName      *string `json:"recipient_name,omitempty"`
 	RecipientPhone     *string `json:"recipient_phone,omitempty"`
 	RecipientAddress   *string `json:"recipient_address,omitempty"`
+	Resolution         *string `json:"resolution,omitempty"`
+	ResolvedAt         *string `json:"resolved_at,omitempty"`
+	CustomerNotifiedAt *string `json:"customer_notified_at,omitempty"`
+	CustomerNotifiedBy *int64  `json:"customer_notified_by,omitempty"`
 	CreatedAt          string  `json:"created_at"`
 	UpdatedAt          string  `json:"updated_at"`
 }

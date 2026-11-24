@@ -108,6 +108,11 @@ type BadgeTicket struct {
 	RecipientName    *string `json:"recipient_name,omitempty"`
 	RecipientPhone   *string `json:"recipient_phone,omitempty"`
 	RecipientAddress *string `json:"recipient_address,omitempty"`
+	// 处理方式：swap 换新 / remote 远程解决 / none 不处理
+	Resolution         *string    `json:"resolution,omitempty"`
+	ResolvedAt         *time.Time `json:"resolved_at,omitempty"`
+	CustomerNotifiedAt *time.Time `json:"customer_notified_at,omitempty"`
+	CustomerNotifiedBy *int64     `json:"customer_notified_by,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }

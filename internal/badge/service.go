@@ -302,36 +302,18 @@ func (s *Service) AdminDisplayName(ctx context.Context, adminID int64) (string, 
 	return name, err
 }
 
-// ReplyTicket 保存运营回复并邮件通知客户；失败时仍保留消息，返回 emailed=false。
+// ReplyTicket 只把回复保存到工单（客户在门户查看），不再给客户发邮件。
 func (s *Service) ReplyTicket(ctx context.Context, ticketID, authorID int64, authorName, body string) (*BadgeTicketMessage, bool, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return nil, false, fmt.Errorf("回复内容不能为空")
 	}
-	ticket, err := s.store.GetTicketByID(ctx, ticketID)
+	// 客户邮件已下线：回复只进工单，客户在门户查看；emailed 恒为 false。
+	msg, err := s.store.AddTicketMessage(ctx, ticketID, "ops", &authorID, authorName, body, nil)
 	if err != nil {
 		return nil, false, err
 	}
-	emailed := false
-	var emailedAt *time.Time
-	if s.notifier != nil {
-		to := []string{}
-		if email, err := s.store.TicketContactEmail(ctx, ticket); err == nil && email != "" {
-			to = append(to, email)
-		}
-		if err := s.notifier.SendTicketReply(ctx, ticket, body, to); err != nil {
-			slog.Warn("failed to send badge ticket reply email", "ticket_id", ticketID, "error", err)
-		} else {
-			emailed = true
-			now := time.Now()
-			emailedAt = &now
-		}
-	}
-	msg, err := s.store.AddTicketMessage(ctx, ticketID, "ops", &authorID, authorName, body, emailedAt)
-	if err != nil {
-		return nil, emailed, err
-	}
-	return msg, emailed, nil
+	return msg, false, nil
 }
 
 // ListTicketMessages 返回工单的消息线程。
@@ -656,9 +638,11 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		SwapDeviceNo:       t.SwapDeviceNo,
 		OutboundTrackingNo: t.OutboundTrackingNo,
 		InboundTrackingNo:  t.InboundTrackingNo,
-		RecipientName:    t.RecipientName,
-		RecipientPhone:   t.RecipientPhone,
-		RecipientAddress: t.RecipientAddress,
+		RecipientName:      t.RecipientName,
+		RecipientPhone:     t.RecipientPhone,
+		RecipientAddress:   t.RecipientAddress,
+		Resolution:         t.Resolution,
+		CustomerNotifiedBy: t.CustomerNotifiedBy,
 		CreatedAt:          t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:          t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -668,6 +652,14 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		resp.ReviewedAt = &formatted
 	}
 
+	if t.ResolvedAt != nil {
+		formatted := t.ResolvedAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.ResolvedAt = &formatted
+	}
+	if t.CustomerNotifiedAt != nil {
+		formatted := t.CustomerNotifiedAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.CustomerNotifiedAt = &formatted
+	}
 	if t.ExecutedAt != nil {
 		formatted := t.ExecutedAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.ExecutedAt = &formatted
