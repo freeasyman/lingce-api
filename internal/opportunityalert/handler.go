@@ -477,11 +477,26 @@ func httpError(w http.ResponseWriter, err error) {
 
 // ListAlertEscalations 升级记录。
 func (h *Handler) ListAlertEscalations(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	// P2：升级记录含原因文本，仅平台运营可按租户读取。
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "admin access required")
+		return
+	}
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	alertID, ok := parseAlertID(w, r)
 	if !ok {
 		return
 	}
-	items, err := h.service.ListEscalations(r.Context(), alertID)
+	items, err := h.service.ListEscalations(r.Context(), tenantID, alertID)
 	if err != nil {
 		httpError(w, err)
 		return

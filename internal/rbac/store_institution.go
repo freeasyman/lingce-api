@@ -1510,6 +1510,26 @@ func (s *Store) GetEmployeeRole(ctx context.Context, employeeID int64) (*Institu
 	return &role, nil
 }
 
+// institutionRoleCode 解析角色 ID 对应的角色 code（供 handler 做防提权判定）。
+func (s *Store) institutionRoleCode(ctx context.Context, roleID, tenantID int64) (string, error) {
+	hasNewRoleTable, err := s.hasInstitutionRolesTable(ctx)
+	if err != nil {
+		return "", err
+	}
+	if hasNewRoleTable {
+		var code string
+		if err := s.pool.QueryRow(ctx, `
+			SELECT code
+			FROM institution_roles
+			WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+		`, roleID, tenantID).Scan(&code); err != nil {
+			return "", fmt.Errorf("role not found: %w", err)
+		}
+		return normalizeInstitutionRoleCode(code), nil
+	}
+	return s.findLegacyRoleCodeByID(ctx, roleID)
+}
+
 // SetEmployeeRole sets the role for an employee
 func (s *Store) SetEmployeeRole(ctx context.Context, employeeID, roleID int64) error {
 	hasNewRoleTable, err := s.hasInstitutionRolesTable(ctx)
@@ -1688,6 +1708,17 @@ func (s *Store) GetDepartmentRole(ctx context.Context, departmentID int64) (*Ins
 		UpdatedAt:   now,
 		Description: nil,
 	}, nil
+}
+
+// departmentTenantID 返回科室所属租户（防跨租户操作，P0-7）。
+func (s *Store) departmentTenantID(ctx context.Context, departmentID int64) (int64, error) {
+	var tenantID int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id FROM departments WHERE id = $1 AND deleted_at IS NULL
+	`, departmentID).Scan(&tenantID); err != nil {
+		return 0, fmt.Errorf("department not found: %w", err)
+	}
+	return tenantID, nil
 }
 
 // SetDepartmentRole sets the default role for a department.

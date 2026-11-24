@@ -1417,7 +1417,7 @@ func (h *Handler) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	members, total, err := h.service.ListGroupMembers(r.Context(), id, page, pageSize)
+	members, total, err := h.service.ListGroupMembers(r.Context(), existingGroup.TenantID, id, page, pageSize)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -1460,6 +1460,12 @@ func (h *Handler) AddGroupMembers(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.CustomerIDs) == 0 {
 		httputil.WriteBadRequest(w, "Customer IDs are required")
+		return
+	}
+
+	// P1-6：成员客户必须属于本机构，防止跨租户引用与回显。
+	if err := h.service.store.assertCustomersInTenant(r.Context(), existingGroup.TenantID, req.CustomerIDs); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 
@@ -1509,6 +1515,12 @@ func (h *Handler) RemoveGroupMembers(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.CustomerIDs) == 0 {
 		httputil.WriteBadRequest(w, "Customer IDs are required")
+		return
+	}
+
+	// P1-6：同 AddGroupMembers。
+	if err := h.service.store.assertCustomersInTenant(r.Context(), existingGroup.TenantID, req.CustomerIDs); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 

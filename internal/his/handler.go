@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/middleware"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
@@ -55,11 +56,28 @@ type Handler struct {
 	service     *Service
 	limiter     *rateLimiter
 	importCache *importFileCache
+	emrPerm     *emrpermission.Service
 }
 
 // NewHandler 创建 Handler。
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service, limiter: newRateLimiter(), importCache: newImportFileCache()}
+func NewHandler(service *Service, emrPerm *emrpermission.Service) *Handler {
+	return &Handler{service: service, limiter: newRateLimiter(), importCache: newImportFileCache(), emrPerm: emrPerm}
+}
+
+// requireEMRRecordAccess 让 HIS 侧 EMR 接口复用听写病历的权限体系（P1-8）：
+// 同租户内也必须通过能力校验与病历归属（scope）校验，防止绕过机构端授权。
+func (h *Handler) requireEMRRecordAccess(w http.ResponseWriter, r *http.Request, claims *auth.Claims, tenantID int64, recordID, ability string) bool {
+	access, err := h.emrPerm.Authorize(r.Context(), claims, tenantID, ability)
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return false
+	}
+	allowed, err := h.emrPerm.CanAccessRecord(r.Context(), access, recordID)
+	if err != nil || !allowed {
+		httputil.WriteForbidden(w, "emr record access denied")
+		return false
+	}
+	return true
 }
 
 // requireOpenClient 开放 API 鉴权：X-API-Key 哈希匹配 + 限流，返回租户。
@@ -1291,13 +1309,16 @@ func (h *Handler) EnsureEMRRecordAuto(w http.ResponseWriter, r *http.Request) {
 
 // SwitchEMRTemplate 更换病历模板（仅空草稿）。
 func (h *Handler) SwitchEMRTemplate(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
 		return
 	}
 	recordID := strings.TrimSpace(r.PathValue("id"))
 	if recordID == "" {
 		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	if !h.requireEMRRecordAccess(w, r, claims, tenantID, recordID, "record.edit") {
 		return
 	}
 	var req SwitchEMRTemplateRequest
@@ -1341,6 +1362,9 @@ func (h *Handler) SaveEMRRecord(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "record id is required")
 		return
 	}
+	if !h.requireEMRRecordAccess(w, r, claims, tenantID, recordID, "record.edit") {
+		return
+	}
 	var req SaveEMRRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -1382,6 +1406,9 @@ func (h *Handler) CompleteEMRRecord(w http.ResponseWriter, r *http.Request) {
 	recordID := strings.TrimSpace(r.PathValue("id"))
 	if recordID == "" {
 		httputil.WriteBadRequest(w, "record id is required")
+		return
+	}
+	if !h.requireEMRRecordAccess(w, r, claims, tenantID, recordID, "record.submit") {
 		return
 	}
 	var req SaveEMRRequest
@@ -2888,11 +2915,14 @@ func (h *Handler) SearchPatients(w http.ResponseWriter, r *http.Request) {
 
 // LatestEMRQuality 病历最近一次质检结果（阻断/提示原因）。
 func (h *Handler) LatestEMRQuality(w http.ResponseWriter, r *http.Request) {
-	_, tenantID, ok := h.requireTenant(w, r)
+	claims, tenantID, ok := h.requireTenant(w, r)
 	if !ok {
 		return
 	}
 	recordID := r.PathValue("id")
+	if !h.requireEMRRecordAccess(w, r, claims, tenantID, recordID, "record.read") {
+		return
+	}
 	report, err := h.service.LatestQualityReport(r.Context(), tenantID, recordID)
 	if err != nil {
 		httputil.WriteInternalError(w, "failed to load quality report")

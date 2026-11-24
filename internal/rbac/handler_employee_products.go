@@ -48,6 +48,11 @@ func (h *Handler) ListEmployeeProducts(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, err.Error())
 		return
 	}
+	// P2：产品权限矩阵含全机构员工姓名/手机号，只有机构管理员（或平台 admin）可看。
+	if !h.requirePortalAdmin(r, claims, tenantID) {
+		httputil.WriteForbidden(w, "Institution admin required")
+		return
+	}
 	employeeID, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("employee_id")), 10, 64)
 	if err != nil || employeeID <= 0 {
 		// 没传 employee_id：批量返回全机构的有效产品（员工产品矩阵视图）。
@@ -91,6 +96,18 @@ func (h *Handler) SetEmployeeProducts(w http.ResponseWriter, r *http.Request) {
 	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
 	if err != nil || employeeID <= 0 {
 		httputil.WriteBadRequest(w, "invalid employee_id")
+		return
+	}
+	// P2：目标员工必须属于本机构，防止跨租户写产品授权。
+	var employeeBelongs bool
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM employees WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)
+	`, employeeID, tenantID).Scan(&employeeBelongs); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if !employeeBelongs {
+		httputil.WriteNotFound(w, "employee not found")
 		return
 	}
 	var req struct {

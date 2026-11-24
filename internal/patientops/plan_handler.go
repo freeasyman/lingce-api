@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeasyman/lingce-api/internal/billing"
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -19,18 +20,13 @@ func planTenantAndEmployee(r *http.Request) (int64, int64, bool) {
 	if claims == nil {
 		return 0, 0, false
 	}
-	tenantID := int64(0)
-	if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	// P2-7：统一走 tenancy.RequireTenantID——员工传别家 tenant_id 直接拒绝，
+	// 不再静默忽略参数回落到本租户。
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		return 0, 0, false
 	}
-	if claims.UserType == auth.UserTypeAdmin {
-		if raw := r.URL.Query().Get("tenant_id"); raw != "" {
-			if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
-				tenantID = parsed
-			}
-		}
-	}
-	if tenantID <= 0 || claims.UserID <= 0 {
+	if claims.UserID <= 0 {
 		return 0, 0, false
 	}
 	return tenantID, claims.UserID, true
@@ -47,7 +43,7 @@ func planPathID(r *http.Request) (int64, error) {
 func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -71,7 +67,7 @@ func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ReportPlans(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	items, err := h.service.ReportPlans(r.Context(), tenantID)
@@ -88,7 +84,7 @@ func (h *Handler) ReportPlans(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	var req CreatePlanRequest
@@ -107,7 +103,7 @@ func (h *Handler) CreatePlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetPlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -126,7 +122,7 @@ func (h *Handler) GetPlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdatePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -150,7 +146,7 @@ func (h *Handler) UpdatePlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PreviewPlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -169,7 +165,7 @@ func (h *Handler) PreviewPlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PublishPlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -209,7 +205,7 @@ func (h *Handler) PublishPlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AddPlanMembers(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -247,7 +243,7 @@ func (h *Handler) AddPlanMembers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ClosePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -274,7 +270,7 @@ func (h *Handler) patientOpsCanManage(r *http.Request, tenantID, employeeID int6
 func (h *Handler) ListPatientOpsPermissions(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	if !h.patientOpsCanManage(r, tenantID, employeeID) {
@@ -292,7 +288,7 @@ func (h *Handler) ListPatientOpsPermissions(w http.ResponseWriter, r *http.Reque
 func (h *Handler) GetPatientOpsPermission(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	target, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
@@ -315,7 +311,7 @@ func (h *Handler) GetPatientOpsPermission(w http.ResponseWriter, r *http.Request
 func (h *Handler) UpsertPatientOpsPermission(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	if !h.patientOpsCanManage(r, tenantID, employeeID) {
@@ -343,7 +339,7 @@ func (h *Handler) UpsertPatientOpsPermission(w http.ResponseWriter, r *http.Requ
 func (h *Handler) DeletePlan(w http.ResponseWriter, r *http.Request) {
 	tenantID, employeeID, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	planID, err := planPathID(r)
@@ -361,7 +357,7 @@ func (h *Handler) DeletePlan(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SuggestProductKeywords(w http.ResponseWriter, r *http.Request) {
 	tenantID, _, ok := planTenantAndEmployee(r)
 	if !ok {
-		httputil.WriteUnauthorized(w, "invalid token")
+		httputil.WriteForbidden(w, "tenant access denied")
 		return
 	}
 	var req ProductKeywordSuggestRequest

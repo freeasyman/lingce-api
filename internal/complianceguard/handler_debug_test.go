@@ -70,7 +70,7 @@ func TestOtherComplianceRoutesRemainRegisteredInProduction(t *testing.T) {
 
 // 开发/测试环境保留调试接口：路由已注册（无 token 返回 401，而不是 404）。
 func TestDebugAnalyzeTextRouteAvailableOutsideProduction(t *testing.T) {
-	for _, env := range []string{"dev", "development", "test", ""} {
+	for _, env := range []string{"dev", "development", "test", "testing"} {
 		t.Run(env, func(t *testing.T) {
 			mux := registerComplianceTestRoutes(env)
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/debug/analyze-text", strings.NewReader(`{}`))
@@ -83,6 +83,24 @@ func TestDebugAnalyzeTextRouteAvailableOutsideProduction(t *testing.T) {
 			}
 			if recorder.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401 for missing token", recorder.Code)
+			}
+		})
+	}
+}
+
+// P2-2：app.env 未注入（默认 dev 兜底）或未知值时，调试路由不得注册（fail-closed）。
+func TestDebugAnalyzeTextRouteDisabledWhenEnvMissingOrUnknown(t *testing.T) {
+	for _, env := range []string{"", "staging", "unknown"} {
+		t.Run("env="+env, func(t *testing.T) {
+			mux := registerComplianceTestRoutes(env)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/compliance/debug/analyze-text", strings.NewReader(`{}`))
+			recorder := httptest.NewRecorder()
+
+			mux.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (route must not be registered); body=%s",
+					recorder.Code, recorder.Body.String())
 			}
 		})
 	}

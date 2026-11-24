@@ -267,6 +267,11 @@ func (h *Handler) GetDoctorPerformance(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
+	// P1 补漏：医生必须属于本机构（此前凭 id 可跨租户探测存在性）。
+	if err := tenancy.RequireSameTenant(claims, doctor.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
 	patients, _, err := h.service.ListPatients(r.Context(), &doctor.TenantID, nil, nil, nil, 1, 1)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())

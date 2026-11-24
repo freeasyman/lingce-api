@@ -579,10 +579,20 @@ func (s *Service) BindEmployee(ctx context.Context, corpID, wecomUserID string, 
 	if err != nil {
 		return err
 	}
+	corpID = strings.TrimSpace(corpID)
+	wecomUserID = strings.TrimSpace(wecomUserID)
+	// P2：绑定身份（corp+wecom_user）不可跨租户覆盖；已属他租户时拒绝。
+	existing, err := s.store.GetUserBinding(ctx, s.providerApp, corpID, wecomUserID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.TenantID != employee.TenantID {
+		return fmt.Errorf("wecom binding belongs to another tenant")
+	}
 	return s.store.UpsertUserBinding(ctx, userBindingRecord{
 		ProviderApp: s.providerApp,
-		CorpID:      strings.TrimSpace(corpID),
-		WeComUserID: strings.TrimSpace(wecomUserID),
+		CorpID:      corpID,
+		WeComUserID: wecomUserID,
 		EmployeeID:  employee.ID,
 		TenantID:    employee.TenantID,
 		Source:      "manual_bind",

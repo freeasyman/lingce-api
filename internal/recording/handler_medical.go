@@ -1106,7 +1106,8 @@ func (h *Handler) ConfirmFollowUpTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	var failedTaskIDs []int64
 	for _, taskID := range req.TaskIDs {
-		if err := h.service.store.CompleteTask(r.Context(), taskID, claims.UserID, nil); err != nil {
+		// P1-4：任务必须属于本租户，防止凭任务 id 跨租户完成他院随访。
+		if err := h.service.store.CompleteTaskForTenant(r.Context(), tenantID, taskID, claims.UserID, nil); err != nil {
 			failedTaskIDs = append(failedTaskIDs, taskID)
 		}
 	}

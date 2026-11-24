@@ -229,7 +229,7 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*Product, error)
 	return s.GetByID(ctx, item.ID)
 }
 
-func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Product, error) {
+func (s *Store) Update(ctx context.Context, tenantID, id int64, req UpdateRequest) (*Product, error) {
 	sets := make([]string, 0, 10)
 	args := make([]any, 0, 12)
 	argIdx := 1
@@ -333,16 +333,17 @@ func (s *Store) Update(ctx context.Context, id int64, req UpdateRequest) (*Produ
 	}
 
 	sets = append(sets, "version = version + 1", "updated_at = NOW()")
-	query := fmt.Sprintf("UPDATE products SET %s WHERE id = $%d", strings.Join(sets, ", "), argIdx)
-	args = append(args, id)
+	// P2-6：写语句带租户条件，避免任何调用方漏判时跨租户改价。
+	args = append(args, id, tenantID)
+	query := fmt.Sprintf("UPDATE products SET %s WHERE id = $%d AND tenant_id = $%d", strings.Join(sets, ", "), argIdx, argIdx+1)
 	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
 		return nil, fmt.Errorf("update product %d: %w", id, err)
 	}
 	return s.GetByID(ctx, id)
 }
 
-func (s *Store) Delete(ctx context.Context, id int64) error {
-	if _, err := s.pool.Exec(ctx, "UPDATE products SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", id); err != nil {
+func (s *Store) Delete(ctx context.Context, tenantID, id int64) error {
+	if _, err := s.pool.Exec(ctx, "UPDATE products SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL", id, tenantID); err != nil {
 		return fmt.Errorf("delete product %d: %w", id, err)
 	}
 	return nil

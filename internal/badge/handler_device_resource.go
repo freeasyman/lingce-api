@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -79,6 +80,11 @@ func (h *Handler) V2ListDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) V2GetDevice(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "invalid token")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "invalid id")
@@ -87,6 +93,15 @@ func (h *Handler) V2GetDevice(w http.ResponseWriter, r *http.Request) {
 	device, logs, err := h.service.V2GetDeviceByID(r.Context(), id)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	// P2：设备含员工姓名/手机号，必须校验所属租户。
+	if device.TenantID == nil || *device.TenantID <= 0 {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, *device.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 	httputil.WriteSuccess(w, map[string]interface{}{"device": device, "logs": logs})

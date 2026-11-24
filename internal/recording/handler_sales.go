@@ -240,6 +240,17 @@ func (h *Handler) GetSalesStageHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// P1 补漏：先校验线索属于调用者租户，再读阶段历史。
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if _, err := h.service.GetLingceSalesProspect(r.Context(), tenantID, prospectID); err != nil {
+		httputil.WriteNotFound(w, "prospect not found")
+		return
+	}
+
 	changes, err := h.service.GetProspectStageHistory(r.Context(), prospectID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -310,6 +321,17 @@ func (h *Handler) GetSalesProspectRecordings(w http.ResponseWriter, r *http.Requ
 	prospectID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "invalid prospect id")
+		return
+	}
+
+	// P1 补漏：同 stage-history。
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
+	if _, err := h.service.GetLingceSalesProspect(r.Context(), tenantID, prospectID); err != nil {
+		httputil.WriteNotFound(w, "prospect not found")
 		return
 	}
 

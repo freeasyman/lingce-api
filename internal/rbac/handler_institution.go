@@ -5,10 +5,48 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/permission"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
+	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
+
+// requireInstitutionAdminIdentity 校验「有权修改机构角色/科室默认角色」的身份：
+// 平台 admin 直接放行；机构员工必须本身是机构管理员（而不是仅持有 roles/departments 菜单）。
+// 返回目标租户；无权返回 (nil, false)。
+func (h *Handler) requireInstitutionAdminIdentity(r *http.Request, claims *auth.Claims) (*int64, bool) {
+	if claims == nil {
+		return nil, false
+	}
+	if claims.UserType == auth.UserTypeAdmin {
+		return h.getTenantID(r), true
+	}
+	if claims.TenantID == nil || *claims.TenantID <= 0 {
+		return nil, false
+	}
+	isAdmin, err := permission.IsInstitutionAdmin(r.Context(), h.service.store.pool, *claims.TenantID, claims.UserID)
+	if err != nil || !isAdmin {
+		return nil, false
+	}
+	tid := *claims.TenantID
+	return &tid, true
+}
+
+// requireOwnedRoleTarget 校验目标员工/科室属于调用者的租户（平台 admin 亦按对象租户比对）。
+func (h *Handler) requireSameTenantAsCaller(w http.ResponseWriter, r *http.Request, callerTenant *int64, objectTenant int64) bool {
+	if callerTenant == nil {
+		httputil.WriteForbidden(w, "Tenant access required")
+		return false
+	}
+	if *callerTenant != objectTenant {
+		httputil.WriteForbidden(w, "Access denied")
+		return false
+	}
+	return true
+}
 
 func (h *Handler) ListOpsOrganizations(w http.ResponseWriter, r *http.Request) {
 	if !h.isAdmin(r) {
@@ -702,6 +740,17 @@ func (h *Handler) GetEmployeeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// P1 补漏：目标员工必须属于本机构。
+	targetTenantID, err := h.service.store.getEmployeeTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, targetTenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
 	role, err := h.service.GetEmployeeRole(r.Context(), id)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -718,6 +767,12 @@ func (h *Handler) SetEmployeeRole(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
+	// P0-6：角色写入必须由机构管理员（或平台 admin）发起，禁止仅凭菜单可见性操作。
+	callerTenant, ok := h.requireInstitutionAdminIdentity(r, claims)
+	if !ok {
+		httputil.WriteForbidden(w, "Institution admin access required")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
@@ -728,6 +783,24 @@ func (h *Handler) SetEmployeeRole(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+
+	// P0-6：目标员工必须属于本机构。
+	targetTenantID, err := h.service.store.getEmployeeTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !h.requireSameTenantAsCaller(w, r, callerTenant, targetTenantID) {
+		return
+	}
+	// P0-6：admin 角色只允许平台运营分配，防止机构管理员/员工自提权。
+	if claims.UserType != auth.UserTypeAdmin && req.RoleID > 0 {
+		roleCode, codeErr := h.service.store.institutionRoleCode(r.Context(), req.RoleID, targetTenantID)
+		if codeErr == nil && strings.EqualFold(strings.TrimSpace(roleCode), "admin") {
+			httputil.WriteForbidden(w, "admin role is not assignable")
+			return
+		}
 	}
 
 	if err := h.service.SetEmployeeRole(r.Context(), id, req); err != nil {
@@ -745,9 +818,23 @@ func (h *Handler) RemoveEmployeeRole(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
+	// P0-6：同 SetEmployeeRole。
+	callerTenant, ok := h.requireInstitutionAdminIdentity(r, claims)
+	if !ok {
+		httputil.WriteForbidden(w, "Institution admin access required")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+	targetTenantID, err := h.service.store.getEmployeeTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !h.requireSameTenantAsCaller(w, r, callerTenant, targetTenantID) {
 		return
 	}
 
@@ -778,6 +865,16 @@ func (h *Handler) GetDepartmentRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// P1 补漏：目标科室必须属于本机构。
+	targetTenantID, err := h.service.store.departmentTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !h.requireSameTenantAsCaller(w, r, tenantID, targetTenantID) {
+		return
+	}
+
 	role, err := h.service.GetDepartmentRole(r.Context(), id)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -794,9 +891,10 @@ func (h *Handler) SetDepartmentRole(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	tenantID := h.getTenantID(r)
-	if tenantID == nil {
-		httputil.WriteForbidden(w, "Tenant access required")
+	// P0-7：同 SetEmployeeRole——机构管理员身份 + 对象租户校验 + 禁分配 admin 角色。
+	callerTenant, ok := h.requireInstitutionAdminIdentity(r, claims)
+	if !ok {
+		httputil.WriteForbidden(w, "Institution admin access required")
 		return
 	}
 
@@ -810,6 +908,28 @@ func (h *Handler) SetDepartmentRole(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
+	}
+
+	targetTenantID, err := h.service.store.departmentTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !h.requireSameTenantAsCaller(w, r, callerTenant, targetTenantID) {
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		if req.RoleCode != nil && strings.EqualFold(strings.TrimSpace(*req.RoleCode), "admin") {
+			httputil.WriteForbidden(w, "admin role is not assignable")
+			return
+		}
+		if req.RoleID != nil && *req.RoleID > 0 {
+			roleCode, codeErr := h.service.store.institutionRoleCode(r.Context(), *req.RoleID, targetTenantID)
+			if codeErr == nil && strings.EqualFold(strings.TrimSpace(roleCode), "admin") {
+				httputil.WriteForbidden(w, "admin role is not assignable")
+				return
+			}
+		}
 	}
 
 	if err := h.service.SetDepartmentRole(r.Context(), id, req); err != nil {
@@ -827,15 +947,24 @@ func (h *Handler) RemoveDepartmentRole(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteForbidden(w, err.Error())
 		return
 	}
-	tenantID := h.getTenantID(r)
-	if tenantID == nil {
-		httputil.WriteForbidden(w, "Tenant access required")
+	// P0-7：同 SetEmployeeRole。
+	callerTenant, ok := h.requireInstitutionAdminIdentity(r, claims)
+	if !ok {
+		httputil.WriteForbidden(w, "Institution admin access required")
 		return
 	}
 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid department ID")
+		return
+	}
+	targetTenantID, err := h.service.store.departmentTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if !h.requireSameTenantAsCaller(w, r, callerTenant, targetTenantID) {
 		return
 	}
 

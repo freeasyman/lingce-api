@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -36,8 +37,15 @@ func (h *Handler) GetDeviceHistory(w http.ResponseWriter, r *http.Request) {
 	if pageSize <= 0 {
 		pageSize = 20
 	}
+	// P2：按当前用户租户过滤设备操作历史，防止凭设备号跨租户读取。
+	tenantID, err := tenancy.RequireTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if err != nil {
+		httputil.WriteForbidden(w, err.Error())
+		return
+	}
 	logs, total, err := h.service.ListRecordingControlLogs(r.Context(), RecordingControlLogListRequest{
 		DeviceNo: &deviceNo,
+		TenantID: &tenantID,
 		Page:     page,
 		PageSize: pageSize,
 	})

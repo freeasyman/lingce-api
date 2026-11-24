@@ -285,9 +285,9 @@ func (h *Handler) ImportFromRecording(w http.ResponseWriter, r *http.Request) {
 			r.recorded_at,
 			COALESCE(r.status, '')
 		FROM recordings r
-		LEFT JOIN customers c ON c.id = r.customer_id
-		WHERE r.id = $1 AND r.deleted_at IS NULL
-	`, req.RecordingID).Scan(
+		LEFT JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
+		WHERE r.id = $1 AND r.tenant_id = $2 AND r.deleted_at IS NULL
+	`, req.RecordingID, tenantID).Scan(
 		&rec.EncounterID,
 		&rec.CustomerID,
 		&rec.PatientID,

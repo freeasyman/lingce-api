@@ -57,7 +57,7 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 		where += " AND o.voided_at IS NULL"
 	}
 	var total int
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deal_outcome_events o JOIN recordings r ON r.id = o.recording_id WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deal_outcome_events o JOIN recordings r ON r.id = o.recording_id AND r.tenant_id = o.tenant_id WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count outcomes: %w", err)
 	}
 	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
@@ -67,9 +67,9 @@ func (s *Store) ListOutcomes(ctx context.Context, tenantID int64, f OutcomeFilte
 		       o.voided_at, o.void_reason, o.updated_by, o.update_reason, o.updated_at,
 		       COALESCE(cu.name,''), COALESCE(NULLIF(e.full_name,''), e.name,''), COALESCE(NULLIF(c.analysis->'intent_project'->>'name',''), NULLIF(r.analysis_result->>'business_title',''), '')
 		FROM deal_outcome_events o
-		JOIN recordings r ON r.id = o.recording_id
-		LEFT JOIN customers cu ON cu.id = r.customer_id
-		LEFT JOIN employees e ON e.id = r.employee_id
+		JOIN recordings r ON r.id = o.recording_id AND r.tenant_id = o.tenant_id
+		LEFT JOIN customers cu ON cu.id = r.customer_id AND cu.tenant_id = r.tenant_id
+		LEFT JOIN employees e ON e.id = r.employee_id AND e.tenant_id = r.tenant_id
 		LEFT JOIN consultation_analyses c ON c.recording_id = o.recording_id AND c.tenant_id = o.tenant_id AND c.status = 'analyzed'
 		WHERE `+where+`
 		ORDER BY o.occurred_at DESC, o.id DESC

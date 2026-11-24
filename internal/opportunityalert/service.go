@@ -628,8 +628,8 @@ func (s *Service) RecordAlertAction(ctx context.Context, tenantID, alertID, acto
 	return s.store.RecordAlertAction(ctx, tenantID, alertID, actorID, actionType, note)
 }
 
-func (s *Service) ListEscalations(ctx context.Context, alertID int64) ([]map[string]any, error) {
-	return s.store.ListEscalations(ctx, alertID)
+func (s *Service) ListEscalations(ctx context.Context, tenantID, alertID int64) ([]map[string]any, error) {
+	return s.store.ListEscalations(ctx, tenantID, alertID)
 }
 
 // StartEscalationLoop 每 30 秒扫描：pending 且创建超过 15 分钟的信号升级一次。

@@ -590,8 +590,8 @@ func (s *Service) GetTagStats(ctx context.Context, tenantID *int64) (map[string]
 	return s.store.GetTagStats(ctx, tenantID)
 }
 
-func (s *Service) ListGroupMembers(ctx context.Context, groupID int64, page, pageSize int) ([]*CustomerResponse, int, error) {
-	members, total, err := s.store.ListGroupMembers(ctx, groupID, page, pageSize)
+func (s *Service) ListGroupMembers(ctx context.Context, tenantID, groupID int64, page, pageSize int) ([]*CustomerResponse, int, error) {
+	members, total, err := s.store.ListGroupMembers(ctx, tenantID, groupID, page, pageSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -841,11 +841,26 @@ func toGroupResponse(cg *CustomerGroup) *GroupResponse {
 
 // Populate lists and details through the same batched contact projection.
 func (s *Service) populateContactIdentities(ctx context.Context, responses []*CustomerResponse) error {
+	// P2-8：联系方式必须按客户所属租户加载，禁止 tenantID=0（=不过滤）的 fail-open。
+	tenantID := int64(0)
+	for _, r := range responses {
+		if r == nil || r.TenantID <= 0 {
+			continue
+		}
+		if tenantID == 0 {
+			tenantID = r.TenantID
+		} else if tenantID != r.TenantID {
+			return fmt.Errorf("customer contacts across tenants are not allowed")
+		}
+	}
+	if tenantID <= 0 {
+		return fmt.Errorf("customer tenant is required")
+	}
 	ids := make([]int64, 0, len(responses))
 	for _, r := range responses {
 		ids = append(ids, r.ID)
 	}
-	contacts, err := customercontact.Load(ctx, s.store.pool, 0, ids)
+	contacts, err := customercontact.Load(ctx, s.store.pool, tenantID, ids)
 	if err != nil {
 		return fmt.Errorf("load customer contacts: %w", err)
 	}

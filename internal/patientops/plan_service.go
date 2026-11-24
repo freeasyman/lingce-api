@@ -146,7 +146,7 @@ func (s *Service) loadPlanMembers(ctx context.Context, tenantID, planID int64) (
 		       to_char(m.created_at,'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM')
 		FROM patient_ops_plan_members m
 		JOIN customers c ON c.id=m.customer_id AND c.tenant_id=m.tenant_id
-		LEFT JOIN products p ON p.id=m.recommended_product_id
+		LEFT JOIN products p ON p.id=m.recommended_product_id AND p.tenant_id=m.tenant_id
 		WHERE m.tenant_id=$1 AND m.plan_id=$2
 		ORDER BY m.id
 	`, tenantID, planID)
@@ -223,7 +223,7 @@ func (s *Service) loadPlanStats(ctx context.Context, tenantID, planID int64) (Pl
 		       COALESCE(MAX(p.name),''), COUNT(*),
 		       COALESCE(SUM(t.result_amount),0)::float8
 		FROM patient_operation_tasks t
-		LEFT JOIN products p ON p.id=COALESCE(NULLIF(t.result_product_id,0),t.product_id)
+		LEFT JOIN products p ON p.id=COALESCE(NULLIF(t.result_product_id,0),t.product_id) AND p.tenant_id=t.tenant_id
 		WHERE t.tenant_id=$1 AND t.plan_id=$2 AND t.status='已完成'
 		  AND (t.product_id IS NOT NULL OR t.result_product_id IS NOT NULL)
 		GROUP BY 1

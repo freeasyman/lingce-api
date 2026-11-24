@@ -1126,8 +1126,9 @@ const registrationColumns = `r.id, r.customer_id, COALESCE(c.name, ''), COALESCE
 	r.reg_type, r.source, r.visit_date::text, r.fee, r.status, en.id, r.created_by, r.created_at`
 
 const registrationFromClause = `FROM his_registrations r
-	JOIN customers c ON c.id = r.customer_id
+	JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
 	LEFT JOIN patient_identifiers pi ON pi.customer_id = r.customer_id
+		AND pi.tenant_id = r.tenant_id
 		AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 	LEFT JOIN his_slots sl ON sl.id = r.slot_id
 	LEFT JOIN departments dep ON dep.id = r.department_id
@@ -1190,7 +1191,7 @@ func (s *Store) ListQueue(ctx context.Context, tenantID int64, date string, doct
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
-		JOIN customers c ON c.id = r.customer_id
+		JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
 		LEFT JOIN his_doctors d ON d.id = r.doctor_id
 		LEFT JOIN employees e ON e.id = d.employee_id
 		WHERE q.tenant_id = $1
@@ -1303,6 +1304,20 @@ func (s *Store) CreateRegistration(ctx context.Context, tenantID, createdBy int6
 		return Registration{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	// P0-10：挂号患者必须属于本租户，防止把别院患者挂到本租户号源后
+	// 经挂号列表/分诊队列/EMR 建档回显他院患者身份信息。
+	var customerBelongs bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM customers
+			WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+		)`, tenantID, req.CustomerID).Scan(&customerBelongs); err != nil {
+		return Registration{}, err
+	}
+	if !customerBelongs {
+		return Registration{}, ErrNotFound
+	}
 
 	var doctorID, departmentID *int64
 	var workDate string
@@ -1468,7 +1483,7 @@ func (s *Store) RefundRegistration(ctx context.Context, tenantID, id int64) (Reg
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE encounters SET status = 'cancelled', updated_at = NOW()
-		WHERE source_type = 'his' AND source_id = $1 AND status <> 'completed'`, id); err != nil {
+		WHERE tenant_id = $2 AND source_type = 'his' AND source_id = $1 AND status <> 'completed'`, id, tenantID); err != nil {
 		return Registration{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM his_queue WHERE registration_id = $1`, id); err != nil {
@@ -1531,7 +1546,7 @@ func (s *Store) StartQueueItem(ctx context.Context, tenantID, registrationID int
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE encounters SET status = 'in_progress', updated_at = NOW()
-		WHERE source_type = 'his' AND source_id = $1`, registrationID); err != nil {
+		WHERE tenant_id = $2 AND source_type = 'his' AND source_id = $1`, registrationID, tenantID); err != nil {
 		return QueueEntry{}, err
 	}
 	return s.queueItemByRegistration(ctx, tenantID, registrationID)
@@ -1556,7 +1571,7 @@ func (s *Store) CompleteQueueItem(ctx context.Context, tenantID, registrationID 
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE encounters SET status = 'completed', ended_at = NOW(), updated_at = NOW()
-		WHERE source_type = 'his' AND source_id = $1`, registrationID); err != nil {
+		WHERE tenant_id = $2 AND source_type = 'his' AND source_id = $1`, registrationID, tenantID); err != nil {
 		return QueueEntry{}, err
 	}
 	return s.queueItemByRegistration(ctx, tenantID, registrationID)
@@ -1571,7 +1586,7 @@ func (s *Store) queueItemByRegistration(ctx context.Context, tenantID, registrat
 		       r.doctor_id, COALESCE(e.full_name, e.name, e.username, '')
 		FROM his_queue q
 		JOIN his_registrations r ON r.id = q.registration_id
-		JOIN customers c ON c.id = r.customer_id
+		JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
 		LEFT JOIN his_doctors d ON d.id = r.doctor_id
 		LEFT JOIN employees e ON e.id = d.employee_id
 		WHERE q.tenant_id = $1 AND q.registration_id = $2`, tenantID, registrationID).
@@ -1690,6 +1705,7 @@ func (s *Store) CustomerSummary(ctx context.Context, tenantID, customerID int64)
 		       COALESCE(NULLIF(c.price_identity, ''), 'standard')
 		FROM customers c
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = c.id
+			AND pi.tenant_id = c.tenant_id
 			AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, customerID).
 		Scan(&summary.CustomerID, &summary.Name, &summary.Phone, &summary.Gender,
@@ -2448,7 +2464,7 @@ func scanOrderRow(row pgx.Row) (Order, error) {
 func (s *Store) loadOrder(ctx context.Context, q querier, tenantID, id int64) (Order, error) {
 	o, err := scanOrderRow(q.QueryRow(ctx, `
 		SELECT `+orderColumns+`
-		FROM his_orders o JOIN customers c ON c.id = o.customer_id
+		FROM his_orders o JOIN customers c ON c.id = o.customer_id AND c.tenant_id = o.tenant_id
 		WHERE o.tenant_id = $1 AND o.id = $2`, tenantID, id))
 	if err != nil {
 		return o, err
@@ -2524,7 +2540,7 @@ func loadOrderPayments(ctx context.Context, q querier, orderID int64) ([]Payment
 func (s *Store) ListOrders(ctx context.Context, tenantID int64, status string, encounterID, customerID int64) ([]Order, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+orderColumns+`
-		FROM his_orders o JOIN customers c ON c.id = o.customer_id
+		FROM his_orders o JOIN customers c ON c.id = o.customer_id AND c.tenant_id = o.tenant_id
 		WHERE o.tenant_id = $1
 		  AND ($2 = '' OR o.status = $2)
 		  AND ($3 = 0 OR o.encounter_id = $3)
@@ -2976,8 +2992,9 @@ func (s *Store) ListPharmacyPrescriptions(ctx context.Context, tenantID int64, s
 		       p.type, p.diagnosis, p.status, p.created_at,
 		       COALESCE(c.name, ''), COALESCE(pi.value, '')
 		FROM his_prescriptions p
-		JOIN customers c ON c.id = p.customer_id
+		JOIN customers c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = p.customer_id
+			AND pi.tenant_id = p.tenant_id
 			AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		WHERE p.tenant_id = $1 AND p.status = $2
 		ORDER BY p.id`, tenantID, status)
@@ -3204,8 +3221,9 @@ func (s *Store) DispensePrescription(ctx context.Context, tenantID, operatorID, 
 	_ = s.pool.QueryRow(ctx, `
 		SELECT COALESCE(c.name, ''), COALESCE(pi.value, '')
 		FROM his_prescriptions p
-		JOIN customers c ON c.id = p.customer_id
+		JOIN customers c ON c.id = p.customer_id AND c.tenant_id = p.tenant_id
 		LEFT JOIN patient_identifiers pi ON pi.customer_id = p.customer_id
+			AND pi.tenant_id = p.tenant_id
 			AND pi.identifier_type = 'mrn' AND pi.status = 'active'
 		WHERE p.id = $1`, prescriptionID).Scan(&customerName, &mrn)
 	return PharmacyPrescription{Prescription: full, CustomerName: customerName, MRN: mrn}, nil

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/freeasyman/lingce-api/internal/compliancepermission"
 )
 
 // 本文件提供三类迎检/整改文书导出：
@@ -191,6 +193,10 @@ func (h *Handler) ExportCheckItemLetter(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// P2-2：导出前校验合规只读能力与租户。
+	if _, _, ok := h.requireAbility(w, r, compliancepermission.AbilityFindingRead); !ok {
+		return
+	}
 	var in LetterInput
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -306,6 +312,10 @@ func (h *Handler) ExportLoopList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// P2-2：导出前校验合规只读能力与租户。
+	if _, _, ok := h.requireAbility(w, r, compliancepermission.AbilityFindingRead); !ok {
+		return
+	}
 	var in LoopInput
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&in); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -405,6 +415,10 @@ func BuildQualificationDocx(in QualInput) ([]byte, error) {
 func (h *Handler) ExportQualificationChecklist(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// P2-2：导出前校验合规只读能力与租户。
+	if _, _, ok := h.requireAbility(w, r, compliancepermission.AbilityFindingRead); !ok {
 		return
 	}
 	var in QualInput

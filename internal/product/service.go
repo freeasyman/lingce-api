@@ -52,15 +52,15 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*Product, erro
 	return s.store.Create(ctx, normalizeCreate(req))
 }
 
-func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (*Product, error) {
+func (s *Service) Update(ctx context.Context, tenantID, id int64, req UpdateRequest) (*Product, error) {
 	if err := validateUpdate(req); err != nil {
 		return nil, err
 	}
-	return s.store.Update(ctx, id, normalizeUpdate(req))
+	return s.store.Update(ctx, tenantID, id, normalizeUpdate(req))
 }
 
-func (s *Service) Delete(ctx context.Context, id int64) error {
-	return s.store.Delete(ctx, id)
+func (s *Service) Delete(ctx context.Context, tenantID, id int64) error {
+	return s.store.Delete(ctx, tenantID, id)
 }
 
 func validateCreate(req CreateRequest) error {

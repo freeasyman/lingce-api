@@ -19,6 +19,7 @@ var (
 //
 // Rules:
 // - admin may explicitly select a tenant with tenant_id
+// - a tenant-bound admin token is restricted to its bound tenant（与 ResolveScope 对齐）
 // - admin without tenant_id falls back to the tenant bound to the token, if any
 // - non-admin users must already be bound to a tenant and may not cross tenant boundaries
 func RequireTenantID(claims *auth.Claims, tenantIDParam string) (int64, error) {
@@ -28,14 +29,18 @@ func RequireTenantID(claims *auth.Claims, tenantIDParam string) (int64, error) {
 
 	tenantIDParam = strings.TrimSpace(tenantIDParam)
 	if claims.UserType == auth.UserTypeAdmin {
+		tokenBound := claims.TenantID != nil && *claims.TenantID > 0
 		if tenantIDParam != "" {
 			tenantID, err := strconv.ParseInt(tenantIDParam, 10, 64)
 			if err != nil || tenantID <= 0 {
 				return 0, fmt.Errorf("invalid tenant_id")
 			}
+			if tokenBound && tenantID != *claims.TenantID {
+				return 0, errAccessDenied
+			}
 			return tenantID, nil
 		}
-		if claims.TenantID != nil && *claims.TenantID > 0 {
+		if tokenBound {
 			return *claims.TenantID, nil
 		}
 		return 0, errTenantIDMissing
@@ -83,11 +88,15 @@ func ResolveOptionalTenantID(claims *auth.Claims, tenantIDParam string, allowAdm
 }
 
 // RequireSameTenant enforces that a non-admin caller can only touch data from its own tenant.
+// 平台 admin（未绑定租户）放行；tenant-bound admin 只允许本租户（P2-1 与 ResolveScope 对齐）。
 func RequireSameTenant(claims *auth.Claims, targetTenantID int64) error {
 	if claims == nil {
 		return errInvalidToken
 	}
 	if claims.UserType == auth.UserTypeAdmin {
+		if claims.TenantID != nil && *claims.TenantID > 0 && *claims.TenantID != targetTenantID {
+			return errAccessDenied
+		}
 		return nil
 	}
 	if claims.TenantID == nil || *claims.TenantID <= 0 {

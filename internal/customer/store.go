@@ -1513,7 +1513,8 @@ func (s *Store) MergeCustomers(ctx context.Context, targetID int64, sourceIDs []
 			return 0, fmt.Errorf("failed to query source customer %d: %w", sourceID, err)
 		}
 		if sourceTenantID != targetTenantID {
-			return 0, fmt.Errorf("source customer %d is not in the same tenant as target", sourceID)
+			// P2-8：不区分"跨租户"与"不存在"，消除客户 id 存在性预言机。
+			return 0, fmt.Errorf("source customer %d not found", sourceID)
 		}
 		validSourceIDs = append(validSourceIDs, sourceID)
 	}
@@ -2029,7 +2030,25 @@ func (s *Store) GetTagStats(ctx context.Context, tenantID *int64) (map[string]in
 	return stats, nil
 }
 
-func (s *Store) ListGroupMembers(ctx context.Context, groupID int64, page, pageSize int) ([]*Customer, int, error) {
+// assertCustomersInTenant 校验全部客户属于指定租户（P1-6：分群成员跨租户引用防护）。
+func (s *Store) assertCustomersInTenant(ctx context.Context, tenantID int64, customerIDs []int64) error {
+	if len(customerIDs) == 0 {
+		return nil
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT id) FROM customers
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+	`, tenantID, customerIDs).Scan(&count); err != nil {
+		return fmt.Errorf("check customers tenant: %w", err)
+	}
+	if count != len(customerIDs) {
+		return fmt.Errorf("customer not in tenant")
+	}
+	return nil
+}
+
+func (s *Store) ListGroupMembers(ctx context.Context, tenantID, groupID int64, page, pageSize int) ([]*Customer, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -2050,8 +2069,8 @@ func (s *Store) ListGroupMembers(ctx context.Context, groupID int64, page, pageS
 		SELECT COUNT(*)
 		FROM customer_group_members gm
 		JOIN customers c ON c.id = gm.customer_id
-		WHERE gm.group_id = $1 AND c.deleted_at IS NULL
-	`, groupID).Scan(&total); err != nil {
+		WHERE gm.group_id = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
+	`, groupID, tenantID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count group members: %w", err)
 	}
 
@@ -2062,10 +2081,10 @@ func (s *Store) ListGroupMembers(ctx context.Context, groupID int64, page, pageS
 		       c.notes, c.extra_data, c.created_by, c.created_at, c.updated_at
 		FROM customer_group_members gm
 		JOIN customers c ON c.id = gm.customer_id
-		WHERE gm.group_id = $1 AND c.deleted_at IS NULL
+		WHERE gm.group_id = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
 		ORDER BY c.updated_at DESC
-		LIMIT $2 OFFSET $3
-	`, groupID, pageSize, offset)
+		LIMIT $3 OFFSET $4
+	`, groupID, tenantID, pageSize, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query group members: %w", err)
 	}

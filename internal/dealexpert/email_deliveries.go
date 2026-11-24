@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -171,6 +172,20 @@ func (h *Handler) ListEmailDeliveriesForOperation(w http.ResponseWriter, r *http
 		return
 	}
 	q := parseEmailDeliveryQuery(r)
+	// P2-5：tenant-bound admin 只允许本租户；未绑定租户的平台 admin 可跨租户。
+	tenantParam := ""
+	if q.TenantID > 0 {
+		tenantParam = strconv.FormatInt(q.TenantID, 10)
+	}
+	scope, err := tenancy.ResolveScope(r.Context(), h.pool, claims, tenantParam)
+	if err != nil {
+		httputil.WriteError(w, http.StatusForbidden, "FORBIDDEN", err.Error(), nil)
+		return
+	}
+	q.TenantID = 0
+	if scope.TenantID != nil {
+		q.TenantID = *scope.TenantID
+	}
 	items, total, err := h.service.ListEmailDeliveries(r.Context(), q)
 	if err != nil {
 		writeServiceError(w, err)

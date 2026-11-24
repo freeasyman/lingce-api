@@ -6,7 +6,9 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/internal/router"
+	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
@@ -264,9 +266,25 @@ func (h *Handler) resolveProfileTenantID(r *http.Request) (int64, bool) {
 
 // GetEmployeeAssistants handles getting assistants for an employee
 func (h *Handler) GetEmployeeAssistants(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
+		return
+	}
+
+	// P1-9：目标员工必须属于本机构。
+	tenantID, err := h.service.store.EmployeeTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, tenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 
@@ -281,10 +299,33 @@ func (h *Handler) GetEmployeeAssistants(w http.ResponseWriter, r *http.Request) 
 
 // UpdateEmployeeAssistants handles updating assistant bindings for an employee
 func (h *Handler) UpdateEmployeeAssistants(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid employee ID")
 		return
+	}
+
+	// P1-9：目标员工租户校验 + 非平台 admin 必须是机构管理员。
+	tenantID, err := h.service.store.EmployeeTenantID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, tenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		isAdmin, adminErr := permission.IsInstitutionAdmin(r.Context(), h.service.store.pool, tenantID, claims.UserID)
+		if adminErr != nil || !isAdmin {
+			httputil.WriteForbidden(w, "Institution admin access required")
+			return
+		}
 	}
 
 	var req UpdateAssistantsRequest

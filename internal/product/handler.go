@@ -32,6 +32,28 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 	router.Register(mux, routes, router.RouteDeps{JWTSecret: jwtSecret})
 }
 
+// listTenantID 解析产品库列表的目标租户（P2-6 fail-closed）：
+// 员工/mobile 必须带租户，否则 403；admin 可跨租户，非法 tenant_id 直接 400，不再静默变全局。
+func (h *Handler) listTenantID(w http.ResponseWriter, r *http.Request, claims *auth.Claims) (int64, bool) {
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil || *claims.TenantID <= 0 {
+			httputil.WriteForbidden(w, "tenant access required")
+			return 0, false
+		}
+		return *claims.TenantID, true
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if raw == "" {
+		return 0, true // 平台 admin 不指定租户 = 全平台
+	}
+	tid, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || tid < 0 {
+		httputil.WriteBadRequest(w, "invalid tenant_id")
+		return 0, false
+	}
+	return tid, true
+}
+
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetUserClaims(r.Context())
 	if claims == nil {
@@ -39,13 +61,9 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tenantID int64
-	if claims.UserType == auth.UserTypeAdmin {
-		if tidStr := r.URL.Query().Get("tenant_id"); tidStr != "" {
-			tenantID, _ = strconv.ParseInt(tidStr, 10, 64)
-		}
-	} else if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, ok := h.listTenantID(w, r, claims)
+	if !ok {
+		return
 	}
 
 	q := r.URL.Query()
@@ -91,18 +109,9 @@ func (h *Handler) Catalog(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteUnauthorized(w, "invalid token")
 		return
 	}
-	var tenantID int64
-	if claims.UserType == auth.UserTypeAdmin {
-		if tidStr := r.URL.Query().Get("tenant_id"); tidStr != "" {
-			tid, err := strconv.ParseInt(tidStr, 10, 64)
-			if err != nil || tid < 0 {
-				httputil.WriteBadRequest(w, "invalid tenant_id")
-				return
-			}
-			tenantID = tid
-		}
-	} else if claims.TenantID != nil {
-		tenantID = *claims.TenantID
+	tenantID, ok := h.listTenantID(w, r, claims)
+	if !ok {
+		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -193,7 +202,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
-	item, err := h.service.Update(r.Context(), id, req)
+	item, err := h.service.Update(r.Context(), tenantID, id, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
 		return
@@ -220,7 +229,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, "product not found")
 		return
 	}
-	if err := h.service.Delete(r.Context(), id); err != nil {
+	if err := h.service.Delete(r.Context(), tenantID, id); err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
 	}

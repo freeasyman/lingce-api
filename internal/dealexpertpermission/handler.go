@@ -124,6 +124,18 @@ func (h *Handler) Upsert(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "invalid request body")
 		return
 	}
+	// P2-5：禁止负责人修改自己的角色/可见范围（防自设 deal_admin + tenant 范围提权）。
+	// 本人请求时强制沿用既有配置；没有既有配置则不允许自建。平台 admin 不受限。
+	if employeeID == claims.UserID && claims.UserType != auth.UserTypeAdmin {
+		existing, getErr := h.service.Get(r.Context(), tenantID, employeeID)
+		if getErr != nil || existing == nil {
+			httputil.WriteForbidden(w, "self permission creation is not allowed")
+			return
+		}
+		req.RoleCode = existing.RoleCode
+		req.DataScope = existing.DataScope
+		req.VisibleEmployeeIDs = existing.VisibleEmployeeIDs
+	}
 	item, err := h.service.Upsert(r.Context(), tenantID, employeeID, claims.UserID, req)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())

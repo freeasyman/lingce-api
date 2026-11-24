@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/freeasyman/lingce-api/internal/middleware"
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/freeasyman/lingce-api/internal/router"
 	"github.com/freeasyman/lingce-api/internal/tenancy"
 	"github.com/freeasyman/lingce-api/pkg/auth"
@@ -137,7 +138,14 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "Invalid request body")
 		return
 	}
-	if req.TenantID == 0 {
+	// P0-9：租户只能来自 token（非 admin 禁止通过 body 指定租户，防止在他院建号）。
+	if claims.UserType != auth.UserTypeAdmin {
+		if claims.TenantID == nil || *claims.TenantID <= 0 {
+			httputil.WriteBadRequest(w, "tenant required")
+			return
+		}
+		req.TenantID = *claims.TenantID
+	} else if req.TenantID == 0 {
 		tenantID, err := resolveEmployeeTenantID(claims, "", false)
 		if err != nil {
 			httputil.WriteBadRequest(w, err.Error())
@@ -178,6 +186,14 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
 			return
+		}
+		// P1-10：修改他人信息必须是机构管理员；本人可维护自己的信息。
+		if existing.ID != claims.UserID {
+			isAdmin, adminErr := permission.IsInstitutionAdmin(r.Context(), h.service.store.pool, existing.TenantID, claims.UserID)
+			if adminErr != nil || !isAdmin {
+				httputil.WriteForbidden(w, "Institution admin access required")
+				return
+			}
 		}
 	}
 
@@ -252,6 +268,12 @@ func (h *Handler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := tenancy.RequireSameTenant(claims, existing.TenantID); err != nil {
 			httputil.WriteForbidden(w, "Access denied")
+			return
+		}
+		// P1-10：删除员工仅限机构管理员（平台 admin 除外）。
+		isAdmin, adminErr := permission.IsInstitutionAdmin(r.Context(), h.service.store.pool, existing.TenantID, claims.UserID)
+		if adminErr != nil || !isAdmin {
+			httputil.WriteForbidden(w, "Institution admin access required")
 			return
 		}
 	}

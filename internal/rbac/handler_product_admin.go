@@ -27,6 +27,11 @@ func (h *Handler) ListProductAdmins(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteBadRequest(w, "tenant required")
 		return
 	}
+	// P2：产品管理员名单含员工姓名，只有机构管理员（或平台 admin）可看。
+	if !h.requirePortalAdmin(r, claims, *claims.TenantID) {
+		httputil.WriteForbidden(w, "Institution admin required")
+		return
+	}
 	rows, err := permission.ListProductAdmins(r.Context(), h.service.store.pool, *claims.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -59,6 +64,19 @@ func (h *Handler) SetProductAdmin(w http.ResponseWriter, r *http.Request) {
 	employeeID, err := strconv.ParseInt(r.PathValue("employee_id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "invalid employee_id")
+		return
+	}
+
+	// P2：目标员工必须属于本机构，防止跨租户写入产品管理员授权。
+	var employeeBelongs bool
+	if err := h.service.store.pool.QueryRow(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM employees WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL)
+	`, employeeID, *claims.TenantID).Scan(&employeeBelongs); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if !employeeBelongs {
+		httputil.WriteNotFound(w, "employee not found")
 		return
 	}
 

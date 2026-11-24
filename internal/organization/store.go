@@ -56,6 +56,17 @@ func (s *Store) ListMedicalSpecialties(ctx context.Context) ([]*MedicalSpecialty
 	return specialties, nil
 }
 
+// EmployeeTenantID 返回员工所属租户（P1-9：助手绑定接口的租户校验）。
+func (s *Store) EmployeeTenantID(ctx context.Context, employeeID int64) (int64, error) {
+	var tenantID int64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id FROM employees WHERE id = $1 AND deleted_at IS NULL
+	`, employeeID).Scan(&tenantID); err != nil {
+		return 0, fmt.Errorf("employee not found: %w", err)
+	}
+	return tenantID, nil
+}
+
 // GetEmployeeAssistants retrieves assistants for an employee
 func (s *Store) GetEmployeeAssistants(ctx context.Context, employeeID int64) ([]*AssistantResponse, error) {
 	query := `

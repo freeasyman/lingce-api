@@ -871,14 +871,14 @@ func (s *Store) AddEscalation(ctx context.Context, alertID int64, level, reason 
 	return true, nil
 }
 
-func (s *Store) ListEscalations(ctx context.Context, alertID int64) ([]map[string]any, error) {
+func (s *Store) ListEscalations(ctx context.Context, tenantID, alertID int64) ([]map[string]any, error) {
 	if err := s.EnsureActionSchema(ctx); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT level, reason, created_at FROM opportunity_alert_escalations
-		WHERE alert_id = $1 ORDER BY id DESC LIMIT 20
-	`, alertID)
+		WHERE alert_id = $1 AND tenant_id = $2 ORDER BY id DESC LIMIT 20
+	`, alertID, tenantID)
 	if err != nil {
 		return nil, err
 	}

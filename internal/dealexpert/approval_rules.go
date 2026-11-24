@@ -82,6 +82,11 @@ func (h *Handler) SaveApprovalRules(w http.ResponseWriter, r *http.Request) {
 		writeTenantError(w, httpErr)
 		return
 	}
+	// P2-5：审批规则是全租户配置，只允许负责人（或平台 admin）修改。
+	if !scope.Manager {
+		httputil.WriteForbidden(w, "manager access required")
+		return
+	}
 	var body struct {
 		Rules map[string]any `json:"rules"`
 	}

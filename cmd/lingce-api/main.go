@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/audit"
 	"github.com/freeasyman/lingce-api/internal/auth"
 	"github.com/freeasyman/lingce-api/internal/badge"
 	"github.com/freeasyman/lingce-api/internal/billing"
@@ -336,9 +337,6 @@ func main() {
 	dealPushService.SetSender(dealexpush.NewAliyunTemplateSender(smsClient))
 	dealExpertGenerator.SetPushNotifier(dealPushService)
 	dealExpertHandler.SetConsultationAnalysisGenerator(dealExpertGenerator)
-	if !strings.EqualFold(cfg.App.Env, "production") {
-		dealExpertHandler.RegisterDevLoginRoute(mux, cfg.JWT.Secret)
-	}
 	dealExpertHandler.RegisterInternalRoutes(mux, cfg.External.InternalWorkerToken)
 	dealExpertHandler.RegisterUserRoutes(mux, cfg.JWT.Secret)
 
@@ -552,11 +550,13 @@ func main() {
 	dashboardHandler := dashboard.NewHandler(dashboardService)
 	dashboardHandler.RegisterRoutes(mux, cfg.JWT.Secret, pool)
 
-	// Apply middleware chain
+	// Apply middleware chain（innermost 先包运营跨租户读审计，再包通用中间件）
 	handler := middleware.RequestID(
 		middleware.Logger(
 			middleware.Recovery(
-				middleware.CORS(mux),
+				middleware.CORS(
+					audit.NewOpsReadLogger(pool).Middleware(mux),
+				),
 			),
 		),
 	)

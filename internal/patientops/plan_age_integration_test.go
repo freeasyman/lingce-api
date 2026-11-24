@@ -108,7 +108,7 @@ func TestPlanAgePreviewAndPublishingIntegration(t *testing.T) {
 	// Product policy is explicitly changed through the real product service.
 	optional := false
 	ps := product.NewService(product.NewStore(s.pool))
-	changed, err := ps.Update(ctx, 36, product.UpdateRequest{AgeRequired: &optional})
+	changed, err := ps.Update(ctx, 1, 36, product.UpdateRequest{AgeRequired: &optional})
 	if err != nil {
 		t.Fatal(err)
 	}

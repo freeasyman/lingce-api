@@ -1735,6 +1735,10 @@ func (h *Handler) TestPlayback(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
+	if err := tenancy.RequireSameTenant(claims, rec.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
 	status := "ok"
 	if rec.RecordingURL == "" {
 		status = "invalid_url"
@@ -1743,6 +1747,20 @@ func (h *Handler) TestPlayback(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"url":    rec.RecordingURL,
 	})
+}
+
+// requireRecordingOwned 校验录音属于当前用户租户（平台 admin 放行）。
+// P1 修复：触发类与反馈类接口此前只按 id 直接操作，跨租户可任意触发/改写。
+func (h *Handler) requireRecordingOwned(w http.ResponseWriter, r *http.Request, id int64) bool {
+	if _, err := h.assertRecordingAccess(r, id); err != nil {
+		if err.Error() == "access denied" {
+			httputil.WriteForbidden(w, "Access denied")
+		} else {
+			httputil.WriteNotFound(w, err.Error())
+		}
+		return false
+	}
+	return true
 }
 
 // ReanalyzeRecording triggers re-analysis for a recording resource.
@@ -1756,6 +1774,9 @@ func (h *Handler) ReanalyzeRecording(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	if !h.requireRecordingOwned(w, r, id) {
 		return
 	}
 
@@ -1804,6 +1825,10 @@ func (h *Handler) TriggerTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.requireRecordingOwned(w, r, id) {
+		return
+	}
+
 	jobID, err := h.service.TriggerTranscribe(r.Context(), id, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -1836,6 +1861,10 @@ func (h *Handler) TriggerAnalyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.requireRecordingOwned(w, r, id) {
+		return
+	}
+
 	jobID, err := h.service.TriggerAnalyze(r.Context(), id, req)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
@@ -1865,6 +1894,10 @@ func (h *Handler) TriggerClean(w http.ResponseWriter, r *http.Request) {
 	var req TriggerCleanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
 		httputil.WriteBadRequest(w, "Invalid request body")
+		return
+	}
+
+	if !h.requireRecordingOwned(w, r, id) {
 		return
 	}
 
@@ -1903,6 +1936,10 @@ func (h *Handler) GetAnalysisResult(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteNotFound(w, err.Error())
 		return
 	}
+	if err := tenancy.RequireSameTenant(claims, result.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
 
 	httputil.WriteSuccess(w, result)
 }
@@ -1918,6 +1955,9 @@ func (h *Handler) DispatchFollowUpTasks(w http.ResponseWriter, r *http.Request) 
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	if !h.requireRecordingOwned(w, r, id) {
 		return
 	}
 
@@ -1939,10 +1979,10 @@ func (h *Handler) DispatchFollowUpTasks(w http.ResponseWriter, r *http.Request) 
 			COALESCE(r.customer_id, 0),
 			COALESCE(c.name, ''),
 			COALESCE(c.phone, ''),
-			$2,
 			$3,
+			$4,
 			r.employee_id,
-			$4::text,
+			$5::text,
 			'pending',
 			'medium',
 			NOW() + INTERVAL '24 hours',
@@ -1950,9 +1990,9 @@ func (h *Handler) DispatchFollowUpTasks(w http.ResponseWriter, r *http.Request) 
 			NOW(),
 			NOW()
 		FROM recordings r
-		LEFT JOIN customers c ON c.id = r.customer_id
-		WHERE r.id = $1
-	`, rec.ID, title, desc, claims.UserID)
+		LEFT JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
+		WHERE r.id = $1 AND r.tenant_id = $2
+	`, rec.ID, rec.TenantID, title, desc, claims.UserID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -1971,6 +2011,9 @@ func (h *Handler) SubmitAnalysisFeedback(w http.ResponseWriter, r *http.Request)
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		httputil.WriteBadRequest(w, "Invalid recording ID")
+		return
+	}
+	if !h.requireRecordingOwned(w, r, id) {
 		return
 	}
 
@@ -2021,6 +2064,15 @@ func (h *Handler) BatchTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	jobs := results["jobs"].(map[int64]string)
 	for _, rid := range req.RecordingIDs {
+		rec, recErr := h.service.store.GetRecordingByID(r.Context(), rid)
+		if recErr != nil {
+			results["failed"] = results["failed"].(int) + 1
+			continue
+		}
+		if tenantErr := tenancy.RequireSameTenant(claims, rec.TenantID); tenantErr != nil {
+			results["failed"] = results["failed"].(int) + 1
+			continue
+		}
 		jobID, err := h.service.TriggerTranscribe(r.Context(), rid, TriggerTranscribeRequest{})
 		if err != nil {
 			results["failed"] = results["failed"].(int) + 1
@@ -2047,6 +2099,11 @@ func (h *Handler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.RecordingIDs) == 0 {
 		httputil.WriteBadRequest(w, "recording_ids is required")
+		return
+	}
+	// 与单条 DeleteRecording（handler.go:836）一致：仅平台运营可删除。
+	if claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "Admin access required")
 		return
 	}
 	var success, failed int
@@ -2110,6 +2167,16 @@ func (h *Handler) ConfirmFollowUpAction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	rec, err := h.service.store.GetRecordingByID(r.Context(), id)
+	if err != nil {
+		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, rec.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
+		return
+	}
+
 	var req ConfirmActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -2126,8 +2193,8 @@ func (h *Handler) ConfirmFollowUpAction(w http.ResponseWriter, r *http.Request) 
 	result, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE recording_tasks
 		SET status = 'completed', completed_at = NOW(), feedback = CONCAT(COALESCE(feedback, ''), CASE WHEN COALESCE(feedback, '') = '' THEN '' ELSE E'\n' END, 'completed_by=', $1::text, E'\n', 'action_note=', $2), updated_at = NOW()
-		WHERE recording_id = $3 AND source_type = 'follow_up' AND execution_status = 'to_execute'
-	`, claims.UserID, note, id)
+		WHERE recording_id = $3 AND tenant_id = $4 AND source_type = 'follow_up' AND execution_status = 'to_execute'
+	`, claims.UserID, note, id, rec.TenantID)
 	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
 		return
@@ -2156,6 +2223,10 @@ func (h *Handler) GenerateOpeningScript(w http.ResponseWriter, r *http.Request) 
 	rec, err := h.service.GetRecording(r.Context(), id)
 	if err != nil {
 		httputil.WriteNotFound(w, err.Error())
+		return
+	}
+	if err := tenancy.RequireSameTenant(claims, rec.TenantID); err != nil {
+		httputil.WriteForbidden(w, "Access denied")
 		return
 	}
 	script := "您好，我是灵策助理，今天我们围绕您的情况做一个简短沟通。"

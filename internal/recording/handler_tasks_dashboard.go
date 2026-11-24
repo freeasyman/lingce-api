@@ -1194,6 +1194,13 @@ func (h *Handler) UpdateTenantPromptConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// P1：配置归属校验，防止跨租户改写他院 LLM 提示词。
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
 	var req UpdateRecordingPromptTenantConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -1217,14 +1224,19 @@ func (h *Handler) UpdateTenantPromptConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	updates = append(updates, "updated_at = NOW()")
-	args = append(args, id)
+	args = append(args, id, tenantID)
 	query := fmt.Sprintf(`
 		UPDATE recording_analysis_tenant_configs
 		SET %s
-		WHERE id = $%d
-	`, strings.Join(updates, ", "), arg)
-	if _, err := h.service.store.pool.Exec(r.Context(), query, args...); err != nil {
+		WHERE id = $%d AND tenant_id = $%d
+	`, strings.Join(updates, ", "), arg, arg+1)
+	result, err := h.service.store.pool.Exec(r.Context(), query, args...)
+	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if result.RowsAffected() == 0 {
+		httputil.WriteNotFound(w, "tenant prompt config not found")
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Tenant prompt config updated"})
@@ -1244,12 +1256,24 @@ func (h *Handler) DeleteTenantPromptConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if _, err := h.service.store.pool.Exec(r.Context(), `
+	// P1：同 UpdateTenantPromptConfig。
+	tenantID, err := getTaskTenantIDFromClaimsOrQuery(claims, r)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+
+	result, err := h.service.store.pool.Exec(r.Context(), `
 		UPDATE recording_analysis_tenant_configs
 		SET is_enabled = false, updated_at = NOW()
-		WHERE id = $1
-	`, id); err != nil {
+		WHERE id = $1 AND tenant_id = $2
+	`, id, tenantID)
+	if err != nil {
 		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	if result.RowsAffected() == 0 {
+		httputil.WriteNotFound(w, "tenant prompt config not found")
 		return
 	}
 	httputil.WriteSuccess(w, map[string]string{"message": "Tenant prompt config deleted"})

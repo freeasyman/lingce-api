@@ -65,13 +65,34 @@ func isProductionEnv(env string) bool {
 	}
 }
 
+// isDevOrTestEnv 判断 app.env 是否显式为开发/测试环境。
+// 与 isProductionEnv 不同：这里用白名单，未注入/未知值一律视为"非调试环境"（fail-closed）。
+func isDevOrTestEnv(env string) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "dev", "development", "test", "testing":
+		return true
+	default:
+		return false
+	}
+}
+
 // debugRoutesEnabled 判断当前环境是否允许注册调试路由。
+// P2-2：由"非生产即开启"收紧为"仅显式 dev/test 开启"，防止生产漏配 app.env 时暴露调试接口。
 func (h *Handler) debugRoutesEnabled() bool {
-	return h == nil || !isProductionEnv(h.appEnv)
+	return h != nil && isDevOrTestEnv(h.appEnv)
 }
 
 func (h *Handler) SetPermissionService(service *compliancepermission.Service) {
 	h.permissions = service
+}
+
+// requirePlatformAdmin 合规规则是全局资源（无租户维度），写操作只允许平台运营（P2-3）。
+func (h *Handler) requirePlatformAdmin(w http.ResponseWriter, claims *auth.Claims) bool {
+	if claims == nil || claims.UserType != auth.UserTypeAdmin {
+		httputil.WriteForbidden(w, "platform admin access required")
+		return false
+	}
+	return true
 }
 
 func (h *Handler) requireAbility(w http.ResponseWriter, r *http.Request, ability string) (*auth.Claims, int64, bool) {
@@ -325,7 +346,7 @@ func (h *Handler) GetRule(w http.ResponseWriter, r *http.Request) {
 // 时间：2026-09-14
 func (h *Handler) CreateRule(w http.ResponseWriter, r *http.Request) {
 	claims, _, ok := h.requireAbility(w, r, compliancepermission.AbilityRuleManage)
-	if !ok {
+	if !ok || !h.requirePlatformAdmin(w, claims) {
 		return
 	}
 	var req ComplianceRuleRequest
@@ -357,7 +378,7 @@ func (h *Handler) CreateRule(w http.ResponseWriter, r *http.Request) {
 // 时间：2026-09-14
 func (h *Handler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	claims, _, ok := h.requireAbility(w, r, compliancepermission.AbilityRuleManage)
-	if !ok {
+	if !ok || !h.requirePlatformAdmin(w, claims) {
 		return
 	}
 	var req ComplianceRuleRequest
@@ -394,7 +415,7 @@ func (h *Handler) DisableRule(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setRuleEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	claims, _, ok := h.requireAbility(w, r, compliancepermission.AbilityRuleManage)
-	if !ok {
+	if !ok || !h.requirePlatformAdmin(w, claims) {
 		return
 	}
 	rule, err := h.service.SetRuleEnabled(r.Context(), claims.UserID, strings.TrimSpace(r.PathValue("id")), enabled)
@@ -417,7 +438,7 @@ func (h *Handler) setRuleEnabled(w http.ResponseWriter, r *http.Request, enabled
 // 时间：2026-09-14
 func (h *Handler) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	claims, _, ok := h.requireAbility(w, r, compliancepermission.AbilityRuleManage)
-	if !ok {
+	if !ok || !h.requirePlatformAdmin(w, claims) {
 		return
 	}
 	err := h.service.DeleteRule(r.Context(), claims.UserID, strings.TrimSpace(r.PathValue("id")))

@@ -3,6 +3,7 @@ package his
 import (
 	"net/http"
 
+	"github.com/freeasyman/lingce-api/internal/emrpermission"
 	"github.com/freeasyman/lingce-api/internal/emrrecord"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,7 +15,8 @@ type Module struct {
 
 // NewModule 创建 HIS 模块；emr 为共享病历域服务（HIS 复用其病历生命周期）。
 func NewModule(pool *pgxpool.Pool, emr *emrrecord.Service) *Module {
-	return &Module{handler: NewHandler(NewService(NewStore(pool), emr))}
+	emrPerm := emrpermission.NewService(emrpermission.NewStore(pool))
+	return &Module{handler: NewHandler(NewService(NewStore(pool), emr), emrPerm)}
 }
 
 // RegisterRoutes 注册 HIS 路由。

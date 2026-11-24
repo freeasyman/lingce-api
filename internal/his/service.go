@@ -620,7 +620,7 @@ func (s *Service) EnsureEMRRecord(ctx context.Context, tenantID, actorID int64, 
 		       COALESCE(c.extra_data->>'id_card', ''),
 		       COALESCE(d.employee_id, 0), r.department_id
 		FROM his_registrations r
-		JOIN customers c ON c.id = r.customer_id
+		JOIN customers c ON c.id = r.customer_id AND c.tenant_id = r.tenant_id
 		LEFT JOIN his_doctors d ON d.id = r.doctor_id
 		WHERE r.tenant_id = $1 AND r.id = (
 			SELECT e.source_id FROM encounters e

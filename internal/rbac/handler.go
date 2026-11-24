@@ -258,15 +258,36 @@ func (h *Handler) requireInstitutionMenuAccess(ctx context.Context, claims *auth
 	return fmt.Errorf("menu %s access denied", menuCode)
 }
 
-// getTenantID gets the tenant ID from the current user
+// getTenantID gets the target tenant ID from the current user.
+//
+// 安全口径（P0-8）：平台 admin 可指定 query tenant_id；employee/mobile 的租户
+// 只能来自 token，query 与 token 不一致时返回 nil（由调用方 403），绝不静默回落。
 func (h *Handler) getTenantID(r *http.Request) *int64 {
-	if q := r.URL.Query().Get("tenant_id"); q != "" {
-		if id, err := strconv.ParseInt(q, 10, 64); err == nil && id > 0 {
-			return &id
-		}
-	}
 	claims := middleware.GetUserClaims(r.Context())
-	if claims != nil && claims.TenantID != nil {
+	if claims == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if claims.UserType == auth.UserTypeAdmin {
+		if raw != "" {
+			if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
+				return &id
+			}
+			return nil // admin 传了非法租户：拒绝，避免静默变全局
+		}
+		if claims.TenantID != nil && *claims.TenantID > 0 {
+			return claims.TenantID
+		}
+		return nil
+	}
+	if raw != "" {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 &&
+			claims.TenantID != nil && *claims.TenantID == id {
+			return claims.TenantID
+		}
+		return nil // 员工试图跨租户：拒绝
+	}
+	if claims.TenantID != nil && *claims.TenantID > 0 {
 		return claims.TenantID
 	}
 	return nil
