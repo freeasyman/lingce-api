@@ -2,15 +2,18 @@ package badge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SetTicketResolved 受理工单并写入处理方式：远程解决（completed）或不处理（rejected）。
+// 处理方式复用 resolution_type，处理时间复用 executed_at，不新增列。
 func (s *Store) SetTicketResolved(ctx context.Context, id int64, status, method, notes string, executorID int64) error {
 	result, err := s.pool.Exec(ctx, `
 		UPDATE badge_tickets
-		SET status = $2, resolution = $3, executor_id = $4,
-		    execute_notes = NULLIF($5, ''), executed_at = NOW(), resolved_at = NOW(),
+		SET status = $2, resolution_type = $3, executor_id = $4,
+		    execute_notes = NULLIF($5, ''), executed_at = NOW(),
 		    completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE completed_at END,
 		    updated_at = NOW()
 		WHERE id = $1 AND status IN ('pending', 'progress')
@@ -28,14 +31,13 @@ func (s *Store) SetTicketResolved(ctx context.Context, id int64, status, method,
 func (s *Store) SetTicketSwapped(ctx context.Context, id int64, swapDeviceID *int64, swapDeviceNo, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress, notes string, executorID int64) error {
 	result, err := s.pool.Exec(ctx, `
 		UPDATE badge_tickets
-		SET status = 'waiting', resolution = 'swap', executor_id = $2,
-		    resolution_type = 'our_issue',
+		SET status = 'waiting', resolution_type = 'swap', executor_id = $2,
 		    swap_device_id = $3, swap_device_no = NULLIF($4, ''),
 		    outbound_tracking_no = NULLIF($5, ''), inbound_tracking_no = NULLIF($6, ''),
 		    recipient_name = COALESCE(NULLIF($7, ''), recipient_name),
 		    recipient_phone = COALESCE(NULLIF($8, ''), recipient_phone),
 		    recipient_address = COALESCE(NULLIF($9, ''), recipient_address),
-		    execute_notes = NULLIF($10, ''), executed_at = NOW(), resolved_at = NOW(),
+		    execute_notes = NULLIF($10, ''), executed_at = NOW(),
 		    shipped_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND status IN ('pending', 'progress')
 	`, id, executorID, swapDeviceID, swapDeviceNo, outboundTracking, inboundTracking, recipientName, recipientPhone, recipientAddress, notes)
@@ -48,13 +50,20 @@ func (s *Store) SetTicketSwapped(ctx context.Context, id int64, swapDeviceID *in
 	return nil
 }
 
-// MarkTicketCustomerNotified 记录运营已把通知单发给客户（微信/企业微信）。
+// MarkTicketCustomerNotified 把「已发送给客户」写进 extra_data，不再新增列。
 func (s *Store) MarkTicketCustomerNotified(ctx context.Context, id, operatorID int64) error {
+	payload, err := json.Marshal(map[string]any{
+		"customer_notified_at": time.Now().Format("2006-01-02T15:04:05"),
+		"customer_notified_by": operatorID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build notify payload: %w", err)
+	}
 	result, err := s.pool.Exec(ctx, `
 		UPDATE badge_tickets
-		SET customer_notified_at = NOW(), customer_notified_by = $2, updated_at = NOW()
-		WHERE id = $1 AND resolution = 'swap'
-	`, id, operatorID)
+		SET extra_data = COALESCE(extra_data, '{}'::jsonb) || $2::jsonb, updated_at = NOW()
+		WHERE id = $1 AND resolution_type = 'swap'
+	`, id, string(payload))
 	if err != nil {
 		return fmt.Errorf("failed to mark customer notified: %w", err)
 	}

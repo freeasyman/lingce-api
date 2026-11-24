@@ -641,8 +641,7 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		RecipientName:      t.RecipientName,
 		RecipientPhone:     t.RecipientPhone,
 		RecipientAddress:   t.RecipientAddress,
-		Resolution:         t.Resolution,
-		CustomerNotifiedBy: t.CustomerNotifiedBy,
+		Resolution:         t.ResolutionType,
 		CreatedAt:          t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:          t.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -652,13 +651,26 @@ func toTicketResponse(t *BadgeTicket) *TicketResponse {
 		resp.ReviewedAt = &formatted
 	}
 
-	if t.ResolvedAt != nil {
-		formatted := t.ResolvedAt.Format("2006-01-02T15:04:05Z07:00")
+	if t.ExecutedAt != nil {
+		formatted := t.ExecutedAt.Format("2006-01-02T15:04:05Z07:00")
 		resp.ResolvedAt = &formatted
 	}
-	if t.CustomerNotifiedAt != nil {
-		formatted := t.CustomerNotifiedAt.Format("2006-01-02T15:04:05Z07:00")
-		resp.CustomerNotifiedAt = &formatted
+	if t.ExtraData != nil {
+		if raw, ok := t.ExtraData["customer_notified_at"]; ok {
+			if value, ok := raw.(string); ok && value != "" {
+				resp.CustomerNotifiedAt = &value
+			}
+		}
+		if raw, ok := t.ExtraData["customer_notified_by"]; ok {
+			switch value := raw.(type) {
+			case float64:
+				id := int64(value)
+				resp.CustomerNotifiedBy = &id
+			case int64:
+				id := value
+				resp.CustomerNotifiedBy = &id
+			}
+		}
 	}
 	if t.ExecutedAt != nil {
 		formatted := t.ExecutedAt.Format("2006-01-02T15:04:05Z07:00")
