@@ -37,7 +37,8 @@ const recordColumns = `
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
 	COALESCE(r.updated_at, r.created_at), r.updated_at,
 	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id,
-	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at`
+	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at,
+	COALESCE((SELECT rec.duration FROM recordings rec WHERE rec.id = NULLIF(r.source_references_json->>'recording_id','')::bigint), 0)::int`
 
 // recordListColumns 供「列表」使用：只回列表界面上真正会渲染的字段。
 // content_json 原本是整份病历（生产上单条几 KB），列表只用得到其中十几个字段；
@@ -76,7 +77,8 @@ const recordListColumns = `
 	r.submitted_at, r.archived_at, r.voided_at, r.created_by, r.created_at,
 	COALESCE(r.updated_at, r.created_at), r.updated_at,
 	COALESCE(r.current_score_status, '未评分'), r.current_total_score, COALESCE(r.current_grade, ''), COALESCE(r.current_score_version, ''), r.current_quality_run_id,
-	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at`
+	COALESCE(r.quality_status, ''), COALESCE(r.quality_status_reason, ''), r.quality_status_at,
+	COALESCE((SELECT rec.duration FROM recordings rec WHERE rec.id = NULLIF(r.source_references_json->>'recording_id','')::bigint), 0)::int`
 
 func scanRecord(row pgx.Row) (*Record, error) {
 	item := &Record{}
@@ -90,6 +92,7 @@ func scanRecord(row pgx.Row) (*Record, error) {
 		&item.SubmittedAt, &item.ArchivedAt, &item.VoidedAt, &item.CreatedBy, &item.CreatedAt,
 		&item.LastSavedAt, &item.UpdatedAt, &item.CurrentScoreStatus, &item.CurrentTotalScore, &item.CurrentGrade, &item.CurrentScoreVersion, &item.CurrentQualityRunID,
 		&item.QualityStatus, &item.QualityStatusReason, &item.QualityStatusAt,
+		&item.RecordingDurationSeconds,
 	)
 	if err != nil {
 		return nil, err
