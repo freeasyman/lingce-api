@@ -106,6 +106,31 @@ func main() {
 	}
 	defer pool.Close()
 	middleware.SetAuthValidationPool(pool)
+	// 门户入口的产品 API 同时校验员工级产品权限（员工产品矩阵）。
+	contractToEmployeeProduct := map[string]string{
+		"tingxie": "emr",
+		"suifang": "followup",
+		"huoke":   "content",
+		"yingke":  "deal-expert",
+		"kehu":    "patient-operations",
+		"hegui":   "compliance",
+	}
+	middleware.SetEmployeeProductAccessChecker(func(ctx context.Context, tenantID, employeeID int64, contractCode string) (bool, error) {
+		productCode, ok := contractToEmployeeProduct[contractCode]
+		if !ok {
+			return true, nil
+		}
+		_, items, err := rbac.EffectiveEmployeeProducts(ctx, pool, tenantID, employeeID)
+		if err != nil {
+			return false, err
+		}
+		for _, item := range items {
+			if item.ProductCode == productCode {
+				return item.Enabled, nil
+			}
+		}
+		return false, nil
+	})
 	router.SetOpsMenuCodeResolver(func(ctx context.Context, adminID int64) ([]string, error) {
 		var codes []string
 		err := pool.QueryRow(ctx, `SELECT COALESCE(menu_codes, '{}') FROM operations_admins WHERE id = $1 AND deleted_at IS NULL`, adminID).Scan(&codes)

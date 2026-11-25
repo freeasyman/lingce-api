@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,15 @@ import (
 
 // 新产品各产品 API 的路径前缀 → 产品码。
 // 产品权限（合同维度）只在这里定义一次；各产品不得再自行判断。
+// employeeProductChecker 判断员工级产品权限（员工产品矩阵）。
+// 由 main 在启动时注入，避免 middleware 反向依赖 rbac。
+var employeeProductChecker func(ctx context.Context, tenantID, employeeID int64, contractCode string) (bool, error)
+
+// SetEmployeeProductAccessChecker 注入员工级产品权限校验函数。
+func SetEmployeeProductAccessChecker(fn func(ctx context.Context, tenantID, employeeID int64, contractCode string) (bool, error)) {
+	employeeProductChecker = fn
+}
+
 var productPathPrefixes = []struct{ Prefix, Code string }{
 	{"/api/v1/emr/", "tingxie"},
 	{"/api/v1/followup/", "suifang"},
@@ -63,6 +73,19 @@ func ProductGate(next http.Handler) http.Handler {
 		if !ok {
 			httputil.WriteError(w, http.StatusForbidden, "PRODUCT_NOT_OPENED", "该产品未开通，请联系顾问开通试用或正式", nil)
 			return
+		}
+		// 员工级产品权限：门户入口的 employee token 必须被机构管理员在
+		// 「员工产品」里开通该产品，否则不允许直接访问产品 API。
+		if employeeProductChecker != nil {
+			employeeAllowed, checkerErr := employeeProductChecker(r.Context(), *claims.TenantID, claims.UserID, code)
+			if checkerErr != nil {
+				httputil.WriteInternalError(w, checkerErr.Error())
+				return
+			}
+			if !employeeAllowed {
+				httputil.WriteError(w, http.StatusForbidden, "EMPLOYEE_PRODUCT_NOT_OPENED", "该员工未开通该产品，请联系机构管理员开通", nil)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
