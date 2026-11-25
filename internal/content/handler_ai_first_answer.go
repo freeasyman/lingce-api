@@ -41,6 +41,9 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "GET", Path: "/api/v1/content-ai/visibility/runs/{id}/conflict", Handler: h.CheckGenerateConflict, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "GET", Path: "/api/v1/content-ai/visibility/runs/{id}", Handler: h.GetAIVisibilityRun, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
 		{Method: "POST", Path: "/api/v1/content-ai/actions/visibility/generate", Handler: h.GenerateFromAIVisibility, Auth: true, AllowedUserTypes: []string{"admin", "employee"}},
+		// 公共"免费体检"入口：独立产品，不挂租户、匿名可调（限流后续再加）
+		{Method: "POST", Path: "/api/v1/public/free-checkup", Handler: h.StartPublicFreeCheckup, Auth: false},
+		{Method: "GET", Path: "/api/v1/public/free-checkup/{id}", Handler: h.GetPublicFreeCheckup, Auth: false},
 	}
 	router.Register(mux, routes, deps)
 }
