@@ -355,9 +355,31 @@ func (s *Store) V2UpdateRealtimeSnapshotWithCheckAt(ctx context.Context, deviceI
 	}
 	setClauses = append(setClauses, "last_check_at = NOW()")
 	setClauses = append(setClauses, "updated_at = NOW()")
+
+	// 只在实时值确实变化时写库，避免每次打开列表都刷 updated_at / last_check_at。
+	// 复用 set 子句里的参数位（Postgres 允许重复引用同一 $n）。
+	changed := make([]string, 0, 3)
+	checkIdx := 1
+	if batteryLevel != nil {
+		changed = append(changed, fmt.Sprintf("battery_level IS DISTINCT FROM $%d", checkIdx))
+		checkIdx++
+	}
+	if lastOnlineAt != nil {
+		changed = append(changed, fmt.Sprintf("last_online_at IS DISTINCT FROM $%d", checkIdx))
+		checkIdx++
+	}
+	if hardwareModel != nil && strings.TrimSpace(*hardwareModel) != "" {
+		changed = append(changed, fmt.Sprintf("hardware_model IS DISTINCT FROM $%d", checkIdx))
+	}
+	if len(changed) == 0 {
+		return nil
+	}
 	args = append(args, deviceID)
 
-	query := fmt.Sprintf("UPDATE badge_devices SET %s WHERE id = $%d AND deleted_at IS NULL", strings.Join(setClauses, ", "), argIndex)
+	query := fmt.Sprintf(
+		"UPDATE badge_devices SET %s WHERE id = $%d AND deleted_at IS NULL AND (%s)",
+		strings.Join(setClauses, ", "), argIndex, strings.Join(changed, " OR "),
+	)
 	_, err := s.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update realtime snapshot with check time: %w", err)

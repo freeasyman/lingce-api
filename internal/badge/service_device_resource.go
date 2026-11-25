@@ -106,7 +106,7 @@ func (s *Service) V2GetLiveStatus(ctx context.Context, deviceID int64) (JSONObje
 	if info.HardwareModel != "" {
 		hardwareModelPtr = &info.HardwareModel
 	}
-	_ = s.store.V2UpdateRealtimeSnapshot(ctx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr)
+	_ = s.store.V2UpdateRealtimeSnapshotWithCheckAt(ctx, device.ID, info.BatteryLevel, info.LastOnlineAt, hardwareModelPtr)
 
 	resp["online"] = info.Online
 	resp["battery"] = info.BatteryLevel
