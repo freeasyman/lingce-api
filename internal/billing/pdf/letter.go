@@ -72,6 +72,8 @@ type Letter struct {
 
 	// SealLines 是电子章内的文字行，默认 ["灵策", "电子章"]。
 	SealLines []string `json:"sealLines"`
+	// SealOverCompany 为 true 时，电子章盖在公司名中间偏左，而不是名字右侧。
+	SealOverCompany bool `json:"sealOverCompany,omitempty"`
 }
 
 // InfoRow 是信息盒里的一行「标签 + 值」。

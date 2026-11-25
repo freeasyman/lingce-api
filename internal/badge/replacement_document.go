@@ -44,6 +44,15 @@ func (h *Handler) ReplacementDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tenantID := int64(0)
+	if ticket.TenantID != nil {
+		tenantID = *ticket.TenantID
+	}
+	advisor := billingpdf.Advisor{Name: "灵策服务团队", IsBrand: true}
+	if name, phone, err := h.service.store.SalesAdvisor(r.Context(), tenantID); err == nil && name != "" {
+		advisor = billingpdf.Advisor{Name: name, Phone: phone}
+	}
+
 	tenantName := derefString(ticket.TenantName)
 	if tenantName == "" {
 		tenantName = "贵机构"
@@ -91,10 +100,11 @@ func (h *Handler) ReplacementDocument(w http.ResponseWriter, r *http.Request) {
 			"旧机寄出前请确认设备已关机，避免运输过程中录入无关声音。",
 			"如物流出现异常或超过 7 天未收到，请联系您的专属顾问。",
 		},
-		Advisor:    billingpdf.Advisor{Name: "灵策服务团队", IsBrand: true},
-		Company:    replacementDocumentCompany,
-		SignDate:   shippedAt.Format("2006 年 01 月 02 日"),
-		FooterLeft: "本通知单由灵策运营系统自动生成",
+		Advisor:         advisor,
+		SealOverCompany: true,
+		Company:         replacementDocumentCompany,
+		SignDate:        shippedAt.Format("2006 年 01 月 02 日"),
+		FooterLeft:      "本通知单由灵策运营系统自动生成",
 	}
 	data, err := billingpdf.Render(letter)
 	if err != nil {

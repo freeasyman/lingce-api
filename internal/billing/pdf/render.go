@@ -403,8 +403,15 @@ func (c *canvas) bottomBlock(letter Letter) {
 	dateWidth := c.textWidth(letter.SignDate, false, 9.5)
 	c.text(contentRight-dateWidth, dateBaseline, letter.SignDate, false, 9.5, colorMuted)
 
-	// 电子章：红色圆形、半透明，盖在公司名落款的后部（只压住名字尾部）。
-	c.seal(contentRight+c.scale(2.5), companyBaseline-c.scale(5.8), c.scale(10), letter.sealLines())
+	// 电子章：红色圆形、半透明。默认压在名字右侧；SealOverCompany 时盖在名字中间偏左。
+	sealCenterX := contentRight + c.scale(2.5)
+	sealCenterY := companyBaseline - c.scale(5.8)
+	if letter.SealOverCompany {
+		// 盖在公司名中间偏左，并整体上移，避免压住下面的落款日期。
+		sealCenterX = contentRight - companyWidth*0.68
+		sealCenterY = companyBaseline - c.scale(7.4)
+	}
+	c.seal(sealCenterX, sealCenterY, c.scale(10), letter.sealLines())
 
 	c.y = blockTop + blockHeight
 }
