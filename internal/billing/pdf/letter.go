@@ -74,6 +74,8 @@ type Letter struct {
 	SealLines []string `json:"sealLines"`
 	// SealOverCompany 为 true 时，电子章盖在公司名中间偏左，而不是名字右侧。
 	SealOverCompany bool `json:"sealOverCompany,omitempty"`
+	// RealSeal 为 true 时使用实拍公章图片，而不是矢量绘制的电子章。
+	RealSeal bool `json:"realSeal,omitempty"`
 }
 
 // InfoRow 是信息盒里的一行「标签 + 值」。

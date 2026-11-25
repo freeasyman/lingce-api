@@ -102,6 +102,7 @@ func (h *Handler) ReplacementDocument(w http.ResponseWriter, r *http.Request) {
 		},
 		Advisor:         advisor,
 		SealOverCompany: true,
+		RealSeal:        true,
 		Company:         replacementDocumentCompany,
 		SignDate:        shippedAt.Format("2006 年 01 月 02 日"),
 		FooterLeft:      "本通知单由灵策运营系统自动生成",
