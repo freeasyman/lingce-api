@@ -21,6 +21,10 @@ func (c *canvas) sealImage(centerX, centerY, diameter float64) {
 	if c.f.GetImageInfo(sealImageName) == nil {
 		c.f.RegisterImageOptionsReader(sealImageName, gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(sealPNG))
 	}
+	// 轻微旋转，模拟手工盖章的角度。
+	c.f.TransformBegin()
+	c.f.TransformRotate(-8, centerX, centerY)
 	c.f.ImageOptions(sealImageName, centerX-diameter/2, centerY-diameter/2, diameter, diameter, false,
 		gofpdf.ImageOptions{ImageType: "PNG", AllowNegativePosition: true}, 0, "")
+	c.f.TransformEnd()
 }
