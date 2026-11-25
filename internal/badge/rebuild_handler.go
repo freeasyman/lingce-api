@@ -45,6 +45,23 @@ func (h *Handler) RebuildGetBadgeLiveStatus(w http.ResponseWriter, r *http.Reque
 		httputil.WriteBadRequest(w, "Invalid badge ID")
 		return
 	}
+	// 机构员工只能读本机构设备，避免用 id 越权查别家工牌。
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		httputil.WriteUnauthorized(w, "Invalid token")
+		return
+	}
+	if claims.UserType != auth.UserTypeAdmin {
+		device, _, lookupErr := h.service.store.V2GetDeviceByID(r.Context(), id)
+		if lookupErr != nil {
+			httputil.WriteNotFound(w, "工牌不存在")
+			return
+		}
+		if claims.TenantID == nil || device.TenantID == nil || *claims.TenantID != *device.TenantID {
+			httputil.WriteForbidden(w, "无权查看该工牌")
+			return
+		}
+	}
 	resp, err := h.service.V2GetLiveStatus(r.Context(), id)
 	if err != nil {
 		httputil.WriteBadRequest(w, err.Error())
