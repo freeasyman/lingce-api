@@ -404,19 +404,18 @@ func (c *canvas) bottomBlock(letter Letter) {
 	if letter.SealOverCompany {
 		// 盖在公司名中间偏左，并整体上移，避免压住下面的落款日期。
 		sealCenterX = contentRight - companyWidth*0.55
-		sealCenterY = companyBaseline - c.scale(9.8)
+		// 与公司名垂直居中（基线之上约半行高）。
+		sealCenterY = companyBaseline - c.scale(2.4)
 	}
-	// 实拍公章先画、文字后压，保证公司名仍然清楚。
-	if letter.RealSeal {
-		c.sealImage(sealCenterX, sealCenterY, c.scale(28))
+	if letter.RealSeal && !c.dry {
+		c.sealImage(sealCenterX, sealCenterY, c.scale(40))
 	}
-
 	c.text(contentRight-companyWidth, companyBaseline, letter.Company, true, 11, colorTitle)
 	dateBaseline := companyBaseline + c.scale(4.9)
 	dateWidth := c.textWidth(letter.SignDate, false, 9.5)
 	c.text(contentRight-dateWidth, dateBaseline, letter.SignDate, false, 9.5, colorMuted)
 
-	// 矢量电子章仍盖在文字上层（半透明），只有实拍章改为先画。
+	// 实拍公章按真实尺寸（40mm）盖在文字上层，轻微透明，像真盖章一样透出文字。
 	if !letter.RealSeal {
 		c.seal(sealCenterX, sealCenterY, c.scale(10), letter.sealLines())
 	}
