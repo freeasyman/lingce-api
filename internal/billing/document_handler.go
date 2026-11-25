@@ -14,6 +14,28 @@ import (
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
+// RegenerateInstitutionDocuments 用当前模板与数据重排该机构已生成的通知函。
+func (h *Handler) RegenerateInstitutionDocuments(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireInstitutionID(w, r)
+	if !ok {
+		return
+	}
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	if h.documents == nil {
+		httputil.WriteInternalError(w, "文档能力未装配")
+		return
+	}
+	count, err := h.documents.RegenerateForTenant(r.Context(), tenantID, adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"regenerated": count})
+}
+
 // GenerateInstitutionDocument 生成一份通知函（PDF 落库）并返回元数据。
 func (h *Handler) GenerateInstitutionDocument(w http.ResponseWriter, r *http.Request) {
 	tenantID, ok := requireInstitutionID(w, r)

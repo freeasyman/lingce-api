@@ -286,6 +286,9 @@ func buildDocumentLetter(input documentLetterInput) (billingpdf.Letter, error) {
 		SignDate:       formatDocumentDate(dateText),
 		FooterLeft:     company,
 		FooterRight:    documentFooterNote,
+		// 统一使用实拍公章：盖在公司名中间偏左、带轻微旋转。
+		RealSeal:        true,
+		SealOverCompany: true,
 	}, nil
 }
 

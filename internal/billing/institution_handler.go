@@ -71,6 +71,7 @@ func (h *Handler) institutionRoutes() []router.Route {
 		ops("GET", institution+"/{id}/documents", h.ListInstitutionDocuments),
 		ops("GET", base+"/documents/{docId}/file", h.DownloadBillingDocument),
 		ops("GET", base+"/documents/{docId}/preview", h.PreviewBillingDocument),
+		ops("POST", institution+"/{id}/documents/regenerate", h.RegenerateInstitutionDocuments),
 		// 服务期
 		ops("GET", institution+"/{id}/periods", h.ListInstitutionPeriods),
 		ops("POST", institution+"/{id}/periods", h.CreateInstitutionPeriod),
