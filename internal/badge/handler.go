@@ -54,6 +54,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/restock", Handler: h.RebuildRestockBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v2/badge-devices/{id}/actions/retire", Handler: h.RebuildRetireBadgeDevice, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v2/badge-devices/actions/refresh-status", Handler: h.RebuildRefreshAllBadgeStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
+		{Method: "GET", Path: "/api/v2/badge-devices/{id}/live-status", Handler: h.RebuildGetBadgeLiveStatus, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/badge-devices", Handler: h.V2ListDevices, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "GET", Path: "/api/v1/badge-devices/{id}", Handler: h.V2GetDevice, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},
 		{Method: "POST", Path: "/api/v1/badge-devices/{device_id}/actions/recording-test", Handler: h.TestDeviceRecording, Auth: true, AllowedUserTypes: []string{"admin", "employee", "mobile"}},

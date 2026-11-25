@@ -38,6 +38,21 @@ func (h *Handler) RebuildRefreshAllBadgeStatus(w http.ResponseWriter, r *http.Re
 	httputil.WriteSuccess(w, resp)
 }
 
+// RebuildGetBadgeLiveStatus 按需读取供应商实时状态（电量/在线），并回写快照。
+func (h *Handler) RebuildGetBadgeLiveStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "Invalid badge ID")
+		return
+	}
+	resp, err := h.service.V2GetLiveStatus(r.Context(), id)
+	if err != nil {
+		httputil.WriteBadRequest(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, resp)
+}
+
 func (h *Handler) RebuildListBadgeDevices(w http.ResponseWriter, r *http.Request) {
 	req := h.parseRebuildListRequest(r)
 	items, total, err := h.service.RebuildListBadgeDevices(r.Context(), req)
