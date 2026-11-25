@@ -142,6 +142,30 @@ func (h *Handler) resolveDealScope(r *http.Request) (*dealScope, *tenantError) {
 		return nil, &tenantError{status: http.StatusForbidden, message: "no tenant access"}
 	}
 	tenantID := *claims.TenantID
+	// 员工产品权限（deal_expert_permission_assignments）是赢客专家的开通依据。
+	// 运营/市场等非机构「咨询师」角色只要产品权限已开通，也应能进入赢客专家。
+	assignment, assignErr := h.access.Get(r.Context(), tenantID, claims.UserID)
+	if assignErr != nil {
+		return nil, &tenantError{status: http.StatusInternalServerError, message: "解析赢客专家权限失败"}
+	}
+	if assignment != nil {
+		if !assignment.Enabled {
+			return nil, &tenantError{status: http.StatusForbidden, message: "赢客专家未开通，请联系机构管理员开通"}
+		}
+		visibility := dealexpertpermission.ResolveVisibility(
+			assignment.DataScope,
+			assignment.VisibleEmployeeIDs,
+			claims.UserID,
+			assignment.RoleCode == dealexpertpermission.RoleAdmin,
+		)
+		return &dealScope{
+			TenantID:    tenantID,
+			EmployeeIDs: visibility.VisibilityEmployeeIDs(),
+			DataScope:   visibility.Scope,
+			Manager:     visibility.All,
+			RoleCode:    assignment.RoleCode,
+		}, nil
+	}
 	roles := h.employeeRoles(r.Context(), claims.UserID)
 	roleCode := ""
 	if len(roles) > 0 {
