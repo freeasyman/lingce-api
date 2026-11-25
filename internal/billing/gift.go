@@ -193,7 +193,7 @@ func parseGiftIncrements(catalog CatalogItem) (map[string]Decimal, error) {
 	return increments, nil
 }
 
-// giftUnitDisplayOrder 决定赠送预览 items 的展示顺序：按运营口头习惯的"份/轮/小时/张/题次/人次"排列，
+// giftUnitDisplayOrder 决定赠送预览 items 的展示顺序：按运营口头习惯的"份/轮/小时/张/次AI问答/人次"排列，
 // 与设计文档 2.3 的例子（record、round、hour）一致；未列出的单位按 Units 声明顺序补在后面。
 var giftUnitDisplayOrder = []string{"record", "round", "hour", "shot", "prompt", "person"}
 

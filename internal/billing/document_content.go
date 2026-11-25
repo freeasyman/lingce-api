@@ -4,7 +4,7 @@ package billing
 //
 // 文案与 06-原型/运营端计费Demo.html 的 openLetter() 保持一致，额度单位按产品说人话：
 // 小时接诊录音 / 小时沟通录音 / 小时接待录音 / 份病历 / 轮质控 /
-// 张截图 / 次对话 / 人次 / 道题 / 份脚本 / 张图文。
+// 张截图 / 次对话 / 人次 / 次AI问答 / 份脚本 / 张图文。
 //
 // 小时类单位必须写清「这些小时是什么录音」：客户看不懂「小时随访生成」，
 // 但看得懂「400 小时接诊录音」。单位仍是 hour，只改展示文案。
@@ -42,12 +42,12 @@ var documentUnitLabels = map[string]map[string]string{
 	"suifang": {"hour": "小时接诊录音"},
 	"tingxie": {"record": "份病历", "round": "轮质控", "hour": "小时接诊录音"},
 	"hegui":   {"hour": "小时沟通录音"},
-	"huoke":   {"hour": "小时沟通录音", "prompt": "道题", "record": "份脚本", "shot": "张图文"},
+	"huoke":   {"hour": "小时沟通录音", "prompt": "次AI问答", "record": "份脚本", "shot": "张图文"},
 }
 
 // documentUnitFallback 是产品不在上表时的兜底单位文案。
 var documentUnitFallback = map[string]string{
-	"hour": "小时", "record": "条", "round": "轮", "shot": "张", "prompt": "题", "person": "人",
+	"hour": "小时", "record": "条", "round": "轮", "shot": "张", "prompt": "次AI问答", "person": "人",
 }
 
 // documentProductFallbackNames 是 product_catalog 查不到时的产品名兜底。

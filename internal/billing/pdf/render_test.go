@@ -73,7 +73,7 @@ func formalLetter() Letter {
 			{Name: "随访顾问", Quota: "400 小时接诊录音"},
 			{Name: "听写病历", Quota: "2,500 份病历　/　5,000 轮质控　/　400 小时接诊录音"},
 			{Name: "合规卫士", Quota: "400 小时沟通录音"},
-			{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 道题　/　600 份脚本　/　1,200 张图文"},
+			{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 次AI问答　/　600 份脚本　/　1,200 张图文"},
 		},
 		StartSection: "开始使用",
 		StartItems: []string{
@@ -144,7 +144,7 @@ func TestRenderShrinksInsteadOfOverflowing(t *testing.T) {
 	letter.Salutation = "尊敬的　" + "超长机构名称测试" + "　欧阳娜娜（院长）："
 	letter.Products = append(letter.Products,
 		ProductRow{Name: "客户总监", Quota: "400 小时接诊录音　/　5,000 张截图　/　10,000 次对话　/　10,000 人次"},
-		ProductRow{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 道题　/　600 份脚本　/　1,200 张图文"},
+		ProductRow{Name: "获客先锋", Quota: "400 小时沟通录音　/　240 次AI问答　/　600 份脚本　/　1,200 张图文"},
 	)
 	letter.TipItems = append(letter.TipItems,
 		"服务到期前我们会提前提醒您续期，服务期内产生的数据均可随时查看。",

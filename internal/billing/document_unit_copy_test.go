@@ -17,7 +17,7 @@ func TestDocumentUnitLabelsSpeakRecordingType(t *testing.T) {
 		"suifang": {"hour": "小时接诊录音"},
 		"tingxie": {"record": "份病历", "round": "轮质控", "hour": "小时接诊录音"},
 		"hegui":   {"hour": "小时沟通录音"},
-		"huoke":   {"hour": "小时沟通录音", "prompt": "道题", "record": "份脚本", "shot": "张图文"},
+		"huoke":   {"hour": "小时沟通录音", "prompt": "次AI问答", "record": "份脚本", "shot": "张图文"},
 	}
 	for code, units := range want {
 		for unit, label := range units {
