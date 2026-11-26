@@ -227,6 +227,37 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
+// ConvertFreeCheckupLeadForOperation 运营控制台：创建机构成功后回写线索（tenant_id + converted）。
+func (h *Handler) ConvertFreeCheckupLeadForOperation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid lead id")
+		return
+	}
+	var req struct {
+		TenantID int64 `json:"tenant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID <= 0 {
+		httputil.WriteBadRequest(w, "tenant_id is required")
+		return
+	}
+	ok, err := h.service.store.ConvertFreeCheckupLead(r.Context(), id, req.TenantID)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	if !ok {
+		httputil.WriteError(w, http.StatusConflict, "ALREADY_CONVERTED", "该线索已关联机构，不能重复回写", nil)
+		return
+	}
+	lead, err := h.service.store.GetFreeCheckupLead(r.Context(), id)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"lead": lead, "tenant_id": req.TenantID})
+}
+
 // GetFreeCheckupLeadForOperation 运营控制台：线索详情（含 run 的引擎与缺口）。
 func (h *Handler) GetFreeCheckupLeadForOperation(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

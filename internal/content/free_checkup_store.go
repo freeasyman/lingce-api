@@ -24,6 +24,8 @@ type FreeCheckupLead struct {
 	DeviceID   string    `json:"device_id"`
 	IP         string    `json:"ip"`
 	IPCity     string    `json:"ip_city"`
+	TenantID   int64     `json:"tenant_id"`
+	ConvertedAt *time.Time `json:"converted_at"`
 	UserAgent  string    `json:"user_agent"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -34,7 +36,7 @@ type FreeCheckupLead struct {
 }
 
 const freeCheckupLeadSelect = `
-	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at, l.ip, l.ip_city, l.contact_name, l.contact_title,
+	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at, l.ip, l.ip_city, l.tenant_id, l.converted_at, l.contact_name, l.contact_title,
 	       COALESCE(r.status,''), COALESCE(r.progress,0), COALESCE(r.total,0)
 	FROM free_checkup_leads l
 	LEFT JOIN content_ai_visibility_runs r ON r.id = l.run_id AND r.tenant_id = $1`
@@ -96,7 +98,7 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status, q string, limi
 	var rows []FreeCheckupLead
 	for rs.Next() {
 		var l FreeCheckupLead
-		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total); err != nil {
+		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total); err != nil {
 			return nil, 0, err
 		}
 		rows = append(rows, l)
@@ -107,11 +109,24 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status, q string, limi
 func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupLead, error) {
 	var l FreeCheckupLead
 	err := s.pool.QueryRow(ctx, freeCheckupLeadSelect+` WHERE l.id = $2`, PublicCheckupTenantID, id).
-		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total)
+		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total)
 	if err != nil {
 		return nil, err
 	}
 	return &l, nil
+}
+
+// ConvertFreeCheckupLead 创建机构成功后回写：记 tenant_id、置 converted、记转化时间。
+// 已转化过的线索不会重复写（tenant_id 已非 0 时返回 false）。
+func (s *Store) ConvertFreeCheckupLead(ctx context.Context, leadID, tenantID int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE free_checkup_leads
+		SET tenant_id=$2, status='converted', converted_at=now(), updated_at=now()
+		WHERE id=$1 AND tenant_id=0`, leadID, tenantID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, status, note string) (bool, error) {
@@ -185,6 +200,8 @@ type FreeCheckupUsage struct {
 	HasLead      bool   `json:"has_lead"`
 	Phone        string `json:"phone"`
 	IPCity       string `json:"ip_city"`
+	TenantID     int64  `json:"tenant_id"`
+	ConvertedAt  *time.Time `json:"converted_at"`
 	ContactName  string `json:"contact_name"`
 	ContactTitle string `json:"contact_title"`
 }
