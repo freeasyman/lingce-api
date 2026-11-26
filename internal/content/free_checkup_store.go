@@ -162,6 +162,42 @@ func (s *Store) FreeCheckupFunnel(ctx context.Context) (today, last7d, total Fre
 	return today, last7d, total, nil
 }
 
+// FreeCheckupFunnelRow 按投放码拆分的漏斗（渠道/销售维度由前端聚合）。
+type FreeCheckupFunnelRow struct {
+	CampaignID  int64  `json:"campaign_id"`
+	Name        string `json:"name"`
+	ChannelName string `json:"channel_name"`
+	SalesName   string `json:"sales_name"`
+	Scans       int    `json:"scans"`
+	Checks      int    `json:"checks"`
+	Leads       int    `json:"leads"`
+	Converted   int    `json:"converted"`
+}
+
+// FreeCheckupFunnelRows 某个时间窗内，各投放码的漏斗数据。
+func (s *Store) FreeCheckupFunnelRows(ctx context.Context, since string) ([]FreeCheckupFunnelRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, c.name, c.channel_name, c.sales_name,
+			(SELECT count(*) FROM free_checkup_scans sc WHERE sc.campaign_id=c.id AND sc.created_at >= `+since+`),
+			(SELECT count(*) FROM free_checkup_usage u WHERE u.campaign_id=c.id AND u.created_at >= `+since+`),
+			(SELECT count(*) FROM free_checkup_leads l WHERE l.campaign_id=c.id AND l.created_at >= `+since+`),
+			(SELECT count(*) FROM free_checkup_leads l WHERE l.campaign_id=c.id AND l.status='converted' AND l.created_at >= `+since+`)
+		FROM free_checkup_campaigns c ORDER BY c.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FreeCheckupFunnelRow
+	for rows.Next() {
+		var r FreeCheckupFunnelRow
+		if err := rows.Scan(&r.CampaignID, &r.Name, &r.ChannelName, &r.SalesName, &r.Scans, &r.Checks, &r.Leads, &r.Converted); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetFreeCheckupLeadByTenantID 机构档案"来源"：按 tenant_id 反查转化线索（最近一条）。
 func (s *Store) GetFreeCheckupLeadByTenantID(ctx context.Context, tenantID int64) (*FreeCheckupLead, error) {
 	row := s.pool.QueryRow(ctx, freeCheckupLeadSelect+" WHERE l.tenant_id=$2 ORDER BY l.converted_at DESC NULLS LAST LIMIT 1", PublicCheckupTenantID, tenantID)

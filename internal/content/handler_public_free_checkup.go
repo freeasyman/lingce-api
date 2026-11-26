@@ -245,14 +245,29 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
-// FreeCheckupFunnelForOperation 工作台：销售链路漏斗（今日/近7天/累计）。
+// FreeCheckupFunnelForOperation 工作台：销售链路漏斗（今日/近7天/累计 + 按投放码拆分）。
 func (h *Handler) FreeCheckupFunnelForOperation(w http.ResponseWriter, r *http.Request) {
 	today, last7, total, err := h.service.store.FreeCheckupFunnel(r.Context())
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
-	httputil.WriteSuccess(w, map[string]any{"today": today, "last7d": last7, "total": total})
+	todayStart := "date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'"
+	last7Cond := "now() - interval '7 days'"
+	todayRows, err := h.service.store.FreeCheckupFunnelRows(r.Context(), todayStart)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	last7Rows, err := h.service.store.FreeCheckupFunnelRows(r.Context(), last7Cond)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{
+		"today": today, "last7d": last7, "total": total,
+		"today_rows": todayRows, "last7d_rows": last7Rows,
+	})
 }
 
 // GetFreeCheckupLeadByTenantForOperation 机构档案：按 tenant_id 查来源线索。
