@@ -87,9 +87,12 @@ func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupL
 	return &l, nil
 }
 
-func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, status, note string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE free_checkup_leads SET status=$1, note=$2, updated_at=NOW() WHERE id=$3`, status, note, id)
-	return err
+func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, status, note string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE free_checkup_leads SET status=$1, note=$2, updated_at=NOW() WHERE id=$3`, status, note, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (s *Store) FreeCheckupLeadStats(ctx context.Context) (map[string]int, error) {

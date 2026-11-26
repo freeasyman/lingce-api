@@ -70,8 +70,9 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Phone string `json:"phone"`
-		Scene string `json:"scene"`
+		Phone      string `json:"phone"`
+		Scene      string `json:"scene"`
+		DoctorName string `json:"doctor_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -94,6 +95,7 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		Question:   run.Question,
 		Phone:      phone,
 		Scene:      strings.TrimSpace(req.Scene),
+		DoctorName: strings.TrimSpace(req.DoctorName),
 		Status:     "new",
 	})
 	if err != nil {
@@ -163,8 +165,13 @@ func (h *Handler) UpdateFreeCheckupLeadStatusForOperation(w http.ResponseWriter,
 		httputil.WriteBadRequest(w, "status 只能是 new/contacted/converted/invalid")
 		return
 	}
-	if err := h.service.store.UpdateFreeCheckupLeadStatus(r.Context(), id, status, req.Note); err != nil {
+	updated, err := h.service.store.UpdateFreeCheckupLeadStatus(r.Context(), id, status, req.Note)
+	if err != nil {
 		writeContentError(w, err)
+		return
+	}
+	if !updated {
+		httputil.WriteNotFound(w, "线索不存在")
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"ok": true})
