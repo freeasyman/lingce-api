@@ -120,6 +120,7 @@ func (s *Service) aiVisibilityDoctorNames(ctx context.Context, tenantID int64) s
 // aiEngineAnswer 一个引擎的回答 + 分析。
 type aiEngineAnswer struct {
 	Engine        string         `json:"engine"`
+	Stage         string         `json:"stage,omitempty"` // searching / judging / done
 	Provider      string         `json:"provider"`
 	ModelCode     string         `json:"model_code"`
 	Answer        string         `json:"answer"`
@@ -422,23 +423,48 @@ func (s *Service) loadAIVisibilityRun(ctx context.Context, tenantID, runID int64
 		wg.Add(1)
 		go func(idx int, sel llmModelSelection) {
 			defer wg.Done()
-			item := aiEngineAnswer{Engine: engineLabel(sel.Provider, sel.ModelCode), Provider: sel.Provider, ModelCode: sel.ModelCode}
+			item := aiEngineAnswer{Engine: engineLabel(sel.Provider, sel.ModelCode), Provider: sel.Provider, ModelCode: sel.ModelCode, Stage: "searching"}
+			mu.Lock()
+			results[idx] = item
+			pre := make([]any, 0, len(engines))
+			for _, r := range results {
+				if r.Engine != "" {
+					pre = append(pre, r)
+				}
+			}
+			mu.Unlock()
+			_ = s.store.updateAIVisibilityRunEngines(ctx, tenantID, runID, pre)
+
 			answer, sources, queries, searchCount, err := s.aiEngineAnswer(ctx, tenantID, sel, q)
 			if err != nil {
 				// 技术细节只进日志，返回给客户的是能看懂的话
 				item.Error = "这次没能拿到该 AI 的回答（可能超时），稍后可单独重试"
+				item.Stage = "done"
 				slog.Warn("ai visibility: engine answer failed", "engine", item.Engine, "error", err)
 			} else {
 				item.Answer = answer
 				item.Sources = sources
 				item.SearchQueries = queries
 				item.SearchCount = searchCount
+				item.Stage = "judging"
+				mu.Lock()
+				results[idx] = item
+				mid := make([]any, 0, len(engines))
+				for _, r := range results {
+					if r.Engine != "" {
+						mid = append(mid, r)
+					}
+				}
+				mu.Unlock()
+				_ = s.store.updateAIVisibilityRunEngines(ctx, tenantID, runID, mid)
+
 				analysis, aerr := s.aiEngineAnalyze(ctx, tenantID, sel, q, answer, orgName, doctorNames)
 				if aerr != nil {
 					item.Error = "该 AI 的回答已拿到，但解析失败，稍后可重试"
 					slog.Warn("ai visibility: engine analyze failed", "engine", item.Engine, "error", aerr)
 				} else {
 					item.Analysis = analysis
+					item.Stage = "done"
 				}
 			}
 
