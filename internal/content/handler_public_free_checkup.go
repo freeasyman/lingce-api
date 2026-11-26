@@ -51,6 +51,17 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 24 小时内同机构+同问题：直接复用上次结果（不调用模型、不扣次数）
+	if cachedID, hit, cerr := h.service.store.FindFreeCheckupCachedRun(r.Context(),
+		strings.TrimSpace(req.OrgName), strings.TrimSpace(req.Region), strings.TrimSpace(req.Question)); cerr == nil && hit {
+		_ = h.service.store.InsertFreeCheckupUsage(r.Context(), cachedID, sid,
+			strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
+			r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
+			strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), true)
+		httputil.WriteSuccess(w, map[string]any{"run_id": cachedID, "started": false, "cached": true})
+		return
+	}
+
 	runID, err := h.service.StartAIVisibilityPublic(r.Context(), req.OrgName, req.DoctorName, req.Question, req.Region)
 	if err != nil {
 		writeContentError(w, err)
@@ -60,7 +71,7 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID, sid,
 		strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
 		r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
-		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question))
+		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), false)
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
 }
 

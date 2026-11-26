@@ -123,12 +123,30 @@ func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, statu
 }
 
 // InsertFreeCheckupUsage 记录一次体检使用（无手机号也记，用于成本与使用量统计）。
-func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question string) error {
+func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question string, cached bool) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO free_checkup_usage (run_id, sid, device_id, ip, ip_city, user_agent, scene, org_name, region, question)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		runID, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question)
+		INSERT INTO free_checkup_usage (run_id, sid, device_id, ip, ip_city, user_agent, scene, org_name, region, question, cached)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		runID, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question, cached)
 	return err
+}
+
+// FindFreeCheckupCachedRun 24 小时内、同机构+同问题+同地区的已完成任务，直接复用。
+func (s *Store) FindFreeCheckupCachedRun(ctx context.Context, orgName, region, question string) (int64, bool, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM content_ai_visibility_runs
+		WHERE tenant_id=$1 AND status='done'
+		  AND org_name=$2 AND region=$3 AND question=$4
+		  AND created_at > now() - interval '24 hours'
+		ORDER BY id DESC LIMIT 1`, PublicCheckupTenantID, orgName, region, question).Scan(&id)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return id, true, nil
 }
 
 // FreeCheckupQuotaUsage 今日已用次数：按 sid / 设备号 / IP 三种口径（Asia/Shanghai 自然日）。
