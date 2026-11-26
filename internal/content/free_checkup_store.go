@@ -14,6 +14,8 @@ type FreeCheckupLead struct {
 	Question   string    `json:"question"`
 	DoctorName string    `json:"doctor_name"`
 	Phone      string    `json:"phone"`
+	ContactName  string  `json:"contact_name"`
+	ContactTitle string  `json:"contact_title"`
 	Scene      string    `json:"scene"`
 	Status     string    `json:"status"`
 	Note       string    `json:"note"`
@@ -29,7 +31,7 @@ type FreeCheckupLead struct {
 }
 
 const freeCheckupLeadSelect = `
-	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at,
+	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at, l.contact_name, l.contact_title,
 	       COALESCE(r.status,''), COALESCE(r.progress,0), COALESCE(r.total,0)
 	FROM free_checkup_leads l
 	LEFT JOIN content_ai_visibility_runs r ON r.id = l.run_id AND r.tenant_id = $1`
@@ -37,9 +39,9 @@ const freeCheckupLeadSelect = `
 func (s *Store) InsertFreeCheckupLead(ctx context.Context, l *FreeCheckupLead) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note, device_id, ip, user_agent)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note, l.DeviceID, l.IP, l.UserAgent).Scan(&id)
+		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note, device_id, ip, user_agent, contact_name, contact_title)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note, l.DeviceID, l.IP, l.UserAgent, l.ContactName, l.ContactTitle).Scan(&id)
 	return id, err
 }
 
@@ -72,7 +74,7 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status string, limit, 
 	var rows []FreeCheckupLead
 	for rs.Next() {
 		var l FreeCheckupLead
-		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.RunStatus, &l.Progress, &l.Total); err != nil {
+		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total); err != nil {
 			return nil, 0, err
 		}
 		rows = append(rows, l)
@@ -83,7 +85,7 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status string, limit, 
 func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupLead, error) {
 	var l FreeCheckupLead
 	err := s.pool.QueryRow(ctx, freeCheckupLeadSelect+` WHERE l.id = $2`, PublicCheckupTenantID, id).
-		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.RunStatus, &l.Progress, &l.Total)
+		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +121,10 @@ type FreeCheckupUsage struct {
 	Question  string    `json:"question"`
 	CreatedAt time.Time `json:"created_at"`
 	RunStatus string    `json:"run_status"`
-	HasLead   bool      `json:"has_lead"`
-	Phone     string    `json:"phone"`
+	HasLead      bool   `json:"has_lead"`
+	Phone        string `json:"phone"`
+	ContactName  string `json:"contact_name"`
+	ContactTitle string `json:"contact_title"`
 }
 
 // ListFreeCheckupUsage 运营控制台：体检使用记录（含未留手机号）。
@@ -139,7 +143,7 @@ func (s *Store) ListFreeCheckupUsage(ctx context.Context, leadFilter string, lim
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.run_id, u.device_id, u.ip, u.user_agent, u.scene, u.org_name, u.region, u.question, u.created_at,
-		       COALESCE(r.status,''), (l.id IS NOT NULL), COALESCE(l.phone,'')
+		       COALESCE(r.status,''), (l.id IS NOT NULL), COALESCE(l.phone,''), COALESCE(l.contact_name,''), COALESCE(l.contact_title,'')
 		FROM free_checkup_usage u
 		LEFT JOIN content_ai_visibility_runs r ON r.id = u.run_id AND r.tenant_id = $3
 		LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id`+where+`
@@ -151,7 +155,7 @@ func (s *Store) ListFreeCheckupUsage(ctx context.Context, leadFilter string, lim
 	var out []FreeCheckupUsage
 	for rows.Next() {
 		var u FreeCheckupUsage
-		if err := rows.Scan(&u.ID, &u.RunID, &u.DeviceID, &u.IP, &u.UserAgent, &u.Scene, &u.OrgName, &u.Region, &u.Question, &u.CreatedAt, &u.RunStatus, &u.HasLead, &u.Phone); err != nil {
+		if err := rows.Scan(&u.ID, &u.RunID, &u.DeviceID, &u.IP, &u.UserAgent, &u.Scene, &u.OrgName, &u.Region, &u.Question, &u.CreatedAt, &u.RunStatus, &u.HasLead, &u.Phone, &u.ContactName, &u.ContactTitle); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, u)

@@ -77,9 +77,11 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Phone      string `json:"phone"`
-		Scene      string `json:"scene"`
-		DoctorName string `json:"doctor_name"`
+		Phone        string `json:"phone"`
+		Scene        string `json:"scene"`
+		DoctorName   string `json:"doctor_name"`
+		ContactName  string `json:"contact_name"`
+		ContactTitle string `json:"contact_title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -103,6 +105,8 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		Phone:      phone,
 		Scene:      strings.TrimSpace(req.Scene),
 		DoctorName: strings.TrimSpace(req.DoctorName),
+		ContactName:  strings.TrimSpace(req.ContactName),
+		ContactTitle: strings.TrimSpace(req.ContactTitle),
 		DeviceID:   strings.TrimSpace(r.Header.Get("X-Device-Id")),
 		IP:         requestIP(r),
 		UserAgent:  r.UserAgent(),
