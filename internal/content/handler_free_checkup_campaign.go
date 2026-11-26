@@ -140,13 +140,8 @@ func (h *Handler) UpdateFreeCheckupCampaignForOperation(w http.ResponseWriter, r
 		return
 	}
 	var req struct {
-		Name        string `json:"name"`
-		Remark      string `json:"remark"`
-		Scene       string `json:"scene"`
-		ChannelID   int64  `json:"channel_id"`
-		ChannelName string `json:"channel_name"`
-		SalesID     int64  `json:"sales_id"`
-		SalesName   string `json:"sales_name"`
+		Name   string `json:"name"`
+		Remark string `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
 		httputil.WriteBadRequest(w, "name is required")
@@ -157,22 +152,10 @@ func (h *Handler) UpdateFreeCheckupCampaignForOperation(w http.ResponseWriter, r
 		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "投放码不存在", nil)
 		return
 	}
-	scans, leads, err := h.service.store.FreeCheckupCampaignUsage(r.Context(), id)
-	if err != nil {
-		writeContentError(w, err)
-		return
-	}
-	locked := scans > 0 || leads > 0
-	channelChanged := req.ChannelID != cur.ChannelID || req.SalesID != cur.SalesID || strings.TrimSpace(req.Scene) != cur.Scene
-	if locked && channelChanged {
-		httputil.WriteError(w, http.StatusConflict, "CAMPAIGN_LOCKED", "该投放码已有扫码或线索，渠道/销售/场景不可修改；请复制为新投放码", nil)
-		return
-	}
-	channelID, channelName, salesID, salesName, scene := cur.ChannelID, cur.ChannelName, cur.SalesID, cur.SalesName, cur.Scene
-	if !locked {
-		channelID, channelName, salesID, salesName, scene = req.ChannelID, strings.TrimSpace(req.ChannelName), req.SalesID, strings.TrimSpace(req.SalesName), strings.TrimSpace(req.Scene)
-	}
-	ok, err := h.service.store.UpdateFreeCheckupCampaign(r.Context(), id, strings.TrimSpace(req.Name), strings.TrimSpace(req.Remark), scene, channelID, channelName, salesID, salesName)
+	// 渠道 / 销售 / 场景建码即定，任何情况都不参与修改；只允许改名称与备注。
+	ok, err := h.service.store.UpdateFreeCheckupCampaign(r.Context(), id,
+		strings.TrimSpace(req.Name), strings.TrimSpace(req.Remark), cur.Scene,
+		cur.ChannelID, cur.ChannelName, cur.SalesID, cur.SalesName)
 	if err != nil {
 		writeContentError(w, err)
 		return
@@ -185,7 +168,7 @@ func (h *Handler) UpdateFreeCheckupCampaignForOperation(w http.ResponseWriter, r
 	if updated != nil {
 		updated.LandingURL = h.campaignLandingURL(r, updated.Token)
 	}
-	httputil.WriteSuccess(w, map[string]any{"campaign": updated, "locked": locked})
+	httputil.WriteSuccess(w, map[string]any{"campaign": updated})
 }
 
 // CloneFreeCheckupCampaignForOperation 复制投放码（新令牌，旧码保持有效）。
