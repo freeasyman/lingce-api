@@ -132,6 +132,101 @@ func (h *Handler) UpdateFreeCheckupCampaignStatusForOperation(w http.ResponseWri
 	httputil.WriteSuccess(w, map[string]any{"id": id, "status": req.Status})
 }
 
+// UpdateFreeCheckupCampaignForOperation 编辑投放码：令牌不变；有数据后渠道/销售/场景冻结。
+func (h *Handler) UpdateFreeCheckupCampaignForOperation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Remark      string `json:"remark"`
+		Scene       string `json:"scene"`
+		ChannelID   int64  `json:"channel_id"`
+		ChannelName string `json:"channel_name"`
+		SalesID     int64  `json:"sales_id"`
+		SalesName   string `json:"sales_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		httputil.WriteBadRequest(w, "name is required")
+		return
+	}
+	cur, err := h.service.store.GetFreeCheckupCampaignByID(r.Context(), id)
+	if err != nil || cur == nil {
+		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "投放码不存在", nil)
+		return
+	}
+	scans, leads, err := h.service.store.FreeCheckupCampaignUsage(r.Context(), id)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	locked := scans > 0 || leads > 0
+	channelChanged := req.ChannelID != cur.ChannelID || req.SalesID != cur.SalesID || strings.TrimSpace(req.Scene) != cur.Scene
+	if locked && channelChanged {
+		httputil.WriteError(w, http.StatusConflict, "CAMPAIGN_LOCKED", "该投放码已有扫码或线索，渠道/销售/场景不可修改；请复制为新投放码", nil)
+		return
+	}
+	channelID, channelName, salesID, salesName, scene := cur.ChannelID, cur.ChannelName, cur.SalesID, cur.SalesName, cur.Scene
+	if !locked {
+		channelID, channelName, salesID, salesName, scene = req.ChannelID, strings.TrimSpace(req.ChannelName), req.SalesID, strings.TrimSpace(req.SalesName), strings.TrimSpace(req.Scene)
+	}
+	ok, err := h.service.store.UpdateFreeCheckupCampaign(r.Context(), id, strings.TrimSpace(req.Name), strings.TrimSpace(req.Remark), scene, channelID, channelName, salesID, salesName)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	if !ok {
+		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "投放码不存在", nil)
+		return
+	}
+	updated, _ := h.service.store.GetFreeCheckupCampaignByID(r.Context(), id)
+	if updated != nil {
+		updated.LandingURL = h.campaignLandingURL(r, updated.Token)
+	}
+	httputil.WriteSuccess(w, map[string]any{"campaign": updated, "locked": locked})
+}
+
+// CloneFreeCheckupCampaignForOperation 复制投放码（新令牌，旧码保持有效）。
+func (h *Handler) CloneFreeCheckupCampaignForOperation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	c, err := h.service.store.CloneFreeCheckupCampaign(r.Context(), id, strings.TrimSpace(req.Name))
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	c.LandingURL = h.campaignLandingURL(r, c.Token)
+	httputil.WriteSuccess(w, map[string]any{"campaign": c})
+}
+
+// MarkFreeCheckupCampaignPrintedForOperation 标记已印刷（下载过海报/二维码）。
+func (h *Handler) MarkFreeCheckupCampaignPrintedForOperation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid id")
+		return
+	}
+	ok, err := h.service.store.MarkFreeCheckupCampaignPrinted(r.Context(), id)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	if !ok {
+		httputil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "投放码不存在", nil)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"id": id, "printed": true})
+}
+
 func (h *Handler) GetFreeCheckupCampaignQRForOperation(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {

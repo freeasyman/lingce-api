@@ -58,6 +58,9 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns", Handler: h.CreateFreeCheckupCampaignForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns/{id}/status", Handler: h.UpdateFreeCheckupCampaignStatusForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/campaigns/{id}/qr.png", Handler: h.GetFreeCheckupCampaignQRForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "PATCH", Path: "/api/v1/operation/free-checkup/campaigns/{id}", Handler: h.UpdateFreeCheckupCampaignForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns/{id}/clone", Handler: h.CloneFreeCheckupCampaignForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns/{id}/printed", Handler: h.MarkFreeCheckupCampaignPrintedForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/usage", Handler: h.ListFreeCheckupUsageForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	router.Register(mux, routes, deps)

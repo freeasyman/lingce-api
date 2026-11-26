@@ -27,6 +27,7 @@ type FreeCheckupCampaign struct {
 	Checks      int        `json:"checks"`
 	Leads       int        `json:"leads"`
 	Converted   int        `json:"converted"`
+	PrintedAt   *time.Time `json:"printed_at"`
 	LandingURL  string     `json:"landing_url,omitempty"`
 }
 
@@ -56,7 +57,7 @@ func (s *Store) ListFreeCheckupCampaigns(ctx context.Context, limit, offset int)
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT c.id, c.token, c.name, c.channel_id, c.channel_name, c.sales_id, c.sales_name, c.scene, c.status, c.expires_at, c.remark, c.created_at, c.updated_at,
+		SELECT c.id, c.token, c.name, c.channel_id, c.channel_name, c.sales_id, c.sales_name, c.scene, c.status, c.expires_at, c.remark, c.printed_at, c.created_at, c.updated_at,
 			(SELECT count(*) FROM free_checkup_scans s WHERE s.campaign_id=c.id),
 			(SELECT count(*) FROM free_checkup_usage u WHERE u.campaign_id=c.id),
 			(SELECT count(*) FROM free_checkup_leads l WHERE l.campaign_id=c.id),
@@ -69,7 +70,7 @@ func (s *Store) ListFreeCheckupCampaigns(ctx context.Context, limit, offset int)
 	var out []FreeCheckupCampaign
 	for rows.Next() {
 		var c FreeCheckupCampaign
-		if err := rows.Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.CreatedAt, &c.UpdatedAt, &c.Scans, &c.Checks, &c.Leads, &c.Converted); err != nil {
+		if err := rows.Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.PrintedAt, &c.CreatedAt, &c.UpdatedAt, &c.Scans, &c.Checks, &c.Leads, &c.Converted); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, c)
@@ -80,9 +81,9 @@ func (s *Store) ListFreeCheckupCampaigns(ctx context.Context, limit, offset int)
 func (s *Store) GetFreeCheckupCampaignByToken(ctx context.Context, token string) (*FreeCheckupCampaign, error) {
 	var c FreeCheckupCampaign
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, token, name, channel_id, channel_name, sales_id, sales_name, scene, status, expires_at, remark, created_at, updated_at
+		SELECT id, token, name, channel_id, channel_name, sales_id, sales_name, scene, status, expires_at, remark, printed_at, created_at, updated_at
 		FROM free_checkup_campaigns WHERE token=$1`, token).
-		Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.CreatedAt, &c.UpdatedAt)
+		Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.PrintedAt, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -92,13 +93,61 @@ func (s *Store) GetFreeCheckupCampaignByToken(ctx context.Context, token string)
 func (s *Store) GetFreeCheckupCampaignByID(ctx context.Context, id int64) (*FreeCheckupCampaign, error) {
 	var c FreeCheckupCampaign
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, token, name, channel_id, channel_name, sales_id, sales_name, scene, status, expires_at, remark, created_at, updated_at
+		SELECT id, token, name, channel_id, channel_name, sales_id, sales_name, scene, status, expires_at, remark, printed_at, created_at, updated_at
 		FROM free_checkup_campaigns WHERE id=$1`, id).
-		Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.CreatedAt, &c.UpdatedAt)
+		Scan(&c.ID, &c.Token, &c.Name, &c.ChannelID, &c.ChannelName, &c.SalesID, &c.SalesName, &c.Scene, &c.Status, &c.ExpiresAt, &c.Remark, &c.PrintedAt, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// FreeCheckupCampaignUsage 投放码已产生的数据量（扫码 / 线索），用于编辑保护。
+func (s *Store) FreeCheckupCampaignUsage(ctx context.Context, id int64) (scans, leads int, err error) {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_scans WHERE campaign_id=$1`, id).Scan(&scans); err != nil {
+		return
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_leads WHERE campaign_id=$1`, id).Scan(&leads); err != nil {
+		return
+	}
+	return
+}
+
+// UpdateFreeCheckupCampaign 更新投放码（令牌永不修改）。
+func (s *Store) UpdateFreeCheckupCampaign(ctx context.Context, id int64, name, remark, scene string, channelID int64, channelName string, salesID int64, salesName string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE free_checkup_campaigns
+		SET name=$2, remark=$3, scene=$4, channel_id=$5, channel_name=$6, sales_id=$7, sales_name=$8, updated_at=now()
+		WHERE id=$1`, id, name, remark, scene, channelID, channelName, salesID, salesName)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// CloneFreeCheckupCampaign 复制投放码：新令牌、新名称，其余沿用。
+func (s *Store) CloneFreeCheckupCampaign(ctx context.Context, id int64, name string) (*FreeCheckupCampaign, error) {
+	src, err := s.GetFreeCheckupCampaignByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if name == "" {
+		name = src.Name + "（副本）"
+	}
+	return s.CreateFreeCheckupCampaign(ctx, &FreeCheckupCampaign{
+		Name: name, ChannelID: src.ChannelID, ChannelName: src.ChannelName,
+		SalesID: src.SalesID, SalesName: src.SalesName, Scene: src.Scene,
+		Status: "active", Remark: src.Remark,
+	})
+}
+
+// MarkFreeCheckupCampaignPrinted 标记已印刷（下载过海报/二维码）。
+func (s *Store) MarkFreeCheckupCampaignPrinted(ctx context.Context, id int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE free_checkup_campaigns SET printed_at=COALESCE(printed_at, now()) WHERE id=$1`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (s *Store) UpdateFreeCheckupCampaignStatus(ctx context.Context, id int64, status string) (bool, error) {
