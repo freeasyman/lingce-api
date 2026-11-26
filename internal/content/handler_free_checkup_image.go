@@ -58,15 +58,17 @@ func (h *Handler) UploadPublicFreeCheckupImage(w http.ResponseWriter, r *http.Re
 		return
 	}
 	// 图片地址用「本次请求的公开源」构造：客户端刚用它上传成功，一定能读回。
-	// （与二维码不同，图片是一次性资源，不需要固定域名）
+	// 末尾带 .jpg：微信/安卓 WebView 对无扩展名 URL 的长按菜单不稳定，
+	// 带图片扩展名才会稳定出现「保存图片」。
 	httputil.WriteSuccess(w, map[string]any{
-		"url": requestBaseURL(r) + "/api/v1/public/free-checkup/image/" + strconv.FormatInt(id, 10),
+		"url": requestBaseURL(r) + "/api/v1/public/free-checkup/image/" + strconv.FormatInt(id, 10) + ".jpg",
 	})
 }
 
 // GetPublicFreeCheckupImage 读取长图（公开可访问，微信长按保存走这里）。
 func (h *Handler) GetPublicFreeCheckupImage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	rawID := strings.TrimSuffix(r.PathValue("id"), ".jpg")
+	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil || id <= 0 {
 		httputil.WriteBadRequest(w, "invalid id")
 		return
@@ -77,6 +79,7 @@ func (h *Handler) GetPublicFreeCheckupImage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", `inline; filename="free-checkup.jpg"`)
 	w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
 	_, _ = w.Write(data)
 }
