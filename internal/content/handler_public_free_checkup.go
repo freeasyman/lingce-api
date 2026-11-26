@@ -160,11 +160,16 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteNotFound(w, "体检记录不存在")
 		return
 	}
-	channelID, channelName, salesID, salesName := int64(0), "", int64(0), ""
+	channelID, channelName, salesID, salesName, campaignScene := int64(0), "", int64(0), "", ""
 	if req.CampaignID > 0 {
 		if camp, cerr := h.service.store.GetFreeCheckupCampaignByID(r.Context(), req.CampaignID); cerr == nil && camp != nil {
 			channelID, channelName, salesID, salesName = camp.ChannelID, camp.ChannelName, camp.SalesID, camp.SalesName
+			campaignScene = camp.Scene
 		}
+	}
+	leadScene := strings.TrimSpace(req.Scene)
+	if leadScene == "" {
+		leadScene = campaignScene
 	}
 	leadID, err := h.service.store.InsertFreeCheckupLead(r.Context(), &FreeCheckupLead{
 		RunID:      id,
@@ -172,7 +177,7 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		Region:     run.Region,
 		Question:   run.Question,
 		Phone:      phone,
-		Scene:      strings.TrimSpace(req.Scene),
+		Scene:      leadScene,
 		DoctorName: strings.TrimSpace(req.DoctorName),
 		ContactName:  strings.TrimSpace(req.ContactName),
 		ContactTitle: strings.TrimSpace(req.ContactTitle),
@@ -238,6 +243,21 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 		return
 	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+}
+
+// GetFreeCheckupLeadByTenantForOperation 机构档案：按 tenant_id 查来源线索。
+func (h *Handler) GetFreeCheckupLeadByTenantForOperation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("tenant_id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteBadRequest(w, "invalid tenant id")
+		return
+	}
+	lead, err := h.service.store.GetFreeCheckupLeadByTenantID(r.Context(), id)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"lead": lead})
 }
 
 // ConvertFreeCheckupLeadForOperation 运营控制台：创建机构成功后回写线索（tenant_id + converted）。

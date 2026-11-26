@@ -121,6 +121,20 @@ func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupL
 	return &l, nil
 }
 
+// GetFreeCheckupLeadByTenantID 机构档案"来源"：按 tenant_id 反查转化线索（最近一条）。
+func (s *Store) GetFreeCheckupLeadByTenantID(ctx context.Context, tenantID int64) (*FreeCheckupLead, error) {
+	row := s.pool.QueryRow(ctx, freeCheckupLeadSelect+" WHERE l.tenant_id=$2 ORDER BY l.converted_at DESC NULLS LAST LIMIT 1", PublicCheckupTenantID, tenantID)
+	var l FreeCheckupLead
+	err := row.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.CampaignID, &l.ChannelID, &l.ChannelName, &l.SalesID, &l.SalesName, &l.RunStatus, &l.Progress, &l.Total)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &l, nil
+}
+
 // ConvertFreeCheckupLead 创建机构成功后回写：记 tenant_id、置 converted、记转化时间。
 // 已转化过的线索不会重复写（tenant_id 已非 0 时返回 false）。
 func (s *Store) ConvertFreeCheckupLead(ctx context.Context, leadID, tenantID int64) (bool, error) {
