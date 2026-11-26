@@ -375,10 +375,11 @@ func (s *Service) StartAIVisibilityPublic(ctx context.Context, orgName, doctorNa
 	if s.llmClient == nil {
 		return 0, fmt.Errorf("llm gateway is not configured")
 	}
-	// 清理僵尸任务：API 重启会中断后台 goroutine，running 超过 10 分钟视为失败。
+	// 清理僵尸任务：API 重启会中断后台 goroutine，进程重启后不可能还有存活的公共体检任务，
+	// 因此创建新任务前把此前所有 running 的公共体检任务标记为 failed。
 	// 只作用于公共体检租户，避免影响机构自己的诊断记录。
 	_, _ = s.store.pool.Exec(ctx, `UPDATE content_ai_visibility_runs SET status='failed'
-		WHERE tenant_id=$1 AND status='running' AND created_at < now() - interval '10 minutes'`, PublicCheckupTenantID)
+		WHERE tenant_id=$1 AND status='running'`, PublicCheckupTenantID)
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return 0, fmt.Errorf("question is required")
