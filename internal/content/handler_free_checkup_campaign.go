@@ -16,14 +16,18 @@ import (
 
 // campaignLandingURL 二维码/海报里的落地链接：不可读令牌。
 // 正式域名待定，用 FREE_CHECKUP_BASE_URL 指定；缺省回退到当前请求 Host。
-func (h *Handler) campaignLandingURL(r *http.Request, token string) string {
+func (h *Handler) landingBaseURL() string {
 	base := strings.TrimRight(os.Getenv("FREE_CHECKUP_BASE_URL"), "/")
 	if base == "" {
 		// 生产兜底必须是正式 H5 域名，绝不能回退到当前 API/console Host：
 		// 否则二维码会写进 console.khgl.xyz:3013，印出去的码全部作废。
 		base = "https://lc.khgl.xyz"
 	}
-	return base + "/?t=" + token
+	return base
+}
+
+func (h *Handler) campaignLandingURL(r *http.Request, token string) string {
+	return h.landingBaseURL() + "/?t=" + token
 }
 
 // ResolvePublicFreeCheckupCampaign 解析令牌、记录访问，返回活动信息供 H5 显示"来自：xxx"。

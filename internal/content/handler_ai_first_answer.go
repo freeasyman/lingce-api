@@ -45,6 +45,8 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/public/free-checkup", Handler: h.StartPublicFreeCheckup, Auth: false},
 		{Method: "GET", Path: "/api/v1/public/free-checkup/quota", Handler: h.GetPublicFreeCheckupQuota, Auth: false},
 		{Method: "GET", Path: "/api/v1/public/free-checkup/campaign", Handler: h.ResolvePublicFreeCheckupCampaign, Auth: false},
+		{Method: "POST", Path: "/api/v1/public/free-checkup/image", Handler: h.UploadPublicFreeCheckupImage, Auth: false},
+		{Method: "GET", Path: "/api/v1/public/free-checkup/image/{id}", Handler: h.GetPublicFreeCheckupImage, Auth: false},
 		{Method: "GET", Path: "/api/v1/public/free-checkup/{id}", Handler: h.GetPublicFreeCheckup, Auth: false},
 		{Method: "POST", Path: "/api/v1/public/free-checkup/{id}/lead", Handler: h.SubmitFreeCheckupLead, Auth: false},
 		// 运营控制台：免费体检线索管理
