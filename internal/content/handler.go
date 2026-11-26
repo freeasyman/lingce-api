@@ -7,7 +7,8 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service      *Service
+	cookieSecret string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -16,6 +17,7 @@ func NewHandler(service *Service) *Handler {
 
 // RegisterRoutes registers content module routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
+	h.cookieSecret = jwtSecret
 	deps := router.RouteDeps{JWTSecret: jwtSecret}
 	h.registerContentOrgProfileRoutes(mux, deps)
 	h.registerAIRoutes(mux, deps)

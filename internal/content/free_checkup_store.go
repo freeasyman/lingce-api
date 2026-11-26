@@ -123,12 +123,33 @@ func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, statu
 }
 
 // InsertFreeCheckupUsage 记录一次体检使用（无手机号也记，用于成本与使用量统计）。
-func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, deviceID, ip, ipCity, ua, scene, orgName, region, question string) error {
+func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question string) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO free_checkup_usage (run_id, device_id, ip, ip_city, user_agent, scene, org_name, region, question)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		runID, deviceID, ip, ipCity, ua, scene, orgName, region, question)
+		INSERT INTO free_checkup_usage (run_id, sid, device_id, ip, ip_city, user_agent, scene, org_name, region, question)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		runID, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question)
 	return err
+}
+
+// FreeCheckupQuotaUsage 今日已用次数：按 sid / 设备号 / IP 三种口径（Asia/Shanghai 自然日）。
+func (s *Store) FreeCheckupQuotaUsage(ctx context.Context, sid, deviceID, ip string) (bySID, byDevice, byIP int, err error) {
+	dayStart := "date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'"
+	if sid != "" {
+		if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE sid=$1 AND created_at >= `+dayStart, sid).Scan(&bySID); err != nil {
+			return
+		}
+	}
+	if deviceID != "" {
+		if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE device_id=$1 AND created_at >= `+dayStart, deviceID).Scan(&byDevice); err != nil {
+			return
+		}
+	}
+	if ip != "" {
+		if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE ip=$1 AND created_at >= `+dayStart, ip).Scan(&byIP); err != nil {
+			return
+		}
+	}
+	return
 }
 
 type FreeCheckupUsage struct {

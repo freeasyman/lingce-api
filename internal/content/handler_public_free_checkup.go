@@ -30,18 +30,65 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		freeCheckupTooMany(w, "请求过于频繁，请稍后再试")
 		return
 	}
+	sid := h.ensureSID(w, r)
+	deviceID := strings.TrimSpace(r.Header.Get("X-Device-Id"))
+	ip := requestIP(r)
+	bySID, byDevice, byIP, err := h.service.store.FreeCheckupQuotaUsage(r.Context(), sid, deviceID, ip)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	used := bySID
+	if byDevice > used {
+		used = byDevice
+	}
+	if used >= freeCheckupDailyLimit {
+		httputil.WriteError(w, http.StatusTooManyRequests, "QUOTA_EXCEEDED", "今日免费体检次数已用完", nil)
+		return
+	}
+	if byIP >= freeCheckupIPDailyCap {
+		httputil.WriteError(w, http.StatusTooManyRequests, "IP_LIMITED", "当前网络体检次数过多，请稍后再试", nil)
+		return
+	}
+
 	runID, err := h.service.StartAIVisibilityPublic(r.Context(), req.OrgName, req.DoctorName, req.Question, req.Region)
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
 	// 使用记录：无手机号也记，用于成本与使用量统计
-	ip := requestIP(r)
-	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID,
+	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID, sid,
 		strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
 		r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
 		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question))
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
+}
+
+// GetPublicFreeCheckupQuota 公共"免费体检"额度：签发/读取签名 Cookie，返回今日剩余次数。
+func (h *Handler) GetPublicFreeCheckupQuota(w http.ResponseWriter, r *http.Request) {
+	sid := h.ensureSID(w, r)
+	deviceID := strings.TrimSpace(r.Header.Get("X-Device-Id"))
+	bySID, byDevice, _, err := h.service.store.FreeCheckupQuotaUsage(r.Context(), sid, deviceID, "")
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	used := bySID
+	if byDevice > used {
+		used = byDevice
+	}
+	remaining := freeCheckupDailyLimit - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	now := time.Now().In(time.FixedZone("CST", 8*3600))
+	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(24 * time.Hour)
+	httputil.WriteSuccess(w, map[string]any{
+		"limit":     freeCheckupDailyLimit,
+		"used":      used,
+		"remaining": remaining,
+		"reset_at":  next.Format(time.RFC3339),
+	})
 }
 
 // GetPublicFreeCheckup 公共"免费体检"轮询：匿名可调，返回进度与引擎结果。
