@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +14,23 @@ import (
 
 // 免费体检每日额度：签名 Cookie（HTTP-only）为主身份，设备号兜底，IP 只做防刷上限。
 const (
-	freeCheckupDailyLimit = 3
-	freeCheckupIPDailyCap = 1500 // 展会场景：几百人扫码，留足余量
-	freeCheckupCookieName = "fc_sid"
-	freeCheckupCookieDays = 30
+	freeCheckupDailyLimitDefault = 3
+	freeCheckupIPDailyCap        = 1500 // 展会场景：几百人扫码，留足余量
+	freeCheckupCookieName        = "fc_sid"
+	freeCheckupCookieDays        = 30
 )
+
+// freeCheckupDailyLimit 可临时通过 FREE_CHECKUP_DAILY_LIMIT 调整（测试/活动），默认 3。
+var freeCheckupDailyLimit = freeCheckupDailyLimitFromEnv()
+
+func freeCheckupDailyLimitFromEnv() int {
+	if raw := strings.TrimSpace(os.Getenv("FREE_CHECKUP_DAILY_LIMIT")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			return value
+		}
+	}
+	return freeCheckupDailyLimitDefault
+}
 
 // signSID 用服务端密钥对 "sid.exp" 做 HMAC，防伪造。
 func (h *Handler) signSID(sid string, exp int64) string {
