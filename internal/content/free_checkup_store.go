@@ -2,6 +2,8 @@ package content
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -46,27 +48,46 @@ func (s *Store) InsertFreeCheckupLead(ctx context.Context, l *FreeCheckupLead) (
 }
 
 // ListFreeCheckupLeads 运营控制台列表：按状态筛选、分页，附带 run 摘要。
-func (s *Store) ListFreeCheckupLeads(ctx context.Context, status string, limit, offset int) ([]FreeCheckupLead, int, error) {
-	where := ""
+func (s *Store) ListFreeCheckupLeads(ctx context.Context, status, q string, limit, offset int) ([]FreeCheckupLead, int, error) {
+	conds := []string{}
 	args := []any{PublicCheckupTenantID}
 	if status != "" {
-		where = " WHERE l.status = $2"
 		args = append(args, status)
+		conds = append(conds, fmt.Sprintf("l.status = $%d", len(args)))
+	}
+	if strings.TrimSpace(q) != "" {
+		args = append(args, "%"+strings.TrimSpace(q)+"%")
+		n := len(args)
+		conds = append(conds, fmt.Sprintf("(l.org_name ILIKE $%d OR l.phone ILIKE $%d OR l.contact_name ILIKE $%d OR l.question ILIKE $%d)", n, n, n, n))
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
-	countSQL := "SELECT count(*) FROM free_checkup_leads l" + where
+	countArgs := []any{}
+	countWhere := ""
 	if status != "" {
-		countSQL = "SELECT count(*) FROM free_checkup_leads l WHERE l.status = $1"
-		if err := s.pool.QueryRow(ctx, countSQL, status).Scan(&total); err != nil {
-			return nil, 0, err
+		countArgs = append(countArgs, status)
+		countWhere = " WHERE l.status = $1"
+	}
+	if strings.TrimSpace(q) != "" {
+		countArgs = append(countArgs, "%"+strings.TrimSpace(q)+"%")
+		n := len(countArgs)
+		cond := fmt.Sprintf("(l.org_name ILIKE $%d OR l.phone ILIKE $%d OR l.contact_name ILIKE $%d OR l.question ILIKE $%d)", n, n, n, n)
+		if countWhere == "" {
+			countWhere = " WHERE " + cond
+		} else {
+			countWhere += " AND " + cond
 		}
-	} else if err := s.pool.QueryRow(ctx, countSQL).Scan(&total); err != nil {
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM free_checkup_leads l"+countWhere, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	q := freeCheckupLeadSelect + where + " ORDER BY l.created_at DESC LIMIT $2 OFFSET $3"
+	query := freeCheckupLeadSelect + where + fmt.Sprintf(" ORDER BY l.created_at DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
 	args = append(args, limit, offset)
-	rs, err := s.pool.Query(ctx, q, args...)
+	rs, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -128,13 +149,17 @@ type FreeCheckupUsage struct {
 }
 
 // ListFreeCheckupUsage 运营控制台：体检使用记录（含未留手机号）。
-func (s *Store) ListFreeCheckupUsage(ctx context.Context, leadFilter string, limit, offset int) ([]FreeCheckupUsage, int, error) {
-	where := ""
+func (s *Store) ListFreeCheckupUsage(ctx context.Context, leadFilter, q string, limit, offset int) ([]FreeCheckupUsage, int, error) {
+	conds := []string{}
 	switch leadFilter {
 	case "lead":
-		where = " WHERE l.id IS NOT NULL"
+		conds = append(conds, "l.id IS NOT NULL")
 	case "nolead":
-		where = " WHERE l.id IS NULL"
+		conds = append(conds, "l.id IS NULL")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
 	countSQL := `SELECT count(*) FROM free_checkup_usage u LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id` + where

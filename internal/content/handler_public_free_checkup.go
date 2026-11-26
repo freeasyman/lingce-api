@@ -133,7 +133,8 @@ func (h *Handler) ListFreeCheckupLeadsForOperation(w http.ResponseWriter, r *htt
 		}
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	items, total, err := h.service.store.ListFreeCheckupLeads(r.Context(), status, limit, offset)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, total, err := h.service.store.ListFreeCheckupLeads(r.Context(), status, q, limit, offset)
 	if err != nil {
 		writeContentError(w, err)
 		return
@@ -155,7 +156,8 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 		}
 	}
 	leadFilter := strings.TrimSpace(r.URL.Query().Get("lead"))
-	items, total, err := h.service.store.ListFreeCheckupUsage(r.Context(), leadFilter, limit, offset)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, total, err := h.service.store.ListFreeCheckupUsage(r.Context(), leadFilter, q, limit, offset)
 	if err != nil {
 		writeContentError(w, err)
 		return
