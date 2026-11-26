@@ -44,6 +44,7 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		// 公共"免费体检"入口：独立产品，不挂租户、匿名可调（限流后续再加）
 		{Method: "POST", Path: "/api/v1/public/free-checkup", Handler: h.StartPublicFreeCheckup, Auth: false},
 		{Method: "GET", Path: "/api/v1/public/free-checkup/quota", Handler: h.GetPublicFreeCheckupQuota, Auth: false},
+		{Method: "GET", Path: "/api/v1/public/free-checkup/campaign", Handler: h.ResolvePublicFreeCheckupCampaign, Auth: false},
 		{Method: "GET", Path: "/api/v1/public/free-checkup/{id}", Handler: h.GetPublicFreeCheckup, Auth: false},
 		{Method: "POST", Path: "/api/v1/public/free-checkup/{id}/lead", Handler: h.SubmitFreeCheckupLead, Auth: false},
 		// 运营控制台：免费体检线索管理
@@ -52,6 +53,10 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/leads/{id}/status", Handler: h.UpdateFreeCheckupLeadStatusForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/leads/{id}/convert", Handler: h.ConvertFreeCheckupLeadForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/stats", Handler: h.FreeCheckupStatsForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/operation/free-checkup/campaigns", Handler: h.ListFreeCheckupCampaignsForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns", Handler: h.CreateFreeCheckupCampaignForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns/{id}/status", Handler: h.UpdateFreeCheckupCampaignStatusForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/operation/free-checkup/campaigns/{id}/qr.png", Handler: h.GetFreeCheckupCampaignQRForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/usage", Handler: h.ListFreeCheckupUsageForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 	}
 	router.Register(mux, routes, deps)

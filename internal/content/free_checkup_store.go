@@ -26,6 +26,11 @@ type FreeCheckupLead struct {
 	IPCity     string    `json:"ip_city"`
 	TenantID   int64     `json:"tenant_id"`
 	ConvertedAt *time.Time `json:"converted_at"`
+	CampaignID  int64     `json:"campaign_id"`
+	ChannelID   int64     `json:"channel_id"`
+	ChannelName string    `json:"channel_name"`
+	SalesID     int64     `json:"sales_id"`
+	SalesName   string    `json:"sales_name"`
 	UserAgent  string    `json:"user_agent"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -36,7 +41,7 @@ type FreeCheckupLead struct {
 }
 
 const freeCheckupLeadSelect = `
-	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at, l.ip, l.ip_city, l.tenant_id, l.converted_at, l.contact_name, l.contact_title,
+	SELECT l.id, l.run_id, l.org_name, l.region, l.question, l.doctor_name, l.phone, l.scene, l.status, l.note, l.created_at, l.updated_at, l.ip, l.ip_city, l.tenant_id, l.converted_at, l.contact_name, l.contact_title, l.campaign_id, l.channel_id, l.channel_name, l.sales_id, l.sales_name,
 	       COALESCE(r.status,''), COALESCE(r.progress,0), COALESCE(r.total,0)
 	FROM free_checkup_leads l
 	LEFT JOIN content_ai_visibility_runs r ON r.id = l.run_id AND r.tenant_id = $1`
@@ -44,9 +49,9 @@ const freeCheckupLeadSelect = `
 func (s *Store) InsertFreeCheckupLead(ctx context.Context, l *FreeCheckupLead) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note, device_id, ip, ip_city, user_agent, contact_name, contact_title)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note, l.DeviceID, l.IP, l.IPCity, l.UserAgent, l.ContactName, l.ContactTitle).Scan(&id)
+		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note, device_id, ip, ip_city, user_agent, contact_name, contact_title, campaign_id, channel_id, channel_name, sales_id, sales_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note, l.DeviceID, l.IP, l.IPCity, l.UserAgent, l.ContactName, l.ContactTitle, l.CampaignID, l.ChannelID, l.ChannelName, l.SalesID, l.SalesName).Scan(&id)
 	return id, err
 }
 
@@ -98,7 +103,7 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status, q string, limi
 	var rows []FreeCheckupLead
 	for rs.Next() {
 		var l FreeCheckupLead
-		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total); err != nil {
+		if err := rs.Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.CampaignID, &l.ChannelID, &l.ChannelName, &l.SalesID, &l.SalesName, &l.RunStatus, &l.Progress, &l.Total); err != nil {
 			return nil, 0, err
 		}
 		rows = append(rows, l)
@@ -109,7 +114,7 @@ func (s *Store) ListFreeCheckupLeads(ctx context.Context, status, q string, limi
 func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupLead, error) {
 	var l FreeCheckupLead
 	err := s.pool.QueryRow(ctx, freeCheckupLeadSelect+` WHERE l.id = $2`, PublicCheckupTenantID, id).
-		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.RunStatus, &l.Progress, &l.Total)
+		Scan(&l.ID, &l.RunID, &l.OrgName, &l.Region, &l.Question, &l.DoctorName, &l.Phone, &l.Scene, &l.Status, &l.Note, &l.CreatedAt, &l.UpdatedAt, &l.IP, &l.IPCity, &l.TenantID, &l.ConvertedAt, &l.ContactName, &l.ContactTitle, &l.CampaignID, &l.ChannelID, &l.ChannelName, &l.SalesID, &l.SalesName, &l.RunStatus, &l.Progress, &l.Total)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +143,11 @@ func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, statu
 }
 
 // InsertFreeCheckupUsage 记录一次体检使用（无手机号也记，用于成本与使用量统计）。
-func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question string, cached bool) error {
+func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question string, cached bool, campaignID int64) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO free_checkup_usage (run_id, sid, device_id, ip, ip_city, user_agent, scene, org_name, region, question, cached)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		runID, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question, cached)
+		INSERT INTO free_checkup_usage (run_id, sid, device_id, ip, ip_city, user_agent, scene, org_name, region, question, cached, campaign_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		runID, sid, deviceID, ip, ipCity, ua, scene, orgName, region, question, cached, campaignID)
 	return err
 }
 

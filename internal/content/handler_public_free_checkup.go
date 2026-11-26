@@ -21,6 +21,7 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		Question   string `json:"question"`
 		DoctorName string `json:"doctor_name"`
 		Scene      string `json:"scene"`
+		CampaignID int64  `json:"campaign_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -57,7 +58,7 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		_ = h.service.store.InsertFreeCheckupUsage(r.Context(), cachedID, sid,
 			strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
 			r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
-			strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), true)
+			strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), true, req.CampaignID)
 		httputil.WriteSuccess(w, map[string]any{"run_id": cachedID, "started": false, "cached": true})
 		return
 	}
@@ -71,7 +72,7 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID, sid,
 		strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
 		r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
-		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), false)
+		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question), false, req.CampaignID)
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
 }
 
@@ -143,6 +144,7 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		DoctorName   string `json:"doctor_name"`
 		ContactName  string `json:"contact_name"`
 		ContactTitle string `json:"contact_title"`
+		CampaignID   int64  `json:"campaign_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -158,6 +160,12 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteNotFound(w, "体检记录不存在")
 		return
 	}
+	channelID, channelName, salesID, salesName := int64(0), "", int64(0), ""
+	if req.CampaignID > 0 {
+		if camp, cerr := h.service.store.GetFreeCheckupCampaignByID(r.Context(), req.CampaignID); cerr == nil && camp != nil {
+			channelID, channelName, salesID, salesName = camp.ChannelID, camp.ChannelName, camp.SalesID, camp.SalesName
+		}
+	}
 	leadID, err := h.service.store.InsertFreeCheckupLead(r.Context(), &FreeCheckupLead{
 		RunID:      id,
 		OrgName:    run.OrgName,
@@ -168,6 +176,11 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		DoctorName: strings.TrimSpace(req.DoctorName),
 		ContactName:  strings.TrimSpace(req.ContactName),
 		ContactTitle: strings.TrimSpace(req.ContactTitle),
+		CampaignID:   req.CampaignID,
+		ChannelID:    channelID,
+		ChannelName:  channelName,
+		SalesID:      salesID,
+		SalesName:    salesName,
 		DeviceID:   strings.TrimSpace(r.Header.Get("X-Device-Id")),
 		IP:         requestIP(r),
 		IPCity:     geo.City(requestIP(r)),
