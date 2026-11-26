@@ -150,7 +150,8 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 			offset = n
 		}
 	}
-	items, total, err := h.service.store.ListFreeCheckupUsage(r.Context(), limit, offset)
+	leadFilter := strings.TrimSpace(r.URL.Query().Get("lead"))
+	items, total, err := h.service.store.ListFreeCheckupUsage(r.Context(), leadFilter, limit, offset)
 	if err != nil {
 		writeContentError(w, err)
 		return

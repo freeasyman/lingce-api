@@ -120,20 +120,29 @@ type FreeCheckupUsage struct {
 	CreatedAt time.Time `json:"created_at"`
 	RunStatus string    `json:"run_status"`
 	HasLead   bool      `json:"has_lead"`
+	Phone     string    `json:"phone"`
 }
 
 // ListFreeCheckupUsage 运营控制台：体检使用记录（含未留手机号）。
-func (s *Store) ListFreeCheckupUsage(ctx context.Context, limit, offset int) ([]FreeCheckupUsage, int, error) {
+func (s *Store) ListFreeCheckupUsage(ctx context.Context, leadFilter string, limit, offset int) ([]FreeCheckupUsage, int, error) {
+	where := ""
+	switch leadFilter {
+	case "lead":
+		where = " WHERE l.id IS NOT NULL"
+	case "nolead":
+		where = " WHERE l.id IS NULL"
+	}
 	var total int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage`).Scan(&total); err != nil {
+	countSQL := `SELECT count(*) FROM free_checkup_usage u LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id` + where
+	if err := s.pool.QueryRow(ctx, countSQL).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.run_id, u.device_id, u.ip, u.user_agent, u.scene, u.org_name, u.region, u.question, u.created_at,
-		       COALESCE(r.status,''), (l.id IS NOT NULL)
+		       COALESCE(r.status,''), (l.id IS NOT NULL), COALESCE(l.phone,'')
 		FROM free_checkup_usage u
 		LEFT JOIN content_ai_visibility_runs r ON r.id = u.run_id AND r.tenant_id = $3
-		LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id
+		LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id`+where+`
 		ORDER BY u.created_at DESC LIMIT $1 OFFSET $2`, limit, offset, PublicCheckupTenantID)
 	if err != nil {
 		return nil, 0, err
@@ -142,7 +151,7 @@ func (s *Store) ListFreeCheckupUsage(ctx context.Context, limit, offset int) ([]
 	var out []FreeCheckupUsage
 	for rows.Next() {
 		var u FreeCheckupUsage
-		if err := rows.Scan(&u.ID, &u.RunID, &u.DeviceID, &u.IP, &u.UserAgent, &u.Scene, &u.OrgName, &u.Region, &u.Question, &u.CreatedAt, &u.RunStatus, &u.HasLead); err != nil {
+		if err := rows.Scan(&u.ID, &u.RunID, &u.DeviceID, &u.IP, &u.UserAgent, &u.Scene, &u.OrgName, &u.Region, &u.Question, &u.CreatedAt, &u.RunStatus, &u.HasLead, &u.Phone); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, u)
