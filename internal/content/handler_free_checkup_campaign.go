@@ -19,11 +19,9 @@ import (
 func (h *Handler) campaignLandingURL(r *http.Request, token string) string {
 	base := strings.TrimRight(os.Getenv("FREE_CHECKUP_BASE_URL"), "/")
 	if base == "" {
-		scheme := "http"
-		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-			scheme = "https"
-		}
-		base = scheme + "://" + r.Host
+		// 生产兜底必须是正式 H5 域名，绝不能回退到当前 API/console Host：
+		// 否则二维码会写进 console.khgl.xyz:3013，印出去的码全部作废。
+		base = "https://lc.khgl.xyz"
 	}
 	return base + "/?t=" + token
 }
