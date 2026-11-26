@@ -2,6 +2,7 @@ package content
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		Region     string `json:"region"`
 		Question   string `json:"question"`
 		DoctorName string `json:"doctor_name"`
+		Scene      string `json:"scene"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteBadRequest(w, "Invalid request body")
@@ -31,6 +33,11 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		writeContentError(w, err)
 		return
 	}
+	// 使用记录：无手机号也记，用于成本与使用量统计
+	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID,
+		strings.TrimSpace(r.Header.Get("X-Device-Id")), requestIP(r),
+		r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
+		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question))
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
 }
 
@@ -96,6 +103,9 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		Phone:      phone,
 		Scene:      strings.TrimSpace(req.Scene),
 		DoctorName: strings.TrimSpace(req.DoctorName),
+		DeviceID:   strings.TrimSpace(r.Header.Get("X-Device-Id")),
+		IP:         requestIP(r),
+		UserAgent:  r.UserAgent(),
 		Status:     "new",
 	})
 	if err != nil {
@@ -177,12 +187,32 @@ func (h *Handler) UpdateFreeCheckupLeadStatusForOperation(w http.ResponseWriter,
 	httputil.WriteSuccess(w, map[string]any{"ok": true})
 }
 
-// FreeCheckupStatsForOperation 运营控制台：统计。
+// FreeCheckupStatsForOperation 运营控制台：统计（线索状态 + 使用量）。
 func (h *Handler) FreeCheckupStatsForOperation(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.service.store.FreeCheckupLeadStats(r.Context())
 	if err != nil {
 		writeContentError(w, err)
 		return
 	}
+	if usage, uerr := h.service.store.FreeCheckupUsageStats(r.Context()); uerr == nil {
+		for k, v := range usage {
+			stats[k] = v
+		}
+	}
 	httputil.WriteSuccess(w, stats)
+}
+
+// requestIP 取客户端 IP（优先 X-Forwarded-For 第一段）。
+func requestIP(r *http.Request) string {
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return xff
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }

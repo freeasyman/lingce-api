@@ -17,6 +17,9 @@ type FreeCheckupLead struct {
 	Scene      string    `json:"scene"`
 	Status     string    `json:"status"`
 	Note       string    `json:"note"`
+	DeviceID   string    `json:"device_id"`
+	IP         string    `json:"ip"`
+	UserAgent  string    `json:"user_agent"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	// 关联 run 的摘要（列表页用）
@@ -34,9 +37,9 @@ const freeCheckupLeadSelect = `
 func (s *Store) InsertFreeCheckupLead(ctx context.Context, l *FreeCheckupLead) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note).Scan(&id)
+		INSERT INTO free_checkup_leads (run_id, org_name, region, question, doctor_name, phone, scene, status, note, device_id, ip, user_agent)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+		l.RunID, l.OrgName, l.Region, l.Question, l.DoctorName, l.Phone, l.Scene, l.Status, l.Note, l.DeviceID, l.IP, l.UserAgent).Scan(&id)
 	return id, err
 }
 
@@ -93,6 +96,27 @@ func (s *Store) UpdateFreeCheckupLeadStatus(ctx context.Context, id int64, statu
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// InsertFreeCheckupUsage 记录一次体检使用（无手机号也记，用于成本与使用量统计）。
+func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, deviceID, ip, ua, scene, orgName, region, question string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO free_checkup_usage (run_id, device_id, ip, user_agent, scene, org_name, region, question)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		runID, deviceID, ip, ua, scene, orgName, region, question)
+	return err
+}
+
+func (s *Store) FreeCheckupUsageStats(ctx context.Context) (map[string]int, error) {
+	out := map[string]int{}
+	var total, today int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage`).Scan(&total); err == nil {
+		out["usage_total"] = total
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE created_at >= CURRENT_DATE`).Scan(&today); err == nil {
+		out["usage_today"] = today
+	}
+	return out, nil
 }
 
 func (s *Store) FreeCheckupLeadStats(ctx context.Context) (map[string]int, error) {
