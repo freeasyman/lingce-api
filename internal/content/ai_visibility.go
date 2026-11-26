@@ -281,7 +281,7 @@ func (s *Service) aiEngineAnalyze(ctx context.Context, tenantID int64, sel llmMo
 // 否则模型只知道「我方机构」这个词，写出来必然是行业级评论。
 func (s *Service) aiVisibilityGap(ctx context.Context, tenantID int64, question, orgName, doctorNames string, results []aiEngineAnswer) (map[string]any, error) {
 	// 缺口诊断用通用快模型（别用豆包，它长上下文要 100s+）
-	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"content_topic", "chat", "ai_assistant"})
+	sel, err := s.resolveLLMModelConfig(ctx, tenantID, []string{"ai_visibility_gap", "content_topic", "chat", "ai_assistant"})
 	if err != nil {
 		return nil, err
 	}
