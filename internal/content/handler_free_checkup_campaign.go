@@ -73,6 +73,9 @@ func (h *Handler) ListFreeCheckupCampaignsForOperation(w http.ResponseWriter, r 
 		writeContentError(w, err)
 		return
 	}
+	for i := range items {
+		items[i].LandingURL = h.campaignLandingURL(r, items[i].Token)
+	}
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total})
 }
 
