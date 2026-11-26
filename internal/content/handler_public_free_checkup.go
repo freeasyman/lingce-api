@@ -245,6 +245,16 @@ func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *htt
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
+// FreeCheckupFunnelForOperation 工作台：销售链路漏斗（今日/近7天/累计）。
+func (h *Handler) FreeCheckupFunnelForOperation(w http.ResponseWriter, r *http.Request) {
+	today, last7, total, err := h.service.store.FreeCheckupFunnel(r.Context())
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"today": today, "last7d": last7, "total": total})
+}
+
 // GetFreeCheckupLeadByTenantForOperation 机构档案：按 tenant_id 查来源线索。
 func (h *Handler) GetFreeCheckupLeadByTenantForOperation(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("tenant_id"), 10, 64)

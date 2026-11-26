@@ -56,6 +56,7 @@ func (h *Handler) registerAIRoutes(mux *http.ServeMux, deps router.RouteDeps) {
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/leads/{id}/convert", Handler: h.ConvertFreeCheckupLeadForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/leads/by-tenant/{tenant_id}", Handler: h.GetFreeCheckupLeadByTenantForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/stats", Handler: h.FreeCheckupStatsForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
+		{Method: "GET", Path: "/api/v1/operation/free-checkup/funnel", Handler: h.FreeCheckupFunnelForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "GET", Path: "/api/v1/operation/free-checkup/campaigns", Handler: h.ListFreeCheckupCampaignsForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns", Handler: h.CreateFreeCheckupCampaignForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},
 		{Method: "POST", Path: "/api/v1/operation/free-checkup/campaigns/{id}/status", Handler: h.UpdateFreeCheckupCampaignStatusForOperation, Auth: true, AllowedUserTypes: []string{"admin"}},

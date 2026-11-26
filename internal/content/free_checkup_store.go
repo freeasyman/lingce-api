@@ -121,6 +121,47 @@ func (s *Store) GetFreeCheckupLead(ctx context.Context, id int64) (*FreeCheckupL
 	return &l, nil
 }
 
+// FreeCheckupFunnel 销售链路漏斗：扫码/体检/线索/成交/缓存命中（今日、近7天、累计）。
+type FreeCheckupFunnel struct {
+	Scans    int `json:"scans"`
+	Checks   int `json:"checks"`
+	Leads    int `json:"leads"`
+	Converted int `json:"converted"`
+	Cached   int `json:"cached"`
+}
+
+func (s *Store) FreeCheckupFunnel(ctx context.Context) (today, last7d, total FreeCheckupFunnel, err error) {
+	todayStart := "date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'"
+	last7Cond := "now() - interval '7 days'"
+	type q struct{ scans, checks, leads, converted, cached string }
+	queries := map[string]q{
+		"today": {scans: "created_at >= " + todayStart, checks: "created_at >= " + todayStart, leads: "created_at >= " + todayStart, converted: "created_at >= " + todayStart, cached: "created_at >= " + todayStart},
+		"last7": {scans: "created_at >= " + last7Cond, checks: "created_at >= " + last7Cond, leads: "created_at >= " + last7Cond, converted: "created_at >= " + last7Cond, cached: "created_at >= " + last7Cond},
+	}
+	for name, w := range queries {
+		f := FreeCheckupFunnel{}
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_scans WHERE `+w.scans).Scan(&f.Scans)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE `+w.checks).Scan(&f.Checks)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_leads WHERE `+w.leads).Scan(&f.Leads)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_leads WHERE status='converted' AND `+w.converted).Scan(&f.Converted)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE cached=true AND `+w.cached).Scan(&f.Cached)
+		switch name {
+		case "today":
+			today = f
+		case "last7":
+			last7d = f
+		}
+	}
+	// 累计（无时间条件）
+	total = FreeCheckupFunnel{}
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_scans`).Scan(&total.Scans)
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage`).Scan(&total.Checks)
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_leads`).Scan(&total.Leads)
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_leads WHERE status='converted'`).Scan(&total.Converted)
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage WHERE cached=true`).Scan(&total.Cached)
+	return today, last7d, total, nil
+}
+
 // GetFreeCheckupLeadByTenantID 机构档案"来源"：按 tenant_id 反查转化线索（最近一条）。
 func (s *Store) GetFreeCheckupLeadByTenantID(ctx context.Context, tenantID int64) (*FreeCheckupLead, error) {
 	row := s.pool.QueryRow(ctx, freeCheckupLeadSelect+" WHERE l.tenant_id=$2 ORDER BY l.converted_at DESC NULLS LAST LIMIT 1", PublicCheckupTenantID, tenantID)
