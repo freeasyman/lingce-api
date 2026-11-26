@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/lib/pq v1.12.3
+	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20261124061657-f1781b7f9b7a
 	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeasyman/lingce-api/internal/geo"
+
 	"github.com/freeasyman/lingce-api/pkg/httputil"
 )
 
@@ -34,8 +36,9 @@ func (h *Handler) StartPublicFreeCheckup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 使用记录：无手机号也记，用于成本与使用量统计
+	ip := requestIP(r)
 	_ = h.service.store.InsertFreeCheckupUsage(r.Context(), runID,
-		strings.TrimSpace(r.Header.Get("X-Device-Id")), requestIP(r),
+		strings.TrimSpace(r.Header.Get("X-Device-Id")), ip, geo.City(ip),
 		r.UserAgent(), strings.TrimSpace(req.Scene), strings.TrimSpace(req.OrgName),
 		strings.TrimSpace(req.Region), strings.TrimSpace(req.Question))
 	httputil.WriteSuccess(w, map[string]any{"run_id": runID, "started": true})
@@ -109,6 +112,7 @@ func (h *Handler) SubmitFreeCheckupLead(w http.ResponseWriter, r *http.Request) 
 		ContactTitle: strings.TrimSpace(req.ContactTitle),
 		DeviceID:   strings.TrimSpace(r.Header.Get("X-Device-Id")),
 		IP:         requestIP(r),
+		IPCity:     geo.City(requestIP(r)),
 		UserAgent:  r.UserAgent(),
 		Status:     "new",
 	})

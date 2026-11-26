@@ -51,3 +51,4 @@ data/*.sqlite
 data/*.sqlite3
 docs/wecom-smart-bot/wecom-cli/
 configs/test.toml
+data/*.xdb
