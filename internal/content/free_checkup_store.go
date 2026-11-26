@@ -107,6 +107,49 @@ func (s *Store) InsertFreeCheckupUsage(ctx context.Context, runID int64, deviceI
 	return err
 }
 
+type FreeCheckupUsage struct {
+	ID        int64     `json:"id"`
+	RunID     int64     `json:"run_id"`
+	DeviceID  string    `json:"device_id"`
+	IP        string    `json:"ip"`
+	UserAgent string    `json:"user_agent"`
+	Scene     string    `json:"scene"`
+	OrgName   string    `json:"org_name"`
+	Region    string    `json:"region"`
+	Question  string    `json:"question"`
+	CreatedAt time.Time `json:"created_at"`
+	RunStatus string    `json:"run_status"`
+	HasLead   bool      `json:"has_lead"`
+}
+
+// ListFreeCheckupUsage 运营控制台：体检使用记录（含未留手机号）。
+func (s *Store) ListFreeCheckupUsage(ctx context.Context, limit, offset int) ([]FreeCheckupUsage, int, error) {
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM free_checkup_usage`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.id, u.run_id, u.device_id, u.ip, u.user_agent, u.scene, u.org_name, u.region, u.question, u.created_at,
+		       COALESCE(r.status,''), (l.id IS NOT NULL)
+		FROM free_checkup_usage u
+		LEFT JOIN content_ai_visibility_runs r ON r.id = u.run_id AND r.tenant_id = $3
+		LEFT JOIN free_checkup_leads l ON l.run_id = u.run_id
+		ORDER BY u.created_at DESC LIMIT $1 OFFSET $2`, limit, offset, PublicCheckupTenantID)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []FreeCheckupUsage
+	for rows.Next() {
+		var u FreeCheckupUsage
+		if err := rows.Scan(&u.ID, &u.RunID, &u.DeviceID, &u.IP, &u.UserAgent, &u.Scene, &u.OrgName, &u.Region, &u.Question, &u.CreatedAt, &u.RunStatus, &u.HasLead); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, u)
+	}
+	return out, total, rows.Err()
+}
+
 func (s *Store) FreeCheckupUsageStats(ctx context.Context) (map[string]int, error) {
 	out := map[string]int{}
 	var total, today int

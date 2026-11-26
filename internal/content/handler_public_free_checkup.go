@@ -137,6 +137,27 @@ func (h *Handler) ListFreeCheckupLeadsForOperation(w http.ResponseWriter, r *htt
 	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
 }
 
+// ListFreeCheckupUsageForOperation 运营控制台：体检使用记录（含未留手机号）。
+func (h *Handler) ListFreeCheckupUsageForOperation(w http.ResponseWriter, r *http.Request) {
+	limit, offset := 20, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	items, total, err := h.service.store.ListFreeCheckupUsage(r.Context(), limit, offset)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"items": items, "total": total, "limit": limit, "offset": offset})
+}
+
 // GetFreeCheckupLeadForOperation 运营控制台：线索详情（含 run 的引擎与缺口）。
 func (h *Handler) GetFreeCheckupLeadForOperation(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
