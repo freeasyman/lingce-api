@@ -975,3 +975,17 @@ func (h *Handler) RemoveDepartmentRole(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteSuccess(w, map[string]string{"message": "Department role removed successfully"})
 }
+
+// RecommendInstitutionRoleMenus 给本机构的标准角色补齐默认菜单（幂等，机构管理员可用）。
+func (h *Handler) RecommendInstitutionRoleMenus(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.TenantID == nil || *claims.TenantID <= 0 {
+		httputil.WriteForbidden(w, "当前账号不在机构下，无法推荐权限")
+		return
+	}
+	if err := h.service.RecommendInstitutionRoleMenus(r.Context(), *claims.TenantID); err != nil {
+		httputil.WriteInternalError(w, err.Error())
+		return
+	}
+	httputil.WriteSuccess(w, map[string]any{"tenant_id": *claims.TenantID, "recommended": true})
+}

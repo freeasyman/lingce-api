@@ -34,6 +34,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, jwtSecret string) {
 		{Method: "POST", Path: "/api/v1/roles/{id}/permissions", Handler: h.AssignPermissionsToRoleByScope, Auth: true},
 		{Method: "DELETE", Path: "/api/v1/roles/{id}/permissions", Handler: h.RemovePermissionsFromRoleByScope, Auth: true},
 		{Method: "GET", Path: "/api/v1/roles/{id}/menus", Handler: h.GetRoleMenusByScope, Auth: true},
+		{Method: "POST", Path: "/api/v1/roles/recommend-menus", Handler: h.RecommendInstitutionRoleMenus, Auth: true},
 		{Method: "PUT", Path: "/api/v1/roles/{id}/menus", Handler: h.AssignMenusToRoleByScope, Auth: true},
 		{Method: "POST", Path: "/api/v1/roles/{id}/menus", Handler: h.AssignMenusToRoleByScope, Auth: true},
 		{Method: "GET", Path: "/api/v1/menus", Handler: h.ListMenus, Auth: true},

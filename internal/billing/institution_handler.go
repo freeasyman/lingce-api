@@ -35,6 +35,8 @@ func (h *Handler) institutionRoutes() []router.Route {
 		// 机构档案
 		ops("GET", institution, h.ListInstitutions),
 		ops("POST", institution, h.CreateInstitution),
+		// 运维：批量补齐机构菜单/角色/管理员产品权限（必须放在 /{id} 之前，避免被 {id} 捕获）
+		ops("POST", base+"/institutions/actions/repair-access", h.RepairInstitutionAccess),
 		ops("GET", institution+"/{id}", h.GetInstitution),
 		ops("PUT", institution+"/{id}", h.UpdateInstitution),
 		// 机构管理员
@@ -949,6 +951,20 @@ func (h *Handler) ToggleBillingDictItem(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httputil.WriteSuccess(w, item)
+}
+
+// RepairInstitutionAccess 批量补齐机构基础权限（菜单 + 管理员产品权限），幂等。
+func (h *Handler) RepairInstitutionAccess(w http.ResponseWriter, r *http.Request) {
+	adminID, ok := requireAdminActor(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.institutions.RepairInstitutionAccess(r.Context(), adminID)
+	if err != nil {
+		writeInstitutionError(w, err)
+		return
+	}
+	httputil.WriteSuccess(w, result)
 }
 
 // ListBillingPayments 收款单列表。

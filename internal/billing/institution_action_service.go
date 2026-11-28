@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeasyman/lingce-api/internal/contract"
+	"github.com/freeasyman/lingce-api/internal/permission"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -488,6 +489,12 @@ func (s *InstitutionService) ActivateTrial(ctx context.Context, tenantID int64, 
 	}
 	products, err := resolveCatalogProducts(index, req.ProductCodes)
 	if err != nil {
+		return nil, err
+	}
+
+	// 开通试用前先补齐机构基础权限（管理员默认菜单 + 标准角色默认菜单 + 管理员产品权限），
+	// 兜住手工建档/历史机构，避免试用开完但账号仍然 403。幂等。
+	if err := s.ensureInstitutionAccessBaseline(ctx, tenantID); err != nil {
 		return nil, err
 	}
 
@@ -1573,4 +1580,83 @@ func (s *InstitutionService) ExtendTrial(ctx context.Context, tenantID int64, re
 		return nil, fmt.Errorf("commit extend trial transaction: %w", err)
 	}
 	return s.GetInstitution(ctx, tenantID)
+}
+
+// ensureInstitutionAccessBaseline 补齐机构的基础菜单权限，并给机构管理员补产品权限。
+func (s *InstitutionService) ensureInstitutionAccessBaseline(ctx context.Context, tenantID int64) error {
+	if s.tenantStore == nil {
+		return nil
+	}
+	if err := s.tenantStore.EnsureInstitutionAccessBaseline(ctx, tenantID); err != nil {
+		return fmt.Errorf("补机构菜单权限失败: %w", err)
+	}
+	rows, err := s.store.pool.Query(ctx, `
+		SELECT DISTINCT er.employee_id
+		FROM institution_employee_roles er
+		JOIN employees e ON e.id = er.employee_id AND e.deleted_at IS NULL
+		WHERE er.tenant_id = $1 AND lower(trim(er.role_code)) = 'admin'
+	`, tenantID)
+	if err != nil {
+		return fmt.Errorf("查询机构管理员失败: %w", err)
+	}
+	defer rows.Close()
+	var adminIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("扫描机构管理员失败: %w", err)
+		}
+		adminIDs = append(adminIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历机构管理员失败: %w", err)
+	}
+	for _, adminEmployeeID := range adminIDs {
+		if _, err := permission.EnsureInstitutionAdminGrants(ctx, s.store.pool, tenantID, adminEmployeeID, adminEmployeeID, false); err != nil {
+			return fmt.Errorf("补管理员产品权限失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// RepairInstitutionAccess 批量补齐所有机构的菜单权限与管理员产品权限，返回处理结果。
+func (s *InstitutionService) RepairInstitutionAccess(ctx context.Context, adminID int64) (map[string]any, error) {
+	// 仅平台管理员可调用（handler 已限制 AllowedUserTypes=admin）。
+	if adminID <= 0 {
+		return nil, fmt.Errorf("admin id is required")
+	}
+	rows, err := s.store.pool.Query(ctx, `SELECT id FROM tenants WHERE deleted_at IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("查询机构失败: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("扫描机构失败: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历机构失败: %w", err)
+	}
+	failures := make([]map[string]any, 0)
+	repaired := 0
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if err := s.ensureInstitutionAccessBaseline(ctx, id); err != nil {
+			failures = append(failures, map[string]any{"tenant_id": id, "error": err.Error()})
+			continue
+		}
+		repaired++
+	}
+	return map[string]any{
+		"total":    len(ids),
+		"repaired": repaired,
+		"failed":   len(failures),
+		"errors":   failures,
+	}, nil
 }

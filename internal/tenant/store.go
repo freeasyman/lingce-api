@@ -547,6 +547,9 @@ func (s *Store) createDefaultTenantAdminTx(ctx context.Context, tx pgx.Tx, tenan
 		if err != nil {
 			return fmt.Errorf("failed to assign institution tenant admin menus: %w", err)
 		}
+		if err := seedDefaultRoleMenusTx(ctx, tx, tenantID); err != nil {
+			return fmt.Errorf("failed to assign institution role menus: %w", err)
+		}
 	} else {
 		return fmt.Errorf("institution role menu tables not prepared for tenant initialization")
 	}
@@ -3609,4 +3612,43 @@ func defaultString(v string, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+// seedDefaultRoleMenusTx 给机构里已存在的标准角色补默认菜单（实际逻辑在 permission 包，便于复用）。
+func seedDefaultRoleMenusTx(ctx context.Context, tx pgx.Tx, tenantID int64) error {
+	return permission.SeedDefaultRoleMenus(ctx, tx, tenantID)
+}
+
+// EnsureInstitutionAccessBaseline 幂等补齐机构的基础权限：
+// 管理员默认菜单 + 标准角色默认菜单。用于开通试用/正式等入口兜底，
+// 也用于修复手工建档或历史数据缺失的角色菜单。
+func (s *Store) EnsureInstitutionAccessBaseline(ctx context.Context, tenantID int64) error {
+	if tenantID <= 0 {
+		return fmt.Errorf("tenant id is required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin institution access baseline: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+		SELECT $1, 'admin', m.code, NOW(), NOW()
+		FROM institution_menus m
+		WHERE m.deleted_at IS NULL
+		  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
+		  AND COALESCE(m.is_active, true) = true
+		  AND COALESCE(m.is_default_for_admin, false) = true
+		ON CONFLICT (tenant_id, role_code, menu_code) DO NOTHING
+	`, tenantID); err != nil {
+		return fmt.Errorf("ensure institution admin menus: %w", err)
+	}
+	if err := seedDefaultRoleMenusTx(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit institution access baseline: %w", err)
+	}
+	return nil
 }

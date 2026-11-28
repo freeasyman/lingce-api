@@ -454,3 +454,46 @@ func PrimaryAdminSourceLabel(source string) string {
 		return source
 	}
 }
+
+// DefaultRoleMenuSeeds 是机构标准角色的最小默认菜单集合。
+// 目的：医生/咨询师等角色开箱即可访问自己的录音列表，避免建档后仍 403。
+var DefaultRoleMenuSeeds = map[string][]string{
+	"doctor":     {"doctor_recordings"},
+	"consultant": {"consultant_recordings"},
+	"therapist":  {"therapist_recordings"},
+	"frontdesk":  {"frontdesk_recordings"},
+}
+
+// SeedDefaultRoleMenus 给机构里已存在的标准角色补默认菜单，幂等。
+func SeedDefaultRoleMenus(ctx context.Context, q QueryExecer, tenantID int64) error {
+	if q == nil {
+		return fmt.Errorf("permission: queryer is nil")
+	}
+	if tenantID <= 0 {
+		return fmt.Errorf("permission: tenant id is required")
+	}
+	for roleCode, menuCodes := range DefaultRoleMenuSeeds {
+		for _, menuCode := range menuCodes {
+			_, err := q.Exec(ctx, `
+				INSERT INTO institution_role_menus (tenant_id, role_code, menu_code, created_at, updated_at)
+				SELECT $1::bigint, $2::text, m.code, NOW(), NOW()
+				FROM institution_menus m
+				WHERE m.deleted_at IS NULL
+				  AND lower(m.code) = lower($3::text)
+				  AND (m.tenant_id = $1 OR m.tenant_id IS NULL)
+				  AND COALESCE(m.is_active, true) = true
+				  AND EXISTS (
+					SELECT 1 FROM institution_roles r
+					WHERE r.tenant_id = $1
+					  AND lower(r.code) = lower($2::text)
+					  AND r.deleted_at IS NULL
+				  )
+				ON CONFLICT (tenant_id, role_code, menu_code) DO NOTHING
+			`, tenantID, roleCode, menuCode)
+			if err != nil {
+				return fmt.Errorf("seed role menu %s/%s: %w", roleCode, menuCode, err)
+			}
+		}
+	}
+	return nil
+}

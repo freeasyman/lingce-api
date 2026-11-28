@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/freeasyman/lingce-api/internal/permission"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -457,4 +459,9 @@ func (s *Service) ResetAdminPassword(ctx context.Context, id int64, req ResetPas
 	}
 
 	return s.store.ResetAdminPassword(ctx, id, string(hashedPassword))
+}
+
+// RecommendInstitutionRoleMenus 给机构标准角色补默认菜单。
+func (s *Service) RecommendInstitutionRoleMenus(ctx context.Context, tenantID int64) error {
+	return permission.SeedDefaultRoleMenus(ctx, s.store.pool, tenantID)
 }
