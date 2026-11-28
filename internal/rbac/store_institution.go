@@ -413,6 +413,10 @@ func (s *Store) ListInstitutionRoles(ctx context.Context, tenantID int64, req In
 		`, tenantID); err != nil {
 			return nil, 0, fmt.Errorf("failed to sync institution roles: %w", err)
 		}
+		// 角色刚按模板建出来时，顺手给标准角色补默认菜单，避免医生/咨询师登录后 403。
+		if err := permission.SeedDefaultRoleMenus(ctx, s.pool, tenantID); err != nil {
+			return nil, 0, fmt.Errorf("failed to seed institution role menus: %w", err)
+		}
 	}
 
 	query := `
@@ -577,6 +581,9 @@ func (s *Store) CreateInstitutionRole(ctx context.Context, tenantID int64, req C
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create role: %w", err)
+	}
+	if err := permission.SeedDefaultRoleMenus(ctx, s.pool, tenantID); err != nil {
+		return nil, fmt.Errorf("failed to seed role menus: %w", err)
 	}
 
 	return &r, nil
