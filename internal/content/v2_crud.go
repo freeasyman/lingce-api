@@ -207,7 +207,7 @@ func (s *Store) listFrequentQuestions(ctx context.Context, tenantID int64, minCo
 	if err != nil {
 		return nil, err
 	}
-	var out []FrequentQuestion
+	out := make([]FrequentQuestion, 0)
 	for rows.Next() {
 		var c FrequentQuestion
 		if err := rows.Scan(&c.ID, &c.Topic, &c.Frequency, &c.Quotes, &c.Items, &c.InsightIDs, &c.TopicCount); err != nil {
@@ -239,7 +239,7 @@ func (s *Store) listFrequentQuestionsFallback(ctx context.Context, tenantID int6
 		return nil, err
 	}
 	defer rows.Close()
-	var out []FrequentQuestion
+	out := make([]FrequentQuestion, 0)
 	for rows.Next() {
 		var c FrequentQuestion
 		if err := rows.Scan(&c.Topic, &c.Frequency, &c.Quotes); err != nil {
